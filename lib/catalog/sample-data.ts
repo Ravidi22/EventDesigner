@@ -122,6 +122,14 @@ export const SAMPLE_PRODUCTS: Product[] = [
     unitPrice: 220,
     styleTags: ["מודרני"],
     variants: [],
+    appearance: {
+      shape: "custom",
+      content: "none",
+      outline: [
+        { x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 1000 },
+        { x: 1200, y: 1000 }, { x: 1200, y: 2000 }, { x: 0, y: 2000 },
+      ],
+    },
   },
   {
     id: id(),
@@ -134,6 +142,7 @@ export const SAMPLE_PRODUCTS: Product[] = [
     unitPrice: 200,
     styleTags: ["מודרני", "זוהר"],
     variants: [],
+    appearance: { shape: "circle", content: "name" },
   },
   {
     id: id(),

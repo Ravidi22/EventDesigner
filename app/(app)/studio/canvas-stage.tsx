@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Stage, Layer, Rect, Circle, Group, Text, Line } from "react-konva";
+import { Stage, Layer, Rect, Circle, Ellipse, Group, Text, Line } from "react-konva";
 import type Konva from "konva";
 import { Minus, Plus, Maximize } from "lucide-react";
 import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
 import type { Hall } from "@/lib/studio/hall";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { resolveFootprint, resolveContent, footprintBounds, outlineBounds, type Footprint } from "@/lib/studio/footprint";
 import { pointAtDistance, resolveWallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
 import { IconButton } from "@/components/icon-button";
 
@@ -28,9 +29,6 @@ const C = {
 };
 
 export type Selection = { kind: "table" | "placement"; id: string } | null;
-
-const CHIP_W = 1650;
-const CHIP_H = 720;
 
 export interface CanvasHandle {
   fit: () => void;
@@ -236,11 +234,11 @@ export function CanvasStage({
             doc.tables.map((t) => {
               const chips = doc.placements.filter((p) => p.layer === "table" && p.tableId === t.id);
               return chips.map((p, i) => (
-                <PlacementChip
+                <PlacementNode
                   key={p.id}
                   placement={p}
                   x={t.position.x}
-                  y={t.position.y + (i - (chips.length - 1) / 2) * (CHIP_H + 120)}
+                  y={t.position.y + (i - (chips.length - 1) / 2) * 840}
                   selected={selection?.kind === "placement" && selection.id === p.id}
                   onSelect={() => onSelect({ kind: "placement", id: p.id })}
                 />
@@ -251,7 +249,7 @@ export function CanvasStage({
           {doc.placements
             .filter((p) => p.layer !== "table" && layerVisible[p.layer])
             .map((p) => (
-              <PlacementChip
+              <PlacementNode
                 key={p.id}
                 placement={p}
                 x={p.position.x}
@@ -343,14 +341,28 @@ function TableNode({
   );
 }
 
-function PlacementChip({
-  placement,
-  x,
-  y,
-  selected,
-  onSelect,
-  draggable,
-  onMove,
+// Draws a footprint shape centered on (0,0). Custom outlines are translated so their
+// bounding-box center sits at (0,0), so all four kinds share one local frame.
+function FootprintShape({ footprint, fill, stroke, strokeWidth }: {
+  footprint: Footprint;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+}) {
+  const common = { fill, stroke, strokeWidth, strokeScaleEnabled: false, listening: false } as const;
+  if (footprint.kind === "circle") return <Circle radius={footprint.diameterMm / 2} {...common} />;
+  if (footprint.kind === "ellipse") return <Ellipse radiusX={footprint.widthMm / 2} radiusY={footprint.depthMm / 2} {...common} />;
+  if (footprint.kind === "custom") {
+    const b = outlineBounds(footprint.outline);
+    const points = footprint.outline.flatMap((p) => [p.x - b.cx, p.y - b.cy]);
+    return <Line points={points} closed {...common} />;
+  }
+  const { widthMm: w, depthMm: d } = footprint;
+  return <Rect x={-w / 2} y={-d / 2} width={w} height={d} cornerRadius={Math.min(w, d) * 0.06} {...common} />;
+}
+
+function PlacementNode({
+  placement, x, y, selected, onSelect, draggable, onMove,
 }: {
   placement: Placement;
   x: number;
@@ -361,58 +373,59 @@ function PlacementChip({
   onMove?: (pos: { x: number; y: number }) => void;
 }) {
   const r = resolve(placement.variantId);
-  const label = r?.product.name ?? "פריט";
+  const product = r?.product;
+  const footprint: Footprint = product ? resolveFootprint(product) : { kind: "rect", widthMm: 600, depthMm: 600 };
+  const content = product ? resolveContent(product) : { mode: "name" as const, name: r?.label ?? "פריט" };
+  const bounds = footprintBounds(footprint);
+  const stroke = selected ? C.accent : C.border;
+  const fill = selected ? C.accentTint : C.surface;
+
   return (
     <Group
-      x={x - CHIP_W / 2}
-      y={y - CHIP_H / 2}
+      x={x}
+      y={y}
+      rotation={placement.rotation || 0}
+      scaleX={placement.scale || 1}
+      scaleY={placement.scale || 1}
       draggable={draggable}
-      onDragEnd={draggable && onMove ? (e) => onMove({ x: e.target.x() + CHIP_W / 2, y: e.target.y() + CHIP_H / 2 }) : undefined}
-      onClick={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onTap={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
+      onDragEnd={draggable && onMove ? (e) => onMove({ x: e.target.x(), y: e.target.y() }) : undefined}
+      onClick={(e) => { e.cancelBubble = true; onSelect(); }}
+      onTap={(e) => { e.cancelBubble = true; onSelect(); }}
     >
-      <Rect
-        width={CHIP_W}
-        height={CHIP_H}
-        cornerRadius={90}
-        fill={selected ? C.accentTint : C.surface}
-        stroke={selected ? C.accent : C.border}
-        strokeWidth={selected ? 4 : 2}
-        strokeScaleEnabled={false}
-      />
-      <Text
-        x={placement.quantity > 1 ? 360 : 90}
-        y={0}
-        width={CHIP_W - (placement.quantity > 1 ? 450 : 180)}
-        height={CHIP_H}
-        text={label}
-        align="center"
-        verticalAlign="middle"
-        fontSize={300}
-        fontFamily="Heebo, sans-serif"
-        fill={C.ink}
-        ellipsis
-        wrap="none"
-        listening={false}
-      />
+      <FootprintShape footprint={footprint} fill={fill} stroke={stroke} strokeWidth={selected ? 4 : 2} />
+
+      {content.mode === "name" && (
+        <Text
+          x={-bounds.w / 2}
+          y={-bounds.h / 2}
+          width={bounds.w}
+          height={bounds.h}
+          text={content.name}
+          align="center"
+          verticalAlign="middle"
+          fontSize={Math.max(140, Math.min(bounds.h * 0.4, bounds.w * 0.22))}
+          fontFamily="Heebo, sans-serif"
+          fill={C.ink}
+          padding={Math.min(bounds.w, bounds.h) * 0.08}
+          ellipsis
+          wrap="none"
+          listening={false}
+        />
+      )}
+      {/* content.mode === "icon" wired in Task 3; "none" renders nothing */}
+
       {placement.quantity > 1 && (
         <Group listening={false}>
-          <Rect x={110} y={CHIP_H / 2 - 190} width={380} height={380} cornerRadius={80} fill={C.accent} />
+          <Rect x={-bounds.w / 2 + 40} y={bounds.h / 2 - 380} width={340} height={340} cornerRadius={70} fill={C.accent} />
           <Text
-            x={110}
-            y={CHIP_H / 2 - 190}
-            width={380}
-            height={380}
+            x={-bounds.w / 2 + 40}
+            y={bounds.h / 2 - 380}
+            width={340}
+            height={340}
             text={`×${placement.quantity}`}
             align="center"
             verticalAlign="middle"
-            fontSize={250}
+            fontSize={220}
             fontStyle="600"
             fontFamily="Heebo, sans-serif"
             fill="#ffffff"
