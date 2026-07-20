@@ -83,6 +83,7 @@ export const SAMPLE_PRODUCTS: Product[] = [
     unitPrice: 18,
     styleTags: ["רומנטי", "זוהר"],
     variants: [],
+    appearance: { shape: "circle", content: "icon", icon: "flame" },
   },
   {
     id: id(),

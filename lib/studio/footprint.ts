@@ -26,7 +26,7 @@ export function resolveFootprint(product: Product): Footprint {
     if (outline && outline.length >= 3) return { kind: "custom", outline };
     // malformed custom → fall through to a safe rectangle
   }
-  if (shape === "circle") return { kind: "circle", diameterMm: d.diameterMm || MIN_FOOTPRINT_MM };
+  if (shape === "circle") return { kind: "circle", diameterMm: d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM };
   const widthMm = d.widthMm || MIN_FOOTPRINT_MM;
   const depthMm = d.depthMm || MIN_FOOTPRINT_MM;
   return { kind: shape === "ellipse" ? "ellipse" : "rect", widthMm, depthMm };
@@ -68,6 +68,7 @@ if ((import.meta as { main?: boolean }).main) {
   assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 420, depthMm: 450, heightMm: 920 } }), { kind: "rect", widthMm: 420, depthMm: 450 }), "w/d derives rect");
   assert(eq(resolveFootprint(base), { kind: "rect", widthMm: 600, depthMm: 600 }), "missing dims → floor default");
   assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 800, depthMm: 400, heightMm: 100 }, appearance: { shape: "ellipse", content: "none" } }), { kind: "ellipse", widthMm: 800, depthMm: 400 }), "explicit ellipse");
+  assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 120, depthMm: 120, heightMm: 350 }, appearance: { shape: "circle", content: "none" } }), { kind: "circle", diameterMm: 120 }), "circle falls back to width when no diameter");
   const outline = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 50, y: 100 }];
   assert(eq(resolveFootprint({ ...base, appearance: { shape: "custom", outline, content: "none" } }), { kind: "custom", outline }), "valid custom");
   assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 200, depthMm: 200, heightMm: 1 }, appearance: { shape: "custom", outline: [{ x: 0, y: 0 }], content: "none" } }), { kind: "rect", widthMm: 200, depthMm: 200 }), "malformed custom → rect fallback");

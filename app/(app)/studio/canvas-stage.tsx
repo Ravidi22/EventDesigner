@@ -10,6 +10,7 @@ import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { resolveFootprint, resolveContent, footprintBounds, outlineBounds, type Footprint } from "@/lib/studio/footprint";
 import { pointAtDistance, resolveWallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
 import { IconButton } from "@/components/icon-button";
+import { KonvaIcon } from "@/components/konva-icon";
 
 // Design tokens mirrored for the canvas (Konva can't read CSS variables). Keep in sync
 // with app/globals.css @theme.
@@ -412,7 +413,16 @@ function PlacementNode({
           listening={false}
         />
       )}
-      {/* content.mode === "icon" wired in Task 3; "none" renders nothing */}
+      {content.mode === "icon" && content.icon && (
+        <KonvaIcon
+          name={content.icon}
+          color={selected ? C.accent : C.inkSoft}
+          x={0}
+          y={0}
+          size={Math.min(bounds.w, bounds.h) * 0.6}
+        />
+      )}
+      {/* "none" renders nothing */}
 
       {placement.quantity > 1 && (
         <Group listening={false}>
