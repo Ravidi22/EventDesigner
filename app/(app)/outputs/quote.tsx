@@ -1,0 +1,304 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Check, Eye, EyeOff, Merge, Send, Share2, TriangleAlert } from "lucide-react";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
+import { quoteGroups, quoteTotals, type DiscountType } from "@/lib/outputs/quote";
+import { priceLookup } from "@/lib/outputs/lookup";
+import { formatPrice } from "@/lib/catalog/format";
+import { loadSettings, type BusinessSettings } from "@/lib/settings/storage";
+import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
+import { activeEvent, updateEvent } from "@/lib/events/storage";
+import { formatEventDate, type EventSummary } from "@/lib/events/types";
+import { Button } from "@/components/button";
+import { controlClassName } from "@/components/control";
+
+// F-7.1–F-7.4: the quote — a renderer over the design document. Variant-level rows, category
+// subtotals, hide/merge before showing, discount, VAT from settings, version lock + re-issue.
+export function Quote({ doc }: { doc: DesignDocumentContent }) {
+  const [settings, setSettings] = useState<BusinessSettings | null>(null);
+  const [event, setEvent] = useState<EventSummary | null>(null);
+  const [issued, setIssued] = useState<IssuedQuote | null>(null);
+  const [discountType, setDiscountType] = useState<DiscountType>("percent");
+  const [discountValue, setDiscountValue] = useState("0");
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [merged, setMerged] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setSettings(loadSettings());
+    const ev = activeEvent();
+    setEvent(ev);
+    if (ev) {
+      const q = loadIssuedQuote(ev.id);
+      setIssued(q);
+      if (q) {
+        setDiscountType(q.discountType);
+        setDiscountValue(String(q.discountValue));
+        setHidden(new Set(q.hiddenVariantIds));
+        setMerged(new Set(q.mergedCategoryIds));
+      }
+    }
+  }, []);
+
+  const vatRate = settings?.vatRate ?? 0.18;
+  const allGroups = useMemo(() => quoteGroups(doc, priceLookup), [doc]);
+
+  // F-7.1: hidden rows are dropped (and not charged); merged categories collapse to one line.
+  const groups = useMemo(
+    () =>
+      allGroups
+        .map((g) => {
+          const lines = g.lines.filter((l) => !hidden.has(l.variantId));
+          const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
+          return { ...g, lines, subtotal: Math.round(subtotal * 100) / 100 };
+        })
+        .filter((g) => g.lines.length > 0),
+    [allGroups, hidden],
+  );
+
+  const subtotal = groups.reduce((s, g) => s + g.subtotal, 0);
+  const unpriced = groups.reduce((n, g) => n + g.lines.filter((l) => !l.priced).length, 0);
+  const totals = quoteTotals(subtotal, { discountType, discountValue: Number(discountValue) || 0, vatRate });
+
+  const changed = issued ? designChangedSince(issued, doc) : false;
+
+  const issue = () => {
+    if (!event) return;
+    const record: IssuedQuote = {
+      issuedAt: Date.now(),
+      docJson: JSON.stringify(doc),
+      discountType,
+      discountValue: Number(discountValue) || 0,
+      hiddenVariantIds: [...hidden],
+      mergedCategoryIds: [...merged],
+      total: totals.total,
+    };
+    saveIssuedQuote(event.id, record);
+    setIssued(record);
+    updateEvent(event.id, { quoteSentAt: record.issuedAt });
+  };
+
+  const share = async () => {
+    // F-7.3: OS share / download only — no send integrations in phase 1.
+    const text = `הצעת מחיר — ${event?.clientName ?? ""}: ${formatPrice(totals.total)}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "הצעת מחיר", text });
+      } catch {
+        // user cancelled — fine
+      }
+    } else window.print();
+  };
+
+  const toggleHide = (variantId: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(variantId)) next.delete(variantId);
+      else next.add(variantId);
+      return next;
+    });
+  const toggleMerge = (categoryId: string) =>
+    setMerged((prev) => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) next.delete(categoryId);
+      else next.add(categoryId);
+      return next;
+    });
+
+  if (allGroups.length === 0) {
+    return (
+      <div className="mx-auto max-w-md py-20 text-center">
+        <p className="text-sm text-ink-soft">עדיין אין פריטים בעיצוב.</p>
+        <Link href="/studio" className="mt-3 inline-block text-sm font-medium text-accent hover:text-accent-hover">
+          חזרה לסטודיו →
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      {/* F-7.2: business + client header */}
+      <header className="flex items-start justify-between gap-4 border-b border-border pb-4">
+        <div>
+          <p className="font-display text-xl text-ink">{settings?.businessName}</p>
+          <p className="mt-0.5 text-sm text-muted">
+            {[settings?.ownerName, settings?.phone, settings?.address].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+        {event && (
+          <div className="text-end text-sm">
+            <p className="font-semibold text-ink">{event.clientName}</p>
+            <p className="mt-0.5 text-muted">
+              {event.hallName} · {formatEventDate(event.date)}
+              {event.phone && <span className="nums" dir="ltr"> · {event.phone}</span>}
+            </p>
+          </div>
+        )}
+      </header>
+
+      {/* F-7.4: version lock indicator + one-click re-issue (no itemized diff in phase 1) */}
+      <div className="no-print flex flex-wrap items-center justify-between gap-3">
+        {issued ? (
+          changed ? (
+            <p className="inline-flex items-center gap-1.5 text-sm text-warn">
+              <TriangleAlert className="h-4 w-4" strokeWidth={2} />
+              העיצוב השתנה מאז ההצעה האחרונה ({new Date(issued.issuedAt).toLocaleDateString("he-IL")})
+            </p>
+          ) : (
+            <p className="inline-flex items-center gap-1.5 text-sm text-ink-soft">
+              <Check className="h-4 w-4 text-accent" strokeWidth={2.5} />
+              הצעה הופקה {new Date(issued.issuedAt).toLocaleDateString("he-IL")} · תואמת לעיצוב הנוכחי
+            </p>
+          )
+        ) : (
+          <p className="text-sm text-muted">טרם הופקה הצעה לאירוע הזה.</p>
+        )}
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={share}>
+            <Share2 className="h-4 w-4" strokeWidth={2} />
+            שיתוף
+          </Button>
+          <Button onClick={issue} disabled={!event}>
+            <Send className="h-4 w-4" strokeWidth={2} />
+            {issued ? (changed ? "הפקת הצעה עדכנית" : "הפקה מחדש") : "הפקת ההצעה"}
+          </Button>
+        </div>
+      </div>
+
+      {groups.map((g) => (
+        <section key={g.categoryId} className="break-inside-avoid">
+          <div className="mb-2 flex items-center justify-between border-b border-ink pb-1">
+            <h3 className="text-base font-semibold text-ink">{g.label}</h3>
+            <button
+              type="button"
+              onClick={() => toggleMerge(g.categoryId)}
+              aria-pressed={merged.has(g.categoryId)}
+              className="no-print inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+              title={merged.has(g.categoryId) ? "פירוק לשורות" : "איחוד לשורה אחת"}
+            >
+              <Merge className="h-3.5 w-3.5" strokeWidth={2} />
+              {merged.has(g.categoryId) ? "פירוק" : "איחוד"}
+            </button>
+          </div>
+
+          {merged.has(g.categoryId) ? (
+            <div className="flex items-center justify-between border-t border-border py-2 text-sm">
+              <span className="text-ink">{g.label} — מקובץ</span>
+              <span className="nums font-semibold text-ink">{formatPrice(g.subtotal)}</span>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted">
+                  <th className="py-1.5 text-start font-medium">פריט</th>
+                  <th className="w-16 py-1.5 text-start font-medium">כמות</th>
+                  <th className="w-24 py-1.5 text-start font-medium">מחיר ליח׳</th>
+                  <th className="w-28 py-1.5 text-end font-medium">סה״כ</th>
+                  <th className="no-print w-9" />
+                </tr>
+              </thead>
+              <tbody>
+                {g.lines.map((l) => (
+                  <tr key={l.variantId} className="border-t border-border">
+                    <td className="py-2 text-ink">{l.label}</td>
+                    <td className="nums py-2 text-ink">×{l.quantity}</td>
+                    <td className="nums py-2 text-ink-soft">
+                      {l.priced ? formatPrice(l.unitPrice) : <span className="text-warn">ללא מחיר</span>}
+                    </td>
+                    <td className="nums py-2 text-end font-semibold text-ink">{l.priced ? formatPrice(l.lineTotal) : "—"}</td>
+                    <td className="no-print py-2 text-end">
+                      <button
+                        type="button"
+                        onClick={() => toggleHide(l.variantId)}
+                        aria-label={`הסתרת "${l.label}" מההצעה`}
+                        title="הסתרה מההצעה"
+                        className="rounded-md p-1 text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+                      >
+                        <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t border-border">
+                  <td colSpan={3} className="py-2 text-end text-muted">סכום ביניים — {g.label}</td>
+                  <td className="nums py-2 text-end font-semibold text-ink">{formatPrice(g.subtotal)}</td>
+                  <td className="no-print" />
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </section>
+      ))}
+
+      {hidden.size > 0 && (
+        <button
+          type="button"
+          onClick={() => setHidden(new Set())}
+          className="no-print inline-flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-ink"
+        >
+          <Eye className="h-3.5 w-3.5" strokeWidth={2} />
+          <span className="nums">{hidden.size}</span> שורות מוסתרות — החזרת הכול
+        </button>
+      )}
+
+      {unpriced > 0 && (
+        <p className="inline-flex items-center gap-1.5 text-xs text-warn">
+          <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
+          <span className="nums">{unpriced}</span> פריטים ללא מחיר אינם נכללים בסכום — הוסיפו מחיר בקטלוג.
+        </p>
+      )}
+
+      {/* Totals */}
+      <section className="ms-auto max-w-sm space-y-2 border-t border-ink pt-4">
+        <Row label="סכום ביניים" value={formatPrice(totals.subtotal)} />
+
+        <div className="flex items-center justify-between gap-3 py-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted">הנחה</span>
+            <div className="no-print flex items-center gap-0.5 rounded-md border border-border p-0.5">
+              {(["percent", "amount"] as DiscountType[]).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setDiscountType(t)}
+                  aria-pressed={discountType === t}
+                  className={"rounded-[5px] px-2 py-0.5 text-xs transition-colors " + (discountType === t ? "bg-accent-tint font-medium text-ink" : "text-muted hover:text-ink")}
+                >
+                  {t === "percent" ? "%" : settings?.currency ?? "₪"}
+                </button>
+              ))}
+            </div>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={discountValue}
+              onChange={(e) => setDiscountValue(e.target.value)}
+              aria-label="ערך ההנחה"
+              className={`${controlClassName} nums no-print h-8 w-20 px-2`}
+            />
+            {discountType === "percent" && <span className="nums text-muted">{Number(discountValue) || 0}%</span>}
+          </div>
+          <span className="nums text-ink">−{formatPrice(totals.discount)}</span>
+        </div>
+
+        <Row label="לאחר הנחה" value={formatPrice(totals.afterDiscount)} muted />
+        <Row label={`מע״מ ${Math.round(vatRate * 100)}%`} value={formatPrice(totals.vat)} muted />
+        <div className="flex items-center justify-between border-t border-ink pt-2.5">
+          <span className="font-semibold text-ink">סה״כ לתשלום</span>
+          <span className="nums text-lg font-semibold text-ink">{formatPrice(totals.total)}</span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Row({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-muted">{label}</span>
+      <span className={"nums " + (muted ? "text-ink-soft" : "text-ink")}>{value}</span>
+    </div>
+  );
+}

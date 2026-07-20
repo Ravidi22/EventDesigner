@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-12T00:00:00.000Z",
+  "title": "Design System: iDesign",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Oxblood",
+        "canonical": "oklch(0.44 0.12 24)",
+        "tonalRamp": [
+          "oklch(0.20 0.07 24)",
+          "oklch(0.30 0.10 24)",
+          "oklch(0.38 0.12 24)",
+          "oklch(0.44 0.12 24)",
+          "oklch(0.55 0.11 24)",
+          "oklch(0.70 0.08 24)",
+          "oklch(0.88 0.04 24)",
+          "oklch(0.95 0.022 24)"
+        ]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Canvas White",
+        "canonical": "oklch(1 0 0)",
+        "tonalRamp": [
+          "oklch(0.22 0.012 25)",
+          "oklch(0.40 0.014 25)",
+          "oklch(0.52 0.014 25)",
+          "oklch(0.70 0.010 25)",
+          "oklch(0.85 0.008 25)",
+          "oklch(0.90 0.006 25)",
+          "oklch(0.982 0.004 25)",
+          "oklch(1 0 0)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(0.22 0.012 25)",
+        "tonalRamp": [
+          "oklch(0.22 0.012 25)",
+          "oklch(0.40 0.014 25)",
+          "oklch(0.52 0.014 25)",
+          "oklch(0.70 0.010 25)",
+          "oklch(0.85 0.008 25)",
+          "oklch(0.90 0.006 25)",
+          "oklch(0.982 0.004 25)",
+          "oklch(1 0 0)"
+        ]
+      },
+      "warn": {
+        "role": "tertiary",
+        "displayName": "Warn Amber",
+        "canonical": "oklch(0.52 0.13 68)",
+        "tonalRamp": [
+          "oklch(0.30 0.08 68)",
+          "oklch(0.42 0.11 68)",
+          "oklch(0.52 0.13 68)",
+          "oklch(0.65 0.13 68)",
+          "oklch(0.75 0.11 68)",
+          "oklch(0.85 0.07 68)",
+          "oklch(0.92 0.05 68)",
+          "oklch(0.96 0.03 68)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Welcome hero and large brand moments only. Frank Ruhl Libre serif — never on a button, label, or data cell." },
+      "headline": { "displayName": "Headline", "purpose": "Section headers on welcome / empty surfaces. Serif." },
+      "title": { "displayName": "Title", "purpose": "Panel and card headers, catalog item names. Heebo sans." },
+      "body": { "displayName": "Body", "purpose": "Running text and descriptions, capped at 65–75ch. Heebo sans." },
+      "label": { "displayName": "Label", "purpose": "Buttons, form labels, chips, table numbers. Heebo sans." }
+    },
+    "shadows": [
+      { "name": "floating", "value": "0 4px 16px oklch(0.22 0.012 25 / 0.10)", "purpose": "Dropdowns, popovers, a catalog card lifting on hover/focus, an item dragged onto the canvas. Cast in the ink hue, never a cool blue." },
+      { "name": "dialog", "value": "0 12px 40px oklch(0.22 0.012 25 / 0.16)", "purpose": "Modal surfaces (export preview, quote composer)." }
+    ],
+    "motion": [
+      { "name": "ease-fluid", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Default easing for state transitions; ~150ms. Instant under prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "tablet", "value": "768px" },
+      { "name": "desktop", "value": "1200px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one saturated control on a screen; the single most important action.",
+      "html": "<button class=\"ds-btn-primary\" dir=\"rtl\">שמור עיצוב</button>",
+      "css": ".ds-btn-primary { direction: rtl; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: oklch(0.44 0.12 24); color: oklch(1 0 0); font-family: Heebo, system-ui, sans-serif; font-weight: 500; font-size: 0.875rem; line-height: 1.4; padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; transition: background 150ms cubic-bezier(0.22,1,0.36,1); } .ds-btn-primary:hover { background: oklch(0.38 0.12 24); } .ds-btn-primary:focus-visible { outline: 2px solid oklch(0.44 0.12 24); outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Default for toolbar and secondary actions; no fill or border at rest, lifts to Oxblood Wash on hover.",
+      "html": "<button class=\"ds-btn-ghost\" dir=\"rtl\">ייצוא</button>",
+      "css": ".ds-btn-ghost { direction: rtl; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: oklch(0.40 0.014 25); font-family: Heebo, system-ui, sans-serif; font-weight: 500; font-size: 0.875rem; line-height: 1.4; padding: 8px 12px; border: none; border-radius: 8px; cursor: pointer; transition: background 150ms cubic-bezier(0.22,1,0.36,1), color 150ms cubic-bezier(0.22,1,0.36,1); } .ds-btn-ghost:hover { background: oklch(0.95 0.022 24); color: oklch(0.22 0.012 25); } .ds-btn-ghost:focus-visible { outline: 2px solid oklch(0.44 0.12 24); outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "The destructive affordance. Muted and quiet at rest; on hover the background lifts to Warn Wash and the label to Warn Amber — never a red button sitting loud on the page.",
+      "html": "<button class=\"ds-btn-danger\" dir=\"rtl\">מחק פריט</button>",
+      "css": ".ds-btn-danger { direction: rtl; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: oklch(0.52 0.014 25); font-family: Heebo, system-ui, sans-serif; font-weight: 500; font-size: 0.875rem; line-height: 1.4; padding: 8px 12px; border: none; border-radius: 8px; cursor: pointer; transition: background 150ms cubic-bezier(0.22,1,0.36,1), color 150ms cubic-bezier(0.22,1,0.36,1); } .ds-btn-danger:hover { background: oklch(0.96 0.03 68); color: oklch(0.55 0.13 68); } .ds-btn-danger:focus-visible { outline: 2px solid oklch(0.44 0.12 24); outline-offset: 2px; }"
+    },
+    {
+      "name": "Icon Button",
+      "kind": "button",
+      "refersTo": "icon-button",
+      "description": "Icon-only ghost control (close, back, undo). Always carries an aria-label; lifts to Oxblood Wash on hover.",
+      "html": "<button class=\"ds-icon-btn\" aria-label=\"סגור\" title=\"סגור\"><svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M18 6 6 18M6 6l12 12\"/></svg></button>",
+      "css": ".ds-icon-btn { display: inline-flex; align-items: center; justify-content: center; background: transparent; color: oklch(0.52 0.014 25); padding: 4px; border: none; border-radius: 8px; cursor: pointer; transition: background 150ms cubic-bezier(0.22,1,0.36,1), color 150ms cubic-bezier(0.22,1,0.36,1); } .ds-icon-btn:hover { background: oklch(0.95 0.022 24); color: oklch(0.22 0.012 25); } .ds-icon-btn:focus-visible { outline: 2px solid oklch(0.44 0.12 24); outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Canvas-white field with a leading muted icon; border darkens on hover, shifts to Oxblood on focus.",
+      "html": "<div class=\"ds-input-wrap\" dir=\"rtl\"><svg class=\"ds-input-icon\" viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m21 21-4.3-4.3\"/></svg><input class=\"ds-input\" type=\"search\" placeholder=\"חיפוש בקטלוג…\" /></div>",
+      "css": ".ds-input-wrap { position: relative; display: block; direction: rtl; } .ds-input-icon { position: absolute; inset-inline-start: 10px; top: 50%; transform: translateY(-50%); color: oklch(0.52 0.014 25); pointer-events: none; } .ds-input { direction: rtl; width: 100%; height: 36px; background: oklch(1 0 0); color: oklch(0.22 0.012 25); font-family: Heebo, system-ui, sans-serif; font-size: 0.875rem; padding-inline-start: 32px; padding-inline-end: 12px; border: 1px solid oklch(0.90 0.006 25); border-radius: 8px; transition: border-color 150ms cubic-bezier(0.22,1,0.36,1); } .ds-input::placeholder { color: oklch(0.52 0.014 25); } .ds-input:hover { border-color: oklch(0.40 0.014 25); } .ds-input:focus-visible { outline: 2px solid oklch(0.44 0.12 24); outline-offset: 2px; border-color: oklch(0.44 0.12 24); }"
+    },
+    {
+      "name": "Tag Toggle",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Toggleable style-tag chip. Active state carries fill AND border, never color alone; aria-pressed carries state to AT.",
+      "html": "<div dir=\"rtl\" style=\"display:flex;gap:6px\"><button class=\"ds-tag ds-tag--on\" aria-pressed=\"true\">קלאסי</button><button class=\"ds-tag\" aria-pressed=\"false\">מודרני</button></div>",
+      "css": ".ds-tag { direction: rtl; background: oklch(1 0 0); color: oklch(0.40 0.014 25); font-family: Heebo, system-ui, sans-serif; font-size: 0.75rem; padding: 4px 8px; border: 1px solid oklch(0.90 0.006 25); border-radius: 4px; cursor: pointer; transition: border-color 150ms cubic-bezier(0.22,1,0.36,1); } .ds-tag:hover { border-color: oklch(0.40 0.014 25); } .ds-tag--on { background: oklch(0.95 0.022 24); color: oklch(0.22 0.012 25); border-color: oklch(0.44 0.12 24); } .ds-tag:focus-visible { outline: 2px solid oklch(0.44 0.12 24); outline-offset: 2px; }"
+    },
+    {
+      "name": "Catalog Card",
+      "kind": "card",
+      "refersTo": "catalog-card",
+      "description": "Catalog item; the product image is the hero, chrome is minimal, flat at rest and lifting a Floating shadow on hover/focus. A hairline footer divides off the tabular price.",
+      "html": "<button class=\"ds-card\" dir=\"rtl\"><div class=\"ds-card__img\"></div><h3 class=\"ds-card__name\">מפת שולחן זהב</h3><p class=\"ds-card__meta\">300 × 300 ס״מ</p><div class=\"ds-card__foot\"><span class=\"ds-card__price\">₪ 240</span><span class=\"ds-card__edit\">עריכה</span></div></button>",
+      "css": ".ds-card { direction: rtl; display: flex; flex-direction: column; text-align: right; background: oklch(1 0 0); border: 1px solid oklch(0.90 0.006 25); border-radius: 12px; padding: 8px; width: 180px; font-family: Heebo, system-ui, sans-serif; cursor: pointer; transition: box-shadow 150ms cubic-bezier(0.22,1,0.36,1); } .ds-card:hover, .ds-card:focus-visible { box-shadow: 0 4px 16px oklch(0.22 0.012 25 / 0.10); outline: none; } .ds-card__img { aspect-ratio: 4/3; margin-bottom: 8px; border-radius: 8px; border: 1px solid oklch(0.90 0.006 25); background: oklch(0.982 0.004 25); } .ds-card__name { margin: 0; color: oklch(0.22 0.012 25); font-weight: 600; font-size: 1rem; line-height: 1.2; } .ds-card__meta { margin: 2px 0 0; color: oklch(0.52 0.014 25); font-size: 0.875rem; font-variant-numeric: tabular-nums; } .ds-card__foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 1px solid oklch(0.90 0.006 25); } .ds-card__price { color: oklch(0.22 0.012 25); font-weight: 600; font-size: 0.875rem; font-variant-numeric: tabular-nums; } .ds-card__edit { color: oklch(0.52 0.014 25); font-size: 0.75rem; opacity: 0; transition: opacity 150ms cubic-bezier(0.22,1,0.36,1); } .ds-card:hover .ds-card__edit, .ds-card:focus-visible .ds-card__edit { opacity: 1; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Lit Atelier",
+    "overview": "An atelier at first light: a chromaless paper surface, one deep oxblood for the marks the designer makes, and all the real color coming from the objects laid out on it — the hall plan and the product photography — never from the surface itself. The luxury is carried by an editorial Hebrew serif and generous space, not by the body background; a product photo of a gold tablecloth reads as gold, not as 'gold, next to a colored button competing for attention.' Restraint here is not the same as unfinished. The system commits to a chromaless canvas, a single oxblood accent, a serif-and-sans pairing, and flat tonal depth — and then spends its care on the details that make a professional trust a tool: aligned tabular counts, legible RTL Hebrew, hairline dividers, states that respond without shouting.",
+    "keyCharacteristics": [
+      "Chromaless neutral canvas; the accent and the designer's imagery are the only color.",
+      "One accent (oxblood, hue 24), used on ≤10% of any screen.",
+      "A serif display (Frank Ruhl Libre) for headings and welcome surfaces, Heebo sans for all UI and body.",
+      "Flat by default; depth is tonal, shadows only on things that truly float.",
+      "Every operational output survives black-and-white printing."
+    ],
+    "rules": [
+      { "name": "The Neutral Canvas Rule", "body": "The workspace is chromaless. The only saturated color on any screen is the accent (≤10% of the surface) and the designer's own product imagery. If the chrome competes with a product photo for attention, the chrome is wrong.", "section": "colors" },
+      { "name": "The No-Cream Rule", "body": "'Luxury' is never expressed by a warm-tinted body background — that is the AI cliché. The canvas stays true white; warmth lives only in the oxblood accent and the serif type.", "section": "colors" },
+      { "name": "The Print Rule", "body": "Every operational output (placement map, packing list) must survive black-and-white printing. Distinctions carry through weight, shape, and label — never color alone.", "section": "colors" },
+      { "name": "The Serif-For-Display-Only Rule", "body": "The serif appears on headings, the welcome page, and spacious empty states — never on a button, form label, table cell, or any dense tool UI. In the studio and catalog chrome, Heebo sans rules.", "section": "typography" },
+      { "name": "The Tabular Count Rule", "body": "Every quantity and dimension (packing-list counts, mm measurements, quote line totals) uses font-variant-numeric: tabular-nums so columns align down the page and in print.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest. A shadow appears only as a response to state — hover, drag, focus, or opening. A resting card with a drop shadow is a bug.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the workspace chromaless — accent on ≤10% of any screen, everything else ink on white (The Neutral Canvas Rule).",
+      "Do set headings, the welcome page, and empty states in the serif; keep every button, label, and data cell in Heebo sans (The Serif-For-Display-Only Rule).",
+      "Do design RTL-first; Hebrew is the primary direction, mirrored layouts are the default, not a retrofit.",
+      "Do use tabular-nums on every count, dimension, and price (The Tabular Count Rule).",
+      "Do keep every operational output legible in black-and-white — carry meaning in weight, shape, and label (The Print Rule).",
+      "Do give every animation a prefers-reduced-motion alternative (a crossfade or an instant state change).",
+      "Do pair the warn amber with an icon and words; color is never the only signal."
+    ],
+    "donts": [
+      "Don't build a generic SaaS dashboard: no purple gradients, no hero-metric cards, no chart-everything layouts, no endless icon-heading-text card grids.",
+      "Don't reach for a trendy dark-mode developer terminal — wrong world for event and interior design.",
+      "Don't go consumer-flashy or playful: no bright bounce, gamification, or illustration filler.",
+      "Don't become a cluttered enterprise CRM: no dense gray-on-gray toolbars or deep nav trees burying the canvas.",
+      "Don't use a colored side-stripe border (border-left/border-right > 1px) on cards, list items, or alerts — use full hairline borders or a background wash.",
+      "Don't use gradient text (background-clip: text) — emphasis comes from weight and size, in one solid color.",
+      "Don't use glassmorphism as decoration — flat and tonal, or nothing.",
+      "Don't set body or placeholder text in light gray 'for elegance'; muted is 0.52 and no lighter, and body runs on ink.",
+      "Don't express luxury with a cream/sand/beige body background, or with gold gradients and serif-everything — the gold-and-cream 'luxury events' look is the cliché this system refuses (The No-Cream Rule)."
+    ]
+  }
+}

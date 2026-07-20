@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700;800&family=Frank+Ruhl+Libre:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Assistant', system-ui, sans-serif; background: #E9E1D4; color: #211D1A; -webkit-font-smoothing: antialiased; }
+  a { color: #6E2A3C; text-decoration: none; }
+  a:hover { color: #521E2C; }
+  ::selection { background: rgba(183,138,61,0.28); }
+  .tk-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .tk-scroll::-webkit-scrollbar-thumb { background: #D6C9B4; border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
+  @keyframes tkPulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+</style>
+</helmet>
+<div dir="rtl" style="display:flex; height:100vh; width:100%; overflow:hidden; background:#F6F1E9; font-family:'Assistant',sans-serif;">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside style="width:250px; flex-shrink:0; background:#41192A; color:#EAD9CA; display:flex; flex-direction:column; padding:22px 16px; position:relative;">
+    <div style="display:flex; align-items:center; gap:12px; padding:6px 8px 22px;">
+      <div style="width:42px; height:42px; border-radius:12px; background:linear-gradient(150deg,#C99A4E,#9C6E2E); display:flex; align-items:center; justify-content:center; box-shadow:0 6px 16px rgba(0,0,0,.28);">
+        <span style="font-family:'Frank Ruhl Libre',serif; font-weight:900; font-size:24px; color:#41192A;">ט</span>
+      </div>
+      <div style="line-height:1.05;">
+        <div style="font-family:'Frank Ruhl Libre',serif; font-size:22px; font-weight:700; color:#fff;">טְרַקְלִין</div>
+        <div style="font-size:11px; letter-spacing:.14em; color:#C99A4E; font-weight:600;">EVENT DESIGN STUDIO</div>
+      </div>
+    </div>
+
+    <nav style="display:flex; flex-direction:column; gap:3px; margin-top:6px;">
+      <button onClick="{{ goDashboard }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>
+        <span style="position:relative; font-weight:600;">לוח בקרה</span>
+      </button>
+      <button onClick="{{ goHalls }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isHalls }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-5h6v5M9 10h.01M12 10h.01M15 10h.01"/></svg></span>
+        <span style="position:relative; font-weight:600;">תבניות אולם</span>
+      </button>
+      <button onClick="{{ goImport }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isImport }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 0L8 7m4-4 4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></span>
+        <span style="position:relative; font-weight:600;">ייבוא חכם</span>
+      </button>
+      <button onClick="{{ goCatalog }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isCatalog }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></span>
+        <span style="position:relative; font-weight:600;">קטלוג מוצרים</span>
+      </button>
+
+      <div style="height:1px; background:rgba(255,255,255,0.09); margin:12px 8px;"></div>
+      <div style="font-size:11px; letter-spacing:.12em; color:#A98A78; font-weight:700; padding:2px 13px 8px;">האירוע הפעיל</div>
+
+      <button onClick="{{ goStudio }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isStudio }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></svg></span>
+        <span style="position:relative; font-weight:600;">סטודיו עיצוב</span>
+      </button>
+      <button onClick="{{ goPlacement }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isPlacement }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 20 3 17V4l6 3 6-3 6 3v13l-6 3-6-3Z"/><path d="M9 7v13M15 4v13"/></svg></span>
+        <span style="position:relative; font-weight:600;">מפת הצבה</span>
+      </button>
+      <button onClick="{{ goPacking }}" style="position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:11px 13px; border:none; background:transparent; cursor:pointer; border-radius:10px; color:#E4CFC0; font-family:'Assistant',sans-serif; font-size:15px; text-align:right;" style-hover="background:rgba(255,255,255,0.05);">
+        <sc-if value="{{ isPacking }}" hint-placeholder-val="{{ true }}"><span style="position:absolute; inset:0; background:rgba(201,154,78,0.16); border-radius:10px; box-shadow:inset -3px 0 0 #C99A4E;"></span></sc-if>
+        <span style="position:relative; display:flex;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m4 6 1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg></span>
+        <span style="position:relative; font-weight:600;">רשימת ציוד</span>
+      </button>
+    </nav>
+
+    <div style="margin-top:auto; display:flex; align-items:center; gap:11px; padding:11px; background:rgba(255,255,255,0.05); border-radius:12px;">
+      <div style="width:36px; height:36px; border-radius:50%; background:#C99A4E; color:#41192A; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px;">ד</div>
+      <div style="line-height:1.2;">
+        <div style="font-size:14px; font-weight:600; color:#fff;">דניאל אמסלם</div>
+        <div style="font-size:12px; color:#A98A78;">מעצב · חשבון יחיד</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+
+    <!-- topbar -->
+    <header style="height:66px; flex-shrink:0; background:#FBF8F2; border-bottom:1px solid #E7DECF; display:flex; align-items:center; justify-content:space-between; padding:0 26px;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <h1 style="margin:0; font-family:'Frank Ruhl Libre',serif; font-size:22px; font-weight:700; color:#2A2320;">{{ screenTitle }}</h1>
+        <span style="font-size:13px; color:#9A8C7C;">{{ screenSub }}</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div style="display:flex; align-items:center; gap:8px; background:#F1E8D8; border:1px solid #E4D6BC; padding:6px 12px; border-radius:20px;">
+          <span style="width:8px; height:8px; border-radius:50%; background:#4C7A52; animation:tkPulse 2.4s ease-in-out infinite;"></span>
+          <span style="font-size:13px; color:#6C5A3E; font-weight:600;">נשמר אוטומטית · גרסה 4</span>
+        </div>
+        <button style="display:flex; align-items:center; gap:7px; background:#6E2A3C; color:#fff; border:none; padding:9px 16px; border-radius:10px; font-family:'Assistant',sans-serif; font-size:14px; font-weight:600; cursor:pointer; box-shadow:0 3px 10px rgba(110,42,60,.22);" style-hover="background:#521E2C;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M12 18v-6M9 15h6"/></svg>
+          ייצוא
+        </button>
+      </div>
+    </header>
+
+    <!-- scroll area -->
+    <main class="tk-scroll" style="flex:1; overflow:auto; position:relative;">
+
+      <!-- ===== DASHBOARD ===== -->
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:28px 32px 48px; max-width:1180px; margin:0 auto;">
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:22px;">
+          <div>
+            <div style="font-size:14px; color:#9A8C7C; margin-bottom:4px;">ערב טוב, דניאל</div>
+            <div style="font-family:'Frank Ruhl Libre',serif; font-size:30px; font-weight:700; color:#2A2320;">ארבעה אירועים על השולחן</div>
+          </div>
+          <button style="display:flex; align-items:center; gap:8px; background:#6E2A3C; color:#fff; border:none; padding:11px 18px; border-radius:11px; font-family:'Assistant',sans-serif; font-size:15px; font-weight:600; cursor:pointer; box-shadow:0 4px 14px rgba(110,42,60,.24);" style-hover="background:#521E2C;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            אירוע חדש
+          </button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:30px;">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+          <div style="background:#FFFDF9; border:1px solid #EBE3D4; border-radius:16px; padding:18px 20px;">
+            <div style="font-size:13px; color:#9A8C7C; margin-bottom:8px;">{{ s.label }}</div>
+            <div style="font-family:'Frank Ruhl Libre',serif; font-size:30px; font-weight:700; color:#6E2A3C;">{{ s.value }}</div>
+            <div style="font-size:12px; color:#B0A290; margin-top:2px;">{{ s.note }}</div>
+          </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+          <div style="font-family:'Frank Ruhl Libre',serif; font-size:19px; font-weight:700; color:#2A2320;">האירועים שלי</div>
+          <div style="display:flex; gap:6px; background:#EFE7D8; padding:4px; border-radius:10px;">
+            <span style="font-size:13px; font-weight:600; color:#41192A; background:#fff; padding:5px 13px; border-radius:7px; box-shadow:0 1px 3px rgba(0,0,0,.06);">הכול</span>
+            <span style="font-size:13px; color:#8A7C6C; padding:5px 13px;">בעיצוב</span>
+            <span style="font-size:13px; color:#8A7C6C; padding:5px 13px;">נשלחו</span>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:16px;">
+          <sc-for list="{{ events }}" as="e" hint-placeholder-count="4">
+          <div style="background:#FFFDF9; border:1px solid #EBE3D4; border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:14px;" style-hover="border-color:#D9C7A6; box-shadow:0 8px 24px rgba(80,40,30,.08);">
+            <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+              <div style="display:flex; align-items:center; gap:13px;">
+                <div style="width:52px; height:52px; border-radius:13px; background:{{ e.chipBg }}; color:{{ e.chipFg }}; display:flex; align-items:center; justify-content:center; font-family:'Frank Ruhl Libre',serif; font-weight:700; font-size:19px; flex-shrink:0;">{{ e.mono }}</div>
+                <div style="line-height:1.25;">
+                  <div style="font-size:17px; font-weight:700; color:#2A2320;">{{ e.name }}</div>
+                  <div style="font-size:13px; color:#9A8C7C;">{{ e.hall }} · {{ e.date }}</div>
+                </div>
+              </div>
+              <span style="font-size:12px; font-weight:700; color:{{ e.statusFg }}; background:{{ e.statusBg }}; padding:5px 11px; border-radius:20px; white-space:nowrap;">{{ e.status }}</span>
+            </div>
+            <div style="display:flex; gap:20px; font-size:13px; color:#7A6F63;">
+              <span><b style="color:#41192A;">{{ e.guests }}</b> אורחים</span>
+              <span><b style="color:#41192A;">{{ e.tables }}</b> שולחנות</span>
+              <span>ערכה: <b style="color:#41192A;">{{ e.kit }}</b></span>
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; color:#9A8C7C; margin-bottom:6px;"><span>התקדמות עיצוב</span><span>{{ e.progress }}%</span></div>
+              <div style="height:7px; background:#EEE5D5; border-radius:6px; overflow:hidden;"><div style="height:100%; width:{{ e.progressW }}; background:linear-gradient(90deg,#C99A4E,#6E2A3C); border-radius:6px;"></div></div>
+            </div>
+          </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== HALLS ===== -->
+      <sc-if value="{{ isHalls }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:28px 32px 48px; max-width:1180px; margin:0 auto;">
+        <div style="background:linear-gradient(120deg,#41192A,#6E2A3C); border-radius:18px; padding:26px 28px; color:#fff; display:flex; align-items:center; justify-content:space-between; margin-bottom:26px;">
+          <div style="max-width:560px;">
+            <div style="font-family:'Frank Ruhl Libre',serif; font-size:24px; font-weight:700; margin-bottom:6px;">אולם מכויל פעם אחת — אירוע חדש בלחיצה</div>
+            <div style="font-size:14px; color:#EAD3C6; line-height:1.55;">שמור מידות, צורה, עמודים ופריסת שולחנות אופיינית כתבנית. אירוע חדש באותו אולם נפתח מוכן — בלי PDF ובלי ייבוא.</div>
+          </div>
+          <button style="display:flex; align-items:center; gap:8px; background:#C99A4E; color:#41192A; border:none; padding:11px 18px; border-radius:11px; font-size:15px; font-weight:700; cursor:pointer; white-space:nowrap;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            תבנית חדשה
+          </button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:18px;">
+          <sc-for list="{{ halls }}" as="h" hint-placeholder-count="3">
+          <div style="background:#FFFDF9; border:1px solid #EBE3D4; border-radius:16px; overflow:hidden;" style-hover="border-color:#D9C7A6; box-shadow:0 10px 26px rgba(80,40,30,.09);">
+            <div style="height:150px; background:{{ h.planBg }}; position:relative; border-bottom:1px solid #EBE3D4;">
+              <div style="position:absolute; inset:14px; border:1.5px dashed #C4A98A; border-radius:8px;"></div>
+              <div style="position:absolute; top:26px; right:26px; width:26px; height:26px; border-radius:50%; border:2px solid #A9743F;"></div>
+              <div style="position:absolute; top:26px; right:64px; width:26px; height:26px; border-radius:50%; border:2px solid #A9743F;"></div>
+              <div style="position:absolute; top:64px; right:26px; width:26px; height:26px; border-radius:50%; border:2px solid #A9743F;"></div>
+              <div style="position:absolute; top:64px; right:64px; width:26px; height:26px; border-radius:50%; border:2px solid #A9743F;"></div>
+              <div style="position:absolute; bottom:22px; left:24px; width:54px; height:28px; border:2px solid #6E2A3C; border-radius:5px;"></div>
+              <span style="position:absolute; top:10px; left:14px; font-size:11px; font-weight:700; letter-spacing:.1em; color:#9A6A3C;">PLAN</span>
+            </div>
+            <div style="padding:18px;">
+              <div style="font-size:17px; font-weight:700; color:#2A2320; margin-bottom:12px;">{{ h.name }}</div>
+              <div style="display:flex; flex-direction:column; gap:8px; font-size:13px; color:#7A6F63; margin-bottom:16px;">
+                <div style="display:flex; justify-content:space-between;"><span>שטח</span><b style="color:#41192A;">{{ h.size }}</b></div>
+                <div style="display:flex; justify-content:space-between;"><span>קיבולת</span><b style="color:#41192A;">{{ h.tables }}</b></div>
+                <div style="display:flex; justify-content:space-between;"><span>מכשולים</span><b style="color:#41192A;">{{ h.obstacles }}</b></div>
+              </div>
+              <div style="display:flex; align-items:center; justify-content:space-between; border-top:1px solid #EFE7D8; padding-top:13px;">
+                <span style="font-size:12px; color:#9A8C7C;">{{ h.events }} אירועים בוצעו</span>
+                <span style="display:flex; align-items:center; gap:6px; font-size:14px; font-weight:700; color:#6E2A3C;">פתח אירוע
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg>
+                </span>
+              </div>
+            </div>
+          </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== SMART IMPORT ===== -->
+      <sc-if value="{{ isImport }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; height:100%; min-height:0;">
+        <!-- pdf canvas -->
+        <div style="flex:1; background:#EDE6DA; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center;">
+          <div style="position:absolute; top:16px; right:20px; display:flex; align-items:center; gap:10px; background:#FBF8F2; border:1px solid #E4D6BC; padding:8px 14px; border-radius:20px; box-shadow:0 2px 8px rgba(0,0,0,.06); z-index:5;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C99A4E" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            <span style="font-size:13px; color:#6C5A3E; font-weight:600;">iplan-lavida.pdf · וקטורי · ביטחון זיהוי גבוה</span>
+          </div>
+          <!-- the sheet -->
+          <div style="width:560px; height:400px; background:#FCFAF5; box-shadow:0 14px 40px rgba(60,30,20,.16); border:1px solid #E0D5C0; position:relative;">
+            <div style="position:absolute; inset:22px; border:1.5px solid #B9AC93;"></div>
+            <!-- detected tables (overlay) -->
+            <div style="position:absolute; top:70px; right:70px; width:60px; height:60px; border-radius:50%; border:2.5px solid #2F7E78; background:rgba(47,126,120,.12);"></div>
+            <div style="position:absolute; top:70px; right:180px; width:60px; height:60px; border-radius:50%; border:2.5px solid #2F7E78; background:rgba(47,126,120,.12);"></div>
+            <div style="position:absolute; top:70px; right:290px; width:60px; height:60px; border-radius:50%; border:2.5px solid #2F7E78; background:rgba(47,126,120,.12);"></div>
+            <div style="position:absolute; top:180px; right:70px; width:60px; height:60px; border-radius:50%; border:2.5px solid #2F7E78; background:rgba(47,126,120,.12);"></div>
+            <div style="position:absolute; top:180px; right:180px; width:60px; height:60px; border-radius:50%; border:2.5px dashed #C46B2E; background:rgba(196,107,46,.13);"></div>
+            <div style="position:absolute; top:180px; right:290px; width:60px; height:60px; border-radius:50%; border:2.5px solid #2F7E78; background:rgba(47,126,120,.12);"></div>
+            <div style="position:absolute; bottom:36px; right:70px; width:150px; height:44px; border:2.5px solid #2F7E78; background:rgba(47,126,120,.12); border-radius:4px;"></div>
+            <!-- calibration line -->
+            <div style="position:absolute; top:100px; right:70px; width:60px; height:2px; background:#6E2A3C;"></div>
+            <div style="position:absolute; top:94px; right:60px; font-size:10px; color:#6E2A3C; font-weight:700; background:#FCFAF5; padding:0 3px;">180 ס״מ</div>
+          </div>
+          <!-- zoom controls -->
+          <div style="position:absolute; bottom:20px; left:20px; display:flex; flex-direction:column; background:#FBF8F2; border:1px solid #E4D6BC; border-radius:12px; overflow:hidden;">
+            <button style="width:40px; height:40px; border:none; background:transparent; cursor:pointer; font-size:20px; color:#6C5A3E; border-bottom:1px solid #EFE7D8;">+</button>
+            <button style="width:40px; height:40px; border:none; background:transparent; cursor:pointer; font-size:20px; color:#6C5A3E;">−</button>
+          </div>
+        </div>
+        <!-- verification panel -->
+        <div class="tk-scroll" style="width:340px; flex-shrink:0; background:#FBF8F2; border-right:1px solid #E7DECF; padding:22px; overflow:auto;">
+          <div style="font-family:'Frank Ruhl Libre',serif; font-size:20px; font-weight:700; color:#2A2320; margin-bottom:4px;">אימות זיהוי</div>
+          <div style="font-size:13px; color:#9A8C7C; margin-bottom:18px; line-height:1.5;">המערכת מציעה, אתה מאשר. אישור גורף ותיקון נקודתי.</div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:18px;">
+            <div style="background:#EAF3F1; border:1px solid #CDE5E1; border-radius:12px; padding:13px;">
+              <div style="font-size:26px; font-weight:800; color:#2F7E78; font-family:'Frank Ruhl Libre',serif;">18</div>
+              <div style="font-size:12px; color:#4C7A72; display:flex; align-items:center; gap:5px;"><span style="width:9px; height:9px; border-radius:50%; background:#2F7E78;"></span>זוהו בביטחון</div>
+            </div>
+            <div style="background:#FBEEE2; border:1px solid #F0D8BE; border-radius:12px; padding:13px;">
+              <div style="font-size:26px; font-weight:800; color:#C46B2E; font-family:'Frank Ruhl Libre',serif;">3</div>
+              <div style="font-size:12px; color:#A65E2A; display:flex; align-items:center; gap:5px;"><span style="width:9px; height:9px; border-radius:50%; background:#C46B2E;"></span>דורשים בדיקה</div>
+            </div>
+          </div>
+
+          <button style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; background:#2F7E78; color:#fff; border:none; padding:12px; border-radius:11px; font-size:15px; font-weight:700; cursor:pointer; margin-bottom:10px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            אשר את הכול (18)
+          </button>
+          <button style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; background:#fff; color:#6E2A3C; border:1.5px solid #E0CFB4; padding:11px; border-radius:11px; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:20px;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            הוסף שולחן ידנית
+          </button>
+
+          <div style="font-size:12px; letter-spacing:.1em; font-weight:700; color:#A98A78; margin-bottom:10px;">דורשים החלטה</div>
+          <sc-for list="{{ importIssues }}" as="it" hint-placeholder-count="3">
+          <div style="background:#fff; border:1px solid #F0D8BE; border-radius:12px; padding:13px; margin-bottom:9px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:9px;">
+              <div style="font-size:14px; font-weight:700; color:#2A2320;">{{ it.title }}</div>
+              <span style="font-size:11px; color:#A65E2A; background:#FBEEE2; padding:3px 8px; border-radius:10px; font-weight:600;">{{ it.tag }}</span>
+            </div>
+            <div style="font-size:12px; color:#8A7C6C; margin-bottom:11px;">{{ it.note }}</div>
+            <div style="display:flex; gap:7px;">
+              <button style="flex:1; background:#2F7E78; color:#fff; border:none; padding:7px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer;">אשר</button>
+              <button style="flex:1; background:#F4ECDD; color:#6C5A3E; border:none; padding:7px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer;">שנה סוג</button>
+              <button style="background:#FBEAEA; color:#B23B3B; border:none; padding:7px 10px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer;">דחה</button>
+            </div>
+          </div>
+          </sc-for>
+
+          <div style="background:#F4ECDD; border-radius:12px; padding:14px; margin-top:8px;">
+            <div style="font-size:13px; font-weight:700; color:#6C5A3E; margin-bottom:6px;">כיול קנה מידה ✓</div>
+            <div style="font-size:12px; color:#8A7C6C; line-height:1.5;">סומן שולחן ⌀180 ס״מ → 2.4 מ״מ לפיקסל. חל על כל המפה.</div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== CATALOG ===== -->
+      <sc-if value="{{ isCatalog }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; min-height:100%;">
+        <!-- filter rail -->
+        <div style="width:210px; flex-shrink:0; background:#FBF8F2; border-left:1px solid #E7DECF; padding:22px 18px;">
+          <div style="font-size:12px; letter-spacing:.1em; font-weight:700; color:#A98A78; margin-bottom:12px;">קטגוריה</div>
+          <div style="display:flex; flex-direction:column; gap:3px; margin-bottom:24px;">
+            <sc-for list="{{ categories }}" as="c" hint-placeholder-count="7">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 11px; border-radius:9px; font-size:14px; color:{{ c.fg }}; background:{{ c.bg }}; font-weight:{{ c.weight }}; cursor:pointer;">
+              <span>{{ c.name }}</span><span style="font-size:12px; color:#B0A290;">{{ c.count }}</span>
+            </div>
+            </sc-for>
+          </div>
+          <div style="font-size:12px; letter-spacing:.1em; font-weight:700; color:#A98A78; margin-bottom:12px;">תגיות סטייל</div>
+          <div style="display:flex; flex-wrap:wrap; gap:7px;">
+            <span style="font-size:12px; padding:5px 11px; border-radius:16px; background:#41192A; color:#fff; font-weight:600;">קלאסי</span>
+            <span style="font-size:12px; padding:5px 11px; border-radius:16px; background:#F1E8D8; color:#6C5A3E;">רומנטי</span>
+            <span style="font-size:12px; padding:5px 11px; border-radius:16px; background:#F1E8D8; color:#6C5A3E;">שחור-לבן</span>
+            <span style="font-size:12px; padding:5px 11px; border-radius:16px; background:#F1E8D8; color:#6C5A3E;">טרופי</span>
+          </div>
+        </div>
+        <!-- grid -->
+        <div style="flex:1; padding:24px 28px 44px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+            <div style="position:relative;">
+              <input placeholder="חיפוש בקטלוג…" style="width:280px; padding:10px 38px 10px 14px; border:1px solid #E4D6BC; border-radius:10px; background:#FBF8F2; font-family:'Assistant',sans-serif; font-size:14px; color:#41192A;"/>
+              <svg style="position:absolute; top:11px; right:12px;" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#B0A290" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            </div>
+            <div style="display:flex; gap:10px;">
+              <button style="display:flex; align-items:center; gap:7px; background:#fff; border:1px solid #E4D6BC; color:#6C5A3E; padding:9px 15px; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>ייבוא מגיליון
+              </button>
+              <button style="display:flex; align-items:center; gap:7px; background:#6E2A3C; color:#fff; border:none; padding:9px 16px; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>מוצר חדש
+              </button>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px;">
+            <sc-for list="{{ catalog }}" as="p" hint-placeholder-count="8">
+            <div style="background:#FFFDF9; border:1px solid #EBE3D4; border-radius:14px; overflow:hidden;" style-hover="border-color:#D9C7A6; box-shadow:0 8px 22px rgba(80,40,30,.08);">
+              <div style="height:120px; background:{{ p.imgBg }}; position:relative; display:flex; align-items:center; justify-content:center;">
+                <span style="font-family:'Frank Ruhl Libre',serif; font-size:34px; color:{{ p.imgFg }}; opacity:.85;">{{ p.icon }}</span>
+                <span style="position:absolute; top:9px; right:9px; font-size:11px; font-weight:700; color:#fff; background:{{ p.layerBg }}; padding:3px 9px; border-radius:12px;">{{ p.layer }}</span>
+              </div>
+              <div style="padding:14px;">
+                <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+                  <div style="font-size:15px; font-weight:700; color:#2A2320;">{{ p.name }}</div>
+                  <div style="font-size:14px; font-weight:700; color:#6E2A3C;">{{ p.price }}</div>
+                </div>
+                <div style="font-size:12px; color:#9A8C7C; margin-bottom:11px;">{{ p.cat }} · {{ p.size }}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:6px; min-height:24px;">
+                  <sc-for list="{{ p.variants }}" as="v" hint-placeholder-count="2">
+                  <span style="display:flex; align-items:center; gap:5px; font-size:11px; color:#6C5A3E; background:#F4ECDD; padding:3px 8px; border-radius:10px;"><span style="width:9px; height:9px; border-radius:50%; background:{{ v.dot }}; border:1px solid rgba(0,0,0,.12);"></span>{{ v.label }}</span>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== STUDIO (HERO) ===== -->
+      <sc-if value="{{ isStudio }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; height:100%; min-height:0; background:#EDE6DA;">
+        <!-- catalog drawer -->
+        <div class="tk-scroll" style="width:230px; flex-shrink:0; background:#FBF8F2; border-left:1px solid #E7DECF; padding:16px 14px; overflow:auto;">
+          <div style="font-size:12px; letter-spacing:.09em; font-weight:700; color:#A98A78; margin-bottom:10px;">גרור מהקטלוג</div>
+          <div style="display:flex; gap:6px; margin-bottom:14px;">
+            <span style="font-size:12px; padding:5px 10px; border-radius:8px; background:#41192A; color:#fff; font-weight:600;">שולחן</span>
+            <span style="font-size:12px; padding:5px 10px; border-radius:8px; background:#EFE7D8; color:#8A7C6C;">רצפה</span>
+            <span style="font-size:12px; padding:5px 10px; border-radius:8px; background:#EFE7D8; color:#8A7C6C;">תקרה</span>
+          </div>
+          <sc-for list="{{ studioItems }}" as="p" hint-placeholder-count="6">
+          <div style="display:flex; align-items:center; gap:11px; padding:9px; background:#fff; border:1px solid #EBE3D4; border-radius:11px; margin-bottom:8px; cursor:grab;" style-hover="border-color:#D9C7A6;">
+            <div style="width:38px; height:38px; border-radius:9px; background:{{ p.imgBg }}; display:flex; align-items:center; justify-content:center; font-family:'Frank Ruhl Libre',serif; font-size:18px; color:{{ p.imgFg }}; flex-shrink:0;">{{ p.icon }}</div>
+            <div style="line-height:1.25; min-width:0;">
+              <div style="font-size:13px; font-weight:600; color:#2A2320; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p.name }}</div>
+              <div style="font-size:11px; color:#9A8C7C;">{{ p.size }}</div>
+            </div>
+          </div>
+          </sc-for>
+        </div>
+
+        <!-- canvas -->
+        <div style="flex:1; position:relative; overflow:hidden; background-image:radial-gradient(#DDD2BF 1px, transparent 1px); background-size:22px 22px; background-color:#EDE6DA;">
+          <!-- toolbar -->
+          <div style="position:absolute; top:14px; right:16px; z-index:6; display:flex; gap:8px;">
+            <div style="display:flex; background:#FBF8F2; border:1px solid #E4D6BC; border-radius:11px; padding:4px; gap:2px; box-shadow:0 2px 8px rgba(0,0,0,.06);">
+              <button style="width:36px; height:34px; border:none; background:#6E2A3C; color:#fff; border-radius:8px; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 3 7.5 18 2.5-8 8-2.5L3 3Z"/></svg></button>
+              <button style="width:36px; height:34px; border:none; background:transparent; color:#8A7C6C; border-radius:8px; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg></button>
+              <button style="width:36px; height:34px; border:none; background:transparent; color:#8A7C6C; border-radius:8px; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h3M20 7V4h-3M4 17v3h3M20 17v3h-3"/></svg></button>
+            </div>
+          </div>
+          <!-- smart-apply toast -->
+          <div style="position:absolute; top:14px; left:16px; z-index:6; display:flex; align-items:center; gap:10px; background:#41192A; color:#fff; padding:9px 14px; border-radius:11px; box-shadow:0 4px 14px rgba(0,0,0,.2);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C99A4E" stroke-width="2.2"><path d="m12 3 1.9 5.8H20l-4.9 3.6 1.9 5.8L12 14.6 7 18.2l1.9-5.8L4 8.8h6.1L12 3Z"/></svg>
+            <span style="font-size:13px; font-weight:600;">ערכת "ורוד עתיק וזהב" הוחלה על 20 שולחנות עגולים</span>
+            <span style="font-size:12px; color:#C99A4E; font-weight:700; cursor:pointer;">חריגים ›</span>
+          </div>
+
+          <!-- floor plan -->
+          <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
+            <div style="width:440px; height:380px; position:relative;">
+              <!-- hall outline -->
+              <div style="position:absolute; inset:0; border:2px solid #B7A98E; border-radius:6px; background:rgba(255,253,249,.55);"></div>
+              <!-- stage -->
+              <div style="position:absolute; top:12px; left:50%; transform:translateX(-50%); width:180px; height:38px; background:#EADFC8; border:1.5px solid #C4A98A; border-radius:5px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#9A6A3C; letter-spacing:.05em;">במה</div>
+              <!-- head table -->
+              <div style="position:absolute; top:70px; left:50%; transform:translateX(-50%); width:150px; height:32px; background:#6E2A3C; border-radius:5px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:700;">שולחן חתן ✦</div>
+              <!-- dance floor -->
+              <div style="position:absolute; top:150px; left:50%; transform:translateX(-50%); width:130px; height:96px; border:2px dashed #C99A4E; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#B0842F;">רחבת ריקודים</div>
+              <!-- obstacles / columns -->
+              <div style="position:absolute; top:180px; right:150px; width:14px; height:14px; background:#9A8C7C; border-radius:3px;"></div>
+              <div style="position:absolute; top:180px; left:150px; width:14px; height:14px; background:#9A8C7C; border-radius:3px;"></div>
+              <!-- round tables (kit applied = rose ring) -->
+              <sc-for list="{{ studioTables }}" as="t" hint-placeholder-count="12">
+              <div style="position:absolute; top:{{ t.top }}; right:{{ t.right }}; width:{{ t.d }}; height:{{ t.d }}; border-radius:50%; border:2.5px solid {{ t.ring }}; background:{{ t.fill }}; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:800; color:{{ t.num }}; box-shadow:0 2px 6px rgba(80,40,30,.1);">{{ t.n }}</div>
+              </sc-for>
+              <!-- selected table halo -->
+              <div style="position:absolute; top:113px; right:91px; width:56px; height:56px; border-radius:50%; border:2px solid #C99A4E; box-shadow:0 0 0 4px rgba(201,154,78,.22); pointer-events:none;"></div>
+              <!-- bar -->
+              <div style="position:absolute; bottom:14px; right:20px; width:84px; height:36px; background:#EADFC8; border:1.5px solid #C4A98A; border-radius:20px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#9A6A3C;">בר</div>
+              <!-- entrance -->
+              <div style="position:absolute; bottom:-9px; left:50%; transform:translateX(-50%); background:#EDE6DA; padding:0 10px; font-size:12px; font-weight:700; color:#8A7C6C;">↓ כניסה</div>
+            </div>
+          </div>
+          <!-- geometry warning -->
+          <div style="position:absolute; bottom:18px; left:16px; z-index:6; display:flex; align-items:center; gap:9px; background:#FBEEE2; border:1px solid #F0D8BE; padding:9px 13px; border-radius:11px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C46B2E" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+            <span style="font-size:13px; color:#A65E2A; font-weight:600;">שולחן 14: סך הפריטים חורג מ-92% משטח השולחן</span>
+          </div>
+        </div>
+
+        <!-- properties / layers -->
+        <div class="tk-scroll" style="width:250px; flex-shrink:0; background:#FBF8F2; border-right:1px solid #E7DECF; padding:18px 16px; overflow:auto;">
+          <div style="font-size:12px; letter-spacing:.09em; font-weight:700; color:#A98A78; margin-bottom:11px;">שכבות</div>
+          <div style="display:flex; flex-direction:column; gap:7px; margin-bottom:22px;">
+            <sc-for list="{{ layers }}" as="l" hint-placeholder-count="3">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:9px 11px; background:#fff; border:1px solid #EBE3D4; border-radius:10px;">
+              <div style="display:flex; align-items:center; gap:9px;"><span style="width:12px; height:12px; border-radius:3px; background:{{ l.color }};"></span><span style="font-size:13px; font-weight:600; color:#2A2320;">{{ l.name }}</span></div>
+              <div style="display:flex; align-items:center; gap:8px;"><span style="font-size:11px; color:#9A8C7C;">{{ l.count }}</span><span style="width:30px; height:17px; border-radius:10px; background:{{ l.toggleBg }}; position:relative;"><span style="position:absolute; top:2px; {{ l.knobSide }}:2px; width:13px; height:13px; border-radius:50%; background:#fff;"></span></span></div>
+            </div>
+            </sc-for>
+          </div>
+
+          <div style="font-size:12px; letter-spacing:.09em; font-weight:700; color:#A98A78; margin-bottom:11px;">שולחן נבחר · 3</div>
+          <div style="background:#fff; border:1px solid #EBE3D4; border-radius:13px; padding:15px; margin-bottom:16px;">
+            <div style="display:flex; align-items:center; gap:11px; margin-bottom:14px;">
+              <div style="width:44px; height:44px; border-radius:50%; border:2.5px solid #CBA0A0; background:#F7EDE9; display:flex; align-items:center; justify-content:center; font-weight:800; color:#6E2A3C;">3</div>
+              <div style="line-height:1.3;"><div style="font-size:14px; font-weight:700; color:#2A2320;">שולחן עגול ⌀180</div><div style="font-size:12px; color:#9A8C7C;">12 מושבים · ערכת ורוד עתיק</div></div>
+            </div>
+            <sc-for list="{{ tableItems }}" as="i" hint-placeholder-count="4">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-top:1px solid #F1E8D8;">
+              <span style="font-size:13px; color:#4A423A;">{{ i.name }}</span><span style="font-size:13px; font-weight:700; color:#6E2A3C;">×{{ i.qty }}</span>
+            </div>
+            </sc-for>
+          </div>
+          <button style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; background:#F4ECDD; color:#6C5A3E; border:1px solid #E4D6BC; padding:10px; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+            החל על כל העגולים
+          </button>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== PLACEMENT MAP ===== -->
+      <sc-if value="{{ isPlacement }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:28px 32px 48px; display:flex; gap:26px; justify-content:center; align-items:flex-start;">
+        <!-- paper -->
+        <div style="background:#fff; width:720px; flex-shrink:0; box-shadow:0 12px 40px rgba(60,30,20,.14); border:1px solid #E7DECF; padding:38px 40px;">
+          <div style="display:flex; align-items:flex-start; justify-content:space-between; border-bottom:2px solid #211D1A; padding-bottom:14px; margin-bottom:22px;">
+            <div>
+              <div style="font-family:'Frank Ruhl Libre',serif; font-size:24px; font-weight:900; color:#211D1A;">מפת הצבה — נועה ואיתי</div>
+              <div style="font-size:13px; color:#555;">אולם לה־וידה · 14 באוגוסט 2026 · 24 שולחנות</div>
+            </div>
+            <div style="text-align:left; font-size:12px; color:#555; line-height:1.6;"><div style="font-weight:700; color:#211D1A;">גרסה 4</div><div>הופק 11.07.2026</div></div>
+          </div>
+          <!-- b/w plan -->
+          <div style="width:100%; height:380px; position:relative; border:2px solid #211D1A;">
+            <div style="position:absolute; top:10px; left:50%; transform:translateX(-50%); width:180px; height:34px; border:1.5px solid #211D1A; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700;">במה</div>
+            <div style="position:absolute; top:60px; left:50%; transform:translateX(-50%); width:130px; height:28px; background:#211D1A; color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;">חתן A</div>
+            <div style="position:absolute; top:160px; left:50%; transform:translateX(-50%); width:130px; height:90px; border:1.5px dashed #999; display:flex; align-items:center; justify-content:center; font-size:11px; color:#777;">רחבה</div>
+            <sc-for list="{{ placementTables }}" as="t" hint-placeholder-count="12">
+            <div style="position:absolute; top:{{ t.top }}; right:{{ t.right }}; width:46px; height:46px; border-radius:50%; border:2px solid #211D1A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:800;">{{ t.n }}</div>
+            </sc-for>
+            <div style="position:absolute; bottom:12px; right:20px; width:74px; height:32px; border:1.5px solid #211D1A; border-radius:16px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;">בר</div>
+            <div style="position:absolute; bottom:-11px; left:50%; transform:translateX(-50%); background:#fff; padding:0 8px; font-size:11px; font-weight:700;">↓ כניסה</div>
+          </div>
+        </div>
+        <!-- legend + controls -->
+        <div style="width:300px; flex-shrink:0;">
+          <div style="background:#FBF8F2; border:1px solid #E7DECF; border-radius:14px; padding:20px; margin-bottom:16px;">
+            <div style="font-family:'Frank Ruhl Libre',serif; font-size:18px; font-weight:700; color:#2A2320; margin-bottom:14px;">מקרא · שולחן ← ערכת עיצוב</div>
+            <sc-for list="{{ legend }}" as="g" hint-placeholder-count="3">
+            <div style="display:flex; align-items:center; gap:12px; padding:9px 0; border-top:1px solid #EFE7D8;">
+              <span style="width:34px; height:34px; border-radius:8px; background:#211D1A; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; flex-shrink:0;">{{ g.table }}</span>
+              <span style="font-size:13px; color:#4A423A;">{{ g.kit }}</span>
+            </div>
+            </sc-for>
+          </div>
+          <button style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; background:#6E2A3C; color:#fff; border:none; padding:12px; border-radius:11px; font-size:15px; font-weight:700; cursor:pointer; margin-bottom:10px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6Z"/></svg>
+            ייצוא PDF להדפסה שחור-לבן
+          </button>
+          <div style="background:#F1E8D8; border:1px solid #E4D6BC; border-radius:11px; padding:12px 14px; font-size:12px; color:#6C5A3E; line-height:1.55;">כל ייצוא נושא תאריך ומספר גרסה — בשטח יידעו אם המפה עדכנית.</div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== PACKING LIST ===== -->
+      <sc-if value="{{ isPacking }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:28px 32px 48px; max-width:900px; margin:0 auto;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+          <div>
+            <div style="font-family:'Frank Ruhl Libre',serif; font-size:24px; font-weight:700; color:#2A2320;">רשימת ציוד — נועה ואיתי</div>
+            <div style="font-size:13px; color:#9A8C7C;">נספרה אוטומטית ממסמך העיצוב · 24 שולחנות · גרסה 4</div>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <div style="text-align:center; background:#FBF8F2; border:1px solid #E4D6BC; border-radius:12px; padding:9px 18px;"><div style="font-family:'Frank Ruhl Libre',serif; font-size:22px; font-weight:800; color:#6E2A3C;">613</div><div style="font-size:11px; color:#9A8C7C;">פריטים</div></div>
+            <button style="display:flex; align-items:center; gap:8px; background:#6E2A3C; color:#fff; border:none; padding:0 18px; border-radius:12px; font-size:14px; font-weight:600; cursor:pointer;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6Z"/></svg>
+              הדפסה
+            </button>
+          </div>
+        </div>
+
+        <div style="background:#FFFDF9; border:1px solid #EBE3D4; border-radius:16px; overflow:hidden;">
+          <div style="display:grid; grid-template-columns:1fr 90px 70px; padding:13px 22px; background:#F4ECDD; font-size:12px; font-weight:700; color:#8A7C6C; letter-spacing:.05em;">
+            <span>פריט</span><span style="text-align:center;">כמות</span><span style="text-align:center;">נארז</span>
+          </div>
+          <sc-for list="{{ packingGroups }}" as="grp" hint-placeholder-count="6">
+          <div>
+            <div style="display:flex; align-items:center; gap:9px; padding:11px 22px; background:#FBF6EC; border-top:1px solid #EFE7D8;">
+              <span style="width:9px; height:9px; border-radius:50%; background:{{ grp.dot }};"></span>
+              <span style="font-size:14px; font-weight:700; color:#41192A;">{{ grp.cat }}</span>
+              <span style="font-size:12px; color:#B0A290;">{{ grp.sub }}</span>
+            </div>
+            <sc-for list="{{ grp.items }}" as="i" hint-placeholder-count="3">
+            <div style="display:grid; grid-template-columns:1fr 90px 70px; align-items:center; padding:11px 22px; border-top:1px solid #F3ECDE;">
+              <span style="font-size:14px; color:#3A332C;">{{ i.name }}</span>
+              <span style="text-align:center; font-size:15px; font-weight:700; color:#2A2320;">{{ i.qty }}</span>
+              <span style="display:flex; justify-content:center;"><span style="width:20px; height:20px; border-radius:5px; border:1.6px solid #C9BBA2; background:{{ i.boxBg }}; display:flex; align-items:center; justify-content:center;">{{ i.check }}</span></span>
+            </div>
+            </sc-for>
+          </div>
+          </sc-for>
+        </div>
+        <div style="display:flex; align-items:center; gap:9px; margin-top:16px; font-size:13px; color:#9A8C7C;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C99A4E" stroke-width="2"><path d="M12 3 1.9 8.8 12 14.6l10.1-5.8L12 3Z"/><path d="m4 12 8 4.6L20 12"/></svg>
+          וריאנטים מופרדים בספירה — מפה זהב ומפה שמנת נספרות בנפרד, כפי שהוגדר בקטלוג.
+        </div>
+      </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:720}}">
+class Component extends DCLogic {
+  state = { screen: 'studio' };
+
+  renderVals() {
+    const s = this.state.screen;
+    const go = (name) => () => this.setState({ screen: name });
+
+    const titles = {
+      dashboard: ['לוח בקרה', 'סקירת כל האירועים הפעילים'],
+      halls:     ['תבניות אולם', 'אולמות מכוילים לשימוש חוזר'],
+      import:    ['ייבוא חכם', 'iplan-lavida.pdf · אימות זיהוי'],
+      catalog:   ['קטלוג מוצרים', '48 מוצרים · 7 קטגוריות'],
+      studio:    ['סטודיו עיצוב', 'נועה ואיתי · אולם לה־וידה'],
+      placement: ['מפת הצבה', 'נועה ואיתי · גרסה 4'],
+      packing:   ['רשימת ציוד', 'נועה ואיתי · גרסה 4'],
+    };
+
+    // catalog dot colors for variants
+    const V = (label, dot) => ({ label, dot });
+
+    const catalog = [
+      { name: 'מפת שולחן סאטן', cat: 'טקסטיל', size: '⌀320 ס״מ', price: '₪85', layer: 'שולחן', layerBg: '#6E2A3C', icon: '❦', imgBg: '#F3E9DC', imgFg: '#B07B4A', variants: [V('זהב', '#C99A4E'), V('שמנת', '#EDE3CE')] },
+      { name: 'כיסא נפוליאון', cat: 'כיסאות', size: '40×40×92', price: '₪28', layer: 'רצפה', layerBg: '#2F7E78', icon: '⌘', imgBg: '#ECEFE9', imgFg: '#5C7A63', variants: [V('זהב', '#C99A4E'), V('שקוף', '#DFE6EC')] },
+      { name: 'שנדליר קריסטל', cat: 'תאורה', size: '⌀80 · 6 קנים', price: '₪450', layer: 'תקרה', layerBg: '#B0842F', icon: '✦', imgBg: '#F6EFDD', imgFg: '#B0842F', variants: [] },
+      { name: 'סידור פרחים גבוה', cat: 'פרחים', size: '⌀35×70', price: '₪180', layer: 'שולחן', layerBg: '#6E2A3C', icon: '❀', imgBg: '#F7EAEA', imgFg: '#C07A7A', variants: [] },
+      { name: 'ראנר קטיפה', cat: 'טקסטיל', size: '40×300', price: '₪45', layer: 'שולחן', layerBg: '#6E2A3C', icon: '▤', imgBg: '#F1E7E4', imgFg: '#9A5A5A', variants: [V('בורדו', '#6E2A3C'), V('ורוד עתיק', '#CBA0A0')] },
+      { name: 'צלחת הצגה', cat: 'שולחנות', size: '⌀33', price: '₪12', layer: 'שולחן', layerBg: '#6E2A3C', icon: '◎', imgBg: '#F6EFDD', imgFg: '#B0842F', variants: [V('זהב', '#C99A4E'), V('נחושת', '#B07248')] },
+      { name: 'שטיח כניסה', cat: 'טקסטיל', size: '200×300', price: '₪220', layer: 'רצפה', layerBg: '#2F7E78', icon: '▦', imgBg: '#EFEAE1', imgFg: '#8A7C63', variants: [] },
+      { name: 'בר עגול מואר', cat: 'ריהוט', size: '⌀120×110', price: '₪600', layer: 'רצפה', layerBg: '#2F7E78', icon: '⬢', imgBg: '#F0EBE2', imgFg: '#8A7C63', variants: [] },
+    ];
+
+    const categories = [
+      { name: 'הכול', count: 48, on: false },
+      { name: 'שולחנות', count: 6, on: true },
+      { name: 'כיסאות', count: 8, on: false },
+      { name: 'טקסטיל', count: 12, on: false },
+      { name: 'תאורה', count: 7, on: false },
+      { name: 'פרחים', count: 9, on: false },
+      { name: 'ריהוט', count: 6, on: false },
+    ].map(c => ({
+      name: c.name, count: c.count,
+      bg: c.on ? '#6E2A3C' : 'transparent',
+      fg: c.on ? '#ffffff' : '#4A423A',
+      weight: c.on ? 700 : 500,
+    }));
+
+    // studio round tables layout — plan 440×380, tables d=46
+    const ring = '#CBA0A0', fill = '#F7EDE9', num = '#6E2A3C';
+    const mkT = (n, top, right, d) => ({ n, top: top + 'px', right: right + 'px', d: (d || 46) + 'px', ring, fill, num });
+    const studioClean = [
+      mkT(1, 118, 24), mkT(2, 118, 96), mkT(3, 118, 298), mkT(4, 118, 370),
+      mkT(5, 200, 20), mkT(6, 200, 96), mkT(7, 200, 298), mkT(8, 200, 374),
+      mkT(9, 288, 20), mkT(10, 288, 96), mkT(11, 288, 298), mkT(12, 288, 374),
+    ];
+
+    // placement plan is wider (≈640) — its own spread layout
+    const mkP = (n, top, right) => ({ n, top: top + 'px', right: right + 'px' });
+    const placementTables = [
+      mkP(1, 100, 40), mkP(2, 100, 150), mkP(3, 100, 444), mkP(4, 100, 554),
+      mkP(5, 185, 36), mkP(6, 185, 150), mkP(7, 185, 444), mkP(8, 185, 554),
+      mkP(9, 275, 36), mkP(10, 275, 150), mkP(11, 275, 444), mkP(12, 275, 554),
+    ];
+
+    const layers = [
+      { name: 'שולחנות', color: '#6E2A3C', count: '24', toggleBg: '#6E2A3C', knobSide: 'left' },
+      { name: 'רצפה', color: '#2F7E78', count: '9', toggleBg: '#2F7E78', knobSide: 'left' },
+      { name: 'תקרה', color: '#C99A4E', count: '6', toggleBg: '#D9CDB6', knobSide: 'right' },
+    ];
+
+    const packingGroups = [
+      { cat: 'טקסטיל', dot: '#6E2A3C', sub: '4 סוגים', items: [
+        { name: 'מפת שולחן סאטן — זהב', qty: 40, packed: true }, { name: 'מפת שולחן סאטן — שמנת', qty: 12, packed: true },
+        { name: 'ראנר קטיפה — ורוד עתיק', qty: 24, packed: false }, { name: 'שטיח כניסה', qty: 1, packed: false } ] },
+      { cat: 'כיסאות', dot: '#2F7E78', sub: '1 סוג', items: [ { name: 'כיסא נפוליאון — זהב', qty: 240, packed: false } ] },
+      { cat: 'שולחנות', dot: '#B07248', sub: '1 סוג', items: [ { name: 'צלחת הצגה — זהב', qty: 240, packed: true } ] },
+      { cat: 'תאורה', dot: '#C99A4E', sub: '2 סוגים', items: [
+        { name: 'שנדליר קריסטל', qty: 6, packed: true }, { name: 'נר לבן (6 קנים × שנדליר)', qty: 36, packed: false } ] },
+      { cat: 'פרחים', dot: '#C07A7A', sub: '1 סוג', items: [ { name: 'סידור פרחים גבוה', qty: 24, packed: false } ] },
+      { cat: 'ריהוט', dot: '#8A7C63', sub: '1 סוג', items: [ { name: 'בר עגול מואר', qty: 1, packed: true } ] },
+    ].map(g => ({ ...g, items: g.items.map(i => ({ name: i.name, qty: i.qty, boxBg: i.packed ? '#4C7A52' : '#fff', check: i.packed ? '✓' : '' })) }));
+
+    return {
+      screen: s,
+      screenTitle: (titles[s] || titles.studio)[0],
+      screenSub: (titles[s] || titles.studio)[1],
+      isDashboard: s === 'dashboard', isHalls: s === 'halls', isImport: s === 'import',
+      isCatalog: s === 'catalog', isStudio: s === 'studio', isPlacement: s === 'placement', isPacking: s === 'packing',
+      goDashboard: go('dashboard'), goHalls: go('halls'), goImport: go('import'),
+      goCatalog: go('catalog'), goStudio: go('studio'), goPlacement: go('placement'), goPacking: go('packing'),
+
+      stats: [
+        { label: 'אירועים פעילים', value: '4', note: '2 החודש' },
+        { label: 'הצעות ממתינות', value: '₪86K', note: 'ב-2 אירועים' },
+        { label: 'מוצרים בקטלוג', value: '48', note: '7 קטגוריות' },
+        { label: 'תבניות אולם', value: '3', note: 'מוכנות לשימוש' },
+      ],
+      events: [
+        { name: 'נועה ואיתי', hall: 'אולם לה־וידה', date: '14 באוג׳', guests: 240, tables: 24, kit: 'ורוד עתיק וזהב', status: 'בעיצוב', statusBg: '#F1E8D8', statusFg: '#9A6A3C', mono: 'נא', chipBg: '#F7EDE9', chipFg: '#6E2A3C', progress: 70, progressW: '70%' },
+        { name: 'שירה ורועי', hall: 'אחוזת הדר', date: '2 בספט׳', guests: 180, tables: 18, kit: 'ירוק בקבוק', status: 'הצעה נשלחה', statusBg: '#E7F0E9', statusFg: '#3E7048', mono: 'שר', chipBg: '#ECEFE9', chipFg: '#3E7048', progress: 100, progressW: '100%' },
+        { name: 'בת מצווה — יעל', hall: 'אולם לה־וידה', date: '21 בספט׳', guests: 120, tables: 12, kit: 'ורוד ולבן', status: 'טיוטה', statusBg: '#EFE7D8', statusFg: '#8A7C6C', mono: 'יע', chipBg: '#F7EAEA', chipFg: '#C07A7A', progress: 20, progressW: '20%' },
+        { name: 'מור ואלון', hall: 'גן הזית', date: '9 באוק׳', guests: 300, tables: 30, kit: 'טרופי', status: 'בעיצוב', statusBg: '#F1E8D8', statusFg: '#9A6A3C', mono: 'מא', chipBg: '#F6EFDD', chipFg: '#B0842F', progress: 45, progressW: '45%' },
+      ],
+      halls: [
+        { name: 'לה־וידה — אולם ראשי', size: '620 מ״ר', tables: 'עד 28 שולחנות', obstacles: '2 עמודים', events: 8, planBg: '#F5EEE1' },
+        { name: 'אחוזת הדר', size: '480 מ״ר', tables: 'עד 20 שולחנות', obstacles: 'ללא', events: 5, planBg: '#F0EEE6' },
+        { name: 'גן הזית · גן פתוח', size: '900 מ״ר', tables: 'עד 40 שולחנות', obstacles: 'במה קבועה', events: 3, planBg: '#EEF1EA' },
+      ],
+      importIssues: [
+        { title: 'שולחן ליד עמוד', tag: 'ביטחון נמוך', note: 'צורה חלקית — ייתכן שולחן "אביר" חתוך ע״י עמוד תמיכה.' },
+        { title: 'צורה לא מזוהה', tag: 'לא ודאי', note: 'ריבוע 90×90 — שולחן מרובע או אלמנט טקסט על הסקיצה?' },
+        { title: 'שני עיגולים קרובים', tag: 'כפילות?', note: 'ייתכן שולחן אחד שזוהה פעמיים. מזג או שמור בנפרד.' },
+      ],
+      catalog, categories,
+      studioItems: catalog.slice(0, 6),
+      studioTables: studioClean,
+      layers,
+      tableItems: [
+        { name: 'מפת סאטן זהב', qty: 1 }, { name: 'ראנר ורוד עתיק', qty: 1 },
+        { name: 'צלחת הצגה זהב', qty: 12 }, { name: 'כיסא נפוליאון זהב', qty: 12 },
+      ],
+      placementTables,
+      legend: [
+        { table: '1–20', kit: 'ערכת "ורוד עתיק וזהב" — סטנדרט' },
+        { table: 'A', kit: 'שולחן חתן — ערכת פרימיום + סידור גבוה' },
+        { table: '21–24', kit: 'ערכת קלאסית שמנת' },
+      ],
+      packingGroups,
+    };
+  }
+}
+</script>
+</body>
+</html>

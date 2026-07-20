@@ -1,0 +1,16 @@
+# Local Postgres for development. Hosted provider (Neon/Supabase) deferred — see docs/02 §5.
+# Requires Docker Desktop. Start with: docker compose up -d
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: idesign
+      POSTGRES_PASSWORD: idesign
+      POSTGRES_DB: idesign
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
