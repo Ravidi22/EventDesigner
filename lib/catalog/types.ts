@@ -1,8 +1,19 @@
 // UI-facing catalog types. This is the seam: today it feeds a seed array, later the
 // same shapes come from mapping Drizzle rows (lib/db/schema.ts) — swap happens here only.
-import type { Layer } from "../design-document/types";
+import type { Layer, Point } from "../design-document/types";
 
 export type { Layer };
+
+// Map appearance (studio 2D plan). Footprint is always drawn at true scale; `content`
+// is what appears inside it. rect/circle/ellipse read from `dimensions` (single source
+// of truth) — only "custom" stores its own outline. Outline coordinates are in mm and
+// are rendered centered on their bounding box (no pre-centering required).
+export interface MapAppearance {
+  shape: "rect" | "circle" | "ellipse" | "custom";
+  outline?: Point[]; // required iff shape === "custom"
+  content: "icon" | "name" | "none";
+  icon?: string; // Lucide name, iff content === "icon"
+}
 
 export interface Variant {
   id: string;
@@ -33,5 +44,6 @@ export interface Product {
   unitPrice?: number; // feeds the quote (F-4.6); never shown in operational output
   styleTags: string[];
   variants: Variant[];
+  appearance?: MapAppearance; // absent → derived from dimensions (see resolveFootprint)
   archived?: boolean; // F-4.5: hidden from the catalog but still resolvable by placements
 }
