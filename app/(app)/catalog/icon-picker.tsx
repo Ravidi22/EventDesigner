@@ -15,6 +15,7 @@ export function IconPicker({ value, onPick }: { value: string | undefined; onPic
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="חיפוש אייקון…"
+        aria-label="חיפוש אייקון"
         className={controlClassName + " mb-2 w-full px-2.5 placeholder:text-muted"}
       />
       <div className="grid grid-cols-6 gap-1">

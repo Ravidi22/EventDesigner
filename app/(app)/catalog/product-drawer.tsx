@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import type { Product, Variant } from "@/lib/catalog/types";
+import type { Product, Variant, MapAppearance } from "@/lib/catalog/types";
+import { resolveFootprint } from "@/lib/studio/footprint";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
 import { isPlacedAnywhere } from "@/lib/catalog/storage";
@@ -10,6 +11,9 @@ import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { TagToggle } from "@/components/tag-toggle";
 import { controlClassName } from "@/components/control";
+import { AppearancePreview } from "./appearance-preview";
+import { PolygonEditor } from "./polygon-editor";
+import { IconPicker } from "./icon-picker";
 
 const uid = () => crypto.randomUUID();
 
@@ -84,6 +88,19 @@ export function ProductDrawer({
       styleTags: d.styleTags.includes(t) ? d.styleTags.filter((x) => x !== t) : [...d.styleTags, t],
     }));
 
+  const [pickingIcon, setPickingIcon] = useState(false);
+
+  // Current shape/content, falling back to what the resolver would derive when appearance is unset.
+  const currentShape = draft.appearance?.shape ?? resolveFootprint(draft).kind;
+  const currentContent = draft.appearance?.content ?? "name";
+
+  // Patch appearance, always keeping the required fields present.
+  const setAppearance = (patch: Partial<MapAppearance>) =>
+    setDraft((d) => ({
+      ...d,
+      appearance: { shape: "rect", content: "name", ...d.appearance, ...patch },
+    }));
+
   const setVariant = (id: string, p: Partial<Variant>) =>
     setDraft((d) => ({ ...d, variants: d.variants.map((v) => (v.id === id ? { ...v, ...p } : v)) }));
   const addVariant = () => setDraft((d) => ({ ...d, variants: [...d.variants, { id: uid(), name: "" }] }));
@@ -98,6 +115,10 @@ export function ProductDrawer({
   const save = () => {
     setSubmitted(true);
     if (draft.name.trim() === "" || !draft.dimensions.heightMm) return;
+    if (draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3) {
+      setSubmitted(true);
+      return;
+    }
     const variants = draft.variants
       .map((v) => ({ ...v, id: v.id || uid(), name: v.name.trim() }))
       .filter((v) => v.name !== "" || v.archived);
@@ -264,6 +285,78 @@ export function ProductDrawer({
                 className={fieldInput + " text-start"}
               />
             </div>
+          </div>
+
+          <div>
+            <span className={fieldLabel}>מראה על התוכנית</span>
+            <div className="flex gap-3">
+              <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-md border border-border bg-bg p-2">
+                {currentShape === "custom" ? (
+                  <PolygonEditor
+                    outline={draft.appearance?.outline ?? []}
+                    onChange={(outline) => setAppearance({ shape: "custom", outline })}
+                  />
+                ) : (
+                  <AppearancePreview product={draft} className="h-full w-full" />
+                )}
+              </div>
+
+              <div className="flex-1 space-y-2">
+                <div>
+                  <span className="mb-1 block text-xs text-muted">צורה</span>
+                  <div className="flex flex-wrap gap-1 rounded-md border border-border p-0.5">
+                    {([["rect", "מלבן"], ["circle", "עיגול"], ["ellipse", "אליפסה"], ["custom", "מותאם"]] as const).map(([s, label]) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setAppearance(s === "custom" ? { shape: "custom", outline: draft.appearance?.outline ?? [] } : { shape: s })}
+                        className={"rounded px-2 py-1 text-xs transition-colors " + (currentShape === s ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="mb-1 block text-xs text-muted">תוכן</span>
+                  <div className="flex flex-wrap gap-1 rounded-md border border-border p-0.5">
+                    {([["icon", "אייקון"], ["name", "שם"], ["none", "ריק"]] as const).map(([c, label]) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => { setAppearance({ content: c }); setPickingIcon(c === "icon"); }}
+                        className={"rounded px-2 py-1 text-xs transition-colors " + (currentContent === c ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {currentShape === "custom" && (draft.appearance?.outline?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setAppearance({ shape: "custom", outline: [] })}
+                className="mt-1.5 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
+              >
+                רשם מחדש
+              </button>
+            )}
+            {submitted && draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3 && (
+              <p className="mt-1 text-xs text-warn">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
+            )}
+
+            {currentContent === "icon" && pickingIcon && (
+              <div className="mt-2">
+                <IconPicker
+                  value={draft.appearance?.icon}
+                  onPick={(icon) => { setAppearance({ content: "icon", icon }); setPickingIcon(false); }}
+                />
+              </div>
+            )}
           </div>
 
           <div>
