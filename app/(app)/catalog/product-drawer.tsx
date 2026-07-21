@@ -51,11 +51,13 @@ export function ProductDrawer({
   const ref = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<Product>(blankProduct);
   const [submitted, setSubmitted] = useState(false);
+  const [pickingIcon, setPickingIcon] = useState(false);
 
   useEffect(() => {
     if (product) {
       setDraft(product);
       setSubmitted(false);
+      setPickingIcon(false);
     }
   }, [product]);
 
@@ -87,8 +89,6 @@ export function ProductDrawer({
       ...d,
       styleTags: d.styleTags.includes(t) ? d.styleTags.filter((x) => x !== t) : [...d.styleTags, t],
     }));
-
-  const [pickingIcon, setPickingIcon] = useState(false);
 
   // Current shape/content, falling back to what the resolver would derive when appearance is unset.
   const currentShape = draft.appearance?.shape ?? resolveFootprint(draft).kind;
