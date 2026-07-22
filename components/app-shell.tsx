@@ -35,7 +35,7 @@ const TITLES: { test: (p: string) => boolean; title: string; sub?: (e: EventSumm
   { test: (p) => p.startsWith("/dashboard"), title: "לוח בקרה", sub: () => "סקירת כל האירועים הפעילים" },
   { test: (p) => p.startsWith("/halls"), title: "אולמות", sub: () => "שלדי האולמות שאתם עובדים בהם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים", sub: () => "מאגר הפריטים שלך" },
-  { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות", sub: () => "תצוגות אצורות ותיק האירוע" },
+  { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות", sub: () => "תצוגות אצורות מתמונות הפרויקטים" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות עסק", sub: () => "פרטי עסק, מע״מ ומטבע" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב", sub: (e) => (e ? `${e.clientName} · ${e.hallName}` : "") },
   { test: (p) => p.startsWith("/outputs"), title: "פלטים", sub: (e) => (e ? `${e.clientName} · פלטים תפעוליים` : "") },

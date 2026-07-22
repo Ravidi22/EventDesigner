@@ -2,47 +2,28 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, Heart, Pencil, Play, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import type { Product } from "@/lib/catalog/types";
 import { loadProducts } from "@/lib/catalog/storage";
-import { activeEvent } from "@/lib/events/storage";
-import {
-  loadFolder,
-  toggleLike,
-  loadImages,
-  saveImage,
-  loadPresentations,
-  savePresentation,
-  deletePresentation,
-} from "@/lib/gallery/storage";
+import { loadImages, saveImage, loadPresentations, savePresentation, deletePresentation } from "@/lib/gallery/storage";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { controlClassName } from "@/components/control";
 
-type View = "presentations" | "folder";
-
-// v0.3 gallery (F-2.1–F-2.4): designer-curated, named presentations replace the old layer
-// walkthrough. `manage` turns on the builder (create/edit presentations) — management mode
-// only; the meeting passes render the same screen client-safe, without it.
-export function GalleryScreen({ manage = false, initialView = "presentations" }: { manage?: boolean; initialView?: View }) {
+// v0.3 studio gallery (F-2.1–F-2.2): create, order, and edit designer-curated presentations.
+// This is management only — client-facing browsing, liking a photo, and the per-event "תיק
+// האירוע" folder are meeting concerns and live in meeting-gallery.tsx instead.
+export function GalleryScreen() {
   const router = useRouter();
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [presentations, setPresentations] = useState<Presentation[]>([]);
-  const [eventId, setEventId] = useState<string | null>(null);
-  const [clientName, setClientName] = useState("");
-  const [folder, setFolder] = useState<string[]>([]);
-  const [view, setView] = useState<View>(initialView);
   const [editing, setEditing] = useState<Presentation | null>(null);
 
   // localStorage is client-only — hydrate after mount.
   useEffect(() => {
     setImages(loadImages());
     setPresentations(loadPresentations());
-    const ev = activeEvent();
-    setEventId(ev?.id ?? null);
-    setClientName(ev?.clientName ?? "");
-    if (ev) setFolder(loadFolder(ev.id));
   }, []);
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
@@ -69,78 +50,38 @@ export function GalleryScreen({ manage = false, initialView = "presentations" }:
   return (
     <div className="mx-auto max-w-6xl px-8 py-7">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
-        {!manage ? (
-          <div className="inline-flex rounded-md border border-border p-0.5 text-sm">
-            <SegBtn active={view === "presentations"} onClick={() => setView("presentations")}>
-              תצוגות
-            </SegBtn>
-            <SegBtn active={view === "folder"} onClick={() => setView("folder")}>
-              תיק האירוע
-              <span className="nums ms-1.5 text-xs text-muted">{folder.length}</span>
-            </SegBtn>
-          </div>
-        ) : (
-          <h1 className="font-display text-2xl text-ink">תצוגות</h1>
-        )}
-
-        {manage && (
-          <Button
-            onClick={() =>
-              setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() })
-            }
-          >
-            <Plus className="h-4 w-4" strokeWidth={2} />
-            תצוגה חדשה
-          </Button>
-        )}
+        <h1 className="font-display text-2xl text-ink">תצוגות</h1>
+        <Button
+          onClick={() =>
+            setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() })
+          }
+        >
+          <Plus className="h-4 w-4" strokeWidth={2} />
+          תצוגה חדשה
+        </Button>
       </div>
 
-      {view === "presentations" ? (
-        presentations.length === 0 ? (
-          <p className="py-20 text-center text-sm text-muted">אין עדיין תצוגות. {manage ? "צרו את הראשונה." : ""}</p>
-        ) : (
-          <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
-            {presentations.map((p) => (
-              <PresentationCard
-                key={p.id}
-                presentation={p}
-                imageById={imageById}
-                manage={manage}
-                onOpen={() => router.push(`/present?p=${p.id}`)}
-                onEdit={() => setEditing(p)}
-              />
-            ))}
-          </div>
-        )
+      {presentations.length === 0 ? (
+        <p className="py-20 text-center text-sm text-muted">אין עדיין תצוגות. צרו את הראשונה.</p>
       ) : (
-        <FolderView
-          folder={folder}
-          imageById={imageById}
-          clientName={clientName}
-          onUnlike={(imageId) => eventId && setFolder(toggleLike(eventId, imageId))}
-        />
+        <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
+          {presentations.map((p) => (
+            <PresentationCard
+              key={p.id}
+              presentation={p}
+              imageById={imageById}
+              manage
+              onOpen={() => router.push(`/present?p=${p.id}`)}
+              onEdit={() => setEditing(p)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={
-        "inline-flex items-center rounded-[6px] px-3 py-1.5 font-medium transition-colors " +
-        (active ? "bg-accent-tint text-ink" : "text-ink-soft hover:text-ink")
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-function PresentationCard({
+export function PresentationCard({
   presentation: p,
   imageById,
   manage,
@@ -189,59 +130,6 @@ function PresentationCard({
         </div>
       </div>
     </article>
-  );
-}
-
-function FolderView({
-  folder,
-  imageById,
-  clientName,
-  onUnlike,
-}: {
-  folder: string[];
-  imageById: Map<string, GalleryImage>;
-  clientName: string;
-  onUnlike: (imageId: string) => void;
-}) {
-  const items = folder.map((id) => imageById.get(id)).filter((i): i is GalleryImage => !!i);
-  if (items.length === 0) {
-    return (
-      <div className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
-        <Heart className="mb-4 h-8 w-8 text-muted" strokeWidth={1.5} />
-        <h2 className="font-display text-2xl text-ink">תיק האירוע עדיין ריק</h2>
-        <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-          עברו עם {clientName || "הלקוח"} על התצוגות וסמנו ♥ את מה שאהב — התמונות ייאספו לכאן, והמוצרים
-          המקושרים יחכו לכם בראש מסילת הסטודיו.
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
-      {items.map((img) => (
-        <article key={img.id} className="group flex flex-col">
-          <div className="relative">
-            <div
-              className="aspect-[4/5] w-full rounded-lg border border-border"
-              style={{ background: img.tone }}
-              role="img"
-              aria-label={img.name}
-            />
-            <button
-              type="button"
-              onClick={() => onUnlike(img.id)}
-              aria-label={`הסרת "${img.name}" מתיק האירוע`}
-              title="הסרה מהתיק"
-              className="absolute inset-inline-start-2.5 top-2.5 rounded-full bg-canvas/85 p-2 transition-colors hover:bg-canvas"
-            >
-              <Heart className="h-4 w-4 text-accent" strokeWidth={2} fill="currentColor" />
-            </button>
-          </div>
-          <h3 className="mt-2 truncate text-sm font-medium text-ink">{img.name}</h3>
-          <p className="mt-0.5 truncate text-xs text-muted">{img.productName}</p>
-        </article>
-      ))}
-    </div>
   );
 }
 

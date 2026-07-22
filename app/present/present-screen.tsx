@@ -8,9 +8,10 @@ import { activeEvent } from "@/lib/events/storage";
 import { loadFolder, toggleLike, loadImages, loadPresentations } from "@/lib/gallery/storage";
 import { IconButton } from "@/components/icon-button";
 
-// F-2.4 present mode: fullscreen flip through ONE presentation with the client. Client-safe —
-// photo name + description only, no prices and no internal data. Like via click or key.
-export function PresentScreen({ presentationId }: { presentationId: string | null }) {
+// F-2.4 present mode: fullscreen flip through ONE presentation. `meeting` gates the client-only
+// bits — like / "תיק האירוע" — so a studio preview of the same presentation stays a plain
+// viewer with no event to save into. Client-safe: photo name + description only, no prices.
+export function PresentScreen({ presentationId, meeting }: { presentationId: string | null; meeting: boolean }) {
   const router = useRouter();
 
   const [presentation, setPresentation] = useState<Presentation | null>(null);
@@ -26,13 +27,15 @@ export function PresentScreen({ presentationId }: { presentationId: string | nul
     const p = (presentationId && all.find((x) => x.id === presentationId)) || all[0] || null;
     setPresentation(p);
     setImages(loadImages());
-    const ev = activeEvent();
-    if (ev) {
-      setEvent({ id: ev.id, clientName: ev.clientName });
-      setFolder(loadFolder(ev.id));
+    if (meeting) {
+      const ev = activeEvent();
+      if (ev) {
+        setEvent({ id: ev.id, clientName: ev.clientName });
+        setFolder(loadFolder(ev.id));
+      }
     }
     setReady(true);
-  }, [presentationId]);
+  }, [presentationId, meeting]);
 
   const ordered = useMemo(() => {
     if (!presentation) return [];
@@ -84,7 +87,7 @@ export function PresentScreen({ presentationId }: { presentationId: string | nul
     <div dir="rtl" className="fixed inset-0 flex flex-col bg-bg">
       {/* Minimal top chrome — the client is watching. The name lives on the photo itself. */}
       <header className="flex h-14 shrink-0 items-center justify-between px-6">
-        {event ? (
+        {meeting && event ? (
           <span className="text-sm text-muted">
             תיק האירוע <span className="nums">{folder.length}</span>
           </span>
@@ -117,23 +120,25 @@ export function PresentScreen({ presentationId }: { presentationId: string | nul
             {current.description && <p className="mt-0.5 text-sm text-canvas/80">{current.description}</p>}
           </figcaption>
 
-          {/* Like — pinned to the opposite corner, a small pop confirms the toggle. */}
-          <button
-            type="button"
-            onClick={like}
-            disabled={!event}
-            aria-pressed={liked}
-            aria-label={liked ? `הסרת "${current.name}" מתיק האירוע` : `שמירת "${current.name}" לתיק האירוע`}
-            title={liked ? "הסרה מתיק האירוע" : "שמירה לתיק האירוע"}
-            onAnimationEnd={() => setPulse(false)}
-            className="absolute inset-inline-end-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-canvas/85 transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            <Heart
-              className={(pulse ? "animate-like-pop " : "") + "h-5 w-5 " + (liked ? "text-accent" : "text-muted")}
-              strokeWidth={2}
-              fill={liked ? "currentColor" : "none"}
-            />
-          </button>
+          {/* Like — pinned to the opposite corner, a small pop confirms the toggle. Meeting-only. */}
+          {meeting && (
+            <button
+              type="button"
+              onClick={like}
+              disabled={!event}
+              aria-pressed={liked}
+              aria-label={liked ? `הסרת "${current.name}" מתיק האירוע` : `שמירת "${current.name}" לתיק האירוע`}
+              title={liked ? "הסרה מתיק האירוע" : "שמירה לתיק האירוע"}
+              onAnimationEnd={() => setPulse(false)}
+              className="absolute inset-inline-end-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-canvas/85 transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <Heart
+                className={(pulse ? "animate-like-pop " : "") + "h-5 w-5 " + (liked ? "text-accent" : "text-muted")}
+                strokeWidth={2}
+                fill={liked ? "currentColor" : "none"}
+              />
+            </button>
+          )}
         </figure>
 
         <NavArrow label="הבא" onClick={() => go(1)}>

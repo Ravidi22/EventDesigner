@@ -14,7 +14,7 @@ import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
 import { Button } from "@/components/button";
 import { controlClassName } from "@/components/control";
-import { GalleryScreen } from "@/app/(app)/gallery/gallery-screen";
+import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
 import { ImportFlow, type ImportResult } from "./import-flow";
 import { Quote } from "@/app/(app)/outputs/quote";
@@ -79,10 +79,10 @@ export function MeetingScreen() {
 
       <main className="min-h-0 flex-1 overflow-auto">
         {view === 0 && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
-        {view === 1 && <GalleryScreen />}
+        {view === 1 && <MeetingGalleryScreen />}
         {view === 2 && <WaitingStep clientName={event?.clientName ?? ""} />}
         {view === 3 && <ImportStep hasCalibration={!!event?.hallTemplateId} onDone={() => advance(4)} onCancel={() => setView(2)} />}
-        {view === 4 && <GalleryScreen initialView="folder" />}
+        {view === 4 && <MeetingGalleryScreen initialView="folder" />}
         {view === 5 && (
           <div className="h-full">
             <StudioScreen />

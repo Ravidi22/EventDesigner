@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# impeccable hook cache
+.impeccable/hook.cache.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
