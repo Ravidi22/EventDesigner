@@ -39,6 +39,9 @@ yarn-error.log*
 # impeccable hook cache
 .impeccable/hook.cache.json
 
+# graphify knowledge-graph output (regenerable, ~1.3MB)
+/graphify-out/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { Product } from "@/lib/catalog/types";
 import { resolveFootprint, resolveContent, outlineBounds } from "@/lib/studio/footprint";
+import { outlinePathD } from "@/lib/studio/geometry";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
@@ -16,7 +17,9 @@ export function AppearancePreview({ product, className }: { product: Product; cl
   else if (f.kind === "ellipse") { w = f.widthMm; h = f.depthMm; shape = <ellipse cx={0} cy={0} rx={w / 2} ry={h / 2} {...shapeProps} />; }
   else if (f.kind === "custom") {
     const b = outlineBounds(f.outline); w = b.w; h = b.h;
-    shape = <polygon points={f.outline.map((p) => `${p.x - b.cx},${p.y - b.cy}`).join(" ")} {...shapeProps} />;
+    // Center on (0,0); edge curves are endpoint-relative offsets so they carry over unchanged.
+    const centered = f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
+    shape = <path d={outlinePathD(centered, f.edgeCurves)} {...shapeProps} />;
   } else { w = f.widthMm; h = f.depthMm; shape = <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={Math.min(w, h) * 0.06} {...shapeProps} />; }
 
   const pad = Math.max(w, h) * 0.15 + 100;

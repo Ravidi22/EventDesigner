@@ -1,6 +1,7 @@
 // UI-facing catalog types. This is the seam: today it feeds a seed array, later the
 // same shapes come from mapping Drizzle rows (lib/db/schema.ts) — swap happens here only.
 import type { Layer, Point } from "../design-document/types";
+import type { EdgeCurve } from "../studio/hall";
 
 export type { Layer };
 
@@ -11,6 +12,7 @@ export type { Layer };
 export interface MapAppearance {
   shape: "rect" | "circle" | "ellipse" | "custom";
   outline?: Point[]; // required iff shape === "custom"
+  edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
   content: "icon" | "name" | "none";
   icon?: string; // Lucide name, iff content === "icon"
 }

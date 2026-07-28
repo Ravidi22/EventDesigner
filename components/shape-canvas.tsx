@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { Maximize, Minus, Plus, Ruler, Trash2, X, type LucideIcon } from "lucide-react";
 import type { Point, EdgeCurve, Entrance, Fixture, FixtureShape, Column } from "@/lib/studio/hall";
 import {
   edgePathD,
@@ -12,13 +12,14 @@ import {
   bulgeDepthMm,
   maxBulgeDepthMm,
   pointAtDistance,
-  doorGeometry,
+  wallSegmentD,
   toLocalFrame,
 } from "@/lib/studio/geometry";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { controlClassName } from "@/components/control";
-import type { StructureDragType } from "./structure-rail";
+
+export type StructureDragType = "entrance" | "stage" | "bar";
 
 export type SelectedKind = "vertex" | "wall" | "entrance" | "stage" | "bar";
 export interface SelectedRef {
@@ -26,37 +27,33 @@ export interface SelectedRef {
   id: string;
 }
 
+// One entry in the right-click menu. The host builds them (halls: add entrance/stage/bar);
+// the canvas just renders + dispatches — so the shape editor stays domain-agnostic.
+export interface ContextMenuItem {
+  label: string;
+  icon?: LucideIcon;
+  disabled?: boolean;
+  onSelect: () => void;
+}
+
 const PAD_MM = 1500;
 const DEFAULT_EXTENT = { w: 22000, h: 15000 };
 const SNAP_PX = 16;
+const MIN_MM_PER_PX = 0.5; // most zoomed-in (1px ≈ 0.5mm)
+const MAX_MM_PER_PX = 300; // most zoomed-out
 
-function outlineCentroid(outline: Point[]): Point {
-  if (outline.length === 0) return { x: 0, y: 0 };
-  return {
-    x: outline.reduce((s, p) => s + p.x, 0) / outline.length,
-    y: outline.reduce((s, p) => s + p.y, 0) / outline.length,
-  };
-}
-
-// A door's open leaf can swing further out than the wall it's cut into (especially "outward" on
-// an outer wall) — include its extent or the swing arc gets clipped by the viewBox padding.
-function computeViewBox(outline: Point[], entrances: Entrance[], stage: Fixture | undefined, bars: Fixture[]) {
-  const interiorHint = outlineCentroid(outline);
-  const doorPoints = entrances.flatMap((e) => {
-    const a = outline[e.wallIndex];
-    const b = outline[(e.wallIndex + 1) % outline.length];
-    if (!a || !b) return [];
-    return doorGeometry(a, b, e.distanceMm, e.widthMm, e.swingInward, interiorHint, e.doubleDoor).leaves.map((l) => l.tip);
-  });
-  const points = [...outline, ...doorPoints, ...(stage ? [stage] : []), ...bars];
-  if (points.length === 0) return { minX: -PAD_MM, minY: -PAD_MM, w: DEFAULT_EXTENT.w, h: DEFAULT_EXTENT.h };
+// Frames the closed shape (doors are plain gaps in the wall now, so there's no swing arc to keep
+// in view). Only used in edit mode — while drawing we hold a fixed frame instead (see below).
+function computeViewBox(outline: Point[], stage: Fixture | undefined, bars: Fixture[], padMm: number, minExtent: { w: number; h: number }) {
+  const points = [...outline, ...(stage ? [stage] : []), ...bars];
+  if (points.length === 0) return { minX: -padMm, minY: -padMm, w: minExtent.w, h: minExtent.h };
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
   const minX = Math.min(...xs);
   const minY = Math.min(...ys);
-  const w = Math.max(DEFAULT_EXTENT.w, Math.max(...xs) - minX + PAD_MM * 2);
-  const h = Math.max(DEFAULT_EXTENT.h, Math.max(...ys) - minY + PAD_MM * 2);
-  return { minX: minX - PAD_MM, minY: minY - PAD_MM, w, h };
+  const w = Math.max(minExtent.w, Math.max(...xs) - minX + padMm * 2);
+  const h = Math.max(minExtent.h, Math.max(...ys) - minY + padMm * 2);
+  return { minX: minX - padMm, minY: minY - padMm, w, h };
 }
 
 function nudge(e: React.KeyboardEvent, x: number, y: number, onMove: (p: Point) => void) {
@@ -97,14 +94,14 @@ function dragHandlers(clientToMm: (clientX: number, clientY: number) => Point, o
 // drag vertices/wall-midpoints/bezier handles once the shape is closed (mode "edit"). Stage/bar
 // drop in from the StructureRail and can be dragged, rotated and resized in place; entrances drop
 // onto the nearest wall and slide along it, rendered as a real door gap + swing symbol.
-export function WallCanvas({
+export function ShapeCanvas({
   mode,
   outline,
   edgeCurves,
-  columns,
-  entrances,
+  columns = [],
+  entrances = [],
   stage,
-  bars,
+  bars = [],
   selected,
   onSelect,
   onAddVertex,
@@ -116,49 +113,91 @@ export function WallCanvas({
   onMoveBar,
   onUpdateStage,
   onUpdateBar,
-  onDropStructure,
+  contextMenuItems,
+  padMm = PAD_MM,
+  minExtentMm = DEFAULT_EXTENT,
+  gridMm = 1000,
 }: {
   mode: "draw" | "edit";
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
-  columns: Column[];
-  entrances: Entrance[];
-  stage: Fixture | undefined;
-  bars: Fixture[];
+  columns?: Column[];
+  entrances?: Entrance[];
+  stage?: Fixture | undefined;
+  bars?: Fixture[];
   selected: SelectedRef | null;
   onSelect: (ref: SelectedRef | null) => void;
   onAddVertex: (p: Point) => void;
   onCloseOutline: () => void;
   onMoveVertex: (idx: number, p: Point) => void;
   onMoveWallHandle: (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => void;
-  onMoveEntrance: (id: string, p: Point) => void;
-  onMoveStage: (p: Point) => void;
-  onMoveBar: (id: string, p: Point) => void;
-  onUpdateStage: (patch: Partial<Fixture>) => void;
-  onUpdateBar: (id: string, patch: Partial<Fixture>) => void;
-  onDropStructure: (type: StructureDragType, p: Point) => void;
+  onMoveEntrance?: (id: string, p: Point) => void;
+  onMoveStage?: (p: Point) => void;
+  onMoveBar?: (id: string, p: Point) => void;
+  onUpdateStage?: (patch: Partial<Fixture>) => void;
+  onUpdateBar?: (id: string, patch: Partial<Fixture>) => void;
+  // Right-click builds its menu from these (e.g. the hall's add entrance/stage/bar). No items → no menu.
+  contextMenuItems?: (point: Point) => ContextMenuItem[];
+  padMm?: number; // frame padding + minimum extent + grid spacing — hall-scale by default, smaller for
+  minExtentMm?: { w: number; h: number }; // product footprints (cm-scale) so a small shape isn't tiny
+  gridMm?: number;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [cursorMm, setCursorMm] = useState<Point | null>(null);
-  const [k, setK] = useState(0.05); // px per mm at current render size
+  const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
+  const [rect, setRect] = useState({ w: 0, h: 0 });
+  const [center, setCenter] = useState<Point>({ x: DEFAULT_EXTENT.w / 2, y: DEFAULT_EXTENT.h / 2 });
+  const [mmPerPx, setMmPerPx] = useState(20); // world mm per screen px — the zoom level
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
+  const [showDims, setShowDims] = useState(false);
+  const didInit = useRef(false);
+  const pan = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
-  const vb = computeViewBox(outline, entrances, stage, bars);
-  const interiorHint = outlineCentroid(outline);
+  // Where the view should sit when fitted: hug the shape, or hold a fixed frame while first drawing
+  // (recomputing to hug a single point would fling it into the corner).
+  const contentBox =
+    mode === "draw" && outline.length < 3
+      ? { minX: -padMm, minY: -padMm, w: minExtentMm.w, h: minExtentMm.h }
+      : computeViewBox(outline, stage, bars, padMm, minExtentMm);
+
+  // The viewBox is derived from center+zoom with the container's own aspect ratio, so there's no
+  // letterbox and 1 screen px == mmPerPx world units everywhere. Pan moves center; zoom changes
+  // mmPerPx about the cursor. Until we've measured the container, fall back to the fitted box.
+  const hasRect = rect.w > 0 && rect.h > 0;
+  const vb = hasRect
+    ? { minX: center.x - (rect.w * mmPerPx) / 2, minY: center.y - (rect.h * mmPerPx) / 2, w: rect.w * mmPerPx, h: rect.h * mmPerPx }
+    : contentBox;
+
+  const fitTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
+    if (rw === 0 || rh === 0) return;
+    setMmPerPx(Math.max(box.w / rw, box.h / rh) * 1.06);
+    setCenter({ x: box.minX + box.w / 2, y: box.minY + box.h / 2 });
+  };
 
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const update = () => {
-      const rect = svg.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) setK(Math.min(rect.width / vb.w, rect.height / vb.h));
+      const r = svg.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setRect({ w: r.width, h: r.height });
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [vb.w, vb.h]);
+  }, []);
 
-  const mm = (px: number) => px / k; // screen px → mm, for marker sizing that must stay a fixed screen size
+  // Fit once, as soon as the container has been measured.
+  useEffect(() => {
+    if (!didInit.current && rect.w > 0 && rect.h > 0) {
+      didInit.current = true;
+      fitTo(contentBox, rect.w, rect.h);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rect.w, rect.h]);
+
+  const mm = (px: number) => px * mmPerPx; // screen px → world mm, for markers that stay a fixed screen size
 
   const clientToMm = (clientX: number, clientY: number): Point => {
     const svg = svgRef.current;
@@ -183,7 +222,45 @@ export function WallCanvas({
     return { x: screen.x, y: screen.y };
   };
 
+  const clampZoom = (m: number) => Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, m));
+  const zoomByCenter = (factor: number) => setMmPerPx((m) => clampZoom(m * factor));
+  const zoomAround = (clientX: number, clientY: number, factor: number) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const r = svg.getBoundingClientRect();
+    const world = clientToMm(clientX, clientY);
+    const next = clampZoom(mmPerPx * factor);
+    const sx = clientX - (r.left + r.width / 2); // cursor offset from viewport centre, px
+    const sy = clientY - (r.top + r.height / 2);
+    setCenter({ x: world.x - sx * next, y: world.y - sy * next }); // keep the cursor's world point put
+    setMmPerPx(next);
+  };
+
+  // Figma-style snapping: pull a dragged point onto a nearby reference (the hall's bbox edges/centre,
+  // any vertex, any other fixture's centre) and remember the matched x/y so we can draw a guide line.
+  const snapPoint = (p: Point, opts?: { fixtureId?: string; vertexIdx?: number }): Point => {
+    const th = 6 * mmPerPx; // 6px snap radius, in world units
+    const xs: number[] = [];
+    const ys: number[] = [];
+    if (outline.length >= 2) {
+      const oxs = outline.map((v) => v.x);
+      const oys = outline.map((v) => v.y);
+      const minX = Math.min(...oxs), maxX = Math.max(...oxs), minY = Math.min(...oys), maxY = Math.max(...oys);
+      xs.push(minX, (minX + maxX) / 2, maxX);
+      ys.push(minY, (minY + maxY) / 2, maxY);
+      outline.forEach((v, i) => { if (i !== opts?.vertexIdx) { xs.push(v.x); ys.push(v.y); } });
+    }
+    [stage, ...bars].forEach((f) => { if (f && f.id !== opts?.fixtureId) { xs.push(f.x); ys.push(f.y); } });
+    let sx = p.x, gx: number | null = null, bx = th;
+    for (const x of xs) { const d = Math.abs(p.x - x); if (d < bx) { bx = d; sx = x; gx = x; } }
+    let sy = p.y, gy: number | null = null, by = th;
+    for (const y of ys) { const d = Math.abs(p.y - y); if (d < by) { by = d; sy = y; gy = y; } }
+    setGuides({ x: gx, y: gy });
+    return { x: sx, y: sy };
+  };
+
   const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (spaceHeld) return; // space is the pan modifier — never draw/select while it's down
     if (mode !== "draw") {
       onSelect(null);
       return;
@@ -198,53 +275,106 @@ export function WallCanvas({
     onAddVertex(clientToMm(e.clientX, e.clientY));
   };
 
+  // Wheel-zoom (non-passive so we can preventDefault the page scroll) + space-to-pan modifier key.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      zoomAround(e.clientX, e.clientY, e.deltaY > 0 ? 1.1 : 1 / 1.1);
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mmPerPx]);
+
+  useEffect(() => {
+    const typing = () => {
+      const el = document.activeElement;
+      return el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    };
+    const down = (e: KeyboardEvent) => {
+      if (typing()) return;
+      if (e.code === "Space") { e.preventDefault(); setSpaceHeld(true); }
+      else if (e.key === "+" || e.key === "=") zoomByCenter(1 / 1.2);
+      else if (e.key === "-" || e.key === "_") zoomByCenter(1.2);
+    };
+    const up = (e: KeyboardEvent) => { if (e.code === "Space") setSpaceHeld(false); };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
+    <>
     <svg
       ref={svgRef}
       viewBox={`${vb.minX} ${vb.minY} ${vb.w} ${vb.h}`}
       preserveAspectRatio="xMidYMid meet"
-      className={"h-full w-full " + (mode === "draw" ? "cursor-crosshair" : "cursor-default")}
+      className={"h-full w-full touch-none " + (spaceHeld ? "cursor-grab" : mode === "draw" ? "cursor-crosshair" : "cursor-default")}
       role="img"
       aria-label="תרשים האולם — עריכה"
       onClick={handleCanvasClick}
-      onPointerMove={(e) => mode === "draw" && setCursorMm(clientToMm(e.clientX, e.clientY))}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
+      onPointerDown={(e) => {
+        if (spaceHeld || e.button === 1) {
+          e.preventDefault();
+          (e.currentTarget as Element).setPointerCapture(e.pointerId);
+          pan.current = { x: e.clientX, y: e.clientY, moved: false };
+        }
       }}
-      onDrop={(e) => {
+      onPointerMove={(e) => {
+        if (pan.current) {
+          const dx = e.clientX - pan.current.x;
+          const dy = e.clientY - pan.current.y;
+          pan.current = { x: e.clientX, y: e.clientY, moved: true };
+          setCenter((c) => ({ x: c.x - dx * mmPerPx, y: c.y - dy * mmPerPx }));
+          return;
+        }
+        if (mode === "draw") setCursorMm(clientToMm(e.clientX, e.clientY));
+      }}
+      onPointerUp={(e) => {
+        if (pan.current) (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+        pan.current = null;
+        setGuides({ x: null, y: null });
+      }}
+      onContextMenu={(e) => {
         e.preventDefault();
-        const type = e.dataTransfer.getData("text/structure") as StructureDragType | "";
-        if (type) onDropStructure(type, clientToMm(e.clientX, e.clientY));
+        const items = contextMenuItems?.(clientToMm(e.clientX, e.clientY)) ?? [];
+        if (items.length) setMenu({ x: e.clientX, y: e.clientY, items });
       }}
     >
       <defs>
-        <pattern id="hall-grid" width={1000} height={1000} patternUnits="userSpaceOnUse">
-          <path d="M 1000 0 L 0 0 0 1000" fill="none" className="text-border" stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <pattern id="shape-grid" width={gridMm} height={gridMm} patternUnits="userSpaceOnUse">
+          <path d={`M ${gridMm} 0 L 0 0 0 ${gridMm}`} fill="none" className="text-border" stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
         </pattern>
       </defs>
-      <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#hall-grid)" />
+      <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#shape-grid)" />
 
-      {/* Walls — cut into stub segments around any door(s) on that wall. A wall carrying a door
-          renders straight (doors don't currently support a curved host wall). */}
+      {/* Walls — solid stubs on either side of each door gap. The wall keeps its curve: the gap is
+          cut along the bezier (via wallSegmentD), so a door on a bowed wall no longer flattens it.
+          ponytail: the gap's t-range is the door's chord-distance / chord-length — the same chord
+          approximation doors already use for placement, fine for a gentle bow. */}
       {outline.map((a, i) => {
         if (mode === "draw" && i === outline.length - 1) return null; // no closing edge until the shape is closed
         const b = outline[(i + 1) % outline.length];
-        const doorsOnWall = entrances.filter((e) => e.wallIndex === i).sort((x, y) => x.distanceMm - y.distanceMm);
-        const curve = doorsOnWall.length > 0 ? null : (edgeCurves[i] ?? null);
+        const curve = edgeCurves[i] ?? null;
         const isSelected = selected?.kind === "wall" && selected.id === String(i);
-        const segments: [Point, Point][] = [];
-        let cursor = a;
+        const len = wallLengthMm(a, b) || 1;
+        const doorsOnWall = entrances.filter((e) => e.wallIndex === i).sort((x, y) => x.distanceMm - y.distanceMm);
+        const solids: [number, number][] = []; // solid-wall t-intervals between the door gaps
+        let cursor = 0;
         for (const door of doorsOnWall) {
-          const half = door.widthMm / 2;
-          segments.push([cursor, pointAtDistance(a, b, door.distanceMm - half)]);
-          cursor = pointAtDistance(a, b, door.distanceMm + half);
+          const gs = Math.max(0, (door.distanceMm - door.widthMm / 2) / len);
+          const ge = Math.min(1, (door.distanceMm + door.widthMm / 2) / len);
+          if (gs > cursor) solids.push([cursor, gs]);
+          cursor = Math.max(cursor, ge);
         }
-        segments.push([cursor, b]);
+        if (cursor < 1) solids.push([cursor, 1]);
         return (
           <g key={i}>
-            {segments.map(([sa, sb], si) => (
-              <path key={si} d={edgePathD(sa, sb, curve)} fill="none" className="text-ink" stroke="currentColor" strokeWidth={isSelected ? 3 : 2} vectorEffect="non-scaling-stroke" />
+            {solids.map(([t0, t1], si) => (
+              <path key={si} d={wallSegmentD(a, b, curve, t0, t1)} fill="none" className="text-ink" stroke="currentColor" strokeWidth={isSelected ? 3 : 2} vectorEffect="non-scaling-stroke" />
             ))}
             {mode === "edit" && (
               <path
@@ -315,7 +445,7 @@ export function WallCanvas({
         const closable = mode === "draw" && i === 0 && outline.length >= 3;
         const interactive = mode === "edit";
         const selectedVertex = selected?.kind === "vertex" && selected.id === String(i);
-        const drag = dragHandlers(clientToMm, (p) => onMoveVertex(i, p), () => onSelect({ kind: "vertex", id: String(i) }));
+        const drag = dragHandlers(clientToMm, (p) => onMoveVertex(i, snapPoint(p, { vertexIdx: i })), () => onSelect({ kind: "vertex", id: String(i) }));
         return (
           <g
             key={i}
@@ -337,7 +467,8 @@ export function WallCanvas({
         );
       })}
 
-      {/* Entrances — a real door: a gap cut in the wall above, a leaf, and a swing arc */}
+      {/* Entrances — a plain opening: the gap is already the absence of wall above; this just adds
+          the drag handle (slide along the wall) and the selection highlight. */}
       {entrances.map((en) => {
         const a = outline[en.wallIndex];
         const b = outline[(en.wallIndex + 1) % outline.length];
@@ -348,10 +479,9 @@ export function WallCanvas({
             entrance={en}
             a={a}
             b={b}
-            interiorHint={interiorHint}
             selected={selected?.kind === "entrance" && selected.id === en.id}
             onSelect={() => onSelect({ kind: "entrance", id: en.id })}
-            onMove={(p) => onMoveEntrance(en.id, p)}
+            onMove={(p) => onMoveEntrance?.(en.id, p)}
             clientToMm={clientToMm}
             mm={mm}
           />
@@ -362,8 +492,8 @@ export function WallCanvas({
           fixture={stage}
           selected={selected?.kind === "stage"}
           onSelect={() => onSelect({ kind: "stage", id: stage.id })}
-          onMove={onMoveStage}
-          onUpdate={onUpdateStage}
+          onMove={(p) => onMoveStage?.(snapPoint(p, { fixtureId: stage.id }))}
+          onUpdate={(patch) => onUpdateStage?.(patch)}
           clientToMm={clientToMm}
           mm={mm}
         />
@@ -374,13 +504,72 @@ export function WallCanvas({
           fixture={b}
           selected={selected?.kind === "bar" && selected.id === b.id}
           onSelect={() => onSelect({ kind: "bar", id: b.id })}
-          onMove={(p) => onMoveBar(b.id, p)}
-          onUpdate={(patch) => onUpdateBar(b.id, patch)}
+          onMove={(p) => onMoveBar?.(b.id, snapPoint(p, { fixtureId: b.id }))}
+          onUpdate={(patch) => onUpdateBar?.(b.id, patch)}
           clientToMm={clientToMm}
           mm={mm}
         />
       ))}
+
+      {/* Smart-alignment guides — the accent lines that appear while a drag snaps to an edge/centre */}
+      {guides.x !== null && (
+        <line x1={guides.x} y1={vb.minY} x2={guides.x} y2={vb.minY + vb.h} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+      )}
+      {guides.y !== null && (
+        <line x1={vb.minX} y1={guides.y} x2={vb.minX + vb.w} y2={guides.y} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+      )}
+
+      {/* Measure overlay — each wall's length in metres at its midpoint */}
+      {showDims && mode === "edit" &&
+        outline.map((a, i) => {
+          const b = outline[(i + 1) % outline.length];
+          const curve = edgeCurves[i] ?? null;
+          const mid = edgeMidpoint(a, b, curve);
+          return (
+            <text key={i} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
+              {(wallLengthMm(a, b) / 1000).toFixed(2)}
+            </text>
+          );
+        })}
     </svg>
+    <div className="absolute bottom-4 start-4 flex items-center gap-0.5 rounded-md border border-border bg-surface p-1 shadow-floating">
+      <IconButton label="התרחקות" onClick={() => zoomByCenter(1.2)}>
+        <Minus className="h-4 w-4" strokeWidth={2} />
+      </IconButton>
+      <IconButton label="התקרבות" onClick={() => zoomByCenter(1 / 1.2)}>
+        <Plus className="h-4 w-4" strokeWidth={2} />
+      </IconButton>
+      <IconButton label="התאמת התצוגה לאולם" onClick={() => fitTo(contentBox, rect.w, rect.h)}>
+        <Maximize className="h-4 w-4" strokeWidth={2} />
+      </IconButton>
+      <div className="mx-0.5 h-5 w-px bg-border" />
+      <IconButton label={showDims ? "הסתרת מידות" : "הצגת מידות"} onClick={() => setShowDims((v) => !v)} className={showDims ? "text-accent" : undefined}>
+        <Ruler className="h-4 w-4" strokeWidth={2} />
+      </IconButton>
+    </div>
+    {menu && (
+      <CanvasMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+    )}
+    </>
+  );
+}
+
+// Generic right-click menu, fixed-positioned at the pointer; a full-screen backdrop closes it on any
+// outside click or right-click. Items are supplied by the host (see contextMenuItems).
+function CanvasMenu({ x, y, items, onClose }: { x: number; y: number; items: ContextMenuItem[]; onClose: () => void }) {
+  const cls = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink transition-colors hover:bg-bg disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent";
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div role="menu" className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-surface py-1 shadow-floating" style={{ top: y, left: x }}>
+        {items.map((it, i) => (
+          <button key={i} type="button" role="menuitem" className={cls} disabled={it.disabled} onClick={() => { it.onSelect(); onClose(); }}>
+            {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -424,7 +613,6 @@ function EntranceDoor({
   entrance,
   a,
   b,
-  interiorHint,
   selected,
   onSelect,
   onMove,
@@ -434,16 +622,16 @@ function EntranceDoor({
   entrance: Entrance;
   a: Point;
   b: Point;
-  interiorHint: Point;
   selected: boolean;
   onSelect: () => void;
   onMove: (p: Point) => void;
   clientToMm: (clientX: number, clientY: number) => Point;
   mm: (px: number) => number;
 }) {
-  const door = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, entrance.swingInward, interiorHint, entrance.doubleDoor);
+  const half = entrance.widthMm / 2;
+  const gapStart = pointAtDistance(a, b, entrance.distanceMm - half);
+  const gapEnd = pointAtDistance(a, b, entrance.distanceMm + half);
   const drag = dragHandlers(clientToMm, onMove, onSelect);
-  const cls = selected ? "text-accent" : "text-ink-soft";
 
   const nudgeAlongWall = (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 200 : 50;
@@ -459,36 +647,22 @@ function EntranceDoor({
     onMove({ x: center.x + ux * delta, y: center.y + uy * delta });
   };
 
+  // The opening itself is just the missing stretch of wall; this handle sits over the gap to slide
+  // it along the wall and show a selection highlight.
   return (
-    <g>
-      {door.leaves.map((leaf, i) => (
-        <g key={i}>
-          <line x1={leaf.hinge.x} y1={leaf.hinge.y} x2={leaf.tip.x} y2={leaf.tip.y} className={cls} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-          <path
-            d={`M ${leaf.tip.x} ${leaf.tip.y} A ${leaf.lenMm} ${leaf.lenMm} 0 0 ${leaf.sweepFlag} ${leaf.arcTo.x} ${leaf.arcTo.y}`}
-            fill="none"
-            className={cls}
-            stroke="currentColor"
-            strokeWidth={1.25}
-            strokeDasharray={3}
-            vectorEffect="non-scaling-stroke"
-          />
-        </g>
-      ))}
-      <g
-        {...drag}
-        tabIndex={0}
-        role="button"
-        aria-label="כניסה — גרירה לאורך הקיר"
-        aria-pressed={selected}
-        onKeyDown={nudgeAlongWall}
-        className="cursor-move touch-none focus:outline-none"
-      >
-        <line x1={door.gapStart.x} y1={door.gapStart.y} x2={door.gapEnd.x} y2={door.gapEnd.y} stroke="transparent" strokeWidth={mm(14)} />
-        {selected && (
-          <line x1={door.gapStart.x} y1={door.gapStart.y} x2={door.gapEnd.x} y2={door.gapEnd.y} className="text-accent" stroke="currentColor" strokeWidth={3} vectorEffect="non-scaling-stroke" />
-        )}
-      </g>
+    <g
+      {...drag}
+      tabIndex={0}
+      role="button"
+      aria-label="פתח — גרירה לאורך הקיר"
+      aria-pressed={selected}
+      onKeyDown={nudgeAlongWall}
+      className="cursor-move touch-none focus:outline-none"
+    >
+      <line x1={gapStart.x} y1={gapStart.y} x2={gapEnd.x} y2={gapEnd.y} stroke="transparent" strokeWidth={mm(14)} />
+      {selected && (
+        <line x1={gapStart.x} y1={gapStart.y} x2={gapEnd.x} y2={gapEnd.y} className="text-accent" stroke="currentColor" strokeWidth={3} vectorEffect="non-scaling-stroke" />
+      )}
     </g>
   );
 }
@@ -619,34 +793,36 @@ export function SelectionInspector({
   selected,
   outline,
   edgeCurves,
-  entrances,
+  entrances = [],
   stage,
-  bars,
-  onUpdateEntrance,
-  onUpdateStage,
-  onUpdateBar,
-  onRemoveEntrance,
-  onRemoveStage,
-  onRemoveBar,
+  bars = [],
+  onUpdateEntrance = () => {},
+  onUpdateStage = () => {},
+  onUpdateBar = () => {},
+  onRemoveEntrance = () => {},
+  onRemoveStage = () => {},
+  onRemoveBar = () => {},
   onRemoveVertex,
   onInsertVertexOnWall,
   onSetWallLength,
   onSetWallAngle,
   onSetWallBulgeDepth,
   onClose,
+  edgeNoun = "קיר",
 }: {
   selected: SelectedRef;
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
-  entrances: Entrance[];
-  stage: Fixture | undefined;
-  bars: Fixture[];
-  onUpdateEntrance: (id: string, patch: Partial<Entrance>) => void;
-  onUpdateStage: (patch: Partial<Fixture>) => void;
-  onUpdateBar: (id: string, patch: Partial<Fixture>) => void;
-  onRemoveEntrance: (id: string) => void;
-  onRemoveStage: () => void;
-  onRemoveBar: (id: string) => void;
+  edgeNoun?: string; // what an outline edge is called — "קיר" in a hall, "צלע" for a product footprint
+  entrances?: Entrance[];
+  stage?: Fixture | undefined;
+  bars?: Fixture[];
+  onUpdateEntrance?: (id: string, patch: Partial<Entrance>) => void;
+  onUpdateStage?: (patch: Partial<Fixture>) => void;
+  onUpdateBar?: (id: string, patch: Partial<Fixture>) => void;
+  onRemoveEntrance?: (id: string) => void;
+  onRemoveStage?: () => void;
+  onRemoveBar?: (id: string) => void;
   onRemoveVertex: (idx: number) => void;
   onInsertVertexOnWall: (edgeIdx: number) => void;
   onSetWallLength: (edgeIdx: number, meters: number) => void;
@@ -714,30 +890,6 @@ export function SelectionInspector({
           רוחב (ס״מ)
           <input type="number" inputMode="decimal" min={40} value={mmToCm(e.widthMm)} onChange={(ev) => onUpdateEntrance(e.id, { widthMm: Math.max(400, cmToMm(ev.target.value)) })} className={smallInput} />
         </label>
-        <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
-          {([true, false] as const).map((inward) => (
-            <button
-              key={String(inward)}
-              type="button"
-              onClick={() => onUpdateEntrance(e.id, { swingInward: inward })}
-              className={`rounded px-2 py-1 text-xs transition-colors ${e.swingInward === inward ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}
-            >
-              {inward ? "פתיחה פנימה" : "פתיחה החוצה"}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
-          {([true, false] as const).map((double) => (
-            <button
-              key={String(double)}
-              type="button"
-              onClick={() => onUpdateEntrance(e.id, { doubleDoor: double })}
-              className={`rounded px-2 py-1 text-xs transition-colors ${e.doubleDoor === double ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}
-            >
-              {double ? "דלת כפולה" : "דלת יחידה"}
-            </button>
-          ))}
-        </div>
         <Button variant="danger" onClick={() => onRemoveEntrance(e.id)}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           מחיקה
@@ -829,7 +981,7 @@ export function SelectionInspector({
     const maxBulgeCm = Math.round(maxBulgeDepthMm(wallLengthMm(a, b)) / 10);
     return (
       <div className={wrap}>
-        <span className="text-sm font-medium text-ink">קיר {idx + 1}</span>
+        <span className="text-sm font-medium text-ink">{edgeNoun} {idx + 1}</span>
         <label className="flex items-center gap-1.5 text-xs text-ink-soft">
           אורך (מ׳)
           <input

@@ -52,6 +52,36 @@ export function edgePathD(a: Point, b: Point, curve?: EdgeCurve | null): string 
   return `M ${a.x} ${a.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${b.x} ${b.y}`;
 }
 
+// De Casteljau split of a cubic at parameter t → the two halves as their own control points.
+type Cubic = [Point, Point, Point, Point];
+const lerpPt = (p: Point, q: Point, t: number): Point => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+function splitCubic(c: Cubic, t: number): { left: Cubic; right: Cubic } {
+  const [p0, p1, p2, p3] = c;
+  const p01 = lerpPt(p0, p1, t);
+  const p12 = lerpPt(p1, p2, t);
+  const p23 = lerpPt(p2, p3, t);
+  const p012 = lerpPt(p01, p12, t);
+  const p123 = lerpPt(p12, p23, t);
+  const p0123 = lerpPt(p012, p123, t);
+  return { left: [p0, p01, p012, p0123], right: [p0123, p123, p23, p3] };
+}
+
+// SVG "d" for the slice of a wall between chord-fractions t0..t1 — a straight segment, or a real
+// bezier sub-curve when the wall is bowed. Lets a door cut a hole out of a curved wall without
+// straightening it: render the stub on either side of the door's t-range.
+export function wallSegmentD(a: Point, b: Point, curve: EdgeCurve | null, t0: number, t1: number): string {
+  if (!curve) {
+    const p0 = lerpPt(a, b, t0);
+    const p1 = lerpPt(a, b, t1);
+    return `M ${p0.x} ${p0.y} L ${p1.x} ${p1.y}`;
+  }
+  const { c1, c2 } = absoluteControlPoints(a, b, curve);
+  const right = splitCubic([a, c1, c2, b], t0).right; // [t0, 1]
+  const t1b = t0 >= 1 ? 0 : (t1 - t0) / (1 - t0); // remap t1 into the [t0,1] sub-curve
+  const [q0, q1, q2, q3] = splitCubic(right, t1b).left; // [t0, t1]
+  return `M ${q0.x} ${q0.y} C ${q1.x} ${q1.y} ${q2.x} ${q2.y} ${q3.x} ${q3.y}`;
+}
+
 // Point at t on a cubic bezier — used to place a wall's drag handle at its visual midpoint.
 export function cubicPointAt(a: Point, c1: Point, c2: Point, b: Point, t: number): Point {
   const mt = 1 - t;
@@ -212,60 +242,8 @@ export function nearestWallToPoint(outline: Point[], p: Point): { edgeIdx: numbe
   return { edgeIdx: best.edgeIdx, distanceMm: best.distanceMm };
 }
 
-export interface DoorLeaf {
-  hinge: Point; // jamb the leaf swings from
-  tip: Point; // open end of the leaf
-  arcTo: Point; // where the swing arc meets the wall (or, for a double door, the other leaf)
-  lenMm: number; // leaf length — also the swing arc's radius
-  sweepFlag: 0 | 1;
-}
-
-export interface DoorGeometry {
-  gapStart: Point;
-  gapEnd: Point;
-  leaves: DoorLeaf[]; // 1 for a single door, 2 for a double door (most event-hall entrances)
-}
-
-function doorLeaf(hinge: Point, arcTo: Point, leafLenMm: number, swx: number, swy: number, ux: number, uy: number): DoorLeaf {
-  return {
-    hinge,
-    tip: { x: hinge.x + swx * leafLenMm, y: hinge.y + swy * leafLenMm },
-    arcTo,
-    lenMm: leafLenMm,
-    sweepFlag: swx * uy - swy * ux > 0 ? 1 : 0,
-  };
-}
-
-// Classic architectural door symbol: a gap cut in the wall, one or two leaves swung open 90°, and
-// a quarter-circle arc tracing each swing. `interiorHint` (e.g. the outline's centroid) resolves
-// which side of the wall is "inward" so swingInward is meaningful regardless of wall winding
-// direction. A double door splits the opening into two equal leaves hinged at each jamb, both
-// swinging the same way and meeting in the middle — the common case for an event-hall entrance.
-export function doorGeometry(a: Point, b: Point, distanceMm: number, widthMm: number, swingInward: boolean, interiorHint: Point, doubleDoor = false): DoorGeometry {
-  const len = wallLengthMm(a, b) || 1;
-  const ux = (b.x - a.x) / len;
-  const uy = (b.y - a.y) / len;
-  const nx = -uy;
-  const ny = ux;
-  const midX = (a.x + b.x) / 2;
-  const midY = (a.y + b.y) / 2;
-  const normalPointsInward = (interiorHint.x - midX) * nx + (interiorHint.y - midY) * ny > 0;
-  const sign = normalPointsInward === swingInward ? 1 : -1;
-  const swx = nx * sign;
-  const swy = ny * sign;
-  const half = widthMm / 2;
-  const gapStart = pointAtDistance(a, b, distanceMm - half);
-  const gapEnd = pointAtDistance(a, b, distanceMm + half);
-  if (!doubleDoor) {
-    return { gapStart, gapEnd, leaves: [doorLeaf(gapStart, gapEnd, widthMm, swx, swy, ux, uy)] };
-  }
-  const mid = pointAtDistance(a, b, distanceMm);
-  return {
-    gapStart,
-    gapEnd,
-    leaves: [doorLeaf(gapStart, mid, half, swx, swy, ux, uy), doorLeaf(gapEnd, mid, half, swx, swy, -ux, -uy)],
-  };
-}
+// Doors render as a plain opening (a gap cut in the wall) — no swing leaf/arc symbol. The gap's
+// two ends are just pointAtDistance(distance ± widthMm/2) along the wall.
 
 // --- Rotation (stage/bar resize+rotate handles) ---
 export function toLocalFrame(p: Point, center: Point, rotationDeg: number): Point {
@@ -364,18 +342,13 @@ if ((import.meta as { main?: boolean }).main) {
   const fallback = resolveWallEndpoints(undefined, 2000, 1000, 2);
   assert(fallback.a.x === 2000 && fallback.a.y === 1000 && fallback.b.x === 0 && fallback.b.y === 1000, "resolveWallEndpoints falls back to the width×height rectangle");
 
-  const door = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 });
-  assert(Math.abs(wallLengthMm(door.gapStart, door.gapEnd) - 900) < 1e-6, "door gap spans the door width");
-  assert(door.leaves.length === 1, "doorGeometry defaults to a single leaf");
-  assert(Math.abs(wallLengthMm(door.gapStart, door.leaves[0].tip) - 900) < 1e-6, "single-door leaf length equals the door width");
-  assert(door.leaves[0].tip.y > 0, "swingInward toward a centroid below the wall opens the leaf downward");
-
-  const doubleDoor = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 }, true);
-  assert(doubleDoor.leaves.length === 2, "doubleDoor produces two leaves");
-  assert(Math.abs(wallLengthMm(doubleDoor.leaves[0].hinge, doubleDoor.leaves[0].tip) - 450) < 1e-6, "each double-door leaf is half the opening width");
-  assert(Math.abs(wallLengthMm(doubleDoor.leaves[1].hinge, doubleDoor.leaves[1].tip) - 450) < 1e-6, "the second leaf matches the first in length");
-  const doorMid = pointAtDistance(a, b, 500);
-  assert(Math.abs(doubleDoor.leaves[0].arcTo.x - doorMid.x) < 1e-6 && Math.abs(doubleDoor.leaves[1].arcTo.x - doorMid.x) < 1e-6, "both double-door leaves swing to meet at the opening's midpoint");
+  // A straight wall sliced between two chord-fractions is just the corresponding chord sub-segment.
+  assert(wallSegmentD(a, b, null, 0.25, 0.75) === "M 250 0 L 750 0", "wallSegmentD slices a straight wall along its chord");
+  // A full-range slice of a bowed wall is a bezier that still runs vertex→vertex (De Casteljau
+  // preserves the endpoints exactly), so the door-hole stubs stay welded to the corners.
+  const bowed = bulgeToCurve(a, b, { x: 500, y: 200 });
+  const full = wallSegmentD(a, b, bowed, 0, 1);
+  assert(full.startsWith("M 0 0 C ") && full.endsWith(" 1000 0"), "full-range slice of a bowed wall keeps its two vertices");
 
   const localPt = toLocalFrame({ x: 100, y: 0 }, { x: 0, y: 0 }, 90);
   assert(Math.abs(localPt.x) < 1e-9 && Math.abs(localPt.y + 100) < 1e-9, "toLocalFrame undoes a 90° rotation");

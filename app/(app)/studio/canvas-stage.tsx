@@ -1,14 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Stage, Layer, Rect, Circle, Ellipse, Group, Text, Line } from "react-konva";
+import { Stage, Layer, Rect, Circle, Ellipse, Group, Text, Line, Path } from "react-konva";
 import type Konva from "konva";
 import { Minus, Plus, Maximize } from "lucide-react";
 import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
 import type { Hall } from "@/lib/studio/hall";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { resolveFootprint, resolveContent, footprintBounds, outlineBounds, type Footprint } from "@/lib/studio/footprint";
-import { pointAtDistance, resolveWallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
+import { pointAtDistance, resolveWallEndpoints, wallLengthMm, outlinePathD } from "@/lib/studio/geometry";
 import { IconButton } from "@/components/icon-button";
 import { KonvaIcon } from "@/components/konva-icon";
 
@@ -355,8 +355,9 @@ function FootprintShape({ footprint, fill, stroke, strokeWidth }: {
   if (footprint.kind === "ellipse") return <Ellipse radiusX={footprint.widthMm / 2} radiusY={footprint.depthMm / 2} {...common} />;
   if (footprint.kind === "custom") {
     const b = outlineBounds(footprint.outline);
-    const points = footprint.outline.flatMap((p) => [p.x - b.cx, p.y - b.cy]);
-    return <Line points={points} closed {...common} />;
+    const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
+    if (footprint.edgeCurves?.some(Boolean)) return <Path data={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
+    return <Line points={centered.flatMap((p) => [p.x, p.y])} closed {...common} />;
   }
   const { widthMm: w, depthMm: d } = footprint;
   return <Rect x={-w / 2} y={-d / 2} width={w} height={d} cornerRadius={Math.min(w, d) * 0.06} {...common} />;
