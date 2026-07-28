@@ -24,7 +24,7 @@ export function GlassCta({
       <span className="flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-full bg-canvas text-ink shadow-[0_8px_18px_-6px_rgb(40_20_80_/_0.5)]">
         {icon}
       </span>
-      <span className="flex-1 text-center text-lg font-medium text-canvas [text-shadow:0_1px_2px_rgb(40_20_70_/_0.25)]">
+      <span className="flex-1 text-center text-h2 font-medium text-canvas [text-shadow:0_1px_2px_rgb(40_20_70_/_0.25)]">
         {children}
       </span>
       {/* Three chevrons, each a step fainter — a direction cue, not a control. */}

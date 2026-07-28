@@ -107,7 +107,7 @@ function FolderView({
     return (
       <div className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
         <Heart className="mb-4 h-8 w-8 text-muted" strokeWidth={1.5} />
-        <h2 className="font-display text-2xl text-ink">תיק האירוע עדיין ריק</h2>
+        <h2 className="font-display text-h2 text-ink">תיק האירוע עדיין ריק</h2>
         <p className="mt-2 text-sm leading-relaxed text-ink-soft">
           עברו עם {clientName || "הלקוח"} על התצוגות וסמנו ♥ את מה שאהב — התמונות ייאספו לכאן, והמוצרים
           המקושרים יחכו לכם בראש מסילת הסטודיו.

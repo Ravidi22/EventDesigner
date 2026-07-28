@@ -14,7 +14,7 @@ colors:
   ink: "#1b1725"
   ink-soft: "#4a4658"
   muted: "#7c7889"
-  caption: "#9c98ac"
+  quiet: "#9c98ac"
   faint: "#a29eb2"
   indigo-900: "#4b3a8c"
   indigo-700: "#6d55bd"
@@ -53,6 +53,11 @@ typography:
     fontSize: "2.875rem"
     fontWeight: 700
     lineHeight: 1.02
+  lede:
+    fontFamily: "Assistant, system-ui, sans-serif"
+    fontSize: "1.0625rem"
+    fontWeight: 400
+    lineHeight: 1.55
   h1:
     fontFamily: "Assistant, system-ui, sans-serif"
     fontSize: "1.875rem"
@@ -193,7 +198,7 @@ A six-stop ramp: `900 #4B3A8C` · `700 #6D55BD` · `500 #8F78D8` · `300 #B7A4EA
 - **Ink** (`#1B1725`): primary text and icons, a violet-leaning near-black. 16:1 on white.
 - **Ink Soft** (`#4A4658`): secondary text and body copy. 8.6:1.
 - **Muted** (`#7C7889`): section subtitles, labels, and meta. 4.3:1 on white — see The Contrast Note below.
-- **Caption** (`#9C98AC`): captions and swatch labels, at 13px and up.
+- **Quiet** (`#9C98AC`): captions and swatch labels, at 13px and up.
 - **Faint** (`#A29EB2`): kickers, rules, dividers, disabled glyphs.
 - **Border** (`#E9E7F0`) / **Border Soft** (`#F0EEF5`) / **Inset Border** (`#EAE8F0`): hairlines between panels, between rows inside a card, and around an inset well.
 
@@ -231,18 +236,30 @@ Each has a **hue** (the swatch, for fills, dots, and bars) and a **tint** (the c
 
 ### Hierarchy
 
+The scale is **46 / 30 / 22 / 17 / 16 / 13 / 11** and it lives in `@theme` as `--text-*` tokens, each paired with its line-height. Reach for the semantic utility, never a raw size.
+
+| Token | Size | Weight | Line-height | Use |
+|---|---|---|---|---|
+| `text-display` | 46 | 700 | 1.02 | the hero and large brand moments; set with `text-wrap: balance` |
+| `text-h1` | 30 | 700 | 1.15 | page and screen headers |
+| `text-h2` | 22 | 700 | 1.3 | section and panel headers |
+| `text-lede` | 17 | 400 | 1.55 | the one step above body — a page intro, a card title |
+| `text-body` | 16 | 400 | 1.6 | running text; cap measure at 65–75ch |
+| `text-caption` | 13 | 500 | 1.4 | meta, dates, hints |
+
+Plus two Latin-only label classes and the mark:
+
 - **Wordmark** (Urbanist 900, `-1.5px` absolute track, `.wordmark`): the `Eve.` lockup only. The track is absolute, not em-relative, so the mark holds its shape from 28px to 88px.
-- **Display** (Assistant 700, `clamp(2.75rem, 7vw, 5rem)` on hero surfaces / 46px nominal, 1.08, `.font-display`): the hero and large brand moments. Set with `text-wrap: balance`.
-- **H1** (Assistant 700, 30px): page and screen headers.
-- **H2** (Assistant 700, 22px): section and panel headers.
-- **Body** (Assistant 400, 16px, 1.6): running text and descriptions. Cap measure at 65–75ch.
-- **Caption** (Assistant 500, 13px): meta, dates, hints.
 - **Overline** (Space Grotesk 500, 11px, `4px` track, `.overline`): section eyebrows, in `accent` or `gold`.
 - **Kicker** (Space Grotesk 500, 12px, `4px` track, `faint`, `.kicker`): the overline's larger, quieter sibling, labelling a whole section or card.
+
+`.font-display` sets family and weight only. It sits outside Tailwind's layers, so a line-height there would silently beat every `text-*` utility — the size token owns the leading.
 
 ### Named Rules
 
 **The One-Wordmark Rule.** Urbanist appears in the wordmark and nowhere else. A heading, a button, or a number set in Urbanist is a bug — Assistant is the voice of the product, and the wordmark is the only place the brand speaks Latin.
+
+**The Closed-Scale Rule.** Tailwind's own `text-lg` / `text-xl` / `text-2xl` steps (18 / 20 / 24) are *off-system* — they are what pulled the headings off the specimen in the first place. Use `text-display` / `text-h1` / `text-h2` / `text-lede` / `text-body` / `text-caption` and nothing else; if a size seems to be missing, the layout is wrong before the scale is.
 
 **The Overline-Is-Not-Copy Rule.** Space Grotesk at a 4px track is a label, never a sentence. It carries two or three words, uppercase, Latin. Hebrew never gets letter-spaced — no display heading in this system carries tracking at all.
 
@@ -364,5 +381,5 @@ The 2D studio is the one place the accent does real work: selected tables and pl
 - **Don't** go consumer-flashy or playful: no bright bounce, gamification, or illustration filler.
 - **Don't** become a cluttered enterprise CRM: no dense gray-on-gray toolbars or deep nav trees burying the canvas.
 - **Don't** use a colored side-stripe border (`border-left`/`border-right` > 1px) on cards, list items, or alerts — use full hairline borders or a tint wash.
-- **Don't** set body or placeholder text lighter than `caption` (`#9C98AC`); `faint` is for kickers, rules and dividers.
+- **Don't** set body or placeholder text lighter than `quiet` (`#9C98AC`); `faint` is for kickers, rules and dividers.
 - **Don't** express luxury with a cream/sand/beige body background or gold gradients — the warmth in this system lives in the mesh and the accent, on a cool lavender-grey plane.

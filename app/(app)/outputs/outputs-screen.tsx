@@ -112,7 +112,7 @@ export function OutputsScreen() {
       <main className="mx-auto w-full max-w-3xl flex-1 px-8 py-8 print:max-w-none print:px-0 print:py-0">
         <div className="mb-6 flex items-baseline justify-between border-b border-ink pb-3">
           <div>
-            <h2 className="font-display text-2xl text-ink">{TITLES[view]}</h2>
+            <h2 className="font-display text-h2 text-ink">{TITLES[view]}</h2>
             {event && <p className="mt-0.5 text-sm text-muted">{event.clientName} · {event.hallName}</p>}
           </div>
           {/* F-6.4: date + version stamp — on screen and in print */}

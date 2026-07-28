@@ -41,7 +41,7 @@ export function LoginScreen() {
             <span className="inline-block h-px w-10 bg-gold" />
             <span className="overline text-gold">YOUR STUDIO</span>
           </span>
-          <p className="font-display text-[clamp(1.75rem,4vw,2.75rem)] leading-[1.15] text-canvas text-balance">
+          <p className="font-display text-h1 text-canvas text-balance">
             כל אירוע מתחיל כאן — סקיצה אחת, שנעשית לתוכנית שלמה.
           </p>
         </div>
@@ -51,7 +51,7 @@ export function LoginScreen() {
       {/* Form panel — canvas paper. */}
       <section className="flex items-center justify-center bg-bg px-6 py-14">
         <div className="w-full max-w-sm">
-          <h1 className="text-2xl font-semibold text-ink">כניסה לחשבון</h1>
+          <h1 className="font-display text-h2 text-ink">כניסה לחשבון</h1>
           <p className="mt-2 text-sm leading-relaxed text-ink-soft">
             הזינו את פרטי החשבון כדי להמשיך לסטודיו.
           </p>

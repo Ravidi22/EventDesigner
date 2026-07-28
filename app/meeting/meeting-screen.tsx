@@ -62,7 +62,7 @@ export function MeetingScreen() {
     <div dir="rtl" className="flex h-dvh flex-col bg-bg">
       <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-5">
         <div className="flex min-w-0 items-baseline gap-2.5">
-          <span className="truncate font-display text-lg text-ink">{event ? event.clientName : "אירוע חדש"}</span>
+          <span className="truncate font-display text-lede text-ink">{event ? event.clientName : "אירוע חדש"}</span>
           {event && <span className="hidden text-sm text-muted sm:block">{event.hallName} · {formatEventDate(event.date)}</span>}
         </div>
 
@@ -200,7 +200,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
 
   return (
     <form onSubmit={submit} className="mx-auto max-w-lg px-6 py-10">
-      <h2 className="font-display text-3xl text-ink">פרטי האירוע</h2>
+      <h2 className="font-display text-h1 text-ink">פרטי האירוע</h2>
       <p className="mt-1.5 text-sm leading-relaxed text-ink-soft">
         הפרטים משמשים כותרת להצעת המחיר ולפלטים. הכול ניתן לעדכון בכל שלב.
       </p>
@@ -256,7 +256,7 @@ function WaitingStep({ clientName }: { clientName: string }) {
       <span className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-accent-tint text-accent">
         <Hourglass className="h-6 w-6" strokeWidth={1.75} />
       </span>
-      <h2 className="font-display text-3xl text-ink">ממתין לסקיצה</h2>
+      <h2 className="font-display text-h1 text-ink">ממתין לסקיצה</h2>
       <p className="mt-3 text-sm leading-relaxed text-ink-soft">
         פריסת השולחנות של {clientName || "האירוע"} מעוצבת ב-iPlan, מחוץ למערכת. האירוע שמור וימתין כאן —
         בין אם הסקיצה מגיעה בעוד דקות ובין אם בעוד ימים. כשהיא אצלכם, המשיכו לייבוא.
@@ -295,7 +295,7 @@ function QuoteStep({ event }: { event: EventSummary }) {
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">
-      <h2 className="mb-6 border-b border-ink pb-3 font-display text-2xl text-ink">סגירה — הצעת מחיר</h2>
+      <h2 className="mb-6 border-b border-ink pb-3 font-display text-h2 text-ink">סגירה — הצעת מחיר</h2>
       {doc ? <Quote doc={doc} /> : <p className="py-16 text-center text-sm text-muted">עדיין אין עיצוב לאירוע {event.clientName}.</p>}
     </div>
   );

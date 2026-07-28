@@ -30,7 +30,7 @@ export default function Home() {
         <div className="mesh-scrim" />
 
         <nav className="relative z-10 mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-          <Wordmark tone="on-dark" className="text-2xl" />
+          <Wordmark tone="on-dark" className="text-[28px]" />
           <div className="flex items-center gap-6">
             <Link href="/catalog" className="text-sm text-canvas/75 transition-colors hover:text-canvas">
               קטלוג
@@ -46,12 +46,12 @@ export default function Home() {
             EVENT STUDIO
           </span>
 
-          <h1 className="mt-5 font-display text-[clamp(2.75rem,7vw,5rem)] leading-[1.02] text-canvas text-balance">
+          <h1 className="mt-5 font-display text-display text-canvas text-balance">
             <span className="hero-rise block" style={{ animationDelay: "80ms" }}>מהסקיצה,</span>
             <span className="hero-rise block" style={{ animationDelay: "180ms" }}>אל האירוע.</span>
           </h1>
 
-          <p className="hero-rise mt-6 max-w-xl text-lg leading-relaxed text-canvas/85 text-pretty" style={{ animationDelay: "300ms" }}>
+          <p className="hero-rise mt-6 max-w-xl text-lede text-canvas/85 text-pretty" style={{ animationDelay: "300ms" }}>
             הלבישו את סקיצת האולם בקטלוג העיצוב שלכם, וקבלו שלושה מסמכי־על — הדמיה ללקוח, מפת הצבה
             לצוות ורשימת ציוד למחסן. הכול ממקור אמת אחד, שלא יכול לסתור את עצמו.
           </p>
@@ -71,7 +71,7 @@ export default function Home() {
         <div className="mx-auto w-full max-w-5xl px-6 py-16 sm:py-20">
           <div className="max-w-2xl">
             <span className="overline text-accent">ONE SOURCE · THREE OUTPUTS</span>
-            <h2 className="mt-4 font-display text-3xl text-ink text-balance">מסמך אחד, שלושה פלטים.</h2>
+            <h2 className="mt-4 font-display text-h1 text-ink text-balance">מסמך אחד, שלושה פלטים.</h2>
             <p className="mt-3 text-base leading-relaxed text-ink-soft text-pretty">
               אתם מעצבים פעם אחת על מפת האולם. מאותו מסמך המערכת מפיקה את שלושת המסמכים שהאירוע רץ עליהם —
               בלי לספור ביד, בלי שהמספרים יסטו זה מזה.
@@ -82,7 +82,7 @@ export default function Home() {
             {outputs.map((o) => (
               <article key={o.title} className="flex flex-col gap-3 bg-surface p-7">
                 <o.icon className="h-6 w-6 text-accent" strokeWidth={1.5} />
-                <h3 className="font-display text-xl text-ink">{o.title}</h3>
+                <h3 className="font-display text-lede text-ink">{o.title}</h3>
                 <p className="text-sm leading-relaxed text-ink-soft text-pretty">{o.body}</p>
               </article>
             ))}

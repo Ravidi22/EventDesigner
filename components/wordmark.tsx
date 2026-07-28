@@ -17,11 +17,12 @@ const tones: Record<Tone, { word: string; dot: string }> = {
 
 /**
  * The Eve wordmark. Latin, always LTR, never re-spaced or stretched — keep clear space
- * equal to the cap height of the "E" on every side.
+ * equal to the cap height of the "E" on every side. Sized in absolute px, outside the type
+ * scale: the mark's -1.5px track is absolute too, so the two have to move together.
  */
 export function Wordmark({
   tone = "mono",
-  className = "text-xl",
+  className = "text-[22px]",
 }: {
   tone?: Tone;
   className?: string;

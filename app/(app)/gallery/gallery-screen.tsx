@@ -50,7 +50,7 @@ export function GalleryScreen() {
   return (
     <div className="mx-auto max-w-6xl px-8 py-7">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-display text-2xl text-ink">תצוגות</h1>
+        <h1 className="font-display text-h2 text-ink">תצוגות</h1>
         <Button
           onClick={() =>
             setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() })
@@ -170,7 +170,7 @@ function PresentationBuilder({
   return (
     <div className="mx-auto max-w-3xl px-8 py-7">
       <div className="mb-6 flex items-center justify-between">
-        <h2 className="font-display text-2xl text-ink">{isNew ? "תצוגה חדשה" : "עריכת תצוגה"}</h2>
+        <h2 className="font-display text-h2 text-ink">{isNew ? "תצוגה חדשה" : "עריכת תצוגה"}</h2>
         <IconButton label="סגירה ללא שמירה" onClick={onCancel}>
           <X className="h-5 w-5" strokeWidth={2} />
         </IconButton>

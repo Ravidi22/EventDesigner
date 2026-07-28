@@ -116,7 +116,7 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
             <p className="nums text-xs tracking-wide text-canvas/70">
               {index + 1} מתוך {total}
             </p>
-            <h2 className="mt-0.5 font-display text-2xl text-canvas sm:text-3xl">{current.name}</h2>
+            <h2 className="mt-0.5 font-display text-h2 text-canvas sm:text-h1">{current.name}</h2>
             {current.description && <p className="mt-0.5 text-sm text-canvas/80">{current.description}</p>}
           </figcaption>
 

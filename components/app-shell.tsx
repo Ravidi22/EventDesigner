@@ -86,9 +86,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface px-8">
           <div className="flex items-baseline gap-3">
             {meta ? (
-              <h1 className="font-display text-xl text-ink">{meta.title}</h1>
+              <h1 className="font-display text-h2 text-ink">{meta.title}</h1>
             ) : (
-              <Wordmark tone="mono" className="text-xl" />
+              <Wordmark tone="mono" className="text-[22px]" />
             )}
             {meta?.sub && <span className="text-sm text-muted">{meta.sub(event)}</span>}
           </div>

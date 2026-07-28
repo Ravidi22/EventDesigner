@@ -80,7 +80,7 @@ export function DashboardScreen() {
       <div className="mb-8 flex items-end justify-between gap-4">
         <div>
           <p className="text-sm text-muted">{greeting}, דניאל</p>
-          <h2 className="mt-1 font-display text-3xl font-bold text-ink text-balance">האירועים שלך</h2>
+          <h2 className="mt-1 font-display text-h1 text-ink text-balance">האירועים שלך</h2>
         </div>
         <div className="flex gap-1 rounded-pill bg-bg p-1">
           {FILTERS.map((f) => (
@@ -173,7 +173,7 @@ function EventCard({
     <article className="group flex flex-col gap-5 rounded-lg border border-border bg-surface p-6 transition-all hover:border-accent-line hover:shadow-lifted">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3.5">
-          <span className="flex h-13 w-13 shrink-0 items-center justify-center rounded-full bg-accent-wash font-display text-lg text-accent-hover">
+          <span className="flex h-13 w-13 shrink-0 items-center justify-center rounded-full bg-accent-wash font-display text-lede text-accent-hover">
             {monogram(e.clientName)}
           </span>
           <span className="leading-tight">

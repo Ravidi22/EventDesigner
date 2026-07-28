@@ -122,7 +122,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
       {/* F-7.2: business + client header */}
       <header className="flex items-start justify-between gap-4 border-b border-border pb-4">
         <div>
-          <p className="font-display text-xl text-ink">{settings?.businessName}</p>
+          <p className="font-display text-h2 text-ink">{settings?.businessName}</p>
           <p className="mt-0.5 text-sm text-muted">
             {[settings?.ownerName, settings?.phone, settings?.address].filter(Boolean).join(" · ")}
           </p>
@@ -287,7 +287,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
         <Row label={`מע״מ ${Math.round(vatRate * 100)}%`} value={formatPrice(totals.vat)} muted />
         <div className="flex items-center justify-between border-t border-ink pt-2.5">
           <span className="font-semibold text-ink">סה״כ לתשלום</span>
-          <span className="nums text-lg font-semibold text-ink">{formatPrice(totals.total)}</span>
+          <span className="nums text-lede font-semibold text-ink">{formatPrice(totals.total)}</span>
         </div>
       </section>
     </div>
