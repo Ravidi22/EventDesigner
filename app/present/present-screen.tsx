@@ -185,7 +185,7 @@ function NavArrow({ label, onClick, children }: { label: string; onClick: () => 
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
     >
       {children}
     </button>

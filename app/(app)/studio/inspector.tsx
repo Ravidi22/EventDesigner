@@ -103,7 +103,7 @@ export function Inspector({
             <Layers className="h-3.5 w-3.5" strokeWidth={2} />
             ניצול שטח
           </span>
-          <span className={"nums font-semibold " + (overflow ? "text-warn" : "text-ink")}>{Math.round(util * 100)}%</span>
+          <span className={"nums font-semibold " + (overflow ? "text-warn-ink" : "text-ink")}>{Math.round(util * 100)}%</span>
         </div>
         <div
           role="progressbar"
@@ -119,7 +119,7 @@ export function Inspector({
           />
         </div>
         {overflow && (
-          <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn">
+          <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn-ink">
             <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
             הפריטים חורגים משטח השולחן
           </p>

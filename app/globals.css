@@ -1,39 +1,77 @@
 @import "tailwindcss";
 
-/* Design tokens — DESIGN.md "The Lit Atelier": chromaless paper, one oxblood accent,
-   an editorial Hebrew serif for display. Light-only by design. */
+/* Design tokens — DESIGN.md "EvE": indigo-violet primary, a warm mesh gradient for brand
+   moments, grain over every gradient, pill geometry. Light-only by design. */
 @theme {
-  --color-canvas: oklch(1 0 0);
-  --color-bg: oklch(0.982 0.004 25);
-  --color-surface: oklch(1 0 0);
-  --color-border: oklch(0.9 0.006 25);
-  --color-ink: oklch(0.22 0.012 25);
-  --color-ink-soft: oklch(0.4 0.014 25);
-  --color-muted: oklch(0.52 0.014 25);
-  --color-accent: oklch(0.44 0.12 24);
-  --color-accent-hover: oklch(0.38 0.12 24);
-  --color-accent-tint: oklch(0.95 0.022 24);
-  --color-warn: oklch(0.52 0.13 68);
-  --color-warn-tint: oklch(0.96 0.03 68);
+  /* --- Surfaces --- */
+  --color-canvas: #ffffff; /* plan surface + inputs — the whitest thing on screen */
+  --color-bg: #eeedf3; /* the app plane behind cards */
+  --color-surface: #ffffff; /* cards and panels */
+  --color-inset: #faf9fd; /* a well recessed inside a card */
+  --color-border: #e9e7f0; /* Line */
+  --color-border-soft: #f0eef5; /* hairline between rows inside a card */
+  --color-inset-border: #eae8f0; /* the stroke around an inset well */
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  /* --- Ink --- */
+  --color-ink: #1b1725;
+  --color-ink-soft: #4a4658; /* body copy and strong labels */
+  --color-muted: #7c7889; /* section subtitles, meta */
+  --color-caption: #9c98ac; /* captions and swatch labels */
+  --color-faint: #a29eb2; /* kickers, rules, dividers, disabled glyphs */
 
-  --shadow-floating: 0 4px 16px oklch(0.22 0.012 25 / 0.1);
-  --shadow-dialog: 0 12px 40px oklch(0.22 0.012 25 / 0.16);
+  /* --- Indigo (primary) --- */
+  --color-indigo-900: #4b3a8c;
+  --color-indigo-700: #6d55bd;
+  --color-indigo-500: #8f78d8;
+  --color-indigo-300: #b7a4ea;
+  --color-indigo-100: #e0d8f6;
+  --color-indigo-50: #f4f0fc;
+
+  --color-accent: #6d55bd; /* = indigo-700; buttons, links, active nav (5.7:1 on white) */
+  --color-accent-hover: #5b4aa0;
+  --color-accent-deep: #4b3a8c; /* = indigo-900; dark headings on tint */
+  --color-accent-tint: #efeafb; /* hover wash, badge fill */
+  --color-accent-wash: #e0d8f6; /* = indigo-100; filled chip / active pill */
+  --color-accent-line: #c9bdec; /* outline-button stroke */
+  --color-soft-line: #e0d8f2; /* soft-button border */
+  --color-badge-line: #e2daf5; /* pill-badge border on accent-tint */
+
+  /* --- Warm accents, lifted out of the mesh gradient. Touches only. --- */
+  --color-amber: #eab887; /* the mesh's warm shoulder — the "bit of yellow" */
+  --color-gold: #f3d98a; /* the wordmark dot and overlines on a dark ground */
+  --color-magenta: #c77fc4;
+  --color-blush: #e8bcce;
+  --color-peach: #efc9ae;
+
+  /* --- Semantic. Values are the design system's own swatches; `warn` carries a separate
+         chip label because amber needs the extra depth on its tint. --- */
+  --color-success: #3f9d76;
+  --color-success-tint: #dcefe5;
+  --color-warn: #c79a2e;
+  --color-warn-ink: #a97e1f;
+  --color-warn-tint: #f6ecd6;
+  --color-alert: #c9603f;
+  --color-alert-tint: #f6e3dc;
+
+  /* --- Geometry --- */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  /* --- Elevation. Cast in violet, never neutral grey. --- */
+  --shadow-floating: 0 8px 18px -10px rgb(70 40 130 / 0.5);
+  --shadow-lifted: 0 18px 40px -18px rgb(70 40 130 / 0.55);
+  --shadow-dialog: 0 30px 60px -22px rgb(70 40 130 / 0.6);
+  --shadow-cta: 0 16px 30px -12px rgb(90 55 180 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.4);
+  --shadow-puck: 0 6px 14px -6px rgb(90 55 180 / 0.5);
 
   --ease-fluid: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --font-sans: var(--font-heebo), system-ui, sans-serif;
-  --font-display: var(--font-frank), Georgia, "Times New Roman", serif;
-}
-
-/* Editorial serif for display headings only — never on UI labels, buttons, or data. */
-.font-display {
-  font-family: var(--font-display);
-  font-weight: 500;
-  letter-spacing: -0.005em;
+  --font-sans: var(--font-assistant), system-ui, sans-serif;
+  --font-display: var(--font-assistant), system-ui, sans-serif;
+  --font-wordmark: var(--font-urbanist), system-ui, sans-serif;
+  --font-label: var(--font-grotesk), ui-monospace, monospace;
 }
 
 body {
@@ -42,10 +80,136 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Display = the body family at its heaviest. Hebrew display is Assistant 700; Latin display is
+   the wordmark only (DESIGN.md — The One-Wordmark Rule). Hebrew is never letter-spaced. */
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.02;
+}
+
+/* The Eve wordmark. Urbanist 900 at a fixed -1.5px track — never re-spaced, stretched, or
+   rotated. The track is absolute, not em-relative, so it holds from 28px to 88px. */
+.wordmark {
+  font-family: var(--font-wordmark);
+  font-weight: 900;
+  letter-spacing: -1.5px;
+  line-height: 1;
+}
+
+/* Overline — Space Grotesk, 11px, 4px track. Latin only; Hebrew is never letter-spaced. */
+.overline {
+  display: inline-block;
+  font-family: var(--font-label);
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 4px;
+}
+
+/* Kicker — the overline's larger, fainter sibling that labels a whole section. */
+.kicker {
+  display: inline-block;
+  font-family: var(--font-label);
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 4px;
+  color: var(--color-faint);
+}
+
 /* Counts, dimensions, and prices always align (DESIGN.md — The Tabular Count Rule). */
 .nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* --- Brand surfaces -------------------------------------------------------- */
+
+/* The mesh: a deep violet core with an amber glow off one shoulder and magenta below, over a
+   periwinkle field. The dark core is the whole point — it is what makes the surface read as lit
+   rather than as a flat gradient, and it is what gives white type something to sit on. The one
+   place the brand is allowed to be saturated. Always wear .grain over it. */
+.mesh {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(160deg, #a99fd8 0%, #8f78d8 46%, #9a7fd0 100%);
+}
+.mesh::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  z-index: 0;
+  background:
+    radial-gradient(38% 40% at 14% 24%, #eab887 0%, rgb(234 184 135 / 0) 62%),
+    radial-gradient(36% 34% at 8% 66%, #d9a08f 0%, rgb(217 160 143 / 0) 62%),
+    radial-gradient(44% 42% at 30% 88%, #c77fc4 0%, rgb(199 127 196 / 0) 66%),
+    radial-gradient(36% 40% at 92% 12%, #b0a2e4 0%, rgb(176 162 228 / 0) 64%),
+    radial-gradient(46% 44% at 66% 46%, #241a3d 0%, rgb(36 26 61 / 0) 68%);
+  animation: float-mesh 16s ease-in-out infinite;
+}
+@keyframes float-mesh {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1.05);
+  }
+  50% {
+    transform: translate(-3%, 2%) scale(1.12);
+  }
+}
+
+/* The mesh's core is dark enough to carry white type on its own, but the amber shoulder is not.
+   This vertical scrim deepens the top and bottom bands — where copy actually lands — and leaves
+   the middle alone so the core stays vivid (DESIGN.md — The Scrim Rule). Direction-agnostic:
+   it runs top-to-bottom, so RTL and LTR need no separate rule. */
+.mesh-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    to bottom,
+    rgb(28 19 48 / 0.4) 0%,
+    rgb(28 19 48 / 0.16) 24%,
+    rgb(28 19 48 / 0.2) 56%,
+    rgb(28 19 48 / 0.55) 100%
+  );
+}
+
+/* Grain — the texture that keeps a gradient from reading as cheap UI chrome. */
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.22;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.grain-strong::after {
+  opacity: 0.28;
+}
+
+/* Glass — only ever over the mesh, never over content or a flat surface. */
+.glass {
+  background: rgb(255 255 255 / 0.16);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgb(255 255 255 / 0.4);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.5),
+    0 16px 30px -14px rgb(50 25 90 / 0.5);
+}
+
+/* Button fills. Kept as classes so the two gradients are defined once. */
+.grad-cta {
+  background-image: linear-gradient(150deg, #8b6fd6, #6d55bd);
+}
+.grad-soft {
+  background-image: linear-gradient(150deg, #efeafb, #e7e0f7);
+}
+
+/* --- Motion ---------------------------------------------------------------- */
 
 /* Entry-surface hero: one meaningful moment. Lines rise in sequence; the accent rule draws.
    Content is visible by default (opacity animates from, not to) so a headless render never ships blank.
@@ -102,7 +266,7 @@ body {
   max-height: none;
 }
 .drawer::backdrop {
-  background: oklch(0.2 0.01 230 / 0.28);
+  background: rgb(40 26 74 / 0.34);
   animation: fade-in 220ms var(--ease-fluid);
 }
 .drawer[open] {
@@ -125,7 +289,7 @@ body {
 }
 
 /* Print: operational outputs go to paper / PDF (F-4.1, F-4.2). Chrome hidden, true white,
-   B&W-legible — the document is all that prints. */
+   B&W-legible — the document is all that prints. Gradients, grain, and glass never print. */
 @media print {
   .no-print {
     display: none !important;
@@ -133,6 +297,17 @@ body {
   body {
     background: #fff;
     color: #000;
+  }
+  .mesh,
+  .grad-cta,
+  .grad-soft,
+  .glass {
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+  .mesh::before,
+  .grain::after {
+    display: none !important;
   }
   @page {
     margin: 16mm;

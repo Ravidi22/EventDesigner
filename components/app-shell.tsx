@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { activeEvent } from "@/lib/events/storage";
+import { Wordmark } from "@/components/wordmark";
 
 interface NavItem {
   href: string;
@@ -56,8 +57,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* Sidebar — quiet gallery: near-white panel, hairline edge, ink text, one muted accent. */}
       <aside className="flex w-64 shrink-0 flex-col border-e border-border bg-surface px-4 py-6">
         <Link href="/dashboard" className="mb-8 block px-2">
-          <span className="block font-display text-2xl text-ink">iDesign</span>
-          <span className="mt-0.5 block text-[11px] tracking-[0.16em] text-muted">אולפן עיצוב אירועים</span>
+          <Wordmark tone="gradient" className="text-[28px]" />
+          <span className="mt-1 block text-[11px] tracking-[0.16em] text-muted">אולפן עיצוב אירועים</span>
         </Link>
 
         <nav className="flex flex-col gap-0.5">
@@ -84,12 +85,16 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface px-8">
           <div className="flex items-baseline gap-3">
-            <h1 className="font-display text-xl text-ink">{meta?.title ?? "iDesign"}</h1>
+            {meta ? (
+              <h1 className="font-display text-xl text-ink">{meta.title}</h1>
+            ) : (
+              <Wordmark tone="mono" className="text-xl" />
+            )}
             {meta?.sub && <span className="text-sm text-muted">{meta.sub(event)}</span>}
           </div>
           <Link
             href="/meeting?new"
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3.5 py-2 text-sm font-medium text-ink-soft transition-colors hover:border-accent hover:bg-accent-tint hover:text-ink"
+            className="grad-soft inline-flex items-center gap-1.5 rounded-pill border border-soft-line px-5 py-2.5 text-sm font-bold text-accent-hover transition-all hover:brightness-[0.98]"
           >
             <Plus className="h-4 w-4" strokeWidth={2} />
             אירוע חדש — פגישה
@@ -109,8 +114,10 @@ function NavRow({ item, pathname }: { item: NavItem; pathname: string }) {
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={
-        "relative flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors " +
-        (active ? "bg-accent-tint font-medium text-ink" : "text-ink-soft hover:bg-bg hover:text-ink")
+        "relative flex items-center gap-3 rounded-pill px-3.5 py-2.5 text-sm transition-colors " +
+        (active
+          ? "bg-accent-wash font-semibold text-accent-hover"
+          : "text-ink-soft hover:bg-accent-tint hover:text-accent-hover")
       }
     >
       {active && <span className="absolute inset-y-2 right-0 w-[3px] rounded-full bg-accent" />}

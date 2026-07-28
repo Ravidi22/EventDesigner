@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, CircleAlert } from "lucide-react";
 import { Button } from "@/components/button";
 import { controlClassName } from "@/components/control";
+import { Wordmark } from "@/components/wordmark";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -29,21 +30,22 @@ export function LoginScreen() {
 
   return (
     <main className="grid min-h-dvh md:grid-cols-[1.1fr_1fr]">
-      {/* Editorial panel — light, quiet, a hairline from the form. */}
-      <aside className="flex flex-col justify-between border-e border-border bg-surface px-6 py-10 sm:px-10 sm:py-14">
-        <Link href="/" className="font-display text-xl text-ink">
-          iDesign
+      {/* The brand lockup surface: the mesh, grained, with copy held inside the scrim. */}
+      <aside className="mesh grain relative flex flex-col justify-between px-6 py-10 sm:px-10 sm:py-14">
+        <div className="mesh-scrim" />
+        <Link href="/" className="relative z-10">
+          <Wordmark tone="on-dark" className="text-[32px] drop-shadow-[0_8px_22px_rgba(50,25,90,0.35)]" />
         </Link>
-        <div className="max-w-md">
-          <span className="mb-5 inline-flex items-center gap-3 text-sm font-medium text-accent">
-            <span className="inline-block h-px w-10 bg-accent" />
-            הסטודיו שלכם
+        <div className="relative z-10 max-w-md">
+          <span className="mb-5 inline-flex items-center gap-3">
+            <span className="inline-block h-px w-10 bg-gold" />
+            <span className="overline text-gold">YOUR STUDIO</span>
           </span>
-          <p className="font-display text-[clamp(1.75rem,4vw,2.75rem)] leading-[1.15] text-ink text-balance">
+          <p className="font-display text-[clamp(1.75rem,4vw,2.75rem)] leading-[1.15] text-canvas text-balance">
             כל אירוע מתחיל כאן — סקיצה אחת, שנעשית לתוכנית שלמה.
           </p>
         </div>
-        <p className="text-sm text-muted">עיצוב אירועים, ממקור אמת אחד.</p>
+        <p className="relative z-10 text-sm text-canvas/85">עיצוב אירועים, ממקור אמת אחד.</p>
       </aside>
 
       {/* Form panel — canvas paper. */}
@@ -75,9 +77,13 @@ export function LoginScreen() {
               error={errors.password}
             />
 
-            <Button type="submit" className="mt-1 w-full justify-center py-2.5">
+            <Button
+              type="submit"
+              size="lg"
+              icon={<ArrowLeft className="h-[18px] w-[18px]" strokeWidth={1.8} />}
+              className="mt-1 w-full"
+            >
               כניסה
-              <ArrowLeft className="h-4 w-4" strokeWidth={2.5} />
             </Button>
           </form>
 
@@ -124,10 +130,10 @@ function Field({
         placeholder={placeholder}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-error` : undefined}
-        className={`${controlClassName} px-3 placeholder:text-muted ${error ? "border-warn" : ""}`}
+        className={`${controlClassName} px-3 placeholder:text-muted ${error ? "border-alert" : ""}`}
       />
       {error && (
-        <p id={`${id}-error`} className="inline-flex items-center gap-1.5 text-xs text-warn">
+        <p id={`${id}-error`} className="inline-flex items-center gap-1.5 text-xs text-alert">
           <CircleAlert className="h-3.5 w-3.5" strokeWidth={2} />
           {error}
         </p>

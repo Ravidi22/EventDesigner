@@ -13,7 +13,7 @@ export function IconButton({
       aria-label={label}
       title={label}
       {...props}
-      className={`rounded-md ${size === "sm" ? "p-1" : "p-1.5"} text-muted transition-colors hover:bg-accent-tint hover:text-ink disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted ${className}`}
+      className={`rounded-pill ${size === "sm" ? "p-1.5" : "p-2"} text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted ${className}`}
     />
   );
 }

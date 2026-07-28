@@ -81,7 +81,7 @@ export function ImportFlow({
               step={0.02}
               value={scale}
               onChange={(e) => setScale(Number(e.target.value))}
-              className="max-w-56 flex-1 accent-[oklch(0.44_0.12_24)]"
+              className="max-w-56 flex-1 accent-[var(--color-accent)]"
             />
             <span className="nums w-12 text-sm text-muted">{Math.round(scale * 100)}%</span>
           </div>
@@ -158,7 +158,7 @@ function AlignStage({
           else return;
           e.preventDefault();
         }}
-        className="absolute cursor-move touch-none rounded-md border-2 border-dashed border-accent bg-accent-tint/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[oklch(0.44_0.12_24)]"
+        className="absolute cursor-move touch-none rounded-md border-2 border-dashed border-accent bg-accent-tint/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
         style={{
           left: `${((pos.x + hall.widthMm * 0.045) * pxPerMm())}px`,
           top: `${((pos.y + hall.heightMm * 0.045) * pxPerMm())}px`,

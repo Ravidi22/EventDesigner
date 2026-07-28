@@ -160,10 +160,10 @@ export function ProductDrawer({
               value={draft.name}
               onChange={(e) => patch({ name: e.target.value })}
               placeholder="לדוגמה: מפת שולחן קטיפה"
-              className={fieldInput + (nameError ? " border-warn hover:border-warn" : "")}
+              className={fieldInput + (nameError ? " border-alert hover:border-alert" : "")}
               autoFocus
             />
-            {nameError && <p className="mt-1 text-xs text-warn">יש להזין שם מוצר.</p>}
+            {nameError && <p className="mt-1 text-xs text-alert">יש להזין שם מוצר.</p>}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -218,7 +218,7 @@ export function ProductDrawer({
                 onChange={(v) => setDim("heightMm", v)}
               />
             </div>
-            {heightError && <p className="mt-1 text-xs text-warn">גובה נדרש (לטובת ההדמיה התלת־ממדית).</p>}
+            {heightError && <p className="mt-1 text-xs text-alert">גובה נדרש (לטובת ההדמיה התלת־ממדית).</p>}
           </fieldset>
 
           {/* F-4.3: only count-multiplier fields are structured (arms, seats) */}
@@ -346,7 +346,7 @@ export function ProductDrawer({
               </button>
             )}
             {submitted && draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3 && (
-              <p className="mt-1 text-xs text-warn">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
+              <p className="mt-1 text-xs text-alert">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
             )}
 
             {currentContent === "icon" && pickingIcon && (
@@ -408,7 +408,7 @@ export function ProductDrawer({
                       type="button"
                       onClick={() => removeVariant(v.id)}
                       aria-label="הסר וריאנט"
-                      className="rounded-md p-1.5 text-muted transition-colors hover:bg-warn-tint hover:text-warn"
+                      className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert"
                     >
                       <Trash2 className="h-4 w-4" strokeWidth={2} />
                     </button>
@@ -460,14 +460,14 @@ function DimInput({
     <label className="block">
       <span className="mb-1 block text-xs text-muted">
         {label}
-        {required && <span className="text-warn"> *</span>}
+        {required && <span className="text-alert"> *</span>}
       </span>
       <input
         type="number"
         min={0}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={fieldInput + " nums" + (error ? " border-warn hover:border-warn" : "")}
+        className={fieldInput + " nums" + (error ? " border-alert hover:border-alert" : "")}
       />
     </label>
   );

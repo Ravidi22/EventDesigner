@@ -28,7 +28,7 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
     <div className="space-y-8">
       <svg viewBox={vb} className="w-full rounded-lg border border-border bg-canvas" role="img" aria-label="מפת הצבה">
         {/* Walls */}
-        <rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill="#ffffff" stroke="#201918" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill="#ffffff" stroke="#1b1725" strokeWidth={2} vectorEffect="non-scaling-stroke" />
         {/* Entrances — position resolved from the wall it's cut into */}
         {hall.entrances.map((e) => {
           const { a, b } = resolveWallEndpoints(hall.outline, hall.widthMm, hall.heightMm, e.wallIndex);
@@ -48,7 +48,7 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
                 strokeWidth={4}
                 vectorEffect="non-scaling-stroke"
               />
-              <text x={center.x} y={center.y + 950} textAnchor="middle" fontSize={520} fontFamily="Heebo, sans-serif" fill="#716665">
+              <text x={center.x} y={center.y + 950} textAnchor="middle" fontSize={520} fontFamily="Assistant, sans-serif" fill="#7c7889">
                 כניסה
               </text>
             </g>
@@ -56,7 +56,7 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
         })}
         {/* Columns */}
         {hall.columns.map((c, i) => (
-          <circle key={i} cx={c.x} cy={c.y} r={c.rMm} fill="#efecec" stroke="#4f4544" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
+          <circle key={i} cx={c.x} cy={c.y} r={c.rMm} fill="#f0eef5" stroke="#4a4658" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
         ))}
         {/* Near-fixed shell elements (stage, bars) — outline + label, B&W-safe */}
         {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => (
@@ -66,12 +66,12 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
               y={f.y - f.depthMm / 2}
               width={f.widthMm}
               height={f.depthMm}
-              fill="#efecec"
-              stroke="#4f4544"
+              fill="#f0eef5"
+              stroke="#4a4658"
               strokeWidth={1.25}
               vectorEffect="non-scaling-stroke"
             />
-            <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Heebo, sans-serif" fill="#4f4544">
+            <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
               {f.label}
             </text>
           </g>
@@ -111,7 +111,7 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
 }
 
 function TableGlyph({ t }: { t: DesignTable }) {
-  const stroke = "#201918";
+  const stroke = "#1b1725";
   return (
     <g>
       {t.diameterMm ? (
@@ -136,7 +136,7 @@ function TableGlyph({ t }: { t: DesignTable }) {
         dominantBaseline="central"
         fontSize={620}
         fontWeight={600}
-        fontFamily="Heebo, sans-serif"
+        fontFamily="Assistant, sans-serif"
         fill={stroke}
       >
         {t.number > 0 ? t.number : "ראש"}

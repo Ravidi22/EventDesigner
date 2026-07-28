@@ -3,7 +3,7 @@
 ## Design Context
 
 - **[PRODUCT.md](PRODUCT.md)** — strategy. Register: **product**. Platform: **web** (Next.js). A quiet operational studio for event designers; the tool recedes so the designer's work is the color. Anti-references: generic SaaS dashboard, dark-mode terminal, consumer-flashy, cluttered CRM. RTL/Hebrew-first, WCAG AA, B&W-print-legible outputs.
-- **[DESIGN.md](DESIGN.md)** — visual system ("The Lit Atelier"): chromaless true-white paper canvas, one oxblood accent (hue 24, ≤10% of any screen), Frank Ruhl Libre serif for display + Heebo for UI/body, flat/tonal depth. No warm/cream backgrounds (the No-Cream Rule); luxury = space + type + hierarchy, never added color.
+- **[DESIGN.md](DESIGN.md)** — visual system ("EvE" / The Lit Studio, imported from the claude.ai/design project): lavender-grey plane with white cards, indigo-violet accent `#6D55BD`, a warm mesh gradient reserved for brand moments (at most one saturated surface + one filled CTA per screen), Assistant for all Hebrew/UI, Urbanist for the `Eve.` wordmark only, Space Grotesk for overlines only. Pill geometry (8/14/22/pill), violet-cast shadows. Every gradient wears grain; no text sits on the mesh without a scrim; text always uses the darkened semantic inks, never the brand fills.
 - Run `/impeccable <command>` for design work; re-run `/impeccable document` after the first real UI build to capture actual tokens.
 
 ## Working Rules

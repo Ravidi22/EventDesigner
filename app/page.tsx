@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft, Eye, Map, PackageCheck } from "lucide-react";
+import { Wordmark } from "@/components/wordmark";
+import { GlassCta } from "@/components/glass-cta";
 
 const outputs = [
   {
@@ -22,45 +24,44 @@ const outputs = [
 export default function Home() {
   return (
     <main className="flex min-h-dvh flex-col bg-bg">
-      <nav className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <span className="font-display text-xl text-ink">iDesign</span>
-        <div className="flex items-center gap-6">
-          <Link href="/catalog" className="text-sm text-muted transition-colors hover:text-ink">
-            קטלוג
-          </Link>
-          <Link href="/login" className="text-sm font-medium text-ink transition-colors hover:text-accent">
-            כניסה
-          </Link>
-        </div>
-      </nav>
+      {/* Entry surface — the mesh, grained, carrying the wordmark and the one glass action.
+          This is the brand at full voice; everything below it returns to the quiet plane. */}
+      <section className="mesh grain relative flex min-h-[88vh] flex-col">
+        <div className="mesh-scrim" />
 
-      {/* Editorial light hero — luxury through space + serif, one held-back accent. */}
-      <section className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-start justify-center px-6 py-20 sm:py-28">
-        <span className="hero-rise inline-flex items-center gap-3 text-sm font-medium text-accent" style={{ animationDelay: "40ms" }}>
-          <span className="hero-rule inline-block h-px w-10 bg-accent" />
-          אולפן עיצוב אירועים
-        </span>
+        <nav className="relative z-10 mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+          <Wordmark tone="on-dark" className="text-2xl" />
+          <div className="flex items-center gap-6">
+            <Link href="/catalog" className="text-sm text-canvas/75 transition-colors hover:text-canvas">
+              קטלוג
+            </Link>
+            <Link href="/login" className="text-sm font-semibold text-canvas transition-colors hover:text-gold">
+              כניסה
+            </Link>
+          </div>
+        </nav>
 
-        <h1 className="mt-6 font-display text-[clamp(2.75rem,7vw,5rem)] leading-[1.05] text-ink text-balance">
-          <span className="hero-rise block" style={{ animationDelay: "80ms" }}>מהסקיצה,</span>
-          <span className="hero-rise block" style={{ animationDelay: "180ms" }}>אל האירוע.</span>
-        </h1>
+        <div className="relative z-10 mx-auto flex w-full max-w-5xl flex-1 flex-col items-start justify-center px-6 py-16">
+          <span className="hero-rise overline text-gold" style={{ animationDelay: "40ms" }}>
+            EVENT STUDIO
+          </span>
 
-        <p className="hero-rise mt-6 max-w-xl text-lg leading-relaxed text-ink-soft text-pretty" style={{ animationDelay: "300ms" }}>
-          הלבישו את סקיצת האולם בקטלוג העיצוב שלכם, וקבלו שלושה מסמכי־על — הדמיה ללקוח, מפת הצבה
-          לצוות ורשימת ציוד למחסן. הכול ממקור אמת אחד, שלא יכול לסתור את עצמו.
-        </p>
+          <h1 className="mt-5 font-display text-[clamp(2.75rem,7vw,5rem)] leading-[1.02] text-canvas text-balance">
+            <span className="hero-rise block" style={{ animationDelay: "80ms" }}>מהסקיצה,</span>
+            <span className="hero-rise block" style={{ animationDelay: "180ms" }}>אל האירוע.</span>
+          </h1>
 
-        <div className="hero-rise mt-8 flex flex-wrap items-center gap-x-6 gap-y-3" style={{ animationDelay: "420ms" }}>
+          <p className="hero-rise mt-6 max-w-xl text-lg leading-relaxed text-canvas/85 text-pretty" style={{ animationDelay: "300ms" }}>
+            הלבישו את סקיצת האולם בקטלוג העיצוב שלכם, וקבלו שלושה מסמכי־על — הדמיה ללקוח, מפת הצבה
+            לצוות ורשימת ציוד למחסן. הכול ממקור אמת אחד, שלא יכול לסתור את עצמו.
+          </p>
+
           <Link
             href="/dashboard"
-            className="group inline-flex items-center gap-2 rounded-md bg-accent px-5 py-2.5 text-sm font-medium text-canvas transition-colors hover:bg-accent-hover"
+            className="hero-rise mt-10 block w-full max-w-md"
+            style={{ animationDelay: "420ms" }}
           >
-            כניסה למערכת
-            <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" strokeWidth={2.5} />
-          </Link>
-          <Link href="/catalog" className="text-sm font-medium text-ink transition-colors hover:text-accent">
-            עיון בקטלוג
+            <GlassCta icon={<ArrowLeft className="h-6 w-6" strokeWidth={1.7} />}>כניסה למערכת</GlassCta>
           </Link>
         </div>
       </section>
@@ -69,7 +70,8 @@ export default function Home() {
       <section className="border-t border-border">
         <div className="mx-auto w-full max-w-5xl px-6 py-16 sm:py-20">
           <div className="max-w-2xl">
-            <h2 className="font-display text-3xl text-ink text-balance">מסמך אחד, שלושה פלטים.</h2>
+            <span className="overline text-accent">ONE SOURCE · THREE OUTPUTS</span>
+            <h2 className="mt-4 font-display text-3xl text-ink text-balance">מסמך אחד, שלושה פלטים.</h2>
             <p className="mt-3 text-base leading-relaxed text-ink-soft text-pretty">
               אתם מעצבים פעם אחת על מפת האולם. מאותו מסמך המערכת מפיקה את שלושת המסמכים שהאירוע רץ עליהם —
               בלי לספור ביד, בלי שהמספרים יסטו זה מזה.

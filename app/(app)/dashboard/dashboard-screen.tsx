@@ -8,6 +8,7 @@ import { STATUS_LABEL, FLOW_STEPS, eventStatus, monogram, formatEventDate } from
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId, updateEvent } from "@/lib/events/storage";
 import { SearchInput } from "@/components/search-input";
+import { StatusChip } from "@/components/status-chip";
 
 type Filter = "active" | EventStatus;
 const FILTERS: { id: Filter; label: string }[] = [
@@ -18,14 +19,14 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: "archived", label: "ארכיון" },
 ];
 
-// Status dot — low-chroma on purpose; the dashboard stays quiet.
-const STATUS_DOT: Record<EventStatus, string> = {
-  details: "bg-muted",
-  gallery: "bg-muted",
-  waiting: "bg-[oklch(0.62_0.09_68)]",
-  design: "bg-accent",
-  sent: "bg-[oklch(0.62_0.06_150)]",
-  archived: "bg-border",
+// Chip tone per stage. Colour never carries the meaning alone — the label rides with it.
+const STATUS_TONE: Record<EventStatus, "neutral" | "accent" | "success" | "warn"> = {
+  details: "neutral",
+  gallery: "neutral",
+  waiting: "warn",
+  design: "accent",
+  sent: "success",
+  archived: "neutral",
 };
 
 export function DashboardScreen() {
@@ -81,7 +82,7 @@ export function DashboardScreen() {
           <p className="text-sm text-muted">{greeting}, דניאל</p>
           <h2 className="mt-1 font-display text-3xl font-bold text-ink text-balance">האירועים שלך</h2>
         </div>
-        <div className="flex gap-1 rounded-lg bg-bg p-1">
+        <div className="flex gap-1 rounded-pill bg-bg p-1">
           {FILTERS.map((f) => (
             <button
               key={f.id}
@@ -89,8 +90,10 @@ export function DashboardScreen() {
               onClick={() => setFilter(f.id)}
               aria-pressed={filter === f.id}
               className={
-                "rounded-md px-3 py-1.5 text-sm transition-colors " +
-                (filter === f.id ? "bg-surface font-medium text-ink shadow-sm" : "text-ink-soft hover:text-ink")
+                "rounded-pill px-3.5 py-1.5 text-sm transition-colors " +
+                (filter === f.id
+                  ? "bg-surface font-semibold text-accent-hover shadow-floating"
+                  : "text-ink-soft hover:text-accent-hover")
               }
             >
               {f.label}
@@ -110,7 +113,7 @@ export function DashboardScreen() {
         <button
           type="button"
           onClick={() => setSortDir((d) => (d === "desc" ? "asc" : "desc"))}
-          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-accent-tint hover:text-ink"
+          className="inline-flex items-center gap-1.5 rounded-pill px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover"
           aria-label={
             sortDir === "desc" ? "מיון לפי תאריך, מהחדש לישן. לחצו למיון מהישן לחדש" : "מיון לפי תאריך, מהישן לחדש. לחצו למיון מהחדש לישן"
           }
@@ -167,10 +170,10 @@ function EventCard({
   const progress = Math.round((Math.min(e.step, FLOW_STEPS.length - 1) / (FLOW_STEPS.length - 1)) * 100);
 
   return (
-    <article className="group flex flex-col gap-5 rounded-2xl border border-border bg-surface p-6 transition-all hover:border-ink-soft/40 hover:shadow-floating">
+    <article className="group flex flex-col gap-5 rounded-lg border border-border bg-surface p-6 transition-all hover:border-accent-line hover:shadow-lifted">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3.5">
-          <span className="flex h-13 w-13 shrink-0 items-center justify-center rounded-full bg-accent-tint font-display text-lg text-accent">
+          <span className="flex h-13 w-13 shrink-0 items-center justify-center rounded-full bg-accent-wash font-display text-lg text-accent-hover">
             {monogram(e.clientName)}
           </span>
           <span className="leading-tight">
@@ -180,10 +183,9 @@ function EventCard({
             </span>
           </span>
         </div>
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-soft">
-          <span className={"h-1.5 w-1.5 rounded-full " + STATUS_DOT[status]} />
+        <StatusChip tone={STATUS_TONE[status]} className="shrink-0">
           {STATUS_LABEL[status]}
-        </span>
+        </StatusChip>
       </div>
 
       <div className="flex gap-5 text-sm text-ink-soft">
@@ -216,7 +218,7 @@ function EventCard({
             onClick={onStudio}
             title="פתיחה בסטודיו"
             aria-label={`פתיחת ${e.clientName} בסטודיו`}
-            className="rounded-md p-1.5 text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+            className="rounded-pill p-1.5 text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
           >
             <PenTool className="h-4 w-4" strokeWidth={1.75} />
           </button>
@@ -225,7 +227,7 @@ function EventCard({
             onClick={onArchive}
             title={e.archived ? "שחזור מהארכיון" : "העברה לארכיון"}
             aria-label={e.archived ? `שחזור ${e.clientName} מהארכיון` : `העברת ${e.clientName} לארכיון`}
-            className="rounded-md p-1.5 text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+            className="rounded-pill p-1.5 text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
           >
             {e.archived ? <ArchiveRestore className="h-4 w-4" strokeWidth={1.75} /> : <Archive className="h-4 w-4" strokeWidth={1.75} />}
           </button>

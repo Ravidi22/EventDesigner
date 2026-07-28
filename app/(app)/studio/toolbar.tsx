@@ -107,7 +107,7 @@ export function Toolbar({
           <button
             type="button"
             onClick={onRetrySave}
-            className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-medium text-warn transition-colors hover:bg-warn-tint"
+            className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-medium text-warn-ink transition-colors hover:bg-warn-tint"
           >
             <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
             לא נשמר · נסה שוב

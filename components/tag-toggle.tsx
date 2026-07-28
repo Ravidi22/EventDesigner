@@ -16,10 +16,10 @@ export function TagToggle({
       onClick={onClick}
       aria-pressed={active}
       className={
-        "rounded-sm border px-2 py-1 text-xs transition-colors " +
+        "rounded-pill border px-3 py-1 text-xs font-medium transition-colors " +
         (active
-          ? "border-accent bg-accent-tint text-ink"
-          : "border-border text-ink-soft hover:border-ink-soft")
+          ? "border-accent-line bg-accent-wash text-accent-hover"
+          : "border-border text-ink-soft hover:border-accent-line hover:bg-accent-tint")
       }
     >
       {children}

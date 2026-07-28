@@ -16,17 +16,17 @@ import { KonvaIcon } from "@/components/konva-icon";
 // with app/globals.css @theme.
 const C = {
   canvas: "#ffffff",
-  wall: "#251d1c",
-  column: "#e1dddc",
-  ink: "#201918",
-  inkSoft: "#4f4544",
-  muted: "#716665",
-  border: "#e2dcdc",
+  wall: "#1b1725",
+  column: "#e0ddea",
+  ink: "#1b1725",
+  inkSoft: "#4a4658",
+  muted: "#7c7889",
+  border: "#e9e7f0",
   surface: "#ffffff",
-  accent: "#893130",
-  accentTint: "#fde9e7",
-  warn: "#985700",
-  warnTint: "#ffefdd",
+  accent: "#6d55bd",
+  accentTint: "#efeafb",
+  warn: "#a97e1f",
+  warnTint: "#f6ecd6",
 };
 
 export type Selection = { kind: "table" | "placement"; id: string } | null;
@@ -183,7 +183,7 @@ export function CanvasStage({
                   text="כניסה"
                   align="center"
                   fontSize={420}
-                  fontFamily="Heebo, sans-serif"
+                  fontFamily="Assistant, sans-serif"
                   fill={C.muted}
                 />
               </Group>
@@ -206,7 +206,7 @@ export function CanvasStage({
                 strokeWidth={1.5}
                 strokeScaleEnabled={false}
               />
-              <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Heebo, sans-serif" fill={C.inkSoft} />
+              <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
             </Group>
           ))}
 
@@ -214,7 +214,7 @@ export function CanvasStage({
           {doc.sketch && (
             <Group x={doc.sketch.x} y={doc.sketch.y} listening={false} opacity={0.55}>
               <Rect width={doc.sketch.widthMm} height={doc.sketch.heightMm} stroke={C.muted} strokeWidth={1.5} strokeScaleEnabled={false} dash={[160, 120]} />
-              <Text x={0} y={doc.sketch.heightMm - 560} width={doc.sketch.widthMm} text={`סקיצה: ${doc.sketch.fileName}`} align="center" fontSize={380} fontFamily="Heebo, sans-serif" fill={C.muted} />
+              <Text x={0} y={doc.sketch.heightMm - 560} width={doc.sketch.widthMm} text={`סקיצה: ${doc.sketch.fileName}`} align="center" fontSize={380} fontFamily="Assistant, sans-serif" fill={C.muted} />
             </Group>
           )}
 
@@ -333,7 +333,7 @@ function TableNode({
           align="center"
           fontSize={520}
           fontStyle="600"
-          fontFamily="Heebo, sans-serif"
+          fontFamily="Assistant, sans-serif"
           fill={selected ? C.accent : C.muted}
           listening={false}
         />
@@ -405,7 +405,7 @@ function PlacementNode({
           align="center"
           verticalAlign="middle"
           fontSize={Math.max(140, Math.min(bounds.h * 0.4, bounds.w * 0.22))}
-          fontFamily="Heebo, sans-serif"
+          fontFamily="Assistant, sans-serif"
           fill={C.ink}
           padding={Math.min(bounds.w, bounds.h) * 0.08}
           ellipsis
@@ -437,7 +437,7 @@ function PlacementNode({
             verticalAlign="middle"
             fontSize={220}
             fontStyle="600"
-            fontFamily="Heebo, sans-serif"
+            fontFamily="Assistant, sans-serif"
             fill="#ffffff"
           />
         </Group>

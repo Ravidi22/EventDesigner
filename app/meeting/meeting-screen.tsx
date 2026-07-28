@@ -70,7 +70,7 @@ export function MeetingScreen() {
 
         <Link
           href="/dashboard"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:bg-accent-tint hover:text-ink"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover"
         >
           <LogOut className="h-4 w-4" strokeWidth={2} />
           יציאה

@@ -142,7 +142,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
       <div className="no-print flex flex-wrap items-center justify-between gap-3">
         {issued ? (
           changed ? (
-            <p className="inline-flex items-center gap-1.5 text-sm text-warn">
+            <p className="inline-flex items-center gap-1.5 text-sm text-warn-ink">
               <TriangleAlert className="h-4 w-4" strokeWidth={2} />
               העיצוב השתנה מאז ההצעה האחרונה ({new Date(issued.issuedAt).toLocaleDateString("he-IL")})
             </p>
@@ -175,7 +175,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
               type="button"
               onClick={() => toggleMerge(g.categoryId)}
               aria-pressed={merged.has(g.categoryId)}
-              className="no-print inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+              className="no-print inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
               title={merged.has(g.categoryId) ? "פירוק לשורות" : "איחוד לשורה אחת"}
             >
               <Merge className="h-3.5 w-3.5" strokeWidth={2} />
@@ -205,7 +205,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
                     <td className="py-2 text-ink">{l.label}</td>
                     <td className="nums py-2 text-ink">×{l.quantity}</td>
                     <td className="nums py-2 text-ink-soft">
-                      {l.priced ? formatPrice(l.unitPrice) : <span className="text-warn">ללא מחיר</span>}
+                      {l.priced ? formatPrice(l.unitPrice) : <span className="text-warn-ink">ללא מחיר</span>}
                     </td>
                     <td className="nums py-2 text-end font-semibold text-ink">{l.priced ? formatPrice(l.lineTotal) : "—"}</td>
                     <td className="no-print py-2 text-end">
@@ -214,7 +214,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
                         onClick={() => toggleHide(l.variantId)}
                         aria-label={`הסתרת "${l.label}" מההצעה`}
                         title="הסתרה מההצעה"
-                        className="rounded-md p-1 text-muted transition-colors hover:bg-accent-tint hover:text-ink"
+                        className="rounded-md p-1 text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
                       >
                         <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />
                       </button>
@@ -244,7 +244,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
       )}
 
       {unpriced > 0 && (
-        <p className="inline-flex items-center gap-1.5 text-xs text-warn">
+        <p className="inline-flex items-center gap-1.5 text-xs text-warn-ink">
           <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
           <span className="nums">{unpriced}</span> פריטים ללא מחיר אינם נכללים בסכום — הוסיפו מחיר בקטלוג.
         </p>

@@ -60,7 +60,7 @@ export function HallsScreen() {
             : (t.hall.widthMm * t.hall.heightMm) / 1_000_000;
           const fixedElements = [t.hall.stage?.label, ...t.hall.bars.map((b) => b.label)].filter(Boolean);
           return (
-            <article key={t.id} className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-surface transition-all hover:border-ink-soft/40 hover:shadow-floating">
+            <article key={t.id} className="group flex flex-col overflow-hidden rounded-lg border border-border bg-surface transition-all hover:border-accent-line hover:shadow-lifted">
               <div className="border-b border-border bg-canvas p-4">
                 <PlanPreview hall={t.hall} tables={[]} />
               </div>

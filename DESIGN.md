@@ -1,51 +1,88 @@
-<!-- Captured from the built app/globals.css and components/ (Next.js + Tailwind v4 @theme). -->
+<!-- Imported from the claude.ai/design project "אתר תכנון אירועים" (EvE Design System.dc.html),
+     then reconciled with the built app/globals.css and components/ (Next.js + Tailwind v4 @theme). -->
 ---
-name: iDesign
-description: An editorial atelier for event designers — chromaless paper, one oxblood accent, a serif for display
+name: EvE
+description: An indigo-violet studio for event designers — a warm mesh gradient for brand moments, grain over every gradient, pill geometry
 colors:
-  canvas: "oklch(1 0 0)"
-  bg: "oklch(0.982 0.004 25)"
-  surface: "oklch(1 0 0)"
-  border: "oklch(0.90 0.006 25)"
-  ink: "oklch(0.22 0.012 25)"
-  ink-soft: "oklch(0.40 0.014 25)"
-  muted: "oklch(0.52 0.014 25)"
-  accent: "oklch(0.44 0.12 24)"
-  accent-hover: "oklch(0.38 0.12 24)"
-  accent-tint: "oklch(0.95 0.022 24)"
-  warn: "oklch(0.52 0.13 68)"
-  warn-tint: "oklch(0.96 0.03 68)"
+  canvas: "#ffffff"
+  bg: "#eeedf3"
+  surface: "#ffffff"
+  inset: "#faf9fd"
+  border: "#e9e7f0"
+  border-soft: "#f0eef5"
+  inset-border: "#eae8f0"
+  ink: "#1b1725"
+  ink-soft: "#4a4658"
+  muted: "#7c7889"
+  caption: "#9c98ac"
+  faint: "#a29eb2"
+  indigo-900: "#4b3a8c"
+  indigo-700: "#6d55bd"
+  indigo-500: "#8f78d8"
+  indigo-300: "#b7a4ea"
+  indigo-100: "#e0d8f6"
+  indigo-50: "#f4f0fc"
+  accent: "#6d55bd"
+  accent-hover: "#5b4aa0"
+  accent-deep: "#4b3a8c"
+  accent-tint: "#efeafb"
+  accent-wash: "#e0d8f6"
+  accent-line: "#c9bdec"
+  soft-line: "#e0d8f2"
+  badge-line: "#e2daf5"
+  amber: "#eab887"
+  gold: "#f3d98a"
+  magenta: "#c77fc4"
+  blush: "#e8bcce"
+  peach: "#efc9ae"
+  success: "#3f9d76"
+  success-tint: "#dcefe5"
+  warn: "#c79a2e"
+  warn-ink: "#a97e1f"
+  warn-tint: "#f6ecd6"
+  alert: "#c9603f"
+  alert-tint: "#f6e3dc"
 typography:
+  wordmark:
+    fontFamily: "Urbanist, system-ui, sans-serif"
+    fontWeight: 900
+    letterSpacing: "-1.5px"
+    lineHeight: 1
   display:
-    fontFamily: "Frank Ruhl Libre, Georgia, serif"
-    fontSize: "clamp(2.75rem, 7vw, 5rem)"
-    fontWeight: 500
-    lineHeight: 1.05
-    letterSpacing: "-0.005em"
-  headline:
-    fontFamily: "Frank Ruhl Libre, Georgia, serif"
-    fontSize: "1.5rem"
-    fontWeight: 500
+    fontFamily: "Assistant, system-ui, sans-serif"
+    fontSize: "2.875rem"
+    fontWeight: 700
+    lineHeight: 1.02
+  h1:
+    fontFamily: "Assistant, system-ui, sans-serif"
+    fontSize: "1.875rem"
+    fontWeight: 700
+    lineHeight: 1.15
+  h2:
+    fontFamily: "Assistant, system-ui, sans-serif"
+    fontSize: "1.375rem"
+    fontWeight: 700
     lineHeight: 1.3
-  title:
-    fontFamily: "Heebo, system-ui, sans-serif"
-    fontSize: "1rem"
-    fontWeight: 600
-    lineHeight: 1.4
   body:
-    fontFamily: "Heebo, system-ui, sans-serif"
-    fontSize: "0.9375rem"
+    fontFamily: "Assistant, system-ui, sans-serif"
+    fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.6
-  label:
-    fontFamily: "Heebo, system-ui, sans-serif"
+  caption:
+    fontFamily: "Assistant, system-ui, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 500
     lineHeight: 1.4
+  overline:
+    fontFamily: "Space Grotesk, ui-monospace, monospace"
+    fontSize: "0.6875rem"
+    fontWeight: 500
+    letterSpacing: "4px"
 rounded:
-  sm: "4px"
-  md: "8px"
-  lg: "12px"
+  sm: "8px"
+  md: "14px"
+  lg: "22px"
+  pill: "999px"
 spacing:
   xs: "4px"
   sm: "8px"
@@ -54,202 +91,278 @@ spacing:
   xl: "40px"
 components:
   button-primary:
-    backgroundColor: "{colors.accent}"
+    backgroundColor: "linear-gradient(150deg, #8b6fd6, #6d55bd)"
     textColor: "{colors.canvas}"
-    typography: "{typography.label}"
-    rounded: "{rounded.md}"
-    padding: "8px 16px"
-  button-primary-hover:
-    backgroundColor: "{colors.accent-hover}"
-    textColor: "{colors.canvas}"
-    rounded: "{rounded.md}"
-    padding: "8px 16px"
+    rounded: "{rounded.pill}"
+    padding: "6px 22px 6px 6px"
+    height: "58px"
+    shadow: "0 16px 30px -12px rgb(90 55 180 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.4)"
+  button-soft:
+    backgroundColor: "linear-gradient(150deg, #efeafb, #e7e0f7)"
+    textColor: "{colors.accent-hover}"
+    borderColor: "{colors.soft-line}"
+    rounded: "{rounded.pill}"
+    padding: "6px 6px 6px 20px"
+    height: "54px"
+  button-outline:
+    backgroundColor: "transparent"
+    textColor: "{colors.accent}"
+    borderColor: "{colors.accent-line}"
+    borderWidth: "1.5px"
+    rounded: "{rounded.pill}"
   button-ghost:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "transparent"
     textColor: "{colors.ink-soft}"
-    typography: "{typography.label}"
-    rounded: "{rounded.md}"
-    padding: "8px 12px"
+    rounded: "{rounded.pill}"
   button-ghost-hover:
     backgroundColor: "{colors.accent-tint}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.md}"
-    padding: "8px 12px"
+    textColor: "{colors.accent-hover}"
   button-danger:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "transparent"
     textColor: "{colors.muted}"
-    typography: "{typography.label}"
-    rounded: "{rounded.md}"
-    padding: "8px 12px"
+    rounded: "{rounded.pill}"
   button-danger-hover:
-    backgroundColor: "{colors.warn-tint}"
-    textColor: "{colors.warn}"
-    rounded: "{rounded.md}"
-    padding: "8px 12px"
+    backgroundColor: "{colors.alert-tint}"
+    textColor: "{colors.alert}"
   icon-button:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "transparent"
     textColor: "{colors.muted}"
-    rounded: "{rounded.md}"
-    padding: "4px"
+    rounded: "{rounded.pill}"
+    padding: "6px"
   input:
     backgroundColor: "{colors.canvas}"
     textColor: "{colors.ink}"
+    borderColor: "{colors.border}"
     rounded: "{rounded.md}"
-    padding: "8px 12px"
+    height: "40px"
+    padding: "0 12px"
   chip:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink-soft}"
-    rounded: "{rounded.sm}"
-    padding: "4px 10px"
-  catalog-card:
+    backgroundColor: "{colors.accent-wash}"
+    textColor: "{colors.accent-hover}"
+    rounded: "{rounded.pill}"
+    padding: "6px 14px"
+  card:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.ink}"
+    borderColor: "{colors.border}"
     rounded: "{rounded.lg}"
-    padding: "8px"
+    padding: "24px"
 ---
 
-# Design System: iDesign
+# Design System: EvE
 
 ## 1. Overview
 
-**Creative North Star: "The Lit Atelier"**
+**Creative North Star: "The Lit Studio"**
 
-An atelier at first light: a chromaless paper surface, one deep oxblood for the marks the designer makes, and all the real color coming from the objects laid out on it — the hall plan and the product photography — never from the surface itself. The luxury is carried by an editorial Hebrew serif and generous space, not by the body background; a product photo of a gold tablecloth reads as gold, not as "gold, next to a colored button competing for attention."
+An indigo-violet studio at golden hour. The working surfaces are quiet — a soft lavender-grey plane, white cards, hairline rules — and the brand arrives in a small number of deliberate moments: a mesh gradient of violet, blush, peach and gold, always worn under grain, carrying the `Eve.` wordmark. Between those moments the tool recedes and the designer's own work (the hall plan, the product photography) is the color on the screen.
 
-Restraint here is not the same as unfinished. The system commits to a chromaless canvas, a single oxblood accent, a serif-and-sans pairing, and flat tonal depth — and then spends its care on the details that make a professional trust a tool: aligned tabular counts, legible RTL Hebrew, hairline dividers, states that respond without shouting. This system explicitly rejects the generic SaaS dashboard (purple gradients, hero-metric cards, chart-everything), the trendy dark-mode developer terminal, the consumer-flashy/playful look, the cluttered enterprise CRM, and — critically — the gold-and-cream "luxury events" cliché. The warmth is in the accent and the type, never in a cream body background.
+The geometry is soft throughout: pill buttons, 22px cards, circular pucks carrying the icons on a CTA. Depth is cast in violet, never in neutral grey — a shadow here is a lit surface's own hue, deepened.
+
+Restraint here is not the same as unfinished. The system commits to one primary hue family, one gradient recipe, one wordmark, and then spends its care on the details a professional trusts: aligned tabular counts, legible RTL Hebrew, AA-clean labels, states that respond without shouting. This system explicitly rejects the generic SaaS dashboard (hero-metric cards, chart-everything), the trendy dark-mode developer terminal, the consumer-flashy/playful look, the cluttered enterprise CRM, and the gold-and-cream "luxury events" cliché — warmth here comes from the mesh, not from a beige page.
 
 **Key Characteristics:**
-- Chromaless neutral canvas; the accent and the designer's imagery are the only color.
-- One accent (oxblood, hue 24), used on ≤10% of any screen.
-- A serif display (Frank Ruhl Libre) for headings and welcome surfaces, Heebo sans for all UI and body.
-- Flat by default; depth is tonal, shadows only on things that truly float.
+- One primary hue family (indigo-violet), one accent gradient, one wordmark.
+- The mesh gradient appears at most once per screen, always grained, always scrimmed under text.
+- Assistant carries every Hebrew surface; Urbanist is the wordmark; Space Grotesk sets overlines only.
+- Pill and soft-corner geometry: 8 / 14 / 22 / pill.
+- Shadows are violet-cast and reserved for what lifts.
 - Every operational output survives black-and-white printing.
 
 ## 2. Colors
 
-A chromaless paper canvas with a single oxblood accent; warmth and richness come from the accent and the type, not the surface.
+An indigo-violet primary over a soft lavender-grey plane, with the warm mesh hues lifted out for touches.
 
-### Primary
-- **Oxblood** (`oklch(0.44 0.12 24)`): the one accent. Primary buttons, selected tables and placements on the canvas, active nav, focus rings, CTA links. Deep enough to carry white label text (8.3:1) and to read as a refined, deliberate mark — a wine-dark ink, not a bright UI toy. Hover deepens to `oklch(0.38 0.12 24)`.
-- **Oxblood Wash** (`oklch(0.95 0.022 24)`): the faintest rosy tint of the accent, for a selected row background or a hovered item — presence without a border.
+### Primary — Indigo
+
+A six-stop ramp: `900 #4B3A8C` · `700 #6D55BD` · `500 #8F78D8` · `300 #B7A4EA` · `100 #E0D8F6` · `50 #F4F0FC`.
+
+- **Accent** (`#6D55BD`, = indigo-700): the working accent. Filled CTAs, links, active nav, focus rings, selected tables on the canvas. 5.7:1 on white — safe for small text, and it carries white label text at the same ratio. Hover deepens to `#5B4AA0`.
+- **Accent Wash** (`#E0D8F6`, = indigo-100): a filled chip, the active nav pill, a monogram disc — presence without a border.
+- **Accent Tint** (`#EFEAFB`): the hover wash, one step lighter than the wash.
+- **Accent Line** (`#C9BDEC`): the outline-button stroke and the input hover border.
+
+`900` is for dark headings on a tint; `100`/`50` for gentle grounds and hover states. `300`/`500` are gradient and illustration members — they do not clear AA as text on white and must never be used for small copy.
 
 ### Neutral
-- **Canvas** (`oklch(1 0 0)`): pure white. The plan surface and input fields — the whitest thing on screen so product photography stays color-accurate. Never cream.
-- **Background** (`oklch(0.982 0.004 25)`): the app chrome behind panels; a barely-perceptible warm tint toward the accent for cohesion, still essentially white and well clear of the cream band.
-- **Ink** (`oklch(0.22 0.012 25)`): primary text and icons, a warm near-black. 17:1 on canvas.
-- **Ink Soft** (`oklch(0.40 0.014 25)`): secondary text, still AA-body (9:1).
-- **Muted** (`oklch(0.52 0.014 25)`): labels and meta. 5.5:1 — safe for small text; not a light gray.
-- **Border** (`oklch(0.90 0.006 25)`): hairline dividers and input strokes.
 
-### Tertiary
-- **Warn Amber** (`oklch(0.52 0.13 68)`): non-blocking geometry warnings (F-3.4: items exceed a table, a floor piece blocks a defined path) and the destructive-action affordance (the `danger` button). Always paired with an icon and text — never color alone. Deep enough to clear AA (4.5:1) as small text on **both** white (5.7:1) and its own Warn Wash (5.0:1) — the darker value is deliberate, so warn text on a warn-tinted hover stays legible.
-- **Warn Wash** (`oklch(0.96 0.03 68)`): the faint amber tint behind a hovered destructive control (`danger` button), matching how Oxblood Wash backs the accent.
+- **Canvas** (`#FFFFFF`): the plan surface and input fields — the whitest thing on screen, so product photography stays color-accurate.
+- **Background** (`#EEEDF3`): the app plane behind cards. A lavender-grey that lets a white card read as a card without a shadow.
+- **Surface** (`#FFFFFF`): cards and panels.
+- **Inset** (`#FAF9FD`): a well recessed *inside* a card — a code sample, a spec swatch, a read-only field.
+- **Ink** (`#1B1725`): primary text and icons, a violet-leaning near-black. 16:1 on white.
+- **Ink Soft** (`#4A4658`): secondary text and body copy. 8.6:1.
+- **Muted** (`#7C7889`): section subtitles, labels, and meta. 4.3:1 on white — see The Contrast Note below.
+- **Caption** (`#9C98AC`): captions and swatch labels, at 13px and up.
+- **Faint** (`#A29EB2`): kickers, rules, dividers, disabled glyphs.
+- **Border** (`#E9E7F0`) / **Border Soft** (`#F0EEF5`) / **Inset Border** (`#EAE8F0`): hairlines between panels, between rows inside a card, and around an inset well.
 
-### Entry surfaces (Home, Login)
-The logged-out marketing home and the login share the same **light quiet-gallery** language as the app — no dark hero. A near-white field carries a large serif headline in ink, one Oxblood eyebrow mark + hairline rule, generous space, and a single Oxblood CTA; the "three outputs" section and the login split sit on white panels divided by hairlines. Luxury is carried by the serif and the whitespace, not by a coloured surface. (An earlier dark "ink-field" hero was removed with its tokens — it read too heavy against the calm light app.)
+### Warm accents — lifted out of the mesh
 
-### The app shell — quiet gallery (sidebar, topbar, dashboard)
-The persistent navigation shell is deliberately **light and quiet** — luxury through restraint, not colour. A near-white sidebar (`surface`) is separated from the content plane (`bg`) by a **single hairline**, not a fill or a shadow; nav is ink-on-white, the active item a soft Oxblood-Wash pill with a thin `accent` bar on its start edge. No dark chrome, no second hue, no gradients. The **one accent is Oxblood**, used sparingly (active nav, the primary action, a progress fill); everything else is ink, muted, and space. Status is carried by a small low-chroma dot + a muted label, never a saturated badge.
+**Amber** (`#EAB887`) is the warm shoulder of the mesh — the "bit of yellow" the brand runs on. **Gold** (`#F3D98A`) is its lighter sibling, for the wordmark dot and overlines on a dark ground. **Magenta** (`#C77FC4`) closes the mesh from below. **Blush** (`#E8BCCE`) and **Peach** (`#EFC9AE`) remain as secondary tints for illustration.
 
-This replaces an earlier warm plum/gold "Traklin" chrome that read as loud/cheap — the tokens were removed. The shell now uses only the core neutral + Oxblood tokens above; it introduces no new colours.
+These are lights, not inks: they carry no small text on white, and they never fill a large flat area. Purple is the brand; amber is what the light does to it.
 
-**The Quiet-Shell Rule.** The chrome recedes. Panels are near-white on near-white, divided by hairlines; the only saturated thing on the shell is the single Oxblood accent on ≤10% of the surface. If the navigation competes with the designer's work for attention, the navigation is wrong.
+### Semantic
+
+Each has a **hue** (the swatch, for fills, dots, and bars) and a **tint** (the chip ground):
+
+- **Success** — hue `#3F9D76`, tint `#DCEFE5`. Approved, paid, confirmed.
+- **Warn** — hue `#C79A2E`, tint `#F6ECD6`, and a deeper **Warn Ink** `#A97E1F` for the label. Pending, and the non-blocking geometry warnings (F-3.4: items exceed a table, a floor piece blocks a defined path).
+- **Alert** — hue `#C9603F`, tint `#F6E3DC`. Destructive actions, validation errors, overruns.
 
 ### Named Rules
-**The Neutral Canvas Rule.** The workspace is chromaless. The only saturated color on any screen is the accent (≤10% of the surface) and the designer's own product imagery. If the chrome competes with a product photo for attention, the chrome is wrong.
 
-**The No-Cream Rule.** "Luxury" is never expressed by a warm-tinted body background — that is the AI cliché. The canvas stays true white; warmth lives only in the oxblood accent and the serif type.
+**The Swatch-Is-Not-A-Label Rule.** Indigo `300`/`500` and the warm accents are *fills* — gradient members, dots, bars, illustration. They never carry small text. Amber is the one hue with a separate label value (`warn-ink`): the `#C79A2E` swatch is for fills and dots, `#A97E1F` for any warning text.
 
-**The Print Rule.** Every operational output (placement map, packing list) must survive black-and-white printing. Distinctions carry through weight, shape, and label — never color alone.
+**The Contrast Note.** These values come from the design system as authored, and three of them sit just under WCAG AA for small text: `muted` `#7C7889` (4.3:1), `alert` `#C9603F` (4.0:1), and `warn-ink` on its tint (3.2:1). Body copy runs on `ink-soft` `#4A4658` (8.6:1) and every warning pairs colour with an icon and words, so meaning never rests on the hue alone — but if the AA bar is later made hard, these three are the values to deepen.
+
+**The One-Saturated-Surface Rule.** At most one mesh-gradient surface per screen, and one filled CTA. Everything else is ink, muted, and space. If the chrome competes with a product photo for attention, the chrome is wrong.
+
+**The Print Rule.** Every operational output (placement map, packing list) must survive black-and-white printing. Distinctions carry through weight, shape, and label — never color alone. Gradients, grain, and glass are stripped in `@media print`.
 
 ## 3. Typography
 
-**Display Font:** Frank Ruhl Libre (a classic Hebrew editorial serif; Georgia/serif fallback)
-**Body / UI Font:** Heebo (with system-ui, sans-serif fallback)
+**Wordmark:** Urbanist 900 (Latin only)
+**Hebrew / UI / body:** Assistant (300–700)
+**Overline:** Space Grotesk 500 (Latin only)
 
-**Character:** A serif-and-sans pairing on a genuine contrast axis. Frank Ruhl Libre — the typeface of Hebrew literary typesetting — carries display headings and welcome surfaces with editorial weight and quiet luxury. Heebo, a clean humanist sans, carries everything a hand touches: buttons, labels, data, body. The serif signals *design*; the sans keeps the tool clean.
+**Character:** One workhorse family does almost everything. Assistant — a clean humanist Hebrew sans — carries display headings, body, buttons, labels and data alike; hierarchy comes from weight and size, not from a second family. Urbanist appears only in the wordmark, where its heavy geometric caps give the brand a mark that reads at any size. Space Grotesk appears only in wide-tracked Latin overlines, where it acts as a structural label rather than as reading text.
 
 ### Hierarchy
-- **Display** (serif, 500, `clamp(2.75rem, 7vw, 5rem)`, 1.05): the welcome hero and large brand moments. Set with `text-wrap: balance`.
-- **Headline** (serif, 500, 1.5rem, 1.3): section headers on welcome/empty surfaces.
-- **Title** (sans, 600, 1rem, 1.4): panel and card headers, catalog item names — UI, so sans.
-- **Body** (sans, 400, 0.9375rem, 1.6): running text and descriptions. Cap measure at 65–75ch.
-- **Label** (sans, 500, 0.8125rem, 1.4): buttons, form labels, chips, table numbers.
+
+- **Wordmark** (Urbanist 900, `-1.5px` absolute track, `.wordmark`): the `Eve.` lockup only. The track is absolute, not em-relative, so the mark holds its shape from 28px to 88px.
+- **Display** (Assistant 700, `clamp(2.75rem, 7vw, 5rem)` on hero surfaces / 46px nominal, 1.08, `.font-display`): the hero and large brand moments. Set with `text-wrap: balance`.
+- **H1** (Assistant 700, 30px): page and screen headers.
+- **H2** (Assistant 700, 22px): section and panel headers.
+- **Body** (Assistant 400, 16px, 1.6): running text and descriptions. Cap measure at 65–75ch.
+- **Caption** (Assistant 500, 13px): meta, dates, hints.
+- **Overline** (Space Grotesk 500, 11px, `4px` track, `.overline`): section eyebrows, in `accent` or `gold`.
+- **Kicker** (Space Grotesk 500, 12px, `4px` track, `faint`, `.kicker`): the overline's larger, quieter sibling, labelling a whole section or card.
 
 ### Named Rules
-**The Serif-For-Display-Only Rule.** The serif appears on headings, the welcome page, and spacious empty states — never on a button, form label, table cell, or any dense tool UI. In the studio and catalog chrome, Heebo sans rules; a serif there would trade legibility for decoration.
 
-**The Tabular Count Rule.** Every quantity and dimension (packing-list counts, mm measurements, quote line totals) uses `font-variant-numeric: tabular-nums` so columns align down the page and in print.
+**The One-Wordmark Rule.** Urbanist appears in the wordmark and nowhere else. A heading, a button, or a number set in Urbanist is a bug — Assistant is the voice of the product, and the wordmark is the only place the brand speaks Latin.
+
+**The Overline-Is-Not-Copy Rule.** Space Grotesk at a 4px track is a label, never a sentence. It carries two or three words, uppercase, Latin. Hebrew never gets letter-spaced — no display heading in this system carries tracking at all.
+
+**The Tabular Count Rule.** Every quantity and dimension (packing-list counts, mm measurements, quote line totals) uses `font-variant-numeric: tabular-nums` (`.nums`) so columns align down the page and in print.
 
 ## 4. Elevation
 
-Flat by default. Depth is tonal: canvas (white) sits on background (`0.982`), separated by hairline borders, not shadows. This keeps the studio calm and keeps outputs print-faithful. Shadows are reserved for elements that genuinely float above the plane.
+Depth is **violet-cast**, never neutral grey. A white card on the `#EEEDF3` plane needs no shadow to read as a card — the plane does that work. A shadow appears when something genuinely lifts.
 
 ### Shadow Vocabulary
-- **Floating** (`box-shadow: 0 4px 16px oklch(0.22 0.012 25 / 0.10)`, token `--shadow-floating`): dropdowns, popovers, a catalog card lifting on hover/focus, an item while it's dragged onto the canvas. Cast in the ink hue, not a blue — the shadow is a darker paper tone, never a cool cast.
-- **Dialog** (`box-shadow: 0 12px 40px oklch(0.22 0.012 25 / 0.16)`, token `--shadow-dialog`): modal surfaces (export preview, quote composer).
-- **Backdrop:** the `<dialog>` scrim is `oklch(0.2 0.01 230 / 0.28)` — the one place a faint cool tone is allowed, behind the edit drawer.
+
+- **Floating** (`0 8px 18px -10px rgb(70 40 130 / .5)`, `--shadow-floating`): a card lifting on hover/focus, a small popover, a segmented-control thumb.
+- **Lifted** (`0 18px 40px -18px rgb(70 40 130 / .55)`, `--shadow-lifted`): dropdowns, a dragged item, a hovered event card.
+- **Dialog** (`0 30px 60px -22px rgb(70 40 130 / .6)`, `--shadow-dialog`): modal surfaces (export preview, quote composer).
+- **CTA** (`0 16px 30px -12px rgb(90 55 180 / .55), inset 0 1px 0 rgb(255 255 255 / .4)`, `--shadow-cta`): the filled gradient button only. The inset white line is the lit top edge — it is what keeps the gradient from looking flat.
+- **Puck** (`0 6px 14px -6px rgb(90 55 180 / .5)`, `--shadow-puck`): the white icon disc inside a button.
+- **Backdrop:** the `<dialog>` scrim is `rgb(40 26 74 / 0.28)`.
 
 ### Named Rules
-**The Flat-By-Default Rule.** Surfaces are flat at rest. A shadow appears only as a response to state — hover, drag, focus, or opening. A resting card with a drop shadow is a bug.
 
-## 5. Components
+**The Flat-By-Default Rule.** Surfaces are flat at rest. A shadow appears as a response to state — hover, drag, focus, opening — or to mark the single CTA. A resting card with a drop shadow is a bug.
 
-### Buttons
-Three variants only (`Button` `variant`: `primary` / `ghost` / `danger`), all `{rounded.md}`, label typography, `transition-colors` 150ms.
-- **Shape:** gently rounded (8px, `{rounded.md}`).
-- **Primary:** Oxblood fill, white label (canvas), 8px 16px padding. The one saturated control on a screen; used for the single most important action, not scattered. Hover deepens to accent-hover.
-- **Ghost:** no fill or border at rest, ink-soft label, 8px 12px padding; background lifts to Oxblood Wash (`accent-tint`) and the label to ink on hover. The default for toolbar and secondary actions.
-- **Danger:** the destructive affordance. Muted label at rest, no fill; on hover the background lifts to Warn Wash and the label to Warn Amber — restraint until the moment it matters, never a red button sitting loud on the page.
-- **Disabled:** `opacity-50` and `not-allowed` cursor; no hover response.
-- **Focus:** a 2px Oxblood ring on `:focus-visible` (the global `outline`, 2px offset), consistent across every control. Instant under reduced motion.
+## 5. Brand Surfaces
 
-### Icon buttons (`IconButton`, toolbar tools, `<Link>` back)
-- **Style:** icon-only ghost, `{rounded.md}`, muted (or ink-soft) icon, 4px / 6px padding by size; hover lifts to Oxblood Wash with an ink icon. Always carries an `aria-label` and `title`.
-- **Disabled:** `opacity-35`, no hover.
+### The Mesh (`.mesh`)
 
-### Chips / Toggles (`TagToggle` style tags; layer toggles)
-- **Style:** surface background, ink-soft text, 4px radius (`{rounded.sm}`), hairline border.
-- **State:** an active tag fills Oxblood Wash with an ink label and an accent border; an inactive one hovers to an ink-soft border — distinct by fill and border, not color alone, and `aria-pressed` carries the state to AT.
+A **deep violet core** (`#241A3D`) with an **amber glow** (`#EAB887`) off one shoulder, **magenta** (`#C77FC4`) closing from below and **periwinkle** (`#B0A2E4`) opening the far corner — over a violet field (`linear-gradient(160deg, #A99FD8, #8F78D8, #9A7FD0)`), drifting on a 16s cycle.
 
-### Cards / Containers (catalog items)
-- **Corner Style:** 12px (`{rounded.lg}`); the inner product image is `{rounded.md}` with a hairline border.
-- **Background:** surface (white) on the background plane.
-- **Shadow Strategy:** flat at rest (see Elevation); Floating shadow appears on hover/focus (`ease-fluid`, 150ms), and while an item is dragged onto the canvas. A resting card carries no shadow.
-- **Border:** hairline `{colors.border}`.
-- **Internal Padding:** 8px — the product image is the hero; chrome is minimal. A footer row divides off the price with a hairline top border, and the "edit" affordance fades in only on hover/focus.
-- Never nest a card inside a card.
+**The dark core is the point.** It is what makes the surface read as lit rather than as a flat gradient, and it is what gives white type something to sit on. A mesh without it is just a purple background.
+
+The reference composition is a phone screen — copy at the bottom, amber safely clear of it. On a wide RTL surface the copy sits at the *start* (right), so the mesh is authored mirrored: **the core falls under the copy at 66%, the warm lights open into the empty end side.** Keep that relationship when placing the mesh anywhere new — light in the open space, mass under the words. This is the brand at full voice: the entry hero, the login lockup, an export cover. Never behind working UI.
+
+### Grain (`.grain`, `.grain-strong`)
+
+A fractal-noise SVG at 22% (28% on a small plate), `mix-blend-mode: overlay`. The reference is heavily grained — this is not a subtle finish. **Every gradient wears grain.** It is what separates this from generic gradient UI — the texture reads as printed ink rather than as a CSS effect.
+
+### The Scrim (`.mesh-scrim`)
+
+The core carries white type on its own; the amber shoulder does not. The scrim is a vertical wash that deepens the top and bottom bands — where copy lands — and leaves the middle alone so the core stays vivid. It runs top-to-bottom, so it needs no RTL/LTR variant. Kept deliberately light (0.40 / 0.16 / 0.20 / 0.55): if copy needs more than this, move the copy onto the core rather than darkening the whole surface.
+
+### Glass (`.glass`)
+
+`rgb(255 255 255 / .16)` + `blur(16px)` + a white hairline + an inset top highlight. Only ever over the mesh — glass over a flat surface or over content is decoration, and this system doesn't do decoration.
+
+### The Glass CTA (`GlassCta`)
+
+The signature entry action, and the one component the reference specifies in full: a 76px glass pill, a **white disc at the start edge** carrying an ink glyph, the label **centred** in the remaining space, and **three chevrons trailing at the end**, each a step fainter, pointing the way forward. Note the label centres here — unlike the solid `primary` button, whose label sits flush to its puck. One per entry surface.
+
+### Named Rules
+
+**The Grain Rule.** No gradient ships without grain over it.
+
+**The Scrim Rule.** No text sits directly on the mesh. If copy needs to go there, the scrim goes under it first.
+
+## 6. Components
+
+### Buttons (`Button`)
+
+Five variants, all `{rounded.pill}`, label weight **700**, `transition-all` 150ms. The design system specifies the `lg` step exactly; `md` (44px) and `sm` (36px) scale it down for dense toolbar and inline use.
+
+- **Primary:** the gradient fill (`150deg, #8B6FD6 → #6D55BD`), white label, CTA shadow. **58px** tall at `lg`, 15px label. The one saturated control on a screen — one per view, on the single most important action. Hover brightens 10%.
+- **Soft:** the tint gradient (`150deg, #EFEAFB → #E7E0F7`) with a `soft-line` (`#E0D8F2`) hairline and an `accent-hover` label. **54px** at `lg`, 14px label. Secondary weight without competing.
+- **Outline:** no fill, a 1.5px `accent-line` stroke, `accent` label. **50px** at `lg`. Hover fills to `accent-tint`.
+- **Ghost:** no fill or border at rest, `ink-soft` label; background lifts to `accent-tint` and the label to `accent-hover` on hover. Not in the design system — the app needs a borderless toolbar action, and this is it.
+- **Danger:** the destructive affordance. Muted label at rest, no fill; on hover the background lifts to `alert-tint` and the label to `alert` — restraint until the moment it matters, never a red button sitting loud on the page.
+- **The puck:** pass `icon` to a `primary` or `soft` button and it renders inside a white circular disc (46px at `lg`) carrying the `accent` glyph. **It sits at the start edge on `primary` and the end edge on `soft`** — the two mirror each other, and that mirroring is the signature. Padding goes tight (6px) against the puck and roomy (22px / 20px) at the far end; the label takes `flex-1` so it sits flush to the disc.
+- **Disabled:** `opacity-50`, `not-allowed` cursor, no shadow, no hover response.
+- **Focus:** a 2px accent ring on `:focus-visible` (the global `outline`, 2px offset), consistent across every control. Instant under reduced motion.
+
+### Icon buttons (`IconButton`)
+
+Icon-only ghost, `{rounded.pill}`, muted glyph, 6px / 8px padding by size; hover lifts to `accent-tint` with an `accent-hover` glyph. Always carries an `aria-label` and `title`. Disabled: `opacity-35`, no hover.
+
+### Chips (`StatusChip`) / Toggles (`TagToggle`)
+
+- **StatusChip:** pill, `7px 14px`, 13px semibold. Tones `neutral` / `accent` / `success` / `warn` / `alert`, each a tint fill with its AA-clean ink label. A chip that carries meaning pairs the fill with a word or a glyph, so it survives print.
+- **TagToggle:** pill, hairline border. Active fills `accent-wash` with an `accent-hover` label and an `accent-line` border; inactive hovers to an `accent-line` border over `accent-tint` — distinct by fill *and* border, not color alone, with `aria-pressed` carrying the state to AT.
+
+### Cards / Containers
+
+- **Corner:** `{rounded.lg}` (22px); an inner product image is `{rounded.md}` with a hairline border.
+- **Background:** surface (white) on the `bg` plane, hairline `{colors.border}`.
+- **Shadow:** flat at rest; Floating or Lifted appears on hover/focus (`ease-fluid`, 150ms) and while an item is dragged onto the canvas.
+- **Padding:** 24px on a content card; 8px on a catalog item, where the product image is the hero.
+- Never nest a card inside a card — use an `inset` well instead.
 
 ### Inputs / Fields (`controlClassName`, `SearchInput`)
-- **Style:** canvas (white) fill, hairline border, 8px radius, ink text, 36px height (`h-9`). A search field carries a leading muted icon and `ps-8` inset.
-- **Hover / Focus:** border darkens to ink-soft on hover, then shifts to Oxblood on `:focus-visible` (plus the global 2px accent ring); no glow.
-- **Error:** border and helper text carry the message with an icon and words, not a red border alone. Placeholder text is muted (`0.52`), never lighter.
+
+Canvas (white) fill, hairline border, `{rounded.md}`, ink text, 40px height (`h-10`). A search field carries a leading muted icon and `ps-8` inset. Hover darkens the border to `accent-line`, focus shifts it to `accent` (plus the global 2px ring); no glow. Errors carry the message with an icon and words in `alert`, not a colored border alone. Placeholder text is `muted` (`#6F6B7D`), never lighter.
 
 ### Navigation
-- **Top bar (studio):** a quiet 56px header on the `bg` plane, hairline bottom border, hairline `w-px` dividers between tool groups; icon-button tools and a live-region save indicator (spinner → accent check). RTL: back-arrow (`ArrowRight`) points to the start.
-- **Catalog rail (studio):** a 256px `border-s` aside on the surface plane — search on top, draggable product rows (`cursor-grab`, hover lifts border + `bg`), a hint footer. RTL: the rail sits on the right, the canvas fills the rest.
+
+- **Sidebar:** a 256px `border-e` aside on the surface plane, separated from the content plane by a **single hairline**. The wordmark sits at the top in its gradient tone. Nav items are pills: active fills `accent-wash` with an `accent-hover` semibold label and a 3px `accent` bar on the start edge; inactive is `ink-soft`, hovering to `accent-tint`.
+- **Top bar (studio):** a quiet header on the `bg` plane, hairline bottom border, hairline `w-px` dividers between tool groups; icon-button tools and a live-region save indicator. RTL: back-arrow (`ArrowRight`) points to the start.
+- **Catalog rail (studio):** a 256px `border-s` aside on the surface plane — search on top, draggable product rows (`cursor-grab`), a hint footer. RTL: the rail sits on the right, the canvas fills the rest.
 
 ### Signature: The Canvas
-The 2D studio is the one place the accent does real work: selected tables and placements are outlined in Oxblood, the rest of the plan stays in ink and the product imagery. The canvas surface is pure white so a printed or exported plan reads like paper. This is where "the tool recedes; the work is the color" is literally true.
 
-## 6. Do's and Don'ts
+The 2D studio is the one place the accent does real work: selected tables and placements are outlined in `accent`, the rest of the plan stays in ink and the product imagery. The canvas surface is pure white so a printed or exported plan reads like paper. Konva can't read CSS variables, so `canvas-stage.tsx` mirrors the tokens in a local `C` map — keep it in sync with `@theme`.
+
+## 7. Do's and Don'ts
 
 ### Do:
-- **Do** keep the workspace chromaless — accent on ≤10% of any screen, everything else ink on white (The Neutral Canvas Rule).
-- **Do** set headings, the welcome page, and empty states in the serif; keep every button, label, and data cell in Heebo sans (The Serif-For-Display-Only Rule).
+- **Do** keep the working surfaces quiet — one mesh surface and one filled CTA per screen, everything else ink on white (The One-Saturated-Surface Rule).
+- **Do** wear grain over every gradient, and scrim under every piece of text on the mesh (The Grain Rule, The Scrim Rule).
+- **Do** set text in the darkened semantic inks, not the brand fills (The AA-Ink Rule).
+- **Do** keep Urbanist to the wordmark and Space Grotesk to overlines (The One-Wordmark Rule).
 - **Do** design RTL-first; Hebrew is the primary direction, mirrored layouts are the default, not a retrofit.
-- **Do** use `tabular-nums` on every count, dimension, and price (The Tabular Count Rule).
+- **Do** use `.nums` on every count, dimension, and price (The Tabular Count Rule).
 - **Do** keep every operational output legible in black-and-white — carry meaning in weight, shape, and label (The Print Rule).
 - **Do** give every animation a `prefers-reduced-motion` alternative (a crossfade or an instant state change).
-- **Do** pair the warn amber with an icon and words; color is never the only signal.
 
 ### Don't:
-- **Don't** build a generic SaaS dashboard: no purple gradients, no hero-metric cards, no chart-everything layouts, no endless icon-heading-text card grids.
+- **Don't** build a generic SaaS dashboard: no hero-metric cards, no chart-everything layouts, no endless icon-heading-text card grids.
+- **Don't** put the mesh behind working UI, or use more than one mesh surface on a screen.
+- **Don't** ship a gradient without grain, or glass over anything but the mesh.
+- **Don't** use gradient text anywhere but the wordmark.
 - **Don't** reach for a trendy dark-mode developer terminal — wrong world for event and interior design.
 - **Don't** go consumer-flashy or playful: no bright bounce, gamification, or illustration filler.
 - **Don't** become a cluttered enterprise CRM: no dense gray-on-gray toolbars or deep nav trees burying the canvas.
-- **Don't** use a colored side-stripe border (`border-left`/`border-right` > 1px) on cards, list items, or alerts — use full hairline borders or a background wash.
-- **Don't** use gradient text (`background-clip: text`) — emphasis comes from weight and size, in one solid color.
-- **Don't** use glassmorphism as decoration — flat and tonal, or nothing.
-- **Don't** set body or placeholder text in light gray "for elegance"; muted is `0.52` and no lighter, and body runs on ink.
-- **Don't** express luxury with a cream/sand/beige body background, or with gold gradients and serif-everything — the gold-and-cream "luxury events" look is the cliché this system refuses (The No-Cream Rule). Warmth lives in the oxblood accent and the serif, on true-white paper.
+- **Don't** use a colored side-stripe border (`border-left`/`border-right` > 1px) on cards, list items, or alerts — use full hairline borders or a tint wash.
+- **Don't** set body or placeholder text lighter than `caption` (`#9C98AC`); `faint` is for kickers, rules and dividers.
+- **Don't** express luxury with a cream/sand/beige body background or gold gradients — the warmth in this system lives in the mesh and the accent, on a cool lavender-grey plane.
