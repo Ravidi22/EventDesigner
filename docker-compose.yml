@@ -4,9 +4,9 @@ services:
   db:
     image: postgres:17
     environment:
-      POSTGRES_USER: idesign
-      POSTGRES_PASSWORD: idesign
-      POSTGRES_DB: idesign
+      POSTGRES_USER: eve
+      POSTGRES_PASSWORD: eve
+      POSTGRES_DB: eve
     ports:
       - "5432:5432"
     volumes:

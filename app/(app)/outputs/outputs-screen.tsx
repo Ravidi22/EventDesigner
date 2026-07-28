@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
+import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { sampleDoc } from "@/lib/studio/sample-doc";
 import { loadDoc, loadHall } from "@/lib/studio/storage";
@@ -19,7 +20,7 @@ const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מ�
 type Paper = "A4" | "A3";
 type Orient = "portrait" | "landscape";
 
-const exportKey = (eventId: string) => `idesign.exports.${eventId}`;
+const exportKey = (eventId: string) => storageKey(`exports.${eventId}`);
 
 export function OutputsScreen() {
   const [doc, setDoc] = useState<DesignDocumentContent>(() => sampleDoc());

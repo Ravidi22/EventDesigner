@@ -2,6 +2,7 @@
 // The mock "version" is the serialized document itself — equality means unchanged, anything
 // else lights the "העיצוב השתנה מאז ההצעה האחרונה" indicator. Re-issue = overwrite with the
 // current document. Per-event key, same seam pattern as lib/studio/storage.ts.
+import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import type { DiscountType } from "@/lib/outputs/quote";
 
@@ -15,7 +16,7 @@ export interface IssuedQuote {
   total: number;
 }
 
-const key = (eventId: string) => `idesign.quote.${eventId}`;
+const key = (eventId: string) => storageKey(`quote.${eventId}`);
 
 export function loadIssuedQuote(eventId: string): IssuedQuote | null {
   if (typeof window === "undefined") return null;

@@ -2,12 +2,13 @@
 // (event folder — the images liked for a given event, keyed by eventId → imageId[]).
 // localStorage for now; the swap to a server action lives here and nowhere else (same seam as
 // lib/events/storage.ts).
+import { storageKey } from "@/lib/storage-keys";
 import type { GalleryImage, Presentation } from "./types";
 import { SAMPLE_IMAGES, SAMPLE_PRESENTATIONS } from "./sample-data";
 
-const KEY = "idesign.gallery.folders";
-const IMAGES_KEY = "idesign.gallery.images";
-const PRESENTATIONS_KEY = "idesign.gallery.presentations";
+const KEY = storageKey("gallery.folders");
+const IMAGES_KEY = storageKey("gallery.images");
+const PRESENTATIONS_KEY = storageKey("gallery.presentations");
 
 type Folders = Record<string, string[]>;
 

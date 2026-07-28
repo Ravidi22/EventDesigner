@@ -1,10 +1,11 @@
 // Event list + the active-event pointer. localStorage for now; the swap to a server action
 // lives here and nowhere else (same seam as lib/studio/storage.ts).
+import { storageKey } from "@/lib/storage-keys";
 import type { EventSummary } from "./types";
 import { SAMPLE_EVENTS } from "./sample-data";
 
-const KEY = "idesign.events";
-const ACTIVE_KEY = "idesign.events.active";
+const KEY = storageKey("events");
+const ACTIVE_KEY = storageKey("events.active");
 
 // Legacy (pre-v0.3) records stored status/progress instead of a flow step — patch them so
 // old localStorage never crashes the dashboard.

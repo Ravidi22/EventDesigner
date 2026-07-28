@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { packingList } from "@/lib/outputs/aggregate";
 import { itemLookup } from "@/lib/outputs/lookup";
@@ -9,7 +10,7 @@ import { itemLookup } from "@/lib/outputs/lookup";
 // F-6.3: manual spares per row, persisted with the event — so the "no manual fixes" success
 // metric covers reserves too, instead of pen-on-paper additions.
 type Spares = Record<string, number>;
-const sparesKey = (eventId: string) => `idesign.spares.${eventId}`;
+const sparesKey = (eventId: string) => storageKey(`spares.${eventId}`);
 
 function loadSpares(eventId: string): Spares {
   try {

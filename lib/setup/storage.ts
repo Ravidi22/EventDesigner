@@ -1,5 +1,6 @@
 // Hall-template persistence + the hand-off into the studio. All localStorage for now; the swap
 // to a server action lives here and nowhere else (same seam pattern as lib/studio/storage.ts).
+import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import type { Hall } from "@/lib/studio/hall";
@@ -7,7 +8,7 @@ import { saveDoc, saveHall } from "@/lib/studio/storage";
 import type { HallTemplate } from "./types";
 import { SEED_TEMPLATES } from "./sample-data";
 
-const KEY = "idesign.setup.templates";
+const KEY = storageKey("setup.templates");
 
 export function loadTemplates(): HallTemplate[] {
   if (typeof window === "undefined") return SEED_TEMPLATES;

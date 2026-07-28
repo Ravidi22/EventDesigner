@@ -1,10 +1,11 @@
 // Catalog persistence (F-4.4–F-4.5). localStorage for now; the swap to a server action lives
 // here and nowhere else (same seam as lib/events/storage.ts).
+import { storageKey, storagePrefix } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "../design-document/types";
 import type { Product } from "./types";
 import { SAMPLE_PRODUCTS } from "./sample-data";
 
-const KEY = "idesign.catalog.products";
+const KEY = storageKey("catalog.products");
 
 // Bumped on every write so the studio's resolver index knows to rebuild (no import cycle).
 export let catalogVersion = 0;
@@ -54,7 +55,7 @@ export function isPlacedAnywhere(variantIds: string[]): boolean {
   const ids = new Set(variantIds);
   for (let i = 0; i < window.localStorage.length; i++) {
     const key = window.localStorage.key(i);
-    if (!key?.startsWith("idesign.studio.doc.")) continue;
+    if (!key?.startsWith(storagePrefix("studio.doc."))) continue;
     try {
       const doc = JSON.parse(window.localStorage.getItem(key) ?? "") as DesignDocumentContent;
       if (doc.placements?.some((pl) => ids.has(pl.variantId))) return true;

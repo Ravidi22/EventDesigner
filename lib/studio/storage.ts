@@ -2,14 +2,15 @@
 // The swap to a server action lives here and nowhere else.
 // Keys are derived from the ACTIVE EVENT (F-1.2): each event's document + hall park and
 // resume independently, so leaving mid-flow and reopening another event is always safe.
+import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { activeEvent } from "@/lib/events/storage";
 import type { Hall } from "./hall";
 
 // activeEvent() (not the raw id) so the fallback event resolves to the same key the
 // gallery folder uses — one notion of "the active event" everywhere.
-const docKey = () => `idesign.studio.doc.${activeEvent()?.id ?? "default"}`;
-const hallKey = () => `idesign.studio.hall.${activeEvent()?.id ?? "default"}`;
+const docKey = () => storageKey(`studio.doc.${activeEvent()?.id ?? "default"}`);
+const hallKey = () => storageKey(`studio.hall.${activeEvent()?.id ?? "default"}`);
 
 export function loadDoc(): DesignDocumentContent | null {
   if (typeof window === "undefined") return null;

@@ -1,4 +1,4 @@
-# iDesign — פלטפורמת עיצוב אירועים
+# Eve — פלטפורמת עיצוב אירועים
 
 Turns a "dead" hall PDF into a live map where an event designer places their catalog,
 producing three outputs from one source of truth — client visualization, placement map,

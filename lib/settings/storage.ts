@@ -1,5 +1,6 @@
 // Business settings (F-8.1): logo + business details for quote/output headers, VAT rate,
 // currency (₪). localStorage for now; the swap to a server action lives here and nowhere else.
+import { storageKey } from "@/lib/storage-keys";
 
 export interface BusinessSettings {
   businessName: string;
@@ -12,7 +13,7 @@ export interface BusinessSettings {
 }
 
 export const DEFAULT_SETTINGS: BusinessSettings = {
-  businessName: "iDesign — עיצוב אירועים",
+  businessName: "Eve — עיצוב אירועים",
   ownerName: "דניאל אמסלם",
   phone: "",
   address: "",
@@ -20,7 +21,7 @@ export const DEFAULT_SETTINGS: BusinessSettings = {
   currency: "₪",
 };
 
-const KEY = "idesign.settings";
+const KEY = storageKey("settings");
 
 export function loadSettings(): BusinessSettings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
