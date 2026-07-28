@@ -52,6 +52,36 @@ export function edgePathD(a: Point, b: Point, curve?: EdgeCurve | null): string 
   return `M ${a.x} ${a.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${b.x} ${b.y}`;
 }
 
+// De Casteljau split of a cubic at parameter t → the two halves as their own control points.
+type Cubic = [Point, Point, Point, Point];
+const lerpPt = (p: Point, q: Point, t: number): Point => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+function splitCubic(c: Cubic, t: number): { left: Cubic; right: Cubic } {
+  const [p0, p1, p2, p3] = c;
+  const p01 = lerpPt(p0, p1, t);
+  const p12 = lerpPt(p1, p2, t);
+  const p23 = lerpPt(p2, p3, t);
+  const p012 = lerpPt(p01, p12, t);
+  const p123 = lerpPt(p12, p23, t);
+  const p0123 = lerpPt(p012, p123, t);
+  return { left: [p0, p01, p012, p0123], right: [p0123, p123, p23, p3] };
+}
+
+// SVG "d" for the slice of a wall between chord-fractions t0..t1 — a straight segment, or a real
+// bezier sub-curve when the wall is bowed. Lets a door cut a hole out of a curved wall without
+// straightening it: render the stub on either side of the door's t-range.
+export function wallSegmentD(a: Point, b: Point, curve: EdgeCurve | null, t0: number, t1: number): string {
+  if (!curve) {
+    const p0 = lerpPt(a, b, t0);
+    const p1 = lerpPt(a, b, t1);
+    return `M ${p0.x} ${p0.y} L ${p1.x} ${p1.y}`;
+  }
+  const { c1, c2 } = absoluteControlPoints(a, b, curve);
+  const right = splitCubic([a, c1, c2, b], t0).right; // [t0, 1]
+  const t1b = t0 >= 1 ? 0 : (t1 - t0) / (1 - t0); // remap t1 into the [t0,1] sub-curve
+  const [q0, q1, q2, q3] = splitCubic(right, t1b).left; // [t0, t1]
+  return `M ${q0.x} ${q0.y} C ${q1.x} ${q1.y} ${q2.x} ${q2.y} ${q3.x} ${q3.y}`;
+}
+
 // Point at t on a cubic bezier — used to place a wall's drag handle at its visual midpoint.
 export function cubicPointAt(a: Point, c1: Point, c2: Point, b: Point, t: number): Point {
   const mt = 1 - t;
@@ -363,6 +393,14 @@ if ((import.meta as { main?: boolean }).main) {
   assert(nearest.edgeIdx === 0 && Math.abs(nearest.distanceMm - 300) < 1e-6, "nearestWallToPoint finds the closest edge and offset along it");
   const fallback = resolveWallEndpoints(undefined, 2000, 1000, 2);
   assert(fallback.a.x === 2000 && fallback.a.y === 1000 && fallback.b.x === 0 && fallback.b.y === 1000, "resolveWallEndpoints falls back to the width×height rectangle");
+
+  // A straight wall sliced between two chord-fractions is just the corresponding chord sub-segment.
+  assert(wallSegmentD(a, b, null, 0.25, 0.75) === "M 250 0 L 750 0", "wallSegmentD slices a straight wall along its chord");
+  // A full-range slice of a bowed wall is a bezier that still runs vertex→vertex (De Casteljau
+  // preserves the endpoints exactly), so the door-hole stubs stay welded to the corners.
+  const bowed = bulgeToCurve(a, b, { x: 500, y: 200 });
+  const full = wallSegmentD(a, b, bowed, 0, 1);
+  assert(full.startsWith("M 0 0 C ") && full.endsWith(" 1000 0"), "full-range slice of a bowed wall keeps its two vertices");
 
   const door = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 });
   assert(Math.abs(wallLengthMm(door.gapStart, door.gapEnd) - 900) < 1e-6, "door gap spans the door width");
