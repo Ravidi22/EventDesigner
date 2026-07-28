@@ -282,7 +282,10 @@ body {
 .drawer {
   max-height: none;
 }
-.drawer::backdrop {
+/* One scrim for every <dialog> surface — shared selector so the drawer and the modal can never
+   drift apart. Violet-cast, like every other shadow in the system. */
+.drawer::backdrop,
+.modal::backdrop {
   background: rgb(40 26 74 / 0.34);
   animation: fade-in 220ms var(--ease-fluid);
 }
@@ -305,11 +308,7 @@ body {
   }
 }
 
-/* Centered modal (e.g. the custom-shape editor) — same backdrop as the drawer, but middle-of-screen. */
-.modal::backdrop {
-  background: oklch(0.2 0.01 230 / 0.28);
-  animation: fade-in 220ms var(--ease-fluid);
-}
+/* Centered modal (e.g. the custom-shape editor) — the shared backdrop above, middle-of-screen. */
 .modal[open] {
   animation: modal-in 180ms var(--ease-fluid);
 }
