@@ -12,7 +12,7 @@ import { IconButton } from "@/components/icon-button";
 import { TagToggle } from "@/components/tag-toggle";
 import { controlClassName } from "@/components/control";
 import { AppearancePreview } from "./appearance-preview";
-import { PolygonEditor } from "./polygon-editor";
+import { ShapeEditorModal } from "./shape-editor-modal";
 import { IconPicker } from "./icon-picker";
 
 const uid = () => crypto.randomUUID();
@@ -52,12 +52,14 @@ export function ProductDrawer({
   const [draft, setDraft] = useState<Product>(blankProduct);
   const [submitted, setSubmitted] = useState(false);
   const [pickingIcon, setPickingIcon] = useState(false);
+  const [shapeModalOpen, setShapeModalOpen] = useState(false);
 
   useEffect(() => {
     if (product) {
       setDraft(product);
       setSubmitted(false);
       setPickingIcon(false);
+      setShapeModalOpen(false);
     }
   }, [product]);
 
@@ -290,16 +292,28 @@ export function ProductDrawer({
           <div>
             <span className={fieldLabel}>מראה על התוכנית</span>
             <div className="flex gap-3">
-              <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-md border border-border bg-bg p-2">
-                {currentShape === "custom" ? (
-                  <PolygonEditor
-                    outline={draft.appearance?.outline ?? []}
-                    onChange={(outline) => setAppearance({ shape: "custom", outline })}
-                  />
-                ) : (
+              {currentShape === "custom" ? (
+                <button
+                  type="button"
+                  onClick={() => setShapeModalOpen(true)}
+                  aria-label="עריכת צורת הפריט"
+                  className="group flex h-28 w-28 shrink-0 items-center justify-center rounded-md border border-border bg-bg p-2 transition-colors hover:border-accent"
+                >
+                  {(draft.appearance?.outline?.length ?? 0) >= 3 ? (
+                    <AppearancePreview product={draft} className="h-full w-full" />
+                  ) : (
+                    <span className="text-center text-xs leading-snug text-muted group-hover:text-accent">
+                      לחצו
+                      <br />
+                      לעריכת הצורה
+                    </span>
+                  )}
+                </button>
+              ) : (
+                <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-md border border-border bg-bg p-2">
                   <AppearancePreview product={draft} className="h-full w-full" />
-                )}
-              </div>
+                </div>
+              )}
 
               <div className="flex-1 space-y-2">
                 <div>
@@ -309,7 +323,10 @@ export function ProductDrawer({
                       <button
                         key={s}
                         type="button"
-                        onClick={() => setAppearance(s === "custom" ? { shape: "custom", outline: draft.appearance?.outline ?? [] } : { shape: s })}
+                        onClick={() => {
+                          if (s === "custom") { setAppearance({ shape: "custom", outline: draft.appearance?.outline ?? [] }); setShapeModalOpen(true); }
+                          else setAppearance({ shape: s });
+                        }}
                         className={"rounded px-2 py-1 text-xs transition-colors " + (currentShape === s ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
                       >
                         {label}
@@ -336,18 +353,26 @@ export function ProductDrawer({
               </div>
             </div>
 
-            {currentShape === "custom" && (draft.appearance?.outline?.length ?? 0) > 0 && (
+            {currentShape === "custom" && (
               <button
                 type="button"
-                onClick={() => setAppearance({ shape: "custom", outline: [] })}
+                onClick={() => setShapeModalOpen(true)}
                 className="mt-1.5 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
               >
-                רשם מחדש
+                {(draft.appearance?.outline?.length ?? 0) >= 3 ? "עריכת הצורה" : "עריכת הצורה…"}
               </button>
             )}
             {submitted && draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3 && (
               <p className="mt-1 text-xs text-warn">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
             )}
+
+            <ShapeEditorModal
+              open={shapeModalOpen}
+              outline={draft.appearance?.outline ?? []}
+              edgeCurves={draft.appearance?.edgeCurves}
+              onSave={(outline, edgeCurves) => setAppearance({ shape: "custom", outline, edgeCurves })}
+              onClose={() => setShapeModalOpen(false)}
+            />
 
             {currentContent === "icon" && pickingIcon && (
               <div className="mt-2">
