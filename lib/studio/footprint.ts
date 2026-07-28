@@ -3,6 +3,7 @@
 // legacy/seed product keeps rendering (name-in-a-shape = today's behavior).
 import type { Product } from "@/lib/catalog/types";
 import type { Point } from "@/lib/design-document/types";
+import type { EdgeCurve } from "@/lib/studio/hall";
 
 export const MIN_FOOTPRINT_MM = 600; // floor so missing/zero dims never render at zero size
 
@@ -10,7 +11,7 @@ export type Footprint =
   | { kind: "rect"; widthMm: number; depthMm: number }
   | { kind: "circle"; diameterMm: number }
   | { kind: "ellipse"; widthMm: number; depthMm: number }
-  | { kind: "custom"; outline: Point[] };
+  | { kind: "custom"; outline: Point[]; edgeCurves?: (EdgeCurve | null)[] };
 
 export interface ResolvedContent {
   mode: "icon" | "name" | "none";
@@ -23,7 +24,8 @@ export function resolveFootprint(product: Product): Footprint {
   const shape = product.appearance?.shape ?? (d.diameterMm ? "circle" : "rect");
   if (shape === "custom") {
     const outline = product.appearance?.outline;
-    if (outline && outline.length >= 3) return { kind: "custom", outline };
+    const edgeCurves = product.appearance?.edgeCurves;
+    if (outline && outline.length >= 3) return { kind: "custom", outline, ...(edgeCurves ? { edgeCurves } : {}) };
     // malformed custom → fall through to a safe rectangle
   }
   if (shape === "circle") return { kind: "circle", diameterMm: d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM };
