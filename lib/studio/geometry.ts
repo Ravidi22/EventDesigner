@@ -242,60 +242,8 @@ export function nearestWallToPoint(outline: Point[], p: Point): { edgeIdx: numbe
   return { edgeIdx: best.edgeIdx, distanceMm: best.distanceMm };
 }
 
-export interface DoorLeaf {
-  hinge: Point; // jamb the leaf swings from
-  tip: Point; // open end of the leaf
-  arcTo: Point; // where the swing arc meets the wall (or, for a double door, the other leaf)
-  lenMm: number; // leaf length — also the swing arc's radius
-  sweepFlag: 0 | 1;
-}
-
-export interface DoorGeometry {
-  gapStart: Point;
-  gapEnd: Point;
-  leaves: DoorLeaf[]; // 1 for a single door, 2 for a double door (most event-hall entrances)
-}
-
-function doorLeaf(hinge: Point, arcTo: Point, leafLenMm: number, swx: number, swy: number, ux: number, uy: number): DoorLeaf {
-  return {
-    hinge,
-    tip: { x: hinge.x + swx * leafLenMm, y: hinge.y + swy * leafLenMm },
-    arcTo,
-    lenMm: leafLenMm,
-    sweepFlag: swx * uy - swy * ux > 0 ? 1 : 0,
-  };
-}
-
-// Classic architectural door symbol: a gap cut in the wall, one or two leaves swung open 90°, and
-// a quarter-circle arc tracing each swing. `interiorHint` (e.g. the outline's centroid) resolves
-// which side of the wall is "inward" so swingInward is meaningful regardless of wall winding
-// direction. A double door splits the opening into two equal leaves hinged at each jamb, both
-// swinging the same way and meeting in the middle — the common case for an event-hall entrance.
-export function doorGeometry(a: Point, b: Point, distanceMm: number, widthMm: number, swingInward: boolean, interiorHint: Point, doubleDoor = false): DoorGeometry {
-  const len = wallLengthMm(a, b) || 1;
-  const ux = (b.x - a.x) / len;
-  const uy = (b.y - a.y) / len;
-  const nx = -uy;
-  const ny = ux;
-  const midX = (a.x + b.x) / 2;
-  const midY = (a.y + b.y) / 2;
-  const normalPointsInward = (interiorHint.x - midX) * nx + (interiorHint.y - midY) * ny > 0;
-  const sign = normalPointsInward === swingInward ? 1 : -1;
-  const swx = nx * sign;
-  const swy = ny * sign;
-  const half = widthMm / 2;
-  const gapStart = pointAtDistance(a, b, distanceMm - half);
-  const gapEnd = pointAtDistance(a, b, distanceMm + half);
-  if (!doubleDoor) {
-    return { gapStart, gapEnd, leaves: [doorLeaf(gapStart, gapEnd, widthMm, swx, swy, ux, uy)] };
-  }
-  const mid = pointAtDistance(a, b, distanceMm);
-  return {
-    gapStart,
-    gapEnd,
-    leaves: [doorLeaf(gapStart, mid, half, swx, swy, ux, uy), doorLeaf(gapEnd, mid, half, swx, swy, -ux, -uy)],
-  };
-}
+// Doors render as a plain opening (a gap cut in the wall) — no swing leaf/arc symbol. The gap's
+// two ends are just pointAtDistance(distance ± widthMm/2) along the wall.
 
 // --- Rotation (stage/bar resize+rotate handles) ---
 export function toLocalFrame(p: Point, center: Point, rotationDeg: number): Point {
@@ -401,19 +349,6 @@ if ((import.meta as { main?: boolean }).main) {
   const bowed = bulgeToCurve(a, b, { x: 500, y: 200 });
   const full = wallSegmentD(a, b, bowed, 0, 1);
   assert(full.startsWith("M 0 0 C ") && full.endsWith(" 1000 0"), "full-range slice of a bowed wall keeps its two vertices");
-
-  const door = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 });
-  assert(Math.abs(wallLengthMm(door.gapStart, door.gapEnd) - 900) < 1e-6, "door gap spans the door width");
-  assert(door.leaves.length === 1, "doorGeometry defaults to a single leaf");
-  assert(Math.abs(wallLengthMm(door.gapStart, door.leaves[0].tip) - 900) < 1e-6, "single-door leaf length equals the door width");
-  assert(door.leaves[0].tip.y > 0, "swingInward toward a centroid below the wall opens the leaf downward");
-
-  const doubleDoor = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 }, true);
-  assert(doubleDoor.leaves.length === 2, "doubleDoor produces two leaves");
-  assert(Math.abs(wallLengthMm(doubleDoor.leaves[0].hinge, doubleDoor.leaves[0].tip) - 450) < 1e-6, "each double-door leaf is half the opening width");
-  assert(Math.abs(wallLengthMm(doubleDoor.leaves[1].hinge, doubleDoor.leaves[1].tip) - 450) < 1e-6, "the second leaf matches the first in length");
-  const doorMid = pointAtDistance(a, b, 500);
-  assert(Math.abs(doubleDoor.leaves[0].arcTo.x - doorMid.x) < 1e-6 && Math.abs(doubleDoor.leaves[1].arcTo.x - doorMid.x) < 1e-6, "both double-door leaves swing to meet at the opening's midpoint");
 
   const localPt = toLocalFrame({ x: 100, y: 0 }, { x: 0, y: 0 }, 90);
   assert(Math.abs(localPt.x) < 1e-9 && Math.abs(localPt.y + 100) < 1e-9, "toLocalFrame undoes a 90° rotation");

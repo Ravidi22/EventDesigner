@@ -1,6 +1,6 @@
 import type { Hall } from "@/lib/studio/hall";
 import type { DesignTable } from "@/lib/design-document/types";
-import { outlinePathD, doorGeometry } from "@/lib/studio/geometry";
+import { outlinePathD, pointAtDistance } from "@/lib/studio/geometry";
 
 export type TableStatus = "approved" | "pending" | "rejected";
 
@@ -40,27 +40,18 @@ export function PlanPreview({
       ) : (
         <rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill="none" className="text-border" stroke="currentColor" strokeWidth={stroke} />
       )}
-      {/* ponytail: thumbnail scale — the door symbol overlays the wall line rather than cutting a
-          true gap into it (see the interactive editor for the real gap+swing rendering). */}
+      {/* Doors are plain openings: overpaint the wall stretch in the background colour so it reads
+          as a hole. ponytail: thumbnail scale — the erase line is the straight chord, close enough
+          across a gentle bow. */}
       {showFixedElements && hall.outline && hall.outline.length >= 3 && hall.entrances.map((e) => {
         const a = hall.outline![e.wallIndex];
         const b = hall.outline![(e.wallIndex + 1) % hall.outline!.length];
         if (!a || !b) return null;
-        const centroid = {
-          x: hall.outline!.reduce((s, p) => s + p.x, 0) / hall.outline!.length,
-          y: hall.outline!.reduce((s, p) => s + p.y, 0) / hall.outline!.length,
-        };
-        const door = doorGeometry(a, b, e.distanceMm, e.widthMm, e.swingInward, centroid, e.doubleDoor);
+        const half = e.widthMm / 2;
+        const gapStart = pointAtDistance(a, b, e.distanceMm - half);
+        const gapEnd = pointAtDistance(a, b, e.distanceMm + half);
         return (
-          <g key={e.id}>
-            <line x1={door.gapStart.x} y1={door.gapStart.y} x2={door.gapEnd.x} y2={door.gapEnd.y} className="text-canvas" stroke="currentColor" strokeWidth={stroke * 1.4} vectorEffect="non-scaling-stroke" />
-            {door.leaves.map((leaf, i) => (
-              <g key={i}>
-                <line x1={leaf.hinge.x} y1={leaf.hinge.y} x2={leaf.tip.x} y2={leaf.tip.y} className="text-accent" stroke="currentColor" strokeWidth={stroke} vectorEffect="non-scaling-stroke" />
-                <path d={`M ${leaf.tip.x} ${leaf.tip.y} A ${leaf.lenMm} ${leaf.lenMm} 0 0 ${leaf.sweepFlag} ${leaf.arcTo.x} ${leaf.arcTo.y}`} fill="none" className="text-accent" stroke="currentColor" strokeWidth={stroke * 0.6} vectorEffect="non-scaling-stroke" />
-              </g>
-            ))}
-          </g>
+          <line key={e.id} x1={gapStart.x} y1={gapStart.y} x2={gapEnd.x} y2={gapEnd.y} className="text-canvas" stroke="currentColor" strokeWidth={stroke * 1.4} vectorEffect="non-scaling-stroke" />
         );
       })}
       {hall.columns.map((c, i) => (
