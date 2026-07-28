@@ -10,6 +10,7 @@ import { isPlacedAnywhere } from "@/lib/catalog/storage";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { TagToggle } from "@/components/tag-toggle";
+import { Select } from "@/components/select";
 import { controlClassName } from "@/components/control";
 import { AppearancePreview } from "./appearance-preview";
 import { ShapeEditorModal } from "./shape-editor-modal";
@@ -173,30 +174,25 @@ export function ProductDrawer({
               <label htmlFor="p-cat" className={fieldLabel}>
                 קטגוריה
               </label>
-              <select id="p-cat" value={draft.category} onChange={(e) => changeCategory(e.target.value)} className={fieldInput}>
-                {CATEGORIES.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="p-cat"
+                value={draft.category}
+                onChange={changeCategory}
+                options={CATEGORIES.map((c) => ({ value: c.id, label: c.label }))}
+                className="w-full"
+              />
             </div>
             <div>
               <label htmlFor="p-layer" className={fieldLabel}>
                 שכבה
               </label>
-              <select
+              <Select
                 id="p-layer"
                 value={draft.layer}
-                onChange={(e) => patch({ layer: e.target.value as Product["layer"] })}
-                className={fieldInput}
-              >
-                {LAYERS.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => patch({ layer: v as Product["layer"] })}
+                options={LAYERS.map((l) => ({ value: l.id, label: l.label }))}
+                className="w-full"
+              />
             </div>
           </div>
 

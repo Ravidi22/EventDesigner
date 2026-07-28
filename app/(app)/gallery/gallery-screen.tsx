@@ -9,6 +9,7 @@ import { loadProducts } from "@/lib/catalog/storage";
 import { loadImages, saveImage, loadPresentations, savePresentation, deletePresentation } from "@/lib/gallery/storage";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
+import { Select } from "@/components/select";
 import { controlClassName } from "@/components/control";
 
 // v0.3 studio gallery (F-2.1–F-2.2): create, order, and edit designer-curated presentations.
@@ -216,19 +217,16 @@ function PresentationBuilder({
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         {available.length > 0 && (
-          <select
+          <Select
             value=""
-            onChange={(e) => e.target.value && setImageIds([...imageIds, e.target.value])}
+            onChange={(v) => v && setImageIds([...imageIds, v])}
             aria-label="הוספת תמונה מהספרייה"
-            className={`${controlClassName} max-w-64 px-3`}
-          >
-            <option value="">הוספה מספריית התמונות…</option>
-            {available.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name} — {i.productName}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: "הוספה מספריית התמונות…" },
+              ...available.map((i) => ({ value: i.id, label: `${i.name} — ${i.productName}` })),
+            ]}
+            className="max-w-64"
+          />
         )}
         <Button variant="ghost" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" strokeWidth={2} />
@@ -303,11 +301,12 @@ function NewImageForm({ onCreate, onCancel }: { onCreate: (img: GalleryImage) =>
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-medium text-ink">מוצר מקושר</span>
-          <select value={productId} onChange={(e) => setProductId(e.target.value)} className={`${controlClassName} px-3`}>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          <Select
+            value={productId}
+            onChange={setProductId}
+            options={products.map((p) => ({ value: p.id, label: p.name }))}
+            className="w-full"
+          />
         </label>
         <label className="flex flex-col gap-1.5 sm:col-span-2">
           <span className="text-sm font-medium text-ink">תיאור</span>

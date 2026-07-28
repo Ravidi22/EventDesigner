@@ -13,6 +13,7 @@ import { SAMPLE_HALL, type Hall } from "@/lib/studio/hall";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
 import { Button } from "@/components/button";
+import { Select } from "@/components/select";
 import { controlClassName } from "@/components/control";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
@@ -221,12 +222,12 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
           </Field>
         </div>
         <Field label="אולם">
-          <select value={hallId} onChange={(e) => setHallId(e.target.value)} className={`${controlClassName} px-3`}>
-            <option value="">טרם נבחר</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
+          <Select
+            value={hallId}
+            onChange={setHallId}
+            options={[{ value: "", label: "טרם נבחר" }, ...templates.map((t) => ({ value: t.id, label: t.name }))]}
+            className="w-full"
+          />
         </Field>
       </div>
 

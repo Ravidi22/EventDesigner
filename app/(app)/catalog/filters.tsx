@@ -6,7 +6,7 @@ import { STYLE_TAGS } from "@/lib/catalog/sample-data";
 import type { Layer } from "@/lib/catalog/types";
 import { SearchInput } from "@/components/search-input";
 import { TagToggle } from "@/components/tag-toggle";
-import { controlClassName } from "@/components/control";
+import { Select } from "@/components/select";
 
 export interface FilterState {
   search: string;
@@ -20,8 +20,6 @@ export const EMPTY_FILTERS: FilterState = { search: "", category: null, layer: n
 export function hasActiveFilters(f: FilterState): boolean {
   return f.search !== "" || f.category !== null || f.layer !== null || f.tags.length > 0;
 }
-
-const selectClass = `${controlClassName} px-2.5`;
 
 export function Filters({
   value,
@@ -47,33 +45,21 @@ export function Filters({
           aria-label="חיפוש מוצר"
         />
 
-        <select
+        <Select
           value={value.category ?? ""}
-          onChange={(e) => set({ category: e.target.value || null })}
+          onChange={(v) => set({ category: v || null })}
           aria-label="קטגוריה"
-          className={selectClass}
-        >
-          <option value="">כל הקטגוריות</option>
-          {CATEGORIES.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
-          ))}
-        </select>
+          options={[{ value: "", label: "כל הקטגוריות" }, ...CATEGORIES.map((c) => ({ value: c.id, label: c.label }))]}
+          className="w-40"
+        />
 
-        <select
+        <Select
           value={value.layer ?? ""}
-          onChange={(e) => set({ layer: (e.target.value as Layer) || null })}
+          onChange={(v) => set({ layer: (v as Layer) || null })}
           aria-label="שכבה"
-          className={selectClass}
-        >
-          <option value="">כל השכבות</option>
-          {LAYERS.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.label}
-            </option>
-          ))}
-        </select>
+          options={[{ value: "", label: "כל השכבות" }, ...LAYERS.map((l) => ({ value: l.id, label: l.label }))]}
+          className="w-36"
+        />
 
         <span className="nums ms-auto text-sm text-muted">{resultCount} מוצרים</span>
       </div>
