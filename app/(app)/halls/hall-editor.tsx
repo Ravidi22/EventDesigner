@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Trash2, X } from "lucide-react";
+import { DoorOpen, Presentation, Trash2, Wine, X } from "lucide-react";
 import type { HallTemplate } from "@/lib/setup/types";
-import type { Hall, Point, EdgeCurve, Entrance, Fixture, Column } from "@/lib/studio/hall";
+import type { Hall, Point, EdgeCurve, Entrance, Fixture } from "@/lib/studio/hall";
 import { loadTemplates } from "@/lib/setup/storage";
 import {
   edgeMidpoint,
@@ -19,22 +19,10 @@ import {
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { controlClassName } from "@/components/control";
-import { StructureRail, type StructureDragType } from "./structure-rail";
-import { WallCanvas, SelectionInspector, type SelectedRef } from "./wall-canvas";
+import { ShapeCanvas, SelectionInspector, type SelectedRef, type StructureDragType } from "@/components/shape-canvas";
 
 const toM = (mm: number) => String(mm / 1000);
 const smallInput = `${controlClassName} nums px-2 w-16`;
-
-function computeColumns(outline: Point[], count: number): Column[] {
-  if (outline.length < 3 || count <= 0) return [];
-  const xs = outline.map((p) => p.x);
-  const ys = outline.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const w = Math.max(...xs) - minX;
-  const minY = Math.min(...ys);
-  const h = Math.max(...ys) - minY;
-  return Array.from({ length: count }, (_, i) => ({ x: minX + (w / (count + 1)) * (i + 1), y: minY + h / 2, rMm: 350 }));
-}
 
 function sanitizeEdgeCurves(outline: Point[], edgeCurves: (EdgeCurve | null)[] | undefined): (EdgeCurve | null)[] {
   // Older/seed halls saved before curves existed have no edgeCurves — pad to match the outline
@@ -63,7 +51,6 @@ export function HallEditor({
 }) {
   const [name, setName] = useState(draft.name);
   const [ceilingM, setCeilingM] = useState(toM(draft.hall.ceilingHeightMm));
-  const [columnCount, setColumnCount] = useState(String(draft.hall.columns.length));
   const [outline, setOutline] = useState<Point[]>(draft.hall.outline ?? []);
   const [edgeCurves, setEdgeCurves] = useState<(EdgeCurve | null)[]>(sanitizeEdgeCurves(draft.hall.outline ?? [], draft.hall.edgeCurves));
   const [mode, setMode] = useState<"draw" | "edit">((draft.hall.outline?.length ?? 0) >= 3 ? "edit" : "draw");
@@ -73,8 +60,6 @@ export function HallEditor({
   const [selected, setSelected] = useState<SelectedRef | null>(null);
 
   const isNew = !loadTemplates().some((t) => t.id === draft.id);
-  const nCols = Math.max(0, Math.min(12, Number(columnCount) || 0));
-  const previewColumns = computeColumns(outline, nCols);
 
   const closeOutline = () => {
     if (outline.length < 3) return;
@@ -244,7 +229,7 @@ export function HallEditor({
       outline: outline.map(shift),
       edgeCurves,
       ceilingHeightMm: Math.max(0, Number(ceilingM) || 0) * 1000,
-      columns: computeColumns(outline, nCols).map((c) => ({ ...c, ...shift(c) })),
+      columns: draft.hall.columns.map((c) => ({ ...c, ...shift(c) })), // preserved as-is (עמודים are no longer editable here)
       entrances, // wall-relative (wallIndex + distanceMm along the chord) — translation-invariant
       stage: stage ? { ...stage, ...shift(stage) } : undefined,
       bars: bars.map((b) => ({ ...b, ...shift(b) })),
@@ -281,14 +266,11 @@ export function HallEditor({
           גובה תקרה (מ׳)
           <input type="number" inputMode="decimal" min={0} value={ceilingM} onChange={(e) => setCeilingM(e.target.value)} className={smallInput} />
         </label>
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-ink-soft">
-          עמודים
-          <input type="number" inputMode="numeric" min={0} max={12} value={columnCount} onChange={(e) => setColumnCount(e.target.value)} className={smallInput} />
-        </label>
 
         <div className="flex-1" />
 
         {mode === "draw" && <span className="text-xs text-ink-soft">{hint}</span>}
+        {mode === "edit" && <span className="text-xs text-ink-soft">קליק ימני על הקנבס להוספת כניסה, במה או בר</span>}
         {mode === "draw" && outline.length >= 3 && (
           <Button variant="ghost" onClick={closeOutline}>
             סגירת הצורה
@@ -307,13 +289,12 @@ export function HallEditor({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <StructureRail hasStage={Boolean(stage)} />
         <div className="relative min-w-0 flex-1 bg-canvas">
-          <WallCanvas
+          <ShapeCanvas
             mode={mode}
             outline={outline}
             edgeCurves={edgeCurves}
-            columns={previewColumns}
+            columns={draft.hall.columns}
             entrances={entrances}
             stage={stage}
             bars={bars}
@@ -337,7 +318,11 @@ export function HallEditor({
             onMoveBar={(id, p) => setBars((prev) => prev.map((b) => (b.id === id ? { ...b, x: p.x, y: p.y } : b)))}
             onUpdateStage={updateStage}
             onUpdateBar={updateBar}
-            onDropStructure={dropStructure}
+            contextMenuItems={(point) => [
+              { label: "כניסה", icon: DoorOpen, disabled: outline.length < 3, onSelect: () => dropStructure("entrance", point) },
+              ...(stage ? [] : [{ label: "במה", icon: Presentation, onSelect: () => dropStructure("stage", point) }]),
+              { label: "עמדת בר", icon: Wine, onSelect: () => dropStructure("bar", point) },
+            ]}
           />
           {selected && (
             <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
