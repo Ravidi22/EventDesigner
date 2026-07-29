@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { loadSettings, saveSettings, DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/storage";
-import { controlClassName } from "@/components/control";
+import { TextField } from "@/components/text-field";
+import { NumberField } from "@/components/number-field";
 
 // F-8.1 minimal business settings: logo + details (for the quote and outputs), VAT rate,
 // currency (₪ in phase 1). Autosaves on change — no save button to forget.
@@ -36,49 +37,31 @@ export function SettingsScreen() {
       </div>
 
       <div className="flex flex-col gap-5">
-        <Field label="שם העסק">
-          <input value={s.businessName} onChange={(e) => patch({ businessName: e.target.value })} className={`${controlClassName} px-3`} />
-        </Field>
-        <Field label="שם בעל/ת העסק">
-          <input value={s.ownerName} onChange={(e) => patch({ ownerName: e.target.value })} className={`${controlClassName} px-3`} />
-        </Field>
+        <TextField label="שם העסק" value={s.businessName} onChange={(v) => patch({ businessName: v })} />
+        <TextField label="שם בעל/ת העסק" value={s.ownerName} onChange={(v) => patch({ ownerName: v })} />
         <div className="grid grid-cols-2 gap-4">
-          <Field label="טלפון">
-            <input type="tel" dir="ltr" value={s.phone} onChange={(e) => patch({ phone: e.target.value })} className={`${controlClassName} px-3 text-end`} />
-          </Field>
-          <Field label="כתובת">
-            <input value={s.address} onChange={(e) => patch({ address: e.target.value })} className={`${controlClassName} px-3`} />
-          </Field>
+          <TextField label="טלפון" type="tel" dir="ltr" value={s.phone} onChange={(v) => patch({ phone: v })} className="text-end" />
+          <TextField label="כתובת" value={s.address} onChange={(v) => patch({ address: v })} />
         </div>
-        <Field label="קישור ללוגו">
-          <input dir="ltr" value={s.logoUrl ?? ""} onChange={(e) => patch({ logoUrl: e.target.value || undefined })} placeholder="https://…" className={`${controlClassName} px-3 text-start`} />
-        </Field>
+        <TextField
+          label="קישור ללוגו"
+          dir="ltr"
+          value={s.logoUrl ?? ""}
+          onChange={(v) => patch({ logoUrl: v || undefined })}
+          placeholder="https://…"
+        />
         <div className="grid grid-cols-2 gap-4">
-          <Field label="שיעור מע״מ (%)">
-            <input
-              type="number"
-              inputMode="decimal"
-              min={0}
-              max={50}
-              value={Math.round(s.vatRate * 100)}
-              onChange={(e) => patch({ vatRate: (Number(e.target.value) || 0) / 100 })}
-              className={`${controlClassName} nums px-3`}
-            />
-          </Field>
-          <Field label="מטבע">
-            <input value={s.currency} readOnly aria-readonly className={`${controlClassName} bg-bg px-3 text-muted`} />
-          </Field>
+          <NumberField
+            label="שיעור מע״מ (%)"
+            min={0}
+            max={50}
+            decimals={0}
+            value={Math.round(s.vatRate * 100)}
+            onChange={(v) => patch({ vatRate: v / 100 })}
+          />
+          <TextField label="מטבע" value={s.currency} onChange={() => {}} readOnly className="bg-bg text-muted" />
         </div>
       </div>
     </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-sm font-medium text-ink">{label}</span>
-      {children}
-    </label>
   );
 }

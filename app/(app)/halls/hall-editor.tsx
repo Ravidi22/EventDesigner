@@ -18,11 +18,8 @@ import {
 } from "@/lib/studio/geometry";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
-import { controlClassName } from "@/components/control";
+import { NumberField } from "@/components/number-field";
 import { ShapeCanvas, SelectionInspector, type SelectedRef, type StructureDragType } from "@/components/shape-canvas";
-
-const toM = (mm: number) => String(mm / 1000);
-const smallInput = `${controlClassName} nums px-2 w-16`;
 
 function sanitizeEdgeCurves(outline: Point[], edgeCurves: (EdgeCurve | null)[] | undefined): (EdgeCurve | null)[] {
   // Older/seed halls saved before curves existed have no edgeCurves — pad to match the outline
@@ -50,7 +47,7 @@ export function HallEditor({
   onCancel: () => void;
 }) {
   const [name, setName] = useState(draft.name);
-  const [ceilingM, setCeilingM] = useState(toM(draft.hall.ceilingHeightMm));
+  const [ceilingM, setCeilingM] = useState(draft.hall.ceilingHeightMm / 1000);
   const [outline, setOutline] = useState<Point[]>(draft.hall.outline ?? []);
   const [edgeCurves, setEdgeCurves] = useState<(EdgeCurve | null)[]>(sanitizeEdgeCurves(draft.hall.outline ?? [], draft.hall.edgeCurves));
   const [mode, setMode] = useState<"draw" | "edit">((draft.hall.outline?.length ?? 0) >= 3 ? "edit" : "draw");
@@ -228,7 +225,7 @@ export function HallEditor({
       heightMm: Math.max(...ys) - minY,
       outline: outline.map(shift),
       edgeCurves,
-      ceilingHeightMm: Math.max(0, Number(ceilingM) || 0) * 1000,
+      ceilingHeightMm: Math.max(0, ceilingM) * 1000,
       columns: draft.hall.columns.map((c) => ({ ...c, ...shift(c) })), // preserved as-is (עמודים are no longer editable here)
       entrances, // wall-relative (wallIndex + distanceMm along the chord) — translation-invariant
       stage: stage ? { ...stage, ...shift(stage) } : undefined,
@@ -262,10 +259,15 @@ export function HallEditor({
           className="w-56 shrink-0 border-0 bg-transparent text-base font-semibold text-ink placeholder:text-muted focus:outline-none"
           autoFocus
         />
-        <label className="flex shrink-0 items-center gap-1.5 text-xs text-ink-soft">
-          גובה תקרה (מ׳)
-          <input type="number" inputMode="decimal" min={0} value={ceilingM} onChange={(e) => setCeilingM(e.target.value)} className={smallInput} />
-        </label>
+        <NumberField
+          layout="inline"
+          label="גובה תקרה (מ׳)"
+          min={0}
+          value={ceilingM}
+          onChange={setCeilingM}
+          wrapperClassName="shrink-0"
+          className="w-16"
+        />
 
         <div className="flex-1" />
 

@@ -17,7 +17,7 @@ import {
 } from "@/lib/studio/geometry";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
-import { controlClassName } from "@/components/control";
+import { NumberField } from "@/components/number-field";
 
 export type StructureDragType = "entrance" | "stage" | "bar";
 
@@ -785,8 +785,6 @@ function FixtureMarker({
   );
 }
 
-const smallInput = `${controlClassName} nums px-2 w-24`;
-
 const SHAPE_LABEL: Record<FixtureShape, string> = { rect: "מלבן", circle: "עיגול", ellipse: "אליפסה" };
 
 export function SelectionInspector({
@@ -831,8 +829,7 @@ export function SelectionInspector({
   onClose: () => void;
 }) {
   const wrap = "flex max-w-2xl flex-wrap items-center gap-3 rounded-md border border-border bg-surface px-3 py-2.5 shadow-floating";
-  const mmToCm = (mm: number) => String(Math.round(mm / 10));
-  const cmToMm = (v: string) => Math.round((Number(v) || 0) * 10);
+  const mmToCm = (mm: number) => mm / 10;
   const closeBtn = (
     <IconButton label="סגירת בחירה" className="ms-auto" onClick={onClose}>
       <X className="h-4 w-4" strokeWidth={2} />
@@ -853,16 +850,7 @@ export function SelectionInspector({
     </div>
   );
   const rotationField = (rotationDeg: number, onChange: (deg: number) => void) => (
-    <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-      זווית (°)
-      <input
-        type="number"
-        inputMode="decimal"
-        value={Math.round(rotationDeg)}
-        onChange={(ev) => onChange(((Number(ev.target.value) || 0) % 360 + 360) % 360)}
-        className={smallInput}
-      />
-    </label>
+    <NumberField layout="inline" label="זווית (°)" decimals={0} min={0} max={360} value={rotationDeg} onChange={onChange} className="w-24" />
   );
 
   if (selected.kind === "entrance") {
@@ -874,22 +862,25 @@ export function SelectionInspector({
     return (
       <div className={wrap}>
         <span className="text-sm font-medium text-ink">כניסה</span>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          מרחק מקצה הקיר (מ׳)
-          <input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            max={(wallLen / 1000).toFixed(2)}
-            value={(e.distanceMm / 1000).toFixed(2)}
-            onChange={(ev) => onUpdateEntrance(e.id, { distanceMm: Math.max(0, Math.min(wallLen, (Number(ev.target.value) || 0) * 1000)) })}
-            className={smallInput}
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          רוחב (ס״מ)
-          <input type="number" inputMode="decimal" min={40} value={mmToCm(e.widthMm)} onChange={(ev) => onUpdateEntrance(e.id, { widthMm: Math.max(400, cmToMm(ev.target.value)) })} className={smallInput} />
-        </label>
+        <NumberField
+          layout="inline"
+          label="מרחק מקצה הקיר (מ׳)"
+          decimals={2}
+          min={0}
+          max={wallLen / 1000}
+          value={e.distanceMm / 1000}
+          onChange={(m) => onUpdateEntrance(e.id, { distanceMm: m * 1000 })}
+          className="w-24"
+        />
+        <NumberField
+          layout="inline"
+          label="רוחב (ס״מ)"
+          decimals={0}
+          min={40}
+          value={mmToCm(e.widthMm)}
+          onChange={(cm) => onUpdateEntrance(e.id, { widthMm: cm * 10 })}
+          className="w-24"
+        />
         <Button variant="danger" onClick={() => onRemoveEntrance(e.id)}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           מחיקה
@@ -904,18 +895,9 @@ export function SelectionInspector({
     return (
       <div className={wrap}>
         <span className="text-sm font-medium text-ink">במה</span>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          רוחב (ס״מ)
-          <input type="number" inputMode="decimal" value={mmToCm(stage.widthMm)} onChange={(ev) => onUpdateStage({ widthMm: cmToMm(ev.target.value) })} className={smallInput} />
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          עומק (ס״מ)
-          <input type="number" inputMode="decimal" value={mmToCm(stage.depthMm)} onChange={(ev) => onUpdateStage({ depthMm: cmToMm(ev.target.value) })} className={smallInput} />
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          גובה במה (ס״מ)
-          <input type="number" inputMode="decimal" value={mmToCm(stage.heightMm)} onChange={(ev) => onUpdateStage({ heightMm: cmToMm(ev.target.value) })} className={smallInput} />
-        </label>
+        <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(stage.widthMm)} onChange={(cm) => onUpdateStage({ widthMm: cm * 10 })} className="w-24" />
+        <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(stage.depthMm)} onChange={(cm) => onUpdateStage({ depthMm: cm * 10 })} className="w-24" />
+        <NumberField layout="inline" label="גובה במה (ס״מ)" decimals={0} min={0} value={mmToCm(stage.heightMm)} onChange={(cm) => onUpdateStage({ heightMm: cm * 10 })} className="w-24" />
         {rotationField(stage.rotationDeg ?? 0, (deg) => onUpdateStage({ rotationDeg: deg }))}
         <Button variant="danger" onClick={onRemoveStage}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
@@ -935,32 +917,22 @@ export function SelectionInspector({
         <span className="text-sm font-medium text-ink">עמדת בר</span>
         {shapeToggle(shape, (s) => onUpdateBar(b.id, { shape: s }))}
         {shape === "circle" ? (
-          <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-            קוטר (ס״מ)
-            <input
-              type="number"
-              inputMode="decimal"
-              value={mmToCm(b.widthMm)}
-              onChange={(ev) => onUpdateBar(b.id, { widthMm: cmToMm(ev.target.value), depthMm: cmToMm(ev.target.value) })}
-              className={smallInput}
-            />
-          </label>
+          <NumberField
+            layout="inline"
+            label="קוטר (ס״מ)"
+            decimals={0}
+            min={0}
+            value={mmToCm(b.widthMm)}
+            onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10, depthMm: cm * 10 })}
+            className="w-24"
+          />
         ) : (
           <>
-            <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-              רוחב (ס״מ)
-              <input type="number" inputMode="decimal" value={mmToCm(b.widthMm)} onChange={(ev) => onUpdateBar(b.id, { widthMm: cmToMm(ev.target.value) })} className={smallInput} />
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-              עומק (ס״מ)
-              <input type="number" inputMode="decimal" value={mmToCm(b.depthMm)} onChange={(ev) => onUpdateBar(b.id, { depthMm: cmToMm(ev.target.value) })} className={smallInput} />
-            </label>
+            <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(b.widthMm)} onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10 })} className="w-24" />
+            <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(b.depthMm)} onChange={(cm) => onUpdateBar(b.id, { depthMm: cm * 10 })} className="w-24" />
           </>
         )}
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          גובה (ס״מ)
-          <input type="number" inputMode="decimal" value={mmToCm(b.heightMm)} onChange={(ev) => onUpdateBar(b.id, { heightMm: cmToMm(ev.target.value) })} className={smallInput} />
-        </label>
+        <NumberField layout="inline" label="גובה (ס״מ)" decimals={0} min={0} value={mmToCm(b.heightMm)} onChange={(cm) => onUpdateBar(b.id, { heightMm: cm * 10 })} className="w-24" />
         {rotationField(b.rotationDeg ?? 0, (deg) => onUpdateBar(b.id, { rotationDeg: deg }))}
         <Button variant="danger" onClick={() => onRemoveBar(b.id)}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
@@ -982,38 +954,33 @@ export function SelectionInspector({
     return (
       <div className={wrap}>
         <span className="text-sm font-medium text-ink">{edgeNoun} {idx + 1}</span>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          אורך (מ׳)
-          <input
-            type="number"
-            inputMode="decimal"
-            value={(wallLengthMm(a, b) / 1000).toFixed(2)}
-            onChange={(ev) => onSetWallLength(idx, Number(ev.target.value) || 0)}
-            className={smallInput}
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          זווית (°)
-          <input
-            type="number"
-            inputMode="decimal"
-            value={wallAngleDeg(a, b).toFixed(1)}
-            onChange={(ev) => onSetWallAngle(idx, Number(ev.target.value) || 0)}
-            className={smallInput}
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-          עיקום (ס״מ, עד {maxBulgeCm})
-          <input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            max={maxBulgeCm}
-            value={mmToCm(bulgeDepthMm(a, b, curve))}
-            onChange={(ev) => onSetWallBulgeDepth(idx, cmToMm(ev.target.value))}
-            className={smallInput}
-          />
-        </label>
+        <NumberField
+          layout="inline"
+          label="אורך (מ׳)"
+          decimals={2}
+          min={0.001}
+          value={wallLengthMm(a, b) / 1000}
+          onChange={(m) => onSetWallLength(idx, m)}
+          className="w-24"
+        />
+        <NumberField
+          layout="inline"
+          label="זווית (°)"
+          decimals={1}
+          value={wallAngleDeg(a, b)}
+          onChange={(deg) => onSetWallAngle(idx, deg)}
+          className="w-24"
+        />
+        <NumberField
+          layout="inline"
+          label={`עיקום (ס״מ, עד ${maxBulgeCm})`}
+          decimals={0}
+          min={0}
+          max={maxBulgeCm}
+          value={mmToCm(bulgeDepthMm(a, b, curve))}
+          onChange={(cm) => onSetWallBulgeDepth(idx, cm * 10)}
+          className="w-24"
+        />
         <Button variant="ghost" onClick={() => onInsertVertexOnWall(idx)}>
           <Plus className="h-4 w-4" strokeWidth={2} />
           הוספת נקודה

@@ -11,7 +11,9 @@ import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
-import { controlClassName } from "@/components/control";
+import { TextField } from "@/components/text-field";
+import { NumberField } from "@/components/number-field";
+import { fieldLabelClassName } from "@/components/control";
 import { AppearancePreview } from "./appearance-preview";
 import { ShapeEditorModal } from "./shape-editor-modal";
 import { IconPicker } from "./icon-picker";
@@ -32,11 +34,7 @@ export function blankProduct(): Product {
   };
 }
 
-const mmToCm = (mm?: number) => (mm == null || mm === 0 ? "" : String(mm / 10));
-const cmToMm = (v: string) => (v === "" ? undefined : Math.round(parseFloat(v) * 10));
-
-const fieldLabel = "mb-1 block text-xs font-medium text-ink-soft";
-const fieldInput = `${controlClassName} w-full px-2.5 placeholder:text-muted`;
+const mmToCm = (mm?: number) => (mm ?? 0) / 10;
 
 export function ProductDrawer({
   product,
@@ -79,10 +77,9 @@ export function ProductDrawer({
   const heightError = submitted && !draft.dimensions.heightMm;
 
   const patch = (p: Partial<Product>) => setDraft((d) => ({ ...d, ...p }));
-  const setDim = (key: keyof Product["dimensions"], v: string) =>
-    setDraft((d) => ({ ...d, dimensions: { ...d.dimensions, [key]: cmToMm(v) ?? 0 } }));
-  const setField = (key: string, v: string | number) =>
-    setDraft((d) => ({ ...d, categoryFields: { ...d.categoryFields, [key]: v } }));
+  const setDim = (key: keyof Product["dimensions"], cm: number) =>
+    setDraft((d) => ({ ...d, dimensions: { ...d.dimensions, [key]: Math.round(cm * 10) } }));
+  const setField = (key: string, v: number) => setDraft((d) => ({ ...d, categoryFields: { ...d.categoryFields, [key]: v } }));
 
   const changeCategory = (id: string) =>
     setDraft((d) => ({ ...d, category: id, layer: CATEGORY_BY_ID[id].defaultLayer, categoryFields: {} }));
@@ -154,24 +151,20 @@ export function ProductDrawer({
         </header>
 
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          <div>
-            <label htmlFor="p-name" className={fieldLabel}>
-              שם המוצר
-            </label>
-            <input
-              id="p-name"
-              value={draft.name}
-              onChange={(e) => patch({ name: e.target.value })}
-              placeholder="לדוגמה: מפת שולחן קטיפה"
-              className={fieldInput + (nameError ? " border-alert hover:border-alert" : "")}
-              autoFocus
-            />
-            {nameError && <p className="mt-1 text-xs text-alert">יש להזין שם מוצר.</p>}
-          </div>
+          <TextField
+            id="p-name"
+            label="שם המוצר"
+            value={draft.name}
+            onChange={(v) => patch({ name: v })}
+            placeholder="לדוגמה: מפת שולחן קטיפה"
+            error={nameError}
+            errorMessage="יש להזין שם מוצר."
+            autoFocus
+          />
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="p-cat" className={fieldLabel}>
+              <label htmlFor="p-cat" className={fieldLabelClassName}>
                 קטגוריה
               </label>
               <Select
@@ -183,7 +176,7 @@ export function ProductDrawer({
               />
             </div>
             <div>
-              <label htmlFor="p-layer" className={fieldLabel}>
+              <label htmlFor="p-layer" className={fieldLabelClassName}>
                 שכבה
               </label>
               <Select
@@ -197,96 +190,78 @@ export function ProductDrawer({
           </div>
 
           <fieldset>
-            <legend className={fieldLabel}>מידות (ס״מ)</legend>
+            <legend className={fieldLabelClassName}>מידות (ס״מ)</legend>
             <div className="grid grid-cols-3 gap-3">
               {showDiameter && (
-                <DimInput label="קוטר" value={mmToCm(draft.dimensions.diameterMm)} onChange={(v) => setDim("diameterMm", v)} />
+                <NumberField label="קוטר" hideZero value={mmToCm(draft.dimensions.diameterMm)} onChange={(v) => setDim("diameterMm", v)} min={0} />
               )}
               {showBox && (
                 <>
-                  <DimInput label="רוחב" value={mmToCm(draft.dimensions.widthMm)} onChange={(v) => setDim("widthMm", v)} />
-                  <DimInput label="עומק" value={mmToCm(draft.dimensions.depthMm)} onChange={(v) => setDim("depthMm", v)} />
+                  <NumberField label="רוחב" hideZero value={mmToCm(draft.dimensions.widthMm)} onChange={(v) => setDim("widthMm", v)} min={0} />
+                  <NumberField label="עומק" hideZero value={mmToCm(draft.dimensions.depthMm)} onChange={(v) => setDim("depthMm", v)} min={0} />
                 </>
               )}
-              <DimInput
+              <NumberField
                 label="גובה"
                 required
+                hideZero
+                min={0}
                 error={heightError}
+                errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
                 value={mmToCm(draft.dimensions.heightMm)}
                 onChange={(v) => setDim("heightMm", v)}
               />
             </div>
-            {heightError && <p className="mt-1 text-xs text-alert">גובה נדרש (לטובת ההדמיה התלת־ממדית).</p>}
           </fieldset>
 
           {/* F-4.3: only count-multiplier fields are structured (arms, seats) */}
           {category.fields.length > 0 && (
             <div className="grid grid-cols-2 gap-3">
               {category.fields.map((f) => (
-                <div key={f.key}>
-                  <label htmlFor={`f-${f.key}`} className={fieldLabel}>
-                    {f.label}
-                    {f.suffix && <span className="text-muted"> (מכפיל {f.suffix})</span>}
-                  </label>
-                  <input
-                    id={`f-${f.key}`}
-                    type="number"
-                    min={0}
-                    value={String(draft.categoryFields[f.key] ?? "")}
-                    onChange={(e) => setField(f.key, Number(e.target.value))}
-                    className={fieldInput + " nums"}
-                  />
-                </div>
+                <NumberField
+                  key={f.key}
+                  id={`f-${f.key}`}
+                  label={f.suffix ? `${f.label} (מכפיל ${f.suffix})` : f.label}
+                  min={0}
+                  value={Number(draft.categoryFields[f.key] ?? 0)}
+                  onChange={(v) => setField(f.key, v)}
+                />
               ))}
             </div>
           )}
 
-          <div>
-            <label htmlFor="p-spec" className={fieldLabel}>
-              מפרט חופשי
-            </label>
-            <textarea
-              id="p-spec"
-              rows={2}
-              value={draft.spec ?? ""}
-              onChange={(e) => patch({ spec: e.target.value || undefined })}
-              placeholder="כל מאפיין אחר: חומר, צבע, מודולים…"
-              className={fieldInput + " h-auto resize-y py-2"}
+          <TextField
+            id="p-spec"
+            label="מפרט חופשי"
+            multiline
+            rows={2}
+            value={draft.spec ?? ""}
+            onChange={(v) => patch({ spec: v || undefined })}
+            placeholder="כל מאפיין אחר: חומר, צבע, מודולים…"
+          />
+
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              id="p-price"
+              label="מחיר ליחידה (₪)"
+              min={0}
+              hideZero
+              placeholder="0"
+              value={draft.unitPrice ?? 0}
+              onChange={(v) => patch({ unitPrice: v || undefined })}
+            />
+            <TextField
+              id="p-img"
+              label="קישור תמונה"
+              value={draft.imageUrl ?? ""}
+              onChange={(v) => patch({ imageUrl: v || undefined })}
+              placeholder="https://…"
+              dir="ltr"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="p-price" className={fieldLabel}>
-                מחיר ליחידה (₪)
-              </label>
-              <input
-                id="p-price"
-                type="number"
-                min={0}
-                value={draft.unitPrice ?? ""}
-                onChange={(e) => patch({ unitPrice: e.target.value === "" ? undefined : Number(e.target.value) })}
-                placeholder="0"
-                className={fieldInput + " nums"}
-              />
-            </div>
-            <div>
-              <label htmlFor="p-img" className={fieldLabel}>
-                קישור תמונה
-              </label>
-              <input
-                id="p-img"
-                value={draft.imageUrl ?? ""}
-                onChange={(e) => patch({ imageUrl: e.target.value || undefined })}
-                placeholder="https://…"
-                dir="ltr"
-                className={fieldInput + " text-start"}
-              />
-            </div>
-          </div>
-
           <div>
-            <span className={fieldLabel}>מראה על התוכנית</span>
+            <span className={fieldLabelClassName}>מראה על התוכנית</span>
             <div className="flex gap-3">
               {currentShape === "custom" ? (
                 <button
@@ -381,7 +356,7 @@ export function ProductDrawer({
           </div>
 
           <div>
-            <span className={fieldLabel}>תגיות סטייל</span>
+            <span className={fieldLabelClassName}>תגיות סטייל</span>
             <div className="flex flex-wrap gap-1.5">
               {STYLE_TAGS.map((t) => (
                 <TagToggle key={t} active={draft.styleTags.includes(t)} onClick={() => toggleTag(t)}>
@@ -393,7 +368,7 @@ export function ProductDrawer({
 
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <span className={fieldLabel + " mb-0"}>וריאנטים (גוונים / גרסאות)</span>
+              <span className={fieldLabelClassName + " mb-0"}>וריאנטים (גוונים / גרסאות)</span>
               <button
                 type="button"
                 onClick={addVariant}
@@ -411,19 +386,19 @@ export function ProductDrawer({
               <div className="space-y-2">
                 {draft.variants.filter((v) => !v.archived).map((v) => (
                   <div key={v.id} className="flex items-center gap-2">
-                    <input
+                    <TextField
                       value={v.name}
-                      onChange={(e) => setVariant(v.id, { name: e.target.value })}
+                      onChange={(name) => setVariant(v.id, { name })}
                       placeholder="שם הגוון (זהב…)"
-                      className={fieldInput + " flex-1"}
+                      className="flex-1"
                     />
-                    <input
-                      type="number"
+                    <NumberField
+                      hideZero
                       min={0}
-                      value={v.unitPrice ?? ""}
-                      onChange={(e) => setVariant(v.id, { unitPrice: e.target.value === "" ? undefined : Number(e.target.value) })}
+                      value={v.unitPrice ?? 0}
+                      onChange={(p) => setVariant(v.id, { unitPrice: p || undefined })}
                       placeholder="מחיר"
-                      className={fieldInput + " nums w-24"}
+                      className="w-24"
                     />
                     <button
                       type="button"
@@ -461,35 +436,5 @@ export function ProductDrawer({
         </footer>
       </form>
     </dialog>
-  );
-}
-
-function DimInput({
-  label,
-  value,
-  onChange,
-  required,
-  error,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  required?: boolean;
-  error?: boolean;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs text-muted">
-        {label}
-        {required && <span className="text-alert"> *</span>}
-      </span>
-      <input
-        type="number"
-        min={0}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={fieldInput + " nums" + (error ? " border-alert hover:border-alert" : "")}
-      />
-    </label>
   );
 }
