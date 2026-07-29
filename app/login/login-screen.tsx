@@ -37,9 +37,9 @@ export function LoginScreen() {
           <Wordmark tone="on-dark" className="text-[32px] drop-shadow-[0_8px_22px_rgba(50,25,90,0.35)]" />
         </Link>
         <div className="relative z-10 max-w-md">
-          <span className="mb-5 inline-flex items-center gap-3">
+          <span className="mb-5 inline-flex items-center gap-3 text-sm font-semibold text-gold">
             <span className="inline-block h-px w-10 bg-gold" />
-            <span className="overline text-gold">YOUR STUDIO</span>
+            הסטודיו שלכם
           </span>
           <p className="font-display text-h1 text-canvas text-balance">
             כל אירוע מתחיל כאן — סקיצה אחת, שנעשית לתוכנית שלמה.

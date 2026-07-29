@@ -42,8 +42,12 @@ export default function Home() {
         </nav>
 
         <div className="relative z-10 mx-auto flex w-full max-w-5xl flex-1 flex-col items-start justify-center px-6 py-16">
-          <span className="hero-rise overline text-gold" style={{ animationDelay: "40ms" }}>
-            EVENT STUDIO
+          <span
+            className="hero-rise inline-flex items-center gap-3 text-sm font-semibold text-gold"
+            style={{ animationDelay: "40ms" }}
+          >
+            <span className="hero-rule inline-block h-px w-10 bg-gold" />
+            אולפן עיצוב אירועים
           </span>
 
           <h1 className="mt-5 font-display text-display text-canvas text-balance">
@@ -70,8 +74,7 @@ export default function Home() {
       <section className="border-t border-border">
         <div className="mx-auto w-full max-w-5xl px-6 py-16 sm:py-20">
           <div className="max-w-2xl">
-            <span className="overline text-accent">ONE SOURCE · THREE OUTPUTS</span>
-            <h2 className="mt-4 font-display text-h1 text-ink text-balance">מסמך אחד, שלושה פלטים.</h2>
+            <h2 className="font-display text-h1 text-ink text-balance">מסמך אחד, שלושה פלטים.</h2>
             <p className="mt-3 text-base leading-relaxed text-ink-soft text-pretty">
               אתם מעצבים פעם אחת על מפת האולם. מאותו מסמך המערכת מפיקה את שלושת המסמכים שהאירוע רץ עליהם —
               בלי לספור ביד, בלי שהמספרים יסטו זה מזה.

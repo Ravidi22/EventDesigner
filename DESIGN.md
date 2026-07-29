@@ -250,7 +250,7 @@ The scale is **46 / 30 / 22 / 17 / 16 / 13 / 11** and it lives in `@theme` as `-
 Plus two Latin-only label classes and the mark:
 
 - **Wordmark** (Urbanist 900, `-1.5px` absolute track, `.wordmark`): the `Eve.` lockup only. The track is absolute, not em-relative, so the mark holds its shape from 28px to 88px.
-- **Overline** (Space Grotesk 500, 11px, `4px` track, `.overline`): section eyebrows, in `accent` or `gold`.
+- **Overline** (Space Grotesk 500, 11px, `4px` track, `.overline`): Latin-only labels — a spec-sheet section marker, a `CLIENT VIEW` badge. **Not** for Hebrew eyebrows; see The Hebrew-Is-Not-Decoration Rule.
 - **Kicker** (Space Grotesk 500, 12px, `4px` track, `faint`, `.kicker`): the overline's larger, quieter sibling, labelling a whole section or card.
 
 `.font-display` sets family and weight only. It sits outside Tailwind's layers, so a line-height there would silently beat every `text-*` utility — the size token owns the leading.
@@ -260,6 +260,8 @@ Plus two Latin-only label classes and the mark:
 **The One-Wordmark Rule.** Urbanist appears in the wordmark and nowhere else. A heading, a button, or a number set in Urbanist is a bug — Assistant is the voice of the product, and the wordmark is the only place the brand speaks Latin.
 
 **The Closed-Scale Rule.** Tailwind's own `text-lg` / `text-xl` / `text-2xl` steps (18 / 20 / 24) are *off-system* — they are what pulled the headings off the specimen in the first place. Use `text-display` / `text-h1` / `text-h2` / `text-lede` / `text-body` / `text-caption` and nothing else; if a size seems to be missing, the layout is wrong before the scale is.
+
+**The Hebrew-Is-Not-Decoration Rule.** The overline and kicker are Latin-only *by construction* — Space Grotesk has no Hebrew, and a 4px track would mangle Hebrew even if it did. That makes them a trap: reaching for one where Hebrew copy already stands means silently translating the product into English for the sake of a typographic texture. **Never replace Hebrew copy with a Latin overline.** This product is Hebrew-first; if a surface needs an eyebrow, set it in Assistant at 14px with the hairline rule, in `accent` on a light ground or `gold` on the mesh. The overline is for genuinely Latin content only — a spec-sheet section label, a `CLIENT VIEW` badge — and if you are unsure, it does not apply.
 
 **The Overline-Is-Not-Copy Rule.** Space Grotesk at a 4px track is a label, never a sentence. It carries two or three words, uppercase, Latin. Hebrew never gets letter-spaced — no display heading in this system carries tracking at all.
 
@@ -367,7 +369,7 @@ The 2D studio is the one place the accent does real work: selected tables and pl
 - **Do** wear grain over every gradient, and scrim under every piece of text on the mesh (The Grain Rule, The Scrim Rule).
 - **Do** set text in the darkened semantic inks, not the brand fills (The AA-Ink Rule).
 - **Do** keep Urbanist to the wordmark and Space Grotesk to overlines (The One-Wordmark Rule).
-- **Do** design RTL-first; Hebrew is the primary direction, mirrored layouts are the default, not a retrofit.
+- **Do** design RTL-first; Hebrew is the primary direction, mirrored layouts are the default, not a retrofit. Hebrew copy stays Hebrew — a Latin overline never replaces it (The Hebrew-Is-Not-Decoration Rule).
 - **Do** use `.nums` on every count, dimension, and price (The Tabular Count Rule).
 - **Do** keep every operational output legible in black-and-white — carry meaning in weight, shape, and label (The Print Rule).
 - **Do** give every animation a `prefers-reduced-motion` alternative (a crossfade or an instant state change).
