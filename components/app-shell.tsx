@@ -32,14 +32,46 @@ const GENERAL: NavItem[] = [
   { href: "/gallery", label: "גלריה ותצוגות", icon: Images },
 ];
 
-const TITLES: { test: (p: string) => boolean; title: string; sub?: (e: EventSummary | null) => string }[] = [
-  { test: (p) => p.startsWith("/dashboard"), title: "לוח בקרה", sub: () => "סקירת כל האירועים הפעילים" },
-  { test: (p) => p.startsWith("/halls"), title: "אולמות", sub: () => "שלדי האולמות שאתם עובדים בהם" },
-  { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים", sub: () => "מאגר הפריטים שלך" },
-  { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות", sub: () => "תצוגות אצורות מתמונות הפרויקטים" },
-  { test: (p) => p.startsWith("/settings"), title: "הגדרות עסק", sub: () => "פרטי עסק, מע״מ ומטבע" },
-  { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב", sub: (e) => (e ? `${e.clientName} · ${e.hallName}` : "") },
-  { test: (p) => p.startsWith("/outputs"), title: "פלטים", sub: (e) => (e ? `${e.clientName} · פלטים תפעוליים` : "") },
+const TITLES: {
+  test: (p: string) => boolean;
+  title: string;
+  sub?: (e: EventSummary | null) => string;
+}[] = [
+  {
+    test: (p) => p.startsWith("/dashboard"),
+    title: "לוח בקרה",
+    sub: () => "סקירת כל האירועים הפעילים",
+  },
+  {
+    test: (p) => p.startsWith("/halls"),
+    title: "אולמות",
+    sub: () => "שלדי האולמות שאתם עובדים בהם",
+  },
+  {
+    test: (p) => p.startsWith("/catalog"),
+    title: "קטלוג מוצרים",
+    sub: () => "מאגר הפריטים שלך",
+  },
+  {
+    test: (p) => p.startsWith("/gallery"),
+    title: "גלריה ותצוגות",
+    sub: () => "תצוגות אצורות מתמונות הפרויקטים",
+  },
+  {
+    test: (p) => p.startsWith("/settings"),
+    title: "הגדרות עסק",
+    sub: () => "פרטי עסק, מע״מ ומטבע",
+  },
+  {
+    test: (p) => p.startsWith("/studio"),
+    title: "סטודיו עיצוב",
+    sub: (e) => (e ? `${e.clientName} · ${e.hallName}` : ""),
+  },
+  {
+    test: (p) => p.startsWith("/outputs"),
+    title: "פלטים",
+    sub: (e) => (e ? `${e.clientName} · פלטים תפעוליים` : ""),
+  },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -58,14 +90,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="flex w-64 shrink-0 flex-col border-e border-border bg-surface px-4 py-6">
         <Link href="/dashboard" className="mb-8 block px-2">
           <Wordmark tone="gradient" className="text-[28px]" />
-          <span className="mt-1 block text-[11px] tracking-[0.16em] text-muted">אולפן עיצוב אירועים</span>
+          <span className="mt-1 block text-[11px] tracking-[0.16em] text-muted">
+            אולפן עיצוב אירועים
+          </span>
         </Link>
 
         <nav className="flex flex-col gap-0.5">
           {GENERAL.map((item) => (
             <NavRow key={item.href} item={item} pathname={pathname} />
           ))}
-          
         </nav>
 
         <Link
@@ -73,9 +106,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           aria-current={pathname.startsWith("/settings") ? "page" : undefined}
           className="mt-auto flex items-center gap-3 rounded-md px-2 py-2 pt-4 transition-colors hover:bg-bg"
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bg text-sm font-semibold text-ink-soft ring-1 ring-inset ring-border">ד</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bg text-sm font-semibold text-ink-soft ring-1 ring-inset ring-border">
+            ד
+          </span>
           <span className="leading-tight">
-            <span className="block text-sm font-medium text-ink">דניאל אמסלם</span>
+            <span className="block text-sm font-medium text-ink">
+              דניאל אמסלם
+            </span>
             <span className="block text-xs text-muted">מעצב · חשבון יחיד</span>
           </span>
         </Link>
@@ -90,7 +127,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             ) : (
               <Wordmark tone="mono" className="text-[22px]" />
             )}
-            {meta?.sub && <span className="text-sm text-muted">{meta.sub(event)}</span>}
+            {meta?.sub && (
+              <span className="text-sm text-muted">{meta.sub(event)}</span>
+            )}
           </div>
           <Link
             href="/meeting?new"
@@ -108,7 +147,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 function NavRow({ item, pathname }: { item: NavItem; pathname: string }) {
-  const active = item.match ? item.match(pathname) : pathname === item.href || pathname.startsWith(item.href + "/");
+  const active = item.match
+    ? item.match(pathname)
+    : pathname === item.href || pathname.startsWith(item.href + "/");
   return (
     <Link
       href={item.href}
@@ -120,8 +161,13 @@ function NavRow({ item, pathname }: { item: NavItem; pathname: string }) {
           : "text-ink-soft hover:bg-accent-tint hover:text-accent-hover")
       }
     >
-      {active && <span className="absolute inset-y-2 right-0 w-[3px] rounded-full bg-accent" />}
-      <item.icon className={"h-[18px] w-[18px] shrink-0 " + (active ? "text-accent" : "text-muted")} strokeWidth={1.75} />
+      <item.icon
+        className={
+          "h-[18px] w-[18px] shrink-0 " +
+          (active ? "text-accent" : "text-muted")
+        }
+        strokeWidth={1.75}
+      />
       {item.label}
     </Link>
   );
