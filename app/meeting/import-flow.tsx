@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { UploadCloud, FileText, ArrowLeft, Info, Ruler } from "lucide-react";
 import type { Hall } from "@/lib/studio/hall";
 import type { SketchRef } from "@/lib/design-document/types";
-import { controlClassName } from "@/components/control";
+import { NumberField } from "@/components/number-field";
+import { fieldLabelClassName } from "@/components/control";
 import { Button } from "@/components/button";
 import { PlanPreview } from "@/components/plan-preview";
 
@@ -36,7 +37,7 @@ export function ImportFlow({
   // Sketch placement in document units (mm). Starts covering the hall.
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
-  const [refCm, setRefCm] = useState("180");
+  const [refCm, setRefCm] = useState(180);
 
   const sketch = (): SketchRef | null =>
     fileName
@@ -101,7 +102,7 @@ export function ImportFlow({
           refCm={refCm}
           onRefCm={setRefCm}
           onBack={() => setStep("align")}
-          onDone={() => onDone({ sketch: sketch(), mmPerUnit: (Number(refCm) * 10) / REF_DRAWN_MM || 1 })}
+          onDone={() => onDone({ sketch: sketch(), mmPerUnit: (refCm * 10) / REF_DRAWN_MM || 1 })}
         />
       )}
     </div>
@@ -212,12 +213,12 @@ function CalibrateStep({
   onBack,
   onDone,
 }: {
-  refCm: string;
-  onRefCm: (v: string) => void;
+  refCm: number;
+  onRefCm: (v: number) => void;
   onBack: () => void;
   onDone: () => void;
 }) {
-  const mmPerUnit = (Number(refCm) * 10) / REF_DRAWN_MM || 1;
+  const mmPerUnit = (refCm * 10) / REF_DRAWN_MM || 1;
   return (
     <div className="mx-auto max-w-lg">
       <div className="flex items-start gap-3">
@@ -234,19 +235,13 @@ function CalibrateStep({
       </div>
 
       <div className="mt-6 flex items-end gap-3">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium text-ink">האורך במציאות</span>
+        <div>
+          <span className={fieldLabelClassName}>האורך במציאות</span>
           <div className="flex items-center gap-2">
-            <input
-              type="number"
-              inputMode="decimal"
-              value={refCm}
-              onChange={(e) => onRefCm(e.target.value)}
-              className={`${controlClassName} nums w-32 px-3`}
-            />
+            <NumberField min={0} value={refCm} onChange={onRefCm} className="w-32" />
             <span className="text-sm text-muted">ס״מ</span>
           </div>
-        </label>
+        </div>
       </div>
 
       <p className="nums mt-4 rounded-md border border-border bg-surface px-4 py-3 text-sm text-ink-soft">

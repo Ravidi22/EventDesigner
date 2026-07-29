@@ -4,6 +4,7 @@ import { Minus, Plus, Trash2, Copy, X, TriangleAlert, Layers } from "lucide-reac
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
+import { NumberField } from "@/components/number-field";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import type { Selection } from "./canvas-stage";
@@ -87,14 +88,7 @@ export function Inspector({
       {/* F-3.3: auto-running numbering, editable per table */}
       <div className="mt-3 flex items-center justify-between">
         <label htmlFor="table-number" className="text-sm text-ink-soft">מספר שולחן</label>
-        <input
-          id="table-number"
-          type="number"
-          inputMode="numeric"
-          value={t.number}
-          onChange={(e) => onRenumber(t.id, Number(e.target.value) || 0)}
-          className="nums h-8 w-16 rounded-md border border-border bg-canvas px-2 text-end text-sm text-ink"
-        />
+        <NumberField id="table-number" decimals={0} value={t.number} onChange={(v) => onRenumber(t.id, v)} className="w-16" />
       </div>
 
       <div className="mt-3">

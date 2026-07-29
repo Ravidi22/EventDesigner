@@ -12,7 +12,7 @@ import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote 
 import { activeEvent, updateEvent } from "@/lib/events/storage";
 import { formatEventDate, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
-import { controlClassName } from "@/components/control";
+import { NumberField } from "@/components/number-field";
 
 // F-7.1–F-7.4: the quote — a renderer over the design document. Variant-level rows, category
 // subtotals, hide/merge before showing, discount, VAT from settings, version lock + re-issue.
@@ -21,7 +21,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [issued, setIssued] = useState<IssuedQuote | null>(null);
   const [discountType, setDiscountType] = useState<DiscountType>("percent");
-  const [discountValue, setDiscountValue] = useState("0");
+  const [discountValue, setDiscountValue] = useState(0);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [merged, setMerged] = useState<Set<string>>(new Set());
 
@@ -34,7 +34,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
       setIssued(q);
       if (q) {
         setDiscountType(q.discountType);
-        setDiscountValue(String(q.discountValue));
+        setDiscountValue(q.discountValue);
         setHidden(new Set(q.hiddenVariantIds));
         setMerged(new Set(q.mergedCategoryIds));
       }
@@ -59,7 +59,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
 
   const subtotal = groups.reduce((s, g) => s + g.subtotal, 0);
   const unpriced = groups.reduce((n, g) => n + g.lines.filter((l) => !l.priced).length, 0);
-  const totals = quoteTotals(subtotal, { discountType, discountValue: Number(discountValue) || 0, vatRate });
+  const totals = quoteTotals(subtotal, { discountType, discountValue, vatRate });
 
   const changed = issued ? designChangedSince(issued, doc) : false;
 
@@ -69,7 +69,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
       issuedAt: Date.now(),
       docJson: JSON.stringify(doc),
       discountType,
-      discountValue: Number(discountValue) || 0,
+      discountValue,
       hiddenVariantIds: [...hidden],
       mergedCategoryIds: [...merged],
       total: totals.total,
@@ -270,15 +270,14 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
                 </button>
               ))}
             </div>
-            <input
-              type="number"
-              inputMode="decimal"
+            <NumberField
+              min={0}
               value={discountValue}
-              onChange={(e) => setDiscountValue(e.target.value)}
+              onChange={setDiscountValue}
               aria-label="ערך ההנחה"
-              className={`${controlClassName} nums no-print h-8 w-20 px-2`}
+              className="no-print w-20"
             />
-            {discountType === "percent" && <span className="nums text-muted">{Number(discountValue) || 0}%</span>}
+            {discountType === "percent" && <span className="nums text-muted">{discountValue}%</span>}
           </div>
           <span className="nums text-ink">−{formatPrice(totals.discount)}</span>
         </div>

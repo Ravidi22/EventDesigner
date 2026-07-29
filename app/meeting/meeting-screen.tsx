@@ -14,7 +14,9 @@ import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
-import { controlClassName } from "@/components/control";
+import { TextField } from "@/components/text-field";
+import { NumberField } from "@/components/number-field";
+import { fieldLabelClassName } from "@/components/control";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
 import { ImportFlow, type ImportResult } from "./import-flow";
@@ -167,7 +169,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   const [phone, setPhone] = useState(event?.phone ?? "");
   const [date, setDate] = useState(event?.date ?? "");
   const [hallId, setHallId] = useState(event?.hallTemplateId ?? "");
-  const [guests, setGuests] = useState(event?.guests ? String(event.guests) : "");
+  const [guests, setGuests] = useState(event?.guests ?? 0);
 
   useEffect(() => setTemplates(loadTemplates()), []);
   useEffect(() => {
@@ -176,7 +178,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       setPhone(event.phone);
       setDate(event.date);
       setHallId(event.hallTemplateId ?? "");
-      setGuests(event.guests ? String(event.guests) : "");
+      setGuests(event.guests ?? 0);
     }
   }, [event]);
 
@@ -187,7 +189,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       clientName: clientName.trim(),
       phone: phone.trim(),
       date,
-      guests: Number(guests) || 0,
+      guests,
       hallTemplateId: t?.id,
       hallName: t?.name ?? "טרם נבחר",
     };
@@ -207,28 +209,21 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       </p>
 
       <div className="mt-8 flex flex-col gap-5">
-        <Field label="שם הלקוח">
-          <input required value={clientName} onChange={(e) => setClientName(e.target.value)} className={`${controlClassName} px-3`} placeholder="נועה ואיתי" />
-        </Field>
-        <Field label="טלפון">
-          <input type="tel" dir="ltr" value={phone} onChange={(e) => setPhone(e.target.value)} className={`${controlClassName} px-3 text-end`} placeholder="052-0000000" />
-        </Field>
+        <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
+        <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
         <div className="grid grid-cols-2 gap-4">
-          <Field label="תאריך האירוע">
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${controlClassName} nums px-3`} />
-          </Field>
-          <Field label="אומדן אורחים">
-            <input type="number" inputMode="numeric" min={0} value={guests} onChange={(e) => setGuests(e.target.value)} className={`${controlClassName} nums px-3`} placeholder="200" />
-          </Field>
+          <TextField label="תאריך האירוע" type="date" value={date} onChange={setDate} className="nums" />
+          <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
         </div>
-        <Field label="אולם">
+        <div>
+          <span className={fieldLabelClassName}>אולם</span>
           <Select
             value={hallId}
             onChange={setHallId}
             options={[{ value: "", label: "טרם נבחר" }, ...templates.map((t) => ({ value: t.id, label: t.name }))]}
             className="w-full"
           />
-        </Field>
+        </div>
       </div>
 
       <div className="mt-8 flex justify-end">
@@ -238,15 +233,6 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
         </Button>
       </div>
     </form>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-sm font-medium text-ink">{label}</span>
-      {children}
-    </label>
   );
 }
 

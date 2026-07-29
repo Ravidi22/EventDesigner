@@ -7,7 +7,7 @@ import type { EdgeCurve } from "@/lib/studio/hall";
 import { outlineBounds } from "@/lib/studio/footprint";
 import { bulgeToCurve, clampEdgeCurve, edgeMidpoint, endpointFromLengthAngle, setBulgeDepth, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import { Button } from "@/components/button";
-import { controlClassName } from "@/components/control";
+import { NumberField } from "@/components/number-field";
 import { ShapeCanvas, SelectionInspector, type SelectedRef } from "@/components/shape-canvas";
 
 type Curves = (EdgeCurve | null)[];
@@ -39,7 +39,6 @@ export function ShapeEditorModal({
   const [curves, setCurves] = useState<Curves>(padCurves(curvesProp, outlineProp.length));
   const [selected, setSelected] = useState<SelectedRef | null>(null);
   const [mode, setMode] = useState<"draw" | "edit">(outlineProp.length >= 3 ? "edit" : "draw");
-  const [edit, setEdit] = useState<{ w?: string; h?: string }>({}); // in-flight size text, committed on blur/Enter
 
   useEffect(() => {
     if (open) {
@@ -47,7 +46,6 @@ export function ShapeEditorModal({
       setCurves(padCurves(curvesProp, outlineProp.length));
       setSelected(null);
       setMode(outlineProp.length >= 3 ? "edit" : "draw");
-      setEdit({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -123,7 +121,7 @@ export function ShapeEditorModal({
   };
 
   const bounds = outline.length >= 3 ? outlineBounds(outline) : null;
-  const mmToCm = (mm: number) => String(Math.round(mm / 10));
+  const mmToCm = (mm: number) => Math.round(mm / 10);
 
   // Rescale the shape to a new bounding width/height (cm). Curves are endpoint-relative offsets, so
   // they scale by the same per-axis factor.
@@ -141,7 +139,6 @@ export function ShapeEditorModal({
     : outline.length < 3 ? "המשיכו להוסיף נקודות…"
     : "לחצו שוב על הנקודה הראשונה כדי לסגור את הצורה";
 
-  const sizeInput = `${controlClassName} nums px-2 w-16`;
   return (
     <dialog ref={ref} onClose={onClose} onCancel={onClose} className="modal m-auto max-h-none rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog">
       <div className="flex h-[80vh] w-[88vw] max-w-4xl flex-col">
@@ -197,28 +194,28 @@ export function ShapeEditorModal({
         </div>
 
         <footer className="flex shrink-0 items-center gap-3 border-t border-border px-5 py-3">
-          <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-            רוחב (ס״מ)
-            <input
-              type="number" inputMode="decimal" min={0} disabled={!bounds}
-              value={edit.w ?? (bounds ? mmToCm(bounds.w) : "")}
-              onChange={(e) => setEdit((s) => ({ ...s, w: e.target.value }))}
-              onBlur={() => { if (edit.w != null) { resize("w", Number(edit.w) || 0); setEdit((s) => ({ ...s, w: undefined })); } }}
-              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-              className={sizeInput}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-ink-soft">
-            עומק (ס״מ)
-            <input
-              type="number" inputMode="decimal" min={0} disabled={!bounds}
-              value={edit.h ?? (bounds ? mmToCm(bounds.h) : "")}
-              onChange={(e) => setEdit((s) => ({ ...s, h: e.target.value }))}
-              onBlur={() => { if (edit.h != null) { resize("h", Number(edit.h) || 0); setEdit((s) => ({ ...s, h: undefined })); } }}
-              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-              className={sizeInput}
-            />
-          </label>
+          <NumberField
+            layout="inline"
+            label="רוחב (ס״מ)"
+            decimals={0}
+            min={0}
+            commitOnBlur
+            disabled={!bounds}
+            value={bounds ? mmToCm(bounds.w) : 0}
+            onChange={(cm) => resize("w", cm)}
+            className="w-16"
+          />
+          <NumberField
+            layout="inline"
+            label="עומק (ס״מ)"
+            decimals={0}
+            min={0}
+            commitOnBlur
+            disabled={!bounds}
+            value={bounds ? mmToCm(bounds.h) : 0}
+            onChange={(cm) => resize("h", cm)}
+            className="w-16"
+          />
           <div className="flex-1" />
           <Button variant="ghost" onClick={onClose}>ביטול</Button>
           <Button disabled={outline.length < 3} onClick={() => { onSave(outline, padCurves(curves, outline.length)); onClose(); }}>

@@ -10,7 +10,8 @@ import { loadImages, saveImage, loadPresentations, savePresentation, deletePrese
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { Select } from "@/components/select";
-import { controlClassName } from "@/components/control";
+import { TextField } from "@/components/text-field";
+import { fieldLabelClassName } from "@/components/control";
 
 // v0.3 studio gallery (F-2.1–F-2.2): create, order, and edit designer-curated presentations.
 // This is management only — client-facing browsing, liking a photo, and the per-event "תיק
@@ -177,10 +178,7 @@ function PresentationBuilder({
         </IconButton>
       </div>
 
-      <label className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium text-ink">שם התצוגה</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} className={`${controlClassName} px-3`} placeholder="חופה קלאסית" />
-      </label>
+      <TextField label="שם התצוגה" value={name} onChange={setName} placeholder="חופה קלאסית" />
 
       <h3 className="mb-2 mt-8 text-sm font-semibold text-ink">
         תמונות <span className="nums font-normal text-muted">({imageIds.length})</span> — הסדר הוא סדר ההצגה
@@ -295,23 +293,23 @@ function NewImageForm({ onCreate, onCancel }: { onCreate: (img: GalleryImage) =>
     <div className="mt-4 rounded-lg border border-border bg-surface p-4">
       <h4 className="mb-3 text-sm font-semibold text-ink">תמונה חדשה</h4>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium text-ink">שם התמונה</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={`${controlClassName} px-3`} placeholder="שנדליר מעל החופה" />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium text-ink">מוצר מקושר</span>
+        <TextField label="שם התמונה" value={name} onChange={setName} placeholder="שנדליר מעל החופה" />
+        <div>
+          <span className={fieldLabelClassName}>מוצר מקושר</span>
           <Select
             value={productId}
             onChange={setProductId}
             options={products.map((p) => ({ value: p.id, label: p.name }))}
             className="w-full"
           />
-        </label>
-        <label className="flex flex-col gap-1.5 sm:col-span-2">
-          <span className="text-sm font-medium text-ink">תיאור</span>
-          <input value={description} onChange={(e) => setDescription(e.target.value)} className={`${controlClassName} px-3`} placeholder="חתונת נועה ואיתי, אולם לה־וידה" />
-        </label>
+        </div>
+        <TextField
+          label="תיאור"
+          value={description}
+          onChange={setDescription}
+          placeholder="חתונת נועה ואיתי, אולם לה־וידה"
+          wrapperClassName="sm:col-span-2"
+        />
       </div>
       <div className="mt-4 flex justify-end gap-2">
         <Button variant="ghost" onClick={onCancel}>ביטול</Button>

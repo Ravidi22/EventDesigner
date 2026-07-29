@@ -6,6 +6,7 @@ import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { packingList } from "@/lib/outputs/aggregate";
 import { itemLookup } from "@/lib/outputs/lookup";
+import { NumberField } from "@/components/number-field";
 
 // F-6.3: manual spares per row, persisted with the event — so the "no manual fixes" success
 // metric covers reserves too, instead of pen-on-paper additions.
@@ -89,15 +90,16 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                     </td>
                     <td className="nums py-2 text-ink">×{r.quantity}</td>
                     <td className="py-2">
-                      <input
-                        type="number"
-                        inputMode="numeric"
+                      <NumberField
+                        size="sm"
+                        decimals={0}
                         min={0}
-                        value={spare === 0 ? "" : spare}
+                        hideZero
+                        value={spare}
+                        onChange={(v) => setSpare(r.variantId, v)}
                         placeholder="0"
-                        onChange={(e) => setSpare(r.variantId, Math.max(0, Number(e.target.value) || 0))}
                         aria-label={`רזרבה עבור ${r.label}`}
-                        className="nums h-7 w-14 rounded-md border border-border bg-canvas px-1.5 text-sm text-ink placeholder:text-muted print:border-transparent"
+                        className="w-14 print:border-transparent"
                       />
                     </td>
                     <td className="nums py-2 font-semibold text-ink">×{r.quantity + spare}</td>
