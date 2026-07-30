@@ -22,6 +22,7 @@ import {
 } from "@/lib/studio/geometry";
 import { snapPoint, constrainAngleDeg, type SnapResult } from "@/lib/studio/snap";
 import { isTypingTarget } from "@/lib/keyboard";
+import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
@@ -1088,12 +1089,23 @@ function FixtureMarker({
   // rotate handle, the focus halo) measures from here rather than from depthMm.
   const halfV = shape === "circle" ? halfW : halfD;
   const colorClass = selected ? "text-accent" : "text-ink-soft";
-  const shared = {
-    className: colorClass,
+  // "currentColor" as the default fill/stroke is the pass-through case: with no style set,
+  // resolveStyle hands it straight back and colorClass still drives it exactly as before.
+  // Selection is also shown by the separate rotate/resize handles below, so a custom colour is
+  // free to fully override the body without losing the selected affordance.
+  const resolved = resolveStyle(fixture.style, "screen", {
     fill: "currentColor",
     fillOpacity: selected ? 0.22 : 0.1,
     stroke: "currentColor",
     strokeWidth: 1.5,
+  });
+  const shared = {
+    className: colorClass,
+    fill: resolved.fill,
+    fillOpacity: resolved.fillOpacity,
+    stroke: resolved.stroke,
+    strokeWidth: resolved.strokeWidth,
+    strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
     vectorEffect: "non-scaling-stroke" as const,
   };
 

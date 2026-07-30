@@ -4,6 +4,7 @@ import type { Hall } from "@/lib/studio/hall";
 import { placementLegend } from "@/lib/outputs/aggregate";
 import { productName } from "@/lib/outputs/lookup";
 import { pointAtDistance, resolveWallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
+import { resolveStyle } from "@/lib/element-style";
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
 
@@ -59,23 +60,27 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
           <circle key={i} cx={c.x} cy={c.y} r={c.rMm} fill="#f0eef5" stroke="#4a4658" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
         ))}
         {/* Near-fixed shell elements (stage, bars) — outline + label, B&W-safe */}
-        {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => (
-          <g key={f.id}>
-            <rect
-              x={f.x - f.widthMm / 2}
-              y={f.y - f.depthMm / 2}
-              width={f.widthMm}
-              height={f.depthMm}
-              fill="#f0eef5"
-              stroke="#4a4658"
-              strokeWidth={1.25}
-              vectorEffect="non-scaling-stroke"
-            />
-            <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
-              {f.label}
-            </text>
-          </g>
-        ))}
+        {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => {
+          const resolved = resolveStyle(f.style, "monochrome", { fill: "#f0eef5", stroke: "#4a4658", strokeWidth: 1.25 });
+          return (
+            <g key={f.id}>
+              <rect
+                x={f.x - f.widthMm / 2}
+                y={f.y - f.depthMm / 2}
+                width={f.widthMm}
+                height={f.depthMm}
+                fill={resolved.fill}
+                stroke={resolved.stroke}
+                strokeWidth={resolved.strokeWidth}
+                strokeDasharray={resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined}
+                vectorEffect="non-scaling-stroke"
+              />
+              <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
+                {f.label}
+              </text>
+            </g>
+          );
+        })}
         {/* Tables */}
         {doc.tables.map((t) => (
           <TableGlyph key={t.id} t={t} />
@@ -111,11 +116,13 @@ export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: 
 }
 
 function TableGlyph({ t }: { t: DesignTable }) {
-  const stroke = "#1b1725";
+  const ink = "#1b1725";
+  const resolved = resolveStyle(t.style, "monochrome", { fill: "#ffffff", stroke: ink, strokeWidth: 1.5 });
+  const dash = resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined;
   return (
     <g>
       {t.diameterMm ? (
-        <circle cx={t.position.x} cy={t.position.y} r={t.diameterMm / 2} fill="#ffffff" stroke={stroke} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        <circle cx={t.position.x} cy={t.position.y} r={t.diameterMm / 2} fill={resolved.fill} stroke={resolved.stroke} strokeWidth={resolved.strokeWidth} strokeDasharray={dash} vectorEffect="non-scaling-stroke" />
       ) : (
         <rect
           x={t.position.x - (t.widthMm ?? 0) / 2}
@@ -123,9 +130,10 @@ function TableGlyph({ t }: { t: DesignTable }) {
           width={t.widthMm ?? 0}
           height={t.depthMm ?? 0}
           rx={80}
-          fill="#ffffff"
-          stroke={stroke}
-          strokeWidth={1.5}
+          fill={resolved.fill}
+          stroke={resolved.stroke}
+          strokeWidth={resolved.strokeWidth}
+          strokeDasharray={dash}
           vectorEffect="non-scaling-stroke"
         />
       )}
@@ -137,7 +145,7 @@ function TableGlyph({ t }: { t: DesignTable }) {
         fontSize={620}
         fontWeight={600}
         fontFamily="Assistant, sans-serif"
-        fill={stroke}
+        fill={ink}
       >
         {t.number > 0 ? t.number : "ראש"}
       </text>

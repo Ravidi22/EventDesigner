@@ -5,14 +5,24 @@ import type { Product } from "@/lib/catalog/types";
 import { resolveFootprint, resolveContent, outlineBounds } from "@/lib/studio/footprint";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
+import { resolveStyle } from "@/lib/element-style";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
   const content = resolveContent(product);
 
-  // Bounds in mm, centered on (0,0) to match the map's local frame.
+  // Bounds in mm, centered on (0,0) to match the map's local frame. "currentColor" is the
+  // pass-through default: with no style set, resolveStyle hands it straight back and the
+  // wrapping <svg>'s text-ink-soft class still drives it exactly as before.
+  const resolved = resolveStyle(product.appearance?.style, "screen", { fill: "#ffffff", stroke: "currentColor", strokeWidth: 2 });
   let w: number, h: number, shape: ReactNode;
-  const shapeProps = { fill: "#ffffff", stroke: "currentColor", strokeWidth: 2, vectorEffect: "non-scaling-stroke" as const };
+  const shapeProps = {
+    fill: resolved.fill,
+    stroke: resolved.stroke,
+    strokeWidth: resolved.strokeWidth,
+    strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
+    vectorEffect: "non-scaling-stroke" as const,
+  };
   if (f.kind === "circle") { w = f.diameterMm; h = f.diameterMm; shape = <circle cx={0} cy={0} r={w / 2} {...shapeProps} />; }
   else if (f.kind === "ellipse") { w = f.widthMm; h = f.depthMm; shape = <ellipse cx={0} cy={0} rx={w / 2} ry={h / 2} {...shapeProps} />; }
   else if (f.kind === "custom") {
