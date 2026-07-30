@@ -110,7 +110,7 @@ export function GanttScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="px-8 py-8">
       <p className="mb-6 max-w-xl text-sm leading-relaxed text-ink-soft">
         ציר הזמן של <span className="font-semibold text-ink">{activeVenue?.name ?? ""}</span> — שורה
         לכל אולם, פס לכל אירוע מרגע פתיחתו ועד תאריך האירוע. חפיפה בין פסים באותה שורה = אותו אולם

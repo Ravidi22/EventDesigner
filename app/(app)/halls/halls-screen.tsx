@@ -54,7 +54,7 @@ export function HallsScreen() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="px-8 py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <p className="max-w-xl text-sm leading-relaxed text-ink-soft">
           האולמות של <span className="font-semibold text-ink">{activeVenue?.name}</span> — קווי מתאר,
@@ -73,7 +73,7 @@ export function HallsScreen() {
         </p>
       )}
 
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {shown.map((t) => {
           const areaM2 = t.hall.outline?.length
             ? polygonAreaMm2(t.hall.outline) / 1_000_000

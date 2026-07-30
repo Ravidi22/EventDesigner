@@ -50,7 +50,7 @@ export function GalleryScreen() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-7">
+    <div className="px-8 py-7">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <h1 className="font-display text-h2 text-ink">תצוגות</h1>
         <Button

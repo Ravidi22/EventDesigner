@@ -76,7 +76,7 @@ export function DashboardScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="px-8 py-8">
       <div className="mb-8 flex items-end justify-between gap-4">
         <div>
           <p className="text-sm text-muted">{greeting}, דניאל</p>
@@ -137,7 +137,7 @@ export function DashboardScreen() {
               : "אין אירועים בסינון הזה."}
         </p>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((e) => (
             <EventCard
               key={e.id}
