@@ -6,6 +6,7 @@ import type { Hall } from "@/lib/studio/hall";
 export interface HallTemplate {
   id: string;
   name: string;
+  venueId: string; // which property this room/space belongs to (lib/venues)
   hall: Hall;
   mmPerUnit: number; // calibration (F-3.4), set once per hall
   createdAt: number;

@@ -9,6 +9,7 @@ import { activeEvent, reachStep, updateEvent } from "@/lib/events/storage";
 import { beginEvent } from "@/lib/events/begin";
 import type { HallTemplate } from "@/lib/setup/types";
 import { loadTemplates } from "@/lib/setup/storage";
+import { loadActiveVenueId } from "@/lib/venues/storage";
 import { SAMPLE_HALL, type Hall } from "@/lib/studio/hall";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
@@ -172,7 +173,12 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   const [hallId, setHallId] = useState(event?.hallTemplateId ?? "");
   const [guests, setGuests] = useState(event?.guests ?? 0);
 
-  useEffect(() => setTemplates(loadTemplates()), []);
+  useEffect(() => {
+    const venueId = loadActiveVenueId();
+    // Scope choices to the active venue, but never hide the hall this event already has —
+    // switching the sidebar's venue after a hall was picked must not silently clear it.
+    setTemplates(loadTemplates().filter((t) => t.venueId === venueId || t.id === event?.hallTemplateId));
+  }, [event?.hallTemplateId]);
   useEffect(() => {
     if (event) {
       setClientName(event.clientName);

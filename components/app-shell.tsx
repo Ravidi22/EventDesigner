@@ -13,7 +13,7 @@ import {
   Bell,
   type LucideIcon,
 } from "lucide-react";
-import { DEFAULT_VENUES, addVenue, loadActiveVenueId, loadVenues, setActiveVenueId, type Venue } from "@/lib/venues/storage";
+import { DEFAULT_VENUES, addVenue, loadActiveVenueId, loadVenues, renameVenue, setActiveVenueId, type Venue } from "@/lib/venues/storage";
 import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
@@ -117,7 +117,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             const next = addVenue();
             setVenues(next);
             setActiveVenue(loadActiveVenueId());
+            // A venue with zero halls isn't a real state — send the designer straight
+            // into adding its first room.
+            router.push("/halls");
           }}
+          onRename={(id, name) => setVenues(renameVenue(id, name))}
         />
 
         <nav className="flex flex-col gap-[3px]">
