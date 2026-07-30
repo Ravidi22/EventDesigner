@@ -2,6 +2,7 @@
 // same shapes come from mapping Drizzle rows (lib/db/schema.ts) — swap happens here only.
 import type { Layer, Point } from "../design-document/types";
 import type { EdgeCurve } from "../studio/hall";
+import type { ElementStyle } from "../element-style";
 
 export type { Layer };
 
@@ -15,6 +16,7 @@ export interface MapAppearance {
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
   content: "icon" | "name" | "none";
   icon?: string; // Lucide name, iff content === "icon"
+  style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
 }
 
 export interface Variant {
