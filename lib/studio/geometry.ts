@@ -15,6 +15,29 @@ export function polygonAreaMm2(outline: Point[]): number {
   return Math.abs(sum) / 2;
 }
 
+// Area-weighted centroid — where the sqm badge sits, so it lands inside an L-shaped hall instead
+// of in the notch a bbox centre would pick. A half-drawn outline has no area yet, so fall back to
+// the plain vertex average there.
+export function polygonCentroid(outline: Point[]): Point {
+  const n = outline.length;
+  if (n === 0) return { x: 0, y: 0 };
+  let a2 = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    const p = outline[i];
+    const q = outline[(i + 1) % n];
+    const cross = p.x * q.y - q.x * p.y;
+    a2 += cross;
+    cx += (p.x + q.x) * cross;
+    cy += (p.y + q.y) * cross;
+  }
+  if (Math.abs(a2) < 1e-9) {
+    return { x: outline.reduce((s, p) => s + p.x, 0) / n, y: outline.reduce((s, p) => s + p.y, 0) / n };
+  }
+  return { x: cx / (3 * a2), y: cy / (3 * a2) };
+}
+
 // EdgeCurve stores control points as offsets from their own edge's endpoints (see hall.ts) so
 // that moving a vertex carries its curves along. These resolve an edge's curve to absolute mm.
 export function absoluteControlPoints(a: Point, b: Point, curve: EdgeCurve): { c1: Point; c2: Point } {
@@ -158,6 +181,55 @@ export function endpointFromLengthAngle(a: Point, lengthMm: number, angleDeg: nu
   return { x: a.x + lengthMm * Math.cos(rad), y: a.y + lengthMm * Math.sin(rad) };
 }
 
+function unitVector(from: Point, to: Point): Point | null {
+  const len = wallLengthMm(from, to);
+  if (len < 1e-6) return null;
+  return { x: (to.x - from.x) / len, y: (to.y - from.y) / len };
+}
+
+// Bounding-box diagonal — the shape's own sense of "far", used to reject a solve that would fling
+// a corner off the map rather than nudge it.
+function outlineSpanMm(outline: Point[]): number {
+  const xs = outline.map((p) => p.x);
+  const ys = outline.map((p) => p.y);
+  return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+}
+
+// Setting a wall's length (or angle) by moving only its end vertex keeps that one wall honest and
+// silently destroys both neighbours' angles: lengthen one side of a square and the next wall goes
+// diagonal, so two "corrections" leave a quadrilateral where a rectangle used to be. Instead, move
+// the end vertex b as asked, then slide the *following* vertex c along wall i+1's original
+// direction until it meets wall i+2's line. Every wall keeps its angle and wall i+2 absorbs the
+// length change — on a rectangle that keeps it a rectangle and grows the opposite wall to match.
+//
+// Pure vector maths, so it holds at any rotation; nothing here assumes an axis-aligned shape.
+// Returns null when the solve is degenerate and the caller should fall back to moving b alone:
+// fewer than 4 vertices (no spare wall to absorb the change), a zero-length neighbour, walls i+1
+// and i+2 parallel (their lines never meet), or an intersection absurdly far from where c sits now
+// (a glancing pair does meet, just off in the distance).
+export function reshapeEdgeKeepingAngles(
+  outline: Point[],
+  edgeIdx: number,
+  newB: Point,
+): { bIdx: number; b: Point; cIdx: number; c: Point } | null {
+  const n = outline.length;
+  if (n < 4) return null;
+  const bIdx = (edgeIdx + 1) % n;
+  const cIdx = (edgeIdx + 2) % n;
+  const c = outline[cIdx];
+  const u = unitVector(outline[bIdx], c); // wall i+1's original direction
+  const v = unitVector(c, outline[(edgeIdx + 3) % n]); // wall i+2's original direction
+  if (!u || !v) return null;
+  const denom = u.x * v.y - u.y * v.x; // u × v — zero when the two walls are parallel
+  if (Math.abs(denom) < 1e-9) return null;
+  // Solve newB + t·u = c + s·v for t by crossing both sides with v.
+  const t = ((c.x - newB.x) * v.y - (c.y - newB.y) * v.x) / denom;
+  if (!Number.isFinite(t)) return null;
+  const cNew = { x: newB.x + u.x * t, y: newB.y + u.y * t };
+  if (wallLengthMm(c, cNew) > outlineSpanMm(outline) * 4) return null;
+  return { bIdx, b: newB, cIdx, c: cNew };
+}
+
 // Perpendicular distance from a wall's curve to its straight midpoint — the numeric counterpart
 // to dragging the bulge handle by hand.
 export function bulgeDepthMm(a: Point, b: Point, curve: EdgeCurve | null): number {
@@ -260,6 +332,30 @@ export function fromLocalFrame(p: Point, center: Point, rotationDeg: number): Po
   };
 }
 
+// Dragging a fixture's edge handle anchors the *opposite* edge (Figma/SketchUp/any floor planner):
+// only the grabbed edge follows the pointer. A fixture is stored as centre+size, so holding the far
+// edge still means moving the centre by half the size delta — along the fixture's own axis, not the
+// world's, hence the round-trip through toLocalFrame/fromLocalFrame at its current rotation.
+// `axis` picks width (local x) or depth (local y); `sign` says which of the two opposing edges was
+// grabbed (+1 = the one on the +axis side). The anchor holds even when the size hits minMm.
+export function resizeFromEdge(
+  fixture: { x: number; y: number; widthMm: number; depthMm: number; rotationDeg?: number },
+  axis: "width" | "depth",
+  sign: 1 | -1,
+  pointer: Point,
+  minMm: number,
+): { sizeMm: number; center: Point } {
+  const center = { x: fixture.x, y: fixture.y };
+  const rot = fixture.rotationDeg ?? 0;
+  const local = toLocalFrame(pointer, center, rot);
+  const size = axis === "width" ? fixture.widthMm : fixture.depthMm;
+  const reach = axis === "width" ? local.x : local.y; // pointer distance from the centre, signed, in the fixture's frame
+  const sizeMm = Math.max(minMm, Math.round(size / 2 + sign * reach));
+  const shift = (sign * (sizeMm - size)) / 2;
+  const moved = fromLocalFrame(axis === "width" ? { x: shift, y: 0 } : { x: 0, y: shift }, center, rot);
+  return { sizeMm, center: { x: Math.round(moved.x), y: Math.round(moved.y) } };
+}
+
 export function tableAreaMm2(t: DesignTable): number {
   if (t.diameterMm) return Math.PI * (t.diameterMm / 2) ** 2;
   if (t.widthMm && t.depthMm) return t.widthMm * t.depthMm;
@@ -301,6 +397,12 @@ if ((import.meta as { main?: boolean }).main) {
   assert(polygonAreaMm2(outline) === 20000, "rectangle polygon area");
   const triangle: Point[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 100 }];
   assert(polygonAreaMm2(triangle) === 5000, "triangle polygon area");
+  const rectCentroid = polygonCentroid(outline);
+  assert(rectCentroid.x === 100 && rectCentroid.y === 50, "rectangle centroid is its centre");
+  const triCentroid = polygonCentroid([{ x: 0, y: 0 }, { x: 300, y: 0 }, { x: 0, y: 300 }]);
+  assert(Math.abs(triCentroid.x - 100) < 1e-9 && Math.abs(triCentroid.y - 100) < 1e-9, "triangle centroid is the average of its vertices");
+  const flat = polygonCentroid([{ x: 0, y: 0 }, { x: 200, y: 0 }]);
+  assert(flat.x === 100 && flat.y === 0, "a zero-area outline falls back to the vertex average");
 
   const a: Point = { x: 0, y: 0 };
   const b: Point = { x: 1000, y: 0 };
@@ -354,5 +456,45 @@ if ((import.meta as { main?: boolean }).main) {
   assert(Math.abs(localPt.x) < 1e-9 && Math.abs(localPt.y + 100) < 1e-9, "toLocalFrame undoes a 90° rotation");
   const roundTrip = fromLocalFrame(localPt, { x: 0, y: 0 }, 90);
   assert(Math.abs(roundTrip.x - 100) < 1e-9 && Math.abs(roundTrip.y) < 1e-9, "fromLocalFrame is the inverse of toLocalFrame");
+
+  // Edge-anchored resize: whatever the handle does, the opposite edge must not budge.
+  const box = { x: 0, y: 0, widthMm: 1000, depthMm: 600, rotationDeg: 0 };
+  const wider = resizeFromEdge(box, "width", 1, { x: 800, y: 0 }, 200);
+  assert(wider.sizeMm === 1300 && wider.center.x === 150, "dragging the +width edge out grows by the reach and shifts the centre half of it");
+  assert(wider.center.x - wider.sizeMm / 2 === -500, "…and the far edge stays exactly where it was");
+  const fromTheOtherSide = resizeFromEdge(box, "width", -1, { x: -800, y: 0 }, 200);
+  assert(fromTheOtherSide.sizeMm === 1300 && fromTheOtherSide.center.x + fromTheOtherSide.sizeMm / 2 === 500, "the opposing width handle anchors the +x edge instead");
+  const deeper = resizeFromEdge(box, "depth", 1, { x: 0, y: 500 }, 200);
+  assert(deeper.sizeMm === 800 && deeper.center.y - deeper.sizeMm / 2 === -300, "the depth handle anchors the opposite edge on the other axis");
+  // Rotated 90°, the fixture's own +width edge points along world +y — the maths has to follow it.
+  const turned = resizeFromEdge({ ...box, rotationDeg: 90 }, "width", 1, { x: 0, y: 800 }, 200);
+  assert(turned.sizeMm === 1300 && turned.center.x === 0 && turned.center.y === 150, "a rotated fixture resizes along its own axis, not the world's");
+  const clamped = resizeFromEdge(box, "width", 1, { x: -400, y: 0 }, 200);
+  assert(clamped.sizeMm === 200 && clamped.center.x - clamped.sizeMm / 2 === -500, "the anchored edge holds even when the size bottoms out at the minimum");
+  // The reported bug: lengthening one side of a square used to shear the next wall diagonal, and
+  // "fixing" the opposite wall sheared another — two edits and the rectangle was gone.
+  const sq: Point[] = [{ x: 0, y: 0 }, { x: 10000, y: 0 }, { x: 10000, y: 10000 }, { x: 0, y: 10000 }];
+  const grown = reshapeEdgeKeepingAngles(sq, 0, { x: 12000, y: 0 });
+  assert(grown !== null, "a square's wall can be reshaped without falling back");
+  assert(grown!.bIdx === 1 && grown!.b.x === 12000 && grown!.b.y === 0, "the wall's own end vertex lands where asked");
+  assert(grown!.cIdx === 2 && Math.abs(grown!.c.x - 12000) < 1e-6 && Math.abs(grown!.c.y - 10000) < 1e-6, "the next corner follows, so the square stays a rectangle at 12x10");
+  // Now the opposite wall of that 12x10, which is what used to destroy the shape on the second edit.
+  const rect12: Point[] = [{ x: 0, y: 0 }, { x: 12000, y: 0 }, { x: 12000, y: 10000 }, { x: 0, y: 10000 }];
+  const shrunk = reshapeEdgeKeepingAngles(rect12, 2, { x: 4000, y: 10000 });
+  assert(shrunk !== null && Math.abs(shrunk.c.x - 4000) < 1e-6 && Math.abs(shrunk.c.y) < 1e-6, "editing the opposite wall stays rectangular too");
+
+  // Nothing above may be secretly assuming axis alignment: same shape turned 45 degrees.
+  const turnedRect: Point[] = [{ x: 0, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 200 }, { x: -100, y: 100 }];
+  const turnedGrown = reshapeEdgeKeepingAngles(turnedRect, 0, { x: 150, y: 150 });
+  assert(turnedGrown !== null && Math.abs(turnedGrown.c.x - 50) < 1e-6 && Math.abs(turnedGrown.c.y - 250) < 1e-6, "a rotated rectangle reshapes along its own axes");
+  const after = turnedRect.map((p, i) => (i === turnedGrown!.bIdx ? turnedGrown!.b : i === turnedGrown!.cIdx ? turnedGrown!.c : p));
+  assert(Math.abs(wallLengthMm(after[0], after[1]) - wallLengthMm(after[2], after[3])) < 1e-6, "the opposite wall grew to match, so it is still a rectangle");
+  assert(Math.abs(((wallAngleDeg(after[1], after[2]) - wallAngleDeg(turnedRect[1], turnedRect[2])) % 360)) < 1e-6, "the neighbouring wall kept its original angle");
+
+  // Degenerate solves fall back to the old move-one-vertex behaviour rather than inventing a corner.
+  assert(reshapeEdgeKeepingAngles([{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 0, y: 1000 }], 0, { x: 1200, y: 0 }) === null, "a triangle has no spare wall to absorb the change");
+  const collinear: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 1000, y: 2000 }];
+  assert(reshapeEdgeKeepingAngles(collinear, 0, { x: 1200, y: 0 }) === null, "parallel neighbouring walls never meet, so there is nothing to solve");
+
   console.log("geometry self-check passed");
 }
