@@ -11,7 +11,11 @@ import { useOutlineEditor } from "@/lib/studio/use-outline-editor";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
-import { ShapeCanvas, SelectionInspector, type StructureDragType } from "@/components/shape-canvas";
+import {
+  ShapeCanvas,
+  SelectionInspector,
+  type StructureDragType,
+} from "@/components/shape-canvas";
 
 // Full-screen shape editor, same shell as the studio: a rail on one side, the hall canvas on the
 // other (RTL DOM order puts the canvas on the left, matching /studio). New halls start with an
@@ -40,20 +44,54 @@ export function HallEditor({
     bars: draft.hall.bars,
   });
   const { mode, outline, edgeCurves, entrances, stage, bars, selected } = ed;
-  const { setSelected, removeVertex, removeEntrance, removeStage, removeBar, removeLastVertex } = ed;
+  const {
+    setSelected,
+    removeVertex,
+    removeEntrance,
+    removeStage,
+    removeBar,
+    removeLastVertex,
+  } = ed;
 
   const isNew = !loadTemplates().some((t) => t.id === draft.id);
 
   const dropStructure = (type: StructureDragType, p: Point) => {
     if (type === "entrance" && outline.length >= 3) {
       const { edgeIdx, distanceMm } = nearestWallToPoint(outline, p);
-      const e: Entrance = { id: crypto.randomUUID(), wallIndex: edgeIdx, distanceMm, widthMm: 1600, swingInward: true, doubleDoor: true };
+      const e: Entrance = {
+        id: crypto.randomUUID(),
+        wallIndex: edgeIdx,
+        distanceMm,
+        widthMm: 1600,
+        swingInward: true,
+        doubleDoor: true,
+      };
       ed.addEntrance(e);
     } else if (type === "bar") {
-      const b: Fixture = { id: crypto.randomUUID(), label: "בר", x: p.x, y: p.y, widthMm: 3000, depthMm: 1500, heightMm: 1100, shape: "rect", rotationDeg: 0 };
+      const b: Fixture = {
+        id: crypto.randomUUID(),
+        label: "בר",
+        x: p.x,
+        y: p.y,
+        widthMm: 3000,
+        depthMm: 1500,
+        heightMm: 1100,
+        shape: "rect",
+        rotationDeg: 0,
+      };
       ed.addBar(b);
     } else if (type === "stage" && !stage) {
-      const s: Fixture = { id: "fx-stage", label: "במה", x: p.x, y: p.y, widthMm: 4000, depthMm: 2400, heightMm: 600, shape: "rect", rotationDeg: 0 };
+      const s: Fixture = {
+        id: "fx-stage",
+        label: "במה",
+        x: p.x,
+        y: p.y,
+        widthMm: 4000,
+        depthMm: 2400,
+        heightMm: 600,
+        shape: "rect",
+        rotationDeg: 0,
+      };
       ed.addStage(s);
     }
   };
@@ -84,7 +122,16 @@ export function HallEditor({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, selected, setSelected, removeVertex, removeEntrance, removeStage, removeBar, removeLastVertex]);
+  }, [
+    mode,
+    selected,
+    setSelected,
+    removeVertex,
+    removeEntrance,
+    removeStage,
+    removeBar,
+    removeLastVertex,
+  ]);
 
   const buildHall = (): Hall => {
     const xs = outline.map((p) => p.x);
@@ -120,15 +167,18 @@ export function HallEditor({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface px-6">
+      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
         <IconButton label="חזרה לרשימת האולמות" onClick={onCancel}>
           <X className="h-5 w-5" strokeWidth={2} />
         </IconButton>
+
+        <div className="h-6 w-px bg-border" />
+
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="אולם לה־וידה"
-          className="w-56 shrink-0 border-0 bg-transparent text-base font-semibold text-ink placeholder:text-muted focus:outline-none"
+          placeholder="שם אולם"
+          className="-mx-2 w-56 shrink-0 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-base font-semibold text-ink transition-colors placeholder:text-muted hover:border-border hover:bg-canvas focus-visible:border-accent focus-visible:bg-canvas"
           autoFocus
         />
         <NumberField
@@ -143,13 +193,18 @@ export function HallEditor({
 
         <div className="flex-1" />
 
-        {mode === "draw" && <span className="text-xs text-ink-soft">{hint}</span>}
-        {mode === "edit" && <span className="text-xs text-ink-soft">קליק ימני על הקנבס להוספת כניסה, במה או בר</span>}
+        <span className="max-w-xs truncate text-xs text-ink-soft">
+          {mode === "draw"
+            ? hint
+            : "קליק ימני על הקנבס להוספת כניסה, במה או בר"}
+        </span>
         {mode === "draw" && outline.length >= 3 && (
           <Button variant="ghost" onClick={ed.closeOutline}>
             סגירת הצורה
           </Button>
         )}
+
+        <div className="h-6 w-px bg-border" />
 
         <Button onClick={save} disabled={!canSave}>
           שמירת האולם
@@ -190,9 +245,26 @@ export function HallEditor({
             onUndo={ed.undo}
             onRedo={ed.redo}
             contextMenuItems={(point) => [
-              { label: "כניסה", icon: DoorOpen, disabled: outline.length < 3, onSelect: () => dropStructure("entrance", point) },
-              ...(stage ? [] : [{ label: "במה", icon: Presentation, onSelect: () => dropStructure("stage", point) }]),
-              { label: "עמדת בר", icon: Wine, onSelect: () => dropStructure("bar", point) },
+              {
+                label: "כניסה",
+                icon: DoorOpen,
+                disabled: outline.length < 3,
+                onSelect: () => dropStructure("entrance", point),
+              },
+              ...(stage
+                ? []
+                : [
+                    {
+                      label: "במה",
+                      icon: Presentation,
+                      onSelect: () => dropStructure("stage", point),
+                    },
+                  ]),
+              {
+                label: "עמדת בר",
+                icon: Wine,
+                onSelect: () => dropStructure("bar", point),
+              },
             ]}
           />
           {selected && (
