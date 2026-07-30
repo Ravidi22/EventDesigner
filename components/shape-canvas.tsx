@@ -26,6 +26,7 @@ import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
+import { StyleFields } from "@/components/style-fields";
 import type { SelectedRef } from "@/lib/studio/use-outline-editor";
 
 export type StructureDragType = "entrance" | "stage" | "bar";
@@ -1388,6 +1389,7 @@ export function SelectionInspector({
         <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(stage.depthMm)} onChange={(cm) => onUpdateStage({ depthMm: cm * 10 })} className="w-24" />
         <NumberField layout="inline" label="גובה במה (ס״מ)" decimals={0} min={0} value={mmToCm(stage.heightMm)} onChange={(cm) => onUpdateStage({ heightMm: cm * 10 })} className="w-24" />
         {rotationField(stage.rotationDeg ?? 0, (deg) => onUpdateStage({ rotationDeg: deg }))}
+        <StyleFields style={stage.style} onChange={(style) => onUpdateStage({ style })} strokeWidthDefault={1.5} />
         <Button variant="danger" onClick={onRemoveStage}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           הסרה
@@ -1423,6 +1425,7 @@ export function SelectionInspector({
         )}
         <NumberField layout="inline" label="גובה (ס״מ)" decimals={0} min={0} value={mmToCm(b.heightMm)} onChange={(cm) => onUpdateBar(b.id, { heightMm: cm * 10 })} className="w-24" />
         {rotationField(b.rotationDeg ?? 0, (deg) => onUpdateBar(b.id, { rotationDeg: deg }))}
+        <StyleFields style={b.style} onChange={(style) => onUpdateBar(b.id, { style })} strokeWidthDefault={1.5} />
         <Button variant="danger" onClick={() => onRemoveBar(b.id)}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           מחיקה

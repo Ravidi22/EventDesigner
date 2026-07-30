@@ -208,6 +208,7 @@ export function StudioScreen() {
                 onDelete={deleteSelection}
                 onSmartApply={smartApply}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
+                onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicateTable={duplicateTable}
               />
             </div>
