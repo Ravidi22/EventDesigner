@@ -16,6 +16,7 @@ import { Button } from "@/components/button";
 import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
+import { DateField } from "@/components/date-field";
 import { fieldLabelClassName } from "@/components/control";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
@@ -212,7 +213,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
         <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
         <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
         <div className="grid grid-cols-2 gap-4">
-          <TextField label="תאריך האירוע" type="date" value={date} onChange={setDate} className="nums" />
+          <DateField label="תאריך האירוע" value={date} onChange={setDate} />
           <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
         </div>
         <div>
