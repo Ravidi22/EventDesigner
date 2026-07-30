@@ -1,4 +1,4 @@
-type Tone = "gradient" | "mono" | "on-dark" | "gold" | "outline";
+type Tone = "gradient" | "solid" | "mono" | "on-dark" | "gold" | "outline";
 
 // The dot is always the focal accent — light violet on light grounds, gold on dark.
 const tones: Record<Tone, { word: string; dot: string }> = {
@@ -6,6 +6,8 @@ const tones: Record<Tone, { word: string; dot: string }> = {
     word: "bg-[linear-gradient(135deg,#8f78d8,#6d55bd)] bg-clip-text text-transparent",
     dot: "text-indigo-500 [-webkit-text-fill-color:#8f78d8]",
   },
+  // Flat two-tone read (no gradient fill) — word in the primary accent, dot a shade lighter.
+  solid: { word: "text-accent", dot: "text-indigo-500" },
   mono: { word: "text-accent", dot: "text-accent" },
   "on-dark": { word: "text-canvas", dot: "text-gold" },
   gold: { word: "text-warn", dot: "text-indigo-500" },
