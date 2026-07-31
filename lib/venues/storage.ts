@@ -80,3 +80,14 @@ export function renameVenue(id: string, name: string): Venue[] {
   saveVenues(next);
   return next;
 }
+
+// Deterministic per-venue color, for calendar/timeline surfaces that need to distinguish
+// venues by color alongside (not instead of) their name — cycles through existing design-
+// system swatches (globals.css @theme) rather than introducing new hues.
+const VENUE_SWATCHES = ["bg-accent", "bg-success", "bg-warn", "bg-magenta", "bg-indigo-300", "bg-peach"];
+export function venueSwatchClass(venueId: string | undefined): string {
+  if (!venueId) return "bg-faint";
+  let hash = 0;
+  for (let i = 0; i < venueId.length; i++) hash = (hash * 31 + venueId.charCodeAt(i)) >>> 0;
+  return VENUE_SWATCHES[hash % VENUE_SWATCHES.length];
+}

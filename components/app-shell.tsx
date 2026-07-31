@@ -179,16 +179,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             </IconButton>
             <Link
               href="/meeting?new"
-              style={{
-                backgroundImage:
-                  "linear-gradient(to bottom, rgb(255 255 255 / 0.3), rgb(255 255 255 / 0) 55%), " +
-                  "radial-gradient(65% 100% at 100% 0%, rgb(234 184 135 / 0.5) 0%, transparent 60%), " +
-                  "radial-gradient(60% 90% at 0% 100%, rgb(199 127 196 / 0.35) 0%, transparent 65%), " +
-                  "linear-gradient(150deg, #8b6fd6, #6d55bd)",
-              }}
-              className="grain relative isolate inline-flex items-center overflow-hidden rounded-pill px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-all hover:brightness-110"
+              className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
             >
-              <span className="relative z-10">+ יצירת אירוע חדש</span>
+              + יצירת אירוע חדש
             </Link>
           </div>
         </header>
