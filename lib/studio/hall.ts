@@ -59,6 +59,7 @@ export interface Hall {
   heightMm: number; // bounding box
   outline?: Point[]; // true room polygon in mm; absent (old saved halls) falls back to the width×height rectangle
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight wall
+  lockedEdges?: boolean[]; // per-edge length lock, aligned to outline; absent/false = free to resize
   ceilingHeightMm: number;
   columns: Column[];
   entrances: Entrance[];

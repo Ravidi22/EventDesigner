@@ -314,8 +314,121 @@ export function nearestWallToPoint(outline: Point[], p: Point): { edgeIdx: numbe
   return { edgeIdx: best.edgeIdx, distanceMm: best.distanceMm };
 }
 
-// Doors render as a plain opening (a gap cut in the wall) — no swing leaf/arc symbol. The gap's
-// two ends are just pointAtDistance(distance ± widthMm/2) along the wall.
+export interface DoorLeaf {
+  hinge: Point; // jamb the leaf swings from
+  tip: Point; // open end of the leaf
+  arcTo: Point; // where the swing arc meets the wall (or, for a double door, the other leaf)
+  lenMm: number; // leaf length — also the swing arc's radius
+  sweepFlag: 0 | 1;
+}
+
+export interface DoorGeometry {
+  gapStart: Point;
+  gapEnd: Point;
+  leaves: DoorLeaf[]; // 1 for a single door, 2 for a double door (most event-hall entrances)
+}
+
+function doorLeaf(hinge: Point, arcTo: Point, leafLenMm: number, swx: number, swy: number, ux: number, uy: number): DoorLeaf {
+  return {
+    hinge,
+    tip: { x: hinge.x + swx * leafLenMm, y: hinge.y + swy * leafLenMm },
+    arcTo,
+    lenMm: leafLenMm,
+    sweepFlag: swx * uy - swy * ux > 0 ? 1 : 0,
+  };
+}
+
+// Classic architectural door symbol: a gap cut in the wall, one or two leaves swung open 90°, and
+// a quarter-circle arc tracing each swing. `interiorHint` (e.g. the outline's centroid) resolves
+// which side of the wall is "inward" so swingInward is meaningful regardless of wall winding
+// direction. A double door splits the opening into two equal leaves hinged at each jamb, both
+// swinging the same way and meeting in the middle — the common case for an event-hall entrance.
+export function doorGeometry(a: Point, b: Point, distanceMm: number, widthMm: number, swingInward: boolean, interiorHint: Point, doubleDoor = false): DoorGeometry {
+  const len = wallLengthMm(a, b) || 1;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const nx = -uy;
+  const ny = ux;
+  const midX = (a.x + b.x) / 2;
+  const midY = (a.y + b.y) / 2;
+  const normalPointsInward = (interiorHint.x - midX) * nx + (interiorHint.y - midY) * ny > 0;
+  const sign = normalPointsInward === swingInward ? 1 : -1;
+  const swx = nx * sign;
+  const swy = ny * sign;
+  const half = widthMm / 2;
+  const gapStart = pointAtDistance(a, b, distanceMm - half);
+  const gapEnd = pointAtDistance(a, b, distanceMm + half);
+  if (!doubleDoor) {
+    return { gapStart, gapEnd, leaves: [doorLeaf(gapStart, gapEnd, widthMm, swx, swy, ux, uy)] };
+  }
+  const mid = pointAtDistance(a, b, distanceMm);
+  return {
+    gapStart,
+    gapEnd,
+    leaves: [doorLeaf(gapStart, mid, half, swx, swy, ux, uy), doorLeaf(gapEnd, mid, half, swx, swy, -ux, -uy)],
+  };
+}
+
+// --- Locked-length walls ---
+// A locked wall behaves like a rigid rod: dragging (or numerically reshaping) either endpoint may
+// still move it, but the two endpoints must stay exactly wallLengthMm(a,b) apart — the length a
+// designer dialled in on purpose must never drift as a side effect of editing a neighbouring wall.
+// `lockedEdges[i]` locks the wall from outline[i] to outline[(i+1)%n].
+
+// The point on a circle nearest `target` — where a single locked wall pins its free endpoint.
+function nearestPointOnCircle(center: Point, radius: number, target: Point): Point {
+  const dx = target.x - center.x;
+  const dy = target.y - center.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-9) return { x: center.x + radius, y: center.y }; // target sits exactly on the centre — any direction is as good as another
+  return { x: center.x + (dx / dist) * radius, y: center.y + (dy / dist) * radius };
+}
+
+// Standard two-circle intersection: 0 points when they don't reach each other or one sits wholly
+// inside the other, 1 when they're exactly tangent, 2 otherwise.
+function circleIntersections(c0: Point, r0: number, c1: Point, r1: number): Point[] {
+  const dx = c1.x - c0.x;
+  const dy = c1.y - c0.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-9 || d > r0 + r1 || d < Math.abs(r0 - r1)) return [];
+  const a = (r0 * r0 - r1 * r1 + d * d) / (2 * d);
+  const h2 = r0 * r0 - a * a;
+  const h = h2 > 0 ? Math.sqrt(h2) : 0;
+  const mx = c0.x + (a * dx) / d;
+  const my = c0.y + (a * dy) / d;
+  const rx = -dy * (h / d);
+  const ry = dx * (h / d);
+  if (h < 1e-9) return [{ x: mx, y: my }];
+  return [{ x: mx + rx, y: my + ry }, { x: mx - rx, y: my - ry }];
+}
+
+// Clamps a proposed new position for outline vertex `idx` so every locked wall touching it keeps
+// its original length. An unlocked neighbour imposes no constraint at all. A vertex pinned between
+// two locked walls has to land on one of their (up to two) intersection points — whichever sits
+// closer to what was actually asked for — or, if the two locked lengths can no longer meet at all,
+// stays exactly where it already was rather than jumping somewhere the drag never suggested.
+export function constrainVertexToLocks(outline: Point[], idx: number, proposed: Point, lockedEdges: boolean[]): Point {
+  const n = outline.length;
+  const prevIdx = (idx - 1 + n) % n;
+  const prevLocked = !!lockedEdges[prevIdx];
+  const nextLocked = !!lockedEdges[idx];
+  if (!prevLocked && !nextLocked) return proposed;
+  const prev = outline[prevIdx];
+  const next = outline[(idx + 1) % n];
+  if (prevLocked && nextLocked) {
+    const options = circleIntersections(prev, wallLengthMm(prev, outline[idx]), next, wallLengthMm(outline[idx], next));
+    if (options.length === 0) return outline[idx];
+    let best = options[0];
+    let bestD = Infinity;
+    for (const o of options) {
+      const d = wallLengthMm(o, proposed);
+      if (d < bestD) { bestD = d; best = o; }
+    }
+    return best;
+  }
+  if (prevLocked) return nearestPointOnCircle(prev, wallLengthMm(prev, outline[idx]), proposed);
+  return nearestPointOnCircle(next, wallLengthMm(outline[idx], next), proposed);
+}
 
 // --- Rotation (stage/bar resize+rotate handles) ---
 export function toLocalFrame(p: Point, center: Point, rotationDeg: number): Point {
@@ -451,6 +564,31 @@ if ((import.meta as { main?: boolean }).main) {
   const bowed = bulgeToCurve(a, b, { x: 500, y: 200 });
   const full = wallSegmentD(a, b, bowed, 0, 1);
   assert(full.startsWith("M 0 0 C ") && full.endsWith(" 1000 0"), "full-range slice of a bowed wall keeps its two vertices");
+
+  const door = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 });
+  assert(Math.abs(wallLengthMm(door.gapStart, door.gapEnd) - 900) < 1e-6, "door gap spans the door width");
+  assert(door.leaves.length === 1, "doorGeometry defaults to a single leaf");
+  assert(Math.abs(wallLengthMm(door.gapStart, door.leaves[0].tip) - 900) < 1e-6, "single-door leaf length equals the door width");
+  assert(door.leaves[0].tip.y > 0, "swingInward toward a centroid below the wall opens the leaf downward");
+
+  const doubleDoor = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 }, true);
+  assert(doubleDoor.leaves.length === 2, "doubleDoor produces two leaves");
+  assert(Math.abs(wallLengthMm(doubleDoor.leaves[0].hinge, doubleDoor.leaves[0].tip) - 450) < 1e-6, "each double-door leaf is half the opening width");
+  assert(Math.abs(wallLengthMm(doubleDoor.leaves[1].hinge, doubleDoor.leaves[1].tip) - 450) < 1e-6, "the second leaf matches the first in length");
+  const doorMid = pointAtDistance(a, b, 500);
+  assert(Math.abs(doubleDoor.leaves[0].arcTo.x - doorMid.x) < 1e-6 && Math.abs(doubleDoor.leaves[1].arcTo.x - doorMid.x) < 1e-6, "both double-door leaves swing to meet at the opening's midpoint");
+
+  // Locked walls: a vertex with one locked neighbour is pinned to that wall's original length.
+  const lockSquare: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 0, y: 1000 }];
+  const oneLock = [true, false, false, false]; // wall 0 (vertex0→vertex1) is locked at length 1000
+  const pinnedByPrev = constrainVertexToLocks(lockSquare, 1, { x: 1400, y: 300 }, oneLock);
+  assert(Math.abs(wallLengthMm(lockSquare[0], pinnedByPrev) - 1000) < 1e-6, "dragging the far end of a locked wall keeps its length");
+  const untouched = constrainVertexToLocks(lockSquare, 2, { x: 1900, y: 900 }, oneLock);
+  assert(untouched.x === 1900 && untouched.y === 900, "a vertex with no locked neighbour drags freely");
+  const twoLocks = [true, true, false, false]; // both walls into/out of vertex1 are locked
+  const pinnedByBoth = constrainVertexToLocks(lockSquare, 1, { x: 1400, y: 300 }, twoLocks);
+  assert(Math.abs(wallLengthMm(lockSquare[0], pinnedByBoth) - 1000) < 1e-6 && Math.abs(wallLengthMm(pinnedByBoth, lockSquare[2]) - 1000) < 1e-6, "a vertex pinned between two locked walls keeps both their lengths");
+  assert(circleIntersections({ x: 0, y: 0 }, 10, { x: 1000, y: 0 }, 10).length === 0, "circleIntersections reports no solution when the circles can't reach each other");
 
   const localPt = toLocalFrame({ x: 100, y: 0 }, { x: 0, y: 0 }, 90);
   assert(Math.abs(localPt.x) < 1e-9 && Math.abs(localPt.y + 100) < 1e-9, "toLocalFrame undoes a 90° rotation");

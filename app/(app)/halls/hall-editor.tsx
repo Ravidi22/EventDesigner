@@ -39,11 +39,12 @@ export function HallEditor({
   const ed = useOutlineEditor({
     outline: draft.hall.outline,
     edgeCurves: draft.hall.edgeCurves,
+    lockedEdges: draft.hall.lockedEdges,
     entrances: draft.hall.entrances,
     stage: draft.hall.stage,
     bars: draft.hall.bars,
   });
-  const { mode, outline, edgeCurves, entrances, stage, bars, selected } = ed;
+  const { mode, outline, edgeCurves, lockedEdges, entrances, stage, bars, selected } = ed;
   const {
     setSelected,
     removeVertex,
@@ -51,6 +52,7 @@ export function HallEditor({
     removeStage,
     removeBar,
     removeLastVertex,
+    removeSelection,
   } = ed;
 
   const isNew = !loadTemplates().some((t) => t.id === draft.id);
@@ -104,7 +106,7 @@ export function HallEditor({
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget()) return;
       if (e.key === "Escape") {
-        if (mode !== "draw") setSelected(null);
+        if (mode !== "draw") setSelected([]);
         return;
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -113,25 +115,13 @@ export function HallEditor({
         e.preventDefault();
         return;
       }
-      if (!selected) return;
+      if (selected.length === 0) return;
       e.preventDefault();
-      if (selected.kind === "vertex") removeVertex(Number(selected.id));
-      else if (selected.kind === "entrance") removeEntrance(selected.id);
-      else if (selected.kind === "stage") removeStage();
-      else if (selected.kind === "bar") removeBar(selected.id);
+      removeSelection(selected);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [
-    mode,
-    selected,
-    setSelected,
-    removeVertex,
-    removeEntrance,
-    removeStage,
-    removeBar,
-    removeLastVertex,
-  ]);
+  }, [mode, selected, setSelected, removeSelection, removeLastVertex]);
 
   const buildHall = (): Hall => {
     const xs = outline.map((p) => p.x);
@@ -144,6 +134,7 @@ export function HallEditor({
       heightMm: Math.max(...ys) - minY,
       outline: outline.map(shift),
       edgeCurves,
+      lockedEdges,
       ceilingHeightMm: Math.max(0, ceilingM) * 1000,
       columns: draft.hall.columns.map((c) => ({ ...c, ...shift(c) })), // preserved as-is (עמודים are no longer editable here)
       entrances, // wall-relative (wallIndex + distanceMm along the chord) — translation-invariant
@@ -223,22 +214,28 @@ export function HallEditor({
             mode={mode}
             outline={outline}
             edgeCurves={edgeCurves}
+            lockedEdges={lockedEdges}
             columns={draft.hall.columns}
             entrances={entrances}
             stage={stage}
             bars={bars}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={(ref) => setSelected(ref ? [ref] : [])}
+            onToggleSelect={ed.toggleSelected}
+            onSelectMany={ed.selectMany}
             onAddVertex={ed.addVertex}
             onCloseOutline={ed.closeOutline}
             onCancelDraw={() => ed.setAll({ outline: [], edgeCurves: [] })}
             onMoveVertex={ed.moveVertex}
             onMoveWallHandle={ed.moveWallHandle}
+            onMoveSelection={ed.moveSelection}
+            onRotateFixtureGroup={ed.rotateFixtureGroup}
             onMoveEntrance={ed.moveEntrance}
             onMoveStage={(p) => ed.updateStage({ x: p.x, y: p.y })}
             onMoveBar={(id, p) => ed.updateBar(id, { x: p.x, y: p.y })}
             onUpdateStage={ed.updateStage}
             onUpdateBar={ed.updateBar}
+            onToggleWallLock={ed.toggleWallLock}
             onCommit={ed.commit}
             canUndo={ed.canUndo}
             canRedo={ed.canRedo}
@@ -267,13 +264,14 @@ export function HallEditor({
               },
             ]}
           />
-          {selected && (
+          {selected.length > 0 && (
             <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
               <div className="pointer-events-auto">
                 <SelectionInspector
                   selected={selected}
                   outline={outline}
                   edgeCurves={edgeCurves}
+                  lockedEdges={lockedEdges}
                   entrances={entrances}
                   stage={stage}
                   bars={bars}
@@ -284,11 +282,13 @@ export function HallEditor({
                   onRemoveStage={removeStage}
                   onRemoveBar={removeBar}
                   onRemoveVertex={removeVertex}
+                  onRemoveSelection={removeSelection}
                   onInsertVertexOnWall={ed.insertVertexOnWall}
                   onSetWallLength={ed.setWallLength}
                   onSetWallAngle={ed.setWallAngle}
                   onSetWallBulgeDepth={ed.setWallBulgeDepth}
-                  onClose={() => setSelected(null)}
+                  onToggleWallLock={ed.toggleWallLock}
+                  onClose={() => setSelected([])}
                 />
               </div>
             </div>

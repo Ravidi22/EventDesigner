@@ -1,12 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Maximize, Minus, Plus, Redo2, Ruler, Trash2, Undo2, X, type LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  CircleDot,
+  DoorOpen,
+  GlassWater,
+  Layers,
+  Lock,
+  Maximize,
+  Minus,
+  Plus,
+  Presentation,
+  Redo2,
+  Ruler,
+  SeparatorHorizontal,
+  Trash2,
+  Undo2,
+  Unlock,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import type { Point, EdgeCurve, Entrance, Fixture, FixtureShape, Column } from "@/lib/studio/hall";
 import {
   edgePathD,
   edgeMidpoint,
   absoluteControlPoints,
+  doorGeometry,
   wallLengthMm,
   wallAngleDeg,
   bulgeDepthMm,
@@ -27,7 +46,7 @@ import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
 import { StyleFields } from "@/components/style-fields";
-import type { SelectedRef } from "@/lib/studio/use-outline-editor";
+import type { SelectedKind, SelectedRef } from "@/lib/studio/use-outline-editor";
 
 export type StructureDragType = "entrance" | "stage" | "bar";
 
@@ -97,6 +116,13 @@ function nudge(e: React.KeyboardEvent, x: number, y: number, onMove: (p: Point) 
 // onMove re-renders the host, which rebuilds these handlers mid-gesture — the origin has to outlive
 // that. Module scope is safe because a pointerId identifies one gesture at a time.
 const pressOrigin = new Map<number, { x: number; y: number; dragging: boolean }>();
+// Set when a gesture crosses the drag threshold, so the click event that always follows its
+// pointerup (browsers fire pointerdown → pointerup → click for one press) can skip re-running
+// selection logic. Without this, dragging an already-multi-selected item would re-fire "select just
+// me" the instant the drag ends, undoing the very group the drag just moved. Not pointerId-keyed:
+// this file only ever has one live drag-then-click sequence in flight at a time (a single pointer),
+// the same assumption pan/marquee already make with their own un-keyed refs.
+let suppressNextClick = false;
 
 // Pointer-drag in SVG user-space (mm), via getScreenCTM — robust to zoom/resize/RTL, unlike a
 // manually-tracked px-per-mm factor, and unaffected by any nested rotate() transform since it
@@ -109,10 +135,15 @@ const pressOrigin = new Map<number, { x: number; y: number; dragging: boolean }>
 // The same crossing is what tells the host's history where one gesture ends: onCommit fires once
 // per press that actually moved something, so a drag of fifty onMove calls is one undo step. A
 // press that never crossed the threshold changed nothing and stays silent.
+//
+// onSelect fires twice per plain click — once on pointerdown (so an unselected item you start
+// dragging shows as selected immediately, not just once you let go) and once on click (the only
+// signal for "this was just a click, no drag") — tagged with which phase it was, so a caller that
+// cares (multi-select) can tell them apart; one that doesn't (a plain click-to-select) can ignore it.
 function dragHandlers(
   clientToMm: (clientX: number, clientY: number) => Point,
   onMove: (p: Point, mods: { alt: boolean }) => void,
-  onSelect?: () => void,
+  onSelect?: (mods: { shift: boolean; phase: "press" | "click" }) => void,
   onDragChange?: (dragging: boolean) => void,
   onCommit?: () => void,
 ) {
@@ -122,6 +153,7 @@ function dragHandlers(
     if (pressOrigin.get(e.pointerId)?.dragging) {
       onDragChange?.(false);
       onCommit?.();
+      suppressNextClick = true;
     }
     pressOrigin.delete(e.pointerId);
   };
@@ -130,7 +162,9 @@ function dragHandlers(
       e.stopPropagation();
       (e.currentTarget as Element).setPointerCapture(e.pointerId);
       pressOrigin.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false });
-      onSelect?.();
+      // A shift-press never selects here — only the click phase toggles (see onClick), so a
+      // press+drag combined with shift reads as "drag", not "drag *and* toggle twice".
+      if (!e.shiftKey) onSelect?.({ shift: false, phase: "press" });
     },
     onPointerMove: (e: React.PointerEvent) => {
       if (e.buttons !== 1) return;
@@ -147,7 +181,11 @@ function dragHandlers(
     onPointerCancel: end,
     onClick: (e: React.MouseEvent) => {
       e.stopPropagation();
-      onSelect?.();
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      onSelect?.({ shift: e.shiftKey, phase: "click" });
     },
   };
 }
@@ -160,22 +198,28 @@ export function ShapeCanvas({
   mode,
   outline,
   edgeCurves,
+  lockedEdges = [],
   columns = [],
   entrances = [],
   stage,
   bars = [],
   selected,
   onSelect,
+  onToggleSelect,
+  onSelectMany,
   onAddVertex,
   onCloseOutline,
   onCancelDraw,
   onMoveVertex,
   onMoveWallHandle,
+  onMoveSelection,
+  onRotateFixtureGroup,
   onMoveEntrance,
   onMoveStage,
   onMoveBar,
   onUpdateStage,
   onUpdateBar,
+  onToggleWallLock,
   onCommit,
   canUndo = false,
   canRedo = false,
@@ -189,22 +233,33 @@ export function ShapeCanvas({
   mode: "draw" | "edit";
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
+  lockedEdges?: boolean[]; // per-wall length lock, aligned to outline — see lib/studio/geometry's constrainVertexToLocks
   columns?: Column[];
   entrances?: Entrance[];
   stage?: Fixture | undefined;
   bars?: Fixture[];
-  selected: SelectedRef | null;
+  // A plain click replaces the selection (or clears it with null); shift-click toggles one ref via
+  // onToggleSelect, and a marquee drag reports every ref it caught via onSelectMany. Walls sit
+  // outside all of this — they stay single-select only (see the group-drag/rotate notes below).
+  selected: SelectedRef[];
   onSelect: (ref: SelectedRef | null) => void;
+  onToggleSelect?: (ref: SelectedRef) => void;
+  onSelectMany?: (refs: SelectedRef[], additive: boolean) => void;
   onAddVertex: (p: Point) => void;
   onCloseOutline: () => void;
   onCancelDraw?: () => void; // Escape while drawing — the host throws the in-progress outline away
   onMoveVertex: (idx: number, p: Point) => void;
   onMoveWallHandle: (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => void;
+  // Fires once per pointermove during a group drag/rotate — every selected ref's next absolute
+  // point (or, for rotate, position+facing), batched so the host coalesces it into one undo entry.
+  onMoveSelection?: (moves: { ref: SelectedRef; point: Point }[]) => void;
+  onRotateFixtureGroup?: (updates: { id: string; x: number; y: number; rotationDeg: number }[]) => void;
   onMoveEntrance?: (id: string, p: Point) => void;
   onMoveStage?: (p: Point) => void;
   onMoveBar?: (id: string, p: Point) => void;
   onUpdateStage?: (patch: Partial<Fixture>) => void;
   onUpdateBar?: (id: string, patch: Partial<Fixture>) => void;
+  onToggleWallLock?: (edgeIdx: number) => void;
   // End of a gesture — one drag, however many onMove calls it made. The host closes its history
   // entry here; discrete edits (a placed vertex, a deleted door) need no such marker.
   onCommit?: () => void;
@@ -247,6 +302,21 @@ export function ShapeCanvas({
   const followed = useRef(0); // outline length the view last chased, so a point is only followed once
   const pan = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const panMoved = useRef(false); // outlives the pan itself, so the click that ends one can't also drop a vertex
+  // Marquee (rubber-band) select: a drag started on empty canvas in edit mode. Corners are tracked
+  // in mm (via clientToMm) so the live rectangle renders directly in SVG user space; the client-px
+  // anchor is kept alongside just to gate the same DRAG_THRESHOLD_PX a click needs to become a drag.
+  const marquee = useRef<{ anchorClientX: number; anchorClientY: number; x0: number; y0: number; x1: number; y1: number; moved: boolean } | null>(null);
+  const marqueeMoved = useRef(false); // mirrors panMoved — the click that ends a marquee drag mustn't also clear the selection
+  const [marqueeBox, setMarqueeBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // One live group-drag gesture: every selected ref's drag-start position, snapshotted the moment
+  // the drag crosses the threshold, so the whole group is re-derived each frame from one shared
+  // delta off a fixed origin rather than drifting from repeated relative nudges.
+  const groupDrag = useRef<{ start: Point; snapshot: { ref: SelectedRef; origin: Point }[] } | null>(null);
+  // A live group-rotate gesture: the pivot and every member's starting position/facing, frozen at
+  // the moment the drag crosses the threshold — the angle lock snaps the *sweep* (how far the
+  // pointer has turned since then) to a step, not each member's absolute final facing, so a locked
+  // group rotation is a clean shared turn rather than each fixture landing on its own nearest step.
+  const groupRotate = useRef<{ pivot: Point; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
 
   const showDims = dimsOverride ?? mode === "draw";
 
@@ -339,6 +409,109 @@ export function ShapeCanvas({
   const fixtureRefs = (excludeId?: string): Point[] =>
     [stage, ...bars].filter((f): f is Fixture => !!f && f.id !== excludeId).map((f) => ({ x: f.x, y: f.y }));
 
+  // --- multi-select -----------------------------------------------------------------------------
+  const isSel = (kind: SelectedKind, id: string) => selected.some((r) => r.kind === kind && r.id === id);
+  // Every selectable ref's current world position — used to snapshot a group drag's origin and to
+  // hit-test a marquee rectangle. Walls are excluded (see the props doc): they have no single point
+  // to test, and take no part in group drag/rotate/delete.
+  const posOf = (ref: SelectedRef): Point | null => {
+    if (ref.kind === "vertex") return outline[Number(ref.id)] ?? null;
+    if (ref.kind === "entrance") {
+      const en = entrances.find((e) => e.id === ref.id);
+      if (!en) return null;
+      const a = outline[en.wallIndex];
+      const b = outline[(en.wallIndex + 1) % outline.length];
+      return a && b ? pointAtDistance(a, b, en.distanceMm) : null;
+    }
+    if (ref.kind === "stage") return stage ? { x: stage.x, y: stage.y } : null;
+    if (ref.kind === "bar") {
+      const b = bars.find((x) => x.id === ref.id);
+      return b ? { x: b.x, y: b.y } : null;
+    }
+    return null;
+  };
+  // A ref's full extent, not just its centre — the group selection outline sizes itself off this,
+  // so it actually surrounds a rotated fixture's corners instead of shrinking to the single point
+  // posOf tracks (which is all a group *drag* needs, since every member just carries the same delta).
+  const boundsOf = (ref: SelectedRef): Point[] => {
+    if (ref.kind === "vertex") {
+      const p = outline[Number(ref.id)];
+      return p ? [p] : [];
+    }
+    if (ref.kind === "entrance") {
+      const en = entrances.find((e) => e.id === ref.id);
+      if (!en) return [];
+      const a = outline[en.wallIndex];
+      const b = outline[(en.wallIndex + 1) % outline.length];
+      if (!a || !b) return [];
+      const half = en.widthMm / 2;
+      return [pointAtDistance(a, b, en.distanceMm - half), pointAtDistance(a, b, en.distanceMm + half)];
+    }
+    const f = ref.kind === "stage" ? stage : bars.find((x) => x.id === ref.id);
+    if (!f) return [];
+    const halfW = f.widthMm / 2;
+    const halfD = (f.shape === "circle" ? f.widthMm : f.depthMm) / 2;
+    const rot = f.rotationDeg ?? 0;
+    const center = { x: f.x, y: f.y };
+    return [
+      { x: -halfW, y: -halfD },
+      { x: halfW, y: -halfD },
+      { x: halfW, y: halfD },
+      { x: -halfW, y: halfD },
+    ].map((c) => fromLocalFrame(c, center, rot));
+  };
+  const collectMarqueeHits = (box: { minX: number; minY: number; maxX: number; maxY: number }): SelectedRef[] => {
+    const inBox = (p: Point) => p.x >= box.minX && p.x <= box.maxX && p.y >= box.minY && p.y <= box.maxY;
+    const hits: SelectedRef[] = [];
+    outline.forEach((v, i) => {
+      if (inBox(v)) hits.push({ kind: "vertex", id: String(i) });
+    });
+    entrances.forEach((en) => {
+      const p = posOf({ kind: "entrance", id: en.id });
+      if (p && inBox(p)) hits.push({ kind: "entrance", id: en.id });
+    });
+    if (stage && inBox({ x: stage.x, y: stage.y })) hits.push({ kind: "stage", id: stage.id });
+    bars.forEach((b) => {
+      if (inBox({ x: b.x, y: b.y })) hits.push({ kind: "bar", id: b.id });
+    });
+    return hits;
+  };
+  // When the item a drag started on is part of a live multi-selection, every member translates
+  // together by the same raw delta off its own drag-start position — no smart alignment guides
+  // during a group drag, just a plain shared offset — instead of only the one item under the
+  // pointer. Falls back to the ordinary single-item move (with its own snapping) the rest of the
+  // time, which is also what keeps a lone selection's drag exactly as precise as it always was.
+  const makeGroupAwareMove = (ref: SelectedRef, singleMove: (p: Point) => void): ((p: Point) => void) => {
+    if (selected.length <= 1 || !isSel(ref.kind, ref.id) || !onMoveSelection) return singleMove;
+    return (p) => {
+      if (!groupDrag.current) {
+        const snapshot = selected
+          .map((r) => ({ ref: r, origin: posOf(r) }))
+          .filter((s): s is { ref: SelectedRef; origin: Point } => !!s.origin);
+        groupDrag.current = { start: p, snapshot };
+      }
+      const { start, snapshot } = groupDrag.current;
+      const dx = p.x - start.x;
+      const dy = p.y - start.y;
+      onMoveSelection(snapshot.map((s) => ({ ref: s.ref, point: { x: s.origin.x + dx, y: s.origin.y + dy } })));
+    };
+  };
+  const endGroupDrag = () => {
+    groupDrag.current = null;
+    onCommit?.();
+  };
+  // Shift always toggles. A plain press on an item that's already part of a live multi-selection
+  // is left alone — dragHandlers' "press" phase would otherwise collapse the group to just this
+  // one item before a group-drag even gets a chance to start (see makeGroupAwareMove, which needs
+  // selected.length > 1 to still be true once the drag begins). The *click* phase (a press that
+  // never turned into a drag) isn't given the same pass, so clicking — not dragging — one member of
+  // a selection still does the ordinary thing and collapses down to just that item.
+  const selectOrPreserveGroup = (ref: SelectedRef) => (mods: { shift: boolean; phase: "press" | "click" }) => {
+    if (mods.shift) { onToggleSelect?.(ref); return; }
+    if (mods.phase === "press" && selected.length > 1 && isSel(ref.kind, ref.id)) return;
+    onSelect(ref);
+  };
+
   // Dragging: alignment pull only (see lib/studio/snap.ts), and remember the matched x/y so the
   // accent guide lines can be drawn.
   const snapDrag = (p: Point, opts?: { fixtureId?: string; vertexIdx?: number }): Point => {
@@ -353,7 +526,7 @@ export function ShapeCanvas({
     return r.point;
   };
 
-  // Drawing: the same references plus the 15°/ortho lock off the previous vertex. Kept pure and
+  // Drawing: the same references plus the 5°/ortho lock off the previous vertex. Kept pure and
   // re-derived every render (rather than stored) so pressing Alt updates the preview immediately.
   const drawAnchor = mode === "draw" && outline.length > 0 ? outline[outline.length - 1] : null;
   const snapDraw = (p: Point, releaseAngle: boolean): SnapResult =>
@@ -371,6 +544,9 @@ export function ShapeCanvas({
   const pendingAngleDeg = pending && drawAnchor ? wallAngleDeg(drawAnchor, pending.point) : 0;
   const closable = mode === "draw" && outline.length >= 3;
   const shownGuides = mode === "draw" ? (pending?.guides ?? { x: null, y: null }) : guides;
+  // Which side of a wall reads as "inward", for a door's swing direction — the outline's own
+  // centroid, same reference point the old (and now-restored) doorGeometry always used.
+  const interiorHint = outline.length >= 3 ? polygonCentroid(outline) : { x: 0, y: 0 };
 
   // Commits the typed segment: exact length along the typed (or currently inferred) direction.
   const commitEntry = () => {
@@ -389,6 +565,7 @@ export function ShapeCanvas({
   const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (spaceHeld) return; // space is the pan modifier — never draw/select while it's down
     if (panMoved.current) return; // …nor on the click that closes a pan the user let go of space during
+    if (marqueeMoved.current) { marqueeMoved.current = false; return; } // …nor on the click that ends a marquee drag
     if (mode !== "draw") {
       onSelect(null);
       return;
@@ -423,7 +600,7 @@ export function ShapeCanvas({
     const down = (e: KeyboardEvent) => {
       if (isTypingTarget()) return; // the value box owns its own keys — Backspace there must not eat a vertex
       if (e.code === "Space") { e.preventDefault(); setSpaceHeld(true); return; }
-      // Alt is tracked in both modes — it releases the angle lock while drawing and the 15°
+      // Alt is tracked in both modes — it releases the angle lock while drawing and the 5°
       // rotation lock while editing. preventDefault keeps Chrome's menu bar out of it.
       if (e.key === "Alt") { e.preventDefault(); setAltHeld(true); return; }
       if (e.key === "+" || e.key === "=") { zoomByCenter(1 / 1.2); return; }
@@ -511,6 +688,12 @@ export function ShapeCanvas({
           e.preventDefault();
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           pan.current = { x: e.clientX, y: e.clientY, moved: false };
+        } else if (mode === "edit") {
+          // Reaching the svg's own onPointerDown at all means the press missed every handle (they
+          // all stopPropagation), so this is empty canvas — the start of a marquee, not a click yet.
+          (e.currentTarget as Element).setPointerCapture(e.pointerId);
+          const p = clientToMm(e.clientX, e.clientY);
+          marquee.current = { anchorClientX: e.clientX, anchorClientY: e.clientY, x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
         }
       }}
       onPointerMove={(e) => {
@@ -521,6 +704,13 @@ export function ShapeCanvas({
           setCenter((c) => ({ x: c.x - dx * mmPerPx, y: c.y - dy * mmPerPx }));
           return;
         }
+        if (marquee.current) {
+          const p = clientToMm(e.clientX, e.clientY);
+          const moved = marquee.current.moved || Math.hypot(e.clientX - marquee.current.anchorClientX, e.clientY - marquee.current.anchorClientY) >= DRAG_THRESHOLD_PX;
+          marquee.current = { ...marquee.current, x1: p.x, y1: p.y, moved };
+          setMarqueeBox(moved ? { x0: marquee.current.x0, y0: marquee.current.y0, x1: p.x, y1: p.y } : null);
+          return;
+        }
         if (e.altKey !== altHeld) setAltHeld(e.altKey); // the modifier can be pressed while the window was unfocused
         if (mode === "draw") setCursorRaw(clientToMm(e.clientX, e.clientY));
       }}
@@ -528,6 +718,16 @@ export function ShapeCanvas({
         if (pan.current) {
           (e.currentTarget as Element).releasePointerCapture(e.pointerId);
           panMoved.current = pan.current.moved;
+        } else if (marquee.current) {
+          (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+          if (marquee.current.moved) {
+            marqueeMoved.current = true;
+            const { x0, y0, x1, y1 } = marquee.current;
+            const hits = collectMarqueeHits({ minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) });
+            onSelectMany?.(hits, e.shiftKey);
+          }
+          marquee.current = null;
+          setMarqueeBox(null);
         }
         pan.current = null;
         setGuides({ x: null, y: null });
@@ -556,7 +756,7 @@ export function ShapeCanvas({
         if (mode === "draw" && i === outline.length - 1) return null; // no closing edge until the shape is closed
         const b = outline[(i + 1) % outline.length];
         const curve = edgeCurves[i] ?? null;
-        const isSelected = selected?.kind === "wall" && selected.id === String(i);
+        const isSelected = isSel("wall", String(i));
         const isHovered = hoverWall === i;
         const len = wallLengthMm(a, b) || 1;
         const doorsOnWall = entrances.filter((e) => e.wallIndex === i).sort((x, y) => x.distanceMm - y.distanceMm);
@@ -591,6 +791,11 @@ export function ShapeCanvas({
                 className="cursor-pointer"
                 onPointerEnter={() => setHoverWall(i)}
                 onPointerLeave={() => setHoverWall((h) => (h === i ? null : h))}
+                // Without this, the press bubbles past this path (it has no drag of its own) up to
+                // the svg's onPointerDown, which reads an untouched pointerdown as the start of a
+                // marquee — capturing the pointer there and leaving the wall's own click to fire
+                // (if at all) against the canvas background instead of this wall.
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect({ kind: "wall", id: String(i) });
@@ -601,8 +806,32 @@ export function ShapeCanvas({
         );
       })}
 
+      {/* Locked-wall badge — a small padlock below the wall's midpoint, so a locked length reads at
+          a glance without selecting the wall to check the inspector. Drawn as plain SVG primitives
+          rather than a nested icon component, matching how everything else on this canvas (doors,
+          vertices, handles) is built from basic shapes. */}
+      {mode === "edit" &&
+        outline.map((a, i) => {
+          if (!lockedEdges[i]) return null;
+          const b = outline[(i + 1) % outline.length];
+          const mid = edgeMidpoint(a, b, edgeCurves[i] ?? null);
+          const r = mm(6);
+          return (
+            <g key={i} transform={`translate(${mid.x} ${mid.y + mm(16)})`} className={isSel("wall", String(i)) ? "text-accent" : "text-ink-soft"}>
+              <rect x={-r} y={-r * 0.15} width={r * 2} height={r * 1.5} rx={r * 0.3} fill="currentColor" />
+              <path
+                d={`M ${-r * 0.55} ${-r * 0.15} V ${-r * 0.9} A ${r * 0.55} ${r * 0.55} 0 0 1 ${r * 0.55} ${-r * 0.9} V ${-r * 0.15}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={r * 0.35}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          );
+        })}
+
       {/* Rubber-band preview of the next wall — drawn to the *snapped* point, so the committed wall
-          is exactly the one on screen. It goes accent while the angle is locked to a 15° multiple. */}
+          is exactly the one on screen. It goes accent while the angle is locked to a 5° multiple. */}
       {drawAnchor && pending && (
         <>
           <line
@@ -630,7 +859,7 @@ export function ShapeCanvas({
           Illustrator scope a segment's handles. */}
       {mode === "edit" &&
         outline.map((a, i) => {
-          const isSelectedWall = selected?.kind === "wall" && selected.id === String(i);
+          const isSelectedWall = isSel("wall", String(i));
           if (!isSelectedWall && hoverWall !== i && dragWall !== i) return null;
           const b = outline[(i + 1) % outline.length];
           const curve = edgeCurves[i] ?? null;
@@ -681,8 +910,15 @@ export function ShapeCanvas({
         const closeTarget = closable && i === 0;
         const hot = closeTarget && hoverClose;
         const interactive = mode === "edit";
-        const selectedVertex = selected?.kind === "vertex" && selected.id === String(i);
-        const drag = dragHandlers(clientToMm, (p) => onMoveVertex(i, snapDrag(p, { vertexIdx: i })), () => onSelect({ kind: "vertex", id: String(i) }), undefined, onCommit);
+        const ref: SelectedRef = { kind: "vertex", id: String(i) };
+        const selectedVertex = isSel("vertex", String(i));
+        const drag = dragHandlers(
+          clientToMm,
+          makeGroupAwareMove(ref, (p) => onMoveVertex(i, snapDrag(p, { vertexIdx: i }))),
+          selectOrPreserveGroup(ref),
+          undefined,
+          endGroupDrag,
+        );
         return (
           <g
             key={i}
@@ -720,56 +956,160 @@ export function ShapeCanvas({
         );
       })}
 
-      {/* Entrances — a plain opening: the gap is already the absence of wall above; this just adds
-          the drag handle (slide along the wall) and the selection highlight. */}
+      {/* Entrances — the gap is already the absence of wall above; this adds the door leaf(s) +
+          swing arc (single/double, in/out — see doorGeometry), the drag handle to slide it along
+          the wall, and the selection highlight. */}
       {entrances.map((en) => {
         const a = outline[en.wallIndex];
         const b = outline[(en.wallIndex + 1) % outline.length];
         if (!a || !b) return null;
+        const ref: SelectedRef = { kind: "entrance", id: en.id };
         return (
           <EntranceDoor
             key={en.id}
             entrance={en}
             a={a}
             b={b}
-            selected={selected?.kind === "entrance" && selected.id === en.id}
-            onSelect={() => onSelect({ kind: "entrance", id: en.id })}
-            onMove={(p) => onMoveEntrance?.(en.id, p)}
-            onCommit={onCommit}
+            interiorHint={interiorHint}
+            selected={isSel("entrance", en.id)}
+            onSelect={selectOrPreserveGroup(ref)}
+            onMove={makeGroupAwareMove(ref, (p) => onMoveEntrance?.(en.id, p))}
+            onCommit={endGroupDrag}
             clientToMm={clientToMm}
             mm={mm}
           />
         );
       })}
-      {stage && (
-        <FixtureMarker
-          fixture={stage}
-          selected={selected?.kind === "stage"}
-          onSelect={() => onSelect({ kind: "stage", id: stage.id })}
-          onMove={(p) => onMoveStage?.(snapDrag(p, { fixtureId: stage.id }))}
-          onUpdate={(patch) => onUpdateStage?.(patch)}
-          onCommit={onCommit}
-          onRotating={setRotating}
-          altHeld={altHeld}
-          clientToMm={clientToMm}
-          mm={mm}
+      {stage && (() => {
+        const ref: SelectedRef = { kind: "stage", id: stage.id };
+        return (
+          <FixtureMarker
+            fixture={stage}
+            selected={isSel("stage", stage.id)}
+            onSelect={selectOrPreserveGroup(ref)}
+            onMove={makeGroupAwareMove(ref, (p) => onMoveStage?.(snapDrag(p, { fixtureId: stage.id })))}
+            onUpdate={(patch) => onUpdateStage?.(patch)}
+            onCommit={endGroupDrag}
+            onRotating={setRotating}
+            altHeld={altHeld}
+            clientToMm={clientToMm}
+            mm={mm}
+          />
+        );
+      })()}
+      {bars.map((b) => {
+        const ref: SelectedRef = { kind: "bar", id: b.id };
+        return (
+          <FixtureMarker
+            key={b.id}
+            fixture={b}
+            selected={isSel("bar", b.id)}
+            onSelect={selectOrPreserveGroup(ref)}
+            onMove={makeGroupAwareMove(ref, (p) => onMoveBar?.(b.id, snapDrag(p, { fixtureId: b.id })))}
+            onUpdate={(patch) => onUpdateBar?.(b.id, patch)}
+            onCommit={endGroupDrag}
+            onRotating={setRotating}
+            altHeld={altHeld}
+            clientToMm={clientToMm}
+            mm={mm}
+          />
+        );
+      })}
+
+      {/* Group selection — a dashed bbox around every selected ref's point, plus (fixtures-only) a
+          rotate handle above it so a homogeneous group of stage/bars can be spun together the same
+          way one fixture already can. Mixed selections (vertices/entrances in the mix) still get
+          the bbox, for visual feedback, but no rotate handle — a polygon vertex has no "facing" to
+          spin, so rotating a mixed group has no well-defined meaning. */}
+      {selected.length > 1 &&
+        (() => {
+          const points = selected.flatMap(boundsOf);
+          if (points.length === 0) return null;
+          const minX = Math.min(...points.map((p) => p.x));
+          const maxX = Math.max(...points.map((p) => p.x));
+          const minY = Math.min(...points.map((p) => p.y));
+          const maxY = Math.max(...points.map((p) => p.y));
+          const padPx = 14;
+          const pad = mm(padPx);
+          const fixturesOnly = selected.every((r) => r.kind === "stage" || r.kind === "bar");
+          const pivot = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+          const handleGap = mm(20);
+          const handleY = minY - pad - handleGap;
+          const rotateDrag = fixturesOnly
+            ? dragHandlers(
+                clientToMm,
+                (p, mods) => {
+                  if (!groupRotate.current) {
+                    const snapshot = selected
+                      .map((r) => {
+                        const f = r.kind === "stage" ? stage : bars.find((x) => x.id === r.id);
+                        return f ? { id: f.id, origin: { x: f.x, y: f.y }, rotationDeg: f.rotationDeg ?? 0 } : null;
+                      })
+                      .filter((s): s is { id: string; origin: Point; rotationDeg: number } => !!s);
+                    const startDeg = (Math.atan2(p.y - pivot.y, p.x - pivot.x) * 180) / Math.PI + 90;
+                    groupRotate.current = { pivot, startDeg, snapshot };
+                  }
+                  const { pivot: fixedPivot, startDeg, snapshot } = groupRotate.current;
+                  const raw = (Math.atan2(p.y - fixedPivot.y, p.x - fixedPivot.x) * 180) / Math.PI + 90;
+                  const free = mods.alt || !!altHeld;
+                  const rawDelta = raw - startDeg;
+                  const deltaDeg = free ? rawDelta : constrainAngleDeg(rawDelta);
+                  const updates = snapshot.map((s) => {
+                    const moved = fromLocalFrame(toLocalFrame(s.origin, fixedPivot, 0), fixedPivot, deltaDeg);
+                    return { id: s.id, x: moved.x, y: moved.y, rotationDeg: norm360(s.rotationDeg + deltaDeg) };
+                  });
+                  onRotateFixtureGroup?.(updates);
+                  setRotating({ deg: norm360(deltaDeg), locked: !free, at: { x: fixedPivot.x, y: handleY } });
+                },
+                undefined,
+                (dragging) => { if (!dragging) { groupRotate.current = null; setRotating(null); } },
+                onCommit,
+              )
+            : null;
+          return (
+            <g>
+              <rect
+                x={minX - pad}
+                y={minY - pad}
+                width={maxX - minX + pad * 2}
+                height={maxY - minY + pad * 2}
+                fill="none"
+                className="text-accent"
+                stroke="currentColor"
+                strokeWidth={1}
+                strokeDasharray="5 3"
+                vectorEffect="non-scaling-stroke"
+              />
+              {rotateDrag && (
+                <>
+                  <line x1={pivot.x} y1={minY - pad} x2={pivot.x} y2={handleY} className="text-accent/50" stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  <g {...rotateDrag} tabIndex={0} role="button" aria-label="סיבוב הקבוצה — גרירה" className={`cursor-alias touch-none ${HANDLE_CLS}`}>
+                    <circle {...HALO} cx={pivot.x} cy={handleY} r={mm(11)} />
+                    <circle cx={pivot.x} cy={handleY} r={mm(6)} className="text-accent hover:text-accent-deep" fill="currentColor" />
+                  </g>
+                </>
+              )}
+            </g>
+          );
+        })()}
+
+      {/* Marquee (rubber-band) select — a translucent rectangle while the drag is live; the hit
+          test itself runs once, on release (see collectMarqueeHits). */}
+      {marqueeBox && (
+        <rect
+          x={Math.min(marqueeBox.x0, marqueeBox.x1)}
+          y={Math.min(marqueeBox.y0, marqueeBox.y1)}
+          width={Math.abs(marqueeBox.x1 - marqueeBox.x0)}
+          height={Math.abs(marqueeBox.y1 - marqueeBox.y0)}
+          className="text-accent"
+          fill="currentColor"
+          fillOpacity={0.08}
+          stroke="currentColor"
+          strokeWidth={1}
+          strokeDasharray="4 3"
+          vectorEffect="non-scaling-stroke"
         />
       )}
-      {bars.map((b) => (
-        <FixtureMarker
-          key={b.id}
-          fixture={b}
-          selected={selected?.kind === "bar" && selected.id === b.id}
-          onSelect={() => onSelect({ kind: "bar", id: b.id })}
-          onMove={(p) => onMoveBar?.(b.id, snapDrag(p, { fixtureId: b.id }))}
-          onUpdate={(patch) => onUpdateBar?.(b.id, patch)}
-          onCommit={onCommit}
-          onRotating={setRotating}
-          altHeld={altHeld}
-          clientToMm={clientToMm}
-          mm={mm}
-        />
-      ))}
 
       {/* Smart-alignment guides — the accent lines that appear when a drag, or the pending wall,
           lines up with an existing edge/vertex/centre */}
@@ -814,7 +1154,7 @@ export function ShapeCanvas({
     })()}
 
     {/* The live rotation angle, in the same pill as the drawing readout — accent while it's locked
-        to a 15° step, ink once Alt has released it. */}
+        to a 5° step, ink once Alt has released it. Doubles as the group-rotate readout. */}
     {hasRect && rotating && (() => {
       const at = worldToPx(rotating.at);
       return (
@@ -961,12 +1301,14 @@ function BezierHandles({
 }
 
 // A door cut into a wall: the gap itself is rendered by the wall above (stub segments); this
-// draws the leaf + swing arc and gives the door a drag handle that slides it along its wall
+// draws the leaf(es) + swing arc — single or double, swinging in or out per entrance.swingInward/
+// doubleDoor (see doorGeometry) — and gives the door a drag handle that slides it along its wall
 // (world-space drag points get projected back onto the wall's chord by the caller).
 function EntranceDoor({
   entrance,
   a,
   b,
+  interiorHint,
   selected,
   onSelect,
   onMove,
@@ -977,8 +1319,9 @@ function EntranceDoor({
   entrance: Entrance;
   a: Point;
   b: Point;
+  interiorHint: Point; // which side of the wall reads as "inward" — see doorGeometry
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (mods: { shift: boolean; phase: "press" | "click" }) => void;
   onMove: (p: Point) => void;
   onCommit?: () => void;
   clientToMm: (clientX: number, clientY: number) => Point;
@@ -988,6 +1331,7 @@ function EntranceDoor({
   const gapStart = pointAtDistance(a, b, entrance.distanceMm - half);
   const gapEnd = pointAtDistance(a, b, entrance.distanceMm + half);
   const mid = pointAtDistance(a, b, entrance.distanceMm);
+  const door = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, entrance.swingInward, interiorHint, entrance.doubleDoor);
   const drag = dragHandlers(clientToMm, onMove, onSelect, undefined, onCommit);
 
   // The door slides along its wall, but the wall's own direction can run either way — so an arrow
@@ -1035,18 +1379,24 @@ function EntranceDoor({
         transform={`rotate(${wallAngleDeg(a, b)} ${mid.x} ${mid.y})`}
       />
       <line x1={gapStart.x} y1={gapStart.y} x2={gapEnd.x} y2={gapEnd.y} stroke="transparent" strokeWidth={mm(14)} />
-      {/* Hover previews the selection highlight at half weight, so the gap announces itself as a
-          handle before it's picked up. */}
-      <line
-        x1={gapStart.x}
-        y1={gapStart.y}
-        x2={gapEnd.x}
-        y2={gapEnd.y}
-        className={selected ? "text-accent" : "text-accent opacity-0 group-hover:opacity-50"}
-        stroke="currentColor"
-        strokeWidth={selected ? 3 : 2}
-        vectorEffect="non-scaling-stroke"
-      />
+      {/* The door leaf(es) — a straight line from hinge to the open tip — and the quarter-circle
+          swing arc from that tip back to the wall (or, on a double door, to the opening's centre).
+          Ink by default, same as a wall; accent on hover/selection, same as everything else here. */}
+      <g className={selected ? "text-accent" : "text-ink-soft group-hover:text-accent"}>
+        {door.leaves.map((leaf, i) => (
+          <g key={i}>
+            <line x1={leaf.hinge.x} y1={leaf.hinge.y} x2={leaf.tip.x} y2={leaf.tip.y} stroke="currentColor" strokeWidth={selected ? 2 : 1.5} vectorEffect="non-scaling-stroke" />
+            <path
+              d={`M ${leaf.tip.x} ${leaf.tip.y} A ${leaf.lenMm} ${leaf.lenMm} 0 0 ${leaf.sweepFlag} ${leaf.arcTo.x} ${leaf.arcTo.y}`}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={selected ? 1.4 : 1}
+              strokeDasharray={3}
+              vectorEffect="non-scaling-stroke"
+            />
+          </g>
+        ))}
+      </g>
     </g>
   );
 }
@@ -1070,7 +1420,7 @@ function FixtureMarker({
 }: {
   fixture: Fixture;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (mods: { shift: boolean; phase: "press" | "click" }) => void;
   onMove: (p: Point) => void;
   onUpdate: (patch: Partial<Fixture>) => void;
   onCommit?: () => void;
@@ -1277,10 +1627,32 @@ function ResizeHandle({
 
 const SHAPE_LABEL: Record<FixtureShape, string> = { rect: "מלבן", circle: "עיגול", ellipse: "אליפסה" };
 
+// A cluster of related fields (dimensions, transform, style...) — kept as one flex item so the
+// wrap's flex-wrap breaks between groups, never in the middle of one.
+function InspectorGroup({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`flex shrink-0 items-center gap-2 ${className}`}>{children}</div>;
+}
+
+function InspectorDivider() {
+  return <div aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />;
+}
+
+// The identity chip every inspector opens with — an icon so the selected kind reads at a glance,
+// matching the object-inspector convention of other plan/design tools.
+function InspectorHeader({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <div className="flex shrink-0 items-center gap-1.5 ps-0.5">
+      <Icon className="h-4 w-4 text-accent" strokeWidth={1.75} />
+      <span className="text-sm font-semibold text-ink nums">{label}</span>
+    </div>
+  );
+}
+
 export function SelectionInspector({
   selected,
   outline,
   edgeCurves,
+  lockedEdges = [],
   entrances = [],
   stage,
   bars = [],
@@ -1291,16 +1663,19 @@ export function SelectionInspector({
   onRemoveStage = () => {},
   onRemoveBar = () => {},
   onRemoveVertex,
+  onRemoveSelection = () => {},
   onInsertVertexOnWall,
   onSetWallLength,
   onSetWallAngle,
   onSetWallBulgeDepth,
+  onToggleWallLock = () => {},
   onClose,
   edgeNoun = "קיר",
 }: {
-  selected: SelectedRef;
+  selected: SelectedRef[];
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
+  lockedEdges?: boolean[];
   edgeNoun?: string; // what an outline edge is called — "קיר" in a hall, "צלע" for a product footprint
   entrances?: Entrance[];
   stage?: Fixture | undefined;
@@ -1312,66 +1687,108 @@ export function SelectionInspector({
   onRemoveStage?: () => void;
   onRemoveBar?: (id: string) => void;
   onRemoveVertex: (idx: number) => void;
+  onRemoveSelection?: (refs: SelectedRef[]) => void;
   onInsertVertexOnWall: (edgeIdx: number) => void;
   onSetWallLength: (edgeIdx: number, meters: number) => void;
   onSetWallAngle: (edgeIdx: number, degrees: number) => void;
   onSetWallBulgeDepth: (edgeIdx: number, depthMm: number) => void;
+  onToggleWallLock?: (edgeIdx: number) => void;
   onClose: () => void;
 }) {
-  const wrap = "flex max-w-2xl flex-wrap items-center gap-3 rounded-md border border-border bg-surface px-3 py-2.5 shadow-floating";
+  const wrap = "flex max-w-3xl flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-2 shadow-floating";
   const mmToCm = (mm: number) => mm / 10;
   const closeBtn = (
     <IconButton label="סגירת בחירה" className="ms-auto" onClick={onClose}>
       <X className="h-4 w-4" strokeWidth={2} />
     </IconButton>
   );
+  // Segmented controls share the fields' own h-10, so a toggle sitting next to a NumberField
+  // lands on the same baseline instead of reading a size smaller.
   const shapeToggle = (shape: FixtureShape, onPick: (s: FixtureShape) => void) => (
-    <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+    <div className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
       {(Object.keys(SHAPE_LABEL) as FixtureShape[]).map((s) => (
         <button
           key={s}
           type="button"
           onClick={() => onPick(s)}
-          className={`rounded px-2 py-1 text-xs transition-colors ${s === shape ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}
+          className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${s === shape ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}
         >
           {SHAPE_LABEL[s]}
         </button>
       ))}
     </div>
   );
+  // A plain two-way segmented control — door direction/leaf-count, either boolean.
+  const boolToggle = (value: boolean, onLabel: string, offLabel: string, onPick: (v: boolean) => void) => (
+    <div className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
+      <button type="button" onClick={() => onPick(true)} className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}>
+        {onLabel}
+      </button>
+      <button type="button" onClick={() => onPick(false)} className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${!value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}>
+        {offLabel}
+      </button>
+    </div>
+  );
   const rotationField = (rotationDeg: number, onChange: (deg: number) => void) => (
-    <NumberField layout="inline" label="זווית (°)" decimals={0} min={0} max={360} value={rotationDeg} onChange={onChange} className="w-24" />
+    <NumberField layout="inline" label="זווית (°)" decimals={0} min={0} max={360} value={rotationDeg} onChange={onChange} className="w-20" />
   );
 
-  if (selected.kind === "entrance") {
-    const e = entrances.find((x) => x.id === selected.id);
+  if (selected.length === 0) return null;
+  // A multi-select gets its own compact panel — the individual fields below only make sense for
+  // one kind of thing at a time, so a mixed (or same-kind) group just gets a count and a delete.
+  if (selected.length > 1) {
+    return (
+      <div className={wrap}>
+        <InspectorHeader icon={Layers} label={`${selected.length} נבחרו`} />
+        <InspectorDivider />
+        <Button variant="danger" size="sm" onClick={() => onRemoveSelection(selected)}>
+          <Trash2 className="h-4 w-4" strokeWidth={2} />
+          מחיקה
+        </Button>
+        {closeBtn}
+      </div>
+    );
+  }
+  const selectedOne = selected[0];
+
+  if (selectedOne.kind === "entrance") {
+    const e = entrances.find((x) => x.id === selectedOne.id);
     if (!e) return null;
     const a = outline[e.wallIndex];
     const b = outline[(e.wallIndex + 1) % outline.length];
     const wallLen = a && b ? wallLengthMm(a, b) : 0;
     return (
       <div className={wrap}>
-        <span className="text-sm font-medium text-ink">כניסה</span>
-        <NumberField
-          layout="inline"
-          label="מרחק מקצה הקיר (מ׳)"
-          decimals={2}
-          min={0}
-          max={wallLen / 1000}
-          value={e.distanceMm / 1000}
-          onChange={(m) => onUpdateEntrance(e.id, { distanceMm: m * 1000 })}
-          className="w-24"
-        />
-        <NumberField
-          layout="inline"
-          label="רוחב (ס״מ)"
-          decimals={0}
-          min={40}
-          value={mmToCm(e.widthMm)}
-          onChange={(cm) => onUpdateEntrance(e.id, { widthMm: cm * 10 })}
-          className="w-24"
-        />
-        <Button variant="danger" onClick={() => onRemoveEntrance(e.id)}>
+        <InspectorHeader icon={DoorOpen} label="כניסה" />
+        <InspectorDivider />
+        <InspectorGroup>
+          <NumberField
+            layout="inline"
+            label="מרחק מקצה הקיר (מ׳)"
+            decimals={2}
+            min={0}
+            max={wallLen / 1000}
+            value={e.distanceMm / 1000}
+            onChange={(m) => onUpdateEntrance(e.id, { distanceMm: m * 1000 })}
+            className="w-20"
+          />
+          <NumberField
+            layout="inline"
+            label="רוחב (ס״מ)"
+            decimals={0}
+            min={40}
+            value={mmToCm(e.widthMm)}
+            onChange={(cm) => onUpdateEntrance(e.id, { widthMm: cm * 10 })}
+            className="w-20"
+          />
+        </InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>
+          {boolToggle(e.doubleDoor, "כפולה", "יחידה", (v) => onUpdateEntrance(e.id, { doubleDoor: v }))}
+          {boolToggle(e.swingInward, "פנימה", "החוצה", (v) => onUpdateEntrance(e.id, { swingInward: v }))}
+        </InspectorGroup>
+        <InspectorDivider />
+        <Button variant="danger" size="sm" onClick={() => onRemoveEntrance(e.id)}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           מחיקה
         </Button>
@@ -1380,17 +1797,25 @@ export function SelectionInspector({
     );
   }
 
-  if (selected.kind === "stage") {
+  if (selectedOne.kind === "stage") {
     if (!stage) return null;
     return (
       <div className={wrap}>
-        <span className="text-sm font-medium text-ink">במה</span>
-        <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(stage.widthMm)} onChange={(cm) => onUpdateStage({ widthMm: cm * 10 })} className="w-24" />
-        <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(stage.depthMm)} onChange={(cm) => onUpdateStage({ depthMm: cm * 10 })} className="w-24" />
-        <NumberField layout="inline" label="גובה במה (ס״מ)" decimals={0} min={0} value={mmToCm(stage.heightMm)} onChange={(cm) => onUpdateStage({ heightMm: cm * 10 })} className="w-24" />
-        {rotationField(stage.rotationDeg ?? 0, (deg) => onUpdateStage({ rotationDeg: deg }))}
-        <StyleFields style={stage.style} onChange={(style) => onUpdateStage({ style })} strokeWidthDefault={1.5} />
-        <Button variant="danger" onClick={onRemoveStage}>
+        <InspectorHeader icon={Presentation} label="במה" />
+        <InspectorDivider />
+        <InspectorGroup>
+          <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(stage.widthMm)} onChange={(cm) => onUpdateStage({ widthMm: cm * 10 })} className="w-20" />
+          <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(stage.depthMm)} onChange={(cm) => onUpdateStage({ depthMm: cm * 10 })} className="w-20" />
+          <NumberField layout="inline" label="גובה במה (ס״מ)" decimals={0} min={0} value={mmToCm(stage.heightMm)} onChange={(cm) => onUpdateStage({ heightMm: cm * 10 })} className="w-20" />
+        </InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>{rotationField(stage.rotationDeg ?? 0, (deg) => onUpdateStage({ rotationDeg: deg }))}</InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>
+          <StyleFields style={stage.style} onChange={(style) => onUpdateStage({ style })} strokeWidthDefault={1.5} />
+        </InspectorGroup>
+        <InspectorDivider />
+        <Button variant="danger" size="sm" onClick={onRemoveStage}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           הסרה
         </Button>
@@ -1399,34 +1824,43 @@ export function SelectionInspector({
     );
   }
 
-  if (selected.kind === "bar") {
-    const b = bars.find((x) => x.id === selected.id);
+  if (selectedOne.kind === "bar") {
+    const b = bars.find((x) => x.id === selectedOne.id);
     if (!b) return null;
     const shape = b.shape ?? "rect";
     return (
       <div className={wrap}>
-        <span className="text-sm font-medium text-ink">עמדת בר</span>
-        {shapeToggle(shape, (s) => onUpdateBar(b.id, { shape: s }))}
-        {shape === "circle" ? (
-          <NumberField
-            layout="inline"
-            label="קוטר (ס״מ)"
-            decimals={0}
-            min={0}
-            value={mmToCm(b.widthMm)}
-            onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10, depthMm: cm * 10 })}
-            className="w-24"
-          />
-        ) : (
-          <>
-            <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(b.widthMm)} onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10 })} className="w-24" />
-            <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(b.depthMm)} onChange={(cm) => onUpdateBar(b.id, { depthMm: cm * 10 })} className="w-24" />
-          </>
-        )}
-        <NumberField layout="inline" label="גובה (ס״מ)" decimals={0} min={0} value={mmToCm(b.heightMm)} onChange={(cm) => onUpdateBar(b.id, { heightMm: cm * 10 })} className="w-24" />
-        {rotationField(b.rotationDeg ?? 0, (deg) => onUpdateBar(b.id, { rotationDeg: deg }))}
-        <StyleFields style={b.style} onChange={(style) => onUpdateBar(b.id, { style })} strokeWidthDefault={1.5} />
-        <Button variant="danger" onClick={() => onRemoveBar(b.id)}>
+        <InspectorHeader icon={GlassWater} label="עמדת בר" />
+        <InspectorDivider />
+        <InspectorGroup>{shapeToggle(shape, (s) => onUpdateBar(b.id, { shape: s }))}</InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>
+          {shape === "circle" ? (
+            <NumberField
+              layout="inline"
+              label="קוטר (ס״מ)"
+              decimals={0}
+              min={0}
+              value={mmToCm(b.widthMm)}
+              onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10, depthMm: cm * 10 })}
+              className="w-20"
+            />
+          ) : (
+            <>
+              <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(b.widthMm)} onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10 })} className="w-20" />
+              <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(b.depthMm)} onChange={(cm) => onUpdateBar(b.id, { depthMm: cm * 10 })} className="w-20" />
+            </>
+          )}
+          <NumberField layout="inline" label="גובה (ס״מ)" decimals={0} min={0} value={mmToCm(b.heightMm)} onChange={(cm) => onUpdateBar(b.id, { heightMm: cm * 10 })} className="w-20" />
+        </InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>{rotationField(b.rotationDeg ?? 0, (deg) => onUpdateBar(b.id, { rotationDeg: deg }))}</InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>
+          <StyleFields style={b.style} onChange={(style) => onUpdateBar(b.id, { style })} strokeWidthDefault={1.5} />
+        </InspectorGroup>
+        <InspectorDivider />
+        <Button variant="danger" size="sm" onClick={() => onRemoveBar(b.id)}>
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           מחיקה
         </Button>
@@ -1435,45 +1869,64 @@ export function SelectionInspector({
     );
   }
 
-  if (selected.kind === "wall") {
-    const idx = Number(selected.id);
+  if (selectedOne.kind === "wall") {
+    const idx = Number(selectedOne.id);
     if (idx < 0 || idx >= outline.length) return null;
     const n = outline.length;
     const a = outline[idx];
     const b = outline[(idx + 1) % n];
     const curve = edgeCurves[idx] ?? null;
     const maxBulgeCm = Math.round(maxBulgeDepthMm(wallLengthMm(a, b)) / 10);
+    const locked = !!lockedEdges[idx];
     return (
       <div className={wrap}>
-        <span className="text-sm font-medium text-ink">{edgeNoun} {idx + 1}</span>
-        <NumberField
-          layout="inline"
-          label="אורך (מ׳)"
-          decimals={2}
-          min={0.001}
-          value={wallLengthMm(a, b) / 1000}
-          onChange={(m) => onSetWallLength(idx, m)}
-          className="w-24"
-        />
-        <NumberField
-          layout="inline"
-          label="זווית (°)"
-          decimals={1}
-          value={wallAngleDeg(a, b)}
-          onChange={(deg) => onSetWallAngle(idx, deg)}
-          className="w-24"
-        />
-        <NumberField
-          layout="inline"
-          label={`עיקום (ס״מ, עד ${maxBulgeCm})`}
-          decimals={0}
-          min={0}
-          max={maxBulgeCm}
-          value={mmToCm(bulgeDepthMm(a, b, curve))}
-          onChange={(cm) => onSetWallBulgeDepth(idx, cm * 10)}
-          className="w-24"
-        />
-        <Button variant="ghost" onClick={() => onInsertVertexOnWall(idx)}>
+        <InspectorHeader icon={SeparatorHorizontal} label={`${edgeNoun} ${idx + 1}`} />
+        <InspectorDivider />
+        <InspectorGroup>
+          <IconButton
+            label={locked ? "שחרור נעילת האורך" : "נעילת האורך"}
+            onClick={() => onToggleWallLock(idx)}
+            className={locked ? "text-accent" : undefined}
+          >
+            {locked ? <Lock className="h-4 w-4" strokeWidth={2} /> : <Unlock className="h-4 w-4" strokeWidth={2} />}
+          </IconButton>
+          <NumberField
+            layout="inline"
+            label="אורך (מ׳)"
+            decimals={2}
+            min={0.001}
+            disabled={locked}
+            value={wallLengthMm(a, b) / 1000}
+            onChange={(m) => onSetWallLength(idx, m)}
+            className="w-20"
+          />
+        </InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>
+          <NumberField
+            layout="inline"
+            label="זווית (°)"
+            decimals={1}
+            value={wallAngleDeg(a, b)}
+            onChange={(deg) => onSetWallAngle(idx, deg)}
+            className="w-20"
+          />
+        </InspectorGroup>
+        <InspectorDivider />
+        <InspectorGroup>
+          <NumberField
+            layout="inline"
+            label={`עיקום (ס״מ, עד ${maxBulgeCm})`}
+            decimals={0}
+            min={0}
+            max={maxBulgeCm}
+            value={mmToCm(bulgeDepthMm(a, b, curve))}
+            onChange={(cm) => onSetWallBulgeDepth(idx, cm * 10)}
+            className="w-20"
+          />
+        </InspectorGroup>
+        <InspectorDivider />
+        <Button variant="ghost" size="sm" onClick={() => onInsertVertexOnWall(idx)}>
           <Plus className="h-4 w-4" strokeWidth={2} />
           הוספת נקודה
         </Button>
@@ -1482,13 +1935,14 @@ export function SelectionInspector({
     );
   }
 
-  const idx = Number(selected.id);
+  const idx = Number(selectedOne.id);
   const v = outline[idx];
   if (!v) return null;
   return (
     <div className={wrap}>
-      <span className="text-sm font-medium text-ink">נקודה {idx + 1}</span>
-      <Button variant="danger" disabled={outline.length <= 3} onClick={() => onRemoveVertex(idx)}>
+      <InspectorHeader icon={CircleDot} label={`נקודה ${idx + 1}`} />
+      <InspectorDivider />
+      <Button variant="danger" size="sm" disabled={outline.length <= 3} onClick={() => onRemoveVertex(idx)}>
         <Trash2 className="h-4 w-4" strokeWidth={2} />
         מחיקה
       </Button>
