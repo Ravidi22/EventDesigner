@@ -312,20 +312,11 @@ export function pointAtDistance(a: Point, b: Point, distanceMm: number): Point {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
 
-// Resolves which two vertices a door's wallIndex refers to, falling back to the width×height
-// rectangle for halls saved before outline existed — the same fallback PlanPreview uses.
-export function resolveWallEndpoints(outline: Point[] | undefined, widthMm: number, heightMm: number, wallIndex: number): { a: Point; b: Point } {
-  const ol =
-    outline && outline.length >= 3
-      ? outline
-      : [
-          { x: 0, y: 0 },
-          { x: widthMm, y: 0 },
-          { x: widthMm, y: heightMm },
-          { x: 0, y: heightMm },
-        ];
-  const n = ol.length;
-  return { a: ol[((wallIndex % n) + n) % n], b: ol[(((wallIndex + 1) % n) + n) % n] };
+// The two vertices a door's wallIndex refers to, with the index wrapped into range. For callers
+// that already hold a resolved outline (everything going through shellOutline does).
+export function wallEndpoints(outline: Point[], wallIndex: number): { a: Point; b: Point } {
+  const n = outline.length;
+  return { a: outline[((wallIndex % n) + n) % n], b: outline[(((wallIndex + 1) % n) + n) % n] };
 }
 
 
@@ -592,8 +583,8 @@ if ((import.meta as { main?: boolean }).main) {
   assert(projectOntoWall(a, b, { x: 300, y: 999 }) === 300, "projectOntoWall drops the perpendicular offset");
   const nearest = nearestWallToPoint([{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 0, y: 1000 }], { x: 300, y: 10 });
   assert(nearest.edgeIdx === 0 && Math.abs(nearest.distanceMm - 300) < 1e-6, "nearestWallToPoint finds the closest edge and offset along it");
-  const fallback = resolveWallEndpoints(undefined, 2000, 1000, 2);
-  assert(fallback.a.x === 2000 && fallback.a.y === 1000 && fallback.b.x === 0 && fallback.b.y === 1000, "resolveWallEndpoints falls back to the width×height rectangle");
+  const wrapped = wallEndpoints([{ x: 0, y: 0 }, { x: 2000, y: 0 }, { x: 2000, y: 1000 }, { x: 0, y: 1000 }], 2);
+  assert(wrapped.a.x === 2000 && wrapped.a.y === 1000 && wrapped.b.x === 0 && wrapped.b.y === 1000, "wallEndpoints resolves an edge index to its two vertices");
 
   // Bounds carry the shape's real position, not just its size — a zone drawn out on a venue plane
   // must not be reported as if it sat at the origin.

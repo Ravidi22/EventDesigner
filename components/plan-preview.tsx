@@ -1,6 +1,6 @@
-import type { Hall } from "@/lib/studio/hall";
 import type { DesignTable } from "@/lib/design-document/types";
 import { outlinePathD, pointAtDistance } from "@/lib/studio/geometry";
+import { shellBounds, shellOutline, type ZoneShell } from "@/lib/venues/zone";
 import { resolveStyle } from "@/lib/element-style";
 
 export type TableStatus = "approved" | "pending" | "rejected";
@@ -21,7 +21,7 @@ export function PlanPreview({
   showFixedElements = true,
   className = "",
 }: {
-  hall: Hall;
+  hall: ZoneShell;
   tables: DesignTable[];
   statusOf?: (t: DesignTable) => TableStatus;
   showFixedElements?: boolean; // off in the hall structure editor, which renders its own draggable markers for entrances/stage/bars instead
@@ -29,24 +29,26 @@ export function PlanPreview({
 }) {
   const pad = PLAN_PAD_MM;
   const stroke = 55;
+  // Framed off the resolved outline rather than a stored width×height, so a zone drawn out on a
+  // venue plane is centred by its own minX/minY instead of being hung off the origin.
+  const outline = shellOutline(hall);
+  const box = shellBounds(hall);
   return (
     <svg
-      viewBox={`${-pad} ${-pad} ${hall.widthMm + pad * 2} ${hall.heightMm + pad * 2}`}
+      viewBox={`${box.minX - pad} ${box.minY - pad} ${box.widthMm + pad * 2} ${box.heightMm + pad * 2}`}
       className={`h-auto w-full ${className}`}
       role="img"
       aria-label="תרשים האולם"
     >
-      {hall.outline && hall.outline.length >= 3 ? (
-        <path d={outlinePathD(hall.outline, hall.edgeCurves)} fill="none" className="text-border" stroke="currentColor" strokeWidth={stroke} />
-      ) : (
-        <rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill="none" className="text-border" stroke="currentColor" strokeWidth={stroke} />
+      {outline.length >= 3 && (
+        <path d={outlinePathD(outline, hall.edgeCurves)} fill="none" className="text-border" stroke="currentColor" strokeWidth={stroke} />
       )}
       {/* Doors are plain openings: overpaint the wall stretch in the background colour so it reads
           as a hole. ponytail: thumbnail scale — the erase line is the straight chord, close enough
           across a gentle bow. */}
-      {showFixedElements && hall.outline && hall.outline.length >= 3 && hall.entrances.map((e) => {
-        const a = hall.outline![e.wallIndex];
-        const b = hall.outline![(e.wallIndex + 1) % hall.outline!.length];
+      {showFixedElements && outline.length >= 3 && hall.entrances.map((e) => {
+        const a = outline[e.wallIndex];
+        const b = outline[(e.wallIndex + 1) % outline.length];
         if (!a || !b) return null;
         const half = e.widthMm / 2;
         const gapStart = pointAtDistance(a, b, e.distanceMm - half);

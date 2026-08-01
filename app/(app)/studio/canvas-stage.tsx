@@ -5,10 +5,10 @@ import { Stage, Layer, Rect, Circle, Ellipse, Group, Text, Line, Path } from "re
 import type Konva from "konva";
 import { Minus, Plus, Maximize } from "lucide-react";
 import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
-import type { Hall } from "@/lib/studio/hall";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { resolveFootprint, resolveContent, footprintBounds, customShapeBounds, type Footprint } from "@/lib/studio/footprint";
-import { pointAtDistance, resolveWallEndpoints, wallLengthMm, outlinePathD } from "@/lib/studio/geometry";
+import { pointAtDistance, wallEndpoints, wallLengthMm, outlinePathD } from "@/lib/studio/geometry";
+import { shellBounds, shellOutline, type ZoneShell } from "@/lib/venues/zone";
 import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
 import { KonvaIcon } from "@/components/konva-icon";
@@ -49,7 +49,7 @@ export function CanvasStage({
   onPlaceTable,
 }: {
   doc: DesignDocumentContent;
-  hall: Hall;
+  hall: ZoneShell;
   selection: Selection;
   layerVisible: Record<LayerId, boolean>;
   addingTable?: string | null; // table type in click-to-place mode (F-3.3)
@@ -64,13 +64,22 @@ export function CanvasStage({
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [view, setView] = useState({ scale: 0.05, x: 0, y: 0 });
 
+  const outline = shellOutline(hall);
+  const box = shellBounds(hall);
+
+  // Fit the shape's own box, offsetting by its minX/minY — a zone drawn far out on a venue plane
+  // must land centred in the viewport, not off-screen by its distance from the origin.
   const fit = useCallback(() => {
     const { w, h } = { w: wrapRef.current?.clientWidth ?? 0, h: wrapRef.current?.clientHeight ?? 0 };
-    if (!w || !h) return;
+    if (!w || !h || !box.widthMm || !box.heightMm) return;
     const pad = 0.08;
-    const scale = Math.min(w / hall.widthMm, h / hall.heightMm) * (1 - pad);
-    setView({ scale, x: (w - hall.widthMm * scale) / 2, y: (h - hall.heightMm * scale) / 2 });
-  }, [hall.widthMm, hall.heightMm]);
+    const scale = Math.min(w / box.widthMm, h / box.heightMm) * (1 - pad);
+    setView({
+      scale,
+      x: (w - box.widthMm * scale) / 2 - box.minX * scale,
+      y: (h - box.heightMm * scale) / 2 - box.minY * scale,
+    });
+  }, [box.widthMm, box.heightMm, box.minX, box.minY]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -157,13 +166,15 @@ export function CanvasStage({
         onTap={() => onSelect(null)}
       >
         <Layer>
-          {/* Hall floor + walls */}
-          <Rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill={C.canvas} stroke={C.wall} strokeWidth={3} strokeScaleEnabled={false} />
+          {/* Hall floor + walls — the real outline, curves included, not a bounding rectangle */}
+          {outline.length >= 3 && (
+            <Path data={outlinePathD(outline, hall.edgeCurves)} fill={C.canvas} stroke={C.wall} strokeWidth={3} strokeScaleEnabled={false} />
+          )}
           {/* Entrance gaps — position resolved from the wall it's cut into (ponytail: this
               backdrop just needs a rough marker, not the full gap+swing symbol the hall
               structure editor draws). */}
-          {hall.entrances.map((e) => {
-            const { a, b } = resolveWallEndpoints(hall.outline, hall.widthMm, hall.heightMm, e.wallIndex);
+          {outline.length >= 3 && hall.entrances.map((e) => {
+            const { a, b } = wallEndpoints(outline, e.wallIndex);
             const len = wallLengthMm(a, b) || 1;
             const ux = (b.x - a.x) / len;
             const uy = (b.y - a.y) / len;
