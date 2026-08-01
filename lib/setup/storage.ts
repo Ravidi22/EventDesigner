@@ -8,7 +8,10 @@ import { saveDoc, saveHall } from "@/lib/studio/storage";
 import type { HallTemplate } from "./types";
 import { SEED_TEMPLATES } from "./sample-data";
 
-const KEY = storageKey("setup.templates");
+// .v2: HallTemplate gained a required `venueId` and the seed IDs/names changed (hall-main →
+// hall-ronit-big, etc.) — bumped so a browser with pre-venue saved templates falls back to the
+// new seed data instead of showing halls that don't match any venue.
+const KEY = storageKey("setup.templates.v2");
 
 export function loadTemplates(): HallTemplate[] {
   if (typeof window === "undefined") return SEED_TEMPLATES;

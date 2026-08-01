@@ -18,7 +18,8 @@ export interface EventSummary {
   id: string;
   clientName: string;
   phone: string;
-  date: string; // ISO yyyy-mm-dd ("" = not set yet)
+  date: string; // ISO yyyy-mm-dd ("" = not set yet) — the wedding/event day itself
+  meetingDate?: string; // ISO yyyy-mm-dd — a scheduled client consultation, distinct from `date`
   hallTemplateId?: string;
   hallName: string;
   guests: number; // estimate (F-1.3)
@@ -48,6 +49,19 @@ export function eventStatus(e: EventSummary): EventStatus {
   if (e.step === 2) return "waiting";
   return "design";
 }
+
+// Chip tone per stage — shared by every surface that shows a status (the event grid on
+// /gantt, the calendar view on /dashboard). Colour never carries the meaning alone; it
+// always rides with the label (StatusChip / STATUS_LABEL).
+export type StatusTone = "neutral" | "accent" | "success" | "warn";
+export const STATUS_TONE: Record<EventStatus, StatusTone> = {
+  details: "neutral",
+  gallery: "neutral",
+  waiting: "warn",
+  design: "accent",
+  sent: "success",
+  archived: "neutral",
+};
 
 // 2-letter monogram for avatar chips, derived (not stored).
 export function monogram(name: string): string {

@@ -4,7 +4,10 @@ import { storageKey } from "@/lib/storage-keys";
 import type { EventSummary } from "./types";
 import { SAMPLE_EVENTS } from "./sample-data";
 
-const KEY = storageKey("events");
+// .v2: sample events now reference the renamed hall IDs (hall-main → hall-ronit-big, etc.) —
+// bumped so a browser with pre-venue saved events falls back to the new seed data instead of
+// keeping events whose hallTemplateId points at a hall that no longer exists.
+const KEY = storageKey("events.v2");
 const ACTIVE_KEY = storageKey("events.active");
 
 // Legacy (pre-v0.3) records stored status/progress instead of a flow step — patch them so

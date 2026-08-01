@@ -62,7 +62,7 @@ export function CatalogScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-7">
+    <div className="px-8 py-7">
       {visible.length === 0 ? (
         <FirstRunEmpty onAdd={() => setEditing(blankProduct())} />
       ) : (

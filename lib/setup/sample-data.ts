@@ -1,10 +1,13 @@
 // Seed hall shells (F-3.1) — geometry only, no table layouts (those come per event from iPlan).
+// Each hall belongs to a venue (lib/venues) — the property; a hall is a room/space within it
+// (e.g. חוות רונית אמארה owns both "אולם גדול" and "אולם קטן").
 import type { HallTemplate } from "./types";
 
 export const SEED_TEMPLATES: HallTemplate[] = [
   {
-    id: "hall-main",
-    name: "אולם ראשי — האולם הקבוע שלי",
+    id: "hall-ronit-big",
+    name: "אולם גדול",
+    venueId: "venue-ronit",
     hall: {
       widthMm: 20000,
       heightMm: 13000,
@@ -46,8 +49,69 @@ export const SEED_TEMPLATES: HallTemplate[] = [
     createdAt: Date.parse("2026-05-02"),
   },
   {
-    id: "hall-garden",
-    name: "גן אירועים — מתחם חוץ",
+    id: "hall-ronit-small",
+    name: "אולם קטן",
+    venueId: "venue-ronit",
+    hall: {
+      widthMm: 12000,
+      heightMm: 9000,
+      outline: [
+        { x: 0, y: 0 },
+        { x: 12000, y: 0 },
+        { x: 12000, y: 9000 },
+        { x: 0, y: 9000 },
+      ],
+      ceilingHeightMm: 3800,
+      columns: [],
+      entrances: [
+        {
+          id: "ent-1",
+          wallIndex: 2,
+          distanceMm: 6000,
+          widthMm: 1600,
+          swingInward: true,
+          doubleDoor: false,
+        },
+      ],
+      bars: [],
+    },
+    mmPerUnit: 1,
+    createdAt: Date.parse("2026-05-02"),
+  },
+  {
+    id: "hall-hadar-main",
+    name: "אולם הדר",
+    venueId: "venue-hadar",
+    hall: {
+      widthMm: 18000,
+      heightMm: 12000,
+      outline: [
+        { x: 0, y: 0 },
+        { x: 18000, y: 0 },
+        { x: 18000, y: 12000 },
+        { x: 0, y: 12000 },
+      ],
+      ceilingHeightMm: 4200,
+      columns: [{ x: 9000, y: 6000, rMm: 350 }],
+      entrances: [
+        {
+          id: "ent-1",
+          wallIndex: 2,
+          distanceMm: 9000,
+          widthMm: 1800,
+          swingInward: true,
+          doubleDoor: true,
+        },
+      ],
+      bars: [],
+    },
+    mmPerUnit: 1,
+    createdAt: Date.parse("2026-06-10"),
+  },
+  {
+    id: "hall-zayit-chuppah",
+    name: "חופה",
+    venueId: "venue-zayit",
     hall: {
       widthMm: 26000,
       heightMm: 16000,
