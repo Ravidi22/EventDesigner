@@ -1,66 +1,82 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Check } from "lucide-react";
-import { loadSettings, saveSettings, DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/storage";
-import { TextField } from "@/components/text-field";
-import { NumberField } from "@/components/number-field";
+import { useEffect, useState } from "react";
+import { Database, Share2, Store, UserRound, Users } from "lucide-react";
+import { BusinessSection } from "./business-section";
+import { AccountSection } from "./account-section";
+import { TeamSection } from "./team-section";
+import { SharingSection } from "./sharing-section";
+import { DataSection } from "./data-section";
 
-// F-8.1 minimal business settings: logo + details (for the quote and outputs), VAT rate,
-// currency (₪ in phase 1). Autosaves on change — no save button to forget.
+// Settings, in five sections along the axis each one belongs to:
+//
+//   העסק / החשבון שלי  — the studio and the person, one letterhead and one profile.
+//   צוות והרשאות       — who works in this business (lib/team/storage.ts).
+//   מתחמים ושיתוף      — who may open a property (lib/venues/access.ts).
+//   נתונים             — the backup, while the store is still this browser.
+//
+// The two people sections are separate on purpose: a studio member and a venue guest are not two
+// weights of the same thing. One is inside the business and sees its work; the other is another
+// designer standing in a hall you drew, and sees the property alone.
+const SECTIONS = [
+  { id: "business", label: "העסק", icon: Store },
+  { id: "account", label: "החשבון שלי", icon: UserRound },
+  { id: "team", label: "צוות והרשאות", icon: Users },
+  { id: "sharing", label: "מתחמים ושיתוף", icon: Share2 },
+  { id: "data", label: "נתונים", icon: Database },
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]["id"];
+
 export function SettingsScreen() {
-  const [s, setS] = useState<BusinessSettings>(DEFAULT_SETTINGS);
-  const [saved, setSaved] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [section, setSection] = useState<SectionId>("business");
 
-  useEffect(() => setS(loadSettings()), []);
+  // The section lives in the hash rather than in a query param: it makes /settings#sharing
+  // linkable from the venue plan editor without pulling this client screen into the
+  // useSearchParams / Suspense dance for one string.
+  useEffect(() => {
+    const fromHash = window.location.hash.slice(1);
+    if (SECTIONS.some((s) => s.id === fromHash)) setSection(fromHash as SectionId);
+  }, []);
 
-  const patch = (p: Partial<BusinessSettings>) => {
-    const next = { ...s, ...p };
-    setS(next);
-    saveSettings(next);
-    setSaved(true);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setSaved(false), 1600);
+  const go = (id: SectionId) => {
+    setSection(id);
+    try {
+      window.history.replaceState(null, "", `#${id}`);
+    } catch {
+      // non-fatal: the section still switched
+    }
   };
 
   return (
-    <div className="mx-auto max-w-lg px-8 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <p className="max-w-sm text-sm leading-relaxed text-ink-soft">
-          הפרטים מופיעים בכותרת הצעת המחיר ובפלטים. הכול נשמר אוטומטית.
-        </p>
-        <span aria-live="polite" className={"inline-flex items-center gap-1.5 text-xs text-muted transition-opacity " + (saved ? "opacity-100" : "opacity-0")}>
-          <Check className="h-3.5 w-3.5 text-accent" strokeWidth={2.5} />
-          נשמר
-        </span>
-      </div>
+    <div className="flex items-start gap-3 px-8 py-8">
+      <nav aria-label="הגדרות" className="sticky top-0 flex w-[228px] shrink-0 flex-col gap-[3px] rounded-md border border-border bg-surface p-2">
+        {SECTIONS.map(({ id, label, icon: Icon }) => {
+          const active = id === section;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => go(id)}
+              aria-current={active ? "page" : undefined}
+              className={
+                "flex items-center gap-3 rounded-md px-3.5 py-[11px] text-sm transition-colors " +
+                (active ? "bg-accent-tint font-bold text-accent" : "font-semibold text-muted hover:bg-accent-tint hover:text-accent")
+              }
+            >
+              <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.4} />
+              {label}
+            </button>
+          );
+        })}
+      </nav>
 
-      <div className="flex flex-col gap-5">
-        <TextField label="שם העסק" value={s.businessName} onChange={(v) => patch({ businessName: v })} />
-        <TextField label="שם בעל/ת העסק" value={s.ownerName} onChange={(v) => patch({ ownerName: v })} />
-        <div className="grid grid-cols-2 gap-4">
-          <TextField label="טלפון" type="tel" dir="ltr" value={s.phone} onChange={(v) => patch({ phone: v })} className="text-end" />
-          <TextField label="כתובת" value={s.address} onChange={(v) => patch({ address: v })} />
-        </div>
-        <TextField
-          label="קישור ללוגו"
-          dir="ltr"
-          value={s.logoUrl ?? ""}
-          onChange={(v) => patch({ logoUrl: v || undefined })}
-          placeholder="https://…"
-        />
-        <div className="grid grid-cols-2 gap-4">
-          <NumberField
-            label="שיעור מע״מ (%)"
-            min={0}
-            max={50}
-            decimals={0}
-            value={Math.round(s.vatRate * 100)}
-            onChange={(v) => patch({ vatRate: v / 100 })}
-          />
-          <TextField label="מטבע" value={s.currency} onChange={() => {}} readOnly className="bg-bg text-muted" />
-        </div>
+      <div className="min-w-0 flex-1">
+        {section === "business" && <BusinessSection />}
+        {section === "account" && <AccountSection />}
+        {section === "team" && <TeamSection />}
+        {section === "sharing" && <SharingSection />}
+        {section === "data" && <DataSection />}
       </div>
     </div>
   );

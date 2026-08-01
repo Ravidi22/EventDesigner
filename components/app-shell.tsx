@@ -40,7 +40,7 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/halls"), title: "אולמות" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות" },
-  { test: (p) => p.startsWith("/settings"), title: "הגדרות עסק" },
+  { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
   { test: (p) => p.startsWith("/outputs"), title: "פלטים" },
 ];

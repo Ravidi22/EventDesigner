@@ -17,6 +17,12 @@ export const layerEnum = pgEnum("layer", ["table", "floor", "ceiling"]);
 export const mapSourceEnum = pgEnum("map_source", ["template", "pdf"]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const verificationEnum = pgEnum("verification_state", ["draft", "verified"]);
+// People (F-8.2). Two ladders, because they answer two different questions: what you are inside
+// this studio (lib/team/storage.ts), and what you may do to one property (lib/venues/access.ts).
+export const studioRoleEnum = pgEnum("studio_role", ["owner", "designer", "crew"]);
+export const venueRoleEnum = pgEnum("venue_role", ["viewer", "editor", "manager"]);
+export const grantKindEnum = pgEnum("grant_kind", ["member", "guest"]);
+export const inviteStateEnum = pgEnum("invite_state", ["pending", "active"]);
 
 const orgId = () => uuid("organization_id").notNull();
 const id = () => uuid("id").primaryKey().defaultRandom();
@@ -36,9 +42,48 @@ export const users = pgTable(
     organizationId: orgId(),
     email: text("email").notNull().unique(),
     name: text("name"),
+    role: studioRoleEnum("role").notNull().default("designer"),
+    state: inviteStateEnum("state").notNull().default("pending"),
     createdAt: created(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)],
+);
+
+// Access to one venue, granted by the studio that drew its plan (F-8.3).
+//
+// The one table in this file that is NOT scoped to a single organization, and deliberately: its
+// entire purpose is to cross the boundary ADR-2 draws everywhere else. A venue is a physical
+// property, so two studios can legitimately work the same hall off the same plan — grantor and
+// grantee are therefore separate columns, and row-level security reads this table rather than
+// the plain organizationId check that governs everything else.
+//
+// What a grant conveys is decided by `kind`, not by role: a `guest` gets the plan and anonymous
+// availability, never the events, clients or prices at that venue. The authority for that rule is
+// grantScope() in lib/venues/access.ts; this table only records which side of it a row is on.
+//
+// venueId has no FK yet — venues arrived after this schema and still live in lib/venues.
+export const venueGrants = pgTable(
+  "venue_grants",
+  {
+    id: id(),
+    venueId: uuid("venue_id").notNull(),
+    /** The studio that owns the plan and issued the grant. */
+    grantorOrgId: uuid("grantor_org_id").notNull(),
+    /** Null until an invited address becomes an account (phase 3). */
+    granteeOrgId: uuid("grantee_org_id"),
+    granteeUserId: uuid("grantee_user_id").references(() => users.id, { onDelete: "cascade" }),
+    granteeEmail: text("grantee_email").notNull(),
+    granteeName: text("grantee_name"),
+    kind: grantKindEnum("kind").notNull(),
+    role: venueRoleEnum("role").notNull().default("viewer"),
+    state: inviteStateEnum("state").notNull().default("pending"),
+    createdAt: created(),
+  },
+  (t) => [
+    index("venue_grants_venue_idx").on(t.venueId),
+    index("venue_grants_grantor_idx").on(t.grantorOrgId),
+    index("venue_grants_grantee_idx").on(t.granteeOrgId),
+  ],
 );
 
 // Catalog item (F-2.1, F-2.5, F-2.6, F-2.7). Height is required for phase-2 3D (R-3).
