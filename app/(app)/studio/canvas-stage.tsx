@@ -7,7 +7,7 @@ import { Minus, Plus, Maximize } from "lucide-react";
 import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
 import type { Hall } from "@/lib/studio/hall";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
-import { resolveFootprint, resolveContent, footprintBounds, outlineBounds, type Footprint } from "@/lib/studio/footprint";
+import { resolveFootprint, resolveContent, footprintBounds, customShapeBounds, type Footprint } from "@/lib/studio/footprint";
 import { pointAtDistance, resolveWallEndpoints, wallLengthMm, outlinePathD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
@@ -367,7 +367,7 @@ function FootprintShape({ footprint, fill, stroke, strokeWidth }: {
   if (footprint.kind === "circle") return <Circle radius={footprint.diameterMm / 2} {...common} />;
   if (footprint.kind === "ellipse") return <Ellipse radiusX={footprint.widthMm / 2} radiusY={footprint.depthMm / 2} {...common} />;
   if (footprint.kind === "custom") {
-    const b = outlineBounds(footprint.outline);
+    const b = customShapeBounds(footprint.outline);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
     if (footprint.edgeCurves?.some(Boolean)) return <Path data={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
     return <Line points={centered.flatMap((p) => [p.x, p.y])} closed {...common} />;
