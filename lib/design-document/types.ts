@@ -1,6 +1,10 @@
 // ADR-4: the Design Document is a pure data structure that knows nothing about display.
 // The 2D canvas, the operational PDF, and the phase-2 3D scene are all renderers of THIS.
 // Shared verbatim between client (canvas) and server (packing list, quote) — principle #2.
+// DesignTable.style (below) doesn't violate this: it's the designer's colour/dash *choice* for a
+// table — design intent, serialisable, renderer-agnostic plain data — not a rendering concern.
+// resolveStyle (lib/element-style.ts) is what turns it into pixels, and it lives outside this file.
+import type { ElementStyle } from "../element-style";
 
 export type Layer = "table" | "floor" | "ceiling";
 
@@ -20,6 +24,7 @@ export interface DesignTable {
   widthMm?: number;
   depthMm?: number;
   seats?: number;
+  style?: ElementStyle; // free-form per-table look (fill/stroke/dash); absent = the renderer's default
 }
 
 // One product-variant placed somewhere. Targets a table (table layer) or a free point.

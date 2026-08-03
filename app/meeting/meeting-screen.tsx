@@ -9,6 +9,7 @@ import { activeEvent, reachStep, updateEvent } from "@/lib/events/storage";
 import { beginEvent } from "@/lib/events/begin";
 import type { HallTemplate } from "@/lib/setup/types";
 import { loadTemplates } from "@/lib/setup/storage";
+import { loadActiveVenueId } from "@/lib/venues/storage";
 import { SAMPLE_HALL, type Hall } from "@/lib/studio/hall";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
@@ -16,6 +17,7 @@ import { Button } from "@/components/button";
 import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
+import { DateField } from "@/components/date-field";
 import { fieldLabelClassName } from "@/components/control";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
@@ -171,7 +173,12 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   const [hallId, setHallId] = useState(event?.hallTemplateId ?? "");
   const [guests, setGuests] = useState(event?.guests ?? 0);
 
-  useEffect(() => setTemplates(loadTemplates()), []);
+  useEffect(() => {
+    const venueId = loadActiveVenueId();
+    // Scope choices to the active venue, but never hide the hall this event already has —
+    // switching the sidebar's venue after a hall was picked must not silently clear it.
+    setTemplates(loadTemplates().filter((t) => t.venueId === venueId || t.id === event?.hallTemplateId));
+  }, [event?.hallTemplateId]);
   useEffect(() => {
     if (event) {
       setClientName(event.clientName);
@@ -212,7 +219,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
         <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
         <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
         <div className="grid grid-cols-2 gap-4">
-          <TextField label="תאריך האירוע" type="date" value={date} onChange={setDate} className="nums" />
+          <DateField label="תאריך האירוע" value={date} onChange={setDate} />
           <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
         </div>
         <div>

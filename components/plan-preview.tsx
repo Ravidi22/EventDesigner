@@ -1,6 +1,7 @@
 import type { Hall } from "@/lib/studio/hall";
 import type { DesignTable } from "@/lib/design-document/types";
 import { outlinePathD, pointAtDistance } from "@/lib/studio/geometry";
+import { resolveStyle } from "@/lib/element-style";
 
 export type TableStatus = "approved" | "pending" | "rejected";
 
@@ -59,7 +60,21 @@ export function PlanPreview({
       ))}
       {showFixedElements && [hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => {
         const shape = f.shape ?? "rect";
-        const shared = { className: "text-muted", stroke: "currentColor", strokeWidth: stroke, fill: "currentColor", fillOpacity: 0.12 };
+        // "currentColor" is the pass-through default: with no style set, resolveStyle hands it
+        // straight back and the wrapping className still drives it exactly as before. This markup
+        // draws in raw hall-mm (no vector-effect, so it scales with the thumbnail) — a custom
+        // style switches to non-scaling-stroke so its pixel width/dash mean the same thing however
+        // large the thumbnail renders.
+        const resolved = resolveStyle(f.style, "screen", { fill: "currentColor", fillOpacity: 0.12, stroke: "currentColor", strokeWidth: stroke });
+        const shared = {
+          className: "text-muted",
+          stroke: resolved.stroke,
+          strokeWidth: resolved.strokeWidth,
+          fill: resolved.fill,
+          fillOpacity: resolved.fillOpacity,
+          strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
+          vectorEffect: f.style ? ("non-scaling-stroke" as const) : undefined,
+        };
         return (
           <g key={f.id}>
             {shape === "circle" ? (
@@ -77,11 +92,34 @@ export function PlanPreview({
       })}
       {tables.map((t) => {
         const status = statusOf?.(t) ?? "approved";
-        const cls = status === "rejected" ? "text-muted" : status === "pending" ? "text-ink-soft" : "text-accent";
-        const dash = status === "rejected" ? stroke * 2 : status === "pending" ? stroke * 1.5 : undefined;
-        const opacity = status === "rejected" ? 0.4 : 1;
         const label = t.number > 0 ? String(t.number) : "ראש";
-        const common = { className: cls, stroke: "currentColor", strokeWidth: stroke, fill: "currentColor", fillOpacity: 0.06, strokeDasharray: dash, opacity };
+        // Approval status is a temporary review signal and always wins over the table's own
+        // style — pending/rejected must stay visually unmistakable during import review. Once
+        // approved (or with no review in progress, the common case), the designer's own colour
+        // shows through the same "currentColor" pass-through as the fixtures above.
+        const resolved = resolveStyle(t.style, "screen", { fill: "currentColor", fillOpacity: 0.06, stroke: "currentColor", strokeWidth: stroke });
+        const common =
+          status === "approved"
+            ? {
+                className: "text-accent",
+                stroke: resolved.stroke,
+                strokeWidth: resolved.strokeWidth,
+                fill: resolved.fill,
+                fillOpacity: resolved.fillOpacity,
+                strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
+                vectorEffect: t.style ? ("non-scaling-stroke" as const) : undefined,
+                opacity: 1,
+              }
+            : {
+                className: status === "rejected" ? "text-muted" : "text-ink-soft",
+                stroke: "currentColor",
+                strokeWidth: stroke,
+                fill: "currentColor",
+                fillOpacity: 0.06,
+                strokeDasharray: status === "rejected" ? stroke * 2 : stroke * 1.5,
+                vectorEffect: undefined,
+                opacity: status === "rejected" ? 0.4 : 1,
+              };
         return (
           <g key={t.id}>
             {t.diameterMm ? (
@@ -89,7 +127,7 @@ export function PlanPreview({
             ) : (
               <rect x={t.position.x - (t.widthMm ?? 2000) / 2} y={t.position.y - (t.depthMm ?? 1000) / 2} width={t.widthMm ?? 2000} height={t.depthMm ?? 1000} {...common} />
             )}
-            <text x={t.position.x} y={t.position.y} textAnchor="middle" dominantBaseline="central" className={cls} fill="currentColor" fillOpacity={opacity} style={{ fontSize: 620, fontWeight: 600 }}>
+            <text x={t.position.x} y={t.position.y} textAnchor="middle" dominantBaseline="central" className={common.className} fill="currentColor" fillOpacity={common.opacity} style={{ fontSize: 620, fontWeight: 600 }}>
               {label}
             </text>
           </g>

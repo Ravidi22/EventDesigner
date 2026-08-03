@@ -13,6 +13,7 @@ import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
+import { StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
 import { AppearancePreview } from "./appearance-preview";
 import { ShapeEditorModal } from "./shape-editor-modal";
@@ -319,6 +320,13 @@ export function ProductDrawer({
                         {label}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="mb-1 block text-xs text-muted">עיצוב</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StyleFields style={draft.appearance?.style} onChange={(style) => setAppearance({ style })} strokeWidthDefault={2} />
                   </div>
                 </div>
               </div>

@@ -2,21 +2,22 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
+  CalendarDays,
   Building2,
   LayoutGrid,
   Images,
-  PenTool,
-  Presentation,
-  FileOutput,
-  Plus,
+  ChevronsLeft,
+  Bell,
   type LucideIcon,
 } from "lucide-react";
-import type { EventSummary } from "@/lib/events/types";
-import { activeEvent } from "@/lib/events/storage";
+import { DEFAULT_VENUES, addVenue, loadActiveVenueId, loadVenues, renameVenue, setActiveVenueId, type Venue } from "@/lib/venues/storage";
 import { Wordmark } from "@/components/wordmark";
+import { VenueSwitcher } from "@/components/venue-switcher";
+import { IconButton } from "@/components/icon-button";
+import { SearchInput } from "@/components/search-input";
 
 interface NavItem {
   href: string;
@@ -27,117 +28,162 @@ interface NavItem {
 
 const GENERAL: NavItem[] = [
   { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard },
+  { href: "/gantt", label: "גאנט אירועים", icon: CalendarDays },
   { href: "/halls", label: "אולמות", icon: Building2 },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
   { href: "/gallery", label: "גלריה ותצוגות", icon: Images },
 ];
 
-const TITLES: {
-  test: (p: string) => boolean;
-  title: string;
-  sub?: (e: EventSummary | null) => string;
-}[] = [
-  {
-    test: (p) => p.startsWith("/dashboard"),
-    title: "לוח בקרה",
-    sub: () => "סקירת כל האירועים הפעילים",
-  },
-  {
-    test: (p) => p.startsWith("/halls"),
-    title: "אולמות",
-    sub: () => "שלדי האולמות שאתם עובדים בהם",
-  },
-  {
-    test: (p) => p.startsWith("/catalog"),
-    title: "קטלוג מוצרים",
-    sub: () => "מאגר הפריטים שלך",
-  },
-  {
-    test: (p) => p.startsWith("/gallery"),
-    title: "גלריה ותצוגות",
-    sub: () => "תצוגות אצורות מתמונות הפרויקטים",
-  },
-  {
-    test: (p) => p.startsWith("/settings"),
-    title: "הגדרות עסק",
-    sub: () => "פרטי עסק, מע״מ ומטבע",
-  },
-  {
-    test: (p) => p.startsWith("/studio"),
-    title: "סטודיו עיצוב",
-    sub: (e) => (e ? `${e.clientName} · ${e.hallName}` : ""),
-  },
-  {
-    test: (p) => p.startsWith("/outputs"),
-    title: "פלטים",
-    sub: (e) => (e ? `${e.clientName} · פלטים תפעוליים` : ""),
-  },
+const TITLES: { test: (p: string) => boolean; title: string }[] = [
+  { test: (p) => p.startsWith("/dashboard"), title: "לוח בקרה" },
+  { test: (p) => p.startsWith("/gantt"), title: "גאנט אירועים" },
+  { test: (p) => p.startsWith("/halls"), title: "אולמות" },
+  { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
+  { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות" },
+  { test: (p) => p.startsWith("/settings"), title: "הגדרות עסק" },
+  { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
+  { test: (p) => p.startsWith("/outputs"), title: "פלטים" },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "";
-  const [event, setEvent] = useState<EventSummary | null>(null);
+  const router = useRouter();
+  const [collapsed, setCollapsed] = useState(false);
+  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
+  const [activeVenueId, setActiveVenue] = useState(DEFAULT_VENUES[0].id);
+  const [headerSearch, setHeaderSearch] = useState("");
 
   useEffect(() => {
-    setEvent(activeEvent());
-  }, [pathname]);
+    setVenues(loadVenues());
+    setActiveVenue(loadActiveVenueId());
+  }, []);
 
   const meta = TITLES.find((t) => t.test(pathname));
+  const settingsActive = pathname.startsWith("/settings");
 
   return (
-    <div dir="rtl" className="flex h-dvh w-full overflow-hidden bg-bg">
-      {/* Sidebar — quiet gallery: near-white panel, hairline edge, ink text, one muted accent. */}
-      <aside className="flex w-64 shrink-0 flex-col border-e border-border bg-surface px-4 py-6">
-        <Link href="/dashboard" className="mb-8 block px-2">
-          <Wordmark tone="gradient" className="text-[28px]" />
-          <span className="mt-1 block text-[11px] tracking-[0.16em] text-muted">
-            אולפן עיצוב אירועים
-          </span>
+    <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3">
+      {/* Sidebar — a floating card on the bg plane: subtle rounded corners, a soft lift, ink
+          text, one muted accent. Internal panels (nav, profile, venue switcher) use a smaller
+          radius than this outer card so the nesting reads as proportional, not arbitrary. */}
+      <aside
+        className={
+          "group/sidebar relative flex shrink-0 flex-col rounded-md bg-surface py-6 shadow-floating transition-[width] duration-200 ease-fluid " +
+          (collapsed ? "w-[96px] px-2" : "w-[258px] px-4")
+        }
+      >
+        {/* Collapse toggle — a "liquid glass" puck straddling the sidebar's trailing edge,
+            vertically centered so it never sits over the venue switcher or nav rows. Subtly
+            visible at rest (not opacity-0) so it's always there to find and click — a hover-only
+            reveal meant clicks could miss it whenever the hover state wasn't active at that exact
+            moment (no persistent hover on touch/trackpad), which read as "the button doesn't work". */}
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-label={collapsed ? "הרחב סרגל צד" : "כווץ סרגל צד"}
+          style={{ insetInlineEnd: "-14px" }}
+          className="absolute top-1/2 z-30 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-white/60 bg-white/50 text-ink-soft opacity-40 shadow-floating backdrop-blur-md transition-all duration-150 hover:opacity-100 hover:bg-white/80 hover:text-accent focus-visible:opacity-100 group-hover/sidebar:opacity-100"
+        >
+          <ChevronsLeft className={"h-4 w-4 transition-transform duration-200 " + (collapsed ? "rotate-180" : "")} strokeWidth={2} />
+        </button>
+
+        <Link
+          href="/dashboard"
+          aria-label="Eve — לוח בקרה"
+          className={
+            "mb-[26px] flex flex-col items-center overflow-hidden " + (collapsed ? "px-1 py-3" : "px-2 py-5")
+          }
+        >
+          <Wordmark
+            tone={collapsed ? "gradient" : "solid"}
+            className={"transition-[font-size] duration-200 " + (collapsed ? "text-[30px]" : "text-[28px]")}
+          />
+          {!collapsed && (
+            <span dir="ltr" className="font-label mt-1 text-[10px] font-medium tracking-[3px] text-[#b6b2c4]">
+              EVENT STUDIO
+            </span>
+          )}
         </Link>
 
-        <nav className="flex flex-col gap-0.5">
+        <VenueSwitcher
+          venues={venues}
+          activeId={activeVenueId}
+          collapsed={collapsed}
+          onSelect={(id) => {
+            setActiveVenue(id);
+            setActiveVenueId(id);
+          }}
+          onAdd={() => {
+            const next = addVenue();
+            setVenues(next);
+            setActiveVenue(loadActiveVenueId());
+            // A venue with zero halls isn't a real state — send the designer straight
+            // into adding its first room.
+            router.push("/halls");
+          }}
+          onRename={(id, name) => setVenues(renameVenue(id, name))}
+        />
+
+        <nav className="flex flex-col gap-[3px]">
           {GENERAL.map((item) => (
-            <NavRow key={item.href} item={item} pathname={pathname} />
+            <NavRow key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
           ))}
         </nav>
 
         <Link
           href="/settings"
-          aria-current={pathname.startsWith("/settings") ? "page" : undefined}
-          className="mt-auto flex items-center gap-3 rounded-md px-2 py-2 pt-4 transition-colors hover:bg-bg"
+          aria-current={settingsActive ? "page" : undefined}
+          title={collapsed ? "הגדרות · דניאל אמסלם" : undefined}
+          className={
+            "mt-auto flex items-center gap-[11px] rounded-md border border-border bg-inset transition-colors hover:bg-accent-tint " +
+            (collapsed ? "justify-center px-0 py-[11px]" : "p-[11px]") +
+            " " +
+            (settingsActive ? "font-bold text-accent" : "")
+          }
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bg text-sm font-semibold text-ink-soft ring-1 ring-inset ring-border">
+          <span className="grad-cta flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[15px] font-bold text-canvas">
             ד
           </span>
-          <span className="leading-tight">
-            <span className="block text-sm font-medium text-ink">
-              דניאל אמסלם
+          {!collapsed && (
+            <span className="leading-tight">
+              <span className="block text-[14px] font-semibold leading-[1.25] text-ink">דניאל אמסלם</span>
+              <span className="block text-xs text-quiet">מעצב · חשבון יחיד</span>
             </span>
-            <span className="block text-xs text-muted">מעצב · חשבון יחיד</span>
-          </span>
+          )}
         </Link>
       </aside>
 
       {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface px-8">
-          <div className="flex items-baseline gap-3">
-            {meta ? (
-              <h1 className="font-display text-h2 text-ink">{meta.title}</h1>
-            ) : (
-              <Wordmark tone="mono" className="text-[22px]" />
-            )}
-            {meta?.sub && (
-              <span className="text-sm text-muted">{meta.sub(event)}</span>
-            )}
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <header className="flex h-16 shrink-0 items-center gap-4 rounded-md bg-surface px-8 shadow-floating">
+          {meta ? (
+            <h1 className="shrink-0 font-display text-h2 text-ink">{meta.title}</h1>
+          ) : (
+            <Wordmark tone="mono" className="shrink-0 text-[22px]" />
+          )}
+
+          <SearchInput
+            value={headerSearch}
+            onChange={setHeaderSearch}
+            placeholder="חיפוש לקוח או אירוע"
+            aria-label="חיפוש לקוח או אירוע"
+            className="mx-auto w-full max-w-sm flex-1"
+          />
+
+          <div className="flex shrink-0 items-center gap-1.5">
+            <IconButton label="אולמות" onClick={() => router.push("/halls")}>
+              <Building2 className="h-4 w-4" strokeWidth={1.75} />
+            </IconButton>
+            <IconButton label="התראות">
+              <Bell className="h-4 w-4" strokeWidth={1.75} />
+            </IconButton>
+            <Link
+              href="/meeting?new"
+              className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
+            >
+              + יצירת אירוע חדש
+            </Link>
           </div>
-          <Link
-            href="/meeting?new"
-            className="grad-soft inline-flex items-center gap-1.5 rounded-pill border border-soft-line px-5 py-2.5 text-sm font-bold text-accent-hover transition-all hover:brightness-[0.98]"
-          >
-            <Plus className="h-4 w-4" strokeWidth={2} />
-            אירוע חדש — פגישה
-          </Link>
         </header>
 
         <main className="min-h-0 flex-1 overflow-auto">{children}</main>
@@ -146,7 +192,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function NavRow({ item, pathname }: { item: NavItem; pathname: string }) {
+function NavRow({ item, pathname, collapsed }: { item: NavItem; pathname: string; collapsed: boolean }) {
   const active = item.match
     ? item.match(pathname)
     : pathname === item.href || pathname.startsWith(item.href + "/");
@@ -154,11 +200,14 @@ function NavRow({ item, pathname }: { item: NavItem; pathname: string }) {
     <Link
       href={item.href}
       aria-current={active ? "page" : undefined}
+      title={collapsed ? item.label : undefined}
       className={
-        "relative flex items-center gap-3 rounded-pill px-3.5 py-2.5 text-sm transition-colors " +
+        "relative flex items-center gap-3 rounded-md py-[11px] text-sm transition-colors " +
+        (collapsed ? "justify-center px-0" : "px-3.5") +
+        " " +
         (active
-          ? "bg-accent-wash font-semibold text-accent-hover"
-          : "text-ink-soft hover:bg-accent-tint hover:text-accent-hover")
+          ? "bg-accent-tint font-bold text-accent"
+          : "font-semibold text-muted hover:bg-accent-tint hover:text-accent-hover")
       }
     >
       <item.icon
@@ -166,9 +215,9 @@ function NavRow({ item, pathname }: { item: NavItem; pathname: string }) {
           "h-[18px] w-[18px] shrink-0 " +
           (active ? "text-accent" : "text-muted")
         }
-        strokeWidth={1.75}
+        strokeWidth={1.4}
       />
-      {item.label}
+      {!collapsed && item.label}
     </Link>
   );
 }

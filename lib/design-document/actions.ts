@@ -1,12 +1,14 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
 import type { DesignDocumentContent, Placement, DesignTable } from "./types";
+import type { ElementStyle } from "../element-style";
 
 export type Action =
   | { type: "addTable"; table: DesignTable }
   | { type: "moveTable"; id: string; position: DesignTable["position"] }
   | { type: "removeTable"; id: string }
   | { type: "renumberTable"; id: string; number: number }
+  | { type: "styleTable"; id: string; style: ElementStyle | undefined }
   | { type: "addPlacement"; placement: Placement }
   | { type: "movePlacement"; id: string; position: Placement["position"] }
   | { type: "setPlacementQuantity"; id: string; quantity: number }
@@ -27,6 +29,11 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
       return {
         ...doc,
         tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number: action.number } : t)),
+      };
+    case "styleTable":
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, style: action.style } : t)),
       };
     case "removeTable":
       return {
@@ -144,6 +151,11 @@ if ((import.meta as { main?: boolean }).main) {
   assert(h.present.tables.find((t) => t.id === "t2")?.number === 12, "renumber edits one table");
   h = undo(h);
   assert(h.present.tables.find((t) => t.id === "t2")?.number === 2, "renumber undoes");
+
+  h = dispatch(h, { type: "styleTable", id: "t2", style: { fill: "#c9a227", dash: "dashed" } });
+  assert(h.present.tables.find((t) => t.id === "t2")?.style?.fill === "#c9a227", "styleTable sets a table's free-form style");
+  h = dispatch(h, { type: "styleTable", id: "t2", style: undefined });
+  assert(h.present.tables.find((t) => t.id === "t2")?.style === undefined, "styleTable clears back to the renderer's default");
 
   // F-5.3: an exception (manual removal) survives a later bulk re-apply.
   const t2placement = h.present.placements.find((p) => p.tableId === "t2")!;

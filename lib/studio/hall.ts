@@ -2,6 +2,8 @@
 // height, columns, and near-fixed elements (stage, bars). Editable tables live in the
 // DesignDocument, not here. Document units are millimetres (calibration mmPerUnit = 1).
 // Seed for now — later this comes from a HallTemplate (docs §4).
+import type { ElementStyle } from "@/lib/element-style";
+
 export interface Point {
   x: number;
   y: number;
@@ -39,6 +41,7 @@ export interface Fixture {
   heightMm: number;
   shape: FixtureShape;
   rotationDeg: number;
+  style?: ElementStyle; // free-form per-fixture look (fill/stroke/dash); absent = the renderer's default
 }
 
 // A wall segment's curve, aligned by index to the outline edge it bows (edge i runs from

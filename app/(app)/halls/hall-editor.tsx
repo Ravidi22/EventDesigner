@@ -3,33 +3,19 @@
 import { useEffect, useState } from "react";
 import { DoorOpen, Presentation, Trash2, Wine, X } from "lucide-react";
 import type { HallTemplate } from "@/lib/setup/types";
-import type { Hall, Point, EdgeCurve, Entrance, Fixture } from "@/lib/studio/hall";
+import type { Hall, Point, Entrance, Fixture } from "@/lib/studio/hall";
 import { loadTemplates } from "@/lib/setup/storage";
-import {
-  edgeMidpoint,
-  bulgeToCurve,
-  wallLengthMm,
-  wallAngleDeg,
-  endpointFromLengthAngle,
-  setBulgeDepth,
-  clampEdgeCurve,
-  nearestWallToPoint,
-  projectOntoWall,
-} from "@/lib/studio/geometry";
+import { isTypingTarget } from "@/lib/keyboard";
+import { nearestWallToPoint } from "@/lib/studio/geometry";
+import { useOutlineEditor } from "@/lib/studio/use-outline-editor";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
-import { ShapeCanvas, SelectionInspector, type SelectedRef, type StructureDragType } from "@/components/shape-canvas";
-
-function sanitizeEdgeCurves(outline: Point[], edgeCurves: (EdgeCurve | null)[] | undefined): (EdgeCurve | null)[] {
-  // Older/seed halls saved before curves existed have no edgeCurves — pad to match the outline
-  // instead of leaving it empty, or every per-edge update would map over nothing. Also re-clamp
-  // every curve to the current per-wall bound, in case it was ever saved before the bulge-depth
-  // clamp existed (that's how "עיקום" could show an absurd number).
-  const n = outline.length;
-  const base = edgeCurves?.length === n ? edgeCurves : Array(n).fill(null);
-  return base.map((c, i) => (c ? clampEdgeCurve(outline[i], outline[(i + 1) % n], c) : c));
-}
+import {
+  ShapeCanvas,
+  SelectionInspector,
+  type StructureDragType,
+} from "@/components/shape-canvas";
 
 // Full-screen shape editor, same shell as the studio: a rail on one side, the hall canvas on the
 // other (RTL DOM order puts the canvas on the left, matching /studio). New halls start with an
@@ -48,158 +34,82 @@ export function HallEditor({
 }) {
   const [name, setName] = useState(draft.name);
   const [ceilingM, setCeilingM] = useState(draft.hall.ceilingHeightMm / 1000);
-  const [outline, setOutline] = useState<Point[]>(draft.hall.outline ?? []);
-  const [edgeCurves, setEdgeCurves] = useState<(EdgeCurve | null)[]>(sanitizeEdgeCurves(draft.hall.outline ?? [], draft.hall.edgeCurves));
-  const [mode, setMode] = useState<"draw" | "edit">((draft.hall.outline?.length ?? 0) >= 3 ? "edit" : "draw");
-  const [entrances, setEntrances] = useState<Entrance[]>(draft.hall.entrances);
-  const [stage, setStage] = useState<Fixture | undefined>(draft.hall.stage);
-  const [bars, setBars] = useState<Fixture[]>(draft.hall.bars);
-  const [selected, setSelected] = useState<SelectedRef | null>(null);
+  // The shape, the doors, the fixtures and their undo history all live in the hook — this screen
+  // only adds the hall's own fields (name, ceiling) and the save/delete plumbing.
+  const ed = useOutlineEditor({
+    outline: draft.hall.outline,
+    edgeCurves: draft.hall.edgeCurves,
+    entrances: draft.hall.entrances,
+    stage: draft.hall.stage,
+    bars: draft.hall.bars,
+  });
+  const { mode, outline, edgeCurves, entrances, stage, bars, selected } = ed;
+  const {
+    setSelected,
+    removeVertex,
+    removeEntrance,
+    removeStage,
+    removeBar,
+    removeLastVertex,
+  } = ed;
 
   const isNew = !loadTemplates().some((t) => t.id === draft.id);
-
-  const closeOutline = () => {
-    if (outline.length < 3) return;
-    setEdgeCurves(Array(outline.length).fill(null));
-    setMode("edit");
-  };
-
-  const moveVertex = (idx: number, p: Point) => setOutline((prev) => prev.map((v, i) => (i === idx ? p : v)));
-
-  // Removing a corner merges its two adjacent walls into one straight wall — doors on either of
-  // those walls lose their host and are dropped; every other door's wallIndex shifts to match.
-  const removeVertex = (idx: number) => {
-    if (outline.length <= 3) return;
-    const n = outline.length;
-    const incomingIdx = (idx - 1 + n) % n;
-    const nextCurves: (EdgeCurve | null)[] = [];
-    const indexMap = new Map<number, number>();
-    let newIdx = 0;
-    for (let i = 0; i < n; i++) {
-      if (i === idx) continue;
-      nextCurves.push(i === incomingIdx ? null : (edgeCurves[i] ?? null));
-      indexMap.set(i, newIdx);
-      newIdx++;
-    }
-    setOutline((prev) => prev.filter((_, i) => i !== idx));
-    setEdgeCurves(nextCurves);
-    setEntrances((prev) =>
-      prev.filter((e) => e.wallIndex !== idx && e.wallIndex !== incomingIdx).map((e) => ({ ...e, wallIndex: indexMap.get(e.wallIndex)! })),
-    );
-    setSelected(null);
-  };
-
-  // Splitting a wall shifts every later wall's index by one; a door on the split wall stays on
-  // whichever half it now falls in (measured along the original chord).
-  const insertVertexOnWall = (edgeIdx: number) => {
-    const n = outline.length;
-    const a = outline[edgeIdx];
-    const b = outline[(edgeIdx + 1) % n];
-    const mid = edgeMidpoint(a, b, edgeCurves[edgeIdx] ?? null);
-    const splitDistance = wallLengthMm(a, b) / 2;
-    const nextOutline = [...outline.slice(0, edgeIdx + 1), mid, ...outline.slice(edgeIdx + 1)];
-    const nextCurves: (EdgeCurve | null)[] = [];
-    for (let i = 0; i < n; i++) {
-      if (i === edgeIdx) nextCurves.push(null, null); // wall splits into two straight segments
-      else nextCurves.push(edgeCurves[i] ?? null);
-    }
-    setOutline(nextOutline);
-    setEdgeCurves(nextCurves);
-    setEntrances((prev) =>
-      prev.map((e) => {
-        if (e.wallIndex === edgeIdx) {
-          return e.distanceMm < splitDistance ? e : { ...e, wallIndex: edgeIdx + 1, distanceMm: e.distanceMm - splitDistance };
-        }
-        return e.wallIndex > edgeIdx ? { ...e, wallIndex: e.wallIndex + 1 } : e;
-      }),
-    );
-    setSelected({ kind: "vertex", id: String(edgeIdx + 1) });
-  };
-
-  const moveWallHandle = (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => {
-    const n = outline.length;
-    const a = outline[edgeIdx];
-    const b = outline[(edgeIdx + 1) % n];
-    setEdgeCurves((prev) =>
-      prev.map((c, i) => {
-        if (i !== edgeIdx) return c;
-        if (which === "bulge") return bulgeToCurve(a, b, p);
-        if (!c) return c;
-        const next = which === "c1" ? { ...c, c1: { x: p.x - a.x, y: p.y - a.y } } : { ...c, c2: { x: p.x - b.x, y: p.y - b.y } };
-        return clampEdgeCurve(a, b, next);
-      }),
-    );
-  };
-
-  // Numeric wall editing: length/angle move the wall's end vertex through the same moveVertex
-  // plumbing a drag would use; bulge depth writes through the same edgeCurves state a drag would.
-  const setWallLength = (edgeIdx: number, meters: number) => {
-    const n = outline.length;
-    const a = outline[edgeIdx];
-    const b = outline[(edgeIdx + 1) % n];
-    moveVertex((edgeIdx + 1) % n, endpointFromLengthAngle(a, Math.max(1, meters * 1000), wallAngleDeg(a, b)));
-  };
-  const setWallAngle = (edgeIdx: number, degrees: number) => {
-    const n = outline.length;
-    const a = outline[edgeIdx];
-    const b = outline[(edgeIdx + 1) % n];
-    moveVertex((edgeIdx + 1) % n, endpointFromLengthAngle(a, wallLengthMm(a, b), degrees));
-  };
-  const setWallBulgeDepth = (edgeIdx: number, depthMm: number) => {
-    const n = outline.length;
-    const a = outline[edgeIdx];
-    const b = outline[(edgeIdx + 1) % n];
-    setEdgeCurves((prev) => prev.map((c, i) => (i === edgeIdx ? setBulgeDepth(a, b, c, depthMm) : c)));
-  };
-
-  const updateEntrance = (id: string, patch: Partial<Entrance>) => setEntrances((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
-  const updateStage = (patch: Partial<Fixture>) => setStage((prev) => (prev ? { ...prev, ...patch } : prev));
-  const updateBar = (id: string, patch: Partial<Fixture>) => setBars((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
-
-  const removeEntrance = (id: string) => {
-    setEntrances((prev) => prev.filter((e) => e.id !== id));
-    setSelected((s) => (s?.kind === "entrance" && s.id === id ? null : s));
-  };
-  const removeStage = () => {
-    setStage(undefined);
-    setSelected((s) => (s?.kind === "stage" ? null : s));
-  };
-  const removeBar = (id: string) => {
-    setBars((prev) => prev.filter((b) => b.id !== id));
-    setSelected((s) => (s?.kind === "bar" && s.id === id ? null : s));
-  };
 
   const dropStructure = (type: StructureDragType, p: Point) => {
     if (type === "entrance" && outline.length >= 3) {
       const { edgeIdx, distanceMm } = nearestWallToPoint(outline, p);
-      const e: Entrance = { id: crypto.randomUUID(), wallIndex: edgeIdx, distanceMm, widthMm: 1600, swingInward: true, doubleDoor: true };
-      setEntrances((prev) => [...prev, e]);
-      setSelected({ kind: "entrance", id: e.id });
+      const e: Entrance = {
+        id: crypto.randomUUID(),
+        wallIndex: edgeIdx,
+        distanceMm,
+        widthMm: 1600,
+        swingInward: true,
+        doubleDoor: true,
+      };
+      ed.addEntrance(e);
     } else if (type === "bar") {
-      const b: Fixture = { id: crypto.randomUUID(), label: "בר", x: p.x, y: p.y, widthMm: 3000, depthMm: 1500, heightMm: 1100, shape: "rect", rotationDeg: 0 };
-      setBars((prev) => [...prev, b]);
-      setSelected({ kind: "bar", id: b.id });
+      const b: Fixture = {
+        id: crypto.randomUUID(),
+        label: "בר",
+        x: p.x,
+        y: p.y,
+        widthMm: 3000,
+        depthMm: 1500,
+        heightMm: 1100,
+        shape: "rect",
+        rotationDeg: 0,
+      };
+      ed.addBar(b);
     } else if (type === "stage" && !stage) {
-      const s: Fixture = { id: "fx-stage", label: "במה", x: p.x, y: p.y, widthMm: 4000, depthMm: 2400, heightMm: 600, shape: "rect", rotationDeg: 0 };
-      setStage(s);
-      setSelected({ kind: "stage", id: s.id });
+      const s: Fixture = {
+        id: "fx-stage",
+        label: "במה",
+        x: p.x,
+        y: p.y,
+        widthMm: 4000,
+        depthMm: 2400,
+        heightMm: 600,
+        shape: "rect",
+        rotationDeg: 0,
+      };
+      ed.addStage(s);
     }
   };
 
   // Global delete/escape: Backspace/Delete undoes the last drawn point while drawing, or removes
-  // the current selection once the shape is closed. Escape just clears the selection.
+  // the current selection once the shape is closed. Escape clears the selection — but only in edit
+  // mode; while drawing it belongs to the canvas, which reads it as "abandon this outline".
+  // (Ctrl+Z/Ctrl+Y are the hook's own — every removal here goes through it, so all of it undoes.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = document.activeElement;
-      const typing = el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (typing) return;
+      if (isTypingTarget()) return;
       if (e.key === "Escape") {
-        setSelected(null);
+        if (mode !== "draw") setSelected(null);
         return;
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return;
       if (mode === "draw") {
-        setOutline((prev) => (prev.length > 0 ? prev.slice(0, -1) : prev));
+        removeLastVertex();
         e.preventDefault();
         return;
       }
@@ -212,7 +122,16 @@ export function HallEditor({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, selected, outline, edgeCurves, entrances, bars, stage]);
+  }, [
+    mode,
+    selected,
+    setSelected,
+    removeVertex,
+    removeEntrance,
+    removeStage,
+    removeBar,
+    removeLastVertex,
+  ]);
 
   const buildHall = (): Hall => {
     const xs = outline.map((p) => p.x);
@@ -243,20 +162,23 @@ export function HallEditor({
     outline.length === 0
       ? "לחצו על הקנבס כדי להתחיל לצייר את קירות האולם"
       : outline.length < 3
-        ? "המשיכו להוסיף פינות…"
-        : "לחצו שוב על הנקודה הראשונה כדי לסגור את הצורה";
+        ? "הקלידו מספר לאורך מדויק · Alt לשחרור נעילת הזווית · Backspace לביטול הנקודה האחרונה"
+        : "Enter או לחיצה על הנקודה הראשונה לסגירת הצורה · Backspace לביטול נקודה · Esc לביטול הציור";
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface px-6">
+      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
         <IconButton label="חזרה לרשימת האולמות" onClick={onCancel}>
           <X className="h-5 w-5" strokeWidth={2} />
         </IconButton>
+
+        <div className="h-6 w-px bg-border" />
+
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="אולם לה־וידה"
-          className="w-56 shrink-0 border-0 bg-transparent text-base font-semibold text-ink placeholder:text-muted focus:outline-none"
+          placeholder="שם אולם"
+          className="-mx-2 w-56 shrink-0 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-base font-semibold text-ink transition-colors placeholder:text-muted hover:border-border hover:bg-canvas focus-visible:border-accent focus-visible:bg-canvas"
           autoFocus
         />
         <NumberField
@@ -271,13 +193,18 @@ export function HallEditor({
 
         <div className="flex-1" />
 
-        {mode === "draw" && <span className="text-xs text-ink-soft">{hint}</span>}
-        {mode === "edit" && <span className="text-xs text-ink-soft">קליק ימני על הקנבס להוספת כניסה, במה או בר</span>}
+        <span className="max-w-xs truncate text-xs text-ink-soft">
+          {mode === "draw"
+            ? hint
+            : "קליק ימני על הקנבס להוספת כניסה, במה או בר"}
+        </span>
         {mode === "draw" && outline.length >= 3 && (
-          <Button variant="ghost" onClick={closeOutline}>
+          <Button variant="ghost" onClick={ed.closeOutline}>
             סגירת הצורה
           </Button>
         )}
+
+        <div className="h-6 w-px bg-border" />
 
         <Button onClick={save} disabled={!canSave}>
           שמירת האולם
@@ -302,28 +229,42 @@ export function HallEditor({
             bars={bars}
             selected={selected}
             onSelect={setSelected}
-            onAddVertex={(p) => setOutline((prev) => [...prev, p])}
-            onCloseOutline={closeOutline}
-            onMoveVertex={moveVertex}
-            onMoveWallHandle={moveWallHandle}
-            onMoveEntrance={(id, p) =>
-              setEntrances((prev) =>
-                prev.map((e) => {
-                  if (e.id !== id) return e;
-                  const a = outline[e.wallIndex];
-                  const b = outline[(e.wallIndex + 1) % outline.length];
-                  return { ...e, distanceMm: projectOntoWall(a, b, p) };
-                }),
-              )
-            }
-            onMoveStage={(p) => setStage((prev) => (prev ? { ...prev, x: p.x, y: p.y } : prev))}
-            onMoveBar={(id, p) => setBars((prev) => prev.map((b) => (b.id === id ? { ...b, x: p.x, y: p.y } : b)))}
-            onUpdateStage={updateStage}
-            onUpdateBar={updateBar}
+            onAddVertex={ed.addVertex}
+            onCloseOutline={ed.closeOutline}
+            onCancelDraw={() => ed.setAll({ outline: [], edgeCurves: [] })}
+            onMoveVertex={ed.moveVertex}
+            onMoveWallHandle={ed.moveWallHandle}
+            onMoveEntrance={ed.moveEntrance}
+            onMoveStage={(p) => ed.updateStage({ x: p.x, y: p.y })}
+            onMoveBar={(id, p) => ed.updateBar(id, { x: p.x, y: p.y })}
+            onUpdateStage={ed.updateStage}
+            onUpdateBar={ed.updateBar}
+            onCommit={ed.commit}
+            canUndo={ed.canUndo}
+            canRedo={ed.canRedo}
+            onUndo={ed.undo}
+            onRedo={ed.redo}
             contextMenuItems={(point) => [
-              { label: "כניסה", icon: DoorOpen, disabled: outline.length < 3, onSelect: () => dropStructure("entrance", point) },
-              ...(stage ? [] : [{ label: "במה", icon: Presentation, onSelect: () => dropStructure("stage", point) }]),
-              { label: "עמדת בר", icon: Wine, onSelect: () => dropStructure("bar", point) },
+              {
+                label: "כניסה",
+                icon: DoorOpen,
+                disabled: outline.length < 3,
+                onSelect: () => dropStructure("entrance", point),
+              },
+              ...(stage
+                ? []
+                : [
+                    {
+                      label: "במה",
+                      icon: Presentation,
+                      onSelect: () => dropStructure("stage", point),
+                    },
+                  ]),
+              {
+                label: "עמדת בר",
+                icon: Wine,
+                onSelect: () => dropStructure("bar", point),
+              },
             ]}
           />
           {selected && (
@@ -336,17 +277,17 @@ export function HallEditor({
                   entrances={entrances}
                   stage={stage}
                   bars={bars}
-                  onUpdateEntrance={updateEntrance}
-                  onUpdateStage={updateStage}
-                  onUpdateBar={updateBar}
+                  onUpdateEntrance={ed.updateEntrance}
+                  onUpdateStage={ed.updateStage}
+                  onUpdateBar={ed.updateBar}
                   onRemoveEntrance={removeEntrance}
                   onRemoveStage={removeStage}
                   onRemoveBar={removeBar}
                   onRemoveVertex={removeVertex}
-                  onInsertVertexOnWall={insertVertexOnWall}
-                  onSetWallLength={setWallLength}
-                  onSetWallAngle={setWallAngle}
-                  onSetWallBulgeDepth={setWallBulgeDepth}
+                  onInsertVertexOnWall={ed.insertVertexOnWall}
+                  onSetWallLength={ed.setWallLength}
+                  onSetWallAngle={ed.setWallAngle}
+                  onSetWallBulgeDepth={ed.setWallBulgeDepth}
                   onClose={() => setSelected(null)}
                 />
               </div>

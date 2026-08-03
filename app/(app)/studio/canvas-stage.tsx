@@ -9,6 +9,7 @@ import type { Hall } from "@/lib/studio/hall";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { resolveFootprint, resolveContent, footprintBounds, outlineBounds, type Footprint } from "@/lib/studio/footprint";
 import { pointAtDistance, resolveWallEndpoints, wallLengthMm, outlinePathD } from "@/lib/studio/geometry";
+import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
 import { KonvaIcon } from "@/components/konva-icon";
 
@@ -194,21 +195,25 @@ export function CanvasStage({
           ))}
 
           {/* Near-fixed shell elements (F-3.1): stage, bars */}
-          {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => (
-            <Group key={f.id} x={f.x} y={f.y} listening={false}>
-              <Rect
-                x={-f.widthMm / 2}
-                y={-f.depthMm / 2}
-                width={f.widthMm}
-                height={f.depthMm}
-                fill={C.column}
-                stroke={C.muted}
-                strokeWidth={1.5}
-                strokeScaleEnabled={false}
-              />
-              <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
-            </Group>
-          ))}
+          {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => {
+            const resolved = resolveStyle(f.style, "screen", { fill: C.column, stroke: C.muted, strokeWidth: 1.5 });
+            return (
+              <Group key={f.id} x={f.x} y={f.y} listening={false}>
+                <Rect
+                  x={-f.widthMm / 2}
+                  y={-f.depthMm / 2}
+                  width={f.widthMm}
+                  height={f.depthMm}
+                  fill={resolved.fill}
+                  stroke={resolved.stroke}
+                  strokeWidth={resolved.strokeWidth}
+                  {...(resolved.dashArray.length ? { dash: resolved.dashArray } : {})}
+                  strokeScaleEnabled={false}
+                />
+                <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
+              </Group>
+            );
+          })}
 
           {/* The event's aligned iPlan sketch (F-3.2) — placeholder frame until real PDF pixels exist */}
           {doc.sketch && (
@@ -294,7 +299,14 @@ function TableNode({
   onMove: (pos: { x: number; y: number }) => void;
 }) {
   const overflow = util > 1;
-  const stroke = selected ? C.accent : overflow ? C.warn : C.ink;
+  // The table's own style sets its "at rest" look; selection and the overflow warning are
+  // functional states that must stay legible regardless, so they still override stroke/fill on
+  // top of it (mirrors the hall editor's fixtures, whose selection handles work the same way).
+  const resolved = resolveStyle(table.style, "screen", { fill: C.surface, stroke: C.ink, strokeWidth: 2.5 });
+  const fill = overflow ? C.warnTint : resolved.fill;
+  const stroke = selected ? C.accent : overflow ? C.warn : resolved.stroke;
+  const strokeWidth = selected ? 4 : resolved.strokeWidth;
+  const dash = resolved.dashArray.length ? { dash: resolved.dashArray } : {};
   const common = {
     onClick: (e: Konva.KonvaEventObject<MouseEvent>) => {
       e.cancelBubble = true;
@@ -310,7 +322,7 @@ function TableNode({
   return (
     <Group x={table.position.x} y={table.position.y} {...common}>
       {table.diameterMm ? (
-        <Circle radius={table.diameterMm / 2} fill={overflow ? C.warnTint : C.surface} stroke={stroke} strokeWidth={selected ? 4 : 2.5} strokeScaleEnabled={false} />
+        <Circle radius={table.diameterMm / 2} fill={fill} stroke={stroke} strokeWidth={strokeWidth} {...dash} strokeScaleEnabled={false} />
       ) : (
         <Rect
           x={-(table.widthMm ?? 0) / 2}
@@ -318,9 +330,10 @@ function TableNode({
           width={table.widthMm ?? 0}
           height={table.depthMm ?? 0}
           cornerRadius={80}
-          fill={overflow ? C.warnTint : C.surface}
+          fill={fill}
           stroke={stroke}
-          strokeWidth={selected ? 4 : 2.5}
+          strokeWidth={strokeWidth}
+          {...dash}
           strokeScaleEnabled={false}
         />
       )}

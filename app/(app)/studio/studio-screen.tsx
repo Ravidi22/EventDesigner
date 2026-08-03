@@ -10,6 +10,7 @@ import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
 import { defaultVariantId } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
+import { isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { Inspector } from "./inspector";
@@ -149,8 +150,7 @@ export function StudioScreen() {
   // Keyboard: undo/redo + delete (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = document.activeElement;
-      const typing = el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      const typing = isTypingTarget();
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         setHistory((h) => (e.shiftKey ? redo(h) : undo(h)));
@@ -208,6 +208,7 @@ export function StudioScreen() {
                 onDelete={deleteSelection}
                 onSmartApply={smartApply}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
+                onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicateTable={duplicateTable}
               />
             </div>

@@ -2,9 +2,11 @@
 
 import { Minus, Plus, Trash2, Copy, X, TriangleAlert, Layers } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
+import type { ElementStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
+import { StyleFields } from "@/components/style-fields";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import type { Selection } from "./canvas-stage";
@@ -17,6 +19,7 @@ export function Inspector({
   onDelete,
   onSmartApply,
   onRenumber,
+  onStyleTable,
   onDuplicateTable,
 }: {
   selection: Selection;
@@ -26,6 +29,7 @@ export function Inspector({
   onDelete: () => void;
   onSmartApply: () => void;
   onRenumber: (id: string, number: number) => void;
+  onStyleTable: (id: string, style: ElementStyle | undefined) => void;
   onDuplicateTable: (id: string) => void;
 }) {
   if (!selection) return null;
@@ -118,6 +122,13 @@ export function Inspector({
             הפריטים חורגים משטח השולחן
           </p>
         )}
+      </div>
+
+      <div className="mt-3">
+        <span className="mb-1.5 block text-xs text-ink-soft">מראה</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <StyleFields style={t.style} onChange={(style) => onStyleTable(t.id, style)} strokeWidthDefault={2.5} />
+        </div>
       </div>
 
       <div className="mt-4 flex flex-col gap-1.5">

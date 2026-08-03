@@ -13,6 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "check:actions": "node --experimental-strip-types lib/design-document/actions.ts",
     "check:footprint": "node --experimental-strip-types lib/studio/footprint.ts",
+    "check:geometry": "node --experimental-strip-types lib/studio/geometry.ts",
+    "check:snap": "node --experimental-strip-types lib/studio/snap.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -5,6 +5,7 @@ import { Pencil, Plus } from "lucide-react";
 import type { HallTemplate } from "@/lib/setup/types";
 import { loadTemplates, saveTemplate, deleteTemplate } from "@/lib/setup/storage";
 import { SEED_TEMPLATES } from "@/lib/setup/sample-data";
+import { DEFAULT_VENUES, VENUE_CHANGED_EVENT, loadActiveVenueId, loadVenues, type Venue } from "@/lib/venues/storage";
 import { PlanPreview } from "@/components/plan-preview";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { Button } from "@/components/button";
@@ -14,13 +15,25 @@ import { HallEditor } from "./hall-editor";
 // Hall shells (F-3.1): the halls the designer works in — geometry, entrances, obstacles,
 // optional near-fixed elements, calibration. NO table layouts; those arrive per event from
 // iPlan in the meeting flow. Events are opened from the meeting flow, not from here.
+// Halls belong to a venue (lib/venues) — the property; this screen scopes the list to
+// whichever venue is active in the sidebar, so "אולם חדש" always lands in the right place.
 export function HallsScreen() {
   const [templates, setTemplates] = useState<HallTemplate[]>(SEED_TEMPLATES);
+  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
+  const [activeVenueId, setActiveVenueId] = useState(DEFAULT_VENUES[0].id);
   const [editing, setEditing] = useState<HallTemplate | null>(null);
 
   useEffect(() => {
     setTemplates(loadTemplates());
+    setVenues(loadVenues());
+    setActiveVenueId(loadActiveVenueId());
+    const onVenueChanged = () => setActiveVenueId(loadActiveVenueId());
+    window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
+    return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
   }, []);
+
+  const activeVenue = venues.find((v) => v.id === activeVenueId);
+  const shown = templates.filter((t) => t.venueId === activeVenueId);
 
   if (editing) {
     return (
@@ -41,20 +54,27 @@ export function HallsScreen() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="px-8 py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <p className="max-w-xl text-sm leading-relaxed text-ink-soft">
-          שלד אולם — קווי מתאר, כניסות, גובה תקרה, במה ובר — מוגדר פעם אחת ומשמש כל אירוע באולם.
-          פריסות השולחנות עצמן מגיעות פר אירוע מסקיצת ה-iPlan, בזרימת הפגישה.
+          האולמות של <span className="font-semibold text-ink">{activeVenue?.name}</span> — קווי מתאר,
+          כניסות, גובה תקרה, במה ובר, מוגדרים פעם אחת ומשמשים כל אירוע באולם. פריסות השולחנות עצמן
+          מגיעות פר אירוע מסקיצת ה-iPlan, בזרימת הפגישה.
         </p>
-        <Button onClick={() => setEditing(newHall())}>
+        <Button onClick={() => setEditing(newHall(activeVenueId))}>
           <Plus className="h-4 w-4" strokeWidth={2} />
           אולם חדש
         </Button>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {templates.map((t) => {
+      {shown.length === 0 && (
+        <p className="py-16 text-center text-sm text-muted">
+          אין עדיין אולמות ב{activeVenue?.name ?? "מתחם זה"}. הוסיפו את האולם הראשון.
+        </p>
+      )}
+
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {shown.map((t) => {
           const areaM2 = t.hall.outline?.length
             ? polygonAreaMm2(t.hall.outline) / 1_000_000
             : (t.hall.widthMm * t.hall.heightMm) / 1_000_000;
@@ -94,10 +114,11 @@ export function HallsScreen() {
 
 // Clean canvas — no outline yet. The editor opens straight into draw mode so the designer
 // places the shell wall by wall instead of starting from a prefilled rectangle.
-function newHall(): HallTemplate {
+function newHall(venueId: string): HallTemplate {
   return {
     id: crypto.randomUUID(),
     name: "",
+    venueId,
     hall: {
       widthMm: 0,
       heightMm: 0,
