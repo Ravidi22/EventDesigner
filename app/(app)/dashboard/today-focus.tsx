@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { MapPin } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventStatus } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus } from "@/lib/events/types";
 import { toISODate, TONE_CLASS } from "./dashboard-view-utils";
 
 type Tab = "events" | "meetings";
@@ -76,7 +76,7 @@ export function TodayFocus({
         <div className="flex flex-col gap-3">
           {shown.map((e) => {
             const status = eventStatus(e);
-            const progress = Math.round((Math.min(e.step, FLOW_STEPS.length - 1) / (FLOW_STEPS.length - 1)) * 100);
+            const progress = eventProgress(e);
             return (
               <button
                 key={e.id}

@@ -19,6 +19,7 @@ export interface EventSummary {
   clientName: string;
   phone: string;
   date: string; // ISO yyyy-mm-dd ("" = not set yet) — the wedding/event day itself
+  time?: string; // HH:mm — start time on `date` (or on `meetingDate`, if that's what's shown)
   meetingDate?: string; // ISO yyyy-mm-dd — a scheduled client consultation, distinct from `date`
   hallTemplateId?: string;
   hallName: string;
@@ -62,6 +63,11 @@ export const STATUS_TONE: Record<EventStatus, StatusTone> = {
   sent: "success",
   archived: "neutral",
 };
+
+// F-1.1: progress = the furthest flow step reached, shown against the whole flow.
+export function eventProgress(e: EventSummary): number {
+  return Math.round((Math.min(e.step, FLOW_STEPS.length - 1) / (FLOW_STEPS.length - 1)) * 100);
+}
 
 // 2-letter monogram for avatar chips, derived (not stored).
 export function monogram(name: string): string {

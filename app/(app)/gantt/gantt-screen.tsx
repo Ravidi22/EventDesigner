@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, PenTool } from "lucide-react";
 import type { EventSummary, EventStatus } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventStatus, monogram, formatEventDate } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventProgress, eventStatus, monogram, formatEventDate } from "@/lib/events/types";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId, updateEvent } from "@/lib/events/storage";
+import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { SearchInput } from "@/components/search-input";
 import { StatusChip } from "@/components/status-chip";
 
@@ -28,21 +29,24 @@ export function GanttScreen() {
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+  const { activeVenueId, eventVenueId } = useActiveVenueScope();
 
   useEffect(() => {
     setEvents(loadEvents());
   }, []);
 
   const filtered = useMemo(() => {
+    const byVenue = events.filter((e) => eventVenueId(e) === activeVenueId);
     const byTab =
       filter === "active"
-        ? events.filter((e) => !e.archived)
+        ? byVenue.filter((e) => !e.archived)
         : filter === "archived"
-          ? events.filter((e) => e.archived)
-          : events.filter((e) => eventStatus(e) === filter);
+          ? byVenue.filter((e) => e.archived)
+          : byVenue.filter((e) => eventStatus(e) === filter);
     const q = query.trim().toLowerCase();
     return q ? byTab.filter((e) => `${e.clientName} ${e.hallName}`.toLowerCase().includes(q)) : byTab;
-  }, [events, filter, query]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, filter, query, activeVenueId]);
 
   const shown = useMemo(() => {
     const sign = sortDir === "desc" ? -1 : 1;
@@ -153,7 +157,7 @@ function EventCard({
   const status = eventStatus(e);
   // F-1.1: progress = the furthest flow step reached, shown against the whole flow.
   const stepLabel = FLOW_STEPS[Math.min(e.step, FLOW_STEPS.length - 1)].label;
-  const progress = Math.round((Math.min(e.step, FLOW_STEPS.length - 1) / (FLOW_STEPS.length - 1)) * 100);
+  const progress = eventProgress(e);
 
   return (
     <article className="group flex flex-col gap-5 rounded-lg border border-border bg-surface p-6 transition-all hover:border-accent-line hover:shadow-lifted">
