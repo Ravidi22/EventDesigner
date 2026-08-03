@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Building2, Check, Eye, Share2, X } from "lucide-react";
-import { DEFAULT_VENUES, loadActiveVenueId, loadVenues, onActiveVenueChange, type Venue } from "@/lib/venues/storage";
+import { DEFAULT_VENUES, VENUE_CHANGED_EVENT, loadActiveVenueId, loadVenues, type Venue } from "@/lib/venues/storage";
 import {
   GRANT_KIND_LABEL,
   SCOPE_LABEL,
@@ -53,10 +53,13 @@ export function SharingSection() {
     setGrants(grantsForVenue(active));
     // Follow the sidebar: switching venues there while this screen is open should retarget it,
     // rather than leaving the designer editing shares for a property they just navigated away from.
-    return onActiveVenueChange((id) => {
+    const onVenueChanged = () => {
+      const id = loadActiveVenueId();
       setVenueId(id);
       setGrants(grantsForVenue(id));
-    });
+    };
+    window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
+    return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
   }, []);
 
   const pick = (id: string) => {
