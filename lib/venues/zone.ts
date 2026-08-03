@@ -12,7 +12,7 @@
 //            boundary behind as a stale duplicate.
 //   region — they drew it freehand over open ground (קוליסאום, lawn, parking), where there are no
 //            walls to enclose anything and therefore nothing to detect.
-import type { Column, EdgeCurve, Entrance, Fixture, Point } from "@/lib/studio/hall";
+import type { Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
 import { outlineBounds, polygonAreaMm2, type Bounds } from "@/lib/studio/geometry";
 import { faceAt, type Face } from "./faces";
@@ -106,40 +106,4 @@ export function newZone(venueId: string, kind: ZoneKind, source: ZoneSource, nam
     ceilingHeightMm: kind === "hall" ? 4000 : 0,
     createdAt: Date.now(),
   };
-}
-
-// --- the legacy renderer seam ----------------------------------------------
-// Unrelated to the zone model above, and on its way out. The four plan renderers still take Hall
-// objects from the old per-hall screens; this is the geometric subset they read, so they could
-// come off Hall.widthMm/heightMm before their callers were migrated. It retires with Hall.
-export interface ZoneShell {
-  outline?: Point[];
-  edgeCurves?: (EdgeCurve | null)[];
-  columns: Column[];
-  entrances: Entrance[];
-  stage?: Fixture;
-  bars: Fixture[];
-  /** @deprecated Legacy Hall bounding box. Read only when `outline` is absent; retires with Hall. */
-  widthMm?: number;
-  heightMm?: number;
-}
-
-// Synthesises the width×height rectangle for halls saved before `outline` existed, so that fallback
-// lives in one place instead of at each viewBox. Any partially-drawn outline wins outright: mid-draw
-// a shape legitimately has one or two points, which is not the legacy case the rectangle is for.
-export function shellOutline(shell: ZoneShell): Point[] {
-  if (shell.outline?.length) return shell.outline;
-  const w = shell.widthMm ?? 0;
-  const h = shell.heightMm ?? 0;
-  if (w <= 0 || h <= 0) return [];
-  return [
-    { x: 0, y: 0 },
-    { x: w, y: 0 },
-    { x: w, y: h },
-    { x: 0, y: h },
-  ];
-}
-
-export function shellBounds(shell: ZoneShell): Bounds {
-  return outlineBounds(shellOutline(shell), shell.edgeCurves);
 }

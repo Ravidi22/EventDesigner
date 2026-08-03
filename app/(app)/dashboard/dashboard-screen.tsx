@@ -5,9 +5,6 @@ import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId } from "@/lib/events/storage";
-import type { HallTemplate } from "@/lib/setup/types";
-import { loadTemplates } from "@/lib/setup/storage";
-import { SEED_TEMPLATES } from "@/lib/setup/sample-data";
 import { DEFAULT_VENUES, loadActiveVenueId, loadVenues, venueSwatchClass, type Venue } from "@/lib/venues/storage";
 import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
@@ -20,42 +17,31 @@ import { EventStats } from "./event-stats";
 export function DashboardScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<EventSummary[]>(SAMPLE_EVENTS);
-  const [templates, setTemplates] = useState<HallTemplate[]>(SEED_TEMPLATES);
   const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
   const [selectedVenueIds, setSelectedVenueIds] = useState<string[]>([DEFAULT_VENUES[0].id]);
   const [greeting, setGreeting] = useState("שלום");
 
   useEffect(() => {
     setEvents(loadEvents());
-    setTemplates(loadTemplates());
     setVenues(loadVenues());
     setSelectedVenueIds([loadActiveVenueId()]);
     const h = new Date().getHours();
     setGreeting(h < 12 ? "בוקר טוב" : h < 18 ? "צהריים טובים" : "ערב טוב");
   }, []);
 
-  // An event only knows its hall (hallTemplateId); the hall is what actually belongs to a
-  // venue, so filtering/coloring by venue has to go through this lookup.
-  const hallVenue = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const t of templates) map.set(t.id, t.venueId);
-    return map;
-  }, [templates]);
-
-  const eventVenueId = (e: EventSummary): string | undefined => (e.hallTemplateId ? hallVenue.get(e.hallTemplateId) : undefined);
-
-  const visibleEvents = useMemo(() => {
-    const active = events.filter((e) => !e.archived);
-    return active.filter((e) => selectedVenueIds.includes(eventVenueId(e) ?? ""));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, selectedVenueIds, hallVenue]);
+  // An event names its venue directly now (it occupies zones OF a venue), so filtering and
+  // colouring by venue is a field read — no hall→venue lookup table in between.
+  const visibleEvents = useMemo(
+    () => events.filter((e) => !e.archived && selectedVenueIds.includes(e.venueId ?? "")),
+    [events, selectedVenueIds],
+  );
 
   const openEvent = (e: EventSummary) => {
     setActiveEventId(e.id);
     router.push("/meeting");
   };
 
-  const getVenueColor = (e: EventSummary) => venueSwatchClass(eventVenueId(e));
+  const getVenueColor = (e: EventSummary) => venueSwatchClass(e.venueId);
 
   return (
     <div className="px-8 py-8">

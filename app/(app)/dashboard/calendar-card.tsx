@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventStatus } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventStatus, zonesLabelOf } from "@/lib/events/types";
 import type { Venue } from "@/lib/venues/storage";
 import { IconButton } from "@/components/icon-button";
 import { MultiSelect } from "@/components/multi-select";
@@ -227,7 +227,7 @@ function EventCard({
       <button
         type="button"
         onClick={onClick}
-        title={`${e.clientName} · ${e.hallName}`}
+        title={`${e.clientName} · ${zonesLabelOf(e)}`}
         className="flex items-center gap-1.5 truncate rounded-sm border border-border bg-surface px-1.5 py-1 text-start transition-all hover:border-accent-line hover:shadow-floating"
       >
         <span className={"h-1.5 w-1.5 shrink-0 rounded-full " + swatch} aria-hidden />
@@ -246,7 +246,7 @@ function EventCard({
         <span className={"h-2 w-2 shrink-0 rounded-full " + swatch} aria-hidden />
         <span className="truncate text-xs font-semibold text-ink">{e.clientName}</span>
       </div>
-      <span className="truncate text-[11px] text-muted">{e.hallName}</span>
+      <span className="truncate text-[11px] text-muted">{zonesLabelOf(e)}</span>
       <span className={"self-start rounded-pill px-1.5 py-0.5 text-[10px] font-medium " + TONE_CLASS[STATUS_TONE[status]]}>
         {STATUS_LABEL[status]}
       </span>

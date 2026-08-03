@@ -2,26 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { packingList } from "@/lib/outputs/aggregate";
 import { itemLookup } from "@/lib/outputs/lookup";
+import { loadSpares, saveSpare, type Spares } from "@/lib/outputs/storage";
 import { NumberField } from "@/components/number-field";
 
 // F-6.3: manual spares per row, persisted with the event — so the "no manual fixes" success
 // metric covers reserves too, instead of pen-on-paper additions.
-type Spares = Record<string, number>;
-const sparesKey = (eventId: string) => storageKey(`spares.${eventId}`);
-
-function loadSpares(eventId: string): Spares {
-  try {
-    const raw = window.localStorage.getItem(sparesKey(eventId));
-    return raw ? (JSON.parse(raw) as Spares) : {};
-  } catch {
-    return {};
-  }
-}
-
 export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; eventId: string | null }) {
   const [spares, setSpares] = useState<Spares>({});
 
@@ -30,17 +18,8 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
   }, [eventId]);
 
   const setSpare = (variantId: string, v: number) => {
-    const next = { ...spares };
-    if (v > 0) next[variantId] = v;
-    else delete next[variantId];
-    setSpares(next);
-    if (eventId) {
-      try {
-        window.localStorage.setItem(sparesKey(eventId), JSON.stringify(next));
-      } catch {
-        // non-fatal
-      }
-    }
+    if (!eventId) return;
+    setSpares(saveSpare(eventId, variantId, v, spares));
   };
 
   const groups = packingList(doc, itemLookup);

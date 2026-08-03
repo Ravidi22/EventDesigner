@@ -5,8 +5,9 @@ import dynamic from "next/dynamic";
 import { dispatch, undo, redo, initHistory, type History } from "@/lib/design-document/actions";
 import type { Layer as LayerId } from "@/lib/design-document/types";
 import { sampleDoc } from "@/lib/studio/sample-doc";
-import { SAMPLE_HALL, type Hall } from "@/lib/studio/hall";
-import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
+import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
+import { activeEvent } from "@/lib/events/storage";
+import { loadDoc, saveDoc } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
 import { defaultVariantId } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
@@ -25,7 +26,7 @@ const uid = () => crypto.randomUUID();
 
 export function StudioScreen() {
   const [history, setHistory] = useState<History>(() => initHistory(sampleDoc()));
-  const [hall, setHall] = useState<Hall>(SAMPLE_HALL);
+  const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
   const [selection, setSelection] = useState<Selection>(null);
   const [layerVisible, setLayerVisible] = useState<Record<LayerId, boolean>>({ table: true, floor: true, ceiling: true });
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
@@ -35,13 +36,12 @@ export function StudioScreen() {
 
   const doc = history.present;
 
-  // Restore the saved document + hall once, on the client (keeps SSR deterministic). The hall
-  // is written by the setup flow (F-1.6) when an event is opened.
+  // Restore the saved document once, on the client (keeps SSR deterministic), and resolve the
+  // geometry it sits on from the active event's venue + zones — never from a stored copy.
   useEffect(() => {
     const saved = loadDoc();
     if (saved) setHistory(initHistory(saved));
-    const savedHall = loadHall();
-    if (savedHall) setHall(savedHall);
+    setPlan(eventPlan(activeEvent()));
   }, []);
 
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only
@@ -188,7 +188,7 @@ export function StudioScreen() {
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={doc}
-            hall={hall}
+            plan={plan}
             selection={selection}
             layerVisible={layerVisible}
             addingTable={addingTable}
