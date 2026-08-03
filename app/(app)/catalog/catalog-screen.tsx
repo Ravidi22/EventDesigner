@@ -4,27 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FileUp, Plus } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { Button } from "@/components/button";
-import { CATEGORY_BY_ID, CATEGORIES } from "@/lib/catalog/categories";
+import { CATEGORIES } from "@/lib/catalog/categories";
 import { SAMPLE_PRODUCTS } from "@/lib/catalog/sample-data";
 import { loadProducts, upsertProduct, deleteOrArchiveProduct, saveProducts } from "@/lib/catalog/storage";
 import { parseCsvProducts } from "@/lib/catalog/csv";
 import { ProductCard } from "./product-card";
-import { Filters, EMPTY_FILTERS, type FilterState } from "./filters";
+import { Filters, EMPTY_FILTERS, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 import { FirstRunEmpty, NoResults } from "./empty-state";
-
-function matches(p: Product, f: FilterState): boolean {
-  if (f.category && p.category !== f.category) return false;
-  if (f.layer && p.layer !== f.layer) return false;
-  if (f.tags.length > 0 && !f.tags.some((t) => p.styleTags.includes(t))) return false; // OR within tags
-  if (f.search.trim()) {
-    const q = f.search.trim().toLowerCase();
-    const hay = `${p.name} ${CATEGORY_BY_ID[p.category]?.label ?? ""}`.toLowerCase();
-    if (!hay.includes(q)) return false;
-  }
-  return true;
-}
-
 
 export function CatalogScreen() {
   const [products, setProducts] = useState<Product[]>(SAMPLE_PRODUCTS);
@@ -39,7 +26,7 @@ export function CatalogScreen() {
 
   // F-4.5: archived products are hidden from the catalog (placements still resolve them).
   const visible = useMemo(() => products.filter((p) => !p.archived), [products]);
-  const filtered = useMemo(() => visible.filter((p) => matches(p, filters)), [visible, filters]);
+  const filtered = useMemo(() => visible.filter((p) => matchesFilters(p, filters)), [visible, filters]);
 
   const saveProduct = (p: Product) => setProducts(upsertProduct(p));
   const deleteProduct = (id: string) => {
