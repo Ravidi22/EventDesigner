@@ -4,6 +4,7 @@
 import type { Product } from "@/lib/catalog/types";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
+import { outlineBounds } from "@/lib/studio/geometry";
 
 export const MIN_FOOTPRINT_MM = 600; // floor so missing/zero dims never render at zero size
 
@@ -41,11 +42,13 @@ export function resolveContent(product: Product): ResolvedContent {
   return { mode, icon: a?.icon, name: product.name };
 }
 
-export function outlineBounds(outline: Point[]) {
-  const xs = outline.map((p) => p.x);
-  const ys = outline.map((p) => p.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-  return { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+// Bounds of a catalog item's custom shape, in the item's own local space. The min/max itself is
+// geometry.outlineBounds — this only adds the centre point the shape editor and previews recentre
+// on, and keeps the short w/h names those call sites read. Named for the catalog shape rather than
+// "outline" so it can't be confused with the canonical one in ./geometry.
+export function customShapeBounds(outline: Point[]) {
+  const { minX, maxX, minY, maxY, widthMm, heightMm } = outlineBounds(outline);
+  return { minX, maxX, minY, maxY, w: widthMm, h: heightMm, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
 
 export function footprintBounds(f: Footprint): { w: number; h: number } {
@@ -53,7 +56,7 @@ export function footprintBounds(f: Footprint): { w: number; h: number } {
     case "circle": return { w: f.diameterMm, h: f.diameterMm };
     case "rect":
     case "ellipse": return { w: f.widthMm, h: f.depthMm };
-    case "custom": { const b = outlineBounds(f.outline); return { w: b.w, h: b.h }; }
+    case "custom": { const b = customShapeBounds(f.outline); return { w: b.w, h: b.h }; }
   }
 }
 
