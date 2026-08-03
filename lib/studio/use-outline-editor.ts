@@ -4,6 +4,7 @@ import type { EdgeCurve, Entrance, Fixture, Point } from "./hall";
 import {
   bulgeToCurve,
   clampEdgeCurve,
+  constrainVertexToLocks,
   edgeMidpoint,
   endpointFromLengthAngle,
   projectOntoWall,
@@ -12,6 +13,8 @@ import {
   wallAngleDeg,
   wallLengthMm,
 } from "./geometry";
+
+const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
 
 // The single owner of an editable outline: the shape's state, every geometry mutation on it, and
 // the undo/redo history those mutations feed. Both the hall editor (outline + doors + stage +
@@ -32,6 +35,7 @@ export interface OutlineState {
   mode: "draw" | "edit";
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
+  lockedEdges: boolean[];
   entrances: Entrance[];
   stage: Fixture | undefined;
   bars: Fixture[];
@@ -40,6 +44,7 @@ export interface OutlineState {
 export interface OutlineEditorInit {
   outline?: Point[];
   edgeCurves?: (EdgeCurve | null)[];
+  lockedEdges?: boolean[];
   entrances?: Entrance[];
   stage?: Fixture;
   bars?: Fixture[];
@@ -61,12 +66,20 @@ function sanitizeEdgeCurves(outline: Point[], edgeCurves: (EdgeCurve | null)[] |
   });
 }
 
+// Older/seed halls saved before locks existed have no lockedEdges — pad to match the outline, same
+// as sanitizeEdgeCurves. Unlike a curve there's nothing to re-validate beyond the pad: a lock
+// either survived the save as a plain boolean or it didn't.
+function sanitizeLockedEdges(outline: Point[], lockedEdges: boolean[] | undefined): boolean[] {
+  return Array.from({ length: outline.length }, (_, i) => lockedEdges?.[i] ?? false);
+}
+
 function initialState(init: OutlineEditorInit): OutlineState {
   const outline = init.outline ?? [];
   return {
     mode: init.mode ?? (outline.length >= 3 ? "edit" : "draw"),
     outline,
     edgeCurves: sanitizeEdgeCurves(outline, init.edgeCurves),
+    lockedEdges: sanitizeLockedEdges(outline, init.lockedEdges),
     entrances: init.entrances ?? [],
     stage: init.stage,
     bars: init.bars ?? [],
@@ -75,8 +88,13 @@ function initialState(init: OutlineEditorInit): OutlineState {
 
 // --- pure state transforms -------------------------------------------------------------------
 
+// A locked wall pins whichever of its endpoints is being dragged onto the circle (or, pinned
+// between two locked walls, the point) that keeps its length exactly what it was — see
+// constrainVertexToLocks. An unlocked vertex is untouched by this, so ordinary dragging is exactly
+// as free as it always was.
 function withVertexMoved(s: OutlineState, idx: number, p: Point): OutlineState {
-  return { ...s, outline: s.outline.map((v, i) => (i === idx ? p : v)) };
+  const clamped = constrainVertexToLocks(s.outline, idx, p, s.lockedEdges);
+  return { ...s, outline: s.outline.map((v, i) => (i === idx ? clamped : v)) };
 }
 
 // Swapping in a whole new outline changes wall lengths, so the two things measured *against* those
@@ -96,12 +114,29 @@ function withOutlineReplaced(s: OutlineState, outline: Point[]): OutlineState {
 // wall keeps its angle and wall i+2 absorbs the change (see reshapeEdgeKeepingAngles — without
 // this, setting one side of a square shears its neighbour and the rectangle is lost). Degenerate
 // shapes fall back to moving the end vertex alone, which is the older, blunter behaviour.
+//
+// A locked wall changes this in two ways: editing a locked wall's *own* length/angle is refused
+// outright (the inspector disables the field too — this is belt-and-suspenders), and if the
+// angle-preserving solve above would quietly change a *different*, locked wall's length two
+// corners over, that solve is rejected in favour of the blunter single-vertex fallback — which
+// moves nothing past this wall's own far end, so a lock further along the outline can't be
+// smuggled past. That fallback still routes through withVertexMoved's own lock clamp, so a lock on
+// the wall being directly touched by the fallback is respected too.
 function withEdgeReshaped(s: OutlineState, edgeIdx: number, newB: Point): OutlineState {
+  if (s.lockedEdges[edgeIdx]) return s;
   const n = s.outline.length;
+  const bIdx = (edgeIdx + 1) % n;
+  const cIdx = (edgeIdx + 2) % n;
   const solved = reshapeEdgeKeepingAngles(s.outline, edgeIdx, newB);
-  const outline = solved
-    ? s.outline.map((v, i) => (i === solved.bIdx ? solved.b : i === solved.cIdx ? solved.c : v))
-    : s.outline.map((v, i) => (i === (edgeIdx + 1) % n ? newB : v));
+  const spoilsLock =
+    solved &&
+    ((s.lockedEdges[bIdx] && Math.abs(wallLengthMm(solved.b, solved.c) - wallLengthMm(s.outline[bIdx], s.outline[cIdx])) > 1e-6) ||
+      (s.lockedEdges[cIdx] &&
+        Math.abs(wallLengthMm(solved.c, s.outline[(cIdx + 1) % n]) - wallLengthMm(s.outline[cIdx], s.outline[(cIdx + 1) % n])) > 1e-6));
+  const outline =
+    solved && !spoilsLock
+      ? s.outline.map((v, i) => (i === solved.bIdx ? solved.b : i === solved.cIdx ? solved.c : v))
+      : s.outline.map((v, i) => (i === bIdx ? constrainVertexToLocks(s.outline, bIdx, newB, s.lockedEdges) : v));
   return withOutlineReplaced(s, outline);
 }
 
@@ -112,11 +147,13 @@ function withVertexRemoved(s: OutlineState, idx: number): OutlineState {
   const n = s.outline.length;
   const incomingIdx = (idx - 1 + n) % n;
   const edgeCurves: (EdgeCurve | null)[] = [];
+  const lockedEdges: boolean[] = [];
   const indexMap = new Map<number, number>();
   let newIdx = 0;
   for (let i = 0; i < n; i++) {
     if (i === idx) continue;
     edgeCurves.push(i === incomingIdx ? null : (s.edgeCurves[i] ?? null));
+    lockedEdges.push(i === incomingIdx ? false : s.lockedEdges[i]); // the merged wall is new geometry — it starts unlocked
     indexMap.set(i, newIdx);
     newIdx++;
   }
@@ -124,6 +161,7 @@ function withVertexRemoved(s: OutlineState, idx: number): OutlineState {
     ...s,
     outline: s.outline.filter((_, i) => i !== idx),
     edgeCurves,
+    lockedEdges,
     entrances: s.entrances
       .filter((e) => e.wallIndex !== idx && e.wallIndex !== incomingIdx)
       .map((e) => ({ ...e, wallIndex: indexMap.get(e.wallIndex)! })),
@@ -139,14 +177,21 @@ function withVertexInserted(s: OutlineState, edgeIdx: number): OutlineState {
   const mid = edgeMidpoint(a, b, s.edgeCurves[edgeIdx] ?? null);
   const splitDistance = wallLengthMm(a, b) / 2;
   const edgeCurves: (EdgeCurve | null)[] = [];
+  const lockedEdges: boolean[] = [];
   for (let i = 0; i < n; i++) {
-    if (i === edgeIdx) edgeCurves.push(null, null); // wall splits into two straight segments
-    else edgeCurves.push(s.edgeCurves[i] ?? null);
+    if (i === edgeIdx) {
+      edgeCurves.push(null, null); // wall splits into two straight segments
+      lockedEdges.push(s.lockedEdges[i], s.lockedEdges[i]); // a locked wall's split halves both stay locked
+    } else {
+      edgeCurves.push(s.edgeCurves[i] ?? null);
+      lockedEdges.push(s.lockedEdges[i]);
+    }
   }
   return {
     ...s,
     outline: [...s.outline.slice(0, edgeIdx + 1), mid, ...s.outline.slice(edgeIdx + 1)],
     edgeCurves,
+    lockedEdges,
     entrances: s.entrances.map((e) => {
       if (e.wallIndex === edgeIdx) {
         return e.distanceMm < splitDistance ? e : { ...e, wallIndex: edgeIdx + 1, distanceMm: e.distanceMm - splitDistance };
@@ -172,24 +217,86 @@ function withWallHandleMoved(s: OutlineState, edgeIdx: number, which: "bulge" | 
   };
 }
 
+// Batched multi-item translate — one group-drag gesture moving every selected ref at once, folded
+// through a single state in ref order (so a locked wall touching one of the vertices in the batch
+// is still respected, via withVertexMoved) and committed as one history entry rather than one per
+// item. A "wall" ref never takes part — see the canvas for why walls are excluded from the group.
+function withSelectionMoved(s: OutlineState, moves: { ref: SelectedRef; point: Point }[]): OutlineState {
+  return moves.reduce((acc, { ref, point }) => {
+    if (ref.kind === "vertex") return withVertexMoved(acc, Number(ref.id), point);
+    if (ref.kind === "entrance") {
+      const n = acc.outline.length;
+      return {
+        ...acc,
+        entrances: acc.entrances.map((e) =>
+          e.id === ref.id ? { ...e, distanceMm: projectOntoWall(acc.outline[e.wallIndex], acc.outline[(e.wallIndex + 1) % n], point) } : e,
+        ),
+      };
+    }
+    if (ref.kind === "stage") return acc.stage && acc.stage.id === ref.id ? { ...acc, stage: { ...acc.stage, x: point.x, y: point.y } } : acc;
+    if (ref.kind === "bar") return { ...acc, bars: acc.bars.map((b) => (b.id === ref.id ? { ...b, x: point.x, y: point.y } : b)) };
+    return acc;
+  }, s);
+}
+
+// Batched multi-fixture "set" — writes an absolute {x, y, rotationDeg} to every named fixture
+// (stage and/or bars) in one history entry. Group-rotating around a shared pivot is the one caller
+// today: an angle lock (a snap to an absolute step, not a per-frame nudge) only makes sense against
+// an absolute target, so the canvas recomputes every fixture's position fresh each frame from its
+// own drag-start snapshot and the current pointer angle — via toLocalFrame/fromLocalFrame, already
+// exported from geometry.ts — and this just writes the result, the same way a plain drag reports an
+// absolute point every frame rather than an incremental delta.
+function withFixturesSet(s: OutlineState, updates: { id: string; x: number; y: number; rotationDeg: number }[]): OutlineState {
+  const byId = new Map(updates.map((u) => [u.id, u]));
+  const apply = (f: Fixture): Fixture => {
+    const u = byId.get(f.id);
+    return u ? { ...f, x: Math.round(u.x), y: Math.round(u.y), rotationDeg: norm360(u.rotationDeg) } : f;
+  };
+  return { ...s, stage: s.stage ? apply(s.stage) : s.stage, bars: s.bars.map(apply) };
+}
+
+// Batched multi-item delete — every selected ref removed in one history entry. Vertices go first,
+// highest index down, so removing several doesn't invalidate the indices of the others still
+// queued (and refuses to drop the outline below a triangle, same as the single-vertex action);
+// entrances/stage/bars are then dropped by id, which withVertexRemoved's own reindexing has
+// already kept correct for whichever of them survive. A "wall" ref has no group action — nothing
+// here handles that kind, so it's silently a no-op, same as it being excluded from the group up front.
+function withSelectionRemoved(s: OutlineState, refs: SelectedRef[]): OutlineState {
+  const vertexIdxs = refs
+    .filter((r) => r.kind === "vertex")
+    .map((r) => Number(r.id))
+    .sort((a, b) => b - a);
+  let next = vertexIdxs.reduce((acc, idx) => withVertexRemoved(acc, idx), s);
+  const entranceIds = new Set(refs.filter((r) => r.kind === "entrance").map((r) => r.id));
+  const barIds = new Set(refs.filter((r) => r.kind === "bar").map((r) => r.id));
+  const dropStage = refs.some((r) => r.kind === "stage");
+  if (entranceIds.size) next = { ...next, entrances: next.entrances.filter((e) => !entranceIds.has(e.id)) };
+  if (barIds.size) next = { ...next, bars: next.bars.filter((b) => !barIds.has(b.id)) };
+  if (dropStage) next = { ...next, stage: undefined };
+  return next;
+}
+
 // Selection lives outside the history (nobody wants Ctrl+Z to re-select), so every restore has to
 // re-validate it against the state it lands on — otherwise undoing past a vertex's creation leaves
-// the inspector pointed at an index that no longer exists.
-export function reconcileSelection(s: OutlineState, sel: SelectedRef | null): SelectedRef | null {
-  if (!sel) return null;
-  switch (sel.kind) {
-    case "vertex":
-    case "wall": {
-      const i = Number(sel.id);
-      return Number.isInteger(i) && i >= 0 && i < s.outline.length ? sel : null;
+// the inspector pointed at an index that no longer exists. A whole selection restores together:
+// each ref is checked on its own, so a multi-select surviving an undo just loses the members that
+// no longer resolve rather than being cleared wholesale.
+export function reconcileSelection(s: OutlineState, sel: SelectedRef[]): SelectedRef[] {
+  return sel.filter((ref) => {
+    switch (ref.kind) {
+      case "vertex":
+      case "wall": {
+        const i = Number(ref.id);
+        return Number.isInteger(i) && i >= 0 && i < s.outline.length;
+      }
+      case "entrance":
+        return s.entrances.some((e) => e.id === ref.id);
+      case "stage":
+        return !!s.stage;
+      case "bar":
+        return s.bars.some((b) => b.id === ref.id);
     }
-    case "entrance":
-      return s.entrances.some((e) => e.id === sel.id) ? sel : null;
-    case "stage":
-      return s.stage ? sel : null;
-    case "bar":
-      return s.bars.some((b) => b.id === sel.id) ? sel : null;
-  }
+  });
 }
 
 // --- history ----------------------------------------------------------------------------------
@@ -200,7 +307,7 @@ interface Store {
   present: OutlineState;
   past: OutlineState[];
   future: OutlineState[];
-  selected: SelectedRef | null;
+  selected: SelectedRef[];
 }
 
 function pushPast(store: Store, present: OutlineState): Store {
@@ -244,7 +351,7 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   // and must not answer for a shape nobody can see.
   const enabled = options?.enabled ?? true;
   // init is read once, lazily — the hosts rebuild the object every render.
-  const [store, setStore] = useState<Store>(() => ({ present: initialState(init), past: [], future: [], selected: null }));
+  const [store, setStore] = useState<Store>(() => ({ present: initialState(init), past: [], future: [], selected: [] }));
   const open = useRef<OpenEntry | null>(null);
 
   // The one way state changes. `token` names the gesture this write belongs to; null means a
@@ -252,7 +359,7 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   // decides the selection for the new state — by default whatever is still resolvable, which is
   // how deleting a fixture drops its own selection.
   const edit = useCallback(
-    (next: (s: OutlineState) => OutlineState, token: string | null, select?: (s: OutlineState) => SelectedRef | null) => {
+    (next: (s: OutlineState) => OutlineState, token: string | null, select?: (s: OutlineState) => SelectedRef[]) => {
       const now = Date.now();
       const joins = continuesEntry(open.current, token, now);
       open.current = token === null ? null : { token, at: now };
@@ -267,7 +374,30 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
     [],
   );
 
-  const setSelected = useCallback((sel: SelectedRef | null) => setStore((s) => (s.selected === sel ? s : { ...s, selected: sel })), []);
+  // Replaces the whole selection — a plain click, or clearing it with []. Shift-click and marquee
+  // go through toggleSelected/selectMany instead, which merge rather than replace.
+  const setSelected = useCallback((refs: SelectedRef[]) => setStore((s) => (s.selected === refs ? s : { ...s, selected: refs })), []);
+  const isSameRef = (a: SelectedRef, b: SelectedRef) => a.kind === b.kind && a.id === b.id;
+  const toggleSelected = useCallback(
+    (ref: SelectedRef) =>
+      setStore((s) => ({
+        ...s,
+        selected: s.selected.some((r) => isSameRef(r, ref)) ? s.selected.filter((r) => !isSameRef(r, ref)) : [...s.selected, ref],
+      })),
+    [],
+  );
+  // A marquee drag's hits: additive (shift held) merges into whatever was already selected,
+  // otherwise it replaces it outright — the same convention every other plan app uses.
+  const selectMany = useCallback(
+    (refs: SelectedRef[], additive: boolean) =>
+      setStore((s) => {
+        if (!additive) return { ...s, selected: refs };
+        const merged = [...s.selected];
+        for (const ref of refs) if (!merged.some((r) => isSameRef(r, ref))) merged.push(ref);
+        return { ...s, selected: merged };
+      }),
+    [],
+  );
   const commit = useCallback(() => {
     open.current = null;
   }, []);
@@ -286,8 +416,24 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   // Starts over on a different shape entirely: no undoing back into the previous one.
   const reset = useCallback((next: OutlineEditorInit) => {
     open.current = null;
-    setStore({ present: initialState(next), past: [], future: [], selected: null });
+    setStore({ present: initialState(next), past: [], future: [], selected: [] });
   }, []);
+
+  // One group-drag gesture calling this once per pointermove still lands as a single history entry
+  // (same token every frame), the way a lone drag already does for one item.
+  const moveSelection = useCallback(
+    (moves: { ref: SelectedRef; point: Point }[]) => edit((s) => withSelectionMoved(s, moves), "group-move"),
+    [edit],
+  );
+  const rotateFixtureGroup = useCallback(
+    (updates: { id: string; x: number; y: number; rotationDeg: number }[]) => edit((s) => withFixturesSet(s, updates), "group-rotate"),
+    [edit],
+  );
+  const toggleWallLock = useCallback(
+    (edgeIdx: number) => edit((s) => ({ ...s, lockedEdges: s.lockedEdges.map((l, i) => (i === edgeIdx ? !l : l)) }), null),
+    [edit],
+  );
+  const removeSelection = useCallback((refs: SelectedRef[]) => edit((s) => withSelectionRemoved(s, refs), null, () => []), [edit]);
 
   // --- outline -------------------------------------------------------------------------------
   const addVertex = useCallback((p: Point) => edit((s) => ({ ...s, outline: [...s.outline, p] }), null), [edit]);
@@ -299,9 +445,9 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   const moveVertex = useCallback((idx: number, p: Point) => edit((s) => withVertexMoved(s, idx, p), `vertex:${idx}`), [edit]);
   // The corner is gone and every index after it has shifted — the old selection can't be remapped
   // to anything the user meant, so it goes.
-  const removeVertex = useCallback((idx: number) => edit((s) => withVertexRemoved(s, idx), null, () => null), [edit]);
+  const removeVertex = useCallback((idx: number) => edit((s) => withVertexRemoved(s, idx), null, () => []), [edit]);
   const insertVertexOnWall = useCallback(
-    (edgeIdx: number) => edit((s) => withVertexInserted(s, edgeIdx), null, () => ({ kind: "vertex", id: String(edgeIdx + 1) })),
+    (edgeIdx: number) => edit((s) => withVertexInserted(s, edgeIdx), null, () => [{ kind: "vertex", id: String(edgeIdx + 1) }]),
     [edit],
   );
   const moveWallHandle = useCallback(
@@ -344,7 +490,7 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
 
   // --- hall fixtures (no-ops on a footprint, which carries none of them) -----------------------
   const addEntrance = useCallback(
-    (entrance: Entrance) => edit((s) => ({ ...s, entrances: [...s.entrances, entrance] }), null, () => ({ kind: "entrance", id: entrance.id })),
+    (entrance: Entrance) => edit((s) => ({ ...s, entrances: [...s.entrances, entrance] }), null, () => [{ kind: "entrance", id: entrance.id }]),
     [edit],
   );
   const updateEntrance = useCallback(
@@ -370,14 +516,14 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   );
   const removeEntrance = useCallback((id: string) => edit((s) => ({ ...s, entrances: s.entrances.filter((e) => e.id !== id) }), null), [edit]);
 
-  const addStage = useCallback((stage: Fixture) => edit((s) => ({ ...s, stage }), null, () => ({ kind: "stage", id: stage.id })), [edit]);
+  const addStage = useCallback((stage: Fixture) => edit((s) => ({ ...s, stage }), null, () => [{ kind: "stage", id: stage.id }]), [edit]);
   const updateStage = useCallback(
     (patch: Partial<Fixture>) => edit((s) => (s.stage ? { ...s, stage: { ...s.stage, ...patch } } : s), patchToken("stage", patch)),
     [edit],
   );
   const removeStage = useCallback(() => edit((s) => ({ ...s, stage: undefined }), null), [edit]);
 
-  const addBar = useCallback((bar: Fixture) => edit((s) => ({ ...s, bars: [...s.bars, bar] }), null, () => ({ kind: "bar", id: bar.id })), [edit]);
+  const addBar = useCallback((bar: Fixture) => edit((s) => ({ ...s, bars: [...s.bars, bar] }), null, () => [{ kind: "bar", id: bar.id }]), [edit]);
   const updateBar = useCallback(
     (id: string, patch: Partial<Fixture>) => edit((s) => ({ ...s, bars: s.bars.map((b) => (b.id === id ? { ...b, ...patch } : b)) }), patchToken(`bar:${id}`, patch)),
     [edit],
@@ -406,6 +552,12 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
     ...store.present,
     selected: store.selected,
     setSelected,
+    toggleSelected,
+    selectMany,
+    moveSelection,
+    rotateFixtureGroup,
+    removeSelection,
+    toggleWallLock,
     addVertex,
     removeLastVertex,
     closeOutline,
@@ -448,7 +600,7 @@ if ((import.meta as { main?: boolean }).main) {
     { x: 0, y: 1000 },
   ];
   const door = (id: string, wallIndex: number, distanceMm: number): Entrance => ({ id, wallIndex, distanceMm, widthMm: 200, swingInward: true, doubleDoor: false });
-  const base: OutlineState = { mode: "edit", outline: square, edgeCurves: [null, null, null, null], entrances: [], stage: undefined, bars: [] };
+  const base: OutlineState = { mode: "edit", outline: square, edgeCurves: [null, null, null, null], lockedEdges: [false, false, false, false], entrances: [], stage: undefined, bars: [] };
 
   // Load-time sanitizing: pad a short/absent array out to the outline, and re-clamp a curve that
   // was saved before the bulge clamp existed.
@@ -457,6 +609,19 @@ if ((import.meta as { main?: boolean }).main) {
   assert(wild.length === 4 && wild[1] === null && wild[0] !== null, "a short saved array keeps what it had and pads the rest");
   assert(Math.hypot(wild[0]!.c1.x, wild[0]!.c1.y) <= 3000 + 1e-6, "a corrupted saved curve is re-clamped on load");
   assert(initialState({ outline: square }).mode === "edit" && initialState({ outline: [] }).mode === "draw", "mode is derived from the outline");
+  assert(sanitizeLockedEdges(square, undefined).length === 4 && sanitizeLockedEdges(square, undefined).every((v) => !v), "missing lockedEdges pad out to all-unlocked");
+  assert(sanitizeLockedEdges(square, [true]).join(",") === "true,false,false,false", "a short saved lock array keeps what it had and pads the rest unlocked");
+
+  // Locked walls: dragging (or numerically reshaping) either endpoint keeps a locked wall's length.
+  const oneLock = { ...base, lockedEdges: [true, false, false, false] }; // wall0 (v0→v1) locked at 1000mm
+  const draggedLocked = withVertexMoved(oneLock, 1, { x: 1400, y: 300 });
+  assert(Math.abs(wallLengthMm(oneLock.outline[0], draggedLocked.outline[1]) - 1000) < 1e-6, "dragging the far end of a locked wall keeps its length");
+  const ownWallLocked = withEdgeReshaped(oneLock, 0, { x: 2000, y: 0 });
+  assert(ownWallLocked === oneLock, "editing a locked wall's own length is refused outright");
+  const neighborLocked = { ...base, lockedEdges: [false, false, true, false] }; // wall2 (v2→v3, the far side) is locked
+  const guarded = withEdgeReshaped(neighborLocked, 0, { x: 1400, y: 0 });
+  assert(guarded.outline[1].x === 1400 && guarded.outline[1].y === 0, "the directly-edited wall still moves its own end vertex");
+  assert(guarded.outline[2].x === 1000 && guarded.outline[2].y === 1000 && guarded.outline[3].x === 0 && guarded.outline[3].y === 1000, "a locked wall two corners away survives the edit untouched, at the cost of the angle-preserving reshape");
 
   // Removing a corner: the two walls it joined become one straight wall, doors on either of them
   // are dropped, and every later door follows its wall's new index.
@@ -467,6 +632,13 @@ if ((import.meta as { main?: boolean }).main) {
   assert(removed.entrances[0].wallIndex === 1, "a surviving door follows its wall's new index");
   assert(withVertexRemoved(withVertexRemoved(withDoors, 1), 0).outline.length === 3, "a triangle refuses to lose another corner");
 
+  // A removed corner's locks travel with its curves: the merged wall starts unlocked, a surviving
+  // locked wall keeps its lock after the removal shifts its index.
+  const withLocks: OutlineState = { ...base, lockedEdges: [true, false, true, false] };
+  const removedLocks = withVertexRemoved(withLocks, 1);
+  assert(removedLocks.lockedEdges.length === 3 && removedLocks.lockedEdges[0] === false, "the merged wall starts unlocked");
+  assert(removedLocks.lockedEdges[1] === true, "a surviving locked wall keeps its lock after a removal shifts its index");
+
   // Splitting a wall: the door stays on whichever half it falls in, later walls shift by one.
   const split = withVertexInserted({ ...base, entrances: [door("near", 0, 100), door("far", 0, 900), door("later", 2, 100)] }, 0);
   assert(split.outline.length === 5 && split.edgeCurves.length === 5, "the split adds a vertex and an edge");
@@ -476,17 +648,55 @@ if ((import.meta as { main?: boolean }).main) {
   assert(byId("far").wallIndex === 1 && byId("far").distanceMm === 400, "a door past the split moves onto the second half");
   assert(byId("later").wallIndex === 3, "a door on a later wall shifts by one");
 
-  // Selection has to survive — or not survive — a restore.
+  // Splitting a locked wall keeps both halves locked; a later locked wall's lock follows its shift.
+  const insertedLocks = withVertexInserted(withLocks, 0);
+  assert(insertedLocks.lockedEdges.length === 5 && insertedLocks.lockedEdges[0] === true && insertedLocks.lockedEdges[1] === true, "splitting a locked wall keeps both halves locked");
+  assert(insertedLocks.lockedEdges[3] === true, "a later locked wall's lock follows its shifted index");
+
+  // Selection has to survive — or not survive — a restore. A whole array restores member by
+  // member, so a mixed selection just loses whichever refs no longer resolve.
   const withBar: OutlineState = { ...base, bars: [{ id: "b1", label: "בר", x: 0, y: 0, widthMm: 100, depthMm: 100, heightMm: 100, shape: "rect", rotationDeg: 0 }] };
-  assert(reconcileSelection(withBar, { kind: "bar", id: "b1" })?.id === "b1", "a still-present bar keeps its selection");
-  assert(reconcileSelection(base, { kind: "bar", id: "b1" }) === null, "a bar that no longer exists clears the selection");
-  assert(reconcileSelection(base, { kind: "vertex", id: "3" })?.id === "3", "a vertex index inside the outline is kept");
-  assert(reconcileSelection(base, { kind: "vertex", id: "9" }) === null, "a vertex index past the end is cleared");
-  assert(reconcileSelection(base, { kind: "stage", id: "fx-stage" }) === null, "a removed stage clears the selection");
+  assert(reconcileSelection(withBar, [{ kind: "bar", id: "b1" }]).length === 1, "a still-present bar keeps its selection");
+  assert(reconcileSelection(base, [{ kind: "bar", id: "b1" }]).length === 0, "a bar that no longer exists clears the selection");
+  assert(reconcileSelection(base, [{ kind: "vertex", id: "3" }]).length === 1, "a vertex index inside the outline is kept");
+  assert(reconcileSelection(base, [{ kind: "vertex", id: "9" }]).length === 0, "a vertex index past the end is cleared");
+  assert(reconcileSelection(base, [{ kind: "stage", id: "fx-stage" }]).length === 0, "a removed stage clears the selection");
+  assert(reconcileSelection(withBar, [{ kind: "bar", id: "b1" }, { kind: "vertex", id: "9" }]).length === 1, "a mixed selection keeps only the refs that still resolve");
+
+  // Batched group ops: one call moves/rotates/removes every selected ref, in one history entry.
+  const withFixture: OutlineState = { ...base, bars: [{ id: "bar1", label: "בר", x: -100, y: 0, widthMm: 100, depthMm: 100, heightMm: 100, shape: "rect", rotationDeg: 0 }] };
+  const groupMoved = withSelectionMoved(withFixture, [
+    { ref: { kind: "vertex", id: "0" }, point: { x: 50, y: 50 } },
+    { ref: { kind: "bar", id: "bar1" }, point: { x: 300, y: 300 } },
+  ]);
+  assert(groupMoved.outline[0].x === 50 && groupMoved.outline[0].y === 50, "a batched move updates the vertex among the selection");
+  assert(groupMoved.bars[0].x === 300 && groupMoved.bars[0].y === 300, "…and the fixture in the same batch");
+  const withDoor: OutlineState = { ...base, entrances: [door("d1", 0, 500)] };
+  const movedDoor = withSelectionMoved(withDoor, [{ ref: { kind: "entrance", id: "d1" }, point: { x: 700, y: 50 } }]);
+  assert(Math.abs(movedDoor.entrances[0].distanceMm - 700) < 1e-6, "a batched entrance move re-projects onto its own wall");
+
+  const twoFixtures: OutlineState = {
+    ...base,
+    stage: { id: "fx-stage", label: "במה", x: 100, y: 0, widthMm: 100, depthMm: 100, heightMm: 100, shape: "rect", rotationDeg: 0 },
+    bars: [{ id: "bar1", label: "בר", x: -100, y: 0, widthMm: 100, depthMm: 100, heightMm: 100, shape: "rect", rotationDeg: 0 }],
+  };
+  const wasSet = withFixturesSet(twoFixtures, [
+    { id: "fx-stage", x: 0, y: 100, rotationDeg: 90 },
+    { id: "bar1", x: 0, y: -100, rotationDeg: 90 },
+  ]);
+  assert(wasSet.stage!.x === 0 && wasSet.stage!.y === 100 && wasSet.stage!.rotationDeg === 90, "a batched fixture set writes the given absolute position and rotation");
+  assert(wasSet.bars[0].x === 0 && wasSet.bars[0].y === -100, "every id in the batch is set together");
+  assert(withFixturesSet(twoFixtures, [{ id: "fx-stage", x: 0, y: 0, rotationDeg: 370 }]).stage!.rotationDeg === 10, "rotation wraps into [0,360)");
+
+  const withMany: OutlineState = { ...base, entrances: [door("d1", 0, 500)], bars: [{ id: "bar1", label: "בר", x: 0, y: 0, widthMm: 100, depthMm: 100, heightMm: 100, shape: "rect", rotationDeg: 0 }] };
+  const afterGroupDelete = withSelectionRemoved(withMany, [{ kind: "entrance", id: "d1" }, { kind: "bar", id: "bar1" }]);
+  assert(afterGroupDelete.entrances.length === 0 && afterGroupDelete.bars.length === 0, "a batched delete removes every selected ref in one pass");
+  const triangle: OutlineState = { ...base, outline: [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 0, y: 1000 }], edgeCurves: [null, null, null], lockedEdges: [false, false, false] };
+  assert(withSelectionRemoved(triangle, [{ kind: "vertex", id: "0" }, { kind: "vertex", id: "1" }]).outline.length === 3, "a batched vertex delete still refuses to drop the outline below a triangle");
 
   // History: push/undo/redo round-trip, the depth cap, and a redo branch dropped by a new edit.
   const moved = withVertexMoved(base, 0, { x: 50, y: 50 });
-  let store: Store = { present: base, past: [], future: [], selected: null };
+  let store: Store = { present: base, past: [], future: [], selected: [] };
   store = pushPast(store, moved);
   assert(store.present.outline[0].x === 50 && store.past.length === 1, "an edit pushes the previous state");
   store = undoStore(store);
@@ -496,8 +706,8 @@ if ((import.meta as { main?: boolean }).main) {
   store = undoStore(store);
   store = pushPast(store, withVertexMoved(base, 0, { x: 9, y: 9 }));
   assert(store.future.length === 0, "a fresh edit drops the redo branch");
-  assert(undoStore({ present: base, past: [], future: [], selected: null }).past.length === 0, "undo at the bottom of the stack is a no-op");
-  let deep: Store = { present: base, past: [], future: [], selected: null };
+  assert(undoStore({ present: base, past: [], future: [], selected: [] }).past.length === 0, "undo at the bottom of the stack is a no-op");
+  let deep: Store = { present: base, past: [], future: [], selected: [] };
   for (let i = 0; i < MAX_HISTORY + 20; i++) deep = pushPast(deep, withVertexMoved(deep.present, 0, { x: i, y: 0 }));
   assert(deep.past.length === MAX_HISTORY, "the history stops growing at the cap");
   assert(deep.past[deep.past.length - 1].outline[0].x === MAX_HISTORY + 18, "the cap drops the oldest entries, not the newest");

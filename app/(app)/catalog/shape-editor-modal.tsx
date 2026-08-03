@@ -39,7 +39,7 @@ export function ShapeEditorModal({
   // it's closed — and reopening on another product starts a fresh history (see reset below), or
   // undo would walk back into a shape that belongs to someone else.
   const ed = useOutlineEditor({ outline: outlineProp, edgeCurves: curvesProp }, { enabled: open });
-  const { mode, outline, edgeCurves: curves, selected, setSelected, reset } = ed;
+  const { mode, outline, edgeCurves: curves, lockedEdges, selected, setSelected, reset } = ed;
 
   useEffect(() => {
     if (open) reset({ outline: outlineProp, edgeCurves: curvesProp });
@@ -101,13 +101,18 @@ export function ShapeEditorModal({
             mode={mode}
             outline={outline}
             edgeCurves={curves}
+            lockedEdges={lockedEdges}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={(ref) => setSelected(ref ? [ref] : [])}
+            onToggleSelect={ed.toggleSelected}
+            onSelectMany={ed.selectMany}
             onAddVertex={ed.addVertex}
             onCloseOutline={ed.closeOutline}
             onCancelDraw={clearShape}
             onMoveVertex={ed.moveVertex}
             onMoveWallHandle={ed.moveWallHandle}
+            onMoveSelection={ed.moveSelection}
+            onToggleWallLock={ed.toggleWallLock}
             onCommit={ed.commit}
             canUndo={ed.canUndo}
             canRedo={ed.canRedo}
@@ -117,19 +122,22 @@ export function ShapeEditorModal({
             minExtentMm={PRODUCT_FRAME.minExtentMm}
             gridMm={PRODUCT_FRAME.gridMm}
           />
-          {selected && (
+          {selected.length > 0 && (
             <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
               <div className="pointer-events-auto">
                 <SelectionInspector
                   selected={selected}
                   outline={outline}
                   edgeCurves={curves}
+                  lockedEdges={lockedEdges}
                   onRemoveVertex={ed.removeVertex}
+                  onRemoveSelection={ed.removeSelection}
                   onInsertVertexOnWall={ed.insertVertexOnWall}
                   onSetWallLength={ed.setWallLength}
                   onSetWallAngle={ed.setWallAngle}
                   onSetWallBulgeDepth={ed.setWallBulgeDepth}
-                  onClose={() => setSelected(null)}
+                  onToggleWallLock={ed.toggleWallLock}
+                  onClose={() => setSelected([])}
                   edgeNoun="צלע"
                 />
               </div>

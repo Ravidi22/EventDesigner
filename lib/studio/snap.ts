@@ -5,7 +5,7 @@ import type { Point } from "./hall";
 // the previous vertex). Pure — the draw preview re-derives it every render, so releasing the angle
 // lock shows up instantly without any state to keep in sync.
 
-const ANGLE_STEP_DEG = 15; // walls are almost never at 37.4° — quantise the direction, not the point
+const ANGLE_STEP_DEG = 5; // walls are almost never at 37.4° — quantise the direction, not the point
 
 export interface SnapContext {
   toleranceMm: number; // the snap radius in world units — callers pass ~6px worth of mm
@@ -138,12 +138,11 @@ if ((import.meta as { main?: boolean }).main) {
   const origin: Point = { x: 0, y: 0 };
   const base = { outline: [] as Point[], fixtures: [] as Point[], gridMm: 1000, toleranceMm: 120 }; // ~6px at the default hall zoom
 
-  assert(constrainAngleDeg(37) === 30, "37° quantises down to 30°");
+  assert(constrainAngleDeg(37) === 35, "37° quantises down to 35°");
   assert(constrainAngleDeg(88) === 90, "88° quantises to the orthogonal");
-  assert(constrainAngleDeg(7.5) === 0, "an exact tie between 0° and 15° goes to the orthogonal");
-  assert(constrainAngleDeg(97.5) === 90, "an exact tie around 90° goes to the orthogonal");
-  assert(constrainAngleDeg(-5) === 0, "negative angles normalise into [0,360)");
-  assert(constrainAngleDeg(352) === 345 || constrainAngleDeg(352) === 0, "wrap-around stays on a 15° multiple");
+  assert(constrainAngleDeg(92.5) === 90, "an exact tie between the orthogonal and the next 5° step goes to the orthogonal");
+  assert(constrainAngleDeg(-2) === 0, "negative angles normalise into [0,360)");
+  assert(constrainAngleDeg(352) === 350, "wrap-around stays on a 5° multiple");
   assert(constrainAngleDeg(358) === 0, "just under 360° snaps to 0, not 360");
 
   assert(gridStepMm(1000, 120) === 100, "a hall grid zoomed out steps in 100mm");
@@ -177,9 +176,12 @@ if ((import.meta as { main?: boolean }).main) {
   const self = snapPoint({ x: 3012, y: 1004 }, { ...withOutline, excludeVertexIdx: 1 });
   assert(self.guides.x === null && self.point.x === 3000, "an excluded vertex is not its own snap target");
 
-  // A zero-length draw can't emit a degenerate wall.
+  // A zero-length draw can't emit a degenerate wall. The threshold sits a hair under the grid
+  // step (100mm) rather than exactly on it: rounding x/y to whole millimetres independently can
+  // shave a fraction of a millimetre off the Euclidean length, which is fine — the guarantee this
+  // checks is "nowhere near zero", not an exact minimum.
   const degenerate = snapPoint({ x: 3, y: 2 }, { ...base, anchor: origin, constrainAngle: true });
-  assert(Math.hypot(degenerate.point.x, degenerate.point.y) >= 100, "a locked draw never commits a zero-length wall");
+  assert(Math.hypot(degenerate.point.x, degenerate.point.y) >= 99, "a locked draw never commits a zero-length wall");
 
   console.log("snap self-check passed");
 }
