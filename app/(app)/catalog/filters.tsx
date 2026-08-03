@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Grid3x3, List, X } from "lucide-react";
 import { CATEGORIES, LAYERS } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
 import type { Layer } from "@/lib/catalog/types";
@@ -25,10 +25,14 @@ export function Filters({
   value,
   onChange,
   resultCount,
+  viewMode,
+  onViewModeChange,
 }: {
   value: FilterState;
   onChange: (next: FilterState) => void;
   resultCount: number;
+  viewMode: "grid" | "list";
+  onViewModeChange: (mode: "grid" | "list") => void;
 }) {
   const set = (patch: Partial<FilterState>) => onChange({ ...value, ...patch });
   const toggleTag = (tag: string) =>
@@ -62,6 +66,28 @@ export function Filters({
         />
 
         <span className="nums ms-auto text-sm text-muted">{resultCount} מוצרים</span>
+
+        <div className="flex gap-1 rounded-pill bg-bg p-1">
+          {([
+            ["grid", Grid3x3, "תצוגת רשת"],
+            ["list", List, "תצוגת רשימה"],
+          ] as const).map(([m, Icon, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onViewModeChange(m)}
+              aria-pressed={viewMode === m}
+              aria-label={label}
+              title={label}
+              className={
+                "rounded-pill p-1.5 transition-colors " +
+                (viewMode === m ? "bg-surface text-accent-hover shadow-floating" : "text-ink-soft hover:text-accent-hover")
+              }
+            >
+              <Icon className="h-4 w-4" strokeWidth={2} />
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">

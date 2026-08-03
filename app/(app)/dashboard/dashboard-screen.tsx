@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId } from "@/lib/events/storage";
-import { venueSwatchClass } from "@/lib/venues/storage";
+import { loadVenues, venueSwatchClass } from "@/lib/venues/storage";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
@@ -47,6 +47,10 @@ export function DashboardScreen() {
   // so a venue-level color would be uniform and pointless; the hall is what still varies.
   const getVenueColor = (e: EventSummary) => venueSwatchClass(e.hallTemplateId);
 
+  // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
+  // to it), so there's one venue name to resolve, not one per event.
+  const activeVenueName = useMemo(() => loadVenues().find((v) => v.id === activeVenueId)?.name, [activeVenueId]);
+
   return (
     <div className="px-8 py-8">
       <div className="mb-6">
@@ -61,7 +65,12 @@ export function DashboardScreen() {
 
       <CalendarCard events={visibleEvents} onOpenEvent={setSelectedEvent} />
 
-      <EventDetailDrawer event={selectedEvent} onClose={() => setSelectedEvent(null)} onContinue={openInMeeting} />
+      <EventDetailDrawer
+        event={selectedEvent}
+        venueName={activeVenueName}
+        onClose={() => setSelectedEvent(null)}
+        onContinue={openInMeeting}
+      />
     </div>
   );
 }

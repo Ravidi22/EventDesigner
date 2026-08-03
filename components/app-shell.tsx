@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
-  CalendarDays,
+  CalendarHeart,
   Building2,
   LayoutGrid,
   Images,
@@ -28,7 +28,7 @@ interface NavItem {
 
 const GENERAL: NavItem[] = [
   { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard },
-  { href: "/gantt", label: "גאנט אירועים", icon: CalendarDays },
+  { href: "/gantt", label: "אירועים", icon: CalendarHeart },
   { href: "/halls", label: "אולמות", icon: Building2 },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
   { href: "/gallery", label: "גלריה ותצוגות", icon: Images },
@@ -36,7 +36,7 @@ const GENERAL: NavItem[] = [
 
 const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/dashboard"), title: "לוח בקרה" },
-  { test: (p) => p.startsWith("/gantt"), title: "גאנט אירועים" },
+  { test: (p) => p.startsWith("/gantt"), title: "אירועים" },
   { test: (p) => p.startsWith("/halls"), title: "אולמות" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות" },

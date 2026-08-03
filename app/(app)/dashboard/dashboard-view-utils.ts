@@ -25,7 +25,7 @@ export function weekGrid(anchor: Date): Date[] {
 
 export function weekLabel(days: Date[]): string {
   const fmt = (d: Date) => d.toLocaleDateString("he-IL", { day: "numeric", month: "short" });
-  return `${fmt(days[0])} – ${fmt(days[6])}`;
+  return `${fmt(days[0])} - ${fmt(days[6])}`;
 }
 
 // 6 full weeks (42 cells) so the grid never changes height between months.
@@ -47,27 +47,22 @@ export const TONE_CLASS: Record<StatusTone, string> = {
   warn: "bg-warn-tint text-warn-ink",
 };
 
-// Soft thematic card backgrounds, one per hall — a deliberately different color language than
-// STATUS_TONE (which colors the stage a card is at, not which hall it's in). Two of these reuse
-// existing brand tokens (indigo/accent, amber); teal has no equivalent in the palette yet, so
-// it's defined here, scoped to this one calendar-card use rather than added to the global theme.
+// Calendar event cards used to be themed per-hall, but that meant a card's color didn't match
+// its own status pill (a "design"-stage card could land on the amber hall theme, clashing with
+// its purple status text) — so the whole card (background, bar, time, percentage, status word)
+// is themed by STATUS_TONE instead, one consistent color per card, matching TONE_CLASS/StatusChip
+// everywhere else a status shows.
 export interface CardTheme {
   bg: string;
   text: string;
   bar: string;
 }
-const CARD_THEMES: CardTheme[] = [
-  { bg: "bg-[#e7f7f5]", text: "text-[#0f8a82]", bar: "bg-[#14b8a6]" }, // soft teal
-  { bg: "bg-[#fbeafa]", text: "text-[#a8479f]", bar: "bg-magenta" }, // soft pink/magenta
-  { bg: "bg-accent-tint", text: "text-accent-hover", bar: "bg-accent" }, // soft indigo
-  { bg: "bg-[#fdf1e6]", text: "text-[#b3742c]", bar: "bg-amber" }, // soft amber/peach
-];
-export function cardTheme(hallTemplateId: string | undefined): CardTheme {
-  if (!hallTemplateId) return CARD_THEMES[0];
-  let hash = 0;
-  for (let i = 0; i < hallTemplateId.length; i++) hash = (hash * 31 + hallTemplateId.charCodeAt(i)) >>> 0;
-  return CARD_THEMES[hash % CARD_THEMES.length];
-}
+export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
+  neutral: { bg: "bg-bg", text: "text-muted", bar: "bg-faint" },
+  warn: { bg: "bg-warn-tint", text: "text-warn-ink", bar: "bg-warn" },
+  accent: { bg: "bg-accent-tint", text: "text-accent-hover", bar: "bg-accent" },
+  success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success" },
+};
 
 // Past days: a visibly darker, textured surface (not just a fainter version of "today") so
 // "this already happened" reads at a glance, not just on close inspection. Split in two so the

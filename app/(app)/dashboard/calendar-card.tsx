@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, eventProgress, eventStatus } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus } from "@/lib/events/types";
 import { IconButton } from "@/components/icon-button";
 import {
   addDays,
@@ -14,7 +14,7 @@ import {
   weekLabel,
   monthGrid,
   monthLabel,
-  cardTheme,
+  STATUS_CARD_THEME,
   holidayName,
   PAST_DAY_BG,
   PAST_DAY_OVERLAY,
@@ -26,8 +26,8 @@ type Mode = "week" | "month";
 // week is the unit that matters day to day); month is a toggle for the wider view. There is no
 // venue filter here anymore — `events` arrives from the parent already scoped to whichever
 // venue is active in the sidebar, the one place that scoping decision lives. `onOpenEvent` is
-// likewise supplied by the parent; each event's own card color comes from `cardTheme`, keyed to
-// its hall, so no external color resolver is needed here.
+// likewise supplied by the parent; each event's own card color comes from `STATUS_CARD_THEME`,
+// keyed to its status, so no external color resolver is needed here.
 export function CalendarCard({
   events,
   onOpenEvent,
@@ -89,8 +89,8 @@ export function CalendarCard({
   const isCurrentRange = sameDay(anchor, today) || (mode === "month" && anchor.getMonth() === today.getMonth() && anchor.getFullYear() === today.getFullYear());
 
   return (
-    <div ref={rootRef} className="rounded-lg border border-border bg-surface p-5">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+    <div ref={rootRef} className="rounded-lg border border-border bg-surface px-3 py-5">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 px-2">
         <h3 className="font-display text-h2 text-ink">{title}</h3>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -112,13 +112,6 @@ export function CalendarCard({
               </button>
             ))}
           </div>
-          <IconButton label={mode === "week" ? "השבוע הקודם" : "החודש הקודם"} onClick={() => step(-1)}>
-            <ChevronRight className="h-4 w-4" strokeWidth={2} />
-          </IconButton>
-          <span className="min-w-32 text-center text-sm font-medium text-ink-soft">{rangeLabel}</span>
-          <IconButton label={mode === "week" ? "השבוע הבא" : "החודש הבא"} onClick={() => step(1)}>
-            <ChevronRight className="h-4 w-4 rotate-180" strokeWidth={2} />
-          </IconButton>
           <button
             type="button"
             onClick={goToday}
@@ -127,10 +120,17 @@ export function CalendarCard({
           >
             היום
           </button>
+          <IconButton label={mode === "week" ? "השבוע הקודם" : "החודש הקודם"} onClick={() => step(-1)}>
+            <ChevronRight className="h-4 w-4" strokeWidth={2} />
+          </IconButton>
+          <span className="min-w-32 text-center text-sm font-medium text-ink-soft">{rangeLabel}</span>
+          <IconButton label={mode === "week" ? "השבוע הבא" : "החודש הבא"} onClick={() => step(1)}>
+            <ChevronRight className="h-4 w-4 rotate-180" strokeWidth={2} />
+          </IconButton>
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-3">
+      <div className="grid grid-cols-7 gap-2">
         {days.map((d) => {
           const iso = toISODate(d);
           const dayEvents = eventsByDate.get(iso) ?? [];
@@ -147,7 +147,7 @@ export function CalendarCard({
               key={iso}
               style={isPast ? PAST_DAY_BG : undefined}
               className={
-                "relative flex flex-col gap-2 rounded-md p-2 " +
+                "relative flex flex-col gap-2 rounded-md px-1.5 py-2 " +
                 (mode === "week" ? "min-h-44" : "min-h-40") +
                 (isPast ? "" : " " + (isToday ? "bg-accent-tint" : inMonth ? "bg-inset" : "bg-inset/50"))
               }
@@ -220,7 +220,7 @@ export function CalendarCard({
 function EventCard({ event: e, compact, onClick }: { event: EventSummary; compact: boolean; onClick: () => void }) {
   const progress = eventProgress(e);
   const status = eventStatus(e);
-  const theme = cardTheme(e.hallTemplateId);
+  const theme = STATUS_CARD_THEME[STATUS_TONE[status]];
 
   if (compact) {
     return (
@@ -234,6 +234,7 @@ function EventCard({ event: e, compact, onClick }: { event: EventSummary; compac
           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{e.clientName}</span>
           {e.time && <span className={"nums shrink-0 text-[11px] font-semibold " + theme.text}>{e.time}</span>}
         </div>
+        <span className="truncate text-[10px] text-ink-soft">{e.hallName}</span>
         <div className="flex items-center gap-1.5">
           <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
             <div className={"h-full rounded-full " + theme.bar} style={{ width: `${progress}%` }} />

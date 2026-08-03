@@ -29,6 +29,7 @@ function matches(p: Product, f: FilterState): boolean {
 export function CatalogScreen() {
   const [products, setProducts] = useState<Product[]>(SAMPLE_PRODUCTS);
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<Product | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -46,6 +47,18 @@ export function CatalogScreen() {
     const { products: next, archived } = deleteOrArchiveProduct(id);
     setProducts(next);
     setNotice(archived ? "המוצר משובץ באירועים ולכן הועבר לארכיון — ההצבות נשמרו." : null);
+  };
+  // Fresh id for the product AND every variant — a duplicate must never alias the original's
+  // variant ids, or isPlacedAnywhere (lib/catalog/storage.ts) would treat it as already placed
+  // just because the original happens to be.
+  const duplicateProduct = (p: Product) => {
+    const copy: Product = {
+      ...p,
+      id: crypto.randomUUID(),
+      name: `${p.name} (עותק)`,
+      variants: p.variants.map((v) => ({ ...v, id: crypto.randomUUID() })),
+    };
+    setProducts(upsertProduct(copy));
   };
 
   const importCsv = async (file: File | undefined) => {
@@ -82,7 +95,7 @@ export function CatalogScreen() {
               <FileUp className="h-4 w-4" strokeWidth={2} />
               ייבוא CSV
             </Button>
-            <Button onClick={() => setEditing(blankProduct())}>
+            <Button variant="outline" onClick={() => setEditing(blankProduct())}>
               <Plus className="h-4 w-4" strokeWidth={2.5} />
               מוצר חדש
             </Button>
@@ -94,17 +107,29 @@ export function CatalogScreen() {
             </p>
           )}
 
-          <Filters value={filters} onChange={setFilters} resultCount={filtered.length} />
+          <Filters
+            value={filters}
+            onChange={setFilters}
+            resultCount={filtered.length}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+          />
 
           {filtered.length === 0 ? (
             <NoResults onClear={() => setFilters(EMPTY_FILTERS)} />
+          ) : viewMode === "list" ? (
+            <div className="mt-6 flex flex-col gap-2">
+              {filtered.map((p) => (
+                <ProductCard key={p.id} product={p} layout="list" onEdit={setEditing} onDuplicate={duplicateProduct} />
+              ))}
+            </div>
           ) : (
             <div
               className="mt-6 grid gap-4"
               style={{ gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))" }}
             >
               {filtered.map((p) => (
-                <ProductCard key={p.id} product={p} onEdit={setEditing} />
+                <ProductCard key={p.id} product={p} onEdit={setEditing} onDuplicate={duplicateProduct} />
               ))}
             </div>
           )}

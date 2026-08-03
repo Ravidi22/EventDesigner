@@ -17,7 +17,10 @@ export type FlowStepId = (typeof FLOW_STEPS)[number]["id"];
 export interface EventSummary {
   id: string;
   clientName: string;
-  phone: string;
+  phone: string; // primary contact's phone
+  contactName?: string; // primary contact's own name, when it differs from clientName (the couple)
+  contact2Name?: string; // a second contact person, if the couple gave one (e.g. a parent, planner)
+  contact2Phone?: string;
   date: string; // ISO yyyy-mm-dd ("" = not set yet) — the wedding/event day itself
   time?: string; // HH:mm — start time on `date` (or on `meetingDate`, if that's what's shown)
   meetingDate?: string; // ISO yyyy-mm-dd — a scheduled client consultation, distinct from `date`

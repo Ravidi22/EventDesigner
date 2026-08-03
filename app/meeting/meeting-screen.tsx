@@ -169,6 +169,9 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   const [templates, setTemplates] = useState<HallTemplate[]>([]);
   const [clientName, setClientName] = useState(event?.clientName ?? "");
   const [phone, setPhone] = useState(event?.phone ?? "");
+  const [contactName, setContactName] = useState(event?.contactName ?? "");
+  const [contact2Name, setContact2Name] = useState(event?.contact2Name ?? "");
+  const [contact2Phone, setContact2Phone] = useState(event?.contact2Phone ?? "");
   const [date, setDate] = useState(event?.date ?? "");
   const [hallId, setHallId] = useState(event?.hallTemplateId ?? "");
   const [guests, setGuests] = useState(event?.guests ?? 0);
@@ -183,6 +186,9 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
     if (event) {
       setClientName(event.clientName);
       setPhone(event.phone);
+      setContactName(event.contactName ?? "");
+      setContact2Name(event.contact2Name ?? "");
+      setContact2Phone(event.contact2Phone ?? "");
       setDate(event.date);
       setHallId(event.hallTemplateId ?? "");
       setGuests(event.guests ?? 0);
@@ -195,6 +201,9 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
     const fields = {
       clientName: clientName.trim(),
       phone: phone.trim(),
+      contactName: contactName.trim() || undefined,
+      contact2Name: contact2Name.trim() || undefined,
+      contact2Phone: contact2Phone.trim() || undefined,
       date,
       guests,
       hallTemplateId: t?.id,
@@ -217,7 +226,14 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
 
       <div className="mt-8 flex flex-col gap-5">
         <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
-        <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
+        <div className="grid grid-cols-2 gap-4">
+          <TextField label="איש קשר" value={contactName} onChange={setContactName} placeholder="נועה" />
+          <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <TextField label="איש קשר נוסף (אופציונלי)" value={contact2Name} onChange={setContact2Name} placeholder="אמא של הכלה" />
+          <TextField label="טלפון" type="tel" dir="ltr" value={contact2Phone} onChange={setContact2Phone} placeholder="052-0000000" className="text-end" />
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <DateField label="תאריך האירוע" value={date} onChange={setDate} />
           <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
