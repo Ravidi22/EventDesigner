@@ -4,17 +4,17 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Check, ChevronRight, Hourglass, LogOut } from "lucide-react";
-import { FLOW_STEPS, type EventSummary, formatEventDate } from "@/lib/events/types";
+import { FLOW_STEPS, type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { activeEvent, reachStep, updateEvent } from "@/lib/events/storage";
 import { beginEvent } from "@/lib/events/begin";
-import type { HallTemplate } from "@/lib/setup/types";
-import { loadTemplates } from "@/lib/setup/storage";
-import { loadActiveVenueId } from "@/lib/venues/storage";
-import { SAMPLE_HALL, type Hall } from "@/lib/studio/hall";
+import { EMPTY_PLAN, eventPlan, labelForZones, type EventPlan } from "@/lib/events/plan";
+import { findVenue, loadActiveVenueId, loadVenues, saveVenue, zonesForVenue, type Venue, type Zone } from "@/lib/venues/storage";
+import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
 import { emptyDocument } from "@/lib/design-document/types";
-import { loadDoc, saveDoc, loadHall } from "@/lib/studio/storage";
+import { loadDoc, saveDoc } from "@/lib/studio/storage";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
+import { MultiSelect } from "@/components/multi-select";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { DateField } from "@/components/date-field";
@@ -23,8 +23,6 @@ import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
 import { ImportFlow, type ImportResult } from "./import-flow";
 import { Quote } from "@/app/(app)/outputs/quote";
-
-const EMPTY_HALL: Hall = { widthMm: 18000, heightMm: 12000, ceilingHeightMm: 0, columns: [], entrances: [], bars: [] };
 
 // The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every step autosaves,
 // exiting mid-flow is always safe, and an existing event re-enters at its furthest step.
@@ -68,7 +66,7 @@ export function MeetingScreen() {
       <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-5">
         <div className="flex min-w-0 items-baseline gap-2.5">
           <span className="truncate font-display text-lede text-ink">{event ? event.clientName : "אירוע חדש"}</span>
-          {event && <span className="hidden text-sm text-muted sm:block">{event.hallName} · {formatEventDate(event.date)}</span>}
+          {event && <span className="hidden text-sm text-muted sm:block">{zonesLabelOf(event)} · {formatEventDate(event.date)}</span>}
         </div>
 
         <Stepper current={view} furthest={furthest} onJump={setView} />
@@ -86,7 +84,7 @@ export function MeetingScreen() {
         {view === 0 && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
         {view === 1 && <MeetingGalleryScreen />}
         {view === 2 && <WaitingStep clientName={event?.clientName ?? ""} />}
-        {view === 3 && <ImportStep hasCalibration={!!event?.hallTemplateId} onDone={() => advance(4)} onCancel={() => setView(2)} />}
+        {view === 3 && <ImportStep event={event} onDone={() => advance(4)} onCancel={() => setView(2)} />}
         {view === 4 && <MeetingGalleryScreen initialView="folder" />}
         {view === 5 && (
           <div className="h-full">
@@ -165,46 +163,66 @@ function FlowFooter({ view, onBack, onContinue, hasEvent }: { view: number; onBa
 }
 
 // F-1.3: the real event-details form. Creates the event on first save; edits in place after.
+//
+// The event occupies ZONES of one venue, and more than one is the normal case — the ceremony at the
+// חופה, the dinner in the hall it opens off. The venue narrows the list; the zones are the answer.
 function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: (ev: EventSummary) => void }) {
-  const [templates, setTemplates] = useState<HallTemplate[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [zones, setZones] = useState<Zone[]>([]);
   const [clientName, setClientName] = useState(event?.clientName ?? "");
   const [phone, setPhone] = useState(event?.phone ?? "");
   const [date, setDate] = useState(event?.date ?? "");
-  const [hallId, setHallId] = useState(event?.hallTemplateId ?? "");
+  // The event's own venue wins over the sidebar's: opening a חוות רונית event while the switcher
+  // sits on אחוזת הדר must not repoint it at a property it was never booked at.
+  const [venueId, setVenueId] = useState(event?.venueId ?? "");
+  const [zoneIds, setZoneIds] = useState<string[]>(event?.zoneIds ?? []);
   const [guests, setGuests] = useState(event?.guests ?? 0);
 
   useEffect(() => {
-    const venueId = loadActiveVenueId();
-    // Scope choices to the active venue, but never hide the hall this event already has —
-    // switching the sidebar's venue after a hall was picked must not silently clear it.
-    setTemplates(loadTemplates().filter((t) => t.venueId === venueId || t.id === event?.hallTemplateId));
-  }, [event?.hallTemplateId]);
+    setVenues(loadVenues());
+    setVenueId((current) => current || event?.venueId || loadActiveVenueId());
+  }, [event?.venueId]);
+
+  useEffect(() => {
+    setZones(venueId ? zonesForVenue(venueId) : []);
+  }, [venueId]);
+
   useEffect(() => {
     if (event) {
       setClientName(event.clientName);
       setPhone(event.phone);
       setDate(event.date);
-      setHallId(event.hallTemplateId ?? "");
+      setVenueId(event.venueId ?? loadActiveVenueId());
+      setZoneIds(event.zoneIds);
       setGuests(event.guests ?? 0);
     }
   }, [event]);
 
+  // Changing the venue drops zones that belong to the old one — a zone id from another property
+  // would resolve to nothing on this plan, and a silently empty selection is worse than a visible one.
+  const changeVenue = (next: string) => {
+    if (next === venueId) return;
+    setVenueId(next);
+    setZoneIds([]);
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const t = templates.find((x) => x.id === hallId);
+    const picked = zoneIds.map((id) => zones.find((z) => z.id === id)).filter((z): z is Zone => !!z);
     const fields = {
       clientName: clientName.trim(),
       phone: phone.trim(),
       date,
       guests,
-      hallTemplateId: t?.id,
-      hallName: t?.name ?? "טרם נבחר",
+      venueId: venueId || undefined,
+      zoneIds: picked.map((z) => z.id),
+      zonesLabel: labelForZones(picked),
     };
     if (event) {
       const list = updateEvent(event.id, fields);
       onSaved(list.find((x) => x.id === event.id) ?? event);
     } else {
-      onSaved(beginEvent({ ...fields, hall: t?.hall ?? EMPTY_HALL, mmPerUnit: t?.mmPerUnit ?? 1 }));
+      onSaved(beginEvent({ ...fields, mmPerUnit: findVenue(venueId)?.plan.mmPerUnit ?? 1 }));
     }
   };
 
@@ -223,13 +241,28 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
           <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
         </div>
         <div>
-          <span className={fieldLabelClassName}>אולם</span>
+          <span className={fieldLabelClassName}>מתחם</span>
           <Select
-            value={hallId}
-            onChange={setHallId}
-            options={[{ value: "", label: "טרם נבחר" }, ...templates.map((t) => ({ value: t.id, label: t.name }))]}
+            value={venueId}
+            onChange={changeVenue}
+            options={[{ value: "", label: "טרם נבחר" }, ...venues.map((v) => ({ value: v.id, label: v.name }))]}
             className="w-full"
           />
+        </div>
+        <div>
+          <span className={fieldLabelClassName}>אזורי האירוע</span>
+          <MultiSelect
+            values={zoneIds}
+            onChange={setZoneIds}
+            options={zones.map((z) => ({ value: z.id, label: `${z.name} · ${ZONE_KIND_LABEL[z.kind]}` }))}
+            countNoun="אזורים"
+            placeholder={venueId ? "בחרו אזור אחד או יותר" : "בחרו מתחם תחילה"}
+            aria-label="אזורי האירוע"
+            className="w-full"
+          />
+          <p className="mt-1.5 text-xs leading-relaxed text-muted">
+            אפשר לבחור כמה אזורים — חופה לטקס ואולם לערב הם אירוע אחד על אותה תוכנית.
+          </p>
         </div>
       </div>
 
@@ -260,10 +293,14 @@ function WaitingStep({ clientName }: { clientName: string }) {
   );
 }
 
-// F-1.6: bring THIS event's iPlan PDF in, align it over the shell, then place tables in the
+// F-1.6: bring THIS event's iPlan PDF in, align it over the venue plan, then place tables in the
 // studio (F-3.2–F-3.3). Everything lands on the event's own document (per-event keys — B).
-function ImportStep({ hasCalibration, onDone, onCancel }: { hasCalibration: boolean; onDone: () => void; onCancel: () => void }) {
-  const [hall] = useState<Hall>(() => loadHall() ?? SAMPLE_HALL);
+//
+// Calibration (F-3.4) is a property of the property: a venue whose plan was measured once needs no
+// second answer here, whatever zone this event stands in.
+function ImportStep({ event, onDone, onCancel }: { event: EventSummary | null; onDone: () => void; onCancel: () => void }) {
+  const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
+  useEffect(() => setPlan(eventPlan(event)), [event]);
 
   const finish = (r: ImportResult) => {
     const doc = loadDoc() ?? emptyDocument();
@@ -272,14 +309,27 @@ function ImportStep({ hasCalibration, onDone, onCancel }: { hasCalibration: bool
       sketch: r.sketch ?? undefined,
       calibration: r.mmPerUnit ? { mmPerUnit: r.mmPerUnit } : doc.calibration,
     });
+    if (r.mmPerUnit && event?.venueId) saveVenueScale(event.venueId, r.mmPerUnit);
     onDone();
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
-      <ImportFlow hall={hall} hasCalibration={hasCalibration} onDone={finish} onCancel={onCancel} />
+    <div className="h-full px-8 py-6">
+      <ImportFlow
+        plan={plan}
+        hasCalibration={plan.mmPerUnit !== 1}
+        onDone={finish}
+        onCancel={onCancel}
+      />
     </div>
   );
+}
+
+/** F-3.4: the measured scale belongs to the venue plan, not to this one event — the next event at
+ *  the same property inherits it and is never asked again. */
+function saveVenueScale(venueId: string, mmPerUnit: number): void {
+  const venue = findVenue(venueId);
+  if (venue) saveVenue({ ...venue, plan: { ...venue.plan, mmPerUnit } });
 }
 
 // F-1.9: close the meeting with a quote — the one step where prices are shown on purpose.
@@ -291,6 +341,17 @@ function QuoteStep({ event }: { event: EventSummary }) {
     <div className="mx-auto max-w-3xl px-8 py-8">
       <h2 className="mb-6 border-b border-ink pb-3 font-display text-h2 text-ink">סגירה — הצעת מחיר</h2>
       {doc ? <Quote doc={doc} /> : <p className="py-16 text-center text-sm text-muted">עדיין אין עיצוב לאירוע {event.clientName}.</p>}
+
+      {/* The operational half (F-6) is prepared later, in management mode — the client is still in
+          the room here, and a packing list is not theirs to read. This is the door to it, not the
+          thing itself. */}
+      <div className="mt-10 flex items-center justify-between gap-4 border-t border-border pt-5 text-sm">
+        <span className="text-muted">לקראת האירוע — מפת הצבה ורשימת ציוד לצוות</span>
+        <Link href="/outputs" className="inline-flex shrink-0 items-center gap-1.5 font-medium text-accent transition-colors hover:text-accent-hover">
+          לפלטים התפעוליים
+          <ChevronRight className="h-4 w-4 rotate-180" strokeWidth={2.5} />
+        </Link>
+      </div>
     </div>
   );
 }

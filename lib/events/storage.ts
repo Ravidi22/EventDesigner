@@ -4,10 +4,10 @@ import { storageKey } from "@/lib/storage-keys";
 import type { EventSummary } from "./types";
 import { SAMPLE_EVENTS } from "./sample-data";
 
-// .v2: sample events now reference the renamed hall IDs (hall-main → hall-ronit-big, etc.) —
-// bumped so a browser with pre-venue saved events falls back to the new seed data instead of
-// keeping events whose hallTemplateId points at a hall that no longer exists.
-const KEY = storageKey("events.v2");
+// .v3: events reference venue ZONES now, not a HallTemplate. A saved v2 event's hallTemplateId
+// points at a model that no longer exists and cannot be mapped to a zone id, so the bump drops
+// those records to the seed rather than carrying an event whose geometry resolves to nothing.
+const KEY = storageKey("events.v3");
 const ACTIVE_KEY = storageKey("events.active");
 
 // Legacy (pre-v0.3) records stored status/progress instead of a flow step — patch them so
@@ -18,8 +18,10 @@ function normalize(e: Partial<EventSummary> & { id: string; clientName: string; 
     clientName: e.clientName,
     phone: e.phone ?? "",
     date: e.date ?? "",
-    hallTemplateId: e.hallTemplateId,
-    hallName: e.hallName ?? "",
+    meetingDate: e.meetingDate,
+    venueId: e.venueId,
+    zoneIds: e.zoneIds ?? [],
+    zonesLabel: e.zonesLabel ?? "",
     guests: e.guests ?? 0,
     step: e.step ?? (e.status === "sent" ? 6 : e.status === "design" ? 5 : 0),
     quoteSentAt: e.quoteSentAt ?? (e.status === "sent" ? e.createdAt : undefined),

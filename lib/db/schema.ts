@@ -15,6 +15,8 @@ import type { DesignDocumentContent } from "@/lib/design-document/types";
 // Which layer of the room a product lives on (F-2.2).
 export const layerEnum = pgEnum("layer", ["table", "floor", "ceiling"]);
 export const mapSourceEnum = pgEnum("map_source", ["template", "pdf"]);
+// What a named region of a venue is (lib/venues/zone.ts).
+export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const verificationEnum = pgEnum("verification_state", ["draft", "verified"]);
 // People (F-8.2). Two ladders, because they answer two different questions: what you are inside
@@ -126,19 +128,58 @@ export const productVariants = pgTable(
   (t) => [index("variants_org_idx").on(t.organizationId)],
 );
 
-// Reusable calibrated hall (F-1.6) — the primary phase-1 flow.
-export const hallTemplates = pgTable(
-  "hall_templates",
+// The property (F-3.1). One site plan per venue: a single millimetre plane every zone on it is
+// drawn in, plus the calibration measured off it once. Replaces the old `hall_templates`, where
+// each hall was its own drawing starting at (0,0) and two rooms of one property could not be
+// positioned relative to each other. See lib/venues/types.ts.
+export const venues = pgTable(
+  "venues",
   {
     id: id(),
     organizationId: orgId(),
     name: text("name").notNull(),
-    // calibrated geometry: shape, dimensions, obstacles (columns), typical table layout
-    geometry: jsonb("geometry").$type<Record<string, unknown>>().notNull(),
+    logoUrl: text("logo_url"),
+    /** VenuePlan: mmPerUnit, the property line, and the placed iPlan underlay. */
+    plan: jsonb("plan").$type<Record<string, unknown>>().notNull(),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [index("hall_templates_org_idx").on(t.organizationId)],
+  (t) => [index("venues_org_idx").on(t.organizationId)],
+);
+
+// The venue's ONE wall graph — nodes, walls, doors, fixed features (lib/venues/structure.ts).
+// One row per venue, held whole: it is read and written as a unit by the plan editor, and the
+// graph's value is that a wall shared by two rooms exists exactly once inside it.
+export const venueStructures = pgTable(
+  "venue_structures",
+  {
+    id: id(),
+    organizationId: orgId(),
+    venueId: uuid("venue_id").notNull().references(() => venues.id, { onDelete: "cascade" }),
+    structure: jsonb("structure").$type<Record<string, unknown>>().notNull(),
+    updatedAt: updated(),
+  },
+  (t) => [index("venue_structures_venue_idx").on(t.venueId)],
+);
+
+// A named region of that structure (lib/venues/zone.ts). Carries no geometry of its own beyond the
+// anchor or freehand boundary in `source` — the region itself is re-derived from the walls, so a
+// wall that moves reshapes the zone instead of leaving a stale copy behind.
+export const zones = pgTable(
+  "zones",
+  {
+    id: id(),
+    organizationId: orgId(),
+    venueId: uuid("venue_id").notNull().references(() => venues.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: zoneKindEnum("kind").notNull(),
+    source: jsonb("source").$type<Record<string, unknown>>().notNull(),
+    ceilingHeightMm: integer("ceiling_height_mm").notNull().default(0), // 0 = open to the sky
+    capacity: jsonb("capacity").$type<Record<string, number>>(),
+    style: jsonb("style").$type<Record<string, unknown>>(),
+    createdAt: created(),
+  },
+  (t) => [index("zones_venue_idx").on(t.venueId)],
 );
 
 export const events = pgTable(
@@ -148,11 +189,17 @@ export const events = pgTable(
     organizationId: orgId(),
     clientName: text("client_name").notNull(),
     eventDate: timestamp("event_date", { withTimezone: true }),
-    hallName: text("hall_name"),
+    venueId: uuid("venue_id").references(() => venues.id, { onDelete: "restrict" }),
+    /** The zones this event occupies, in the designer's own order — the ceremony's חופה and the
+     *  hall it opens off are one event. Ordered, so a join table would need its own position
+     *  column to say the same thing. */
+    zoneIds: jsonb("zone_ids").$type<string[]>().notNull().default([]),
+    /** Denormalised zone names for lists and the quote header (EventSummary.zonesLabel). */
+    zonesLabel: text("zones_label"),
     mapSource: mapSourceEnum("map_source").notNull(),
     createdAt: created(),
   },
-  (t) => [index("events_org_idx").on(t.organizationId)],
+  (t) => [index("events_org_idx").on(t.organizationId), index("events_venue_idx").on(t.venueId)],
 );
 
 // Import result (F-1.x): PDF ref, calibration, detected/placed tables, verification state.

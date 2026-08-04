@@ -20,6 +20,7 @@ export function MultiSelect({
   "aria-label": ariaLabel,
   className = "",
   placeholder = "בחירה",
+  countNoun = "מתחמים",
 }: {
   values: string[];
   onChange: (values: string[]) => void;
@@ -28,6 +29,8 @@ export function MultiSelect({
   "aria-label"?: string;
   className?: string;
   placeholder?: string;
+  /** What the trigger counts when more than one is picked ("3 אזורים נבחרו"). */
+  countNoun?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -60,7 +63,7 @@ export function MultiSelect({
       ? placeholder
       : values.length === 1
         ? (options.find((o) => o.value === values[0])?.label ?? placeholder)
-        : `${values.length} מתחמים נבחרו`;
+        : `${values.length} ${countNoun} נבחרו`;
 
   return (
     <div ref={rootRef} className={`relative ${className}`}>

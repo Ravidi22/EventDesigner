@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
-import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { sampleDoc } from "@/lib/studio/sample-doc";
-import { loadDoc, loadHall } from "@/lib/studio/storage";
-import { SAMPLE_HALL, type Hall } from "@/lib/studio/hall";
+import { loadDoc } from "@/lib/studio/storage";
+import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
-import type { EventSummary } from "@/lib/events/types";
+import { markExported, nextExportVersion } from "@/lib/outputs/storage";
+import { zonesLabelOf, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { PackingList } from "./packing-list";
 import { PlacementMap } from "./placement-map";
@@ -20,42 +20,30 @@ const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מ�
 type Paper = "A4" | "A3";
 type Orient = "portrait" | "landscape";
 
-const exportKey = (eventId: string) => storageKey(`exports.${eventId}`);
-
 export function OutputsScreen() {
   const [doc, setDoc] = useState<DesignDocumentContent>(() => sampleDoc());
-  const [hall, setHall] = useState<Hall>(SAMPLE_HALL);
+  const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [view, setView] = useState<View>("packing");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("landscape");
   const [version, setVersion] = useState(1);
 
-  // Read the current design document + hall the studio autosaved (keeps SSR deterministic).
+  // Read the design document the studio autosaved (keeps SSR deterministic), and resolve the plan
+  // it sits on from the event's venue + zones — the same geometry the studio drew it against.
   useEffect(() => {
     const saved = loadDoc();
     if (saved) setDoc(saved);
-    const savedHall = loadHall();
-    if (savedHall) setHall(savedHall);
     const ev = activeEvent();
     setEvent(ev);
-    if (ev) {
-      try {
-        setVersion(Number(window.localStorage.getItem(exportKey(ev.id)) ?? 0) + 1);
-      } catch {
-        // stays at 1
-      }
-    }
+    setPlan(eventPlan(ev));
+    if (ev) setVersion(nextExportVersion(ev.id));
   }, []);
 
   // F-6.4: every export carries date + a running version number, bumped per print.
   const print = () => {
     if (event) {
-      try {
-        window.localStorage.setItem(exportKey(event.id), String(version));
-      } catch {
-        // non-fatal
-      }
+      markExported(event.id, version);
       setVersion((v) => v + 1);
     }
     // Print the just-stamped version (state updates after; the stamp below uses `version`).
@@ -113,7 +101,7 @@ export function OutputsScreen() {
         <div className="mb-6 flex items-baseline justify-between border-b border-ink pb-3">
           <div>
             <h2 className="font-display text-h2 text-ink">{TITLES[view]}</h2>
-            {event && <p className="mt-0.5 text-sm text-muted">{event.clientName} · {event.hallName}</p>}
+            {event && <p className="mt-0.5 text-sm text-muted">{event.clientName} · {zonesLabelOf(event)}</p>}
           </div>
           {/* F-6.4: date + version stamp — on screen and in print */}
           <p className="nums text-sm text-muted">
@@ -123,7 +111,7 @@ export function OutputsScreen() {
         {view === "packing" ? (
           <PackingList doc={doc} eventId={event?.id ?? null} />
         ) : view === "map" ? (
-          <PlacementMap doc={doc} hall={hall} />
+          <PlacementMap doc={doc} plan={plan} />
         ) : (
           <Quote doc={doc} />
         )}
