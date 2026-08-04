@@ -1,9 +1,9 @@
 "use client";
 
 import { X } from "lucide-react";
-import { CATEGORIES, LAYERS } from "@/lib/catalog/categories";
+import { CATEGORIES, CATEGORY_BY_ID, LAYERS } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
-import type { Layer } from "@/lib/catalog/types";
+import type { Layer, Product } from "@/lib/catalog/types";
 import { SearchInput } from "@/components/search-input";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
@@ -19,6 +19,21 @@ export const EMPTY_FILTERS: FilterState = { search: "", category: null, layer: n
 
 export function hasActiveFilters(f: FilterState): boolean {
   return f.search !== "" || f.category !== null || f.layer !== null || f.tags.length > 0;
+}
+
+/** The predicate itself, apart from the control bar below — the studio's catalog rail filters the
+ *  same products by the same rules from a much narrower strip of UI, and two copies of "does this
+ *  product match" is exactly the kind of pair that drifts. */
+export function matchesFilters(p: Product, f: FilterState): boolean {
+  if (f.category && p.category !== f.category) return false;
+  if (f.layer && p.layer !== f.layer) return false;
+  if (f.tags.length > 0 && !f.tags.some((t) => p.styleTags.includes(t))) return false; // OR within tags
+  if (f.search.trim()) {
+    const q = f.search.trim().toLowerCase();
+    const hay = `${p.name} ${CATEGORY_BY_ID[p.category]?.label ?? ""}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
 }
 
 export function Filters({

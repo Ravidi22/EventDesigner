@@ -1,21 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Heart } from "lucide-react";
+import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { loadProducts } from "@/lib/catalog/storage";
-import { CATEGORY_BY_ID, LAYER_LABEL } from "@/lib/catalog/categories";
+import { CATEGORIES, CATEGORY_BY_ID, LAYER_LABEL } from "@/lib/catalog/categories";
+import { STYLE_TAGS } from "@/lib/catalog/sample-data";
 import { formatDimensions } from "@/lib/catalog/format";
 import { loadFolder, likedProductIds, loadImages } from "@/lib/gallery/storage";
 import { activeEvent } from "@/lib/events/storage";
+import { EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState } from "../catalog/filters";
 import { SearchInput } from "@/components/search-input";
+import { Select } from "@/components/select";
+import { TagToggle } from "@/components/tag-toggle";
 import { ProductImage } from "../catalog/product-image";
 
 // Drag source. Each row carries its product id via dataTransfer; the canvas resolves the drop.
-// The products the client liked in the gallery (F-5.4) are pinned to the top ("תיק האירוע") so the
+// The products the client liked in the gallery (F-2.3) are pinned to the top ("תיק האירוע") so the
 // designer places from the shortlist first — the whole catalog stays available below.
+//
+// F-5.2 filtering is the same predicate the catalog screen uses (matchesFilters), driven by a much
+// smaller set of controls: at this width a permanent filter bar would cost more rows than it saves,
+// so category and style tags live behind a disclosure and only the search box is always up.
 export function CatalogRail() {
-  const [q, setQ] = useState("");
+  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
   const [likedIds, setLikedIds] = useState<string[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
@@ -26,23 +35,85 @@ export function CatalogRail() {
     if (ev) setLikedIds(likedProductIds(loadImages(), loadFolder(ev.id)));
   }, []);
 
+  const set = (patch: Partial<FilterState>) => setFilters((f) => ({ ...f, ...patch }));
+  const toggleTag = (tag: string) =>
+    setFilters((f) => ({ ...f, tags: f.tags.includes(tag) ? f.tags.filter((t) => t !== tag) : [...f.tags, tag] }));
+
   const { liked, rest } = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    const match = (p: Product) => !s || p.name.toLowerCase().includes(s);
     const byId = new Map(products.map((p) => [p.id, p]));
     const likedSet = new Set(likedIds);
+    const match = (p: Product) => matchesFilters(p, filters);
+    // The event folder is filtered too, not exempted: a search for "פמוט" that still shows six
+    // liked chuppah photos above the result is a search that didn't happen.
     const liked = likedIds.map((id) => byId.get(id)).filter((p): p is Product => !!p && match(p));
     const rest = products.filter((p) => !likedSet.has(p.id) && match(p));
     return { liked, rest };
-  }, [q, likedIds, products]);
+  }, [filters, likedIds, products]);
 
   const empty = liked.length === 0 && rest.length === 0;
+  const active = hasActiveFilters(filters);
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-s border-border bg-surface">
-      <div className="border-b border-border p-3">
-        <SearchInput value={q} onChange={setQ} placeholder="חיפוש בקטלוג…" aria-label="חיפוש בקטלוג" />
+      <div className="flex flex-col gap-2 border-b border-border p-3">
+        <div className="flex items-center gap-1.5">
+          <SearchInput
+            value={filters.search}
+            onChange={(v) => set({ search: v })}
+            placeholder="חיפוש בקטלוג…"
+            aria-label="חיפוש בקטלוג"
+            className="min-w-0 flex-1"
+          />
+          <button
+            type="button"
+            onClick={() => setShowFilters((s) => !s)}
+            aria-expanded={showFilters}
+            aria-label="סינון לפי קטגוריה וסגנון"
+            title="סינון לפי קטגוריה וסגנון"
+            className={
+              "relative shrink-0 rounded-md border p-2 transition-colors " +
+              (showFilters || active
+                ? "border-accent-line bg-accent-tint text-accent"
+                : "border-border text-muted hover:text-ink")
+            }
+          >
+            <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} />
+            {active && !showFilters && (
+              <span className="absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-accent" aria-hidden />
+            )}
+          </button>
+        </div>
+
+        {showFilters && (
+          <div className="flex flex-col gap-2">
+            <Select
+              value={filters.category ?? ""}
+              onChange={(v) => set({ category: v || null })}
+              aria-label="קטגוריה"
+              options={[{ value: "", label: "כל הקטגוריות" }, ...CATEGORIES.map((c) => ({ value: c.id, label: c.label }))]}
+              className="w-full"
+            />
+            <div className="flex flex-wrap gap-1">
+              {STYLE_TAGS.map((tag) => (
+                <TagToggle key={tag} active={filters.tags.includes(tag)} onClick={() => toggleTag(tag)}>
+                  {tag}
+                </TagToggle>
+              ))}
+            </div>
+            {active && (
+              <button
+                type="button"
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="inline-flex items-center gap-1 self-start text-xs text-muted transition-colors hover:text-ink"
+              >
+                <X className="h-3 w-3" strokeWidth={2} />
+                ניקוי הסינון
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
       <div className="flex-1 overflow-y-auto p-2">
         {liked.length > 0 && (
           <>
