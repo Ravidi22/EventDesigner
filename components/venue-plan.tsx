@@ -1,8 +1,9 @@
 "use client";
 
-import { outlinePathD, polygonAreaMm2, polygonCentroid, pointAtDistance } from "@/lib/studio/geometry";
+import { outlinePathD, polygonAreaMm2, polygonCentroid, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
 import { nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { stairsGeometry } from "@/lib/venues/stairs";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 
 // World-space layers for the venue plan, meant to be handed to ShapeCanvas as its `backdrop`/`overlay`.
@@ -120,6 +121,7 @@ export function StructureFeatures({
   selectedIds,
   onSelect,
   onMove,
+  onMoveStairs,
   onCommit,
   clientToMm,
 }: {
@@ -129,6 +131,10 @@ export function StructureFeatures({
   onSelect?: (id: string, additive: boolean) => void;
   /** Absent = features are fixed in place for this mode (drawing walls, naming zones). */
   onMove?: (id: string, p: { x: number; y: number }) => void;
+  /** Dragging a flight of stairs — reported as the raw world point it was dropped on, since which
+   *  edge of the deck that means (and how far along it) is the model's call, not the layer's.
+   *  See lib/venues/stairs.ts's stairsPlacementAt. */
+  onMoveStairs?: (id: string, p: { x: number; y: number }) => void;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
 }) {
@@ -150,32 +156,68 @@ export function StructureFeatures({
           vectorEffect: "non-scaling-stroke" as const,
         };
         const drag = draggable(f, onMove, onCommit, clientToMm);
+        // The flight comes back already in world millimetres, rotation and all, so it is drawn
+        // OUTSIDE the feature's rotated group — inside it, the group's own transform would turn a
+        // stage's stairs a second time.
+        const stairs = stairsGeometry(f);
+        const stairsDrag = draggableStairs(f, onMoveStairs, onCommit, clientToMm);
         return (
-          <g
-            key={f.id}
-            transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}
-            {...drag}
-            onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, e.shiftKey); } : undefined}
-            className={onMove ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
-          >
-            {f.shape === "circle" ? (
-              <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
-            ) : f.shape === "ellipse" ? (
-              <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
-            ) : (
-              <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
+          <g key={f.id}>
+            {stairs && (
+              <g
+                {...stairsDrag}
+                onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, e.shiftKey); } : undefined}
+                className={onMoveStairs ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
+                aria-label={`${f.label} — מדרגות`}
+              >
+                <path
+                  d={outlinePathD(stairs.outline)}
+                  fill={selected ? "var(--color-accent-wash)" : "var(--color-inset)"}
+                  stroke={selected ? "var(--color-accent)" : "var(--color-muted)"}
+                  strokeWidth={selected ? 2.5 : 1.25}
+                  vectorEffect="non-scaling-stroke"
+                />
+                {/* One line per step edge. With the footprint's own two ends, the count of lines is
+                    the count of risers — which is how a plan says "four steps" without a label. */}
+                {stairs.nosings.map(([p, q], i) => (
+                  <line
+                    key={i}
+                    x1={p.x}
+                    y1={p.y}
+                    x2={q.x}
+                    y2={q.y}
+                    stroke={selected ? "var(--color-accent)" : "var(--color-muted)"}
+                    strokeWidth={1}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+              </g>
             )}
-            <text
-              x={f.x}
-              y={f.y}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fill={selected ? "var(--color-accent-deep)" : "var(--color-muted)"}
-              style={{ fontSize: mm(FEATURE_LABEL_PX) }}
-              className="pointer-events-none"
+            <g
+              transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}
+              {...drag}
+              onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, e.shiftKey); } : undefined}
+              className={onMove ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
             >
-              {f.label}
-            </text>
+              {f.shape === "circle" ? (
+                <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
+              ) : f.shape === "ellipse" ? (
+                <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
+              ) : (
+                <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
+              )}
+              <text
+                x={f.x}
+                y={f.y}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fill={selected ? "var(--color-accent-deep)" : "var(--color-muted)"}
+                style={{ fontSize: mm(FEATURE_LABEL_PX) }}
+                className="pointer-events-none"
+              >
+                {f.label}
+              </text>
+            </g>
           </g>
         );
       })}
@@ -226,6 +268,45 @@ function draggable(
   };
 }
 
+// Dragging a flight of stairs. Unlike a feature, this reports where the pointer *is* rather than how
+// far it has travelled: a flight has only two degrees of freedom (which edge, how far along it), so
+// the honest gesture is "put them here" — the model then lands them on the nearest edge rather than
+// letting a raw delta walk them off the deck. Same 4px threshold, so a click still can't nudge.
+const stairsDrag = new Map<number, { x: number; y: number; dragging: boolean }>();
+
+function draggableStairs(
+  f: StructureFeature,
+  onMoveStairs?: (id: string, p: { x: number; y: number }) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+) {
+  if (!onMoveStairs || !clientToMm) return {};
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    if (stairsDrag.get(e.pointerId)?.dragging) onCommit?.();
+    stairsDrag.delete(e.pointerId);
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      stairsDrag.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const origin = stairsDrag.get(e.pointerId);
+      if (!origin || e.buttons !== 1) return;
+      if (!origin.dragging) {
+        if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 4) return;
+        origin.dragging = true;
+      }
+      onMoveStairs(f.id, clientToMm(e.clientX, e.clientY));
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+}
+
 /** Door openings, painted over the wall the canvas already stroked so they read as gaps. Drawn as
  *  part of the overlay layer that sits *above* the walls. */
 export function StructureDoors({
@@ -245,27 +326,29 @@ export function StructureDoors({
         const pts = w ? wallPoints(structure, w, nodes) : null;
         if (!pts) return null;
         const selected = selectedIds?.includes(e.id) ?? false;
+        // The gap is cut along the wall as drawn, bow and all — a straight strike across a curved
+        // wall would leave the opening floating beside the wall it is supposed to be a hole in.
+        // The t-range is the door's chord distance over the chord length, the same approximation
+        // the door's placement already uses (see geometry.ts's note on doors and curves).
+        const len = wallLengthMm(pts.a, pts.b) || 1;
         const half = e.widthMm / 2;
-        const from = pointAtDistance(pts.a, pts.b, e.distanceMm - half);
-        const to = pointAtDistance(pts.a, pts.b, e.distanceMm + half);
+        const t0 = Math.max(0, (e.distanceMm - half) / len);
+        const t1 = Math.min(1, (e.distanceMm + half) / len);
+        const d = wallSegmentD(pts.a, pts.b, w?.curve ?? null, t0, t1);
         return (
           <g key={e.id}>
-            <line
-              x1={from.x}
-              y1={from.y}
-              x2={to.x}
-              y2={to.y}
+            <path
+              d={d}
+              fill="none"
               stroke={selected ? "var(--color-accent)" : "var(--color-canvas)"}
               strokeWidth={selected ? 5 : 4.5}
               vectorEffect="non-scaling-stroke"
               className="pointer-events-none"
             />
             {onSelect && (
-              <line
-                x1={from.x}
-                y1={from.y}
-                x2={to.x}
-                y2={to.y}
+              <path
+                d={d}
+                fill="none"
                 stroke="transparent"
                 strokeWidth={Math.max(e.widthMm * 0.7, 600)}
                 strokeLinecap="butt"

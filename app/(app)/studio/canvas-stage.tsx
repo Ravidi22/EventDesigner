@@ -7,9 +7,10 @@ import { Minus, Plus, Maximize } from "lucide-react";
 import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { resolveFootprint, resolveContent, footprintBounds, customShapeBounds, type Footprint } from "@/lib/studio/footprint";
-import { absoluteControlPoints, outlinePathD, pointAtDistance, polygonCentroid, wallLengthMm } from "@/lib/studio/geometry";
+import { absoluteControlPoints, outlinePathD, polygonCentroid, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import type { EventPlan } from "@/lib/events/plan";
 import { nodeMap, wallPoints } from "@/lib/venues/structure";
+import { stairsGeometry } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
 import { KonvaIcon } from "@/components/konva-icon";
@@ -230,15 +231,19 @@ export function CanvasStage({
             const wall = plan.structure.walls.find((w) => w.id === e.wallId);
             const pts = wall ? wallPoints(plan.structure, wall, nodes) : null;
             if (!pts) return null;
+            // Cut along the wall as drawn, so the gap stays in the wall when that wall is bowed.
             const len = wallLengthMm(pts.a, pts.b) || 1;
-            const ux = (pts.b.x - pts.a.x) / len;
-            const uy = (pts.b.y - pts.a.y) / len;
-            const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
             const half = e.widthMm / 2;
             return (
-              <Line
+              <Path
                 key={e.id}
-                points={[centre.x - ux * half, centre.y - uy * half, centre.x + ux * half, centre.y + uy * half]}
+                data={wallSegmentD(
+                  pts.a,
+                  pts.b,
+                  wall?.curve ?? null,
+                  Math.max(0, (e.distanceMm - half) / len),
+                  Math.min(1, (e.distanceMm + half) / len),
+                )}
                 stroke={C.canvas}
                 strokeWidth={5}
                 strokeScaleEnabled={false}
@@ -251,16 +256,30 @@ export function CanvasStage({
           {plan.structure.features.map((f) => {
             const resolved = resolveStyle(f.style, "screen", { fill: C.column, stroke: C.muted, strokeWidth: 1.5 });
             const shape = { fill: resolved.fill, stroke: resolved.stroke, strokeWidth: resolved.strokeWidth, strokeScaleEnabled: false, ...(resolved.dashArray.length ? { dash: resolved.dashArray } : {}) };
+            // A stage's stairs are floor a table cannot stand on, so they belong on the backdrop a
+            // designer places against. Drawn beside the feature's own group rather than inside it:
+            // the flight arrives in world coordinates, already turned with the deck.
+            const stairs = stairsGeometry(f);
             return (
-              <Group key={f.id} x={f.x} y={f.y} rotation={f.rotationDeg} listening={false}>
-                {f.shape === "circle" ? (
-                  <Circle radius={f.widthMm / 2} {...shape} />
-                ) : f.shape === "ellipse" ? (
-                  <Ellipse radiusX={f.widthMm / 2} radiusY={f.depthMm / 2} {...shape} />
-                ) : (
-                  <Rect x={-f.widthMm / 2} y={-f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...shape} />
+              <Group key={f.id} listening={false}>
+                {stairs && (
+                  <Group listening={false}>
+                    <Line points={stairs.outline.flatMap((p) => [p.x, p.y])} closed fill={C.bg} stroke={C.muted} strokeWidth={1.25} strokeScaleEnabled={false} />
+                    {stairs.nosings.map(([p, q], i) => (
+                      <Line key={i} points={[p.x, p.y, q.x, q.y]} stroke={C.muted} strokeWidth={1} strokeScaleEnabled={false} />
+                    ))}
+                  </Group>
                 )}
-                <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
+                <Group x={f.x} y={f.y} rotation={f.rotationDeg} listening={false}>
+                  {f.shape === "circle" ? (
+                    <Circle radius={f.widthMm / 2} {...shape} />
+                  ) : f.shape === "ellipse" ? (
+                    <Ellipse radiusX={f.widthMm / 2} radiusY={f.depthMm / 2} {...shape} />
+                  ) : (
+                    <Rect x={-f.widthMm / 2} y={-f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...shape} />
+                  )}
+                  <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
+                </Group>
               </Group>
             );
           })}

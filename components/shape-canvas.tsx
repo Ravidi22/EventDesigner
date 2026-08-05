@@ -81,6 +81,10 @@ export interface CanvasGraphWall {
   a: string; // node id
   b: string; // node id
   kind?: "wall" | "edge"; // built wall vs. a boundary line you can see but not walk into
+  // A bow, stored as control-point offsets from this wall's own two nodes (the EdgeCurve convention
+  // — see lib/studio/hall). Offsets rather than absolute points is what lets a curved wall keep its
+  // shape while a corner it hangs off is dragged. Absent/null = straight.
+  curve?: EdgeCurve | null;
 }
 export interface CanvasGraph {
   nodes: CanvasGraphNode[];
@@ -284,6 +288,7 @@ export function ShapeCanvas({
   overlay,
   graph,
   onMoveGraphNode,
+  onCurveGraphWall,
   graphSelection = [],
   onSelectGraph,
   onMarquee,
@@ -345,6 +350,11 @@ export function ShapeCanvas({
   // references, so tracing a new wing aligns to the walls already on the plan.
   graph?: CanvasGraph;
   onMoveGraphNode?: (nodeId: string, p: Point) => void;
+  // Bowing a wall. "bulge" is the diamond on the wall's middle — drag it and the wall curves through
+  // the pointer; "c1"/"c2" are the two bezier points a curved wall exposes for asymmetric shaping.
+  // Supplying this is what puts the handles on screen at all, so a host that is mid-draw (or one
+  // whose walls are not curvable) leaves it off and gets exactly the straight-wall canvas it had.
+  onCurveGraphWall?: (wallId: string, which: "bulge" | "c1" | "c2", p: Point) => void;
   // Graph selection. Supplying onSelectGraph is what makes walls clickable at all — a host that is
   // mid-draw leaves it off, so a click meant to place a corner can't be swallowed by the wall it
   // lands on. Node handles are drawn whenever either this or onMoveGraphNode is present.
@@ -380,6 +390,9 @@ export function ShapeCanvas({
   // disappearing out from under the pointer that is holding it.
   const [hoverWall, setHoverWall] = useState<number | null>(null);
   const [dragWall, setDragWall] = useState<number | null>(null);
+  // The same pair for the graph's walls, which are keyed by id rather than by position in an array.
+  const [hoverGraphWall, setHoverGraphWall] = useState<string | null>(null);
+  const [dragGraphWall, setDragGraphWall] = useState<string | null>(null);
   // A fixture's live rotation, for the angle pill — the fixture lives in SVG, the pill is an HTML
   // overlay, so the marker reports the angle up rather than drawing it itself.
   const [rotating, setRotating] = useState<{ deg: number; locked: boolean; at: Point } | null>(null);
@@ -948,13 +961,14 @@ export function ShapeCanvas({
         if (!a || !b) return null; // wall left dangling by a deleted node
         const isEdge = w.kind === "edge";
         const isSelected = graphSelection.some((r) => r.kind === "wall" && r.id === w.id);
+        // One path for both the stroke and the hit area, straight or bowed: edgePathD falls back to
+        // a plain line when there is no curve, so a straight wall is exactly the geometry it was.
+        const d = edgePathD(a, b, w.curve ?? null);
         return (
           <g key={w.id}>
-            <line
-              x1={a.x}
-              y1={a.y}
-              x2={b.x}
-              y2={b.y}
+            <path
+              d={d}
+              fill="none"
               className={isSelected ? "text-accent" : isEdge ? "text-muted" : "text-ink"}
               stroke="currentColor"
               strokeWidth={isSelected ? 4 : isEdge ? 1.5 : 2.5}
@@ -966,11 +980,9 @@ export function ShapeCanvas({
                 world units so it stays the same size on screen at any zoom, and only mounted when
                 the host is actually taking selections (see onSelectGraph's note). */}
             {onSelectGraph && (
-              <line
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
+              <path
+                d={d}
+                fill="none"
                 stroke="transparent"
                 strokeWidth={mm(11)}
                 strokeLinecap="round"
@@ -978,6 +990,10 @@ export function ShapeCanvas({
                 role="button"
                 aria-label={`${isEdge ? "גבול שטח" : "קיר"} — בחירה לעריכה`}
                 className={`cursor-pointer touch-none ${HANDLE_CLS}`}
+                // Hovering a wall is what surfaces its bow handle (below) — the same rule the
+                // outline's walls follow, so a plan of forty walls isn't forty diamonds at once.
+                onPointerEnter={() => setHoverGraphWall(w.id)}
+                onPointerLeave={() => setHoverGraphWall((h) => (h === w.id ? null : h))}
                 // No stopPropagation on the press: a wall is selectable but not draggable, so the
                 // press has to reach the <svg> for a marquee to be able to start on top of one.
                 // The click below survives that only because the svg defers its pointer capture
@@ -1000,6 +1016,67 @@ export function ShapeCanvas({
 
       {/* Above the walls, below the handles — door gaps overpainting the wall they cut. */}
       {typeof overlay === "function" ? overlay(layerCtx) : overlay}
+
+      {/* A graph wall's bow handle: the diamond on its middle. Same rule as the outline's — a wall
+          only surfaces its curve handle once it is live (hovered, selected, or holding the drag),
+          because a diamond per wall would be a second full set of handles competing with the
+          corners. Drag it and the wall bows through the pointer; once bowed, a selected wall also
+          exposes its two bezier points for a curve that leans rather than bulging evenly. */}
+      {graph &&
+        onCurveGraphWall &&
+        graph.walls.map((w) => {
+          const isSelected = graphSelection.some((r) => r.kind === "wall" && r.id === w.id);
+          if (!isSelected && hoverGraphWall !== w.id && dragGraphWall !== w.id) return null;
+          const a = graphNodeAt(w.a);
+          const b = graphNodeAt(w.b);
+          if (!a || !b) return null;
+          const curve = w.curve ?? null;
+          const mid = edgeMidpoint(a, b, curve);
+          const bulgeDrag = dragHandlers(
+            clientToMm,
+            (p) => onCurveGraphWall(w.id, "bulge", p),
+            () => onSelectGraph?.({ kind: "wall", id: w.id }, false),
+            (dragging) => setDragGraphWall(dragging ? w.id : null),
+            onCommit,
+          );
+          return (
+            <g key={w.id}>
+              <g
+                {...bulgeDrag}
+                tabIndex={0}
+                role="button"
+                aria-label="עיקום הקיר — גרירה"
+                // The diamond covers the wall's own hit stroke, so entering it reads as leaving the
+                // wall — it has to hold the hover open itself or it vanishes as the pointer arrives.
+                onPointerEnter={() => setHoverGraphWall(w.id)}
+                onPointerLeave={() => setHoverGraphWall((h) => (h === w.id ? null : h))}
+                className={`cursor-move touch-none ${HANDLE_CLS}`}
+              >
+                <circle {...HALO} cx={mid.x} cy={mid.y} r={mm(11)} />
+                <rect
+                  x={mid.x - mm(5)}
+                  y={mid.y - mm(5)}
+                  width={mm(10)}
+                  height={mm(10)}
+                  transform={`rotate(45 ${mid.x} ${mid.y})`}
+                  className={`hover:text-accent ${isSelected ? "text-accent" : "text-ink-soft/60"}`}
+                  fill="currentColor"
+                />
+              </g>
+              {isSelected && curve && (
+                <BezierHandles
+                  a={a}
+                  b={b}
+                  curve={curve}
+                  mm={mm}
+                  clientToMm={clientToMm}
+                  onMoveHandle={(which, p) => onCurveGraphWall(w.id, which, p)}
+                  onCommit={onCommit}
+                />
+              )}
+            </g>
+          );
+        })}
 
       {/* Graph corners. One handle can be shared by several walls, so dragging it reshapes every
           room that meets there at once — the whole reason the structure is a graph. */}

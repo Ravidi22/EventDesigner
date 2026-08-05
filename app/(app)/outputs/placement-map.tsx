@@ -2,9 +2,10 @@ import Link from "next/link";
 import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
 import { placementLegend } from "@/lib/outputs/aggregate";
 import { productName } from "@/lib/outputs/lookup";
-import { absoluteControlPoints, outlinePathD, pointAtDistance, wallLengthMm } from "@/lib/studio/geometry";
+import { absoluteControlPoints, outlinePathD, pointAtDistance, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import type { EventPlan } from "@/lib/events/plan";
 import { nodeMap, wallPoints } from "@/lib/venues/structure";
+import { stairsGeometry } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
@@ -65,17 +66,15 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
           const pts = wall ? wallPoints(plan.structure, wall, nodes) : null;
           if (!pts) return null;
           const len = wallLengthMm(pts.a, pts.b) || 1;
-          const ux = (pts.b.x - pts.a.x) / len;
-          const uy = (pts.b.y - pts.a.y) / len;
           const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
           const half = e.widthMm / 2;
           return (
             <g key={e.id}>
-              <line
-                x1={centre.x - ux * half}
-                y1={centre.y - uy * half}
-                x2={centre.x + ux * half}
-                y2={centre.y + uy * half}
+              {/* Struck along the wall as drawn — on a bowed wall a straight chord would print the
+                  gap beside the wall instead of through it. */}
+              <path
+                d={wallSegmentD(pts.a, pts.b, wall?.curve ?? null, Math.max(0, (e.distanceMm - half) / len), Math.min(1, (e.distanceMm + half) / len))}
+                fill="none"
                 stroke="#ffffff"
                 strokeWidth={4}
                 vectorEffect="non-scaling-stroke"
@@ -96,18 +95,31 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
             strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
             vectorEffect: "non-scaling-stroke" as const,
           };
+          // Stairs are floor the crew cannot put a table on, so they print with the stage rather
+          // than being screen-only chrome. World coordinates already, hence outside the rotation.
+          const stairs = stairsGeometry(f);
           return (
-            <g key={f.id} transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
-              {f.shape === "circle" ? (
-                <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
-              ) : f.shape === "ellipse" ? (
-                <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
-              ) : (
-                <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
+            <g key={f.id}>
+              {stairs && (
+                <g>
+                  <path d={outlinePathD(stairs.outline)} fill="#f7f6fa" stroke="#4a4658" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  {stairs.nosings.map(([p, q], i) => (
+                    <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke="#4a4658" strokeWidth={0.75} vectorEffect="non-scaling-stroke" />
+                  ))}
+                </g>
               )}
-              <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
-                {f.label}
-              </text>
+              <g transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
+                {f.shape === "circle" ? (
+                  <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
+                ) : f.shape === "ellipse" ? (
+                  <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
+                ) : (
+                  <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
+                )}
+                <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
+                  {f.label}
+                </text>
+              </g>
             </g>
           );
         })}
