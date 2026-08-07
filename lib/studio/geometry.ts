@@ -187,12 +187,49 @@ function unitVector(from: Point, to: Point): Point | null {
   return { x: (to.x - from.x) / len, y: (to.y - from.y) / len };
 }
 
+export interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  widthMm: number;
+  heightMm: number;
+}
+
+// Axis-aligned bounds of an outline, in whatever space that outline is stored in. Callers use this
+// to fit a viewport, so unlike polygonAreaMm2 it does NOT ignore wall curvature: a cubic bezier is
+// contained in the convex hull of its four control points, so folding the absolute control points
+// into the min/max yields a box that is slightly loose but can never clip a bulge off the edge of
+// the view. A few mm of slack is invisible; a clipped wall is not.
+export function outlineBounds(outline: Point[], edgeCurves?: (EdgeCurve | null)[]): Bounds {
+  if (outline.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0, widthMm: 0, heightMm: 0 };
+  const n = outline.length;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const p of outline) {
+    xs.push(p.x);
+    ys.push(p.y);
+  }
+  // A stale edgeCurves array can outlive the outline it was built for — ignore any entry past the
+  // last edge rather than indexing off the end of the outline.
+  edgeCurves?.forEach((curve, i) => {
+    if (!curve || i >= n) return;
+    const { c1, c2 } = absoluteControlPoints(outline[i], outline[(i + 1) % n], curve);
+    xs.push(c1.x, c2.x);
+    ys.push(c1.y, c2.y);
+  });
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return { minX, minY, maxX, maxY, widthMm: maxX - minX, heightMm: maxY - minY };
+}
+
 // Bounding-box diagonal — the shape's own sense of "far", used to reject a solve that would fling
 // a corner off the map rather than nudge it.
 function outlineSpanMm(outline: Point[]): number {
-  const xs = outline.map((p) => p.x);
-  const ys = outline.map((p) => p.y);
-  return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+  const { widthMm, heightMm } = outlineBounds(outline);
+  return Math.hypot(widthMm, heightMm) || 1;
 }
 
 // Setting a wall's length (or angle) by moving only its end vertex keeps that one wall honest and
@@ -275,21 +312,13 @@ export function pointAtDistance(a: Point, b: Point, distanceMm: number): Point {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
 
-// Resolves which two vertices a door's wallIndex refers to, falling back to the width×height
-// rectangle for halls saved before outline existed — the same fallback PlanPreview uses.
-export function resolveWallEndpoints(outline: Point[] | undefined, widthMm: number, heightMm: number, wallIndex: number): { a: Point; b: Point } {
-  const ol =
-    outline && outline.length >= 3
-      ? outline
-      : [
-          { x: 0, y: 0 },
-          { x: widthMm, y: 0 },
-          { x: widthMm, y: heightMm },
-          { x: 0, y: heightMm },
-        ];
-  const n = ol.length;
-  return { a: ol[((wallIndex % n) + n) % n], b: ol[(((wallIndex + 1) % n) + n) % n] };
+// The two vertices a door's wallIndex refers to, with the index wrapped into range. For callers
+// that already hold a resolved outline (everything going through shellOutline does).
+export function wallEndpoints(outline: Point[], wallIndex: number): { a: Point; b: Point } {
+  const n = outline.length;
+  return { a: outline[((wallIndex % n) + n) % n], b: outline[(((wallIndex + 1) % n) + n) % n] };
 }
+
 
 // Clamped distance along a→b closest to p — used both to snap a dropped entrance onto a wall and
 // to slide an existing one as it's dragged.
@@ -554,8 +583,20 @@ if ((import.meta as { main?: boolean }).main) {
   assert(projectOntoWall(a, b, { x: 300, y: 999 }) === 300, "projectOntoWall drops the perpendicular offset");
   const nearest = nearestWallToPoint([{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 0, y: 1000 }], { x: 300, y: 10 });
   assert(nearest.edgeIdx === 0 && Math.abs(nearest.distanceMm - 300) < 1e-6, "nearestWallToPoint finds the closest edge and offset along it");
-  const fallback = resolveWallEndpoints(undefined, 2000, 1000, 2);
-  assert(fallback.a.x === 2000 && fallback.a.y === 1000 && fallback.b.x === 0 && fallback.b.y === 1000, "resolveWallEndpoints falls back to the width×height rectangle");
+  const wrapped = wallEndpoints([{ x: 0, y: 0 }, { x: 2000, y: 0 }, { x: 2000, y: 1000 }, { x: 0, y: 1000 }], 2);
+  assert(wrapped.a.x === 2000 && wrapped.a.y === 1000 && wrapped.b.x === 0 && wrapped.b.y === 1000, "wallEndpoints resolves an edge index to its two vertices");
+
+  // Bounds carry the shape's real position, not just its size — a zone drawn out on a venue plane
+  // must not be reported as if it sat at the origin.
+  const offsetBox = outlineBounds([{ x: 5000, y: 8000 }, { x: 9000, y: 8000 }, { x: 9000, y: 11000 }, { x: 5000, y: 11000 }]);
+  assert(offsetBox.minX === 5000 && offsetBox.minY === 8000, "outlineBounds reports the shape's origin, not (0,0)");
+  assert(offsetBox.widthMm === 4000 && offsetBox.heightMm === 3000, "outlineBounds measures the shape's own extent");
+  assert(outlineBounds([]).widthMm === 0, "outlineBounds tolerates an empty outline");
+  // A wall bowed outward must widen the box, or a viewport fitted to it would clip the bulge.
+  const bowedSquare = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 0, y: 1000 }];
+  const curves = [null, bulgeToCurve({ x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 1300, y: 500 }), null, null];
+  assert(outlineBounds(bowedSquare, curves).maxX > 1000, "outlineBounds grows to contain a bowed wall");
+  assert(outlineBounds(bowedSquare, [null, null, null, null, null]).maxX === 1000, "outlineBounds ignores a stale curve past the last edge");
 
   // A straight wall sliced between two chord-fractions is just the corresponding chord sub-segment.
   assert(wallSegmentD(a, b, null, 0.25, 0.75) === "M 250 0 L 750 0", "wallSegmentD slices a straight wall along its chord");

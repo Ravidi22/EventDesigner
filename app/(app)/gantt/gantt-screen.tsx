@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, PenTool } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, PenTool, Printer } from "lucide-react";
 import type { EventSummary, EventStatus } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventProgress, eventStatus, monogram, formatEventDate } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventProgress, eventStatus, monogram, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId, updateEvent } from "@/lib/events/storage";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
@@ -29,14 +29,14 @@ export function GanttScreen() {
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
-  const { activeVenueId, eventVenueId } = useActiveVenueScope();
+  const { activeVenueId } = useActiveVenueScope();
 
   useEffect(() => {
     setEvents(loadEvents());
   }, []);
 
   const filtered = useMemo(() => {
-    const byVenue = events.filter((e) => eventVenueId(e) === activeVenueId);
+    const byVenue = events.filter((e) => e.venueId === activeVenueId);
     const byTab =
       filter === "active"
         ? byVenue.filter((e) => !e.archived)
@@ -44,7 +44,7 @@ export function GanttScreen() {
           ? byVenue.filter((e) => e.archived)
           : byVenue.filter((e) => eventStatus(e) === filter);
     const q = query.trim().toLowerCase();
-    return q ? byTab.filter((e) => `${e.clientName} ${e.hallName}`.toLowerCase().includes(q)) : byTab;
+    return q ? byTab.filter((e) => `${e.clientName} ${e.zonesLabel}`.toLowerCase().includes(q)) : byTab;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, filter, query, activeVenueId]);
 
@@ -64,6 +64,11 @@ export function GanttScreen() {
   const openStudio = (e: EventSummary) => {
     setActiveEventId(e.id);
     router.push("/studio");
+  };
+  // F-6: the operational outputs are prepared here, after the meeting — the one route into them.
+  const openOutputs = (e: EventSummary) => {
+    setActiveEventId(e.id);
+    router.push("/outputs");
   };
   const toggleArchive = (e: EventSummary) => {
     setEvents(updateEvent(e.id, { archived: !e.archived }));
@@ -134,6 +139,7 @@ export function GanttScreen() {
               event={e}
               onMeeting={() => enterMeeting(e)}
               onStudio={() => openStudio(e)}
+              onOutputs={() => openOutputs(e)}
               onArchive={() => toggleArchive(e)}
             />
           ))}
@@ -147,11 +153,13 @@ function EventCard({
   event: e,
   onMeeting,
   onStudio,
+  onOutputs,
   onArchive,
 }: {
   event: EventSummary;
   onMeeting: () => void;
   onStudio: () => void;
+  onOutputs: () => void;
   onArchive: () => void;
 }) {
   const status = eventStatus(e);
@@ -169,7 +177,7 @@ function EventCard({
           <span className="leading-tight">
             <span className="block text-base font-semibold text-ink">{e.clientName}</span>
             <span className="block text-sm text-muted">
-              {e.hallName} · {formatEventDate(e.date)}
+              {zonesLabelOf(e)} · {formatEventDate(e.date)}
             </span>
           </span>
         </div>
@@ -211,6 +219,15 @@ function EventCard({
             className="rounded-pill p-1.5 text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
           >
             <PenTool className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            onClick={onOutputs}
+            title="פלטים תפעוליים"
+            aria-label={`פלטים תפעוליים של ${e.clientName}`}
+            className="rounded-pill p-1.5 text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
+          >
+            <Printer className="h-4 w-4" strokeWidth={1.75} />
           </button>
           <button
             type="button"

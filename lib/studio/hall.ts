@@ -54,33 +54,7 @@ export interface EdgeCurve {
   c2: Point;
 }
 
-export interface Hall {
-  widthMm: number; // bounding box; also used by renderers that still assume a rectangle
-  heightMm: number; // bounding box
-  outline?: Point[]; // true room polygon in mm; absent (old saved halls) falls back to the width×height rectangle
-  edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight wall
-  lockedEdges?: boolean[]; // per-edge length lock, aligned to outline; absent/false = free to resize
-  ceilingHeightMm: number;
-  columns: Column[];
-  entrances: Entrance[];
-  stage?: Fixture;
-  bars: Fixture[];
-}
-
-export const SAMPLE_HALL: Hall = {
-  widthMm: 20000,
-  heightMm: 13000,
-  outline: [
-    { x: 0, y: 0 },
-    { x: 20000, y: 0 },
-    { x: 20000, y: 13000 },
-    { x: 0, y: 13000 },
-  ],
-  ceilingHeightMm: 4500,
-  columns: [
-    { x: 6500, y: 6500, rMm: 350 },
-    { x: 13500, y: 6500, rMm: 350 },
-  ],
-  entrances: [{ id: "ent-1", wallIndex: 2, distanceMm: 10000, widthMm: 1800, swingInward: true, doubleDoor: true }],
-  bars: [],
-};
+// `Hall` itself is gone. A hall was its own drawing starting at (0,0), which could not express two
+// rooms of one property standing next to each other; a venue is now ONE plane and one wall graph,
+// and a hall is a named region of it (lib/venues/zone.ts). What survives here are the primitive
+// shapes that model still uses — points, curves, columns, fixtures.

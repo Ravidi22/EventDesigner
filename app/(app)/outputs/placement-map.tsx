@@ -1,9 +1,10 @@
 import Link from "next/link";
 import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
-import type { Hall } from "@/lib/studio/hall";
 import { placementLegend } from "@/lib/outputs/aggregate";
 import { productName } from "@/lib/outputs/lookup";
-import { pointAtDistance, resolveWallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
+import { absoluteControlPoints, outlinePathD, pointAtDistance, wallLengthMm } from "@/lib/studio/geometry";
+import type { EventPlan } from "@/lib/events/plan";
+import { nodeMap, wallPoints } from "@/lib/venues/structure";
 import { resolveStyle } from "@/lib/element-style";
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
@@ -20,61 +21,90 @@ function formatTables(nums: number[]): string {
   return parts.join(", ");
 }
 
-export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: Hall }) {
+export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: EventPlan }) {
   const legend = placementLegend(doc, productName);
   const pad = 800;
-  const vb = `${-pad} ${-pad} ${hall.widthMm + pad * 2} ${hall.heightMm + pad + 1400}`;
+  // Framed on the zones this event occupies. Walls, doors and features are all drawn from the venue
+  // structure, and the frame is what keeps the rest of the property off the crew's page — an
+  // adjacent room's wall crops at the edge instead of being special-cased out.
+  const box = plan.bounds;
+  const nodes = nodeMap(plan.structure);
+  const vb = `${box.minX - pad} ${box.minY - pad} ${box.widthMm + pad * 2} ${box.heightMm + pad + 1400}`;
 
   return (
     <div className="space-y-8">
       <svg viewBox={vb} className="w-full rounded-lg border border-border bg-canvas" role="img" aria-label="מפת הצבה">
-        {/* Walls */}
-        <rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill="#ffffff" stroke="#1b1725" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-        {/* Entrances — position resolved from the wall it's cut into */}
-        {hall.entrances.map((e) => {
-          const { a, b } = resolveWallEndpoints(hall.outline, hall.widthMm, hall.heightMm, e.wallIndex);
-          const len = wallLengthMm(a, b) || 1;
-          const ux = (b.x - a.x) / len;
-          const uy = (b.y - a.y) / len;
-          const center = pointAtDistance(a, b, e.distanceMm);
+        {/* Zone floors — white ground for the rooms being set up */}
+        {plan.zones
+          .filter((r) => r.boundary.length >= 3)
+          .map((r) => (
+            <path key={r.zone.id} d={outlinePathD(r.boundary)} fill="#ffffff" stroke="none" />
+          ))}
+        {/* Walls. An "edge" (a terrace lip, a rim) prints lighter and dashed — never as something
+            the crew would read as a wall they cannot carry a table through. */}
+        {plan.structure.walls.map((w) => {
+          const pts = wallPoints(plan.structure, w, nodes);
+          if (!pts) return null;
+          const isEdge = w.kind === "edge";
+          const common = {
+            fill: "none",
+            stroke: isEdge ? "#7c7889" : "#1b1725",
+            strokeWidth: isEdge ? 1 : 2,
+            strokeDasharray: isEdge ? "220 160" : undefined,
+            vectorEffect: "non-scaling-stroke" as const,
+          };
+          if (w.curve) {
+            const { c1, c2 } = absoluteControlPoints(pts.a, pts.b, w.curve);
+            return <path key={w.id} d={`M ${pts.a.x} ${pts.a.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${pts.b.x} ${pts.b.y}`} {...common} />;
+          }
+          return <line key={w.id} x1={pts.a.x} y1={pts.a.y} x2={pts.b.x} y2={pts.b.y} {...common} />;
+        })}
+        {/* Doors — a gap struck through the wall, labelled */}
+        {plan.structure.entrances.map((e) => {
+          const wall = plan.structure.walls.find((w) => w.id === e.wallId);
+          const pts = wall ? wallPoints(plan.structure, wall, nodes) : null;
+          if (!pts) return null;
+          const len = wallLengthMm(pts.a, pts.b) || 1;
+          const ux = (pts.b.x - pts.a.x) / len;
+          const uy = (pts.b.y - pts.a.y) / len;
+          const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
           const half = e.widthMm / 2;
           return (
             <g key={e.id}>
               <line
-                x1={center.x - ux * half}
-                y1={center.y - uy * half}
-                x2={center.x + ux * half}
-                y2={center.y + uy * half}
+                x1={centre.x - ux * half}
+                y1={centre.y - uy * half}
+                x2={centre.x + ux * half}
+                y2={centre.y + uy * half}
                 stroke="#ffffff"
                 strokeWidth={4}
                 vectorEffect="non-scaling-stroke"
               />
-              <text x={center.x} y={center.y + 950} textAnchor="middle" fontSize={520} fontFamily="Assistant, sans-serif" fill="#7c7889">
+              <text x={centre.x} y={centre.y + 950} textAnchor="middle" fontSize={520} fontFamily="Assistant, sans-serif" fill="#7c7889">
                 כניסה
               </text>
             </g>
           );
         })}
-        {/* Columns */}
-        {hall.columns.map((c, i) => (
-          <circle key={i} cx={c.x} cy={c.y} r={c.rMm} fill="#f0eef5" stroke="#4a4658" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
-        ))}
-        {/* Near-fixed shell elements (stage, bars) — outline + label, B&W-safe */}
-        {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => {
+        {/* Fixed features (pool, built stage, bar) — outline + label, B&W-safe */}
+        {plan.structure.features.map((f) => {
           const resolved = resolveStyle(f.style, "monochrome", { fill: "#f0eef5", stroke: "#4a4658", strokeWidth: 1.25 });
+          const common = {
+            fill: resolved.fill,
+            stroke: resolved.stroke,
+            strokeWidth: resolved.strokeWidth,
+            strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
+            vectorEffect: "non-scaling-stroke" as const,
+          };
           return (
-            <g key={f.id}>
-              <rect
-                x={f.x - f.widthMm / 2}
-                y={f.y - f.depthMm / 2}
-                width={f.widthMm}
-                height={f.depthMm}
-                fill={resolved.fill}
-                stroke={resolved.stroke}
-                strokeWidth={resolved.strokeWidth}
-                strokeDasharray={resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined}
-                vectorEffect="non-scaling-stroke"
-              />
+            <g key={f.id} transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
+              {f.shape === "circle" ? (
+                <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
+              ) : f.shape === "ellipse" ? (
+                <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
+              ) : (
+                <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
+              )}
               <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
                 {f.label}
               </text>

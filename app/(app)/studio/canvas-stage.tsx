@@ -5,10 +5,11 @@ import { Stage, Layer, Rect, Circle, Ellipse, Group, Text, Line, Path } from "re
 import type Konva from "konva";
 import { Minus, Plus, Maximize } from "lucide-react";
 import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
-import type { Hall } from "@/lib/studio/hall";
 import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
-import { resolveFootprint, resolveContent, footprintBounds, outlineBounds, type Footprint } from "@/lib/studio/footprint";
-import { pointAtDistance, resolveWallEndpoints, wallLengthMm, outlinePathD } from "@/lib/studio/geometry";
+import { resolveFootprint, resolveContent, footprintBounds, customShapeBounds, type Footprint } from "@/lib/studio/footprint";
+import { absoluteControlPoints, outlinePathD, pointAtDistance, polygonCentroid, wallLengthMm } from "@/lib/studio/geometry";
+import type { EventPlan } from "@/lib/events/plan";
+import { nodeMap, wallPoints } from "@/lib/venues/structure";
 import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
 import { KonvaIcon } from "@/components/konva-icon";
@@ -17,6 +18,7 @@ import { KonvaIcon } from "@/components/konva-icon";
 // with app/globals.css @theme.
 const C = {
   canvas: "#ffffff",
+  bg: "#eeedf3",
   wall: "#1b1725",
   column: "#e0ddea",
   ink: "#1b1725",
@@ -38,7 +40,7 @@ export interface CanvasHandle {
 
 export function CanvasStage({
   doc,
-  hall,
+  plan,
   selection,
   layerVisible,
   addingTable,
@@ -49,7 +51,7 @@ export function CanvasStage({
   onPlaceTable,
 }: {
   doc: DesignDocumentContent;
-  hall: Hall;
+  plan: EventPlan;
   selection: Selection;
   layerVisible: Record<LayerId, boolean>;
   addingTable?: string | null; // table type in click-to-place mode (F-3.3)
@@ -64,13 +66,24 @@ export function CanvasStage({
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [view, setView] = useState({ scale: 0.05, x: 0, y: 0 });
 
+  // The event's zones, not the whole property: the studio opens framed on what is being designed,
+  // while everything else on the plan stays drawn and reachable one scroll away.
+  const box = plan.bounds;
+  const nodes = nodeMap(plan.structure);
+
+  // Fit the shape's own box, offsetting by its minX/minY — a zone drawn far out on a venue plane
+  // must land centred in the viewport, not off-screen by its distance from the origin.
   const fit = useCallback(() => {
     const { w, h } = { w: wrapRef.current?.clientWidth ?? 0, h: wrapRef.current?.clientHeight ?? 0 };
-    if (!w || !h) return;
+    if (!w || !h || !box.widthMm || !box.heightMm) return;
     const pad = 0.08;
-    const scale = Math.min(w / hall.widthMm, h / hall.heightMm) * (1 - pad);
-    setView({ scale, x: (w - hall.widthMm * scale) / 2, y: (h - hall.heightMm * scale) / 2 });
-  }, [hall.widthMm, hall.heightMm]);
+    const scale = Math.min(w / box.widthMm, h / box.heightMm) * (1 - pad);
+    setView({
+      scale,
+      x: (w - box.widthMm * scale) / 2 - box.minX * scale,
+      y: (h - box.heightMm * scale) / 2 - box.minY * scale,
+    });
+  }, [box.widthMm, box.heightMm, box.minX, box.minY]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -83,14 +96,16 @@ export function CanvasStage({
     return () => ro.disconnect();
   }, []);
 
-  // Fit once we know the size (and if the hall changes).
+  // Fit once, as soon as there is both a viewport and a plan to frame. The plan resolves after
+  // mount (storage is client-only), so this deliberately waits for a non-empty box rather than
+  // spending its one fit on the zero-sized placeholder and leaving the event off-screen.
   const fittedRef = useRef(false);
   useEffect(() => {
-    if (size.w && size.h && !fittedRef.current) {
+    if (size.w && size.h && box.widthMm && !fittedRef.current) {
       fit();
       fittedRef.current = true;
     }
-  }, [size, fit]);
+  }, [size, fit, box.widthMm]);
 
   const zoomBy = (factor: number) => {
     const stage = stageRef.current;
@@ -157,59 +172,94 @@ export function CanvasStage({
         onTap={() => onSelect(null)}
       >
         <Layer>
-          {/* Hall floor + walls */}
-          <Rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill={C.canvas} stroke={C.wall} strokeWidth={3} strokeScaleEnabled={false} />
-          {/* Entrance gaps — position resolved from the wall it's cut into (ponytail: this
-              backdrop just needs a rough marker, not the full gap+swing symbol the hall
-              structure editor draws). */}
-          {hall.entrances.map((e) => {
-            const { a, b } = resolveWallEndpoints(hall.outline, hall.widthMm, hall.heightMm, e.wallIndex);
-            const len = wallLengthMm(a, b) || 1;
-            const ux = (b.x - a.x) / len;
-            const uy = (b.y - a.y) / len;
-            const center = pointAtDistance(a, b, e.distanceMm);
-            const half = e.widthMm / 2;
+          {/* The venue plan under the design. Zone floors first, then the walls stroked once on top
+              — a wall between two zones is one wall, so it must not be painted twice. Zones the
+              event doesn't occupy are drawn dimmed rather than omitted: the designer needs to see
+              what the חופה opens onto, and placing just outside a zone stays possible. */}
+          {plan.all.map((r) => {
+            const occupied = plan.zones.some((z) => z.zone.id === r.zone.id);
+            if (r.boundary.length < 3) return null;
+            const centre = polygonCentroid(r.boundary);
             return (
-              <Group key={e.id}>
+              <Group key={r.zone.id} listening={false} opacity={occupied ? 1 : 0.45}>
                 <Line
-                  points={[center.x - ux * half, center.y - uy * half, center.x + ux * half, center.y + uy * half]}
-                  stroke={C.canvas}
-                  strokeWidth={5}
-                  strokeScaleEnabled={false}
+                  points={r.boundary.flatMap((p) => [p.x, p.y])}
+                  closed
+                  fill={occupied ? C.canvas : C.bg}
                 />
-                <Text
-                  x={center.x - 1200}
-                  y={center.y + 150}
-                  width={2400}
-                  text="כניסה"
-                  align="center"
-                  fontSize={420}
-                  fontFamily="Assistant, sans-serif"
-                  fill={C.muted}
-                />
+                {!occupied && (
+                  <Text
+                    x={centre.x - 4000}
+                    y={centre.y}
+                    width={8000}
+                    text={r.zone.name}
+                    align="center"
+                    fontSize={480}
+                    fontFamily="Assistant, sans-serif"
+                    fill={C.muted}
+                  />
+                )}
               </Group>
             );
           })}
-          {hall.columns.map((c, i) => (
-            <Circle key={i} x={c.x} y={c.y} radius={c.rMm} fill={C.column} stroke={C.border} strokeWidth={2} strokeScaleEnabled={false} />
-          ))}
 
-          {/* Near-fixed shell elements (F-3.1): stage, bars */}
-          {[hall.stage, ...hall.bars].filter((f): f is NonNullable<typeof f> => Boolean(f)).map((f) => {
-            const resolved = resolveStyle(f.style, "screen", { fill: C.column, stroke: C.muted, strokeWidth: 1.5 });
+          {plan.structure.walls.map((w) => {
+            const pts = wallPoints(plan.structure, w, nodes);
+            if (!pts) return null;
+            // An "edge" (a terrace lip, the קוליסאום's rim) is a boundary you can see and step over
+            // — drawn lighter and dashed so it never reads as something you can't walk through.
+            const isEdge = w.kind === "edge";
+            const common = {
+              stroke: isEdge ? C.muted : C.wall,
+              strokeWidth: isEdge ? 1.5 : 3,
+              strokeScaleEnabled: false,
+              listening: false,
+              ...(isEdge ? { dash: [220, 160] } : {}),
+            };
+            if (w.curve) {
+              const { c1, c2 } = absoluteControlPoints(pts.a, pts.b, w.curve);
+              return <Path key={w.id} data={`M ${pts.a.x} ${pts.a.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${pts.b.x} ${pts.b.y}`} {...common} />;
+            }
+            return <Line key={w.id} points={[pts.a.x, pts.a.y, pts.b.x, pts.b.y]} {...common} />;
+          })}
+
+          {/* Doors, drawn as gaps: a stroke in the floor colour over the wall they cut through
+              (ponytail: a rough marker, not the full gap+swing symbol the venue plan editor draws
+              — this is a backdrop to place tables against, not a structure to edit). */}
+          {plan.structure.entrances.map((e) => {
+            const wall = plan.structure.walls.find((w) => w.id === e.wallId);
+            const pts = wall ? wallPoints(plan.structure, wall, nodes) : null;
+            if (!pts) return null;
+            const len = wallLengthMm(pts.a, pts.b) || 1;
+            const ux = (pts.b.x - pts.a.x) / len;
+            const uy = (pts.b.y - pts.a.y) / len;
+            const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
+            const half = e.widthMm / 2;
             return (
-              <Group key={f.id} x={f.x} y={f.y} listening={false}>
-                <Rect
-                  x={-f.widthMm / 2}
-                  y={-f.depthMm / 2}
-                  width={f.widthMm}
-                  height={f.depthMm}
-                  fill={resolved.fill}
-                  stroke={resolved.stroke}
-                  strokeWidth={resolved.strokeWidth}
-                  {...(resolved.dashArray.length ? { dash: resolved.dashArray } : {})}
-                  strokeScaleEnabled={false}
-                />
+              <Line
+                key={e.id}
+                points={[centre.x - ux * half, centre.y - uy * half, centre.x + ux * half, centre.y + uy * half]}
+                stroke={C.canvas}
+                strokeWidth={5}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            );
+          })}
+
+          {/* Fixed features you plan around and cannot move (F-3.1): the pool, a built stage, a bar */}
+          {plan.structure.features.map((f) => {
+            const resolved = resolveStyle(f.style, "screen", { fill: C.column, stroke: C.muted, strokeWidth: 1.5 });
+            const shape = { fill: resolved.fill, stroke: resolved.stroke, strokeWidth: resolved.strokeWidth, strokeScaleEnabled: false, ...(resolved.dashArray.length ? { dash: resolved.dashArray } : {}) };
+            return (
+              <Group key={f.id} x={f.x} y={f.y} rotation={f.rotationDeg} listening={false}>
+                {f.shape === "circle" ? (
+                  <Circle radius={f.widthMm / 2} {...shape} />
+                ) : f.shape === "ellipse" ? (
+                  <Ellipse radiusX={f.widthMm / 2} radiusY={f.depthMm / 2} {...shape} />
+                ) : (
+                  <Rect x={-f.widthMm / 2} y={-f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...shape} />
+                )}
                 <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
               </Group>
             );
@@ -367,7 +417,7 @@ function FootprintShape({ footprint, fill, stroke, strokeWidth }: {
   if (footprint.kind === "circle") return <Circle radius={footprint.diameterMm / 2} {...common} />;
   if (footprint.kind === "ellipse") return <Ellipse radiusX={footprint.widthMm / 2} radiusY={footprint.depthMm / 2} {...common} />;
   if (footprint.kind === "custom") {
-    const b = outlineBounds(footprint.outline);
+    const b = customShapeBounds(footprint.outline);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
     if (footprint.edgeCurves?.some(Boolean)) return <Path data={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
     return <Line points={centered.flatMap((p) => [p.x, p.y])} closed {...common} />;

@@ -22,7 +22,7 @@ export function DashboardScreen() {
   const [events, setEvents] = useState<EventSummary[]>(SAMPLE_EVENTS);
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
-  const { activeVenueId, eventVenueId } = useActiveVenueScope();
+  const { activeVenueId } = useActiveVenueScope();
 
   useEffect(() => {
     setEvents(loadEvents());
@@ -30,11 +30,12 @@ export function DashboardScreen() {
     setGreeting(h < 12 ? "בוקר טוב" : h < 18 ? "צהריים טובים" : "ערב טוב");
   }, []);
 
-  const visibleEvents = useMemo(() => {
-    const active = events.filter((e) => !e.archived);
-    return active.filter((e) => eventVenueId(e) === activeVenueId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, activeVenueId]);
+  // An event names its venue directly now (it occupies zones OF a venue), so scoping to the
+  // sidebar's active venue is a field read — no hall→venue lookup table in between.
+  const visibleEvents = useMemo(
+    () => events.filter((e) => !e.archived && e.venueId === activeVenueId),
+    [events, activeVenueId],
+  );
 
   // Calendar clicks open the drawer for a quick look; Today's Focus keeps jumping straight
   // into the meeting flow (its own, separately-scoped interaction — unchanged here).
@@ -43,9 +44,10 @@ export function DashboardScreen() {
     router.push("/meeting");
   };
 
-  // Color by hall, not venue — every visible event already belongs to the one active venue,
-  // so a venue-level color would be uniform and pointless; the hall is what still varies.
-  const getVenueColor = (e: EventSummary) => venueSwatchClass(e.hallTemplateId);
+  // Color by zone, not venue — every visible event already belongs to the one active venue, so a
+  // venue-level color would be uniform and pointless; the zone it occupies is what still varies.
+  // Multi-zone events key off the first, the designer's own primary.
+  const getVenueColor = (e: EventSummary) => venueSwatchClass(e.zoneIds[0]);
 
   // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
   // to it), so there's one venue name to resolve, not one per event.

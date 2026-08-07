@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft, Calendar, CalendarClock, Clock, MapPin, Phone, User, Users, X } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { StatusChip } from "@/components/status-chip";
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/button";
@@ -41,7 +41,8 @@ export function EventDetailDrawer({
 
   const status = eventStatus(event);
   const progress = eventProgress(event);
-  const venueHall = venueName ? `${venueName} · ${event.hallName}` : event.hallName;
+  // The event's zones under the venue that owns them — "חוות רונית אמארה · אולם גדול · חופה".
+  const venueZones = venueName ? `${venueName} · ${zonesLabelOf(event)}` : zonesLabelOf(event);
 
   const go = () => {
     onContinue(event);
@@ -88,7 +89,7 @@ export function EventDetailDrawer({
 
               <div className="flex items-center gap-2.5 text-ink-soft">
                 <MapPin className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span>{venueHall}</span>
+                <span>{venueZones}</span>
               </div>
 
               <div className="flex items-center gap-2.5 text-ink-soft">

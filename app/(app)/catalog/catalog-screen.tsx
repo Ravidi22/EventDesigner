@@ -2,28 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Product } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID, CATEGORIES } from "@/lib/catalog/categories";
+import { CATEGORIES } from "@/lib/catalog/categories";
 import { SAMPLE_PRODUCTS } from "@/lib/catalog/sample-data";
 import { loadProducts, upsertProduct, deleteOrArchiveProduct, saveProducts } from "@/lib/catalog/storage";
 import { parseCsvProducts } from "@/lib/catalog/csv";
 import { useHeaderSearch } from "@/components/header-search-context";
 import { ProductCard } from "./product-card";
-import { Filters, EMPTY_FILTERS, type FilterState } from "./filters";
+import { Filters, EMPTY_FILTERS, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 import { FirstRunEmpty, NoResults } from "./empty-state";
-
-function matches(p: Product, f: FilterState): boolean {
-  if (f.category && CATEGORY_BY_ID[p.category]?.group !== f.category) return false;
-  if (f.subcategory && p.category !== f.subcategory) return false;
-  if (f.tags.length > 0 && !f.tags.some((t) => p.styleTags.includes(t))) return false; // OR within tags
-  if (f.search.trim()) {
-    const q = f.search.trim().toLowerCase();
-    const hay = `${p.name} ${CATEGORY_BY_ID[p.category]?.label ?? ""}`.toLowerCase();
-    if (!hay.includes(q)) return false;
-  }
-  return true;
-}
-
 
 export function CatalogScreen() {
   const [products, setProducts] = useState<Product[]>(SAMPLE_PRODUCTS);
@@ -42,8 +29,10 @@ export function CatalogScreen() {
 
   // F-4.5: archived products are hidden from the catalog (placements still resolve them).
   const visible = useMemo(() => products.filter((p) => !p.archived), [products]);
+  // `search` is held in the header-search context rather than in `filters`, so it's spliced in
+  // here — the predicate itself is the same one the studio's catalog rail runs.
   const filtered = useMemo(
-    () => visible.filter((p) => matches(p, { ...filters, search })),
+    () => visible.filter((p) => matchesFilters(p, { ...filters, search })),
     [visible, filters, search],
   );
 

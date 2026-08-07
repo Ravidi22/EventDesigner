@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { MapPin } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
 import { toISODate, TONE_CLASS } from "./dashboard-view-utils";
 
 type Tab = "events" | "meetings";
@@ -93,7 +93,7 @@ export function TodayFocus({
                 </div>
                 <span className="flex items-center gap-1 text-xs font-medium text-ink-soft">
                   <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-                  {e.hallName}
+                  {zonesLabelOf(e)}
                 </span>
                 <div className="h-1.5 overflow-hidden rounded-full bg-bg">
                   <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />

@@ -1,5 +1,10 @@
-// An event (docs/02 §4, v0.3): client (name+phone), date, hall, guest estimate. Status is
+// An event (docs/02 §4, v0.3): client (name+phone), date, zones, guest estimate. Status is
 // DERIVED from the furthest meeting-flow step reached (F-1.1) — no separate status machine.
+//
+// An event occupies ZONES of one venue, not "a hall": the ceremony is at the חופה and the dinner
+// in the hall next to it, and both are regions of the same site plan (lib/venues). It stores their
+// ids and resolves the geometry live — nothing about the walls is copied onto the event, so a wall
+// corrected at the venue reaches every event standing on it.
 
 // The guided meeting flow, in order (F-1.1–F-1.9).
 export const FLOW_STEPS = [
@@ -24,8 +29,12 @@ export interface EventSummary {
   date: string; // ISO yyyy-mm-dd ("" = not set yet) — the wedding/event day itself
   time?: string; // HH:mm — start time on `date` (or on `meetingDate`, if that's what's shown)
   meetingDate?: string; // ISO yyyy-mm-dd — a scheduled client consultation, distinct from `date`
-  hallTemplateId?: string;
-  hallName: string;
+  venueId?: string; // the property; absent until the details step picks one
+  zoneIds: string[]; // the regions of that venue this event occupies (F-1.3) — order is the designer's
+  /** The zones' names, joined — denormalised for the lists, headers and the quote, which need a
+   *  label without loading the venue plan. Rewritten whenever the selection changes; a zone renamed
+   *  at the venue does not chase it, same trade as GalleryImage.productName. */
+  zonesLabel: string;
   guests: number; // estimate (F-1.3)
   step: number; // furthest flow step reached — index into FLOW_STEPS
   quoteSentAt?: number; // stamped when a quote is issued (F-1.9)
@@ -75,6 +84,12 @@ export function eventProgress(e: EventSummary): number {
 // 2-letter monogram for avatar chips, derived (not stored).
 export function monogram(name: string): string {
   return name.replace(/[^֐-׿\w]/g, "").slice(0, 2) || "אר";
+}
+
+/** What to print where the event's zones are named — every surface wants the same placeholder for
+ *  an event whose details step hasn't picked any yet. */
+export function zonesLabelOf(e: Pick<EventSummary, "zonesLabel">): string {
+  return e.zonesLabel || "טרם נבחר";
 }
 
 export function formatEventDate(iso: string): string {

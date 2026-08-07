@@ -10,7 +10,7 @@ import { formatPrice } from "@/lib/catalog/format";
 import { loadSettings, type BusinessSettings } from "@/lib/settings/storage";
 import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
 import { activeEvent, updateEvent } from "@/lib/events/storage";
-import { formatEventDate, type EventSummary } from "@/lib/events/types";
+import { formatEventDate, zonesLabelOf, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
 
@@ -131,7 +131,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
           <div className="text-end text-sm">
             <p className="font-semibold text-ink">{event.clientName}</p>
             <p className="mt-0.5 text-muted">
-              {event.hallName} · {formatEventDate(event.date)}
+              {zonesLabelOf(event)} · {formatEventDate(event.date)}
               {event.phone && <span className="nums" dir="ltr"> · {event.phone}</span>}
             </p>
           </div>

@@ -1,8 +1,9 @@
 "use client";
 
 import { FileUp, Grid3x3, List, Plus } from "lucide-react";
-import { CATEGORIES, CATEGORY_GROUPS } from "@/lib/catalog/categories";
+import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
+import type { Layer, Product } from "@/lib/catalog/types";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
 import { IconButton } from "@/components/icon-button";
@@ -12,19 +13,39 @@ export interface FilterState {
   search: string;
   category: string | null; // a CategoryGroupId (lib/catalog/categories.ts) — "הקטגוריות" in the UI
   subcategory: string | null; // a CategoryDef id — "המוצרים" in the UI, scoped to the chosen category
+  layer: Layer | null; // where the product sits — "השכבות" in the UI; orthogonal to the two above
   tags: string[];
 }
 
-export const EMPTY_FILTERS: FilterState = { search: "", category: null, subcategory: null, tags: [] };
+export const EMPTY_FILTERS: FilterState = { search: "", category: null, subcategory: null, layer: null, tags: [] };
 
 export function hasActiveFilters(f: FilterState): boolean {
-  return f.search !== "" || f.category !== null || f.subcategory !== null || f.tags.length > 0;
+  return f.search !== "" || f.category !== null || f.subcategory !== null || f.layer !== null || f.tags.length > 0;
 }
 
-// The bordered white bar holds count → category dropdown → product dropdown → search → the page
-// actions (add/import) → view mode at the far end (`ms-auto`) — the top header's own search box
-// is hidden on this page (AppShell), so this is still the only search box, just moved down here.
-// Style pills sit outside that white frame, as their own plain row underneath.
+/** The predicate itself, apart from the control bar below — the studio's catalog rail filters the
+ *  same products by the same rules from a much narrower strip of UI, and two copies of "does this
+ *  product match" is exactly the kind of pair that drifts.
+ *
+ *  `category` is a department (CategoryGroupId) and `subcategory` the fine CategoryDef under it, so
+ *  the two narrow together rather than competing; `layer` cuts across both. */
+export function matchesFilters(p: Product, f: FilterState): boolean {
+  if (f.category && CATEGORY_BY_ID[p.category]?.group !== f.category) return false;
+  if (f.subcategory && p.category !== f.subcategory) return false;
+  if (f.layer && p.layer !== f.layer) return false;
+  if (f.tags.length > 0 && !f.tags.some((t) => p.styleTags.includes(t))) return false; // OR within tags
+  if (f.search.trim()) {
+    const q = f.search.trim().toLowerCase();
+    const hay = `${p.name} ${CATEGORY_BY_ID[p.category]?.label ?? ""}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+
+// The bordered white bar holds count → category dropdown → product dropdown → layer dropdown →
+// search → the page actions (add/import) → view mode at the far end (`ms-auto`) — the top header's
+// own search box is hidden on this page (AppShell), so this is still the only search box, just
+// moved down here. Style pills sit outside that white frame, as their own plain row underneath.
 export function Filters({
   value,
   onChange,
@@ -75,6 +96,14 @@ export function Filters({
           aria-label="מוצר"
           options={[{ value: "", label: "כל המוצרים" }, ...subcategoryOptions.map((c) => ({ value: c.id, label: c.label }))]}
           className="w-40 shrink-0"
+        />
+
+        <Select
+          value={value.layer ?? ""}
+          onChange={(v) => set({ layer: (v as Layer) || null })}
+          aria-label="שכבה"
+          options={[{ value: "", label: "כל השכבות" }, ...LAYERS.map((l) => ({ value: l.id, label: l.label }))]}
+          className="w-32 shrink-0"
         />
 
         <SearchInput

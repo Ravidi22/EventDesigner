@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
 import { IconButton } from "@/components/icon-button";
 import {
   addDays,
@@ -227,14 +227,14 @@ function EventCard({ event: e, compact, onClick }: { event: EventSummary; compac
       <button
         type="button"
         onClick={onClick}
-        title={`${e.clientName} · ${e.hallName}${e.time ? " · " + e.time : ""} · ${progress}% · ${STATUS_LABEL[status]}`}
+        title={`${e.clientName} · ${zonesLabelOf(e)}${e.time ? " · " + e.time : ""} · ${progress}% · ${STATUS_LABEL[status]}`}
         className={"flex flex-col gap-1.5 rounded-md p-2 text-start transition-transform hover:-translate-y-px hover:shadow-floating " + theme.bg}
       >
         <div className="flex items-center justify-between gap-2">
           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{e.clientName}</span>
           {e.time && <span className={"nums shrink-0 text-[11px] font-semibold " + theme.text}>{e.time}</span>}
         </div>
-        <span className="truncate text-[10px] text-ink-soft">{e.hallName}</span>
+        <span className="truncate text-[10px] text-ink-soft">{zonesLabelOf(e)}</span>
         <div className="flex items-center gap-1.5">
           <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
             <div className={"h-full rounded-full " + theme.bar} style={{ width: `${progress}%` }} />
@@ -256,7 +256,7 @@ function EventCard({ event: e, compact, onClick }: { event: EventSummary; compac
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{e.clientName}</span>
         {e.time && <span className={"nums shrink-0 text-xs font-semibold " + theme.text}>{e.time}</span>}
       </div>
-      <span className="truncate text-xs text-ink-soft">{e.hallName}</span>
+      <span className="truncate text-xs text-ink-soft">{zonesLabelOf(e)}</span>
       <div className="flex items-center gap-2">
         <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
           <div className={"h-full rounded-full " + theme.bar} style={{ width: `${progress}%` }} />
