@@ -51,12 +51,12 @@ export function ProductCard({
         />
 
         <div className="pointer-events-none relative h-14 w-14 shrink-0 overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={product.imageUrl} category={product.category} name={product.name} />
+          <ProductImage imageUrl={product.imageUrl} category={product.category} name={product.name} productId={product.id} />
         </div>
 
         <div className="pointer-events-none relative min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h3 className="truncate text-sm font-semibold text-ink">{product.name}</h3>
+            <h3 className="font-display truncate text-sm text-ink">{product.name}</h3>
             {product.variants.length > 0 && (
               <span className="nums inline-flex shrink-0 items-center gap-1 text-xs text-muted">
                 <Palette className="h-3 w-3" strokeWidth={2} />
@@ -77,8 +77,9 @@ export function ProductCard({
           </div>
         </div>
 
-        <span className="nums pointer-events-none relative shrink-0 text-base font-bold text-ink">
-          {formatPrice(product.unitPrice)}
+        <span className="pointer-events-none relative flex shrink-0 items-baseline gap-1">
+          <span className="nums text-lg font-bold text-ink">{formatPrice(product.unitPrice)}</span>
+          {product.unitPrice != null && <span className="text-xs text-muted">ליחידה</span>}
         </span>
 
         {quickActions}
@@ -100,16 +101,16 @@ export function ProductCard({
 
       <div className="pointer-events-none relative flex flex-col">
         <div className="relative mb-2 aspect-[4/3] overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={product.imageUrl} category={product.category} name={product.name} />
+          <ProductImage imageUrl={product.imageUrl} category={product.category} name={product.name} productId={product.id} />
           {product.variants.length > 0 && (
-            <span className="absolute bottom-1.5 left-1.5 inline-flex items-center gap-1 rounded-pill border border-canvas/50 bg-canvas/70 px-2 py-0.5 text-xs font-medium text-ink-soft backdrop-blur-sm">
+            <span className="absolute start-1.5 top-1.5 inline-flex items-center gap-1 rounded-pill border border-canvas/50 bg-canvas/70 px-2 py-0.5 text-xs font-medium text-ink-soft backdrop-blur-sm">
               <Palette className="h-3 w-3" strokeWidth={2} />
               <span className="nums">{product.variants.length}</span> גוונים
             </span>
           )}
         </div>
 
-        <h3 className="text-base font-semibold leading-tight text-ink">{product.name}</h3>
+        <h3 className="font-display text-base leading-tight text-ink">{product.name}</h3>
 
         <p className="nums mt-1 text-sm text-muted">{formatDimensions(product.dimensions)}</p>
 
@@ -133,8 +134,9 @@ export function ProductCard({
           </div>
         )}
 
-        <div className="mt-3 border-t border-border pt-2">
-          <span className="nums text-base font-bold text-ink">{formatPrice(product.unitPrice)}</span>
+        <div className="-mx-2 mt-3 flex items-baseline justify-between gap-1 border-t border-border px-4 pb-1 pt-2.5">
+          {product.unitPrice != null && <span className="text-xs text-muted">מחיר ליחידה</span>}
+          <span className="nums text-lg font-bold text-ink">{formatPrice(product.unitPrice)}</span>
         </div>
       </div>
 

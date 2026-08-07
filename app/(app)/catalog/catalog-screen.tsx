@@ -1,21 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileUp, Plus } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
-import { Button } from "@/components/button";
 import { CATEGORY_BY_ID, CATEGORIES } from "@/lib/catalog/categories";
 import { SAMPLE_PRODUCTS } from "@/lib/catalog/sample-data";
 import { loadProducts, upsertProduct, deleteOrArchiveProduct, saveProducts } from "@/lib/catalog/storage";
 import { parseCsvProducts } from "@/lib/catalog/csv";
+import { useHeaderSearch } from "@/components/header-search-context";
 import { ProductCard } from "./product-card";
 import { Filters, EMPTY_FILTERS, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 import { FirstRunEmpty, NoResults } from "./empty-state";
 
 function matches(p: Product, f: FilterState): boolean {
-  if (f.category && p.category !== f.category) return false;
-  if (f.layer && p.layer !== f.layer) return false;
+  if (f.category && CATEGORY_BY_ID[p.category]?.group !== f.category) return false;
+  if (f.subcategory && p.category !== f.subcategory) return false;
   if (f.tags.length > 0 && !f.tags.some((t) => p.styleTags.includes(t))) return false; // OR within tags
   if (f.search.trim()) {
     const q = f.search.trim().toLowerCase();
@@ -33,6 +32,9 @@ export function CatalogScreen() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // The visible search box lives in the top header now (AppShell) — its value flows down
+  // through context rather than a second, redundant input inside this page.
+  const { value: search, setValue: setSearch } = useHeaderSearch();
 
   useEffect(() => {
     setProducts(loadProducts());
@@ -40,7 +42,10 @@ export function CatalogScreen() {
 
   // F-4.5: archived products are hidden from the catalog (placements still resolve them).
   const visible = useMemo(() => products.filter((p) => !p.archived), [products]);
-  const filtered = useMemo(() => visible.filter((p) => matches(p, filters)), [visible, filters]);
+  const filtered = useMemo(
+    () => visible.filter((p) => matches(p, { ...filters, search })),
+    [visible, filters, search],
+  );
 
   const saveProduct = (p: Product) => setProducts(upsertProduct(p));
   const deleteProduct = (id: string) => {
@@ -75,31 +80,21 @@ export function CatalogScreen() {
   };
 
   return (
-    <div className="px-8 py-7">
+    <div className="px-8 pb-7 pt-3">
       {visible.length === 0 ? (
         <FirstRunEmpty onAdd={() => setEditing(blankProduct())} />
       ) : (
         <>
-          <div className="mb-5 flex items-center justify-end gap-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="sr-only"
-              onChange={(e) => {
-                importCsv(e.target.files?.[0]);
-                e.target.value = "";
-              }}
-            />
-            <Button variant="ghost" onClick={() => fileRef.current?.click()}>
-              <FileUp className="h-4 w-4" strokeWidth={2} />
-              ייבוא CSV
-            </Button>
-            <Button variant="outline" onClick={() => setEditing(blankProduct())}>
-              <Plus className="h-4 w-4" strokeWidth={2.5} />
-              מוצר חדש
-            </Button>
-          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="sr-only"
+            onChange={(e) => {
+              importCsv(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
 
           {notice && (
             <p className="mb-4 rounded-md border border-border bg-surface px-4 py-2.5 text-sm text-ink-soft" role="status">
@@ -113,10 +108,19 @@ export function CatalogScreen() {
             resultCount={filtered.length}
             viewMode={viewMode}
             onViewModeChange={setViewMode}
+            onAddProduct={() => setEditing(blankProduct())}
+            onImportCsv={() => fileRef.current?.click()}
+            searchValue={search}
+            onSearchChange={setSearch}
           />
 
           {filtered.length === 0 ? (
-            <NoResults onClear={() => setFilters(EMPTY_FILTERS)} />
+            <NoResults
+              onClear={() => {
+                setFilters(EMPTY_FILTERS);
+                setSearch("");
+              }}
+            />
           ) : viewMode === "list" ? (
             <div className="mt-6 flex flex-col gap-2">
               {filtered.map((p) => (

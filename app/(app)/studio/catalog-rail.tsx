@@ -93,7 +93,7 @@ function ProductRow({ product: p }: { product: Product }) {
         className="group flex cursor-grab items-center gap-2.5 rounded-md border border-transparent p-1.5 transition-colors hover:border-border hover:bg-bg active:cursor-grabbing"
       >
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} />
+          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} productId={p.id} />
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-ink">{p.name}</p>

@@ -37,6 +37,18 @@ export function blankProduct(): Product {
 
 const mmToCm = (mm?: number) => (mm ?? 0) / 10;
 
+// A quiet group header for the drawer's longer form — Assistant, no letter-spacing (Space
+// Grotesk / tracked overlines are reserved for Latin kickers elsewhere in the system, never for
+// Hebrew body copy), just small size + faint color + a hairline to read as "a new group starts here".
+function SectionDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] font-semibold text-faint">{label}</span>
+      <div className="h-px flex-1 bg-border-soft" />
+    </div>
+  );
+}
+
 export function ProductDrawer({
   product,
   onSave,
@@ -134,7 +146,7 @@ export function ProductDrawer({
     <dialog
       ref={ref}
       onClose={onClose}
-      className="drawer fixed inset-y-0 inset-inline-end-0 m-0 h-dvh w-full max-w-md bg-bg text-ink shadow-dialog"
+      className="drawer fixed inset-y-0 inset-inline-end-0 m-0 h-dvh w-full max-w-md bg-bg text-ink shadow-[-24px_0_60px_-30px_rgba(70,40,130,0.4)]"
     >
       <form
         method="dialog"
@@ -145,7 +157,7 @@ export function ProductDrawer({
         className="flex h-full flex-col"
       >
         <header className="flex items-center justify-between border-b border-border bg-surface px-5 py-3.5">
-          <h2 className="text-base font-semibold">{isEdit ? "עריכת מוצר" : "מוצר חדש"}</h2>
+          <h2 className="font-display text-base">{isEdit ? "עריכת מוצר" : "מוצר חדש"}</h2>
           <IconButton label="סגור" onClick={onClose}>
             <X className="h-5 w-5" strokeWidth={2} />
           </IconButton>
@@ -162,6 +174,8 @@ export function ProductDrawer({
             errorMessage="יש להזין שם מוצר."
             autoFocus
           />
+
+          <SectionDivider label="קטגוריה" />
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -190,8 +204,9 @@ export function ProductDrawer({
             </div>
           </div>
 
+          <SectionDivider label="מידות (ס״מ)" />
+
           <fieldset>
-            <legend className={fieldLabelClassName}>מידות (ס״מ)</legend>
             <div className="grid grid-cols-3 gap-3">
               {showDiameter && (
                 <NumberField label="קוטר" hideZero value={mmToCm(draft.dimensions.diameterMm)} onChange={(v) => setDim("diameterMm", v)} min={0} />
@@ -230,6 +245,8 @@ export function ProductDrawer({
               ))}
             </div>
           )}
+
+          <SectionDivider label="מפרט" />
 
           <TextField
             id="p-spec"

@@ -17,7 +17,7 @@ import { DEFAULT_VENUES, addVenue, loadActiveVenueId, loadVenues, renameVenue, s
 import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
-import { SearchInput } from "@/components/search-input";
+import { HeaderSearchProvider } from "@/components/header-search-context";
 
 interface NavItem {
   href: string;
@@ -58,8 +58,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     setActiveVenue(loadActiveVenueId());
   }, []);
 
+  // The header search means something different per page (products on /catalog, clients/events
+  // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
+  // whatever page you land on next.
+  useEffect(() => {
+    setHeaderSearch("");
+  }, [pathname]);
+
   const meta = TITLES.find((t) => t.test(pathname));
   const settingsActive = pathname.startsWith("/settings");
+  const isCatalog = pathname.startsWith("/catalog");
 
   return (
     <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3">
@@ -162,31 +170,27 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Wordmark tone="mono" className="shrink-0 text-[22px]" />
           )}
 
-          <SearchInput
-            value={headerSearch}
-            onChange={setHeaderSearch}
-            placeholder="חיפוש לקוח או אירוע"
-            aria-label="חיפוש לקוח או אירוע"
-            className="mx-auto w-full max-w-sm flex-1"
-          />
+          {/* No visible search box or icon here anymore — the catalog's own search box lives in
+              its control bar instead (app/(app)/catalog/filters.tsx), still fed by the same
+              shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
+          <div className="flex-1" />
 
           <div className="flex shrink-0 items-center gap-1.5">
-            <IconButton label="אולמות" onClick={() => router.push("/halls")}>
-              <Building2 className="h-4 w-4" strokeWidth={1.75} />
-            </IconButton>
-            <IconButton label="התראות">
-              <Bell className="h-4 w-4" strokeWidth={1.75} />
-            </IconButton>
             <Link
               href="/meeting?new"
               className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
             >
               + יצירת אירוע חדש
             </Link>
+            <IconButton label="התראות">
+              <Bell className="h-4 w-4" strokeWidth={1.75} />
+            </IconButton>
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-auto">{children}</main>
+        <main className="min-h-0 flex-1 overflow-auto">
+          <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+        </main>
       </div>
     </div>
   );

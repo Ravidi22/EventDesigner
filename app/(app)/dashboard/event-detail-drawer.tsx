@@ -14,6 +14,9 @@ import { Button } from "@/components/button";
 // for this one surface, not a new default. `inset-inline-end`/`start` are RTL-logical and would
 // resolve to the right here (this codebase's `.drawer` convention), so the left edge is pinned
 // with a plain physical `left` inline style to guarantee the side regardless of direction.
+// `top`/`bottom` are inline styles too, not Tailwind's `top-*`/`bottom-*` classes — a shown
+// <dialog> lives in the top layer, and empirically its height doesn't stretch to fill top+bottom
+// offsets the way a normal fixed element's would, so the height is computed explicitly instead.
 export function EventDetailDrawer({
   event,
   venueName,
@@ -49,8 +52,8 @@ export function EventDetailDrawer({
     <dialog
       ref={ref}
       onClose={onClose}
-      style={{ left: "8px", right: "auto" }}
-      className="drawer fixed top-2 bottom-2 m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
+      style={{ left: "8px", right: "auto", top: "4px", bottom: "4px", height: "calc(100dvh - 8px)" }}
+      className="drawer fixed m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
     >
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between border-b border-border bg-surface px-5 py-3.5">

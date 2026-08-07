@@ -182,7 +182,7 @@ export function DateField({
         } ${className}`}
       >
         <Calendar className="h-4 w-4 shrink-0 text-muted" strokeWidth={2} />
-        <span className={`nums flex-1 truncate ${selected ? "text-ink" : "text-muted"}`}>{selected ? fullLabel(selected) : placeholder}</span>
+        <span className={`nums flex-1 truncate ${selected ? "text-ink" : "text-faint"}`}>{selected ? fullLabel(selected) : placeholder}</span>
       </button>
       {error && errorMessage && <p className="mt-1 text-xs text-alert">{errorMessage}</p>}
 

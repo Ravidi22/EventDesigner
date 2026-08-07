@@ -11,7 +11,7 @@ const format = (n: number, decimals?: number) => (decimals != null ? n.toFixed(d
 // base rather than layering on top of the default one.
 const sizeBase = {
   md: controlClassName,
-  sm: "h-7 rounded-md border border-border bg-canvas text-sm text-ink transition-colors hover:border-accent-line focus-visible:border-accent",
+  sm: "h-7 rounded-sm border border-border bg-canvas text-sm text-ink transition-colors hover:border-accent-line focus-visible:border-accent",
 };
 
 // Every numeric field in the app used to bind an <input type="number"> straight to a value derived
@@ -142,7 +142,7 @@ export function NumberField({
       }}
       onBlur={commit}
       onKeyDown={onKeyDown}
-      className={`${sizeBase[size]} nums text-end ${layout === "stack" ? "w-full px-2.5" : size === "sm" ? "px-1.5" : "px-2"} ${
+      className={`${sizeBase[size]} nums text-end placeholder:text-faint ${layout === "stack" ? "w-full px-2.5" : size === "sm" ? "px-1.5" : "px-2"} ${
         error ? "border-alert hover:border-alert" : ""
       } ${className}`}
     />
