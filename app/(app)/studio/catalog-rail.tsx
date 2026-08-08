@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { loadProducts } from "@/lib/catalog/storage";
-import { CATEGORIES, CATEGORY_BY_ID, LAYER_LABEL } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
 import { formatDimensions } from "@/lib/catalog/format";
 import { loadFolder, likedProductIds, loadImages } from "@/lib/gallery/storage";
@@ -86,11 +86,13 @@ export function CatalogRail() {
 
         {showFilters && (
           <div className="flex flex-col gap-2">
+            {/* Departments, not the fine categories: the same level as the catalog page's first
+                dropdown, and at this width one short list beats a thirteen-item one. */}
             <Select
               value={filters.category ?? ""}
               onChange={(v) => set({ category: v || null })}
               aria-label="קטגוריה"
-              options={[{ value: "", label: "כל הקטגוריות" }, ...CATEGORIES.map((c) => ({ value: c.id, label: c.label }))]}
+              options={[{ value: "", label: "כל הקטגוריות" }, ...CATEGORY_GROUPS.map((g) => ({ value: g.id, label: g.label }))]}
               className="w-full"
             />
             <div className="flex flex-wrap gap-1">
@@ -164,7 +166,7 @@ function ProductRow({ product: p }: { product: Product }) {
         className="group flex cursor-grab items-center gap-2.5 rounded-md border border-transparent p-1.5 transition-colors hover:border-border hover:bg-bg active:cursor-grabbing"
       >
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} />
+          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} productId={p.id} />
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-ink">{p.name}</p>

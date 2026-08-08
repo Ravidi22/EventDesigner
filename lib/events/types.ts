@@ -22,8 +22,12 @@ export type FlowStepId = (typeof FLOW_STEPS)[number]["id"];
 export interface EventSummary {
   id: string;
   clientName: string;
-  phone: string;
+  phone: string; // primary contact's phone
+  contactName?: string; // primary contact's own name, when it differs from clientName (the couple)
+  contact2Name?: string; // a second contact person, if the couple gave one (e.g. a parent, planner)
+  contact2Phone?: string;
   date: string; // ISO yyyy-mm-dd ("" = not set yet) — the wedding/event day itself
+  time?: string; // HH:mm — start time on `date` (or on `meetingDate`, if that's what's shown)
   meetingDate?: string; // ISO yyyy-mm-dd — a scheduled client consultation, distinct from `date`
   venueId?: string; // the property; absent until the details step picks one
   zoneIds: string[]; // the regions of that venue this event occupies (F-1.3) — order is the designer's
@@ -71,6 +75,11 @@ export const STATUS_TONE: Record<EventStatus, StatusTone> = {
   sent: "success",
   archived: "neutral",
 };
+
+// F-1.1: progress = the furthest flow step reached, shown against the whole flow.
+export function eventProgress(e: EventSummary): number {
+  return Math.round((Math.min(e.step, FLOW_STEPS.length - 1) / (FLOW_STEPS.length - 1)) * 100);
+}
 
 // 2-letter monogram for avatar chips, derived (not stored).
 export function monogram(name: string): string {

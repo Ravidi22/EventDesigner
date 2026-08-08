@@ -41,7 +41,7 @@ export function TextField({
   rows?: number;
   "aria-label"?: string;
 }) {
-  const inputClass = `${controlClassName} w-full px-2.5 placeholder:text-muted ${
+  const inputClass = `${controlClassName} w-full px-2.5 placeholder:text-faint ${
     error ? "border-alert hover:border-alert" : ""
   } ${multiline ? "h-auto resize-y py-2" : ""} ${className}`;
 

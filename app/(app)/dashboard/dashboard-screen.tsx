@@ -5,43 +5,53 @@ import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId } from "@/lib/events/storage";
-import { DEFAULT_VENUES, loadActiveVenueId, loadVenues, venueSwatchClass, type Venue } from "@/lib/venues/storage";
+import { loadVenues, venueSwatchClass } from "@/lib/venues/storage";
+import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
 import { EventStats } from "./event-stats";
+import { EventDetailDrawer } from "./event-detail-drawer";
 
 // F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved to the Gantt tab.
 // This screen is "my week" at a glance — Today's Focus + Statistics up top (each half-width),
-// the week/month calendar below with its own venue filter. Everything downstream of
-// `selectedVenueIds` (default: the sidebar's currently-active venue) shares the same scope.
+// the week/month calendar below. There's no venue picker on this page anymore — every section
+// scopes to whichever venue is active in the sidebar (useActiveVenueScope), the one shared
+// source of truth also used by /gantt, so switching venues in the sidebar updates everything.
 export function DashboardScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<EventSummary[]>(SAMPLE_EVENTS);
-  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
-  const [selectedVenueIds, setSelectedVenueIds] = useState<string[]>([DEFAULT_VENUES[0].id]);
   const [greeting, setGreeting] = useState("שלום");
+  const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
+  const { activeVenueId } = useActiveVenueScope();
 
   useEffect(() => {
     setEvents(loadEvents());
-    setVenues(loadVenues());
-    setSelectedVenueIds([loadActiveVenueId()]);
     const h = new Date().getHours();
     setGreeting(h < 12 ? "בוקר טוב" : h < 18 ? "צהריים טובים" : "ערב טוב");
   }, []);
 
-  // An event names its venue directly now (it occupies zones OF a venue), so filtering and
-  // colouring by venue is a field read — no hall→venue lookup table in between.
+  // An event names its venue directly now (it occupies zones OF a venue), so scoping to the
+  // sidebar's active venue is a field read — no hall→venue lookup table in between.
   const visibleEvents = useMemo(
-    () => events.filter((e) => !e.archived && selectedVenueIds.includes(e.venueId ?? "")),
-    [events, selectedVenueIds],
+    () => events.filter((e) => !e.archived && e.venueId === activeVenueId),
+    [events, activeVenueId],
   );
 
-  const openEvent = (e: EventSummary) => {
+  // Calendar clicks open the drawer for a quick look; Today's Focus keeps jumping straight
+  // into the meeting flow (its own, separately-scoped interaction — unchanged here).
+  const openInMeeting = (e: EventSummary) => {
     setActiveEventId(e.id);
     router.push("/meeting");
   };
 
-  const getVenueColor = (e: EventSummary) => venueSwatchClass(e.venueId);
+  // Color by zone, not venue — every visible event already belongs to the one active venue, so a
+  // venue-level color would be uniform and pointless; the zone it occupies is what still varies.
+  // Multi-zone events key off the first, the designer's own primary.
+  const getVenueColor = (e: EventSummary) => venueSwatchClass(e.zoneIds[0]);
+
+  // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
+  // to it), so there's one venue name to resolve, not one per event.
+  const activeVenueName = useMemo(() => loadVenues().find((v) => v.id === activeVenueId)?.name, [activeVenueId]);
 
   return (
     <div className="px-8 py-8">
@@ -51,17 +61,17 @@ export function DashboardScreen() {
       </div>
 
       <div className="mb-6 grid gap-6 sm:grid-cols-2">
-        <TodayFocus events={visibleEvents} venueColor={getVenueColor} onOpenEvent={openEvent} />
+        <TodayFocus events={visibleEvents} venueColor={getVenueColor} onOpenEvent={openInMeeting} />
         <EventStats events={visibleEvents} />
       </div>
 
-      <CalendarCard
-        events={visibleEvents}
-        venueColor={getVenueColor}
-        onOpenEvent={openEvent}
-        venues={venues}
-        selectedVenueIds={selectedVenueIds}
-        onChangeSelectedVenueIds={setSelectedVenueIds}
+      <CalendarCard events={visibleEvents} onOpenEvent={setSelectedEvent} />
+
+      <EventDetailDrawer
+        event={selectedEvent}
+        venueName={activeVenueName}
+        onClose={() => setSelectedEvent(null)}
+        onContinue={openInMeeting}
       />
     </div>
   );
