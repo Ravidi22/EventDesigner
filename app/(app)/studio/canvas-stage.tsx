@@ -1,42 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Stage, Layer, Rect, Circle, Ellipse, Group, Text, Line, Path } from "react-konva";
-import type Konva from "konva";
-import { Minus, Plus, Maximize } from "lucide-react";
-import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId } from "@/lib/design-document/types";
-import { resolve, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
+import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId, WallSpan } from "@/lib/design-document/types";
+import { resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
+import { pointToT, resolveSpan, wallSegment } from "@/lib/studio/anchor";
+import { toLocalFrame, fromLocalFrame } from "@/lib/studio/geometry";
+import type { VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, customShapeBounds, type Footprint } from "@/lib/studio/footprint";
-import { absoluteControlPoints, outlinePathD, pointAtDistance, polygonCentroid, wallLengthMm } from "@/lib/studio/geometry";
+import { outlinePathD } from "@/lib/studio/geometry";
+import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
-import { nodeMap, wallPoints } from "@/lib/venues/structure";
 import { resolveStyle } from "@/lib/element-style";
-import { IconButton } from "@/components/icon-button";
-import { KonvaIcon } from "@/components/konva-icon";
+import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
+import { PlanCanvas, type CanvasFocus, type CanvasLayerContext } from "@/components/plan-canvas";
+import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
 
-// Design tokens mirrored for the canvas (Konva can't read CSS variables). Keep in sync
-// with app/globals.css @theme.
-const C = {
-  canvas: "#ffffff",
-  bg: "#eeedf3",
-  wall: "#1b1725",
-  column: "#e0ddea",
-  ink: "#1b1725",
-  inkSoft: "#4a4658",
-  muted: "#7c7889",
-  border: "#e9e7f0",
-  surface: "#ffffff",
-  accent: "#6d55bd",
-  accentTint: "#efeafb",
-  warn: "#a97e1f",
-  warnTint: "#f6ecd6",
-};
-
+// The studio's design surface — the app's one canvas (components/plan-canvas.tsx) with the design
+// document drawn into its layers.
+//
+// It owns the viewport, grid, pan/zoom, fit and the wall graph itself; this file supplies the venue
+// plan underneath (the same ZoneRegions / StructureFeatures / StructureDoors the hall editor uses,
+// so the two screens cannot drift into drawing the same property two different ways) and the
+// tables and placements on top.
+//
+// THE STRUCTURE IS NOT EDITABLE HERE. Walls, corners, doors, zones and fixed features are a
+// property of the PROPERTY, drawn once at /halls — an event is designed inside them, never by
+// moving them. That is enforced by omission rather than by a flag: the canvas only draws corner
+// handles and takes wall clicks when given onMoveGraphNode/onSelectGraph, and the venue layers are
+// only interactive when given onSelect/onMove. None of those are passed. A designer who needs the
+// bar moved is looking at a different job, on a different screen.
 export type Selection = { kind: "table" | "placement"; id: string } | null;
-
-export interface CanvasHandle {
-  fit: () => void;
-}
 
 export function CanvasStage({
   doc,
@@ -47,6 +40,8 @@ export function CanvasStage({
   onSelect,
   onMoveTable,
   onMovePlacement,
+  onResizePlacement,
+  onSpanPlacement,
   onDropProduct,
   onPlaceTable,
 }: {
@@ -56,239 +51,129 @@ export function CanvasStage({
   layerVisible: Record<LayerId, boolean>;
   addingTable?: string | null; // table type in click-to-place mode (F-3.3)
   onSelect: (s: Selection) => void;
-  onMoveTable: (id: string, pos: { x: number; y: number }) => void;
-  onMovePlacement: (id: string, pos: { x: number; y: number }) => void;
+  onMoveTable: (id: string, pos: Point) => void;
+  onMovePlacement: (id: string, pos: Point) => void;
+  /** A carpet stretched by its corner: the new size, and the centre it moved to (the opposite
+   *  corner stays put, which is what dragging one corner means). */
+  onResizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
+  /** A drape's run along its wall, after dragging one of its ends. */
+  onSpanPlacement: (id: string, span: WallSpan) => void;
   onDropProduct: (productId: string, x: number, y: number) => void;
   onPlaceTable?: (x: number, y: number) => void;
 }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<Konva.Stage>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const [view, setView] = useState({ scale: 0.05, x: 0, y: 0 });
-
-  // The event's zones, not the whole property: the studio opens framed on what is being designed,
-  // while everything else on the plan stays drawn and reachable one scroll away.
-  const box = plan.bounds;
-  const nodes = nodeMap(plan.structure);
-
-  // Fit the shape's own box, offsetting by its minX/minY — a zone drawn far out on a venue plane
-  // must land centred in the viewport, not off-screen by its distance from the origin.
-  const fit = useCallback(() => {
-    const { w, h } = { w: wrapRef.current?.clientWidth ?? 0, h: wrapRef.current?.clientHeight ?? 0 };
-    if (!w || !h || !box.widthMm || !box.heightMm) return;
-    const pad = 0.08;
-    const scale = Math.min(w / box.widthMm, h / box.heightMm) * (1 - pad);
-    setView({
-      scale,
-      x: (w - box.widthMm * scale) / 2 - box.minX * scale,
-      y: (h - box.heightMm * scale) / 2 - box.minY * scale,
-    });
-  }, [box.widthMm, box.heightMm, box.minX, box.minY]);
-
+  // Frame the event's zones once, and only once there is something to frame — the plan resolves
+  // from storage after mount, so framing on the first render would spend the one move on an empty
+  // box and leave the event off-screen. The nonce never changes after that, so the designer's own
+  // panning is never yanked back mid-work.
+  const [focus, setFocus] = useState<CanvasFocus | null>(null);
+  const framed = useRef(false);
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      setSize({ w: el.clientWidth, h: el.clientHeight });
-    });
-    ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
-    return () => ro.disconnect();
-  }, []);
+    if (framed.current || !plan.bounds.widthMm) return;
+    framed.current = true;
+    setFocus({ ...plan.bounds, nonce: 1 });
+  }, [plan.bounds]);
 
-  // Fit once, as soon as there is both a viewport and a plan to frame. The plan resolves after
-  // mount (storage is client-only), so this deliberately waits for a non-empty box rather than
-  // spending its one fit on the zero-sized placeholder and leaving the event off-screen.
-  const fittedRef = useRef(false);
-  useEffect(() => {
-    if (size.w && size.h && box.widthMm && !fittedRef.current) {
-      fit();
-      fittedRef.current = true;
+  const eventZoneIds = plan.zones.map((r) => r.zone.id);
+  const others = plan.all.filter((r) => !eventZoneIds.includes(r.zone.id));
+
+  // Sort the placements by what they ARE before drawing any of them: a drape hangs on a wall, a
+  // cloth is a table's surface, a carpet is a rectangle on the floor, and everything else is an
+  // object standing somewhere. Which is which comes from the product's category (CategoryDef
+  // anchor/sizing, lifted onto the resolver), never from guessing at whichever fields are set.
+  const sorted = useMemo(() => {
+    const drapes: Placement[] = [];
+    const carpets: Placement[] = [];
+    const items: Placement[] = [];
+    const coverByTable = new Map<string, Placement>();
+    const chipsByTable = new Map<string, Placement[]>();
+
+    for (const p of doc.placements) {
+      const r = resolve(p.variantId);
+      if (r?.anchor === "wall") {
+        drapes.push(p);
+      } else if (p.layer === "table" && p.tableId) {
+        if (r?.anchor === "table") coverByTable.set(p.tableId, p);
+        else chipsByTable.set(p.tableId, [...(chipsByTable.get(p.tableId) ?? []), p]);
+      } else if (r?.sizing === "stretch") {
+        carpets.push(p);
+      } else {
+        items.push(p);
+      }
     }
-  }, [size, fit, box.widthMm]);
-
-  const zoomBy = (factor: number) => {
-    const stage = stageRef.current;
-    const center = { x: size.w / 2, y: size.h / 2 };
-    const scale = Math.max(0.008, Math.min(0.6, view.scale * factor));
-    const mx = (center.x - view.x) / view.scale;
-    const my = (center.y - view.y) / view.scale;
-    setView({ scale, x: center.x - mx * scale, y: center.y - my * scale });
-    stage?.batchDraw();
-  };
-
-  const onWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
-    e.evt.preventDefault();
-    const stage = stageRef.current!;
-    const pointer = stage.getPointerPosition()!;
-    const factor = e.evt.deltaY > 0 ? 1 / 1.08 : 1.08;
-    const scale = Math.max(0.008, Math.min(0.6, view.scale * factor));
-    const mx = (pointer.x - view.x) / view.scale;
-    const my = (pointer.y - view.y) / view.scale;
-    setView({ scale, x: pointer.x - mx * scale, y: pointer.y - my * scale });
-  };
-
-  const toDoc = (clientX: number, clientY: number) => {
-    const rect = wrapRef.current!.getBoundingClientRect();
-    return { x: (clientX - rect.left - view.x) / view.scale, y: (clientY - rect.top - view.y) / view.scale };
-  };
+    return { drapes, carpets, items, coverByTable, chipsByTable };
+  }, [doc.placements]);
 
   return (
-    <div
-      ref={wrapRef}
-      className={"relative h-full w-full overflow-hidden bg-bg" + (addingTable ? " cursor-crosshair" : "")}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
+    <PlanCanvas
+      mode="edit"
+      ariaLabel="סקיצת האירוע — שולחנות ופריטי עיצוב על תוכנית המתחם"
+      outline={[]}
+      edgeCurves={[]}
+      selected={[]}
+      onSelect={() => onSelect(null)}
+      onAddVertex={() => {}}
+      onCloseOutline={() => {}}
+      onMoveVertex={() => {}}
+      onMoveWallHandle={() => {}}
+      graph={plan.structure}
+      focus={focus}
+      cursor={addingTable ? "crosshair" : "default"}
+      onCanvasClick={addingTable && onPlaceTable ? (p) => onPlaceTable(p.x, p.y) : undefined}
+      onDropAt={(e, p) => {
         const productId = e.dataTransfer.getData("text/product");
-        if (!productId) return;
-        const p = toDoc(e.clientX, e.clientY);
-        onDropProduct(productId, p.x, p.y);
+        if (productId) onDropProduct(productId, p.x, p.y);
       }}
-    >
-      <Stage
-        ref={stageRef}
-        width={size.w}
-        height={size.h}
-        scaleX={view.scale}
-        scaleY={view.scale}
-        x={view.x}
-        y={view.y}
-        draggable
-        onWheel={onWheel}
-        onDragEnd={(e) => {
-          if (e.target === stageRef.current) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
-        }}
-        onClick={() => {
-          // F-3.3 click-to-place: in add mode a stage click drops a table; otherwise it clears selection.
-          if (addingTable && onPlaceTable) {
-            const pointer = stageRef.current?.getPointerPosition();
-            if (pointer) onPlaceTable((pointer.x - view.x) / view.scale, (pointer.y - view.y) / view.scale);
-          } else onSelect(null);
-        }}
-        onTap={() => onSelect(null)}
-      >
-        <Layer>
-          {/* The venue plan under the design. Zone floors first, then the walls stroked once on top
-              — a wall between two zones is one wall, so it must not be painted twice. Zones the
-              event doesn't occupy are drawn dimmed rather than omitted: the designer needs to see
-              what the חופה opens onto, and placing just outside a zone stays possible. */}
-          {plan.all.map((r) => {
-            const occupied = plan.zones.some((z) => z.zone.id === r.zone.id);
-            if (r.boundary.length < 3) return null;
-            const centre = polygonCentroid(r.boundary);
-            return (
-              <Group key={r.zone.id} listening={false} opacity={occupied ? 1 : 0.45}>
-                <Line
-                  points={r.boundary.flatMap((p) => [p.x, p.y])}
-                  closed
-                  fill={occupied ? C.canvas : C.bg}
-                />
-                {!occupied && (
-                  <Text
-                    x={centre.x - 4000}
-                    y={centre.y}
-                    width={8000}
-                    text={r.zone.name}
-                    align="center"
-                    fontSize={480}
-                    fontFamily="Assistant, sans-serif"
-                    fill={C.muted}
-                  />
-                )}
-              </Group>
-            );
-          })}
+      backdrop={({ mm }) => (
+        <>
+          {/* Zones the event doesn't occupy stay drawn, dimmed: the designer needs to see what the
+              חופה opens onto, and placing just outside a zone stays possible. */}
+          <g opacity={0.45}>
+            <ZoneRegions zones={others} mm={mm} />
+          </g>
+          <ZoneRegions zones={plan.zones} mm={mm} />
+          <StructureFeatures structure={plan.structure} mm={mm} />
+        </>
+      )}
+      overlay={(ctx) => (
+        <>
+          <StructureDoors structure={plan.structure} />
 
-          {plan.structure.walls.map((w) => {
-            const pts = wallPoints(plan.structure, w, nodes);
-            if (!pts) return null;
-            // An "edge" (a terrace lip, the קוליסאום's rim) is a boundary you can see and step over
-            // — drawn lighter and dashed so it never reads as something you can't walk through.
-            const isEdge = w.kind === "edge";
-            const common = {
-              stroke: isEdge ? C.muted : C.wall,
-              strokeWidth: isEdge ? 1.5 : 3,
-              strokeScaleEnabled: false,
-              listening: false,
-              ...(isEdge ? { dash: [220, 160] } : {}),
-            };
-            if (w.curve) {
-              const { c1, c2 } = absoluteControlPoints(pts.a, pts.b, w.curve);
-              return <Path key={w.id} data={`M ${pts.a.x} ${pts.a.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${pts.b.x} ${pts.b.y}`} {...common} />;
-            }
-            return <Line key={w.id} points={[pts.a.x, pts.a.y, pts.b.x, pts.b.y]} {...common} />;
-          })}
-
-          {/* Doors, drawn as gaps: a stroke in the floor colour over the wall they cut through
-              (ponytail: a rough marker, not the full gap+swing symbol the venue plan editor draws
-              — this is a backdrop to place tables against, not a structure to edit). */}
-          {plan.structure.entrances.map((e) => {
-            const wall = plan.structure.walls.find((w) => w.id === e.wallId);
-            const pts = wall ? wallPoints(plan.structure, wall, nodes) : null;
-            if (!pts) return null;
-            const len = wallLengthMm(pts.a, pts.b) || 1;
-            const ux = (pts.b.x - pts.a.x) / len;
-            const uy = (pts.b.y - pts.a.y) / len;
-            const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
-            const half = e.widthMm / 2;
-            return (
-              <Line
-                key={e.id}
-                points={[centre.x - ux * half, centre.y - uy * half, centre.x + ux * half, centre.y + uy * half]}
-                stroke={C.canvas}
-                strokeWidth={5}
-                strokeScaleEnabled={false}
-                listening={false}
+          {/* Laid on the floor, under everything that stands on it. */}
+          {layerVisible.floor &&
+            sorted.carpets.map((p) => (
+              <CarpetNode
+                key={p.id}
+                placement={p}
+                selected={selection?.kind === "placement" && selection.id === p.id}
+                ctx={ctx}
+                onSelect={() => onSelect({ kind: "placement", id: p.id })}
+                onMove={(pos) => onMovePlacement(p.id, pos)}
+                onResize={(sizeMm, position) => onResizePlacement(p.id, sizeMm, position)}
               />
-            );
-          })}
+            ))}
 
-          {/* Fixed features you plan around and cannot move (F-3.1): the pool, a built stage, a bar */}
-          {plan.structure.features.map((f) => {
-            const resolved = resolveStyle(f.style, "screen", { fill: C.column, stroke: C.muted, strokeWidth: 1.5 });
-            const shape = { fill: resolved.fill, stroke: resolved.stroke, strokeWidth: resolved.strokeWidth, strokeScaleEnabled: false, ...(resolved.dashArray.length ? { dash: resolved.dashArray } : {}) };
-            return (
-              <Group key={f.id} x={f.x} y={f.y} rotation={f.rotationDeg} listening={false}>
-                {f.shape === "circle" ? (
-                  <Circle radius={f.widthMm / 2} {...shape} />
-                ) : f.shape === "ellipse" ? (
-                  <Ellipse radiusX={f.widthMm / 2} radiusY={f.depthMm / 2} {...shape} />
-                ) : (
-                  <Rect x={-f.widthMm / 2} y={-f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...shape} />
-                )}
-                <Text x={-f.widthMm / 2} y={-210} width={f.widthMm} text={f.label} align="center" fontSize={420} fontFamily="Assistant, sans-serif" fill={C.inkSoft} />
-              </Group>
-            );
-          })}
-
-          {/* The event's aligned iPlan sketch (F-3.2) — placeholder frame until real PDF pixels exist */}
-          {doc.sketch && (
-            <Group x={doc.sketch.x} y={doc.sketch.y} listening={false} opacity={0.55}>
-              <Rect width={doc.sketch.widthMm} height={doc.sketch.heightMm} stroke={C.muted} strokeWidth={1.5} strokeScaleEnabled={false} dash={[160, 120]} />
-              <Text x={0} y={doc.sketch.heightMm - 560} width={doc.sketch.widthMm} text={`סקיצה: ${doc.sketch.fileName}`} align="center" fontSize={380} fontFamily="Assistant, sans-serif" fill={C.muted} />
-            </Group>
-          )}
-
-          {/* Tables */}
           {doc.tables.map((t) => (
             <TableNode
               key={t.id}
               table={t}
               selected={selection?.kind === "table" && selection.id === t.id}
               util={tableUtilization(doc, t)}
+              // The cloth IS the table's surface — a table wears one, so it is drawn as the table's
+              // own fill rather than as an object sitting on top of it, and is selected from the
+              // table's inspector. (catalog-resolver gives tablecloths zero footprint for the same
+              // reason: a cover consumes no room on the table it covers.)
+              cloth={sorted.coverByTable.get(t.id)}
+              ctx={ctx}
               onSelect={() => onSelect({ kind: "table", id: t.id })}
               onMove={(pos) => onMoveTable(t.id, pos)}
             />
           ))}
 
-          {/* Table-layer placements — clustered on their table */}
+          {/* Table-layer items — clustered on their table. Covers are excluded: they were drawn as
+              the table itself just above. */}
           {layerVisible.table &&
             doc.tables.map((t) => {
-              const chips = doc.placements.filter((p) => p.layer === "table" && p.tableId === t.id);
+              const chips = sorted.chipsByTable.get(t.id) ?? [];
               return chips.map((p, i) => (
                 <PlacementNode
                   key={p.id}
@@ -296,14 +181,15 @@ export function CanvasStage({
                   x={t.position.x}
                   y={t.position.y + (i - (chips.length - 1) / 2) * 840}
                   selected={selection?.kind === "placement" && selection.id === p.id}
+                  ctx={ctx}
                   onSelect={() => onSelect({ kind: "placement", id: p.id })}
                 />
               ));
             })}
 
           {/* Free placements (floor / ceiling) */}
-          {doc.placements
-            .filter((p) => p.layer !== "table" && layerVisible[p.layer])
+          {sorted.items
+            .filter((p) => layerVisible[p.layer])
             .map((p) => (
               <PlacementNode
                 key={p.id}
@@ -311,201 +197,537 @@ export function CanvasStage({
                 x={p.position.x}
                 y={p.position.y}
                 selected={selection?.kind === "placement" && selection.id === p.id}
+                ctx={ctx}
                 onSelect={() => onSelect({ kind: "placement", id: p.id })}
-                draggable
                 onMove={(pos) => onMovePlacement(p.id, pos)}
               />
             ))}
-        </Layer>
-      </Stage>
 
-      {/* View controls — inline-start edge, opposite the inspector (inline-end) so they never overlap in RTL. */}
-      <div className="absolute bottom-4 inset-inline-start-4 flex items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-floating">
-        <IconButton label="הקטן" size="md" onClick={() => zoomBy(1 / 1.2)}>
-          <Minus className="h-4 w-4" strokeWidth={2} />
-        </IconButton>
-        <IconButton label="התאם למסך" size="md" onClick={fit}>
-          <Maximize className="h-4 w-4" strokeWidth={2} />
-        </IconButton>
-        <IconButton label="הגדל" size="md" onClick={() => zoomBy(1.2)}>
-          <Plus className="h-4 w-4" strokeWidth={2} />
-        </IconButton>
-      </div>
-    </div>
+          {/* Drapes last, over the wall they hang on — they are overhead (the ceiling layer), and a
+              wall drawn on top of a curtain would read as the curtain being behind it. */}
+          {layerVisible.ceiling &&
+            sorted.drapes.map((p) => (
+              <DrapeNode
+                key={p.id}
+                placement={p}
+                structure={plan.structure}
+                selected={selection?.kind === "placement" && selection.id === p.id}
+                ctx={ctx}
+                onSelect={() => onSelect({ kind: "placement", id: p.id })}
+                onSpan={(span) => onSpanPlacement(p.id, span)}
+              />
+            ))}
+        </>
+      )}
+    />
   );
+}
+
+/** Is this shade dark enough that text on it has to go light? Perceived luminance (ITU-R BT.601),
+ *  the same rule the catalog swatches read by. Non-hex values (a CSS variable fallback) are treated
+ *  as light, which is what the tints in this palette are. */
+function isDark(color: string): boolean {
+  const hex = color.trim().replace("#", "");
+  const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+  if (!/^[0-9a-f]{6}$/i.test(full)) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+  return (r * 299 + g * 587 + b * 114) / 1000 < 140;
+}
+
+/** The colour a placed item is drawn in: the shade the designer picked, or the neutral surface for
+ *  a product whose shades carry no colour (or that has none at all). */
+function swatchOf(r: Resolved | undefined, fallback = "var(--color-surface)"): string {
+  return r?.swatch ?? fallback;
+}
+
+// A drape hung on a wall (F: curtains). Drawn as a band lying along the wall's own line, thick
+// enough to read at plan scale — a curtain is a surface you see, not a hairline. Selecting it puts
+// a handle on each end; dragging one slides that end along the wall, which is the whole vocabulary
+// this thing needs (its other dimension is the wall's, and its height is the product's).
+const DRAPE_MM = 220; // drawn thickness of the band, in plan millimetres
+
+function DrapeNode({
+  placement,
+  structure,
+  selected,
+  ctx,
+  onSelect,
+  onSpan,
+}: {
+  placement: Placement;
+  structure: VenueStructure;
+  selected: boolean;
+  ctx: CanvasLayerContext;
+  onSelect: () => void;
+  onSpan: (span: WallSpan) => void;
+}) {
+  // A drape whose wall was deleted at the venue draws nothing. It is not lost — it still lists and
+  // prices, and the inspector offers it a new wall — but there is no honest place to put it here.
+  const span = placement.span;
+  const resolved = span ? resolveSpan(structure, span) : null;
+  if (!span || !resolved) return null;
+
+  const r = resolve(placement.variantId);
+  const colour = swatchOf(r, "var(--color-accent-tint)");
+  const { from, to } = resolved;
+
+  const dragEnd = (which: "from" | "to") => ({
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      onSelect();
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      if (e.buttons !== 1) return;
+      const wall = wallSegment(structure, span.wallId);
+      if (!wall) return;
+      const t = pointToT(wall, ctx.clientToMm(e.clientX, e.clientY));
+      onSpan(which === "from" ? { ...span, from: t } : { ...span, to: t });
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      const el = e.currentTarget as Element;
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    },
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+  });
+
+  return (
+    <g>
+      <line
+        x1={from.x}
+        y1={from.y}
+        x2={to.x}
+        y2={to.y}
+        stroke={colour}
+        strokeWidth={DRAPE_MM}
+        strokeLinecap="butt"
+        opacity={0.9}
+        tabIndex={0}
+        role="button"
+        aria-label={`${r?.label ?? "וילון"} — ${(resolved.lengthMm / 1000).toFixed(1)} מטר על הקיר`}
+        className="cursor-pointer touch-none focus:outline-none"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect();
+        }}
+      />
+      {/* The selection outline is a second stroke rather than a colour change: a drape's whole
+          point is the colour it is, and highlighting must not repaint it. */}
+      <line
+        x1={from.x}
+        y1={from.y}
+        x2={to.x}
+        y2={to.y}
+        stroke={selected ? "var(--color-accent)" : "var(--color-ink-soft)"}
+        strokeWidth={selected ? 3 : 1}
+        strokeOpacity={selected ? 1 : 0.5}
+        vectorEffect="non-scaling-stroke"
+        className="pointer-events-none"
+      />
+      {selected &&
+        ([
+          ["from", from],
+          ["to", to],
+        ] as const).map(([which, p]) => (
+          <circle
+            key={which}
+            cx={p.x}
+            cy={p.y}
+            r={ctx.mm(7)}
+            fill="var(--color-canvas)"
+            stroke="var(--color-accent)"
+            strokeWidth={2.5}
+            vectorEffect="non-scaling-stroke"
+            tabIndex={0}
+            role="slider"
+            aria-label={which === "from" ? "תחילת הווילון על הקיר" : "סוף הווילון על הקיר"}
+            aria-valuenow={Math.round((which === "from" ? span.from : span.to) * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="cursor-ew-resize touch-none focus:outline-none"
+            onKeyDown={(e) => {
+              const step = (e.shiftKey ? 0.1 : 0.02) * (e.key === "ArrowLeft" ? -1 : 1);
+              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+              e.preventDefault();
+              const at = which === "from" ? span.from : span.to;
+              const next = Math.max(0, Math.min(1, at + step));
+              onSpan(which === "from" ? { ...span, from: next } : { ...span, to: next });
+            }}
+            {...dragEnd(which)}
+          />
+        ))}
+    </g>
+  );
+}
+
+// A carpet laid on the floor: a rectangle in its own colour, sized on the plan rather than in the
+// catalog. Dragging a corner stretches it, keeping the opposite corner where it is — which is what
+// grabbing a corner of a rug means, and why the resize reports a new centre alongside a new size.
+function CarpetNode({
+  placement,
+  selected,
+  ctx,
+  onSelect,
+  onMove,
+  onResize,
+}: {
+  placement: Placement;
+  selected: boolean;
+  ctx: CanvasLayerContext;
+  onSelect: () => void;
+  onMove: (pos: Point) => void;
+  onResize: (sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
+}) {
+  const r = resolve(placement.variantId);
+  const size = placement.sizeMm ?? fallbackSize(r);
+  const { x, y } = placement.position;
+  const halfW = size.widthMm / 2;
+  const halfD = size.depthMm / 2;
+  const rot = placement.rotation || 0;
+
+  return (
+    <g transform={rot ? `rotate(${rot} ${x} ${y})` : undefined}>
+      <rect
+        {...draggable(placement.position, ctx.clientToMm, onMove, onSelect)}
+        x={x - halfW}
+        y={y - halfD}
+        width={size.widthMm}
+        height={size.depthMm}
+        rx={Math.min(size.widthMm, size.depthMm) * 0.03}
+        fill={swatchOf(r, "var(--color-inset)")}
+        fillOpacity={0.85}
+        stroke={selected ? "var(--color-accent)" : "var(--color-border)"}
+        strokeWidth={selected ? 3 : 1.5}
+        vectorEffect="non-scaling-stroke"
+        tabIndex={0}
+        role="button"
+        aria-label={`${r?.label ?? "שטיח"} — ${(size.widthMm / 1000).toFixed(1)}×${(size.depthMm / 1000).toFixed(1)} מטר`}
+        className="cursor-move touch-none focus:outline-none"
+      />
+      {selected &&
+        CORNERS.map(([sx, sy]) => {
+          const corner = { x: x + sx * halfW, y: y + sy * halfD };
+          return (
+            <rect
+              key={`${sx},${sy}`}
+              x={corner.x - ctx.mm(5)}
+              y={corner.y - ctx.mm(5)}
+              width={ctx.mm(10)}
+              height={ctx.mm(10)}
+              fill="var(--color-canvas)"
+              stroke="var(--color-accent)"
+              strokeWidth={2.5}
+              vectorEffect="non-scaling-stroke"
+              className={(sx === sy ? "cursor-nwse-resize" : "cursor-nesw-resize") + " touch-none focus:outline-none"}
+              tabIndex={0}
+              role="button"
+              aria-label="פינה — גרירה לשינוי הגודל"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                (e.currentTarget as Element).setPointerCapture(e.pointerId);
+                onSelect();
+              }}
+              onPointerMove={(e) => {
+                if (e.buttons !== 1) return;
+                // Work in the carpet's own frame so a rotated one still stretches along its edges
+                // rather than along the world axes.
+                const world = ctx.clientToMm(e.clientX, e.clientY);
+                const local = toLocalFrame(world, { x, y }, rot);
+                const fixed = { x: -sx * halfW, y: -sy * halfD }; // the opposite corner, held still
+                const widthMm = Math.max(MIN_CARPET_MM, Math.abs(local.x - fixed.x));
+                const depthMm = Math.max(MIN_CARPET_MM, Math.abs(local.y - fixed.y));
+                const centreLocal = { x: fixed.x + (sx * widthMm) / 2, y: fixed.y + (sy * depthMm) / 2 };
+                onResize({ widthMm: Math.round(widthMm), depthMm: Math.round(depthMm) }, fromLocalFrame(centreLocal, { x, y }, rot));
+              }}
+              onPointerUp={(e) => {
+                const el = e.currentTarget as Element;
+                if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+              }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          );
+        })}
+    </g>
+  );
+}
+
+const CORNERS = [
+  [-1, -1],
+  [1, -1],
+  [1, 1],
+  [-1, 1],
+] as const;
+const MIN_CARPET_MM = 300; // a rug you can still grab a corner of
+
+/** The size a stretch item gets before anyone has stretched it: whatever the catalog footprint
+ *  says, so a freshly dropped carpet is a real rectangle rather than a point. */
+function fallbackSize(r: Resolved | undefined): { widthMm: number; depthMm: number } {
+  const b = r ? footprintBounds(resolveFootprint(r.product)) : null;
+  return { widthMm: b?.w || 2000, depthMm: b?.h || 1400 };
+}
+
+// Where each live drag started, keyed by pointerId. Module scope rather than a closure: the first
+// onMove re-renders the host, which rebuilds these handlers mid-gesture, so the origin has to
+// outlive that. Same shape and same 4px threshold as venue-plan.tsx's feature drag — a click that
+// drifts a pixel under the finger must select, not nudge.
+const dragOrigin = new Map<number, { cx: number; cy: number; ox: number; oy: number; moved: boolean }>();
+const DRAG_THRESHOLD_PX = 4;
+
+function draggable(
+  at: Point,
+  clientToMm: (clientX: number, clientY: number) => Point,
+  onMove?: (p: Point) => void,
+  onSelect?: () => void,
+) {
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    dragOrigin.delete(e.pointerId);
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      dragOrigin.set(e.pointerId, { cx: e.clientX, cy: e.clientY, ox: at.x, oy: at.y, moved: false });
+      onSelect?.(); // selecting on press, not on release, so what you are about to drag is already lit
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const origin = dragOrigin.get(e.pointerId);
+      if (!origin || !onMove || e.buttons !== 1) return;
+      if (!origin.moved) {
+        if (Math.hypot(e.clientX - origin.cx, e.clientY - origin.cy) < DRAG_THRESHOLD_PX) return;
+        origin.moved = true;
+      }
+      // Off the gesture's own origin each frame, not off the last position — repeated relative
+      // nudges drift, and the grab point would slide out from under the pointer.
+      const from = clientToMm(origin.cx, origin.cy);
+      const to = clientToMm(e.clientX, e.clientY);
+      onMove({ x: Math.round(origin.ox + to.x - from.x), y: Math.round(origin.oy + to.y - from.y) });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+    // The press already selected; this only stops the click reaching the canvas, which would read
+    // it as "empty canvas" and clear the selection the press just made.
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+  };
 }
 
 function TableNode({
   table,
   selected,
   util,
+  cloth,
+  ctx,
   onSelect,
   onMove,
 }: {
   table: DesignTable;
   selected: boolean;
   util: number;
+  /** The cover this table wears, if any — drawn as the table's own fill. */
+  cloth?: Placement;
+  ctx: CanvasLayerContext;
   onSelect: () => void;
-  onMove: (pos: { x: number; y: number }) => void;
+  onMove: (pos: Point) => void;
 }) {
   const overflow = util > 1;
+  const clothColour = cloth ? (resolve(cloth.variantId)?.swatch ?? "var(--color-accent-tint)") : undefined;
   // The table's own style sets its "at rest" look; selection and the overflow warning are
-  // functional states that must stay legible regardless, so they still override stroke/fill on
-  // top of it (mirrors the hall editor's fixtures, whose selection handles work the same way).
-  const resolved = resolveStyle(table.style, "screen", { fill: C.surface, stroke: C.ink, strokeWidth: 2.5 });
-  const fill = overflow ? C.warnTint : resolved.fill;
-  const stroke = selected ? C.accent : overflow ? C.warn : resolved.stroke;
-  const strokeWidth = selected ? 4 : resolved.strokeWidth;
-  const dash = resolved.dashArray.length ? { dash: resolved.dashArray } : {};
-  const common = {
-    onClick: (e: Konva.KonvaEventObject<MouseEvent>) => {
-      e.cancelBubble = true;
-      onSelect();
-    },
-    onTap: (e: Konva.KonvaEventObject<Event>) => {
-      e.cancelBubble = true;
-      onSelect();
-    },
-    draggable: true,
-    onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => onMove({ x: e.target.x(), y: e.target.y() }),
+  // functional states that must stay legible regardless, so they still override stroke/fill on top
+  // of it (mirrors the hall editor's fixtures, whose selection works the same way).
+  const style = resolveStyle(table.style, "screen", {
+    fill: "var(--color-surface)",
+    stroke: "var(--color-ink)",
+    strokeWidth: 2.5,
+  });
+  const shape = {
+    // A dressed table shows its cloth. The overflow warning still wins over it: that one is a
+    // problem to notice, not a colour choice, and it has to stay legible whatever is on the table.
+    fill: overflow ? "var(--color-warn-tint)" : (clothColour ?? style.fill),
+    fillOpacity: overflow || !clothColour ? style.fillOpacity : 1,
+    stroke: selected ? "var(--color-accent)" : overflow ? "var(--color-warn)" : style.stroke,
+    strokeWidth: selected ? 4 : style.strokeWidth,
+    strokeDasharray: style.dashArray.length ? style.dashArray.join(" ") : undefined,
+    vectorEffect: "non-scaling-stroke" as const,
   };
+  const w = table.widthMm ?? 0;
+  const d = table.depthMm ?? 0;
+  // The number has to stay readable on whatever colour the cloth is, so it goes dark on a light
+  // cloth and light on a dark one rather than trusting one fixed grey.
+  const numberInk = selected
+    ? "var(--color-accent)"
+    : clothColour && isDark(clothColour)
+      ? "var(--color-canvas)"
+      : "var(--color-muted)";
+
   return (
-    <Group x={table.position.x} y={table.position.y} {...common}>
+    <g
+      {...draggable(table.position, ctx.clientToMm, onMove, onSelect)}
+      transform={table.rotation ? `rotate(${table.rotation} ${table.position.x} ${table.position.y})` : undefined}
+      tabIndex={0}
+      role="button"
+      aria-label={`שולחן ${table.number || ""} — גרירה להזזה`}
+      className="cursor-move touch-none focus:outline-none"
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? 500 : 100;
+        if (e.key === "ArrowLeft") onMove({ x: table.position.x - step, y: table.position.y });
+        else if (e.key === "ArrowRight") onMove({ x: table.position.x + step, y: table.position.y });
+        else if (e.key === "ArrowUp") onMove({ x: table.position.x, y: table.position.y - step });
+        else if (e.key === "ArrowDown") onMove({ x: table.position.x, y: table.position.y + step });
+        else return;
+        e.preventDefault();
+      }}
+    >
       {table.diameterMm ? (
-        <Circle radius={table.diameterMm / 2} fill={fill} stroke={stroke} strokeWidth={strokeWidth} {...dash} strokeScaleEnabled={false} />
+        <circle cx={table.position.x} cy={table.position.y} r={table.diameterMm / 2} {...shape} />
       ) : (
-        <Rect
-          x={-(table.widthMm ?? 0) / 2}
-          y={-(table.depthMm ?? 0) / 2}
-          width={table.widthMm ?? 0}
-          height={table.depthMm ?? 0}
-          cornerRadius={80}
-          fill={fill}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-          {...dash}
-          strokeScaleEnabled={false}
-        />
+        <rect x={table.position.x - w / 2} y={table.position.y - d / 2} width={w} height={d} rx={80} {...shape} />
       )}
       {table.number > 0 && (
-        <Text
-          x={-600}
-          y={table.diameterMm ? -table.diameterMm / 2 + 90 : -320}
-          width={1200}
-          text={String(table.number)}
-          align="center"
-          fontSize={520}
-          fontStyle="600"
-          fontFamily="Assistant, sans-serif"
-          fill={selected ? C.accent : C.muted}
-          listening={false}
-        />
+        <text
+          x={table.position.x}
+          y={table.diameterMm ? table.position.y - table.diameterMm / 2 + 350 : table.position.y}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill={numberInk}
+          style={{ fontSize: 520, fontWeight: 600 }}
+          className="pointer-events-none"
+        >
+          {table.number}
+        </text>
       )}
-    </Group>
+    </g>
   );
 }
 
-// Draws a footprint shape centered on (0,0). Custom outlines are translated so their
-// bounding-box center sits at (0,0), so all four kinds share one local frame.
-function FootprintShape({ footprint, fill, stroke, strokeWidth }: {
+/** A footprint centred on (0,0) in its own local frame — the parent <g> carries the position,
+ *  rotation and scale. Custom outlines are translated so their bounding-box centre sits at (0,0),
+ *  so all four kinds share that frame. */
+function FootprintShape({
+  footprint,
+  fill,
+  stroke,
+  strokeWidth,
+}: {
   footprint: Footprint;
   fill: string;
   stroke: string;
   strokeWidth: number;
 }) {
-  const common = { fill, stroke, strokeWidth, strokeScaleEnabled: false, listening: false } as const;
-  if (footprint.kind === "circle") return <Circle radius={footprint.diameterMm / 2} {...common} />;
-  if (footprint.kind === "ellipse") return <Ellipse radiusX={footprint.widthMm / 2} radiusY={footprint.depthMm / 2} {...common} />;
+  const common = { fill, stroke, strokeWidth, vectorEffect: "non-scaling-stroke" as const };
+  if (footprint.kind === "circle") return <circle r={footprint.diameterMm / 2} {...common} />;
+  if (footprint.kind === "ellipse") return <ellipse rx={footprint.widthMm / 2} ry={footprint.depthMm / 2} {...common} />;
   if (footprint.kind === "custom") {
     const b = customShapeBounds(footprint.outline);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
-    if (footprint.edgeCurves?.some(Boolean)) return <Path data={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
-    return <Line points={centered.flatMap((p) => [p.x, p.y])} closed {...common} />;
+    return <path d={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
   }
   const { widthMm: w, depthMm: d } = footprint;
-  return <Rect x={-w / 2} y={-d / 2} width={w} height={d} cornerRadius={Math.min(w, d) * 0.06} {...common} />;
+  return <rect x={-w / 2} y={-d / 2} width={w} height={d} rx={Math.min(w, d) * 0.06} {...common} />;
 }
 
 function PlacementNode({
-  placement, x, y, selected, onSelect, draggable, onMove,
+  placement,
+  x,
+  y,
+  selected,
+  ctx,
+  onSelect,
+  onMove,
 }: {
   placement: Placement;
   x: number;
   y: number;
   selected: boolean;
+  ctx: CanvasLayerContext;
   onSelect: () => void;
-  draggable?: boolean;
-  onMove?: (pos: { x: number; y: number }) => void;
+  /** Absent for table-layer items: those are clustered onto their table and follow it. */
+  onMove?: (pos: Point) => void;
 }) {
   const r = resolve(placement.variantId);
   const product = r?.product;
   const footprint: Footprint = product ? resolveFootprint(product) : { kind: "rect", widthMm: 600, depthMm: 600 };
   const content = product ? resolveContent(product) : { mode: "name" as const, name: r?.label ?? "פריט" };
   const bounds = footprintBounds(footprint);
-  const stroke = selected ? C.accent : C.border;
-  const fill = selected ? C.accentTint : C.surface;
+  const scale = placement.scale || 1;
+  const label = content.mode === "name" ? content.name : "";
+  // No ellipsis in SVG text: size the type to the footprint the way Konva did, then clip the string
+  // to what that box can hold rather than letting it run out past the shape's edge.
+  const fontSize = Math.max(140, Math.min(bounds.h * 0.4, bounds.w * 0.22));
+  const maxChars = Math.max(3, Math.floor((bounds.w * 0.84) / (fontSize * 0.55)));
+  const shown = label.length > maxChars ? label.slice(0, maxChars - 1) + "…" : label;
+  const Icon = content.mode === "icon" && content.icon ? ICON_BY_NAME[content.icon] : undefined;
+  const iconSize = Math.min(bounds.w, bounds.h) * 0.6;
+  const badge = 340;
 
   return (
-    <Group
-      x={x}
-      y={y}
-      rotation={placement.rotation || 0}
-      scaleX={placement.scale || 1}
-      scaleY={placement.scale || 1}
-      draggable={draggable}
-      onDragEnd={draggable && onMove ? (e) => onMove({ x: e.target.x(), y: e.target.y() }) : undefined}
-      onClick={(e) => { e.cancelBubble = true; onSelect(); }}
-      onTap={(e) => { e.cancelBubble = true; onSelect(); }}
+    <g
+      {...draggable({ x, y }, ctx.clientToMm, onMove, onSelect)}
+      transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
+      tabIndex={0}
+      role="button"
+      aria-label={`${r?.label ?? "פריט"}${onMove ? " — גרירה להזזה" : ""}`}
+      className={(onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
     >
-      <FootprintShape footprint={footprint} fill={fill} stroke={stroke} strokeWidth={selected ? 4 : 2} />
+      <FootprintShape
+        footprint={footprint}
+        fill={selected ? "var(--color-accent-tint)" : "var(--color-surface)"}
+        stroke={selected ? "var(--color-accent)" : "var(--color-border)"}
+        strokeWidth={selected ? 4 : 2}
+      />
 
       {content.mode === "name" && (
-        <Text
-          x={-bounds.w / 2}
-          y={-bounds.h / 2}
-          width={bounds.w}
-          height={bounds.h}
-          text={content.name}
-          align="center"
-          verticalAlign="middle"
-          fontSize={Math.max(140, Math.min(bounds.h * 0.4, bounds.w * 0.22))}
-          fontFamily="Assistant, sans-serif"
-          fill={C.ink}
-          padding={Math.min(bounds.w, bounds.h) * 0.08}
-          ellipsis
-          wrap="none"
-          listening={false}
-        />
+        <text
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="var(--color-ink)"
+          style={{ fontSize }}
+          className="pointer-events-none"
+        >
+          {shown}
+        </text>
       )}
-      {content.mode === "icon" && content.icon && (
-        <KonvaIcon
-          name={content.icon}
-          color={selected ? C.accent : C.inkSoft}
-          x={0}
-          y={0}
-          size={Math.min(bounds.w, bounds.h) * 0.6}
-        />
+
+      {/* The same lucide glyph the catalog picker shows, drawn straight into the plan — its 24-unit
+          viewBox scaled to the footprint and re-centred. */}
+      {Icon && (
+        <g
+          transform={`translate(${-iconSize / 2} ${-iconSize / 2}) scale(${iconSize / 24})`}
+          className="pointer-events-none"
+        >
+          {createElement(Icon, {
+            width: 24,
+            height: 24,
+            color: selected ? "var(--color-accent)" : "var(--color-ink-soft)",
+            strokeWidth: 1.5,
+          })}
+        </g>
       )}
-      {/* "none" renders nothing */}
+      {/* content.mode "none" renders nothing */}
 
       {placement.quantity > 1 && (
-        <Group listening={false}>
-          <Rect x={-bounds.w / 2 + 40} y={bounds.h / 2 - 380} width={340} height={340} cornerRadius={70} fill={C.accent} />
-          <Text
+        <g className="pointer-events-none">
+          <rect
             x={-bounds.w / 2 + 40}
-            y={bounds.h / 2 - 380}
-            width={340}
-            height={340}
-            text={`×${placement.quantity}`}
-            align="center"
-            verticalAlign="middle"
-            fontSize={220}
-            fontStyle="600"
-            fontFamily="Assistant, sans-serif"
-            fill="#ffffff"
+            y={bounds.h / 2 - badge - 40}
+            width={badge}
+            height={badge}
+            rx={70}
+            fill="var(--color-accent)"
           />
-        </Group>
+          <text
+            x={-bounds.w / 2 + 40 + badge / 2}
+            y={bounds.h / 2 - badge / 2 - 40}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fill="var(--color-canvas)"
+            style={{ fontSize: 220, fontWeight: 600 }}
+          >
+            ×{placement.quantity}
+          </text>
+        </g>
       )}
-    </Group>
+    </g>
   );
 }

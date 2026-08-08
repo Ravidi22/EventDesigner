@@ -3,7 +3,7 @@
 // A venue is a *property*, and a property outlives the studio that drew it. The plan of
 // חוות רונית is the same wall graph whichever designer is standing in it, which is exactly why
 // sharing one is worth doing: drawing a site plan is expensive, and the second designer working
-// that hall should inherit it rather than trace it again from the same iPlan PDF.
+// that hall should inherit it rather than trace the same floor plan a second time.
 //
 // The line that must not move: a grant conveys the PROPERTY, never the BUSINESS. Events, clients,
 // prices and quotes belong to the studio (lib/team/storage.ts, and organizationId on every table

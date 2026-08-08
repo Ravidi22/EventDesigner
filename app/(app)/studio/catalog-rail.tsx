@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { loadProducts } from "@/lib/catalog/storage";
-import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, type CategoryGroupId } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
 import { formatDimensions } from "@/lib/catalog/format";
 import { loadFolder, likedProductIds, loadImages } from "@/lib/gallery/storage";
@@ -22,7 +22,12 @@ import { ProductImage } from "../catalog/product-image";
 // F-5.2 filtering is the same predicate the catalog screen uses (matchesFilters), driven by a much
 // smaller set of controls: at this width a permanent filter bar would cost more rows than it saves,
 // so category and style tags live behind a disclosure and only the search box is always up.
-export function CatalogRail() {
+//
+// `groups` narrows the whole rail to a few departments — the meeting's two drawing passes each get
+// their own half of the catalog (HALL_PASS_GROUPS / DESIGN_PASS_GROUPS). It's a floor under the
+// filters, not one of them: the category dropdown only ever offers what's in scope, and clearing
+// the filters cannot widen the rail past it. Absent = the whole catalog, which is /studio.
+export function CatalogRail({ groups, hint }: { groups?: CategoryGroupId[]; hint?: string } = {}) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
   const [likedIds, setLikedIds] = useState<string[]>([]);
@@ -39,16 +44,19 @@ export function CatalogRail() {
   const toggleTag = (tag: string) =>
     setFilters((f) => ({ ...f, tags: f.tags.includes(tag) ? f.tags.filter((t) => t !== tag) : [...f.tags, tag] }));
 
+  const allowedGroups = useMemo(() => (groups ? new Set(groups) : null), [groups]);
+
   const { liked, rest } = useMemo(() => {
     const byId = new Map(products.map((p) => [p.id, p]));
     const likedSet = new Set(likedIds);
-    const match = (p: Product) => matchesFilters(p, filters);
+    const inScope = (p: Product) => !allowedGroups || allowedGroups.has(CATEGORY_BY_ID[p.category]?.group);
+    const match = (p: Product) => inScope(p) && matchesFilters(p, filters);
     // The event folder is filtered too, not exempted: a search for "פמוט" that still shows six
     // liked chuppah photos above the result is a search that didn't happen.
     const liked = likedIds.map((id) => byId.get(id)).filter((p): p is Product => !!p && match(p));
     const rest = products.filter((p) => !likedSet.has(p.id) && match(p));
     return { liked, rest };
-  }, [filters, likedIds, products]);
+  }, [filters, likedIds, products, allowedGroups]);
 
   const empty = liked.length === 0 && rest.length === 0;
   const active = hasActiveFilters(filters);
@@ -92,7 +100,10 @@ export function CatalogRail() {
               value={filters.category ?? ""}
               onChange={(v) => set({ category: v || null })}
               aria-label="קטגוריה"
-              options={[{ value: "", label: "כל הקטגוריות" }, ...CATEGORY_GROUPS.map((g) => ({ value: g.id, label: g.label }))]}
+              options={[
+                { value: "", label: groups ? "כל הקטגוריות בשלב זה" : "כל הקטגוריות" },
+                ...CATEGORY_GROUPS.filter((g) => !groups || groups.includes(g.id)).map((g) => ({ value: g.id, label: g.label })),
+              ]}
               className="w-full"
             />
             <div className="flex flex-wrap gap-1">
@@ -140,7 +151,7 @@ export function CatalogRail() {
         {empty && <p className="p-4 text-center text-sm text-muted">אין תוצאות</p>}
       </div>
       <p className="border-t border-border px-3 py-2 text-xs leading-relaxed text-muted">
-        גרור פריט אל האולם. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה.
+        {hint ?? "גרור פריט אל האולם. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה."}
       </p>
     </aside>
   );

@@ -5,8 +5,10 @@ import Link from "next/link";
 import { Check, Eye, EyeOff, Merge, Send, Share2, TriangleAlert } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { quoteGroups, quoteTotals, type DiscountType } from "@/lib/outputs/quote";
-import { priceLookup } from "@/lib/outputs/lookup";
-import { formatPrice } from "@/lib/catalog/format";
+import { measureContext, priceLookup } from "@/lib/outputs/lookup";
+import { eventPlan } from "@/lib/events/plan";
+import type { VenueStructure } from "@/lib/venues/structure";
+import { formatAmount, formatPrice, formatUnitPrice } from "@/lib/catalog/format";
 import { loadSettings, type BusinessSettings } from "@/lib/settings/storage";
 import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
 import { activeEvent, updateEvent } from "@/lib/events/storage";
@@ -24,11 +26,15 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   const [discountValue, setDiscountValue] = useState(0);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [merged, setMerged] = useState<Set<string>>(new Set());
+  // The walls the drapes hang on: a per-metre line charges for the run it actually covers, and the
+  // wall that decides that length lives at the venue, not in this document (lib/.../measure.ts).
+  const [structure, setStructure] = useState<VenueStructure | undefined>(undefined);
 
   useEffect(() => {
     setSettings(loadSettings());
     const ev = activeEvent();
     setEvent(ev);
+    setStructure(eventPlan(ev).structure);
     if (ev) {
       const q = loadIssuedQuote(ev.id);
       setIssued(q);
@@ -42,7 +48,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   }, []);
 
   const vatRate = settings?.vatRate ?? 0.18;
-  const allGroups = useMemo(() => quoteGroups(doc, priceLookup), [doc]);
+  const allGroups = useMemo(() => quoteGroups(doc, priceLookup, measureContext(structure)), [doc, structure]);
 
   // F-7.1: hidden rows are dropped (and not charged); merged categories collapse to one line.
   const groups = useMemo(
@@ -203,9 +209,9 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
                 {g.lines.map((l) => (
                   <tr key={l.variantId} className="border-t border-border">
                     <td className="py-2 text-ink">{l.label}</td>
-                    <td className="nums py-2 text-ink">×{l.quantity}</td>
+                    <td className="nums py-2 text-ink">{formatAmount(l.quantity, l.priceUnit)}</td>
                     <td className="nums py-2 text-ink-soft">
-                      {l.priced ? formatPrice(l.unitPrice) : <span className="text-warn-ink">ללא מחיר</span>}
+                      {l.priced ? formatUnitPrice(l.unitPrice, l.priceUnit) : <span className="text-warn-ink">ללא מחיר</span>}
                     </td>
                     <td className="nums py-2 text-end font-semibold text-ink">{l.priced ? formatPrice(l.lineTotal) : "—"}</td>
                     <td className="no-print py-2 text-end">

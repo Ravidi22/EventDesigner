@@ -1,5 +1,7 @@
-// Seed events for the dashboard (stands in for the DB `events` table), one per flow stage
-// so the derived statuses all show. The first one is the "live" sample the studio works on.
+// Seed events for the dashboard (stands in for the DB `events` table), spread across the stages of
+// the default meeting flow (lib/meeting/steps.ts) so the derived statuses all show. `step` is an
+// index into that flow — a studio that reorders its own meeting just reads these marks differently.
+// The first one is the "live" sample the studio works on.
 // zoneIds are the real reference (lib/venues); zonesLabel mirrors their names at save time.
 //
 // Deliberately includes, so the Gantt room chart, Dashboard, and calendar have something to show:
@@ -20,13 +22,13 @@
 import type { EventSummary } from "./types";
 
 export const SAMPLE_EVENTS: EventSummary[] = [
-  { id: "ev-noa-itai", clientName: "נועה ואיתי", phone: "052-1234567", contactName: "נועה", contact2Name: "אמא של נועה - רונית", contact2Phone: "054-8887766", date: "2026-08-14", time: "20:00", meetingDate: "2026-07-31", venueId: "venue-ronit", zoneIds: ["z-ronit-big", "z-ronit-big-canopy"], zonesLabel: "אולם גדול · חופה אולם גדול", guests: 240, step: 5, createdAt: Date.parse("2026-06-20") },
-  { id: "ev-tamar-eyal", clientName: "תמר ואייל", phone: "058-3334455", date: "2026-08-14", time: "20:00", venueId: "venue-ronit", zoneIds: ["z-ronit-big"], zonesLabel: "אולם גדול", guests: 160, step: 3, createdAt: Date.parse("2026-05-15") },
-  { id: "ev-shira-roi", clientName: "שירה ורועי", phone: "054-7654321", date: "2026-09-02", time: "19:30", venueId: "venue-hadar", zoneIds: ["z-hadar-hall"], zonesLabel: "אולם ראשי", guests: 180, step: 6, quoteSentAt: Date.parse("2026-07-01"), createdAt: Date.parse("2026-06-28") },
+  { id: "ev-noa-itai", clientName: "נועה ואיתי", phone: "052-1234567", contactName: "נועה", contact2Name: "אמא של נועה - רונית", contact2Phone: "054-8887766", date: "2026-08-14", time: "20:00", meetingDate: "2026-07-31", venueId: "venue-ronit", zoneIds: ["z-ronit-big", "z-ronit-big-canopy"], zonesLabel: "אולם גדול · חופה אולם גדול", guests: 240, step: 3, createdAt: Date.parse("2026-06-20") },
+  { id: "ev-tamar-eyal", clientName: "תמר ואייל", phone: "058-3334455", date: "2026-08-14", time: "20:00", venueId: "venue-ronit", zoneIds: ["z-ronit-big"], zonesLabel: "אולם גדול", guests: 160, step: 2, createdAt: Date.parse("2026-05-15") },
+  { id: "ev-shira-roi", clientName: "שירה ורועי", phone: "054-7654321", date: "2026-09-02", time: "19:30", venueId: "venue-hadar", zoneIds: ["z-hadar-hall"], zonesLabel: "אולם ראשי", guests: 180, step: 4, quoteSentAt: Date.parse("2026-07-01"), createdAt: Date.parse("2026-06-28") },
   { id: "ev-yael-bat", clientName: "בת מצווה — יעל", phone: "050-9998877", date: "2026-09-21", meetingDate: "2026-07-31", venueId: "venue-ronit", zoneIds: ["z-ronit-small"], zonesLabel: "אולם קטן", guests: 120, step: 2, createdAt: Date.parse("2026-07-05") },
   { id: "ev-mor-alon", clientName: "מור ואלון", phone: "053-2211334", date: "2026-10-09", venueId: "venue-hadar", zoneIds: ["z-hadar-garden"], zonesLabel: "גן", guests: 300, step: 1, createdAt: Date.parse("2026-07-10") },
   { id: "ev-dana-cohen", clientName: "דנה כהן", phone: "052-7778899", date: "2026-11-02", zoneIds: [], zonesLabel: "", guests: 80, step: 0, createdAt: Date.parse("2026-07-20") },
-  { id: "ev-adi-noam", clientName: "עדי ונועם", phone: "052-3312211", date: "2026-07-31", time: "19:00", venueId: "venue-ronit", zoneIds: ["z-ronit-small"], zonesLabel: "אולם קטן", guests: 140, step: 6, quoteSentAt: Date.parse("2026-07-15"), createdAt: Date.parse("2026-06-01") },
-  { id: "ev-keren-omri", clientName: "קרן ועומרי", phone: "050-4445566", date: "2026-07-18", time: "18:30", venueId: "venue-ronit", zoneIds: ["z-ronit-big"], zonesLabel: "אולם גדול", guests: 200, step: 6, quoteSentAt: Date.parse("2026-06-10"), createdAt: Date.parse("2026-05-01") },
-  { id: "ev-liran-noy", clientName: "לירן ונוי", phone: "054-1112233", date: "2026-07-05", venueId: "venue-hadar", zoneIds: ["z-hadar-hall"], zonesLabel: "אולם ראשי", guests: 140, step: 6, quoteSentAt: Date.parse("2026-06-01"), archived: true, createdAt: Date.parse("2026-05-20") },
+  { id: "ev-adi-noam", clientName: "עדי ונועם", phone: "052-3312211", date: "2026-07-31", time: "19:00", venueId: "venue-ronit", zoneIds: ["z-ronit-small"], zonesLabel: "אולם קטן", guests: 140, step: 4, quoteSentAt: Date.parse("2026-07-15"), createdAt: Date.parse("2026-06-01") },
+  { id: "ev-keren-omri", clientName: "קרן ועומרי", phone: "050-4445566", date: "2026-07-18", time: "18:30", venueId: "venue-ronit", zoneIds: ["z-ronit-big"], zonesLabel: "אולם גדול", guests: 200, step: 4, quoteSentAt: Date.parse("2026-06-10"), createdAt: Date.parse("2026-05-01") },
+  { id: "ev-liran-noy", clientName: "לירן ונוי", phone: "054-1112233", date: "2026-07-05", venueId: "venue-hadar", zoneIds: ["z-hadar-hall"], zonesLabel: "אולם ראשי", guests: 140, step: 4, quoteSentAt: Date.parse("2026-06-01"), archived: true, createdAt: Date.parse("2026-05-20") },
 ];

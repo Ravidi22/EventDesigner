@@ -5,9 +5,9 @@ import { resolveStyle } from "@/lib/element-style";
 import { nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 
-// World-space layers for the venue plan, meant to be handed to ShapeCanvas as its `backdrop`/`overlay`.
+// World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
 //
-// These render no <svg> and own no viewport: ShapeCanvas provides the coordinate space, the pan and
+// These render no <svg> and own no viewport: PlanCanvas provides the coordinate space, the pan and
 // zoom, the grid and the snapping, and it draws the walls itself from the same graph. That split is
 // the point — the zone tints go underneath and the shared walls are stroked once on top, so a wall
 // between two zones reads as the single wall it is.
@@ -39,7 +39,7 @@ const FEATURE_LABEL_PX = 11;
 // marquee drag start on top of a zone tint instead of only in the gaps between them. Clicks still
 // work because the canvas no longer captures the pointer until a drag actually begins — a captured
 // pointer retargets the click to the capture element, which is what made walls, zones and doors
-// read as unclickable in the first place. See shape-canvas's onPointerDown/onPointerMove.
+// read as unclickable in the first place. See plan-canvas's onPointerDown/onPointerMove.
 
 /** Tinted, labelled zone regions. Drawn under the walls. */
 export function ZoneRegions({
@@ -51,7 +51,7 @@ export function ZoneRegions({
   zones: ResolvedZone[];
   selectedIds?: string[];
   onSelect?: (id: string, additive: boolean) => void;
-  /** Screen px → world mm at the current zoom (from ShapeCanvas's layer context). */
+  /** Screen px → world mm at the current zoom (from PlanCanvas's layer context). */
   mm: (px: number) => number;
 }) {
   return (
@@ -185,10 +185,10 @@ export function StructureFeatures({
 
 // Where each live feature drag started, keyed by pointerId. Module scope, not a closure variable:
 // the first onMove re-renders the host, which rebuilds these handlers mid-gesture, so the origin has
-// to outlive that. (Same reason — and same shape — as shape-canvas.tsx's own pressOrigin map.)
+// to outlive that. (Same reason — and same shape — as plan-canvas.tsx's own pressOrigin map.)
 const featureDrag = new Map<number, { x: number; y: number; fx: number; fy: number; dragging: boolean }>();
 
-// A feature drags with the plain pointer-capture idiom rather than ShapeCanvas's dragHandlers: that
+// A feature drags with the plain pointer-capture idiom rather than PlanCanvas's dragHandlers: that
 // helper lives inside the canvas and carries its whole selection protocol, which a host-drawn layer
 // has no business in. The threshold is the same 4px, so a click still can't nudge.
 function draggable(

@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, PenTool, Printer } from "lucide-react";
 import type { EventSummary, EventStatus } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, FLOW_STEPS, eventProgress, eventStatus, monogram, formatEventDate, zonesLabelOf } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, monogram, formatEventDate, zonesLabelOf } from "@/lib/events/types";
+import { stepAt, type MeetingStepId } from "@/lib/meeting/steps";
+import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId, updateEvent } from "@/lib/events/storage";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
@@ -14,7 +16,7 @@ import { StatusChip } from "@/components/status-chip";
 type Filter = "active" | EventStatus;
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "active", label: "פעילים" },
-  { id: "waiting", label: "ממתינים לסקיצה" },
+  { id: "gallery", label: "בגלריה" },
   { id: "design", label: "בעיצוב" },
   { id: "sent", label: "נשלחה הצעה" },
   { id: "archived", label: "ארכיון" },
@@ -30,6 +32,7 @@ export function GanttScreen() {
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const { activeVenueId } = useActiveVenueScope();
+  const flow = useMeetingFlow();
 
   useEffect(() => {
     setEvents(loadEvents());
@@ -42,11 +45,10 @@ export function GanttScreen() {
         ? byVenue.filter((e) => !e.archived)
         : filter === "archived"
           ? byVenue.filter((e) => e.archived)
-          : byVenue.filter((e) => eventStatus(e) === filter);
+          : byVenue.filter((e) => eventStatus(e, flow) === filter);
     const q = query.trim().toLowerCase();
     return q ? byTab.filter((e) => `${e.clientName} ${e.zonesLabel}`.toLowerCase().includes(q)) : byTab;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, filter, query, activeVenueId]);
+  }, [events, filter, query, activeVenueId, flow]);
 
   const shown = useMemo(() => {
     const sign = sortDir === "desc" ? -1 : 1;
@@ -137,6 +139,7 @@ export function GanttScreen() {
             <EventCard
               key={e.id}
               event={e}
+              flow={flow}
               onMeeting={() => enterMeeting(e)}
               onStudio={() => openStudio(e)}
               onOutputs={() => openOutputs(e)}
@@ -151,21 +154,23 @@ export function GanttScreen() {
 
 function EventCard({
   event: e,
+  flow,
   onMeeting,
   onStudio,
   onOutputs,
   onArchive,
 }: {
   event: EventSummary;
+  flow: MeetingStepId[];
   onMeeting: () => void;
   onStudio: () => void;
   onOutputs: () => void;
   onArchive: () => void;
 }) {
-  const status = eventStatus(e);
-  // F-1.1: progress = the furthest flow step reached, shown against the whole flow.
-  const stepLabel = FLOW_STEPS[Math.min(e.step, FLOW_STEPS.length - 1)].label;
-  const progress = eventProgress(e);
+  const status = eventStatus(e, flow);
+  // F-1.1: progress = the furthest stage reached, shown against this studio's own meeting flow.
+  const stepLabel = stepAt(flow, e.step).label;
+  const progress = eventProgress(e, flow);
 
   return (
     <article className="group flex flex-col gap-5 rounded-lg border border-border bg-surface p-6 transition-all hover:border-accent-line hover:shadow-lifted">

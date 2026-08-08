@@ -139,7 +139,7 @@ export const venues = pgTable(
     organizationId: orgId(),
     name: text("name").notNull(),
     logoUrl: text("logo_url"),
-    /** VenuePlan: mmPerUnit, the property line, and the placed iPlan underlay. */
+    /** VenuePlan: mmPerUnit, the property line, and the placed plan underlay. */
     plan: jsonb("plan").$type<Record<string, unknown>>().notNull(),
     createdAt: created(),
     updatedAt: updated(),

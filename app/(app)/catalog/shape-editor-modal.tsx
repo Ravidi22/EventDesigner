@@ -8,7 +8,7 @@ import { customShapeBounds } from "@/lib/studio/footprint";
 import { useOutlineEditor } from "@/lib/studio/use-outline-editor";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
-import { ShapeCanvas, SelectionInspector } from "@/components/shape-canvas";
+import { PlanCanvas, SelectionInspector } from "@/components/plan-canvas";
 
 type Curves = (EdgeCurve | null)[];
 const padCurves = (c: Curves | undefined, len: number): Curves => Array.from({ length: len }, (_, i) => c?.[i] ?? null);
@@ -97,7 +97,7 @@ export function ShapeEditorModal({
         </header>
 
         <div className="relative min-h-0 flex-1 bg-canvas">
-          <ShapeCanvas
+          <PlanCanvas
             mode={mode}
             outline={outline}
             edgeCurves={curves}

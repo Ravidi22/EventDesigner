@@ -30,7 +30,7 @@ import {
   InspectorGroup,
   InspectorHeader,
   SegmentedToggle,
-} from "@/components/shape-canvas";
+} from "@/components/plan-canvas";
 
 export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other"];
 

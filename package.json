@@ -17,18 +17,18 @@
     "check:snap": "node --experimental-strip-types lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",
     "check:structure": "node --experimental-strip-types lib/venues/structure.ts",
-    "check:selection": "node --experimental-strip-types lib/venues/selection.ts"
+    "check:selection": "node --experimental-strip-types lib/venues/selection.ts",
+    "check:measure": "node --experimental-strip-types lib/design-document/measure.ts",
+    "check:anchor": "node --experimental-strip-types lib/studio/anchor.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
-    "konva": "^10.3.0",
     "lucide-react": "^1.24.0",
     "next": "16.2.10",
     "pdfjs-dist": "^6.1.200",
     "postgres": "^3.4.9",
     "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "react-konva": "^19.2.5"
+    "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

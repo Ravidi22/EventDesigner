@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { ArrowLeft, Calendar, CalendarClock, Clock, MapPin, Phone, User, Users, X } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
+import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { StatusChip } from "@/components/status-chip";
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/button";
@@ -39,8 +40,9 @@ export function EventDetailDrawer({
 
   if (!event) return null;
 
-  const status = eventStatus(event);
-  const progress = eventProgress(event);
+  const flow = useMeetingFlow();
+  const status = eventStatus(event, flow);
+  const progress = eventProgress(event, flow);
   // The event's zones under the venue that owns them — "חוות רונית אמארה · אולם גדול · חופה".
   const venueZones = venueName ? `${venueName} · ${zonesLabelOf(event)}` : zonesLabelOf(event);
 

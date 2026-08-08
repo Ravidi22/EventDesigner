@@ -13,7 +13,7 @@ export interface Point {
   y: number;
 }
 
-// A table on the plan (from a hall template or PDF import).
+// A table on the plan, drawn in the meeting's hall-sketch stage.
 export interface DesignTable {
   id: string;
   type: string; // "round" | "rectangle" | "knight" ... (drives smart-apply, F-3.3)
@@ -27,7 +27,20 @@ export interface DesignTable {
   style?: ElementStyle; // free-form per-table look (fill/stroke/dash); absent = the renderer's default
 }
 
-// One product-variant placed somewhere. Targets a table (table layer) or a free point.
+/** A drape's run along one wall of the venue, as fractions of that wall's length (0 = the wall's
+ *  start node, 1 = its end). Fractions rather than millimetres on purpose: the wall belongs to the
+ *  property, not to this document, so a wall later redrawn at /halls carries its curtain with it
+ *  instead of leaving it hanging in the air. `wallId` may dangle if the wall is deleted — the
+ *  renderer draws nothing and the inspector says so, same contract as a zone id. */
+export interface WallSpan {
+  wallId: string;
+  from: number; // 0..1 along the wall
+  to: number; // 0..1, always > from
+}
+
+// One product-variant placed somewhere. Targets a table (table layer), a wall (a drape), or a free
+// point. Which of those it is comes from the product's category (CategoryDef.anchor), never from
+// guessing at which fields happen to be set.
 export interface Placement {
   id: string;
   variantId: string;
@@ -37,20 +50,18 @@ export interface Placement {
   position: Point; // free point for floor/ceiling; offset within table otherwise
   rotation: number;
   scale: number;
+  /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. */
+  span?: WallSpan;
+  /** Stretch items sized on the plan rather than in the catalog (a carpet). Overrides the product's
+   *  footprint; absent means "the size the catalog gives it". */
+  sizeMm?: { widthMm: number; depthMm: number };
 }
 
 export interface Calibration {
-  mmPerUnit: number; // maps document units to real millimetres (F-3.4)
-}
-
-// The event's iPlan sketch, manually aligned over the hall shell (F-3.2). Position/size in
-// document units. ponytail: fileName only for now — real PDF pixels arrive with file storage.
-export interface SketchRef {
-  fileName: string;
-  x: number;
-  y: number;
-  widthMm: number;
-  heightMm: number;
+  /** Maps document units to real millimetres (F-3.4). Copied from the VENUE plan when the event is
+   *  opened — scale is a property of the property, so it is measured there, once, and never asked
+   *  again per event. A plan drawn with the wall tools is already in millimetres: 1. */
+  mmPerUnit: number;
 }
 
 // F-5.3: a table the designer explicitly diverged from smart-apply for this variant.
@@ -64,7 +75,6 @@ export interface SmartApplyException {
 // and quote are pure aggregations over `placements`.
 export interface DesignDocumentContent {
   calibration: Calibration;
-  sketch?: SketchRef;
   tables: DesignTable[];
   placements: Placement[];
   exceptions?: SmartApplyException[];

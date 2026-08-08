@@ -15,6 +15,10 @@ export const TABLE_TYPES = [
 
 // Slim studio sub-toolbar — sits under the app-shell topbar (which carries the title + event
 // context). Tools only: undo/redo, table placement, layer visibility, and the honest save indicator.
+//
+// `showTableTools` is off in the meeting's design pass: the room's furniture was settled in the
+// hall-sketch stage before it, and a table dropped in while dressing the tables is a slip, not a
+// shortcut. The tables themselves stay selectable on the canvas either way.
 export function Toolbar({
   canUndo,
   canRedo,
@@ -24,6 +28,7 @@ export function Toolbar({
   onToggleLayer,
   addingTable,
   onSetAddingTable,
+  showTableTools = true,
   saveState,
   onRetrySave,
 }: {
@@ -35,6 +40,7 @@ export function Toolbar({
   onToggleLayer: (l: LayerId) => void;
   addingTable: string | null;
   onSetAddingTable: (t: string | null) => void;
+  showTableTools?: boolean;
   saveState: "saving" | "saved" | "error";
   onRetrySave: () => void;
 }) {
@@ -52,29 +58,33 @@ export function Toolbar({
       <div className="mx-1 h-6 w-px bg-border" />
 
       {/* F-3.3: pick a type, then click the canvas to place. Esc or re-click exits. */}
-      <div className="flex items-center gap-1">
-        {TABLE_TYPES.map((t) => {
-          const on = addingTable === t.type;
-          return (
-            <button
-              key={t.type}
-              type="button"
-              onClick={() => onSetAddingTable(on ? null : t.type)}
-              aria-pressed={on}
-              title={`הנחת ${t.label} בקליק`}
-              className={
-                "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors " +
-                (on ? "border-accent bg-accent-tint text-ink" : "border-transparent text-muted hover:bg-canvas hover:text-ink")
-              }
-            >
-              <t.icon className="h-3.5 w-3.5" strokeWidth={2} />
-              {t.type}
-            </button>
-          );
-        })}
-      </div>
+      {showTableTools && (
+        <>
+          <div className="flex items-center gap-1">
+            {TABLE_TYPES.map((t) => {
+              const on = addingTable === t.type;
+              return (
+                <button
+                  key={t.type}
+                  type="button"
+                  onClick={() => onSetAddingTable(on ? null : t.type)}
+                  aria-pressed={on}
+                  title={`הנחת ${t.label} בקליק`}
+                  className={
+                    "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors " +
+                    (on ? "border-accent bg-accent-tint text-ink" : "border-transparent text-muted hover:bg-canvas hover:text-ink")
+                  }
+                >
+                  <t.icon className="h-3.5 w-3.5" strokeWidth={2} />
+                  {t.type}
+                </button>
+              );
+            })}
+          </div>
 
-      <div className="mx-1 h-6 w-px bg-border" />
+          <div className="mx-1 h-6 w-px bg-border" />
+        </>
+      )}
 
       <div className="flex items-center gap-1">
         {LAYERS.map((l) => {

@@ -2,6 +2,7 @@
 // legend are just reductions. Both take an injected lookup so this file has no runtime
 // dependency on the catalog/alias graph — which keeps the self-check runnable under node.
 import type { DesignDocumentContent } from "@/lib/design-document/types";
+import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 
 export interface ItemInfo {
   productName: string;
@@ -9,6 +10,7 @@ export interface ItemInfo {
   categoryId: string;
   categoryLabel: string;
   categoryOrder: number;
+  priceUnit?: MeasureUnit; // what this item is counted in; absent = "unit"
   // Per-category multiplier (F-2.5): a chandelier with N arms yields N×qty candles/bulbs.
   armsMultiplier?: { label: string; count: number };
 }
@@ -18,7 +20,9 @@ export type ItemLookup = (variantId: string) => ItemInfo | undefined;
 export interface PackRow {
   variantId: string;
   label: string;
+  /** What the crew has to bring: a count, or the metres/square metres to cut. */
   quantity: number;
+  unit: MeasureUnit;
   derived?: { label: string; quantity: number };
 }
 
@@ -28,15 +32,15 @@ export interface PackGroup {
   rows: PackRow[];
 }
 
-export function packingList(doc: DesignDocumentContent, lookup: ItemLookup): PackGroup[] {
-  const totals = new Map<string, number>();
-  for (const p of doc.placements) totals.set(p.variantId, (totals.get(p.variantId) ?? 0) + p.quantity);
+export function packingList(doc: DesignDocumentContent, lookup: ItemLookup, ctx?: MeasureContext): PackGroup[] {
+  const measureCtx: MeasureContext = ctx ?? { unitOf: (id) => lookup(id)?.priceUnit ?? "unit" };
+  const totals = measureTotals(doc, measureCtx);
 
   const groups = new Map<string, PackGroup & { order: number }>();
   for (const [variantId, quantity] of totals) {
     const info = lookup(variantId);
     if (!info) continue;
-    const row: PackRow = { variantId, label: info.variantLabel, quantity };
+    const row: PackRow = { variantId, label: info.variantLabel, quantity, unit: info.priceUnit ?? "unit" };
     if (info.armsMultiplier) {
       row.derived = { label: info.armsMultiplier.label, quantity: info.armsMultiplier.count * quantity };
     }

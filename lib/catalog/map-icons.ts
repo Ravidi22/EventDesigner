@@ -1,6 +1,6 @@
 // Curated glyphs offered for a catalog item's map appearance. `name` is the stable
 // string stored on Product.appearance.icon; the component is used both in the DOM
-// picker and (via KonvaIcon) on the Konva map.
+// picker and, at footprint scale, on the plan itself (app/(app)/studio/canvas-stage.tsx).
 import {
   Armchair, Table2, Lightbulb, Flame, Frame, Square, Flower2, Wine, Martini,
   Sofa, Speaker, Music, Utensils, Coffee, Gift, Sparkles, Cake, TreePine,

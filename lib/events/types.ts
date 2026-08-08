@@ -5,19 +5,7 @@
 // in the hall next to it, and both are regions of the same site plan (lib/venues). It stores their
 // ids and resolves the geometry live — nothing about the walls is copied onto the event, so a wall
 // corrected at the venue reaches every event standing on it.
-
-// The guided meeting flow, in order (F-1.1–F-1.9).
-export const FLOW_STEPS = [
-  { id: "details", label: "פרטי אירוע" },
-  { id: "gallery1", label: "גלריה — השראה" },
-  { id: "waiting", label: "ממתין לסקיצה" },
-  { id: "import", label: "ייבוא הסקיצה" },
-  { id: "gallery2", label: "גלריה — בחירה" },
-  { id: "placement", label: "שיבוץ" },
-  { id: "quote", label: "הצעת מחיר" },
-] as const;
-
-export type FlowStepId = (typeof FLOW_STEPS)[number]["id"];
+import { DEFAULT_FLOW, stepAt, type MeetingStepId, type StepStatus } from "@/lib/meeting/steps";
 
 export interface EventSummary {
   id: string;
@@ -36,31 +24,33 @@ export interface EventSummary {
    *  at the venue does not chase it, same trade as GalleryImage.productName. */
   zonesLabel: string;
   guests: number; // estimate (F-1.3)
-  step: number; // furthest flow step reached — index into FLOW_STEPS
+  /** Furthest meeting stage reached — an index into the studio's CONFIGURED flow
+   *  (lib/meeting/storage.ts), not into a fixed list. Always clamped on read: the designer may have
+   *  shortened the flow since this event was opened. */
+  step: number;
   quoteSentAt?: number; // stamped when a quote is issued (F-1.9)
   archived?: boolean;
   createdAt: number;
 }
 
-export type EventStatus = "details" | "gallery" | "waiting" | "design" | "sent" | "archived";
+/** The stage statuses, plus the two that are facts about the event rather than about its stage. */
+export type EventStatus = StepStatus | "sent" | "archived";
 
 export const STATUS_LABEL: Record<EventStatus, string> = {
   details: "פרטים",
   gallery: "גלריה",
-  waiting: "ממתין לסקיצה",
   design: "בעיצוב",
   sent: "נשלחה הצעה",
   archived: "בארכיון",
 };
 
-// F-1.1: the dashboard status is a pure derivation of flow progress.
-export function eventStatus(e: EventSummary): EventStatus {
+// F-1.1: the dashboard status is a pure derivation of flow progress — the stage the event is parked
+// on says what it is. The flow is a parameter, not a constant: a studio that reordered its meeting
+// (Settings → מצב פגישה) must read its own list here, so callers hand it in (useMeetingFlow).
+export function eventStatus(e: EventSummary, flow: readonly MeetingStepId[] = DEFAULT_FLOW): EventStatus {
   if (e.archived) return "archived";
   if (e.quoteSentAt) return "sent";
-  if (e.step <= 0) return "details";
-  if (e.step === 1) return "gallery";
-  if (e.step === 2) return "waiting";
-  return "design";
+  return stepAt(flow, e.step).status;
 }
 
 // Chip tone per stage — shared by every surface that shows a status (the event grid on
@@ -70,15 +60,17 @@ export type StatusTone = "neutral" | "accent" | "success" | "warn";
 export const STATUS_TONE: Record<EventStatus, StatusTone> = {
   details: "neutral",
   gallery: "neutral",
-  waiting: "warn",
   design: "accent",
   sent: "success",
   archived: "neutral",
 };
 
-// F-1.1: progress = the furthest flow step reached, shown against the whole flow.
-export function eventProgress(e: EventSummary): number {
-  return Math.round((Math.min(e.step, FLOW_STEPS.length - 1) / (FLOW_STEPS.length - 1)) * 100);
+// F-1.1: progress = the furthest stage reached, against the length of the studio's own flow. A
+// one-stage flow is either 0% or done — never a division by zero.
+export function eventProgress(e: EventSummary, flow: readonly MeetingStepId[] = DEFAULT_FLOW): number {
+  const last = flow.length - 1;
+  if (last <= 0) return e.step > 0 ? 100 : 0;
+  return Math.round((Math.min(e.step, last) / last) * 100);
 }
 
 // 2-letter monogram for avatar chips, derived (not stored).

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
+import { useMeetingFlow } from "@/lib/meeting/use-flow";
+import type { MeetingStepId } from "@/lib/meeting/steps";
 import { IconButton } from "@/components/icon-button";
 import {
   addDays,
@@ -38,6 +40,9 @@ export function CalendarCard({
   const [mode, setMode] = useState<Mode>("week");
   const [anchor, setAnchor] = useState(() => new Date());
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
+  // Read once here, not in each card: a month view renders dozens of them, all measuring progress
+  // against the same configured meeting flow.
+  const flow = useMeetingFlow();
   const rootRef = useRef<HTMLDivElement>(null);
   const today = new Date();
   const todayIso = toISODate(today);
@@ -174,7 +179,7 @@ export function CalendarCard({
 
               <div className="flex flex-col gap-1.5">
                 {visible.map((e) => (
-                  <EventCard key={e.id} event={e} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
+                  <EventCard key={e.id} event={e} flow={flow} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
                 ))}
                 {overflow > 0 && (
                   <button
@@ -194,6 +199,7 @@ export function CalendarCard({
                       <EventCard
                         key={e.id}
                         event={e}
+                        flow={flow}
                         compact
                         onClick={() => {
                           onOpenEvent(e);
@@ -217,9 +223,9 @@ export function CalendarCard({
   );
 }
 
-function EventCard({ event: e, compact, onClick }: { event: EventSummary; compact: boolean; onClick: () => void }) {
-  const progress = eventProgress(e);
-  const status = eventStatus(e);
+function EventCard({ event: e, flow, compact, onClick }: { event: EventSummary; flow: MeetingStepId[]; compact: boolean; onClick: () => void }) {
+  const progress = eventProgress(e, flow);
+  const status = eventStatus(e, flow);
   const theme = STATUS_CARD_THEME[STATUS_TONE[status]];
 
   if (compact) {

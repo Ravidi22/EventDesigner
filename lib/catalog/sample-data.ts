@@ -19,9 +19,9 @@ export const SAMPLE_PRODUCTS: Product[] = [
     unitPrice: 45,
     styleTags: ["קלאסי", "זוהר"],
     variants: [
-      { id: id(), name: "זהב" },
-      { id: id(), name: "שמנת" },
-      { id: id(), name: "בורדו", unitPrice: 52 },
+      { id: id(), name: "זהב", swatch: "#c9a227" },
+      { id: id(), name: "שמנת", swatch: "#f2e8d5" },
+      { id: id(), name: "בורדו", swatch: "#6d1f2e", unitPrice: 52 },
     ],
   },
   {
@@ -90,12 +90,16 @@ export const SAMPLE_PRODUCTS: Product[] = [
     name: "שטיח פרחוני",
     category: "rugs",
     layer: "floor",
-    dimensions: { widthMm: 3000, depthMm: 2000, heightMm: 12 },
+    dimensions: { heightMm: 12 }, // laid to fit — the size is drawn per event
     categoryFields: {},
-    spec: "3×2 מ׳, גוון ירוק",
+    spec: "אריגה צפופה, נפרש לפי המידה",
     unitPrice: 150,
+    priceUnit: "m2",
     styleTags: ["טרופי", "כפרי"],
-    variants: [],
+    variants: [
+      { id: id(), name: "ירוק זית", swatch: "#5b6b3a" },
+      { id: id(), name: "חול", swatch: "#d8c8a9" },
+    ],
   },
   {
     id: id(),
@@ -156,7 +160,7 @@ export const SAMPLE_PRODUCTS: Product[] = [
     unitPrice: 22,
     styleTags: ["טרופי", "כפרי"],
     variants: [
-      { id: id(), name: "עלים" },
+      { id: id(), name: "עלים", swatch: "#4f7a46" },
       { id: id(), name: "מונסטרה" },
     ],
   },
@@ -267,15 +271,19 @@ export const SAMPLE_PRODUCTS: Product[] = [
     id: id(),
     name: "וילון קטיפה",
     category: "curtains",
-    layer: "floor",
-    dimensions: { widthMm: 3000, depthMm: 100, heightMm: 2800 },
+    layer: "ceiling",
+    // No width or depth: a drape is cut to the wall it covers (CategoryDef.sizing "stretch").
+    // Height is real stock — this one reaches 2.8m.
+    dimensions: { heightMm: 2800 },
     categoryFields: {},
     spec: "קטיפה כבדה, תלייה מרצפה לתקרה",
-    unitPrice: 60,
+    unitPrice: 180,
+    priceUnit: "m", // ₪180 the running metre — the quote multiplies by the run actually drawn
     styleTags: ["קלאסי", "זוהר"],
     variants: [
-      { id: id(), name: "שמנת" },
-      { id: id(), name: "בורדו" },
+      { id: id(), name: "שמנת", swatch: "#efe6d6" },
+      { id: id(), name: "בורדו", swatch: "#6d1f2e" },
+      { id: id(), name: "אפור פחם", swatch: "#3f3b47" },
     ],
   },
   {

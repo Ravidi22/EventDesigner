@@ -45,7 +45,7 @@ export interface StructureEntrance {
 }
 
 // Fixed things a designer has to plan around and cannot move: the pool, a built stage, a permanent
-// bar. Real geometry, unlike the trees and parked cars in the iPlan render, which stay pixels in
+// bar. Real geometry, unlike the trees and parked cars in a traced floor plan, which stay pixels in
 // the underlay because nobody ever needs to place a table relative to a tree.
 export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other";
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { MapPin } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
+import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { toISODate, TONE_CLASS } from "./dashboard-view-utils";
 
 type Tab = "events" | "meetings";
@@ -22,6 +23,7 @@ export function TodayFocus({
   onOpenEvent: (e: EventSummary) => void;
 }) {
   const [tab, setTab] = useState<Tab>("events");
+  const flow = useMeetingFlow();
   const today = new Date();
   const todayIso = toISODate(today);
 
@@ -75,8 +77,8 @@ export function TodayFocus({
       ) : (
         <div className="flex flex-col gap-3">
           {shown.map((e) => {
-            const status = eventStatus(e);
-            const progress = eventProgress(e);
+            const status = eventStatus(e, flow);
+            const progress = eventProgress(e, flow);
             return (
               <button
                 key={e.id}

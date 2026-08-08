@@ -1,4 +1,4 @@
-import type { Dimensions, Product, Variant } from "./types";
+import type { Dimensions, PriceUnit, Product, Variant } from "./types";
 
 const cm = (mm: number) => {
   const v = mm / 10;
@@ -20,6 +20,20 @@ export function formatPrice(n?: number): string {
   return n == null ? "—" : `₪${n.toLocaleString("he-IL")}`;
 }
 
+// How much of a thing, in its own unit: countable items keep the "×3" the quote and packing list
+// have always shown, while the ones cut to fit read as the measurement they are.
+export function formatAmount(quantity: number, unit: PriceUnit = "unit"): string {
+  if (unit === "m") return `${quantity.toFixed(1)} מ׳`;
+  if (unit === "m2") return `${quantity.toFixed(1)} מ״ר`;
+  return `×${quantity}`;
+}
+
+/** A price with what it is per — "₪180 למטר". */
+export function formatUnitPrice(n: number | undefined, unit: PriceUnit = "unit"): string {
+  const price = formatPrice(n);
+  return n == null || unit === "unit" ? price : `${price} ${unit === "m" ? "למטר" : 'למ"ר'}`;
+}
+
 // A variant inherits the product price when it has none of its own (F-2.4).
 export function variantPrice(product: Product, variant: Variant): number | undefined {
   return variant.unitPrice ?? product.unitPrice;
@@ -36,5 +50,10 @@ if ((import.meta as { main?: boolean }).main) {
   const p = { unitPrice: 45 } as Product;
   assert(variantPrice(p, { id: "v", name: "x" }) === 45, "variant inherits");
   assert(variantPrice(p, { id: "v", name: "x", unitPrice: 52 }) === 52, "variant overrides");
+  assert(formatAmount(3) === "×3", "countable items keep the multiplication sign");
+  assert(formatAmount(14, "m") === "14.0 מ׳", "metres read as metres");
+  assert(formatAmount(7.5, "m2") === "7.5 מ״ר", "square metres too");
+  assert(formatUnitPrice(180, "m") === "₪180 למטר", "a per-metre price says so");
+  assert(formatUnitPrice(45) === "₪45", "a plain price is unchanged");
   console.log("format self-check passed");
 }

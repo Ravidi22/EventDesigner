@@ -4,17 +4,27 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { packingList } from "@/lib/outputs/aggregate";
-import { itemLookup } from "@/lib/outputs/lookup";
+import { itemLookup, measureContext } from "@/lib/outputs/lookup";
+import { activeEvent } from "@/lib/events/storage";
+import { eventPlan } from "@/lib/events/plan";
+import type { VenueStructure } from "@/lib/venues/structure";
 import { loadSpares, saveSpare, type Spares } from "@/lib/outputs/storage";
+import { formatAmount } from "@/lib/catalog/format";
 import { NumberField } from "@/components/number-field";
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
 
 // F-6.3: manual spares per row, persisted with the event — so the "no manual fixes" success
 // metric covers reserves too, instead of pen-on-paper additions.
 export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; eventId: string | null }) {
   const [spares, setSpares] = useState<Spares>({});
+  // Same reason as the quote: a drape's metres come from the wall it hangs on, which lives at the
+  // venue rather than in the document the crew's list is aggregated from.
+  const [structure, setStructure] = useState<VenueStructure | undefined>(undefined);
 
   useEffect(() => {
     if (eventId) setSpares(loadSpares(eventId));
+    setStructure(eventPlan(activeEvent()).structure);
   }, [eventId]);
 
   const setSpare = (variantId: string, v: number) => {
@@ -22,8 +32,13 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
     setSpares(saveSpare(eventId, variantId, v, spares));
   };
 
-  const groups = packingList(doc, itemLookup);
-  const total = groups.reduce((s, g) => s + g.rows.reduce((n, r) => n + r.quantity + (spares[r.variantId] ?? 0), 0), 0);
+  const groups = packingList(doc, itemLookup, measureContext(structure));
+  // Countable rows only: metres of drape and square metres of carpet are not "items", and adding
+  // them into one headline number would make it mean nothing.
+  const total = groups.reduce(
+    (s, g) => s + g.rows.reduce((n, r) => (r.unit === "unit" ? n + r.quantity + (spares[r.variantId] ?? 0) : n), 0),
+    0,
+  );
 
   if (groups.length === 0) {
     return (
@@ -67,7 +82,7 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                         </span>
                       )}
                     </td>
-                    <td className="nums py-2 text-ink">×{r.quantity}</td>
+                    <td className="nums py-2 text-ink">{formatAmount(r.quantity, r.unit)}</td>
                     <td className="py-2">
                       <NumberField
                         size="sm"
@@ -81,7 +96,7 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                         className="w-14 print:border-transparent"
                       />
                     </td>
-                    <td className="nums py-2 font-semibold text-ink">×{r.quantity + spare}</td>
+                    <td className="nums py-2 font-semibold text-ink">{formatAmount(round1(r.quantity + spare), r.unit)}</td>
                     <td className="py-2 text-center">
                       <span className="inline-block h-4 w-4 rounded-[3px] border border-ink-soft align-middle" aria-hidden="true" />
                     </td>

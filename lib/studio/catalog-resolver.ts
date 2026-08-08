@@ -4,8 +4,9 @@
 // The index includes ARCHIVED products/variants on purpose (F-4.5) — a design document
 // must always resolve, even when the item is hidden from the catalog.
 import type { Product, Variant } from "@/lib/catalog/types";
-import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
+import { CATEGORY_BY_ID, type Anchor, type Sizing } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
 import { tableAreaMm2 } from "./geometry";
 
@@ -16,6 +17,12 @@ export interface Resolved {
   category: string;
   price?: number;
   footprintMm2: number; // 0 for items that don't consume table area (e.g. tablecloths)
+  /** How this item behaves on the plan — lifted off its category so the canvas can ask one
+   *  question of one object instead of walking product → category itself at every node. */
+  anchor: Anchor;
+  sizing: Sizing;
+  /** The shade's actual colour, when the designer gave it one (F-4.2). */
+  swatch?: string;
 }
 
 export function defaultVariantId(product: Product): string {
@@ -39,7 +46,14 @@ function ensureIndex(): Map<string, Resolved> {
   if (builtVersion === catalogVersion && index.size > 0) return index;
   index = new Map();
   for (const product of loadProducts()) {
-    const base = { product, category: product.category, footprintMm2: footprint(product) };
+    const cat = CATEGORY_BY_ID[product.category];
+    const base = {
+      product,
+      category: product.category,
+      footprintMm2: footprint(product),
+      anchor: cat?.anchor ?? ("free" as Anchor),
+      sizing: cat?.sizing ?? ("fixed" as Sizing),
+    };
     index.set(product.id, { ...base, label: product.name, price: product.unitPrice });
     for (const variant of product.variants) {
       index.set(variant.id, {
@@ -47,6 +61,7 @@ function ensureIndex(): Map<string, Resolved> {
         variant,
         label: `${product.name} · ${variant.name}`,
         price: variantPrice(product, variant),
+        swatch: variant.swatch,
       });
     }
   }
@@ -56,6 +71,22 @@ function ensureIndex(): Map<string, Resolved> {
 
 export function resolve(variantId: string): Resolved | undefined {
   return ensureIndex().get(variantId);
+}
+
+/** The cover a table is wearing — one per table by definition, since a cover IS the table's
+ *  surface (CategoryDef.anchor === "table"). */
+export function coverOn(doc: DesignDocumentContent, tableId: string): Placement | undefined {
+  return doc.placements.find(
+    (p) => p.layer === "table" && p.tableId === tableId && resolve(p.variantId)?.anchor === "table",
+  );
+}
+
+/** Every shade of the product this variant belongs to — what a colour picker offers, and what a
+ *  bulk re-colour has to replace on the tables it reaches. */
+export function shadesOf(variantId: string): { id: string; name: string; swatch?: string }[] {
+  const product = resolve(variantId)?.product;
+  if (!product) return [];
+  return product.variants.filter((v) => !v.archived).map((v) => ({ id: v.id, name: v.name, swatch: v.swatch }));
 }
 
 // Fraction of a table's area consumed by the items placed on it (F-5.4: table-area only —
