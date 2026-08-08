@@ -2,6 +2,7 @@
 // Pure aggregation with an injected lookup, so this file has no runtime dependency on the
 // catalog graph and the self-check runs under node (same shape as aggregate.ts).
 import type { DesignDocumentContent } from "@/lib/design-document/types";
+import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 
 export interface QuoteItemInfo {
   label: string;
@@ -9,6 +10,7 @@ export interface QuoteItemInfo {
   categoryLabel: string;
   categoryOrder: number;
   unitPrice?: number; // undefined = no price set on the product/variant
+  priceUnit?: MeasureUnit; // what unitPrice is per; absent = "unit"
 }
 
 export type QuoteLookup = (variantId: string) => QuoteItemInfo | undefined;
@@ -16,7 +18,10 @@ export type QuoteLookup = (variantId: string) => QuoteItemInfo | undefined;
 export interface QuoteLine {
   variantId: string;
   label: string;
+  /** Billable amount: a count for ordinary items, metres or square metres for the ones drawn to
+   *  fit (lib/design-document/measure.ts). The unit travels with it so the line can say so. */
   quantity: number;
+  priceUnit: MeasureUnit;
   unitPrice?: number;
   lineTotal: number;
   priced: boolean; // false when the item has no price — surfaced, never silently zeroed
@@ -31,9 +36,12 @@ export interface QuoteGroup {
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-export function quoteGroups(doc: DesignDocumentContent, lookup: QuoteLookup): QuoteGroup[] {
-  const totals = new Map<string, number>();
-  for (const p of doc.placements) totals.set(p.variantId, (totals.get(p.variantId) ?? 0) + p.quantity);
+/** A quote over the document. `ctx` measures the stretched items — hand it the venue plan and a
+ *  drape bills the metres it actually covers; omit it and everything is counted, which is what a
+ *  caller with no plan loaded can honestly say. */
+export function quoteGroups(doc: DesignDocumentContent, lookup: QuoteLookup, ctx?: MeasureContext): QuoteGroup[] {
+  const measureCtx: MeasureContext = ctx ?? { unitOf: (id) => lookup(id)?.priceUnit ?? "unit" };
+  const totals = measureTotals(doc, measureCtx);
 
   const groups = new Map<string, QuoteGroup & { order: number }>();
   for (const [variantId, quantity] of totals) {
@@ -41,7 +49,7 @@ export function quoteGroups(doc: DesignDocumentContent, lookup: QuoteLookup): Qu
     if (!info) continue;
     const priced = typeof info.unitPrice === "number";
     const lineTotal = round2((info.unitPrice ?? 0) * quantity);
-    const line: QuoteLine = { variantId, label: info.label, quantity, unitPrice: info.unitPrice, lineTotal, priced };
+    const line: QuoteLine = { variantId, label: info.label, quantity, priceUnit: info.priceUnit ?? "unit", unitPrice: info.unitPrice, lineTotal, priced };
     const g = groups.get(info.categoryId) ?? {
       categoryId: info.categoryId,
       label: info.categoryLabel,

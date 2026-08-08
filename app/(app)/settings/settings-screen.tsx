@@ -1,16 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Database, Share2, Store, UserRound, Users } from "lucide-react";
+import { Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
 import { BusinessSection } from "./business-section";
 import { AccountSection } from "./account-section";
+import { MeetingSection } from "./meeting-section";
 import { TeamSection } from "./team-section";
 import { SharingSection } from "./sharing-section";
 import { DataSection } from "./data-section";
 
-// Settings, in five sections along the axis each one belongs to:
+// Settings, in six sections along the axis each one belongs to:
 //
 //   העסק / החשבון שלי  — the studio and the person, one letterhead and one profile.
+//   מצב פגישה          — the shape of a client meeting (lib/meeting/steps.ts).
 //   צוות והרשאות       — who works in this business (lib/team/storage.ts).
 //   מתחמים ושיתוף      — who may open a property (lib/venues/access.ts).
 //   נתונים             — the backup, while the store is still this browser.
@@ -21,6 +23,7 @@ import { DataSection } from "./data-section";
 const SECTIONS = [
   { id: "business", label: "העסק", icon: Store },
   { id: "account", label: "החשבון שלי", icon: UserRound },
+  { id: "meeting", label: "מצב פגישה", icon: ListChecks },
   { id: "team", label: "צוות והרשאות", icon: Users },
   { id: "sharing", label: "מתחמים ושיתוף", icon: Share2 },
   { id: "data", label: "נתונים", icon: Database },
@@ -74,6 +77,7 @@ export function SettingsScreen() {
       <div className="min-w-0 flex-1">
         {section === "business" && <BusinessSection />}
         {section === "account" && <AccountSection />}
+        {section === "meeting" && <MeetingSection />}
         {section === "team" && <TeamSection />}
         {section === "sharing" && <SharingSection />}
         {section === "data" && <DataSection />}

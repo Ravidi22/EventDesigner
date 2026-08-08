@@ -8,11 +8,14 @@
 // as one continuous plan instead of one drawing per room.
 import type { Point } from "@/lib/studio/hall";
 
-// The designer's own iPlan render/PDF, placed and scaled over the plan so zone outlines can be
-// traced straight off it. Optional: a venue can be drawn from scratch with the wall tools instead.
-// Geometry is in venue mm, same as everything else on the plan.
-// ponytail: fileName only for now — real image pixels arrive with file storage, same staging as
-// SketchRef in the design document.
+// A floor plan the designer already has — the venue's own PDF, a photo of a printout — placed and
+// scaled over the plane so zone outlines can be traced straight off it. Optional: a venue can be
+// drawn from scratch with the wall tools instead. Geometry is in venue mm, like everything else here.
+//
+// This is the ONLY place an imported drawing still belongs. The meeting used to import a per-event
+// table layout drawn in an outside tool and align it over the hall; tables are drawn in the meeting
+// itself now (lib/meeting/steps.ts — סקיצת אולם), so nothing per-event is imported any more.
+// ponytail: fileName only for now — real image pixels arrive with file storage.
 export interface PlanUnderlay {
   fileName: string;
   x: number;

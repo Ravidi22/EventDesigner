@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import type { Product, Variant, MapAppearance } from "@/lib/catalog/types";
+import { PRICE_UNIT_LABEL, type Product, type Variant, type MapAppearance, type PriceUnit } from "@/lib/catalog/types";
 import { resolveFootprint } from "@/lib/studio/footprint";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/sample-data";
@@ -15,6 +15,7 @@ import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
+import { SwatchField } from "@/components/swatch-field";
 import { AppearancePreview } from "./appearance-preview";
 import { ShapeEditorModal } from "./shape-editor-modal";
 import { IconPicker } from "./icon-picker";
@@ -139,8 +140,12 @@ export function ProductDrawer({
     onClose();
   };
 
-  const showDiameter = category.dims === "round" || category.dims === "both";
-  const showBox = category.dims === "box" || category.dims === "both";
+  // A stretch category (a drape, a carpet) is cut or laid to whatever it has to cover, so it has
+  // no width or depth here — those are drawn per placement in the studio. Height still matters:
+  // a 2.8m drape and a 4m drape are different stock.
+  const stretch = category.sizing === "stretch";
+  const showDiameter = !stretch && (category.dims === "round" || category.dims === "both");
+  const showBox = !stretch && (category.dims === "box" || category.dims === "both");
 
   return (
     <dialog
@@ -207,6 +212,12 @@ export function ProductDrawer({
           <SectionDivider label="מידות (ס״מ)" />
 
           <fieldset>
+            {stretch && (
+              <p className="mb-3 rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+                {category.label} נמדדים על התוכנית, לא כאן — הגודל נקבע כשמותחים אותם באירוע, והמחיר
+                מחושב לפי מה שנפרש בפועל.
+              </p>
+            )}
             <div className="grid grid-cols-3 gap-3">
               {showDiameter && (
                 <NumberField label="קוטר" hideZero value={mmToCm(draft.dimensions.diameterMm)} onChange={(v) => setDim("diameterMm", v)} min={0} />
@@ -261,13 +272,27 @@ export function ProductDrawer({
           <div className="grid grid-cols-2 gap-3">
             <NumberField
               id="p-price"
-              label="מחיר ליחידה (₪)"
+              label={`מחיר ${PRICE_UNIT_LABEL[draft.priceUnit ?? "unit"]} (₪)`}
               min={0}
               hideZero
               placeholder="0"
               value={draft.unitPrice ?? 0}
               onChange={(v) => patch({ unitPrice: v || undefined })}
             />
+            <div>
+              <span className={fieldLabelClassName}>המחיר הוא</span>
+              <Select
+                value={draft.priceUnit ?? "unit"}
+                onChange={(v) => patch({ priceUnit: v === "unit" ? undefined : (v as PriceUnit) })}
+                aria-label="יחידת המחיר"
+                options={[
+                  { value: "unit", label: PRICE_UNIT_LABEL.unit },
+                  { value: "m", label: PRICE_UNIT_LABEL.m },
+                  { value: "m2", label: PRICE_UNIT_LABEL.m2 },
+                ]}
+                className="w-full"
+              />
+            </div>
             <TextField
               id="p-img"
               label="קישור תמונה"
@@ -393,7 +418,7 @@ export function ProductDrawer({
 
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <span className={fieldLabelClassName + " mb-0"}>וריאנטים (גוונים / גרסאות)</span>
+              <span className={fieldLabelClassName + " mb-0"}>גוונים וצבעים</span>
               <button
                 type="button"
                 onClick={addVariant}
@@ -405,12 +430,20 @@ export function ProductDrawer({
             </div>
             {draft.variants.filter((v) => !v.archived).length === 0 ? (
               <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted">
-                אין וריאנטים. הוסף גוונים כדי שרשימת הציוד תפריד ביניהם.
+                אין גוונים. הוסיפו את הצבעים שיש לכם — הם אלה שייבחרו על התוכנית ויופרדו ברשימת הציוד.
               </p>
             ) : (
               <div className="space-y-2">
                 {draft.variants.filter((v) => !v.archived).map((v) => (
                   <div key={v.id} className="flex items-center gap-2">
+                    {/* The shade itself. A swatch is optional — a variant can be a size or a finish
+                        rather than a colour — but when it is set, this is the colour the studio
+                        paints the item on the plan and the colour the picker shows the client. */}
+                    <SwatchField
+                      value={v.swatch}
+                      onChange={(swatch) => setVariant(v.id, { swatch })}
+                      label={`צבע הגוון ${v.name || ""}`.trim()}
+                    />
                     <TextField
                       value={v.name}
                       onChange={(name) => setVariant(v.id, { name })}

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import dynamic from "next/dynamic";
 import { dispatch, undo, redo, initHistory, type History } from "@/lib/design-document/actions";
 import type { Layer as LayerId } from "@/lib/design-document/types";
 import { sampleDoc } from "@/lib/studio/sample-doc";
@@ -9,22 +8,37 @@ import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
 import { loadDoc, saveDoc } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
-import { defaultVariantId } from "@/lib/studio/catalog-resolver";
+import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
+import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
+import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import { isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { Inspector } from "./inspector";
-import type { Selection } from "./canvas-stage";
-
-const CanvasStage = dynamic(() => import("./canvas-stage").then((m) => m.CanvasStage), {
-  ssr: false,
-  loading: () => <div className="flex h-full items-center justify-center text-sm text-muted">טוען את הסטודיו…</div>,
-});
+// A plain import now that the canvas is the app's shared SVG one: it renders on the server like any
+// other component, so there is nothing left to defer and no "loading the studio" flash to cover.
+import { CanvasStage, type Selection } from "./canvas-stage";
 
 const uid = () => crypto.randomUUID();
 
-export function StudioScreen() {
+/** The meeting draws the same document in two passes, so the studio has two narrower faces:
+ *
+ *  - `hall`    — סקיצת אולם: the furniture. Table tools on, rail cut to seating / stages / bars.
+ *  - `design`  — סקיצה עיצובית: the dressing. Table tools off, rail cut to the design departments.
+ *  - `full`    — /studio, after the meeting: every tool, the whole catalog.
+ *
+ *  One document, one canvas, one autosave underneath all three — a pass is a narrower set of tools
+ *  over the same drawing, never a separate drawing. */
+export type StudioMode = "full" | "hall" | "design";
+
+const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = {
+  full: {},
+  hall: { groups: HALL_PASS_GROUPS, hint: "גרור שולחן, כיסא, במה או בר אל התוכנית. העיצוב עצמו — בשלב הבא." },
+  design: { groups: DESIGN_PASS_GROUPS, hint: "גרור פריט עיצוב. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה." },
+};
+
+export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   const [history, setHistory] = useState<History>(() => initHistory(sampleDoc()));
   const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
   const [selection, setSelection] = useState<Selection>(null);
@@ -77,15 +91,42 @@ export function StudioScreen() {
     hintTimer.current = setTimeout(() => setHint(null), 2600);
   };
 
+  // Where a dropped item lands depends on what it is (CategoryDef.anchor), not on where the pointer
+  // happened to be: a drape goes onto the nearest wall, a cloth onto the table under it, everything
+  // else stays exactly where it was let go.
   const dropProduct = (productId: string, x: number, y: number) => {
     const product = productById(productId);
     if (!product) return;
+    const cat = CATEGORY_BY_ID[product.category];
     const id = uid();
-    const base = { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1 };
-    if (product.layer === "table") {
+    const variantId = defaultVariantId(product);
+    const base = { id, variantId, layer: product.layer, quantity: 1, rotation: 0, scale: 1 };
+
+    if (cat?.anchor === "wall") {
+      const near = nearestWall(plan.structure, { x, y });
+      if (!near) {
+        showHint("אין קיר לתלות עליו — שרטטו את המתחם ב״אולמות״");
+        return;
+      }
+      // Across the whole wall, which is the normal case and the one worth defaulting to; the two
+      // end handles shorten it from there.
+      act({
+        type: "addPlacement",
+        placement: { ...base, position: { x, y }, span: { wallId: near.wallId, ...WHOLE_WALL } },
+      });
+    } else if (product.layer === "table") {
       const t = tableAt(doc, x, y);
       if (!t) {
         showHint("שחרר פריט שולחן על גבי שולחן");
+        return;
+      }
+      // A table wears ONE cloth: dropping a second onto a dressed table recolours the one that is
+      // already there rather than stacking. Not a remove+add — that would record the removal as a
+      // deliberate divergence and make the next "on all tables" skip this table (F-5.3).
+      const worn = cat?.anchor === "table" ? coverOn(doc, t.id) : undefined;
+      if (worn) {
+        act({ type: "setPlacementVariant", id: worn.id, variantId });
+        setSelection({ kind: "table", id: t.id });
         return;
       }
       act({ type: "addPlacement", placement: { ...base, tableId: t.id, position: { x: 0, y: 0 } } });
@@ -147,6 +188,20 @@ export function StudioScreen() {
     showHint(`הוחל על כל שולחנות ${table.type}`);
   };
 
+  // "על כל השולחנות" — the whole room in one cloth, whatever each table's type. `replaces` carries
+  // the product's other shades, so tables already dressed in gold are recoloured rather than given
+  // a second cloth: a table wears one.
+  const spreadCloth = (placementId: string) => {
+    const p = doc.placements.find((x) => x.id === placementId);
+    if (!p) return;
+    act({
+      type: "applyToAllTables",
+      placement: { variantId: p.variantId, layer: "table", quantity: p.quantity, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+      replaces: shadesOf(p.variantId).map((s) => s.id),
+    });
+    showHint(`${resolve(p.variantId)?.product.name ?? "המפה"} הוחלה על כל השולחנות`);
+  };
+
   // Keyboard: undo/redo + delete (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -180,11 +235,12 @@ export function StudioScreen() {
         onToggleLayer={(l) => setLayerVisible((v) => ({ ...v, [l]: !v[l] }))}
         addingTable={addingTable}
         onSetAddingTable={setAddingTable}
+        showTableTools={mode !== "design"}
         saveState={saveState}
         onRetrySave={retrySave}
       />
       <div className="flex min-h-0 flex-1">
-        <CatalogRail />
+        <CatalogRail groups={RAIL[mode].groups} hint={RAIL[mode].hint} />
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={doc}
@@ -195,6 +251,11 @@ export function StudioScreen() {
             onSelect={setSelection}
             onMoveTable={(id, pos) => act({ type: "moveTable", id, position: pos })}
             onMovePlacement={(id, pos) => act({ type: "movePlacement", id, position: pos })}
+            onResizePlacement={(id, sizeMm, position) => {
+              act({ type: "resizePlacement", id, sizeMm });
+              act({ type: "movePlacement", id, position });
+            }}
+            onSpanPlacement={(id, span) => act({ type: "setPlacementSpan", id, span })}
             onDropProduct={dropProduct}
             onPlaceTable={placeTable}
           />
@@ -203,13 +264,19 @@ export function StudioScreen() {
               <Inspector
                 selection={selection}
                 doc={doc}
+                structure={plan.structure}
                 onClose={() => setSelection(null)}
                 onQuantity={changeQuantity}
                 onDelete={deleteSelection}
                 onSmartApply={smartApply}
+                onApplyToAllTables={spreadCloth}
+                onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
+                onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
+                onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicateTable={duplicateTable}
+                onRemovePlacement={(id) => act({ type: "removePlacement", id })}
               />
             </div>
           </div>

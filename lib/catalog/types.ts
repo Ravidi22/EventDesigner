@@ -19,14 +19,34 @@ export interface MapAppearance {
   style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
 }
 
+// A shade of a product — "זהב", "בורדו". This IS the colour list: a designer who stocks a drape in
+// four colours adds four variants, and a placement's `variantId` already records which one is on the
+// plan. `swatch` is what makes that colour real rather than a word — the picker shows it, the plan
+// draws the item in it. Absent = a version that isn't a colour (a size, a finish), which still reads
+// fine everywhere as a name.
 export interface Variant {
   id: string;
   name: string; // shade / version, e.g. "זהב"
+  swatch?: string; // CSS colour (hex) — the actual shade, for the picker and the plan
   imageUrl?: string;
   unitPrice?: number; // inherits the product price when undefined (F-4.2)
   archived?: boolean; // F-4.5: a placed variant is archived, never deleted
 }
 
+/** What a price is per. A drape bought by the running metre and stretched across a 14m wall is not
+ *  one unit of anything — the quote multiplies by what was actually drawn (lib/outputs/quote.ts).
+ *  Absent = "unit", which is every ordinary countable product. */
+export type PriceUnit = "unit" | "m" | "m2";
+
+export const PRICE_UNIT_LABEL: Record<PriceUnit, string> = {
+  unit: "ליחידה",
+  m: "למטר",
+  m2: 'למ"ר',
+};
+
+// A stretch product (a drape, a carpet — see CategoryDef.sizing) has no width or depth here: it is
+// cut or laid to whatever it has to cover, so its size is a property of the PLACEMENT, not of the
+// catalog entry. Height still matters — a 2.8m drape and a 4m drape are different stock.
 export interface Dimensions {
   diameterMm?: number;
   widthMm?: number;
@@ -46,6 +66,7 @@ export interface Product {
   categoryFields: Record<string, string | number>;
   spec?: string; // free specification text ("6 מודולים, 2 מדרגות")
   unitPrice?: number; // feeds the quote (F-4.6); never shown in operational output
+  priceUnit?: PriceUnit; // what unitPrice is per; absent = "unit"
   styleTags: string[];
   variants: Variant[];
   appearance?: MapAppearance; // absent → derived from dimensions (see resolveFootprint)

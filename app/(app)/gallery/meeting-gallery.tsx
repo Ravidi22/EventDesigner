@@ -13,14 +13,18 @@ type View = "presentations" | "folder";
 // F-2.3–F-2.4 meeting-mode gallery: the client-facing counterpart to the studio gallery
 // (gallery-screen.tsx). The designer flips through presentations with the client, likes land
 // in "תיק האירוע" (the per-event folder) — no create/edit here, that stays in the studio.
-export function MeetingGalleryScreen({ initialView = "presentations" }: { initialView?: View }) {
+//
+// One pass, opening on the presentations: the meeting used to run the gallery twice, once for
+// inspiration before the hall layout arrived and once to choose after it, and the second visit only
+// ever needed the folder tab this one already has.
+export function MeetingGalleryScreen() {
   const router = useRouter();
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [presentations, setPresentations] = useState<Presentation[]>([]);
   const [eventId, setEventId] = useState<string | null>(null);
   const [clientName, setClientName] = useState("");
   const [folder, setFolder] = useState<string[]>([]);
-  const [view, setView] = useState<View>(initialView);
+  const [view, setView] = useState<View>("presentations");
 
   // localStorage is client-only — hydrate after mount.
   useEffect(() => {

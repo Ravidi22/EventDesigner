@@ -54,7 +54,7 @@ import {
   type PlanSelection,
   type SelectionBox,
 } from "@/lib/venues/selection";
-import { ShapeCanvas, type CanvasFocus } from "@/components/shape-canvas";
+import { PlanCanvas, type CanvasFocus } from "@/components/plan-canvas";
 import { useHistory } from "@/lib/studio/use-history";
 import { isTypingTarget } from "@/lib/keyboard";
 import type { Point } from "@/lib/studio/hall";
@@ -273,7 +273,7 @@ export function HallsScreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [region, selection, deleteSelection]);
 
-  // ShapeCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
+  // PlanCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
   // against every existing corner — so this only decides what a click *means* in the current mode.
   // Nothing re-rounds that point: a length typed into the canvas's value box arrives exact, and a
   // second snap here would quietly throw those digits away.
@@ -466,7 +466,7 @@ export function HallsScreen() {
           {/* The app's one canvas. It owns the viewport, grid, pan/zoom, snapping, undo buttons and
               the wall graph itself; this screen supplies only the zone tints beneath, the doors
               above, and what a click means in the current mode. */}
-          <ShapeCanvas
+          <PlanCanvas
             mode={isSelectMode ? "edit" : "draw"}
             outline={[]}
             edgeCurves={[]}

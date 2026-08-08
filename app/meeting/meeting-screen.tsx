@@ -3,15 +3,16 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Check, ChevronRight, Hourglass, LogOut } from "lucide-react";
-import { FLOW_STEPS, type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
+import { Check, ChevronRight, LogOut } from "lucide-react";
+import { type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { activeEvent, reachStep, updateEvent } from "@/lib/events/storage";
 import { beginEvent } from "@/lib/events/begin";
-import { EMPTY_PLAN, eventPlan, labelForZones, type EventPlan } from "@/lib/events/plan";
-import { findVenue, loadActiveVenueId, loadVenues, saveVenue, zonesForVenue, type Venue, type Zone } from "@/lib/venues/storage";
+import { labelForZones } from "@/lib/events/plan";
+import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
+import { loadFlow } from "@/lib/meeting/storage";
+import { findVenue, loadActiveVenueId, loadVenues, zonesForVenue, type Venue, type Zone } from "@/lib/venues/storage";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
-import { emptyDocument } from "@/lib/design-document/types";
-import { loadDoc, saveDoc } from "@/lib/studio/storage";
+import { loadDoc } from "@/lib/studio/storage";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
 import { MultiSelect } from "@/components/multi-select";
@@ -21,27 +22,37 @@ import { DateField } from "@/components/date-field";
 import { fieldLabelClassName } from "@/components/control";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
-import { ImportFlow, type ImportResult } from "./import-flow";
 import { Quote } from "@/app/(app)/outputs/quote";
 
-// The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every step autosaves,
-// exiting mid-flow is always safe, and an existing event re-enters at its furthest step.
-// MEETING-MODE RULE: no prices or internal data on any step except the quote (step 7).
+// The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every stage autosaves,
+// exiting mid-flow is always safe, and an existing event re-enters at its furthest stage.
+//
+// The stages themselves are not written here — they come from the studio's configured flow
+// (Settings → מצב פגישה, lib/meeting/*). This screen only knows how to render each stage id and how
+// to walk a list, so a designer who drops the gallery or swaps the two sketches gets exactly that
+// meeting, and `event.step` keeps meaning "furthest reached" against whatever the list says today.
+//
+// MEETING-MODE RULE: no prices or internal data on any stage except the quote.
 export function MeetingScreen() {
   const router = useRouter();
   const params = useSearchParams();
+  const [flow, setFlow] = useState<MeetingStepId[]>(DEFAULT_FLOW);
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [view, setView] = useState(0);
   const [ready, setReady] = useState(false);
 
+  // The flow is read here rather than through useMeetingFlow: resuming has to land on the right
+  // stage on the first paint, and that needs the list and the event in the same pass.
   useEffect(() => {
+    const saved = loadFlow();
+    setFlow(saved);
     if (params.get("new") !== null) {
       setEvent(null);
       setView(0);
     } else {
       const ev = activeEvent();
       setEvent(ev);
-      setView(ev ? Math.min(ev.step, FLOW_STEPS.length - 1) : 0);
+      setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
     }
     setReady(true);
   }, [params]);
@@ -60,6 +71,9 @@ export function MeetingScreen() {
   if (!ready) return null;
 
   const furthest = event?.step ?? 0;
+  const at = Math.min(view, flow.length - 1);
+  const step = STEP_BY_ID[flow[at]];
+  const nextStep = flow[at + 1] ? STEP_BY_ID[flow[at + 1]] : null;
 
   return (
     <div dir="rtl" className="flex h-dvh flex-col bg-bg">
@@ -69,7 +83,7 @@ export function MeetingScreen() {
           {event && <span className="hidden text-sm text-muted sm:block">{zonesLabelOf(event)} · {formatEventDate(event.date)}</span>}
         </div>
 
-        <Stepper current={view} furthest={furthest} onJump={setView} />
+        <Stepper flow={flow} current={at} furthest={furthest} onJump={setView} />
 
         <Link
           href="/dashboard"
@@ -81,40 +95,63 @@ export function MeetingScreen() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-auto">
-        {view === 0 && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
-        {view === 1 && <MeetingGalleryScreen />}
-        {view === 2 && <WaitingStep clientName={event?.clientName ?? ""} />}
-        {view === 3 && <ImportStep event={event} onDone={() => advance(4)} onCancel={() => setView(2)} />}
-        {view === 4 && <MeetingGalleryScreen initialView="folder" />}
-        {view === 5 && (
+        {step.id === "details" && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
+        {/* Both sketches are the same document on the same canvas — a narrower set of tools each
+            (StudioMode), not a second drawing. */}
+        {step.id === "hall" && (
           <div className="h-full">
-            <StudioScreen />
+            <StudioScreen mode="hall" />
           </div>
         )}
-        {view === 6 && event && <QuoteStep event={event} />}
+        {step.id === "gallery" && <MeetingGalleryScreen />}
+        {step.id === "design" && (
+          <div className="h-full">
+            <StudioScreen mode="design" />
+          </div>
+        )}
+        {step.id === "quote" && event && <QuoteStep event={event} />}
       </main>
 
-      <FlowFooter view={view} onBack={() => setView(view - 1)} onContinue={() => advance(view + 1)} hasEvent={!!event} />
+      {/* The details form advances from its own submit button; every other stage advances from here. */}
+      {step.id !== "details" && !!event && (
+        <FlowFooter
+          nextLabel={nextStep ? `השלב הבא: ${nextStep.label}` : null}
+          onBack={() => setView(at - 1)}
+          onContinue={() => advance(at + 1)}
+          canBack={at > 0}
+        />
+      )}
     </div>
   );
 
-  // A freshly created event lands on the first gallery pass.
+  // A freshly created event opens on whatever the studio put after the details stage.
   function advanceFor(ev: EventSummary) {
-    const list = reachStep(ev.id, 1);
+    const next = Math.min(1, flow.length - 1);
+    const list = reachStep(ev.id, next);
     setEvent(list.find((e) => e.id === ev.id) ?? ev);
-    setView(1);
+    setView(next);
     router.replace("/meeting"); // drop ?new so a refresh resumes the event, not the blank form
   }
 }
 
-function Stepper({ current, furthest, onJump }: { current: number; furthest: number; onJump: (i: number) => void }) {
+function Stepper({
+  flow,
+  current,
+  furthest,
+  onJump,
+}: {
+  flow: MeetingStepId[];
+  current: number;
+  furthest: number;
+  onJump: (i: number) => void;
+}) {
   return (
     <ol className="hidden items-center gap-1 md:flex">
-      {FLOW_STEPS.map((s, i) => {
+      {flow.map((id, i) => {
         const reachable = i <= furthest;
         const state = i === current ? "current" : reachable ? "done" : "todo";
         return (
-          <li key={s.id} className="flex items-center">
+          <li key={id} className="flex items-center">
             <button
               type="button"
               disabled={!reachable}
@@ -130,9 +167,9 @@ function Stepper({ current, furthest, onJump }: { current: number; furthest: num
               }
             >
               {state === "done" && <Check className="h-3 w-3 text-accent" strokeWidth={2.5} />}
-              {s.label}
+              {STEP_BY_ID[id].label}
             </button>
-            {i < FLOW_STEPS.length - 1 && <span className="mx-0.5 h-px w-3 bg-border" aria-hidden />}
+            {i < flow.length - 1 && <span className="mx-0.5 h-px w-3 bg-border" aria-hidden />}
           </li>
         );
       })}
@@ -140,24 +177,24 @@ function Stepper({ current, furthest, onJump }: { current: number; furthest: num
   );
 }
 
-// Steps whose "continue" lives in the shared footer (the rest advance from their own CTA).
-const FOOTER_LABEL: Record<number, string> = {
-  1: "השלב הבא: ממתין לסקיצה",
-  2: "הסקיצה הגיעה — לייבוא",
-  4: "השלב הבא: שיבוץ בסטודיו",
-  5: "השלב הבא: סיכום והצעת מחיר",
-};
-
-function FlowFooter({ view, onBack, onContinue, hasEvent }: { view: number; onBack: () => void; onContinue: () => void; hasEvent: boolean }) {
-  const label = FOOTER_LABEL[view];
-  if (!label || !hasEvent) return null;
+function FlowFooter({
+  nextLabel,
+  onBack,
+  onContinue,
+  canBack,
+}: {
+  nextLabel: string | null;
+  onBack: () => void;
+  onContinue: () => void;
+  canBack: boolean;
+}) {
   return (
     <footer className="flex h-14 shrink-0 items-center justify-between border-t border-border bg-surface px-5">
-      <Button variant="ghost" onClick={onBack} disabled={view === 0}>
+      <Button variant="ghost" onClick={onBack} disabled={!canBack}>
         <ChevronRight className="h-4 w-4" strokeWidth={2} />
         לשלב הקודם
       </Button>
-      <Button onClick={onContinue}>{label}</Button>
+      {nextLabel && <Button onClick={onContinue}>{nextLabel}</Button>}
     </footer>
   );
 }
@@ -292,63 +329,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   );
 }
 
-// F-1.5: the app does nothing while iPlan happens outside — the event is parked.
-function WaitingStep({ clientName }: { clientName: string }) {
-  return (
-    <div className="mx-auto flex max-w-md flex-col items-center px-6 py-24 text-center">
-      <span className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-accent-tint text-accent">
-        <Hourglass className="h-6 w-6" strokeWidth={1.75} />
-      </span>
-      <h2 className="font-display text-h1 text-ink">ממתין לסקיצה</h2>
-      <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-        פריסת השולחנות של {clientName || "האירוע"} מעוצבת ב-iPlan, מחוץ למערכת. האירוע שמור וימתין כאן —
-        בין אם הסקיצה מגיעה בעוד דקות ובין אם בעוד ימים. כשהיא אצלכם, המשיכו לייבוא.
-      </p>
-      <p className="mt-6 text-xs text-muted">אפשר לצאת בבטחה — הכול נשמר.</p>
-    </div>
-  );
-}
-
-// F-1.6: bring THIS event's iPlan PDF in, align it over the venue plan, then place tables in the
-// studio (F-3.2–F-3.3). Everything lands on the event's own document (per-event keys — B).
-//
-// Calibration (F-3.4) is a property of the property: a venue whose plan was measured once needs no
-// second answer here, whatever zone this event stands in.
-function ImportStep({ event, onDone, onCancel }: { event: EventSummary | null; onDone: () => void; onCancel: () => void }) {
-  const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
-  useEffect(() => setPlan(eventPlan(event)), [event]);
-
-  const finish = (r: ImportResult) => {
-    const doc = loadDoc() ?? emptyDocument();
-    saveDoc({
-      ...doc,
-      sketch: r.sketch ?? undefined,
-      calibration: r.mmPerUnit ? { mmPerUnit: r.mmPerUnit } : doc.calibration,
-    });
-    if (r.mmPerUnit && event?.venueId) saveVenueScale(event.venueId, r.mmPerUnit);
-    onDone();
-  };
-
-  return (
-    <div className="h-full px-8 py-6">
-      <ImportFlow
-        plan={plan}
-        hasCalibration={plan.mmPerUnit !== 1}
-        onDone={finish}
-        onCancel={onCancel}
-      />
-    </div>
-  );
-}
-
-/** F-3.4: the measured scale belongs to the venue plan, not to this one event — the next event at
- *  the same property inherits it and is never asked again. */
-function saveVenueScale(venueId: string, mmPerUnit: number): void {
-  const venue = findVenue(venueId);
-  if (venue) saveVenue({ ...venue, plan: { ...venue.plan, mmPerUnit } });
-}
-
-// F-1.9: close the meeting with a quote — the one step where prices are shown on purpose.
+// F-1.9: close the meeting with a quote — the one stage where prices are shown on purpose.
 // The Quote component itself carries issue / re-issue / share (F-7.1–F-7.4).
 function QuoteStep({ event }: { event: EventSummary }) {
   const [doc] = useState(() => loadDoc());

@@ -244,11 +244,21 @@ function dragHandlers(
   };
 }
 
-// Direct-manipulation hall shape editor: click to draw walls one at a time (mode "draw"), then
-// drag vertices/wall-midpoints/bezier handles once the shape is closed (mode "edit"). Stage/bar
-// drop in from the StructureRail and can be dragged, rotated and resized in place; entrances drop
-// onto the nearest wall and slide along it, rendered as a real door gap + swing symbol.
-export function ShapeCanvas({
+// THE canvas. Every plan, map and footprint surface in the app is this component with different
+// layers hung off it — the hall editor, the studio's design surface, the catalog's shape editor —
+// so pan, zoom, fit, the grid, snapping and the millimetre world space are written once and behave
+// the same everywhere. Extend it; never hand-roll a second SVG next to it.
+//
+// Direct manipulation: click to draw walls one at a time (mode "draw"), then drag
+// vertices/wall-midpoints/bezier handles once the shape is closed (mode "edit"). Stage/bar drop in
+// from the StructureRail and can be dragged, rotated and resized in place; entrances drop onto the
+// nearest wall and slide along it, rendered as a real door gap + swing symbol.
+//
+// Everything editable is opt-in, and a host that omits a handler gets a surface that draws but does
+// not yield: leave out onSelectGraph/onMoveGraphNode and the walls have no corner handles and take
+// no clicks. That is exactly how the studio keeps a venue's structure fixed while an event is
+// designed inside it — by asking for less, not by passing a "readOnly" flag.
+export function PlanCanvas({
   mode,
   outline,
   edgeCurves,
@@ -287,6 +297,10 @@ export function ShapeCanvas({
   graphSelection = [],
   onSelectGraph,
   onMarquee,
+  onCanvasClick,
+  onDropAt,
+  cursor = "default",
+  ariaLabel = "תרשים האולם — עריכה",
   drawFrom,
   focus,
   padMm = PAD_MM,
@@ -355,6 +369,21 @@ export function ShapeCanvas({
   // selectable here belongs to the host — the graph is its data, and so is whatever it drew into
   // backdrop/overlay. Hit-testing it here would mean teaching the canvas what a zone is.
   onMarquee?: (box: { minX: number; minY: number; maxX: number; maxY: number }, additive: boolean) => void;
+  // A click on empty canvas in edit mode, in world mm — for a host whose current tool means "put one
+  // here" (the studio's click-to-place tables). It fires alongside the selection-clearing onSelect
+  // (null), not instead of it: what the click MEANS is the host's business, and a host with no tool
+  // armed simply ignores the point.
+  onCanvasClick?: (p: Point) => void;
+  // Something was dragged onto the canvas from outside it (the studio's catalog rail), reported at
+  // the world point it landed on. Supplying this is what turns on dragover/drop handling at all —
+  // the canvas never claims a drop a host isn't listening for.
+  onDropAt?: (e: React.DragEvent, p: Point) => void;
+  // Edit-mode cursor. A host holding an armed tool says so here rather than reaching over the
+  // canvas with a wrapper class, which the svg's own cursor would win against anyway.
+  cursor?: "default" | "crosshair";
+  /** What this surface IS, for screen readers — the same canvas is a hall plan on one screen and an
+   *  event's design on the next. */
+  ariaLabel?: string;
   // Where the rubber-band starts when there is no `outline` to hang it off — a graph host passes
   // the corner its current run reached. Ignored while an outline is being drawn.
   drawFrom?: Point | null;
@@ -393,7 +422,10 @@ export function ShapeCanvas({
   const entryRef = useRef<HTMLInputElement>(null);
   const didInit = useRef(false);
   const followed = useRef(0); // outline length the view last chased, so a point is only followed once
-  const pan = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  // `deferred` marks a pan that started as a plain drag on empty canvas rather than with the space
+  // key: it holds its anchor and takes no pointer capture until the drag threshold is crossed, so
+  // the click that ends a press-without-movement still reaches whatever is underneath.
+  const pan = useRef<{ x: number; y: number; moved: boolean; deferred?: boolean; ax: number; ay: number } | null>(null);
   const panMoved = useRef(false); // outlives the pan itself, so the click that ends one can't also drop a vertex
   // Marquee (rubber-band) select: a drag started on empty canvas in edit mode. Corners are tracked
   // in mm (via clientToMm) so the live rectangle renders directly in SVG user space; the client-px
@@ -412,6 +444,9 @@ export function ShapeCanvas({
   const groupRotate = useRef<{ pivot: Point; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
 
   const showDims = dimsOverride ?? mode === "draw";
+  // Whether a rubber-band drag has anywhere to report to. A host that takes no multi-selection gets
+  // drag-to-pan on empty canvas instead of a selection box that selects nothing.
+  const canMarquee = !!onSelectMany || !!onMarquee;
 
   // Where the view should sit when fitted: hug the shape, or hold a fixed frame while first drawing
   // (recomputing to hug a single point would fling it into the corner).
@@ -717,6 +752,7 @@ export function ShapeCanvas({
     if (mode !== "draw") {
       onSelect(null);
       onSelectGraph?.(null, false); // empty canvas clears the graph selection too, not just the outline's
+      onCanvasClick?.(clientToMm(e.clientX, e.clientY));
       return;
     }
     svgRef.current?.focus(); // typed lengths and Enter-to-close belong to the canvas from here on
@@ -843,10 +879,16 @@ export function ShapeCanvas({
         // host draws into backdrop/overlay. A drawing surface has nothing worth text-selecting, and
         // a drag across a label that highlights it instead of moving the plan reads as broken.
         "h-full w-full touch-none select-none focus:outline-none " +
-        (spaceHeld ? "cursor-grab" : hoverClose && closable ? "cursor-pointer" : mode === "draw" ? "cursor-crosshair" : "cursor-default")
+        (spaceHeld
+          ? "cursor-grab"
+          : hoverClose && closable
+            ? "cursor-pointer"
+            : mode === "draw" || cursor === "crosshair"
+              ? "cursor-crosshair"
+              : "cursor-default")
       }
       role="img"
-      aria-label="תרשים האולם — עריכה"
+      aria-label={ariaLabel}
       onClick={handleCanvasClick}
       onPointerDown={(e) => {
         panMoved.current = false;
@@ -854,8 +896,8 @@ export function ShapeCanvas({
           e.preventDefault();
           cancelFocus(); // the view is the user's again the instant they grab it
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
-          pan.current = { x: e.clientX, y: e.clientY, moved: false };
-        } else if (mode === "edit") {
+          pan.current = { x: e.clientX, y: e.clientY, moved: false, ax: e.clientX, ay: e.clientY };
+        } else if (mode === "edit" && canMarquee) {
           // A press that reached the svg missed every *draggable* handle (those stopPropagation),
           // but it may still be a plain click on something selectable in a host layer — a zone
           // tint, a wall, a door — since those have to let the press through or a marquee could
@@ -867,13 +909,29 @@ export function ShapeCanvas({
           // — the exact reason walls and zones read as unclickable.
           const p = clientToMm(e.clientX, e.clientY);
           marquee.current = { anchorClientX: e.clientX, anchorClientY: e.clientY, x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
+        } else if (mode === "edit") {
+          // No marquee to draw here (the host takes no multi-selection), so a drag on empty canvas
+          // means the only other thing it could mean: move the view. Same deferred capture as the
+          // marquee, for the same reason — a press that never travels is still a click.
+          pan.current = { x: e.clientX, y: e.clientY, moved: false, deferred: true, ax: e.clientX, ay: e.clientY };
         }
       }}
       onPointerMove={(e) => {
         if (pan.current) {
-          const dx = e.clientX - pan.current.x;
-          const dy = e.clientY - pan.current.y;
-          pan.current = { x: e.clientX, y: e.clientY, moved: true };
+          const p = pan.current;
+          if (p.deferred) {
+            // A press released off-canvas never reaches our onPointerUp while uncaptured — seeing
+            // the button already up is how that stranded gesture gets dropped.
+            if (e.buttons !== 1) { pan.current = null; return; }
+            if (!p.moved && Math.hypot(e.clientX - p.ax, e.clientY - p.ay) < DRAG_THRESHOLD_PX) return;
+            if (!p.moved) {
+              cancelFocus();
+              (e.currentTarget as Element).setPointerCapture(e.pointerId);
+            }
+          }
+          const dx = e.clientX - p.x;
+          const dy = e.clientY - p.y;
+          pan.current = { ...p, x: e.clientX, y: e.clientY, moved: true };
           setCenter((c) => ({ x: c.x - dx * mmPerPx, y: c.y - dy * mmPerPx }));
           return;
         }
@@ -902,7 +960,8 @@ export function ShapeCanvas({
       }}
       onPointerUp={(e) => {
         if (pan.current) {
-          (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+          const el = e.currentTarget as Element;
+          if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId); // a deferred pan may never have taken one
           panMoved.current = pan.current.moved;
         } else if (marquee.current) {
           const el = e.currentTarget as Element;
@@ -928,13 +987,29 @@ export function ShapeCanvas({
         const items = contextMenuItems?.(clientToMm(e.clientX, e.clientY)) ?? [];
         if (items.length) setMenu({ x: e.clientX, y: e.clientY, items });
       }}
+      onDragOver={
+        onDropAt
+          ? (e) => {
+              e.preventDefault(); // without this the browser refuses the drop outright
+              e.dataTransfer.dropEffect = "copy";
+            }
+          : undefined
+      }
+      onDrop={
+        onDropAt
+          ? (e) => {
+              e.preventDefault();
+              onDropAt(e, clientToMm(e.clientX, e.clientY));
+            }
+          : undefined
+      }
     >
       <defs>
-        <pattern id="shape-grid" width={gridMm} height={gridMm} patternUnits="userSpaceOnUse">
+        <pattern id="plan-canvas-grid" width={gridMm} height={gridMm} patternUnits="userSpaceOnUse">
           <path d={`M ${gridMm} 0 L 0 0 0 ${gridMm}`} fill="none" className="text-border" stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
         </pattern>
       </defs>
-      <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#shape-grid)" />
+      <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#plan-canvas-grid)" />
 
       {/* Host-supplied world-space layers (the venue plan's zone tints and fixed features), under
           everything the canvas draws itself. */}
