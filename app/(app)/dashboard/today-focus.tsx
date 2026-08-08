@@ -36,7 +36,9 @@ export function TodayFocus({
     // (no grain, no radial blooms: those are tuned for a large hero and just read as noise
     // at card size). A plain two-stop gradient in the accent/accent-deep range, dark enough
     // throughout that white text always clears AA (DESIGN.md: accent vs. white is 5.7:1).
-    <div className="flex h-fit flex-col gap-4 rounded-lg bg-[linear-gradient(150deg,#6d55bd,#4b3a8c)] p-5 shadow-lifted">
+    // No `h-fit`: this card stretches to the dashboard grid row so it stays level with
+    // EventStats beside it (which does the same) instead of each sizing to its own content.
+    <div className="flex flex-col gap-4 rounded-lg bg-[linear-gradient(150deg,#6d55bd,#4b3a8c)] p-5 shadow-lifted">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="font-display text-h2 text-canvas">פוקוס היום</h3>
@@ -71,7 +73,7 @@ export function TodayFocus({
       </div>
 
       {shown.length === 0 ? (
-        <p className="py-8 text-center text-sm text-canvas/80">
+        <p className="flex flex-1 items-center justify-center py-8 text-center text-sm text-canvas/80">
           {tab === "events" ? "אין אירועים מתקיימים היום." : "אין פגישות מתוכננות להיום."}
         </p>
       ) : (

@@ -30,6 +30,10 @@ export function EventDetailDrawer({
   onContinue: (e: EventSummary) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Every hook stays above the `!event` bail-out below — this component renders with a null event
+  // whenever the drawer is closed, so a hook called after the early return would appear and
+  // disappear with the selection and trip React's "order of Hooks changed" error.
+  const flow = useMeetingFlow();
 
   useEffect(() => {
     const d = ref.current;
@@ -40,7 +44,6 @@ export function EventDetailDrawer({
 
   if (!event) return null;
 
-  const flow = useMeetingFlow();
   const status = eventStatus(event, flow);
   const progress = eventProgress(event, flow);
   // The event's zones under the venue that owns them — "חוות רונית אמארה · אולם גדול · חופה".

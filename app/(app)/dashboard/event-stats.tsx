@@ -42,7 +42,7 @@ export function EventStats({ events }: { events: EventSummary[] }) {
   }, [events, rangeDays, flow]);
 
   return (
-    <div className="flex h-fit flex-col gap-4 rounded-lg border border-border bg-surface p-5">
+    <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="font-display text-h2 text-ink">סטטיסטיקת אירועים</h3>
         <Select
