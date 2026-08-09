@@ -1,4 +1,39 @@
-// Data model — core entities (docs/02 §4). Every table carries organizationId (ADR-2).
+// Data model — the tables behind lib/*/storage.ts.
+//
+// THE RULE OF THIS FILE: the TypeScript types in lib/*/types.ts are the source of truth, and every
+// column here exists to hold one of them. When the two disagree, this file is what's wrong — the
+// app has been maintained continuously and the schema had not, which is how it drifted a whole
+// product model behind (a PDF-import table that no longer has a feature, an events table missing
+// ten of the fields the meeting form collects, and no table at all for the gallery). Each block
+// below names the type it carries, so the next drift is visible instead of silent.
+//
+// ADR-2: every table carries organizationId and every query filters by it. The one deliberate
+// exception is venue_grants, which exists to cross that line — see its own note.
+//
+// Three decisions worth stating, because each one departs from a default:
+//
+//  1. PRIMARY KEYS ARE UUIDv4, NOT `bigint identity`. Postgres guidance prefers sequential keys
+//     (random UUIDs fragment the index), and it is right for tables that grow to millions. It
+//     loses here because Eve's ids are minted in the BROWSER: the canvas creates a table, selects
+//     it, and lets the designer drag it before any server round-trip has happened
+//     (crypto.randomUUID() in studio-screen.tsx). Server-assigned ids would mean a placeholder id
+//     and a reconciliation pass on every optimistic edit. The tables this touches top out in the
+//     tens of thousands of rows for a studio, where the fragmentation cost is not measurable.
+//
+//  2. NO GIN INDEXES ON THE BIG JSONB COLUMNS (design_documents.content, venues.plan,
+//     venue_structures.structure). GIN pays off when you query INTO a document; every one of these
+//     is read and written whole, as one value, by exactly one screen. An index would be write cost
+//     with no read to earn it back. If a query ever reaches inside one of them, that is the moment
+//     to add the index — not now.
+//
+//  3. RLS IS NOT DEFINED HERE YET. Row-level security is how ADR-2 actually gets enforced, and its
+//     policies key on the signed-in user — which does not exist until auth lands. A policy written
+//     against an auth function that isn't wired yet cannot be tested, and an untested RLS policy is
+//     a data leak with a false sense of safety. So: policies land WITH auth, in the same change, on
+//     these tables. ⚠ Until then the org filter in the server actions is the ONLY tenant boundary,
+//     which is precisely the "application-level filtering only" anti-pattern — acceptable strictly
+//     because there is one organization and no public signup, and not a day longer.
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -6,30 +41,53 @@ import {
   text,
   integer,
   numeric,
+  boolean,
   jsonb,
+  date,
+  time,
   timestamp,
+  primaryKey,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
+import type { MapAppearance } from "@/lib/catalog/types";
+import type { VenuePlan } from "@/lib/venues/types";
+import type { VenueStructure } from "@/lib/venues/structure";
+import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
+import type { ElementStyle } from "@/lib/element-style";
+import type { MeetingStepId } from "@/lib/meeting/steps";
 
-// Which layer of the room a product lives on (F-2.2).
+// ── Enums ──────────────────────────────────────────────────────────────────────────────────────
+// Which layer of the room a product lives on (Product.layer).
 export const layerEnum = pgEnum("layer", ["table", "floor", "ceiling"]);
-export const mapSourceEnum = pgEnum("map_source", ["template", "pdf"]);
+// What a price is per (Product.priceUnit) — a drape sold by the running metre is not "one unit".
+export const priceUnitEnum = pgEnum("price_unit", ["unit", "m", "m2"]);
+// Who may see a catalog item (Product.visibility). `private` is the whole catalog today: the
+// column exists so that publishing an item is a per-product decision the designer makes
+// deliberately, never a side effect of some other setting.
+export const visibilityEnum = pgEnum("product_visibility", ["private", "public"]);
 // What a named region of a venue is (lib/venues/zone.ts).
 export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
-export const verificationEnum = pgEnum("verification_state", ["draft", "verified"]);
-// People (F-8.2). Two ladders, because they answer two different questions: what you are inside
-// this studio (lib/team/storage.ts), and what you may do to one property (lib/venues/access.ts).
+export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
+// People. Two ladders, because they answer two different questions: what you are inside this
+// studio (lib/team/storage.ts), and what you may do to one property (lib/venues/access.ts).
 export const studioRoleEnum = pgEnum("studio_role", ["owner", "designer", "crew"]);
 export const venueRoleEnum = pgEnum("venue_role", ["viewer", "editor", "manager"]);
 export const grantKindEnum = pgEnum("grant_kind", ["member", "guest"]);
+// One state, two words in the app: StudioMember calls it "invited", VenueGrant calls it "pending".
+// They mean the same thing — invitation sent, not yet accepted — so there is one enum, and the
+// mapping layer picks the word its screen uses.
 export const inviteStateEnum = pgEnum("invite_state", ["pending", "active"]);
 
+// ── Column helpers ─────────────────────────────────────────────────────────────────────────────
 const orgId = () => uuid("organization_id").notNull();
 const id = () => uuid("id").primaryKey().defaultRandom();
 const created = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updated = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
+
+// ── The tenant and its people ──────────────────────────────────────────────────────────────────
 
 export const organizations = pgTable("organizations", {
   id: id(),
@@ -37,6 +95,7 @@ export const organizations = pgTable("organizations", {
   createdAt: created(),
 });
 
+/** StudioMember (lib/team/storage.ts) — someone inside the business. */
 export const users = pgTable(
   "users",
   {
@@ -46,29 +105,54 @@ export const users = pgTable(
     name: text("name"),
     role: studioRoleEnum("role").notNull().default("designer"),
     state: inviteStateEnum("state").notNull().default("pending"),
+    /** The day they joined the studio, as the settings list prints it — a calendar date, not the
+     *  instant the row was written, which is what createdAt already says. */
+    joinedAt: date("joined_at"),
     createdAt: created(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)],
 );
 
-// Access to one venue, granted by the studio that drew its plan (F-8.3).
+/** BusinessSettings (lib/settings/storage.ts) + the configured meeting flow
+ *  (lib/meeting/storage.ts). One row per organization, so the organization id IS the key: a studio
+ *  has one letterhead and one meeting shape, and a table that can hold two of either invites the
+ *  question of which one is live. */
+export const studioSettings = pgTable("studio_settings", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  businessName: text("business_name").notNull().default(""),
+  ownerName: text("owner_name").notNull().default(""),
+  phone: text("phone").notNull().default(""),
+  address: text("address").notNull().default(""),
+  logoUrl: text("logo_url"),
+  /** 0.18 = 18%. numeric, never float — this multiplies money. */
+  vatRate: numeric("vat_rate", { precision: 5, scale: 4 }).notNull().default("0.18"),
+  currency: text("currency").notNull().default("₪"),
+  /** The stages this studio's meeting has, in order (MeetingStepId[]). Ordered and rewritten
+   *  whole by the settings screen, never queried into — an array column says exactly that. */
+  meetingFlow: text("meeting_flow").array().$type<MeetingStepId[]>().notNull().default([]),
+  updatedAt: updated(),
+});
+
+// Access to one venue, granted by the studio that drew its plan (VenueGrant, lib/venues/access.ts).
 //
 // The one table in this file that is NOT scoped to a single organization, and deliberately: its
 // entire purpose is to cross the boundary ADR-2 draws everywhere else. A venue is a physical
 // property, so two studios can legitimately work the same hall off the same plan — grantor and
-// grantee are therefore separate columns, and row-level security reads this table rather than
-// the plain organizationId check that governs everything else.
+// grantee are therefore separate columns, and the RLS policy for venues will read this table
+// rather than the plain organizationId check that governs everything else.
 //
 // What a grant conveys is decided by `kind`, not by role: a `guest` gets the plan and anonymous
 // availability, never the events, clients or prices at that venue. The authority for that rule is
 // grantScope() in lib/venues/access.ts; this table only records which side of it a row is on.
-//
-// venueId has no FK yet — venues arrived after this schema and still live in lib/venues.
 export const venueGrants = pgTable(
   "venue_grants",
   {
     id: id(),
-    venueId: uuid("venue_id").notNull(),
+    venueId: uuid("venue_id")
+      .notNull()
+      .references(() => venues.id, { onDelete: "cascade" }),
     /** The studio that owns the plan and issued the grant. */
     grantorOrgId: uuid("grantor_org_id").notNull(),
     /** Null until an invited address becomes an account (phase 3). */
@@ -79,16 +163,24 @@ export const venueGrants = pgTable(
     kind: grantKindEnum("kind").notNull(),
     role: venueRoleEnum("role").notNull().default("viewer"),
     state: inviteStateEnum("state").notNull().default("pending"),
+    invitedAt: date("invited_at"),
     createdAt: created(),
   },
   (t) => [
     index("venue_grants_venue_idx").on(t.venueId),
     index("venue_grants_grantor_idx").on(t.grantorOrgId),
-    index("venue_grants_grantee_idx").on(t.granteeOrgId),
+    index("venue_grants_grantee_org_idx").on(t.granteeOrgId),
+    index("venue_grants_grantee_user_idx").on(t.granteeUserId),
+    // One person, one grant per venue — re-inviting updates the row instead of stacking a second.
+    uniqueIndex("venue_grants_venue_email_key").on(t.venueId, t.granteeEmail),
   ],
 );
 
-// Catalog item (F-2.1, F-2.5, F-2.6, F-2.7). Height is required for phase-2 3D (R-3).
+// ── Catalog ────────────────────────────────────────────────────────────────────────────────────
+
+/** Product (lib/catalog/types.ts). Dimensions stay flat columns rather than a nested jsonb blob:
+ *  height is required for phase-2 3D (R-3) and a NOT NULL column is how you actually enforce that,
+ *  and "every product taller than 2m" is a query someone will eventually write. */
 export const products = pgTable(
   "products",
   {
@@ -97,41 +189,85 @@ export const products = pgTable(
     name: text("name").notNull(),
     imageUrl: text("image_url"),
     layer: layerEnum("layer").notNull(),
-    category: text("category").notNull(),
-    // dimensions in millimetres
+    category: text("category").notNull(), // CategoryDef id
+    // Dimensions, in millimetres. A stretch product (a drape, a carpet) carries no width or depth —
+    // it is cut to whatever it must cover, so its size belongs to the placement, not the catalog.
     diameterMm: integer("diameter_mm"),
     widthMm: integer("width_mm"),
     depthMm: integer("depth_mm"),
     heightMm: integer("height_mm").notNull(),
-    // per-category fields (F-2.5): candle arms, stage modules, seat type/colour...
-    categoryFields: jsonb("category_fields").$type<Record<string, unknown>>().notNull().default({}),
+    /** Structured fields exist ONLY where they multiply quantities (candle arms, standard seats);
+     *  every other trait is free text in `spec`. */
+    categoryFields: jsonb("category_fields")
+      .$type<Record<string, string | number>>()
+      .notNull()
+      .default({}),
+    spec: text("spec"),
     unitPrice: numeric("unit_price", { precision: 12, scale: 2 }),
+    priceUnit: priceUnitEnum("price_unit").notNull().default("unit"),
     styleTags: text("style_tags").array().notNull().default([]),
+    /** How the item draws on the plan; absent means "derive it from the dimensions above". */
+    appearance: jsonb("appearance").$type<MapAppearance>(),
+    /** F-4.5: a product that is placed in any event is archived, never deleted — a design document
+     *  must never point at nothing. */
+    archived: boolean("archived").notNull().default(false),
+    /** Private (the default) means this item exists only in its own studio's catalog. Public means
+     *  other studios may see it.
+     *
+     *  DEFAULTS CLOSED, and the default is enforced here rather than in the app: a product that
+     *  somehow arrives without an opinion about who may see it must not become visible to strangers
+     *  because of a missing field. Publishing is always an explicit act.
+     *
+     *  ⚠ The column is written and read today, but NOTHING CROSSES ORGANISATIONS YET — every query
+     *  in lib/catalog/actions.ts is still scoped to one studio. That is deliberate: a cross-org read
+     *  needs decisions this flag alone does not answer (may another studio PLACE a public item, and
+     *  what happens to their design when the owner archives it?) and it needs RLS, which arrives
+     *  with auth. The flag is recorded now so the day those land, the data is already there. */
+    visibility: visibilityEnum("visibility").notNull().default("private"),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [index("products_org_idx").on(t.organizationId)],
+  (t) => [
+    index("products_org_idx").on(t.organizationId),
+    // The catalog screen's default read is "this org's live products" — the partial index serves it
+    // without carrying the archived rows nobody lists.
+    index("products_org_live_idx")
+      .on(t.organizationId, t.category)
+      .where(sql`${t.archived} = false`),
+  ],
 );
 
-// A shade/version of a product (F-2.4). Every placement references a variant.
+/** Variant (lib/catalog/types.ts) — a shade or version. Every placement references a VARIANT, not
+ *  a product, so the packing list and quote separate "מפה זהב ×40" from "מפה שמנת ×12". */
 export const productVariants = pgTable(
   "product_variants",
   {
     id: id(),
     organizationId: orgId(),
-    productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
-    name: text("name").notNull(), // e.g. "זהב", "שמנת"
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    name: text("name").notNull(), // "זהב", "שמנת"
+    /** The actual colour, for the picker and the plan. Absent = a version that isn't a colour. */
+    swatch: text("swatch"),
     imageUrl: text("image_url"),
-    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }), // inherits product if null
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }), // inherits the product when null
+    archived: boolean("archived").notNull().default(false),
+    /** The order the designer put them in; the first is the default a drop lands on. */
+    position: integer("position").notNull().default(0),
     createdAt: created(),
   },
-  (t) => [index("variants_org_idx").on(t.organizationId)],
+  (t) => [
+    index("variants_org_idx").on(t.organizationId),
+    // FK columns are not indexed automatically, and this one is joined on every catalog read.
+    index("variants_product_idx").on(t.productId, t.position),
+  ],
 );
 
-// The property (F-3.1). One site plan per venue: a single millimetre plane every zone on it is
-// drawn in, plus the calibration measured off it once. Replaces the old `hall_templates`, where
-// each hall was its own drawing starting at (0,0) and two rooms of one property could not be
-// positioned relative to each other. See lib/venues/types.ts.
+// ── The property ───────────────────────────────────────────────────────────────────────────────
+
+/** Venue (lib/venues/types.ts). One site plan per venue: a single millimetre plane every zone on
+ *  the property is drawn in, plus the calibration measured off it once. */
 export const venues = pgTable(
   "venues",
   {
@@ -139,110 +275,297 @@ export const venues = pgTable(
     organizationId: orgId(),
     name: text("name").notNull(),
     logoUrl: text("logo_url"),
-    /** VenuePlan: mmPerUnit, the property line, and the placed plan underlay. */
-    plan: jsonb("plan").$type<Record<string, unknown>>().notNull(),
+    /** mmPerUnit, the property line, and the placed plan underlay. */
+    plan: jsonb("plan").$type<VenuePlan>().notNull(),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [index("venues_org_idx").on(t.organizationId)],
 );
 
-// The venue's ONE wall graph — nodes, walls, doors, fixed features (lib/venues/structure.ts).
-// One row per venue, held whole: it is read and written as a unit by the plan editor, and the
-// graph's value is that a wall shared by two rooms exists exactly once inside it.
+/** The venue's ONE wall graph — nodes, walls, doors, fixed features (lib/venues/structure.ts).
+ *  One row per venue, held whole: it is read and written as a unit by the plan editor, and the
+ *  graph's whole value is that a wall shared by two rooms exists exactly once inside it. */
 export const venueStructures = pgTable(
   "venue_structures",
   {
-    id: id(),
+    venueId: uuid("venue_id")
+      .primaryKey()
+      .references(() => venues.id, { onDelete: "cascade" }),
     organizationId: orgId(),
-    venueId: uuid("venue_id").notNull().references(() => venues.id, { onDelete: "cascade" }),
-    structure: jsonb("structure").$type<Record<string, unknown>>().notNull(),
+    structure: jsonb("structure").$type<VenueStructure>().notNull(),
     updatedAt: updated(),
   },
-  (t) => [index("venue_structures_venue_idx").on(t.venueId)],
+  (t) => [index("venue_structures_org_idx").on(t.organizationId)],
 );
 
-// A named region of that structure (lib/venues/zone.ts). Carries no geometry of its own beyond the
-// anchor or freehand boundary in `source` — the region itself is re-derived from the walls, so a
-// wall that moves reshapes the zone instead of leaving a stale copy behind.
+/** Zone (lib/venues/zone.ts) — a named region of that structure. Carries no geometry of its own
+ *  beyond the anchor or freehand boundary in `source`: the region is re-derived from the walls, so
+ *  a wall that moves reshapes the zone instead of leaving a stale copy behind. */
 export const zones = pgTable(
   "zones",
   {
     id: id(),
     organizationId: orgId(),
-    venueId: uuid("venue_id").notNull().references(() => venues.id, { onDelete: "cascade" }),
+    venueId: uuid("venue_id")
+      .notNull()
+      .references(() => venues.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     kind: zoneKindEnum("kind").notNull(),
-    source: jsonb("source").$type<Record<string, unknown>>().notNull(),
+    source: jsonb("source").$type<ZoneSource>().notNull(),
     ceilingHeightMm: integer("ceiling_height_mm").notNull().default(0), // 0 = open to the sky
-    capacity: jsonb("capacity").$type<Record<string, number>>(),
-    style: jsonb("style").$type<Record<string, unknown>>(),
+    capacity: jsonb("capacity").$type<ZoneCapacity>(),
+    style: jsonb("style").$type<ElementStyle>(),
     createdAt: created(),
   },
-  (t) => [index("zones_venue_idx").on(t.venueId)],
+  (t) => [index("zones_venue_idx").on(t.venueId), index("zones_org_idx").on(t.organizationId)],
 );
 
+// ── Events ─────────────────────────────────────────────────────────────────────────────────────
+
+/** EventSummary (lib/events/types.ts). Status is DERIVED from `step` — the furthest stage the
+ *  meeting flow reached — so there is no status column and no second state machine to keep honest.
+ *
+ *  `eventDate` is a `date`, not a timestamptz: a wedding on 09/08/2026 is that calendar day
+ *  everywhere, and storing it as an instant would let a timezone move the wedding. */
 export const events = pgTable(
   "events",
   {
     id: id(),
     organizationId: orgId(),
     clientName: text("client_name").notNull(),
-    eventDate: timestamp("event_date", { withTimezone: true }),
+    phone: text("phone").notNull().default(""),
+    /** The primary contact's own name, when it differs from clientName (the couple). */
+    contactName: text("contact_name"),
+    /** A second contact, if the couple gave one — a parent, a planner. */
+    contact2Name: text("contact2_name"),
+    contact2Phone: text("contact2_phone"),
+    eventDate: date("event_date"),
+    startTime: time("start_time"),
+    /** A scheduled client consultation, distinct from the event day itself. */
+    meetingDate: date("meeting_date"),
     venueId: uuid("venue_id").references(() => venues.id, { onDelete: "restrict" }),
-    /** The zones this event occupies, in the designer's own order — the ceremony's חופה and the
-     *  hall it opens off are one event. Ordered, so a join table would need its own position
-     *  column to say the same thing. */
-    zoneIds: jsonb("zone_ids").$type<string[]>().notNull().default([]),
-    /** Denormalised zone names for lists and the quote header (EventSummary.zonesLabel). */
-    zonesLabel: text("zones_label"),
-    mapSource: mapSourceEnum("map_source").notNull(),
+    /** The zones' names, joined — denormalised for lists, headers and the quote, which need a label
+     *  without loading the venue plan. Rewritten whenever the selection changes. */
+    zonesLabel: text("zones_label").notNull().default(""),
+    guests: integer("guests").notNull().default(0),
+    /** Furthest meeting stage reached: an index into the studio's CONFIGURED flow
+     *  (studio_settings.meetingFlow), not into a fixed list. Always clamped on read. */
+    step: integer("step").notNull().default(0),
+    quoteSentAt: timestamp("quote_sent_at", { withTimezone: true }),
+    archived: boolean("archived").notNull().default(false),
     createdAt: created(),
   },
-  (t) => [index("events_org_idx").on(t.organizationId), index("events_venue_idx").on(t.venueId)],
+  (t) => [
+    index("events_org_idx").on(t.organizationId),
+    index("events_venue_idx").on(t.venueId),
+    // The dashboard and Gantt both read "this org's live events, soonest first".
+    index("events_org_date_idx").on(t.organizationId, t.eventDate),
+  ],
 );
 
-// Import result (F-1.x): PDF ref, calibration, detected/placed tables, verification state.
-export const floorPlans = pgTable(
-  "floor_plans",
+/** The zones an event occupies, in the designer's own order — the ceremony's חופה and the hall it
+ *  opens off are one event.
+ *
+ *  ⚠ CHANGED FROM the previous `events.zoneIds jsonb` column, whose note argued a join table "would
+ *  need its own position column to say the same thing". It says two more things that turned out to
+ *  matter: a foreign key, so a deleted zone cannot leave a dangling id inside a JSON array; and the
+ *  reverse lookup — "which events stand on this zone?" — which the venue editor needs before it
+ *  lets someone delete a region that four events are booked into. */
+export const eventZones = pgTable(
+  "event_zones",
   {
-    id: id(),
-    organizationId: orgId(),
-    eventId: uuid("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
-    pdfUrl: text("pdf_url"),
-    mmPerUnit: numeric("mm_per_unit", { precision: 12, scale: 4 }), // calibration (F-1.4)
-    tables: jsonb("tables").$type<unknown[]>().notNull().default([]),
-    verificationState: verificationEnum("verification_state").notNull().default("draft"),
-    createdAt: created(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    zoneId: uuid("zone_id")
+      .notNull()
+      .references(() => zones.id, { onDelete: "restrict" }),
+    position: integer("position").notNull().default(0),
   },
-  (t) => [index("floor_plans_org_idx").on(t.organizationId)],
+  (t) => [
+    primaryKey({ columns: [t.eventId, t.zoneId] }),
+    index("event_zones_zone_idx").on(t.zoneId),
+  ],
 );
 
-// The heart of the system (ADR-4). Placements live as JSONB; each save is a version (F-4.3).
+/** DesignDocumentContent (lib/design-document/types.ts) — the heart of the system (ADR-4).
+ *  Placements live as JSONB because the canvas reads and writes them as one value; each save is a
+ *  new row, so `version` is real history and a quote can pin itself to the drawing it was made
+ *  from (F-6.4, F-7.4). */
 export const designDocuments = pgTable(
   "design_documents",
   {
     id: id(),
     organizationId: orgId(),
-    eventId: uuid("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
     version: integer("version").notNull().default(1),
     content: jsonb("content").$type<DesignDocumentContent>().notNull(),
     createdAt: created(),
   },
-  (t) => [index("design_documents_org_idx").on(t.organizationId)],
+  (t) => [
+    index("design_documents_org_idx").on(t.organizationId),
+    // "the current document for this event" = the highest version, which is the only read the
+    // studio ever does on open.
+    uniqueIndex("design_documents_event_version_key").on(t.eventId, t.version),
+  ],
 );
 
-// A produced output (F-4.x): map / packing list / quote, pinned to a document version.
+// ── Gallery ────────────────────────────────────────────────────────────────────────────────────
+
+/** GalleryImage (lib/gallery/types.ts) — a PHOTO, linked to exactly ONE catalog product. A product
+ *  can have many photos, from different events; that link is the bridge into the studio rail.
+ *  `imageUrl` is null until file storage exists; `tone` is the placeholder tile standing in for it
+ *  and can be dropped once real files land. */
+export const galleryImages = pgTable(
+  "gallery_images",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    description: text("description"),
+    productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+    imageUrl: text("image_url"),
+    tone: text("tone"),
+    createdAt: created(),
+  },
+  (t) => [
+    index("gallery_images_org_idx").on(t.organizationId),
+    index("gallery_images_product_idx").on(t.productId),
+  ],
+);
+
+/** Presentation (lib/gallery/types.ts) — a curated, manually ordered series shown to a client. */
+export const presentations = pgTable(
+  "presentations",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(), // "חופה קלאסית בזהב"
+    createdAt: created(),
+  },
+  (t) => [index("presentations_org_idx").on(t.organizationId)],
+);
+
+/** The photos in a presentation, in the order the designer set (F-2.1). A join table rather than an
+ *  id array: a photo appears in several presentations, and deleting one has to know where it is
+ *  showing. */
+export const presentationImages = pgTable(
+  "presentation_images",
+  {
+    presentationId: uuid("presentation_id")
+      .notNull()
+      .references(() => presentations.id, { onDelete: "cascade" }),
+    imageId: uuid("image_id")
+      .notNull()
+      .references(() => galleryImages.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.presentationId, t.imageId] }),
+    index("presentation_images_image_idx").on(t.imageId),
+  ],
+);
+
+/** תיק האירוע — the photos the client ♥'d during a meeting (F-2.3). The products behind them are
+ *  derived from this and pinned to the top of the studio's catalog rail. A row per like, so the
+ *  toggle is an insert or a delete rather than a read-modify-write of a JSON array while a client
+ *  is watching. */
+export const eventLikedImages = pgTable(
+  "event_liked_images",
+  {
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    imageId: uuid("image_id")
+      .notNull()
+      .references(() => galleryImages.id, { onDelete: "cascade" }),
+    likedAt: created(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.eventId, t.imageId] }),
+    index("event_liked_images_image_idx").on(t.imageId),
+  ],
+);
+
+// ── Outputs ────────────────────────────────────────────────────────────────────────────────────
+
+/** F-6.3: the manual spare quantity a designer adds to a packing-list row before printing. Stored
+ *  so the "no hand-corrections" success metric covers reserves too, instead of them being added in
+ *  pen on the printed page. */
+export const packingSpares = pgTable(
+  "packing_spares",
+  {
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    variantId: uuid("variant_id")
+      .notNull()
+      .references(() => productVariants.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.eventId, t.variantId] }),
+    index("packing_spares_variant_idx").on(t.variantId),
+  ],
+);
+
+/** A produced output (F-6.4): map / packing list / quote, pinned to the document version it was
+ *  made from, and numbered per event so the crew can tell whether the sheet in their hand is the
+ *  current one. */
 export const exports = pgTable(
   "exports",
   {
     id: id(),
     organizationId: orgId(),
-    designDocumentId: uuid("design_document_id").notNull().references(() => designDocuments.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    designDocumentId: uuid("design_document_id").references(() => designDocuments.id, {
+      onDelete: "set null",
+    }),
     type: exportTypeEnum("type").notNull(),
+    /** The running export number for this event — what gets printed on the sheet. */
+    number: integer("number").notNull(),
     documentVersion: integer("document_version").notNull(),
     fileUrl: text("file_url"),
     createdAt: created(),
   },
-  (t) => [index("exports_org_idx").on(t.organizationId)],
+  (t) => [
+    index("exports_org_idx").on(t.organizationId),
+    index("exports_document_idx").on(t.designDocumentId),
+    uniqueIndex("exports_event_number_key").on(t.eventId, t.number),
+  ],
+);
+
+/** IssuedQuote (lib/quotes/storage.ts) — F-7.4: a quote locks to the design-document version it was
+ *  produced from, so a later edit lights the "העיצוב השתנה מאז ההצעה האחרונה" indicator.
+ *
+ *  One row per event, matching what the app does today: re-issuing overwrites. The mock compared
+ *  serialised JSON to detect a change; with real versions it compares two integers instead. */
+export const issuedQuotes = pgTable(
+  "issued_quotes",
+  {
+    eventId: uuid("event_id")
+      .primaryKey()
+      .references(() => events.id, { onDelete: "cascade" }),
+    organizationId: orgId(),
+    designDocumentId: uuid("design_document_id").references(() => designDocuments.id, {
+      onDelete: "set null",
+    }),
+    documentVersion: integer("document_version").notNull(),
+    discountType: discountTypeEnum("discount_type").notNull().default("amount"),
+    discountValue: numeric("discount_value", { precision: 12, scale: 2 }).notNull().default("0"),
+    /** Rows the designer hid, and categories collapsed to one line, before showing the client. */
+    hiddenVariantIds: uuid("hidden_variant_ids").array().notNull().default([]),
+    mergedCategoryIds: text("merged_category_ids").array().notNull().default([]),
+    total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+    issuedAt: created(),
+  },
+  (t) => [
+    index("issued_quotes_org_idx").on(t.organizationId),
+    index("issued_quotes_document_idx").on(t.designDocumentId),
+  ],
 );
