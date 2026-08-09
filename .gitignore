@@ -32,6 +32,15 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the template, which carries no secrets and is what README tells you to copy.
+!.env.example
+
+# agent skills: the packages themselves live in .agents/skills and ARE committed, so the guidance
+# an agent follows is pinned with the code. What's ignored is how each tool reaches them —
+# .claude/skills/<name> is an absolute symlink into this checkout, valid on one machine only.
+# Recreate them with `npx skills experimental_install`.
+/.claude/skills/supabase
+/.claude/skills/supabase-postgres-best-practices
 
 # vercel
 .vercel
