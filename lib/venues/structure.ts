@@ -12,6 +12,7 @@
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
 import { endpointFromLengthAngle, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import { isMain } from "../self-check";
 
 export interface StructureNode {
   id: string;
@@ -247,7 +248,7 @@ export function newFeature(kind: FeatureKind, at: Point): Omit<StructureFeature,
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/venues/structure.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

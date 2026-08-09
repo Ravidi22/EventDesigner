@@ -5,6 +5,7 @@ import type { Product } from "@/lib/catalog/types";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import { outlineBounds } from "@/lib/studio/geometry";
+import { isMain } from "../self-check";
 
 export const MIN_FOOTPRINT_MM = 600; // floor so missing/zero dims never render at zero size
 
@@ -61,7 +62,7 @@ export function footprintBounds(f: Footprint): { w: number; h: number } {
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/footprint.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => { if (!c) throw new Error("FAIL: " + m); };
   const base: Product = {
     id: "x", name: "בדיקה", category: "chairs", layer: "floor",

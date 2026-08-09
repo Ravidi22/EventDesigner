@@ -1,5 +1,6 @@
 import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
 import type { EdgeCurve, Point } from "./hall";
+import { isMain } from "../self-check";
 
 // Shoelace formula — true area of an arbitrary (simple) polygon, in mm². Used for the hall
 // outline once it's no longer just a rectangle.
@@ -524,7 +525,7 @@ export function tableAt(doc: DesignDocumentContent, x: number, y: number): Desig
   return undefined;
 }
 
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

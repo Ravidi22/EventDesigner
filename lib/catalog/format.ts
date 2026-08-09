@@ -1,4 +1,5 @@
 import type { Dimensions, PriceUnit, Product, Variant } from "./types";
+import { isMain } from "../self-check";
 
 const cm = (mm: number) => {
   const v = mm / 10;
@@ -39,7 +40,7 @@ export function variantPrice(product: Product, variant: Variant): number | undef
   return variant.unitPrice ?? product.unitPrice;
 }
 
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

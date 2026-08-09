@@ -1,3 +1,4 @@
+import { isMain } from "./self-check";
 // Shared per-element visual styling (fill/stroke/dash) for map elements — free-form, not named
 // presets. Each element carries its own optional `style`; absent means "the renderer's own
 // default look," so old saved data with no `style` field renders exactly as it always has.
@@ -72,7 +73,7 @@ export function resolveStyle(style: ElementStyle | undefined, mode: StyleMode, d
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/element-style.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

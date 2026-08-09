@@ -14,6 +14,7 @@
 import type { Point } from "@/lib/studio/hall";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { nodeMap, type VenueStructure } from "./structure";
+import { isMain } from "../self-check";
 
 export interface Face {
   /** Node ids around the region, in traversal order. */
@@ -133,7 +134,7 @@ export function faceAreaM2(face: Face): number {
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/venues/faces.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

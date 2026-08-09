@@ -2,6 +2,7 @@
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
 import type { DesignDocumentContent, Placement, DesignTable, WallSpan } from "./types";
 import type { ElementStyle } from "../element-style";
+import { isMain } from "../self-check";
 
 export type Action =
   | { type: "addTable"; table: DesignTable }
@@ -186,7 +187,7 @@ export function redo(h: History): History {
 }
 
 // ponytail: self-check for the reducer + history. Run: node --experimental-strip-types lib/design-document/actions.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

@@ -3,6 +3,7 @@
 // dependency on the catalog/alias graph — which keeps the self-check runnable under node.
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { isMain } from "../self-check";
 
 export interface ItemInfo {
   productName: string;
@@ -99,7 +100,7 @@ export function placementLegend(
     .sort((a, b) => a.tableNumbers[0] - b.tableNumbers[0]);
 }
 
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

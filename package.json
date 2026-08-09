@@ -11,15 +11,23 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "check:actions": "node --experimental-strip-types lib/design-document/actions.ts",
-    "check:footprint": "node --experimental-strip-types lib/studio/footprint.ts",
-    "check:geometry": "node --experimental-strip-types lib/studio/geometry.ts",
-    "check:snap": "node --experimental-strip-types lib/studio/snap.ts",
+    "check:actions": "tsx lib/design-document/actions.ts",
+    "check:footprint": "tsx lib/studio/footprint.ts",
+    "check:geometry": "tsx lib/studio/geometry.ts",
+    "check:snap": "tsx lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",
-    "check:structure": "node --experimental-strip-types lib/venues/structure.ts",
-    "check:selection": "node --experimental-strip-types lib/venues/selection.ts",
-    "check:measure": "node --experimental-strip-types lib/design-document/measure.ts",
-    "check:anchor": "node --experimental-strip-types lib/studio/anchor.ts"
+    "check:structure": "tsx lib/venues/structure.ts",
+    "check:selection": "tsx lib/venues/selection.ts",
+    "check:measure": "tsx lib/design-document/measure.ts",
+    "check:anchor": "tsx lib/studio/anchor.ts",
+    "check:outline": "tsx lib/studio/use-outline-editor.ts",
+    "check:faces": "tsx lib/venues/faces.ts",
+    "check:csv": "tsx lib/catalog/csv.ts",
+    "check:format": "tsx lib/catalog/format.ts",
+    "check:style": "tsx lib/element-style.ts",
+    "check:folder": "tsx lib/gallery/folder-logic.ts",
+    "check:aggregate": "tsx lib/outputs/aggregate.ts",
+    "check:quote": "tsx lib/outputs/quote.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -40,6 +48,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
+    "tsx": "^4.23.11",
     "typescript": "^5"
   }
 }
