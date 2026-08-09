@@ -7,6 +7,7 @@ import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
+import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { markExported, nextExportVersion } from "@/lib/outputs/storage";
 import { zonesLabelOf, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
@@ -34,12 +35,18 @@ export function OutputsScreen() {
   // Read the design document the studio autosaved (keeps SSR deterministic), and resolve the plan
   // it sits on from the event's venue + zones — the same geometry the studio drew it against.
   useEffect(() => {
-    const saved = loadDoc();
-    if (saved) setDoc(saved);
+    let live = true;
     const ev = activeEvent();
+    const saved = loadDoc(ev?.id ?? null);
+    if (saved) setDoc(saved);
     setEvent(ev);
-    setPlan(eventPlan(ev));
+    void fetchVenueGeometry(ev?.venueId).then((geometry) => {
+      if (live) setPlan(eventPlan(ev, geometry));
+    });
     if (ev) setVersion(nextExportVersion(ev.id));
+    return () => {
+      live = false;
+    };
   }, []);
 
   // F-6.4: every export carries date + a running version number, bumped per print.

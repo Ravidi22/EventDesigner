@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Building2, Check, Eye, Share2, X } from "lucide-react";
-import { DEFAULT_VENUES, VENUE_CHANGED_EVENT, loadActiveVenueId, loadVenues, type Venue } from "@/lib/venues/storage";
+import { VENUE_CHANGED_EVENT, loadActiveVenueId, type Venue } from "@/lib/venues/storage";
+import { fetchVenues } from "@/lib/venues/actions";
 import {
   GRANT_KIND_LABEL,
   SCOPE_LABEL,
@@ -33,8 +34,8 @@ const SCOPE_KEYS: (keyof GrantScope)[] = ["plan", "availability", "events", "mon
 // outlives whoever drew it: the second designer working that hall should inherit the wall graph
 // instead of tracing it again — while your clients and your prices stay on your side of the line.
 export function SharingSection() {
-  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
-  const [venueId, setVenueId] = useState(DEFAULT_VENUES[0].id);
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [venueId, setVenueId] = useState<string | null>(null);
   const [grants, setGrants] = useState<VenueGrant[]>([]);
   const [members, setMembers] = useState<StudioMember[]>([]);
 
@@ -46,17 +47,27 @@ export function SharingSection() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setVenues(loadVenues());
     setMembers(loadMembers());
     const active = loadActiveVenueId();
     setVenueId(active);
-    setGrants(grantsForVenue(active));
+    if (active) setGrants(grantsForVenue(active));
+    // The venue list is a server read now; the sidebar's current selection stays local.
+    void fetchVenues().then((list) => {
+      setVenues(list);
+      // A stored selection pointing at nothing — or none at all, on a fresh studio — falls back to
+      // the first property rather than leaving this screen aimed at no venue.
+      setVenueId((current) => {
+        const next = list.some((v) => v.id === current) ? current : (list[0]?.id ?? null);
+        if (next) setGrants(grantsForVenue(next));
+        return next;
+      });
+    });
     // Follow the sidebar: switching venues there while this screen is open should retarget it,
     // rather than leaving the designer editing shares for a property they just navigated away from.
     const onVenueChanged = () => {
       const id = loadActiveVenueId();
       setVenueId(id);
-      setGrants(grantsForVenue(id));
+      if (id) setGrants(grantsForVenue(id));
     };
     window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
     return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
@@ -77,6 +88,9 @@ export function SharingSection() {
   const apply = (all: VenueGrant[]) => setGrants(all.filter((g) => g.venueId === venueId));
 
   const submit = () => {
+    // Nothing to share until a property exists — the panel below already says so, and this keeps a
+    // stray Enter from calling shareVenue with no venue.
+    if (!venueId) return setError("אין עדיין מתחם לשתף");
     if (kind === "member") {
       const member = members.find((m) => m.id === memberId);
       if (!member) return setError("בחרו חבר צוות");
@@ -103,7 +117,7 @@ export function SharingSection() {
         hint="התוכנית של המתחם היא נכס שמשתלם לשתף — מי שעובד באולם הזה יקבל את הקירות והאזורים שציירתם, בלי לצייר אותם מחדש. האירועים, הלקוחות והמחירים שלכם לא נכללים בשיתוף."
         action={
           <Select
-            value={venueId}
+            value={venueId ?? ""}
             onChange={pick}
             options={venues.map((v) => ({ value: v.id, label: v.name }))}
             aria-label="בחירת מתחם"

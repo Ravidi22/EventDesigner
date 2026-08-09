@@ -8,6 +8,7 @@ import { quoteGroups, quoteTotals, type DiscountType } from "@/lib/outputs/quote
 import { measureContext, priceLookup } from "@/lib/outputs/lookup";
 import { eventPlan } from "@/lib/events/plan";
 import type { VenueStructure } from "@/lib/venues/structure";
+import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { formatAmount, formatPrice, formatUnitPrice } from "@/lib/catalog/format";
 import { loadSettings, type BusinessSettings } from "@/lib/settings/storage";
 import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
@@ -31,10 +32,13 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   const [structure, setStructure] = useState<VenueStructure | undefined>(undefined);
 
   useEffect(() => {
+    let live = true;
     setSettings(loadSettings());
     const ev = activeEvent();
     setEvent(ev);
-    setStructure(eventPlan(ev).structure);
+    void fetchVenueGeometry(ev?.venueId).then((geometry) => {
+      if (live) setStructure(eventPlan(ev, geometry).structure);
+    });
     if (ev) {
       const q = loadIssuedQuote(ev.id);
       setIssued(q);
@@ -45,6 +49,9 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
         setMerged(new Set(q.mergedCategoryIds));
       }
     }
+    return () => {
+      live = false;
+    };
   }, []);
 
   const vatRate = settings?.vatRate ?? 0.18;

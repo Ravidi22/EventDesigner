@@ -6,6 +6,7 @@ import type { Layer as LayerId } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
+import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { loadDoc, saveDoc } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
 import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
@@ -57,15 +58,29 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   const [addingTable, setAddingTable] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Which event this drawing belongs to. A ref, not state: the autosave timeout below reads it
+  // when it fires rather than when it was scheduled, so the id cannot go stale in a closure — and
+  // because the restore effect is declared first, it is always set before the first save runs.
+  const eventId = useRef<string | null>(null);
 
   const doc = history.present;
 
   // Restore the saved document once, on the client (keeps SSR deterministic), and resolve the
   // geometry it sits on from the active event's venue + zones — never from a stored copy.
   useEffect(() => {
-    const saved = loadDoc();
+    let live = true;
+    const event = activeEvent();
+    eventId.current = event?.id ?? null;
+    const saved = loadDoc(eventId.current);
     if (saved) setHistory(initHistory(saved));
-    setPlan(eventPlan(activeEvent()));
+    // The geometry is a server read now. The canvas renders on EMPTY_PLAN for the moment it takes,
+    // which is the same blank plane it showed before the walls were fetched — never a wrong plan.
+    void fetchVenueGeometry(event?.venueId).then((geometry) => {
+      if (live) setPlan(eventPlan(event, geometry));
+    });
+    return () => {
+      live = false;
+    };
   }, []);
 
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only
@@ -73,13 +88,13 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   useEffect(() => {
     setSaveState("saving");
     const t = setTimeout(() => {
-      setSaveState(saveDoc(doc) ? "saved" : "error");
+      setSaveState(saveDoc(eventId.current, doc) ? "saved" : "error");
     }, 500);
     return () => clearTimeout(t);
   }, [doc]);
 
   const retrySave = useCallback(() => {
-    setSaveState(saveDoc(doc) ? "saved" : "error");
+    setSaveState(saveDoc(eventId.current, doc) ? "saved" : "error");
   }, [doc]);
 
   // Warn before leaving while a write is still pending or has failed — don't let a plan slip away unsaved.

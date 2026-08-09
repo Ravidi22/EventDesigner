@@ -3,20 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DoorOpen, Layers, MousePointer2, PenLine, Ruler, Shapes, Users } from "lucide-react";
 import {
-  DEFAULT_VENUES,
-  DEFAULT_ZONES,
   loadActiveVenueId,
-  loadStructure,
-  loadVenues,
   onActiveVenueChange,
-  saveStructure,
-  saveZonesForVenue,
-  structureForVenue,
-  zonesForVenue,
   type Venue,
   type VenueStructure,
   type Zone,
 } from "@/lib/venues/storage";
+import { fetchVenues, fetchVenuePlan, saveVenuePlan } from "@/lib/venues/actions";
 import {
   FEATURE_KIND_LABEL,
   addEntrance,
@@ -31,6 +24,7 @@ import {
   removeNode,
   removeWall,
   updateFeature,
+  emptyStructure,
   type WallKind,
 } from "@/lib/venues/structure";
 import { detectFaces, faceAt } from "@/lib/venues/faces";
@@ -92,15 +86,13 @@ const MODES: { id: Mode; label: string; icon: typeof MousePointer2; hint: string
 ];
 
 export function HallsScreen() {
-  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
-  const [venueId, setVenueId] = useState<string>(DEFAULT_VENUES[0].id);
-  // Seeded from the static sample so server and first client render agree (storage is client-only).
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [venueId, setVenueId] = useState<string>("");
+  // Starts on an EMPTY plane: server and first client render agree on "nothing drawn yet", and the
+  // real graph arrives from the server in the effect below. There is no sample property to seed
+  // from any more, and a fresh studio genuinely has none.
   const hist = useHistory<PlanState>(
-    () => ({
-      venueId: DEFAULT_VENUES[0].id,
-      structure: structureForVenue(DEFAULT_VENUES[0].id),
-      zones: DEFAULT_ZONES.filter((z) => z.venueId === DEFAULT_VENUES[0].id),
-    }),
+    () => ({ venueId: "", structure: emptyStructure(), zones: [] }),
     { keyboard: true },
   );
   const { structure, zones } = hist.present;
@@ -116,32 +108,51 @@ export function HallsScreen() {
   const [ready, setReady] = useState(false); // storage has been read; before this, nothing is written back
 
   useEffect(() => {
-    setVenues(loadVenues());
-    setVenueId(loadActiveVenueId());
+    void fetchVenues().then((list) => {
+      setVenues(list);
+      const stored = loadActiveVenueId();
+      setVenueId(list.some((v) => v.id === stored) ? (stored as string) : (list[0]?.id ?? ""));
+    });
   }, []);
-  useEffect(() => onActiveVenueChange(setVenueId), []);
+  useEffect(() => onActiveVenueChange((id) => setVenueId(id ?? "")), []);
 
   useEffect(() => {
-    const loaded = loadStructure(venueId);
-    hist.reset({ venueId, structure: loaded, zones: zonesForVenue(venueId) });
-    setSelection([]);
-    setRunNodeId(null);
-    setRegion(null);
-    setDraftZone(null);
-    setFocus(null);
-    // A property with nothing drawn on it has nothing to select or name — open on the one tool that
-    // can make progress rather than on an empty grid with the wrong tool in hand.
-    setMode(loaded.walls.length === 0 ? "walls" : "select");
-    setReady(true);
+    if (!venueId) return;
+    let live = true;
+    setReady(false); // nothing is written back while another property's plan is in flight
+    void fetchVenuePlan(venueId).then(({ structure: loaded, zones: loadedZones }) => {
+      if (!live) return;
+      hist.reset({ venueId, structure: loaded, zones: loadedZones });
+      setSelection([]);
+      setRunNodeId(null);
+      setRegion(null);
+      setDraftZone(null);
+      setFocus(null);
+      // A property with nothing drawn on it has nothing to select or name — open on the one tool
+      // that can make progress rather than on an empty grid with the wrong tool in hand.
+      setMode(loaded.walls.length === 0 ? "walls" : "select");
+      setReady(true);
+    });
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venueId]);
 
   // Persist whatever the history currently holds — including after an undo, which is the reason
   // zones are written as a whole list (a snapshot has no per-zone delete to replay).
+  //
+  // DEBOUNCED, because this fires on every history entry: every wall dragged, every node nudged.
+  // Against localStorage that was free; against the server it would be a request per mouse-up. The
+  // cleanup cancels the pending write, so a burst of edits sends one save at the end of it.
   useEffect(() => {
     if (!ready) return;
-    saveStructure(hist.present.venueId, hist.present.structure);
-    saveZonesForVenue(hist.present.venueId, hist.present.zones);
+    const { venueId: id, structure: s, zones: z } = hist.present;
+    if (!id) return;
+    const t = setTimeout(() => {
+      void saveVenuePlan(id, s, z);
+    }, 600);
+    return () => clearTimeout(t);
   }, [ready, hist.present]);
 
   // Regions are derived from the walls on every change, never stored — that is what makes a zone

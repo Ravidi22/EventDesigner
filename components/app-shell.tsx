@@ -13,7 +13,8 @@ import {
   Bell,
   type LucideIcon,
 } from "lucide-react";
-import { DEFAULT_VENUES, addVenue, loadActiveVenueId, loadVenues, renameVenue, setActiveVenueId, type Venue } from "@/lib/venues/storage";
+import { setActiveVenueId } from "@/lib/venues/storage";
+import { useVenues } from "@/lib/venues/use-venues";
 import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
@@ -49,14 +50,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "";
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
-  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
-  const [activeVenueId, setActiveVenue] = useState(DEFAULT_VENUES[0].id);
   const [headerSearch, setHeaderSearch] = useState("");
-
-  useEffect(() => {
-    setVenues(loadVenues());
-    setActiveVenue(loadActiveVenueId());
-  }, []);
+  // Venues come from the server now; the switcher's own selection stays in this browser.
+  const { venues, activeVenueId, add, rename } = useVenues();
+  const [selected, setSelected] = useState<string | null>(null);
+  const current = selected ?? activeVenueId;
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -115,21 +113,20 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <VenueSwitcher
           venues={venues}
-          activeId={activeVenueId}
+          activeId={current}
           collapsed={collapsed}
           onSelect={(id) => {
-            setActiveVenue(id);
+            setSelected(id);
             setActiveVenueId(id);
           }}
           onAdd={() => {
-            const next = addVenue();
-            setVenues(next);
-            setActiveVenue(loadActiveVenueId());
-            // A venue with zero halls isn't a real state — send the designer straight
-            // into adding its first room.
-            router.push("/halls");
+            void add().then(() => {
+              // A venue with nothing drawn on it isn't a real state — send the designer straight
+              // into drawing its first room.
+              router.push("/halls");
+            });
           }}
-          onRename={(id, name) => setVenues(renameVenue(id, name))}
+          onRename={(id, name) => void rename(id, name)}
         />
 
         <nav className="flex flex-col gap-[3px]">

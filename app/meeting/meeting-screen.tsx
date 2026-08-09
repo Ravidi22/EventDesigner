@@ -10,7 +10,8 @@ import { beginEvent } from "@/lib/events/begin";
 import { labelForZones } from "@/lib/events/plan";
 import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
 import { loadFlow } from "@/lib/meeting/storage";
-import { findVenue, loadActiveVenueId, loadVenues, zonesForVenue, type Venue, type Zone } from "@/lib/venues/storage";
+import { loadActiveVenueId, type Venue, type Zone } from "@/lib/venues/storage";
+import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
 import { loadDoc } from "@/lib/studio/storage";
 import { Button } from "@/components/button";
@@ -219,12 +220,23 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   const [guests, setGuests] = useState(event?.guests ?? 0);
 
   useEffect(() => {
-    setVenues(loadVenues());
-    setVenueId((current) => current || event?.venueId || loadActiveVenueId());
+    void fetchVenues().then(setVenues);
+    setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
   }, [event?.venueId]);
 
+  // The zones offered depend on the venue picked above, so this refetches when that changes.
   useEffect(() => {
-    setZones(venueId ? zonesForVenue(venueId) : []);
+    if (!venueId) {
+      setZones([]);
+      return;
+    }
+    let live = true;
+    void fetchVenuePlan(venueId).then(({ zones: list }) => {
+      if (live) setZones(list);
+    });
+    return () => {
+      live = false;
+    };
   }, [venueId]);
 
   useEffect(() => {
@@ -235,7 +247,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       setContact2Name(event.contact2Name ?? "");
       setContact2Phone(event.contact2Phone ?? "");
       setDate(event.date);
-      setVenueId(event.venueId ?? loadActiveVenueId());
+      setVenueId(event.venueId ?? loadActiveVenueId() ?? "");
       setZoneIds(event.zoneIds);
       setGuests(event.guests ?? 0);
     }
@@ -268,7 +280,9 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       const list = updateEvent(event.id, fields);
       onSaved(list.find((x) => x.id === event.id) ?? event);
     } else {
-      onSaved(beginEvent({ ...fields, mmPerUnit: findVenue(venueId)?.plan.mmPerUnit ?? 1 }));
+      // The venue list is already in state from the picker above — no need to go back to the server
+      // for a scale we are holding.
+      onSaved(beginEvent({ ...fields, mmPerUnit: venues.find((v) => v.id === venueId)?.plan.mmPerUnit ?? 1 }));
     }
   };
 
@@ -332,7 +346,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
 // F-1.9: close the meeting with a quote — the one stage where prices are shown on purpose.
 // The Quote component itself carries issue / re-issue / share (F-7.1–F-7.4).
 function QuoteStep({ event }: { event: EventSummary }) {
-  const [doc] = useState(() => loadDoc());
+  const [doc] = useState(() => loadDoc(event.id));
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">

@@ -8,6 +8,7 @@ import { itemLookup, measureContext } from "@/lib/outputs/lookup";
 import { activeEvent } from "@/lib/events/storage";
 import { eventPlan } from "@/lib/events/plan";
 import type { VenueStructure } from "@/lib/venues/structure";
+import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { loadSpares, saveSpare, type Spares } from "@/lib/outputs/storage";
 import { formatAmount } from "@/lib/catalog/format";
 import { NumberField } from "@/components/number-field";
@@ -23,8 +24,15 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
   const [structure, setStructure] = useState<VenueStructure | undefined>(undefined);
 
   useEffect(() => {
+    let live = true;
     if (eventId) setSpares(loadSpares(eventId));
-    setStructure(eventPlan(activeEvent()).structure);
+    const ev = activeEvent();
+    void fetchVenueGeometry(ev?.venueId).then((geometry) => {
+      if (live) setStructure(eventPlan(ev, geometry).structure);
+    });
+    return () => {
+      live = false;
+    };
   }, [eventId]);
 
   const setSpare = (variantId: string, v: number) => {

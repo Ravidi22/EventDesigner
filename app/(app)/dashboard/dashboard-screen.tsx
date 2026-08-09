@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
 import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
 import { loadEvents, setActiveEventId } from "@/lib/events/storage";
-import { loadVenues, venueSwatchClass } from "@/lib/venues/storage";
+import { venueSwatchClass } from "@/lib/venues/storage";
+import { useVenues } from "@/lib/venues/use-venues";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
@@ -23,6 +24,7 @@ export function DashboardScreen() {
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
   const { activeVenueId } = useActiveVenueScope();
+  const { venues } = useVenues();
 
   useEffect(() => {
     setEvents(loadEvents());
@@ -51,7 +53,12 @@ export function DashboardScreen() {
 
   // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
   // to it), so there's one venue name to resolve, not one per event.
-  const activeVenueName = useMemo(() => loadVenues().find((v) => v.id === activeVenueId)?.name, [activeVenueId]);
+  // The one venue read in the app that used to happen during render. It is state now, because the
+  // list comes from the server — the drawer shows the name once it arrives.
+  const activeVenueName = useMemo(
+    () => venues.find((v) => v.id === activeVenueId)?.name,
+    [venues, activeVenueId],
+  );
 
   return (
     <div className="px-8 py-8">

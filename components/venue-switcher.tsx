@@ -35,7 +35,8 @@ export function VenueSwitcher({
   onRename,
 }: {
   venues: Venue[];
-  activeId: string;
+  /** Null on a studio with no venues yet — the switcher shows its own empty state. */
+  activeId: string | null;
   collapsed?: boolean;
   onSelect: (id: string) => void;
   onAdd: () => void;

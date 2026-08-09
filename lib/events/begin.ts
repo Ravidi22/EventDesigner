@@ -40,7 +40,9 @@ export function beginEvent(input: {
     createdAt: Date.now(),
   };
   addEvent(ev);
-  setActiveEventId(ev.id); // before saveDoc — the document's storage key derives from the active event
-  saveDoc(emptyDocument(input.mmPerUnit ?? 1));
+  setActiveEventId(ev.id);
+  // Seeded under this event's own id, explicitly — no longer dependent on setActiveEventId having
+  // run first, which was an ordering rule enforced only by a comment.
+  saveDoc(ev.id, emptyDocument(input.mmPerUnit ?? 1));
   return ev;
 }
