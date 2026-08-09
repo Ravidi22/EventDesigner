@@ -109,41 +109,9 @@ export function RemoveButton({
   );
 }
 
-/** An on/off switch. The knob is placed with flexbox rather than a transform, so "on" lands on the
- *  end side of the track in Hebrew the same way it does in English, with no RTL arithmetic. */
-export function Switch({
-  checked,
-  onChange,
-  label,
-  disabled,
-  className = "",
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={
-        "flex h-5 w-9 shrink-0 items-center rounded-pill p-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
-        (checked ? "justify-end bg-accent" : "justify-start bg-inset-border") +
-        " " +
-        className
-      }
-    >
-      <span aria-hidden className="h-4 w-4 rounded-full bg-canvas shadow-floating" />
-    </button>
-  );
-}
+// The on/off switch moved to components/toggle.tsx — the product drawer needed the same control,
+// and re-exporting keeps every existing `import { Switch } from "./ui"` working.
+export { Switch } from "@/components/toggle";
 
 /** The "נשמר" flash shared by the autosaving forms. */
 export function SavedFlag({ shown }: { shown: boolean }) {
