@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
-import { sampleDoc } from "@/lib/studio/sample-doc";
+import { emptyDocument } from "@/lib/design-document/types";
 import { loadDoc } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
@@ -21,7 +21,9 @@ type Paper = "A4" | "A3";
 type Orient = "portrait" | "landscape";
 
 export function OutputsScreen() {
-  const [doc, setDoc] = useState<DesignDocumentContent>(() => sampleDoc());
+  // Empty until the event's real document loads. A packing list is the one screen that must never
+  // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
+  const [doc, setDoc] = useState<DesignDocumentContent>(() => emptyDocument());
   const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [view, setView] = useState<View>("packing");

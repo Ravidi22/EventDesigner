@@ -131,3 +131,11 @@ export const LAYER_LABEL: Record<Layer, string> = {
   floor: "רצפה",
   ceiling: "תקרה",
 };
+
+/** The studio's style vocabulary — what the drawer offers when tagging a product, and what the
+ *  catalog and the studio rail filter by.
+ *
+ *  It lives here, with the rest of the taxonomy, because it is not sample data: it survived the
+ *  catalog's move to Postgres untouched, and the products that carry these tags are real rows now.
+ *  It sat in the seed file only because that is where it was first written. */
+export const STYLE_TAGS = ["קלאסי", "מודרני", "טרופי", "שחור-לבן", "כפרי", "זוהר", "רומנטי"];

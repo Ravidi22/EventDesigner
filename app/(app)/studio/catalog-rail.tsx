@@ -3,9 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
-import { loadProducts } from "@/lib/catalog/storage";
-import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, type CategoryGroupId } from "@/lib/catalog/categories";
-import { STYLE_TAGS } from "@/lib/catalog/sample-data";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, STYLE_TAGS, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { loadFolder, likedProductIds, loadImages } from "@/lib/gallery/storage";
 import { activeEvent } from "@/lib/events/storage";
@@ -27,15 +25,21 @@ import { ProductImage } from "../catalog/product-image";
 // their own half of the catalog (HALL_PASS_GROUPS / DESIGN_PASS_GROUPS). It's a floor under the
 // filters, not one of them: the category dropdown only ever offers what's in scope, and clearing
 // the filters cannot widen the rail past it. Absent = the whole catalog, which is /studio.
-export function CatalogRail({ groups, hint }: { groups?: CategoryGroupId[]; hint?: string } = {}) {
+export function CatalogRail({
+  products: all = [],
+  groups,
+  hint,
+}: { products?: Product[]; groups?: CategoryGroupId[]; hint?: string } = {}) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
   const [likedIds, setLikedIds] = useState<string[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  // The catalog is fetched and cached by the studio above us and handed down, so opening the studio
+  // is one request rather than one per panel — and so the canvas's resolver and this rail are
+  // looking at the same list by construction.
+  const products = useMemo(() => all.filter((p) => !p.archived), [all]); // F-4.5: archived stay off the rail
 
-  // localStorage is client-only — resolve the catalog + active event's liked products after mount.
+  // The active event's liked products are still client-side storage — resolve after mount.
   useEffect(() => {
-    setProducts(loadProducts().filter((p) => !p.archived)); // F-4.5: archived stay off the rail
     const ev = activeEvent();
     if (ev) setLikedIds(likedProductIds(loadImages(), loadFolder(ev.id)));
   }, []);

@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORIES } from "@/lib/catalog/categories";
-import { SAMPLE_PRODUCTS } from "@/lib/catalog/sample-data";
-import { loadProducts, upsertProduct, deleteOrArchiveProduct, saveProducts } from "@/lib/catalog/storage";
+import { useCatalog } from "@/lib/catalog/use-catalog";
 import { parseCsvProducts } from "@/lib/catalog/csv";
 import { useHeaderSearch } from "@/components/header-search-context";
 import { ProductCard } from "./product-card";
@@ -13,7 +12,9 @@ import { ProductDrawer, blankProduct } from "./product-drawer";
 import { FirstRunEmpty, NoResults } from "./empty-state";
 
 export function CatalogScreen() {
-  const [products, setProducts] = useState<Product[]>(SAMPLE_PRODUCTS);
+  // The catalog now comes from Postgres through a server action; the hook fetches it, primes the
+  // studio's synchronous cache, and hands back the list plus the three write paths.
+  const { products, ready, error, save, remove, importMany } = useCatalog();
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<Product | null>(null);
@@ -22,10 +23,6 @@ export function CatalogScreen() {
   // The visible search box lives in the top header now (AppShell) — its value flows down
   // through context rather than a second, redundant input inside this page.
   const { value: search, setValue: setSearch } = useHeaderSearch();
-
-  useEffect(() => {
-    setProducts(loadProducts());
-  }, []);
 
   // F-4.5: archived products are hidden from the catalog (placements still resolve them).
   const visible = useMemo(() => products.filter((p) => !p.archived), [products]);
@@ -36,14 +33,13 @@ export function CatalogScreen() {
     [visible, filters, search],
   );
 
-  const saveProduct = (p: Product) => setProducts(upsertProduct(p));
-  const deleteProduct = (id: string) => {
-    const { products: next, archived } = deleteOrArchiveProduct(id);
-    setProducts(next);
+  const saveProduct = (p: Product) => void save(p);
+  const deleteProduct = async (id: string) => {
+    const { archived } = await remove(id);
     setNotice(archived ? "המוצר משובץ באירועים ולכן הועבר לארכיון — ההצבות נשמרו." : null);
   };
   // Fresh id for the product AND every variant — a duplicate must never alias the original's
-  // variant ids, or isPlacedAnywhere (lib/catalog/storage.ts) would treat it as already placed
+  // variant ids, or isPlacedAnywhere (lib/catalog/actions.ts) would treat it as already placed
   // just because the original happens to be.
   const duplicateProduct = (p: Product) => {
     const copy: Product = {
@@ -52,7 +48,7 @@ export function CatalogScreen() {
       name: `${p.name} (עותק)`,
       variants: p.variants.map((v) => ({ ...v, id: crypto.randomUUID() })),
     };
-    setProducts(upsertProduct(copy));
+    void save(copy);
   };
 
   const importCsv = async (file: File | undefined) => {
@@ -62,14 +58,28 @@ export function CatalogScreen() {
       setNotice("לא נמצאו שורות תקינות בקובץ. עמודות: שם, קטגוריה, קוטר/רוחב/עומק/גובה (ס״מ), מחיר.");
       return;
     }
-    const next = [...added, ...loadProducts()];
-    saveProducts(next);
-    setProducts(next);
+    await importMany(added);
     setNotice(`נוספו ${added.length} מוצרים מהקובץ. וריאנטים ושדות מיוחדים מוזנים ידנית.`);
   };
 
+  // "No products yet" and "not loaded yet" look identical in the data and mean opposite things —
+  // showing the first-run screen to a designer with 300 products, for the length of one fetch, is
+  // the kind of flicker that reads as data loss. `ready` is what separates them.
+  if (!ready) {
+    return (
+      <div className="px-8 pb-7 pt-3" aria-busy="true">
+        <p className="py-20 text-center text-sm text-muted">טוען את הקטלוג…</p>
+      </div>
+    );
+  }
+
   return (
     <div className="px-8 pb-7 pt-3">
+      {error && (
+        <p className="mb-4 rounded-md border border-alert bg-alert-tint px-4 py-2.5 text-sm text-ink" role="alert">
+          {error}
+        </p>
+      )}
       {visible.length === 0 ? (
         <FirstRunEmpty onAdd={() => setEditing(blankProduct())} />
       ) : (

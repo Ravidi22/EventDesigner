@@ -2,7 +2,7 @@
 
 import { FileUp, Grid3x3, List, Plus } from "lucide-react";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
-import { STYLE_TAGS } from "@/lib/catalog/sample-data";
+import { STYLE_TAGS } from "@/lib/catalog/categories";
 import type { Layer, Product } from "@/lib/catalog/types";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";

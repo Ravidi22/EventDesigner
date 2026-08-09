@@ -4,8 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
-import type { Product } from "@/lib/catalog/types";
-import { loadProducts } from "@/lib/catalog/storage";
+import { useCatalog } from "@/lib/catalog/use-catalog";
 import { loadImages, saveImage, loadPresentations, savePresentation, deletePresentation } from "@/lib/gallery/storage";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
@@ -271,7 +270,10 @@ function PresentationBuilder({
 const TONES = ["oklch(0.86 0.045 20)", "oklch(0.88 0.03 90)", "oklch(0.84 0.05 145)", "oklch(0.85 0.035 280)", "oklch(0.88 0.025 250)", "oklch(0.83 0.05 170)"];
 
 function NewImageForm({ onCreate, onCancel }: { onCreate: (img: GalleryImage) => void; onCancel: () => void }) {
-  const [products] = useState<Product[]>(() => loadProducts().filter((p) => !p.archived));
+  // Its own fetch: this form is opened on demand, long after the gallery screen mounted, and it is
+  // the only thing here that needs the catalog.
+  const { products: all } = useCatalog();
+  const products = useMemo(() => all.filter((p) => !p.archived), [all]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [productId, setProductId] = useState(products[0]?.id ?? "");

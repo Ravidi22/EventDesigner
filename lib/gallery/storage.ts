@@ -2,9 +2,15 @@
 // (event folder — the images liked for a given event, keyed by eventId → imageId[]).
 // localStorage for now; the swap to a server action lives here and nowhere else (same seam as
 // lib/events/storage.ts).
+// The gallery starts EMPTY. Its seed images were photo-less colour tiles whose only real content
+// was a link to a seed catalog product — and the catalog is real rows now, entered by the designer,
+// so those links pointed at products that no longer exist. Rather than fake photos of fake products,
+// the gallery shows its own empty state until real images are uploaded (which waits on file storage).
 import { storageKey } from "@/lib/storage-keys";
 import type { GalleryImage, Presentation } from "./types";
-import { SAMPLE_IMAGES, SAMPLE_PRESENTATIONS } from "./sample-data";
+
+const NO_IMAGES: GalleryImage[] = [];
+const NO_PRESENTATIONS: Presentation[] = [];
 
 const KEY = storageKey("gallery.folders");
 const IMAGES_KEY = storageKey("gallery.images");
@@ -33,7 +39,7 @@ function writeList<T>(key: string, list: T[]): void {
 }
 
 export function loadImages(): GalleryImage[] {
-  return readList(IMAGES_KEY, SAMPLE_IMAGES);
+  return readList(IMAGES_KEY, NO_IMAGES);
 }
 
 export function saveImage(image: GalleryImage): GalleryImage[] {
@@ -43,7 +49,7 @@ export function saveImage(image: GalleryImage): GalleryImage[] {
 }
 
 export function loadPresentations(): Presentation[] {
-  return readList(PRESENTATIONS_KEY, SAMPLE_PRESENTATIONS);
+  return readList(PRESENTATIONS_KEY, NO_PRESENTATIONS);
 }
 
 export function savePresentation(p: Presentation): Presentation[] {

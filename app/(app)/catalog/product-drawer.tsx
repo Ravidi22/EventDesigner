@@ -2,14 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import { PRICE_UNIT_LABEL, type Product, type Variant, type MapAppearance, type PriceUnit } from "@/lib/catalog/types";
+import {
+  PRICE_UNIT_LABEL,
+  VISIBILITY_LABEL,
+  VISIBILITY_HINT,
+  type Product,
+  type Variant,
+  type MapAppearance,
+  type PriceUnit,
+} from "@/lib/catalog/types";
 import { resolveFootprint } from "@/lib/studio/footprint";
-import { CATEGORIES, CATEGORY_BY_ID, LAYERS } from "@/lib/catalog/categories";
-import { STYLE_TAGS } from "@/lib/catalog/sample-data";
-import { isPlacedAnywhere } from "@/lib/catalog/storage";
+import { CATEGORIES, CATEGORY_BY_ID, LAYERS, STYLE_TAGS } from "@/lib/catalog/categories";
+import { isPlacedAnywhere } from "@/lib/catalog/actions";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { TagToggle } from "@/components/tag-toggle";
+import { SwitchRow } from "@/components/toggle";
 import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
@@ -119,12 +127,18 @@ export function ProductDrawer({
     setDraft((d) => ({ ...d, variants: d.variants.map((v) => (v.id === id ? { ...v, ...p } : v)) }));
   const addVariant = () => setDraft((d) => ({ ...d, variants: [...d.variants, { id: uid(), name: "" }] }));
   // F-4.5: a variant that's placed in any event is archived (kept resolvable), not deleted.
-  const removeVariant = (id: string) =>
+  //
+  // The "is it placed?" question is a database query now, so it is asked BEFORE the state update
+  // rather than inside it — a setState updater must stay synchronous and pure, and awaiting inside
+  // one would make React run it with a promise instead of a draft.
+  const removeVariant = async (id: string) => {
+    const placed = await isPlacedAnywhere([id]);
     setDraft((d) =>
-      isPlacedAnywhere([id])
+      placed
         ? { ...d, variants: d.variants.map((v) => (v.id === id ? { ...v, archived: true } : v)) }
         : { ...d, variants: d.variants.filter((v) => v.id !== id) },
     );
+  };
 
   const save = () => {
     setSubmitted(true);
@@ -415,6 +429,19 @@ export function ProductDrawer({
               ))}
             </div>
           </div>
+
+          <SectionDivider label="נראות" />
+
+          {/* The switch is worded as the thing being turned ON — "פריט ציבורי" — so that "off"
+              reads as the private default rather than as the absence of an unnamed state. Off
+              stores `undefined`, not the string "private": absent IS private (see Visibility), and
+              keeping one spelling is what makes the save/reload round-trip lossless. */}
+          <SwitchRow
+            checked={draft.visibility === "public"}
+            onChange={(on) => patch({ visibility: on ? "public" : undefined })}
+            label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
+            hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
+          />
 
           <div>
             <div className="mb-1.5 flex items-center justify-between">

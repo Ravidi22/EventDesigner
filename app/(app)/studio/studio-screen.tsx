@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { dispatch, undo, redo, initHistory, type History } from "@/lib/design-document/actions";
 import type { Layer as LayerId } from "@/lib/design-document/types";
-import { sampleDoc } from "@/lib/studio/sample-doc";
+import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
 import { loadDoc, saveDoc } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
 import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
+import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
 import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import { isTypingTarget } from "@/lib/keyboard";
@@ -39,7 +40,16 @@ const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = 
 };
 
 export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
-  const [history, setHistory] = useState<History>(() => initHistory(sampleDoc()));
+  // Fetched once here, for the whole studio: it fills the rail below AND primes the synchronous
+  // cache that the canvas's resolver and dropProduct() read during render and mid-drag.
+  const { products: catalog } = useCatalog();
+  // An EMPTY document, not a fabricated one. The studio used to open on a sample plan built out of
+  // sample products — invented tables, invented placements — which the restore effect below then
+  // replaced. With the catalog on Postgres that fiction is worse than useless: it would draw items
+  // against variant ids the designer's real catalog may not contain, and for one frame it showed a
+  // plan nobody drew. An event's real document is loaded below; a new one starts empty, which is
+  // what beginEvent() already writes.
+  const [history, setHistory] = useState<History>(() => initHistory(emptyDocument()));
   const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
   const [selection, setSelection] = useState<Selection>(null);
   const [layerVisible, setLayerVisible] = useState<Record<LayerId, boolean>>({ table: true, floor: true, ceiling: true });
@@ -240,7 +250,7 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
         onRetrySave={retrySave}
       />
       <div className="flex min-h-0 flex-1">
-        <CatalogRail groups={RAIL[mode].groups} hint={RAIL[mode].hint} />
+        <CatalogRail products={catalog} groups={RAIL[mode].groups} hint={RAIL[mode].hint} />
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={doc}

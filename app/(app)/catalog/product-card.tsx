@@ -1,4 +1,4 @@
-import { Copy, Layers, Palette, Pencil } from "lucide-react";
+import { Copy, Globe, Layers, Palette, Pencil } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, LAYER_LABEL } from "@/lib/catalog/categories";
 import { formatDimensions, formatPrice } from "@/lib/catalog/format";
@@ -106,6 +106,14 @@ export function ProductCard({
             <span className="absolute start-1.5 top-1.5 inline-flex items-center gap-1 rounded-pill border border-canvas/50 bg-canvas/70 px-2 py-0.5 text-xs font-medium text-ink-soft backdrop-blur-sm">
               <Palette className="h-3 w-3" strokeWidth={2} />
               <span className="nums">{product.variants.length}</span> גוונים
+            </span>
+          )}
+          {/* Only PUBLIC is marked. Private is the default and the overwhelming majority, so a badge
+              on every card would be noise; the badge means "this one leaves the studio". */}
+          {product.visibility === "public" && (
+            <span className="absolute end-1.5 top-1.5 inline-flex items-center gap-1 rounded-pill border border-accent-line bg-accent-tint/90 px-2 py-0.5 text-xs font-semibold text-accent backdrop-blur-sm">
+              <Globe className="h-3 w-3" strokeWidth={2} />
+              ציבורי
             </span>
           )}
         </div>

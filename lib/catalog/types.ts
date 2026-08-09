@@ -38,6 +38,25 @@ export interface Variant {
  *  Absent = "unit", which is every ordinary countable product. */
 export type PriceUnit = "unit" | "m" | "m2";
 
+/** Who may see a catalog item.
+ *
+ *  `private` — it exists only in this studio's catalog. `public` — other studios may see it.
+ *
+ *  Absent means private, and that direction is not an accident: an item with no stated opinion about
+ *  who may see it stays in. Publishing is something the designer does on purpose, in the drawer,
+ *  one product at a time. */
+export type Visibility = "private" | "public";
+
+export const VISIBILITY_LABEL: Record<Visibility, string> = {
+  private: "פרטי",
+  public: "ציבורי",
+};
+
+export const VISIBILITY_HINT: Record<Visibility, string> = {
+  private: "רק בקטלוג שלך.",
+  public: "מעצבים אחרים יוכלו לראות את הפריט. המחיר שלך נשאר פרטי.",
+};
+
 export const PRICE_UNIT_LABEL: Record<PriceUnit, string> = {
   unit: "ליחידה",
   m: "למטר",
@@ -70,5 +89,6 @@ export interface Product {
   styleTags: string[];
   variants: Variant[];
   appearance?: MapAppearance; // absent → derived from dimensions (see resolveFootprint)
+  visibility?: Visibility; // absent = private (see Visibility) — publishing is always explicit
   archived?: boolean; // F-4.5: hidden from the catalog but still resolvable by placements
 }
