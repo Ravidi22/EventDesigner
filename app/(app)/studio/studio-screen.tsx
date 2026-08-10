@@ -58,10 +58,14 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   const [addingTable, setAddingTable] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // Which event this drawing belongs to. A ref, not state: the autosave timeout below reads it
-  // when it fires rather than when it was scheduled, so the id cannot go stale in a closure — and
-  // because the restore effect is declared first, it is always set before the first save runs.
+  // Which event this drawing belongs to. A ref, not state: the autosave timeout below reads it when
+  // it FIRES rather than when it was scheduled, so the id cannot go stale in a closure.
   const eventId = useRef<string | null>(null);
+  // Whether the restore below has finished. It gates the autosave, and it has to: resolving which
+  // event we are in is a round trip now, and the 500ms debounce would otherwise beat it — writing
+  // the blank starting document under the "default" key (clobbering a scratch drawing) and then
+  // racing the restore that is still in flight.
+  const [restored, setRestored] = useState(false);
 
   const doc = history.present;
 
@@ -69,15 +73,18 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   // geometry it sits on from the active event's venue + zones — never from a stored copy.
   useEffect(() => {
     let live = true;
-    const event = activeEvent();
-    eventId.current = event?.id ?? null;
-    const saved = loadDoc(eventId.current);
-    if (saved) setHistory(initHistory(saved));
-    // The geometry is a server read now. The canvas renders on EMPTY_PLAN for the moment it takes,
-    // which is the same blank plane it showed before the walls were fetched — never a wrong plan.
-    void fetchVenueGeometry(event?.venueId).then((geometry) => {
+    void (async () => {
+      const event = await activeEvent();
+      if (!live) return;
+      eventId.current = event?.id ?? null;
+      const saved = loadDoc(eventId.current);
+      if (saved) setHistory(initHistory(saved));
+      setRestored(true);
+      // The geometry is a server read too. The canvas renders on EMPTY_PLAN for the moment it takes,
+      // which is the same blank plane it showed before the walls were fetched — never a wrong plan.
+      const geometry = await fetchVenueGeometry(event?.venueId);
       if (live) setPlan(eventPlan(event, geometry));
-    });
+    })();
     return () => {
       live = false;
     };
@@ -86,12 +93,13 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only
   // claims "saved" when the write actually landed; a failed write shows an error + retry.
   useEffect(() => {
+    if (!restored) return;
     setSaveState("saving");
     const t = setTimeout(() => {
       setSaveState(saveDoc(eventId.current, doc) ? "saved" : "error");
     }, 500);
     return () => clearTimeout(t);
-  }, [doc]);
+  }, [doc, restored]);
 
   const retrySave = useCallback(() => {
     setSaveState(saveDoc(eventId.current, doc) ? "saved" : "error");

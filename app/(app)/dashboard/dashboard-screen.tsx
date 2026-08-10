@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
-import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
-import { loadEvents, setActiveEventId } from "@/lib/events/storage";
+import { setActiveEventId } from "@/lib/events/storage";
+import { useEvents } from "@/lib/events/use-events";
 import { venueSwatchClass } from "@/lib/venues/storage";
 import { useVenues } from "@/lib/venues/use-venues";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
@@ -20,14 +20,15 @@ import { EventDetailDrawer } from "./event-detail-drawer";
 // source of truth also used by /gantt, so switching venues in the sidebar updates everything.
 export function DashboardScreen() {
   const router = useRouter();
-  const [events, setEvents] = useState<EventSummary[]>(SAMPLE_EVENTS);
+  const { events } = useEvents();
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
   const { activeVenueId } = useActiveVenueScope();
   const { venues } = useVenues();
 
+  // After mount, so the server and the first client render agree — the hour is not the same fact
+  // in both places.
   useEffect(() => {
-    setEvents(loadEvents());
     const h = new Date().getHours();
     setGreeting(h < 12 ? "בוקר טוב" : h < 18 ? "צהריים טובים" : "ערב טוב");
   }, []);

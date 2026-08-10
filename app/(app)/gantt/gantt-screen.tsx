@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, PenTool, Printer } from "lucide-react";
 import type { EventSummary, EventStatus } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, monogram, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { stepAt, type MeetingStepId } from "@/lib/meeting/steps";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
-import { SAMPLE_EVENTS } from "@/lib/events/sample-data";
-import { loadEvents, setActiveEventId, updateEvent } from "@/lib/events/storage";
+import { setActiveEventId } from "@/lib/events/storage";
+import { useEvents } from "@/lib/events/use-events";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { SearchInput } from "@/components/search-input";
 import { StatusChip } from "@/components/status-chip";
@@ -27,16 +27,12 @@ const FILTERS: { id: Filter; label: string }[] = [
 // favor of this view.
 export function GanttScreen() {
   const router = useRouter();
-  const [events, setEvents] = useState<EventSummary[]>(SAMPLE_EVENTS);
+  const { events, patch } = useEvents();
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const { activeVenueId } = useActiveVenueScope();
   const flow = useMeetingFlow();
-
-  useEffect(() => {
-    setEvents(loadEvents());
-  }, []);
 
   const filtered = useMemo(() => {
     const byVenue = events.filter((e) => e.venueId === activeVenueId);
@@ -73,7 +69,7 @@ export function GanttScreen() {
     router.push("/outputs");
   };
   const toggleArchive = (e: EventSummary) => {
-    setEvents(updateEvent(e.id, { archived: !e.archived }));
+    void patch(e.id, { archived: !e.archived });
   };
 
   return (

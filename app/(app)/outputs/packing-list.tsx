@@ -26,10 +26,11 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
   useEffect(() => {
     let live = true;
     if (eventId) setSpares(loadSpares(eventId));
-    const ev = activeEvent();
-    void fetchVenueGeometry(ev?.venueId).then((geometry) => {
+    void (async () => {
+      const ev = await activeEvent();
+      const geometry = await fetchVenueGeometry(ev?.venueId);
       if (live) setStructure(eventPlan(ev, geometry).structure);
-    });
+    })();
     return () => {
       live = false;
     };

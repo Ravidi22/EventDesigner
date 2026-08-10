@@ -23,18 +23,30 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
   const [pulse, setPulse] = useState(false);
 
   useEffect(() => {
+    let live = true;
     const all = loadPresentations();
     const p = (presentationId && all.find((x) => x.id === presentationId)) || all[0] || null;
     setPresentation(p);
     setImages(loadImages());
-    if (meeting) {
-      const ev = activeEvent();
-      if (ev) {
+    // A studio preview has no event to save likes into, so it needs no round trip at all.
+    if (!meeting) {
+      setReady(true);
+      return;
+    }
+    void activeEvent()
+      .then((ev) => {
+        if (!live || !ev) return;
         setEvent({ id: ev.id, clientName: ev.clientName });
         setFolder(loadFolder(ev.id));
-      }
-    }
-    setReady(true);
+      })
+      // `finally`, not `then`: a failed lookup still has to open the presentation. The client is
+      // sitting in front of this screen; losing the like button is a nuisance, a blank screen is not.
+      .finally(() => {
+        if (live) setReady(true);
+      });
+    return () => {
+      live = false;
+    };
   }, [presentationId, meeting]);
 
   const ordered = useMemo(() => {

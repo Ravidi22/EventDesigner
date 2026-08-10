@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Check, ChevronRight, LogOut } from "lucide-react";
 import { type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
-import { activeEvent, reachStep, updateEvent } from "@/lib/events/storage";
+import { activeEvent } from "@/lib/events/storage";
+import { patchEvent, reachStep } from "@/lib/events/actions";
 import { beginEvent } from "@/lib/events/begin";
 import { labelForZones } from "@/lib/events/plan";
 import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
@@ -45,26 +46,41 @@ export function MeetingScreen() {
   // The flow is read here rather than through useMeetingFlow: resuming has to land on the right
   // stage on the first paint, and that needs the list and the event in the same pass.
   useEffect(() => {
+    let live = true;
     const saved = loadFlow();
     setFlow(saved);
     if (params.get("new") !== null) {
       setEvent(null);
       setView(0);
-    } else {
-      const ev = activeEvent();
-      setEvent(ev);
-      setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
+      setReady(true);
+      return;
     }
-    setReady(true);
+    // `ready` gates the first paint deliberately: resuming has to land on the right stage
+    // immediately, and a meeting that flickered through the details form on its way to the stage
+    // the designer left off at would do it in front of the client.
+    void activeEvent()
+      .then((ev) => {
+        if (!live) return;
+        setEvent(ev);
+        setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
+      })
+      .finally(() => {
+        if (live) setReady(true);
+      });
+    return () => {
+      live = false;
+    };
   }, [params]);
 
   const advance = useCallback(
     (next: number) => {
-      if (event) {
-        const list = reachStep(event.id, next);
-        setEvent(list.find((e) => e.id === event.id) ?? event);
-      }
+      // The stage moves NOW and the record catches up: the designer clicked "continue" with a client
+      // watching, and a stage that waits on a round trip to change is a stage that looks broken.
       setView(next);
+      if (event) {
+        setEvent({ ...event, step: Math.max(event.step, next) });
+        void reachStep(event.id, next);
+      }
     },
     [event],
   );
@@ -128,9 +144,9 @@ export function MeetingScreen() {
   // A freshly created event opens on whatever the studio put after the details stage.
   function advanceFor(ev: EventSummary) {
     const next = Math.min(1, flow.length - 1);
-    const list = reachStep(ev.id, next);
-    setEvent(list.find((e) => e.id === ev.id) ?? ev);
+    setEvent({ ...ev, step: Math.max(ev.step, next) });
     setView(next);
+    void reachStep(ev.id, next);
     router.replace("/meeting"); // drop ?new so a refresh resumes the event, not the blank form
   }
 }
@@ -261,7 +277,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
     setZoneIds([]);
   };
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     const picked = zoneIds.map((id) => zones.find((z) => z.id === id)).filter((z): z is Zone => !!z);
     const fields = {
@@ -276,13 +292,16 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       zoneIds: picked.map((z) => z.id),
       zonesLabel: labelForZones(picked),
     };
+    // Unlike every other stage, this one WAITS for the write. The whole meeting hangs off the event
+    // existing — the sketch stages save a document under its id, the quote stamps it — so advancing
+    // before the row is there would leave the next stage drawing into nothing.
     if (event) {
-      const list = updateEvent(event.id, fields);
+      const list = await patchEvent(event.id, fields);
       onSaved(list.find((x) => x.id === event.id) ?? event);
     } else {
       // The venue list is already in state from the picker above — no need to go back to the server
       // for a scale we are holding.
-      onSaved(beginEvent({ ...fields, mmPerUnit: venues.find((v) => v.id === venueId)?.plan.mmPerUnit ?? 1 }));
+      onSaved(await beginEvent({ ...fields, mmPerUnit: venues.find((v) => v.id === venueId)?.plan.mmPerUnit ?? 1 }));
     }
   };
 

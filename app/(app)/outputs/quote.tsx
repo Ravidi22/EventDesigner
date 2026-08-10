@@ -12,7 +12,8 @@ import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { formatAmount, formatPrice, formatUnitPrice } from "@/lib/catalog/format";
 import { loadSettings, type BusinessSettings } from "@/lib/settings/storage";
 import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
-import { activeEvent, updateEvent } from "@/lib/events/storage";
+import { activeEvent } from "@/lib/events/storage";
+import { patchEvent } from "@/lib/events/actions";
 import { formatEventDate, zonesLabelOf, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
@@ -34,21 +35,23 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   useEffect(() => {
     let live = true;
     setSettings(loadSettings());
-    const ev = activeEvent();
-    setEvent(ev);
-    void fetchVenueGeometry(ev?.venueId).then((geometry) => {
-      if (live) setStructure(eventPlan(ev, geometry).structure);
-    });
-    if (ev) {
-      const q = loadIssuedQuote(ev.id);
-      setIssued(q);
-      if (q) {
-        setDiscountType(q.discountType);
-        setDiscountValue(q.discountValue);
-        setHidden(new Set(q.hiddenVariantIds));
-        setMerged(new Set(q.mergedCategoryIds));
+    void (async () => {
+      const ev = await activeEvent();
+      if (!live) return;
+      setEvent(ev);
+      if (ev) {
+        const q = loadIssuedQuote(ev.id);
+        setIssued(q);
+        if (q) {
+          setDiscountType(q.discountType);
+          setDiscountValue(q.discountValue);
+          setHidden(new Set(q.hiddenVariantIds));
+          setMerged(new Set(q.mergedCategoryIds));
+        }
       }
-    }
+      const geometry = await fetchVenueGeometry(ev?.venueId);
+      if (live) setStructure(eventPlan(ev, geometry).structure);
+    })();
     return () => {
       live = false;
     };
@@ -89,7 +92,8 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
     };
     saveIssuedQuote(event.id, record);
     setIssued(record);
-    updateEvent(event.id, { quoteSentAt: record.issuedAt });
+    // F-1.9: the stamp that moves the event to "נשלחה הצעה" on every list in the app.
+    void patchEvent(event.id, { quoteSentAt: record.issuedAt });
   };
 
   const share = async () => {

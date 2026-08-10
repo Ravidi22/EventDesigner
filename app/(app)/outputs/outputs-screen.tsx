@@ -36,14 +36,16 @@ export function OutputsScreen() {
   // it sits on from the event's venue + zones — the same geometry the studio drew it against.
   useEffect(() => {
     let live = true;
-    const ev = activeEvent();
-    const saved = loadDoc(ev?.id ?? null);
-    if (saved) setDoc(saved);
-    setEvent(ev);
-    void fetchVenueGeometry(ev?.venueId).then((geometry) => {
+    void (async () => {
+      const ev = await activeEvent();
+      if (!live) return;
+      const saved = loadDoc(ev?.id ?? null);
+      if (saved) setDoc(saved);
+      setEvent(ev);
+      if (ev) setVersion(nextExportVersion(ev.id));
+      const geometry = await fetchVenueGeometry(ev?.venueId);
       if (live) setPlan(eventPlan(ev, geometry));
-    });
-    if (ev) setVersion(nextExportVersion(ev.id));
+    })();
     return () => {
       live = false;
     };

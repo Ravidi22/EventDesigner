@@ -26,14 +26,21 @@ export function MeetingGalleryScreen() {
   const [folder, setFolder] = useState<string[]>([]);
   const [view, setView] = useState<View>("presentations");
 
-  // localStorage is client-only — hydrate after mount.
+  // Hydrate after mount: the images and the folder are still client storage, the event is a server
+  // read now.
   useEffect(() => {
+    let live = true;
     setImages(loadImages());
     setPresentations(loadPresentations());
-    const ev = activeEvent();
-    setEventId(ev?.id ?? null);
-    setClientName(ev?.clientName ?? "");
-    if (ev) setFolder(loadFolder(ev.id));
+    void activeEvent().then((ev) => {
+      if (!live) return;
+      setEventId(ev?.id ?? null);
+      setClientName(ev?.clientName ?? "");
+      if (ev) setFolder(loadFolder(ev.id));
+    });
+    return () => {
+      live = false;
+    };
   }, []);
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);

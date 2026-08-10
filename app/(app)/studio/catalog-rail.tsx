@@ -38,10 +38,17 @@ export function CatalogRail({
   // looking at the same list by construction.
   const products = useMemo(() => all.filter((p) => !p.archived), [all]); // F-4.5: archived stay off the rail
 
-  // The active event's liked products are still client-side storage — resolve after mount.
+  // Which event we are in is a server read; the folder of liked images within it is still client
+  // storage. Until both land the rail simply shows no hearts, which is what an event with no likes
+  // shows anyway.
   useEffect(() => {
-    const ev = activeEvent();
-    if (ev) setLikedIds(likedProductIds(loadImages(), loadFolder(ev.id)));
+    let live = true;
+    void activeEvent().then((ev) => {
+      if (live && ev) setLikedIds(likedProductIds(loadImages(), loadFolder(ev.id)));
+    });
+    return () => {
+      live = false;
+    };
   }, []);
 
   const set = (patch: Partial<FilterState>) => setFilters((f) => ({ ...f, ...patch }));

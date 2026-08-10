@@ -23,13 +23,20 @@ import {
 } from "@/lib/venues/actions";
 import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import type { Zone } from "@/lib/venues/zone";
+import { fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
+import type { EventSummary } from "@/lib/events/types";
 import { db } from "@/lib/db";
-import { venues } from "@/lib/db/schema";
+import { venues, events } from "@/lib/db/schema";
 
-/** There is no deleteVenue action — the app has no such button — so the fixture is removed
- *  directly. A test must not be the reason a destructive production action exists. */
+/** There is no deleteVenue or deleteEvent action — the app has no such button, only archive — so
+ *  fixtures are removed directly. A test must not be the reason a destructive production action
+ *  exists. */
 async function deleteVenueForTest(id: string) {
   await db().delete(venues).where(eq(venues.id, id));
+}
+
+async function deleteEventForTest(id: string) {
+  await db().delete(events).where(eq(events.id, id));
 }
 
 let failures = 0;
@@ -123,6 +130,7 @@ async function main() {
   check("the catalog is exactly as we found it", afterDelete.length === before, `${afterDelete.length} vs ${before}`);
 
   await verifyVenues();
+  await verifyEvents();
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
@@ -187,6 +195,110 @@ async function verifyVenues() {
 
   await deleteVenueForTest(id);
   check("cleanup: the venue list is as we found it", (await fetchVenues()).length === before, `${(await fetchVenues()).length} vs ${before}`);
+}
+
+/** The event half: a client record standing on zones of a property. Needs a venue and a zone to
+ *  stand on, so it builds both and takes both down again. */
+async function verifyEvents() {
+  console.log("\n— events —");
+  const before = (await fetchEvents()).length;
+
+  // The property this event is booked into.
+  const { id: venueId } = await createVenue();
+  const zoneA: Zone = {
+    id: crypto.randomUUID(),
+    venueId,
+    name: "האולם",
+    kind: "hall",
+    source: { type: "face", anchor: { x: 1000, y: 1000 } },
+    ceilingHeightMm: 4000,
+    createdAt: Date.now(),
+  };
+  const zoneB: Zone = { ...zoneA, id: crypto.randomUUID(), name: "החופה", kind: "canopy" };
+  await saveVenuePlan(venueId, emptyStructure(), [zoneA, zoneB]);
+
+  const original: EventSummary = {
+    id: crypto.randomUUID(),
+    clientName: "בדיקה — משפחת לוי",
+    phone: "050-0000000",
+    contactName: "נועה",
+    contact2Name: "אבי",
+    contact2Phone: "052-0000000",
+    // The date this whole check exists for. It is a Sunday in August; the machine running this is
+    // at UTC+3, so anything that parses it into a Date and formats it back lands on the 8th.
+    date: "2026-08-09",
+    time: "19:30",
+    meetingDate: "2026-06-01",
+    venueId,
+    // B before A on purpose: the order is the designer's, not the table's.
+    zoneIds: [zoneB.id, zoneA.id],
+    zonesLabel: "החופה + האולם",
+    guests: 240,
+    step: 2,
+    createdAt: Date.now(),
+  };
+
+  const afterSave = await saveEvent(original);
+  const returned = afterSave.find((e) => e.id === original.id);
+  check("saveEvent created it", !!returned);
+
+  if (returned) {
+    const a = JSON.parse(JSON.stringify(original)) as Record<string, unknown>;
+    const b = JSON.parse(JSON.stringify(returned)) as Record<string, unknown>;
+    const diffs = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+      .filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]))
+      .map((k) => `${k}: sent=${JSON.stringify(a[k])} got=${JSON.stringify(b[k])}`);
+    check("the whole event round-trips identically", diffs.length === 0, diffs.join(" | "));
+    check("the wedding is still the same CALENDAR DAY", returned.date === "2026-08-09", returned.date);
+    check("the start time survives as HH:mm", returned.time === "19:30", String(returned.time));
+    check("the meeting date is its own date", returned.meetingDate === "2026-06-01", String(returned.meetingDate));
+    check("zone order is the designer's, not the table's", returned.zoneIds.join() === [zoneB.id, zoneA.id].join());
+    check("an unarchived event has no archived key", returned.archived === undefined, String(returned.archived));
+    check("createdAt survives as epoch ms", returned.createdAt === original.createdAt);
+  }
+
+  // ── patch ────────────────────────────────────────────────────────────────────────────────────
+  const patched = await patchEvent(original.id, { guests: 260, zoneIds: [zoneA.id] });
+  const one = patched.find((e) => e.id === original.id);
+  check("patch is in place, not a duplicate", patched.filter((e) => e.id === original.id).length === 1);
+  check("patch landed", one?.guests === 260, String(one?.guests));
+  check("a shorter zone list drops the zone", one?.zoneIds.join() === zoneA.id, String(one?.zoneIds));
+  check("patch left untouched fields alone", one?.clientName === original.clientName && one?.date === "2026-08-09");
+
+  const stamped = await patchEvent(original.id, { quoteSentAt: 1_760_000_000_000, archived: true });
+  const sent = stamped.find((e) => e.id === original.id);
+  check("quoteSentAt survives as epoch ms", sent?.quoteSentAt === 1_760_000_000_000, String(sent?.quoteSentAt));
+  check("archived is true once set", sent?.archived === true, String(sent?.archived));
+
+  // ── the flow only moves forward ──────────────────────────────────────────────────────────────
+  const forward = await reachStep(original.id, 4);
+  check("reachStep advances", forward.find((e) => e.id === original.id)?.step === 4);
+  const backward = await reachStep(original.id, 1);
+  check(
+    "reachStep NEVER regresses",
+    backward.find((e) => e.id === original.id)?.step === 4,
+    String(backward.find((e) => e.id === original.id)?.step),
+  );
+
+  // ── the tenant/placement boundary ────────────────────────────────────────────────────────────
+  // A zone id that is real, but belongs to a DIFFERENT property. The foreign key alone would accept
+  // it — nothing about zone→venue is expressed in the events table — so this is the assertion that
+  // proves the check in assertPlacement is doing the work.
+  const { id: otherVenueId } = await createVenue();
+  const strayZone: Zone = { ...zoneA, id: crypto.randomUUID(), venueId: otherVenueId };
+  await saveVenuePlan(otherVenueId, emptyStructure(), [strayZone]);
+  let rejected = false;
+  try {
+    await patchEvent(original.id, { zoneIds: [strayZone.id] });
+  } catch {
+    rejected = true;
+  }
+  check("a zone from another venue is refused", rejected);
+
+  await deleteEventForTest(original.id);
+  await deleteVenueForTest(venueId);
+  await deleteVenueForTest(otherVenueId);
+  check("cleanup: the event list is as we found it", (await fetchEvents()).length === before, `${(await fetchEvents()).length} vs ${before}`);
 }
 
 main().catch((e) => {
