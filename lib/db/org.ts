@@ -46,12 +46,23 @@ export function actAsOrgForScript(organizationId: string): void {
 /**
  * The organization the current request belongs to.
  *
- * @throws when there is no signed-in user. Callers do not catch this: a server action that cannot
- * say whose data it is being asked for has nothing safe to return.
+ * @throws when there is no signed-in user, and when the signed-in user is a CLIENT.
+ *
+ * Callers do not catch either: a server action that cannot say whose data it is being asked for has
+ * nothing safe to return.
+ *
+ * The client case is the one worth spelling out. A client account has no organisation — the column
+ * is null for them — so this function is the point at which every studio-side action in the app
+ * refuses them, without any of those actions having been changed. That is the whole value of the
+ * seam: the day a second kind of account appeared, "clients cannot read the studio's catalog,
+ * venues, events or prices" became true in one place rather than forty.
  */
 export async function currentOrg(): Promise<string> {
   if (scriptOrg) return scriptOrg;
   const session = await currentSession();
   if (!session) throw new Error("not signed in");
+  if (session.kind !== "studio" || !session.organizationId) {
+    throw new Error("this account is not a studio account");
+  }
   return session.organizationId;
 }

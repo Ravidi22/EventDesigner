@@ -1,6 +1,5 @@
-import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
-import { currentSession } from "@/lib/auth/session";
+import { requireStudio } from "@/lib/auth/guard";
 
 // Every route under (app) renders inside the persistent shell (plum sidebar + topbar).
 // The marketing home (/) and the account screens sit outside the group and have no shell.
@@ -10,8 +9,10 @@ import { currentSession } from "@/lib/auth/session";
 // gets no further than here. Server-side, before any of the shell renders — a signed-out visitor
 // never receives the studio's markup at all, which is the difference between a redirect and a
 // flicker of someone else's app.
+//
+// requireStudio, not requireSession: this is a whole business's clients, catalog and prices, and a
+// signed-in CLIENT has no more right to it than a stranger.
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const session = await currentSession();
-  if (!session) redirect("/login");
+  const session = await requireStudio();
   return <AppShell user={{ name: session.name, email: session.email }}>{children}</AppShell>;
 }

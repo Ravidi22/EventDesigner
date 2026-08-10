@@ -36,6 +36,11 @@ export function proxy(request: NextRequest) {
 
   // Already signed in and looking at the sign-in screen: there is nothing there for you. The
   // marketing home is exempt — someone with an account is still allowed to read it.
+  //
+  // /dashboard for everyone, including clients, who belong on /client. Sending them there directly
+  // would mean reading their account KIND, which means a database query, which is the one thing
+  // this layer must not do. The (app) layout bounces them on arrival — one extra hop for a case
+  // that only happens when someone signed in navigates back to the sign-in page.
   if (hasCookie && AUTH_PAGES.includes(pathname)) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }

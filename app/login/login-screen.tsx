@@ -41,11 +41,13 @@ export function LoginScreen() {
         setBusy(false);
         return;
       }
-      // Where the guard sent them from, if anywhere. Only ever a PATH — the guard writes one and
-      // this refuses anything else, so `?next=https://elsewhere` cannot turn a sign-in into a
-      // redirect off this site.
+      // Where the guard sent them from, if anywhere; otherwise wherever this KIND of account
+      // belongs, which only the server knows. Only ever a PATH — the guard writes one and this
+      // refuses anything else, so `?next=https://elsewhere` cannot turn a sign-in into a redirect
+      // off this site.
       const requested = params.get("next");
-      const destination = requested?.startsWith("/") && !requested.startsWith("//") ? requested : "/dashboard";
+      const home = result.home ?? "/dashboard";
+      const destination = requested?.startsWith("/") && !requested.startsWith("//") ? requested : home;
       // refresh() so the shell re-renders as the signed-in user rather than from the cache it built
       // a moment ago, when nobody was.
       router.replace(destination);

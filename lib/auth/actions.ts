@@ -11,6 +11,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
+import { HOME_FOR, isAccountKind, type AccountKind } from "./kinds";
 import { hashPassword, passwordProblem, verifyPassword } from "./password";
 import { createSession, currentSession, destroySession, pruneExpiredSessions, type Session } from "./session";
 
@@ -21,6 +22,9 @@ export interface AuthResult {
   error?: string;
   /** Which field it belongs under, when it belongs under one. */
   field?: "email" | "password" | "studioName" | "name";
+  /** Where this account belongs, on success. The two kinds land in different halves of the app and
+   *  the caller should not have to re-derive which. */
+  home?: string;
 }
 
 /** Emails are compared case-insensitively and stored lowercase: nobody thinks of Noa@studio.co.il
@@ -45,17 +49,23 @@ async function noSuchUserHash(): Promise<string> {
 }
 
 export async function signUp(input: {
-  studioName: string;
+  kind: AccountKind;
+  /** Required for a studio; ignored for a client, who has no business to name. */
+  studioName?: string;
   name: string;
   email: string;
   password: string;
 }): Promise<AuthResult> {
+  // The kind arrives from a form the person controls, so it is checked against the two values that
+  // exist rather than cast — an unrecognised kind must not fall through to a default that grants
+  // more than was asked for.
+  const kind: AccountKind = isAccountKind(input?.kind) ? input.kind : "client";
   const studioName = String(input?.studioName ?? "").trim();
   const name = String(input?.name ?? "").trim();
   const email = normalizeEmail(String(input?.email ?? ""));
   const password = String(input?.password ?? "");
 
-  if (!studioName) return { error: "יש להזין שם עסק", field: "studioName" };
+  if (kind === "studio" && !studioName) return { error: "יש להזין שם עסק", field: "studioName" };
   if (!name) return { error: "יש להזין שם מלא", field: "name" };
   if (!EMAIL_RE.test(email)) return { error: "כתובת אימייל לא תקינה", field: "email" };
   const problem = passwordProblem(password);
@@ -72,7 +82,9 @@ export async function signUp(input: {
   if (existing) return { error: "כבר קיים חשבון עם האימייל הזה", field: "email" };
 
   const passwordHash = await hashPassword(password);
-  const organizationId = await claimOrganization(studioName);
+  // A client creates NO organisation. They own nothing here — an organisation for a client would be
+  // an empty studio nobody works in, and a tenant boundary that means nothing is worse than none.
+  const organizationId = kind === "studio" ? await claimOrganization(studioName) : null;
 
   let userId: string;
   try {
@@ -80,23 +92,30 @@ export async function signUp(input: {
       .insert(users)
       .values({
         organizationId,
+        kind,
         email,
         name,
-        // Whoever creates the studio owns it. Everyone after them is invited into it.
+        // Whoever creates the studio owns it; everyone after them is invited into it. For a client
+        // the column is meaningless — they are not on this ladder — so it keeps its default and
+        // nothing reads it.
         role: "owner",
         state: "active",
         passwordHash,
-        joinedAt: today(), // a calendar date, not an instant
+        // The day they joined the STUDIO. A client joined no studio, so it stays null rather than
+        // recording a date about a thing that did not happen.
+        joinedAt: kind === "studio" ? today() : null,
       })
       .returning({ id: users.id });
     userId = row.id;
   } catch {
-    // The unique index caught a second signup that raced the check above.
+    // The unique index caught a second signup that raced the check above. One email, one account,
+    // across both kinds — which is deliberate: a designer who is also somebody's client is one
+    // person, and two rows would be two passwords to keep in step.
     return { error: "כבר קיים חשבון עם האימייל הזה", field: "email" };
   }
 
   await createSession(userId);
-  return {};
+  return { home: HOME_FOR[kind] };
 }
 
 /**
@@ -166,7 +185,7 @@ export async function signIn(input: { email: string; password: string }): Promis
   if (!email || !password) return { error: "יש להזין אימייל וסיסמה" };
 
   const [user] = await db()
-    .select({ id: users.id, passwordHash: users.passwordHash, state: users.state })
+    .select({ id: users.id, kind: users.kind, passwordHash: users.passwordHash, state: users.state })
     .from(users)
     .where(and(eq(users.email, email), eq(users.state, "active")))
     .limit(1);
@@ -180,7 +199,10 @@ export async function signIn(input: { email: string; password: string }): Promis
 
   await pruneExpiredSessions();
   await createSession(user.id);
-  return {};
+  // ONE sign-in form for both kinds, on purpose. Which half of the app you belong to is a fact
+  // about your account, not a thing to make you declare at the door — and a chooser on the sign-in
+  // screen would be a way to ask "does this email belong to a designer?" without a password.
+  return { home: HOME_FOR[user.kind] };
 }
 
 export async function signOut(): Promise<void> {

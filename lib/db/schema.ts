@@ -71,6 +71,17 @@ export const visibilityEnum = pgEnum("product_visibility", ["private", "public"]
 export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
+// Which SIDE of the product an account is on, and the one distinction that is not a role.
+//
+// A `studio` account is a designer or supplier: they own an organisation and everything in it —
+// venues, catalog, events, prices. A `client` account is the couple whose wedding it is. They own
+// no organisation at all; they are shown things, by the studio, about their own event.
+//
+// It is deliberately NOT a value of studioRoleEnum. owner/designer/crew are rungs of one ladder,
+// where each can do everything the one below can; a client is not a smaller designer, and modelling
+// them as the bottom rung is how "crew can't see prices" quietly becomes the rule that is supposed
+// to be keeping a client out of the whole studio.
+export const accountKindEnum = pgEnum("account_kind", ["studio", "client"]);
 // People. Two ladders, because they answer two different questions: what you are inside this
 // studio (lib/team/storage.ts), and what you may do to one property (lib/venues/access.ts).
 export const studioRoleEnum = pgEnum("studio_role", ["owner", "designer", "crew"]);
@@ -95,14 +106,29 @@ export const organizations = pgTable("organizations", {
   createdAt: created(),
 });
 
-/** StudioMember (lib/team/storage.ts) — someone inside the business. */
+/** Everyone with an account: the studio's own people (StudioMember, lib/team/storage.ts) and the
+ *  clients whose events they are designing.
+ *
+ *  ONE table, not two, because a person has one set of credentials. Two tables would mean two
+ *  password columns, two sign-in paths and two places to get a lockout or a reset wrong — and the
+ *  day a designer is also somebody else's client, two rows fighting over one email. What differs
+ *  between the two kinds is not how they sign in; it is what they are attached to. */
 export const users = pgTable(
   "users",
   {
     id: id(),
-    organizationId: orgId(),
+    /** ⚠ NULL for client accounts, and that is the whole point: a client belongs to no studio.
+     *
+     *  Note this is the one organizationId in the schema that is nullable — everywhere else it is
+     *  the tenant key and NOT NULL. Here it answers "which studio is this person OF", and for a
+     *  client the honest answer is none. Which events they may see is a different question, with
+     *  its own table (event_clients) — a client of one studio must not become a member of it. */
+    organizationId: uuid("organization_id"),
+    /** studio (designer/supplier) or client. See accountKindEnum. */
+    kind: accountKindEnum("kind").notNull().default("studio"),
     email: text("email").notNull().unique(),
     name: text("name"),
+    /** Meaningful only for studio accounts; a client is not a rung on this ladder. */
     role: studioRoleEnum("role").notNull().default("designer"),
     state: inviteStateEnum("state").notNull().default("pending"),
     /** scrypt, salted per user — see lib/auth/password.ts for the encoding.
@@ -416,6 +442,39 @@ export const eventZones = pgTable(
   (t) => [
     primaryKey({ columns: [t.eventId, t.zoneId] }),
     index("event_zones_zone_idx").on(t.zoneId),
+  ],
+);
+
+/** Which client accounts may see which event.
+ *
+ *  This is the whole permission model for the client side, and it is a table rather than a column on
+ *  either end for two reasons. A wedding has more than one client — the couple, sometimes a parent
+ *  paying for it — and each of them signs in as themselves. And an event is shared DELIBERATELY, by
+ *  the designer, at a moment of their choosing: a client seeing a plan is a decision, not a
+ *  consequence of the record existing. A row here is that decision, and deleting it is how it is
+ *  taken back.
+ *
+ *  ⚠ It does NOT make the client a member of the studio. It grants sight of one event and nothing
+ *  else — never the catalog, never the studio's other clients, and never the internal columns of
+ *  this event. What may be rendered for a client stays the /present rule: no prices, no costs, no
+ *  quantities on hand.
+ */
+export const eventClients = pgTable(
+  "event_clients",
+  {
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** When it was shared. There is no separate createdAt: the row IS the sharing. */
+    sharedAt: created(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.eventId, t.userId] }),
+    // "which events may this person see" is the only read the client side ever does.
+    index("event_clients_user_idx").on(t.userId),
   ],
 );
 

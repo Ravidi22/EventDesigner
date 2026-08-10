@@ -27,7 +27,11 @@ const TTL_DAYS = 30;
  *  and "which studio", and nothing that would go stale between sign-in and now. */
 export interface Session {
   userId: string;
-  organizationId: string;
+  /** studio = a designer or supplier; client = someone whose event is being designed. */
+  kind: "studio" | "client";
+  /** ⚠ NULL for a client — they belong to no studio. Anything scoping data by organisation must
+   *  therefore treat this as a REQUIREMENT and not an optional field; see currentOrg(). */
+  organizationId: string | null;
   email: string;
   name: string | null;
   role: "owner" | "designer" | "crew";
@@ -79,6 +83,7 @@ export const currentSession = cache(async (): Promise<Session | null> => {
   const [row] = await db()
     .select({
       userId: users.id,
+      kind: users.kind,
       organizationId: users.organizationId,
       email: users.email,
       name: users.name,
@@ -97,6 +102,7 @@ export const currentSession = cache(async (): Promise<Session | null> => {
 
   return {
     userId: row.userId,
+    kind: row.kind,
     organizationId: row.organizationId,
     email: row.email,
     name: row.name,
