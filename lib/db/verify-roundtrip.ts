@@ -11,6 +11,17 @@ config({ path: ".env.local" });
 config();
 
 import { eq } from "drizzle-orm";
+import { actAsOrgForScript, SINGLE_ORG_ID } from "@/lib/db/org";
+
+// This script is a plain Node process: there is no request and no session cookie for currentOrg()
+// to read. This is the one seam that lets it say which studio it is acting as, and it refuses to
+// work in production. The organisation is the one `npm run db:seed` creates.
+//
+// It runs at module scope rather than inside main() because it must be set before the first action
+// call. (Imports hoist above it — that is fine, since none of them call currentOrg() while being
+// evaluated, only when invoked.)
+actAsOrgForScript(SINGLE_ORG_ID);
+
 import { fetchProducts, saveProduct, removeProduct } from "@/lib/catalog/actions";
 import type { Product } from "@/lib/catalog/types";
 import {

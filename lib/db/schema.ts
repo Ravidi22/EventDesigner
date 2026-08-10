@@ -105,12 +105,42 @@ export const users = pgTable(
     name: text("name"),
     role: studioRoleEnum("role").notNull().default("designer"),
     state: inviteStateEnum("state").notNull().default("pending"),
+    /** scrypt, salted per user — see lib/auth/password.ts for the encoding.
+     *
+     *  NULLABLE, and that is the whole difference between the two rows this table holds: someone
+     *  who signed up has a hash, someone who was INVITED is a real row with a real email and no
+     *  password until they accept. A NOT NULL column would force an invitation to invent a
+     *  credential nobody chose, which is a credential that can be guessed. */
+    passwordHash: text("password_hash"),
     /** The day they joined the studio, as the settings list prints it — a calendar date, not the
      *  instant the row was written, which is what createdAt already says. */
     joinedAt: date("joined_at"),
     createdAt: created(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)],
+);
+
+/** A signed-in browser.
+ *
+ *  Sessions live in the database rather than in a signed cookie so that they can be REVOKED — a
+ *  stolen laptop, a member removed from the studio, a password changed. A self-contained signed
+ *  token is valid until it expires no matter what happens on this end, and "log out everywhere"
+ *  cannot be built on top of one.
+ *
+ *  ⚠ The column holds a HASH of the token, never the token. The cookie the browser carries is the
+ *  only copy of the secret itself, so a leaked database dump cannot be replayed as a login. */
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
 /** BusinessSettings (lib/settings/storage.ts) + the configured meeting flow

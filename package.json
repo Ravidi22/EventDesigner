@@ -30,7 +30,8 @@
     "check:style": "tsx lib/element-style.ts",
     "check:folder": "tsx lib/gallery/folder-logic.ts",
     "check:aggregate": "tsx lib/outputs/aggregate.ts",
-    "check:quote": "tsx lib/outputs/quote.ts"
+    "check:quote": "tsx lib/outputs/quote.ts",
+    "check:password": "tsx lib/auth/password.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
