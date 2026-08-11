@@ -10,7 +10,8 @@ import { eventPlan } from "@/lib/events/plan";
 import type { VenueStructure } from "@/lib/venues/structure";
 import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { formatAmount, formatPrice, formatUnitPrice } from "@/lib/catalog/format";
-import { loadSettings, type BusinessSettings } from "@/lib/settings/storage";
+import { fetchSettings } from "@/lib/settings/actions";
+import type { BusinessSettings } from "@/lib/settings/types";
 import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
 import { activeEvent } from "@/lib/events/storage";
 import { patchEvent } from "@/lib/events/actions";
@@ -34,7 +35,9 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
 
   useEffect(() => {
     let live = true;
-    setSettings(loadSettings());
+    void fetchSettings().then((loaded) => {
+      if (live) setSettings(loaded);
+    });
     void (async () => {
       const ev = await activeEvent();
       if (!live) return;

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { loadSettings, saveSettings, DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/storage";
+import { fetchSettings, saveSettings } from "@/lib/settings/actions";
+import { DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/types";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { Panel, SavedFlag } from "./ui";
@@ -14,17 +15,35 @@ import { Panel, SavedFlag } from "./ui";
 export function BusinessSection() {
   const [s, setS] = useState<BusinessSettings>(DEFAULT_SETTINGS);
   const [saved, setSaved] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  useEffect(() => setS(loadSettings()), []);
+  useEffect(() => {
+    let live = true;
+    void fetchSettings().then((loaded) => {
+      if (live) setS(loaded);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Typing stays instant and the write follows 600ms later. Every field here autosaves on change,
+  // which against localStorage was free; against a database, "שם העסק" would be one request per
+  // character. The pending write is cancelled and rescheduled on each keystroke, and the timer is
+  // cleared on unmount so navigating away mid-word does not fire a stale save.
+  useEffect(() => () => clearTimeout(saveTimer.current), []);
 
   const patch = (p: Partial<BusinessSettings>) => {
     const next = { ...s, ...p };
     setS(next);
-    saveSettings(next);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      void saveSettings(next);
+    }, 600);
     setSaved(true);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setSaved(false), 1600);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setSaved(false), 1600);
   };
 
   return (

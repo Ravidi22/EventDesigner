@@ -10,7 +10,7 @@ import { patchEvent, reachStep } from "@/lib/events/actions";
 import { beginEvent } from "@/lib/events/begin";
 import { labelForZones } from "@/lib/events/plan";
 import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
-import { loadFlow } from "@/lib/meeting/storage";
+import { fetchMeetingFlow } from "@/lib/settings/actions";
 import { loadActiveVenueId, type Venue, type Zone } from "@/lib/venues/storage";
 import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
@@ -43,24 +43,19 @@ export function MeetingScreen() {
   const [view, setView] = useState(0);
   const [ready, setReady] = useState(false);
 
-  // The flow is read here rather than through useMeetingFlow: resuming has to land on the right
-  // stage on the first paint, and that needs the list and the event in the same pass.
+  // The flow is read here rather than from the (app) layout's context: /meeting sits outside that
+  // group, and resuming has to land on the right stage on the first paint — which needs the list
+  // and the event in the same pass, since the stage to resume at is `event.step` clamped to the
+  // flow's length. Fetched together, for that reason.
   useEffect(() => {
     let live = true;
-    const saved = loadFlow();
-    setFlow(saved);
-    if (params.get("new") !== null) {
-      setEvent(null);
-      setView(0);
-      setReady(true);
-      return;
-    }
-    // `ready` gates the first paint deliberately: resuming has to land on the right stage
-    // immediately, and a meeting that flickered through the details form on its way to the stage
-    // the designer left off at would do it in front of the client.
-    void activeEvent()
-      .then((ev) => {
+    const isNew = params.get("new") !== null;
+    // `ready` gates the first paint deliberately: a meeting that flickered through the details form
+    // on its way to the stage the designer left off at would do it in front of the client.
+    void Promise.all([fetchMeetingFlow(), isNew ? Promise.resolve(null) : activeEvent()])
+      .then(([saved, ev]) => {
         if (!live) return;
+        setFlow(saved);
         setEvent(ev);
         setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
       })

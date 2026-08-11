@@ -20,28 +20,31 @@ config();
 import { db } from "@/lib/db";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { organizations, studioSettings } from "@/lib/db/schema";
-import { DEFAULT_SETTINGS } from "@/lib/settings/storage";
-import { DEFAULT_FLOW } from "@/lib/meeting/steps";
+import { DEFAULT_SETTINGS } from "@/lib/settings/types";
 
 async function main() {
   const database = db();
 
+  // "Eve" is a placeholder, not a business. The real name arrives at sign-up, which renames this
+  // organisation when the first account adopts it (see claimOrganization).
   await database
     .insert(organizations)
-    .values({ id: SINGLE_ORG_ID, name: DEFAULT_SETTINGS.businessName })
+    .values({ id: SINGLE_ORG_ID, name: "Eve" })
     .onConflictDoNothing();
 
+  // The letterhead fields are left at their defaults — which are EMPTY. Seeding a business name and
+  // an owner would put an invented studio on a real quote for any designer who never opened the
+  // settings screen.
+  //
+  // meetingFlow is left empty too, and that is not the same as writing DEFAULT_FLOW into it: an
+  // empty list means "never customised", so a studio that has not touched the meeting screen keeps
+  // following the app's default even after that default changes. See fetchMeetingFlow.
   await database
     .insert(studioSettings)
     .values({
       organizationId: SINGLE_ORG_ID,
-      businessName: DEFAULT_SETTINGS.businessName,
-      ownerName: DEFAULT_SETTINGS.ownerName,
-      phone: DEFAULT_SETTINGS.phone,
-      address: DEFAULT_SETTINGS.address,
       vatRate: String(DEFAULT_SETTINGS.vatRate),
       currency: DEFAULT_SETTINGS.currency,
-      meetingFlow: DEFAULT_FLOW,
     })
     .onConflictDoNothing();
 

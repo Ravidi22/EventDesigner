@@ -1,10 +1,14 @@
-// Everything this browser is holding for the studio, as one file.
+// Everything THIS BROWSER is still holding for the studio, as one file.
 //
-// While the backend seam is still localStorage, the designer's catalog, venues, events and plans
-// live in exactly one browser profile — clearing site data loses the lot. So "export" here is not
-// a nicety, it is the only backup that exists, and "reset" is the only way back to the seed data
-// once a demo has been drawn over. Both belong behind a storage module rather than in the screen,
-// same rule as everywhere else: when this swaps to Postgres, these two become an endpoint each.
+// It used to be the only backup that existed, because everything lived here. That shrinks with each
+// module that moves: the catalog, the venues, the events and the studio's own settings are rows in
+// Postgres now, backed up by whatever backs up the database. What this still covers is the design
+// documents, the gallery, the issued quotes, the packing spares, the team list and the venue
+// grants — which is why it is still worth having, and why it will stop being worth having.
+//
+// ⚠ A file exported from one browser and imported into another carries the drawings but not the
+// events they belong to, since those are no longer in here. Both halves are needed for it to mean
+// anything, and that is a reason to finish the migration rather than to grow this file.
 import { storagePrefix } from "@/lib/storage-keys";
 
 export interface SnapshotStats {
@@ -63,8 +67,12 @@ export function importSnapshot(json: string): number {
   return written;
 }
 
-/** Drops every `eve.*` key. The next read from each storage module falls back to its seed data,
- *  so this is "back to the sample studio", not "empty app". */
+/** Drops every `eve.*` key.
+ *
+ *  This USED to mean "back to the sample studio", because each storage module fell back to seed
+ *  data. There is no seed data any more, so it now means what it says: the drawings, gallery,
+ *  quotes and spares held in this browser are gone. What is in Postgres — the catalog, the venues,
+ *  the events, the settings — is untouched, and this cannot reach it. */
 export function resetAll(): void {
   for (const key of eveKeys()) window.localStorage.removeItem(key);
 }

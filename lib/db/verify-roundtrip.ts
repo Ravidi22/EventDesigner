@@ -36,6 +36,14 @@ import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import type { Zone } from "@/lib/venues/zone";
 import { fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
+import {
+  fetchSettings,
+  saveSettings,
+  fetchMeetingFlow,
+  saveMeetingFlow,
+  resetMeetingFlow,
+} from "@/lib/settings/actions";
+import { DEFAULT_FLOW } from "@/lib/meeting/steps";
 import { db } from "@/lib/db";
 import { venues, events } from "@/lib/db/schema";
 
@@ -142,6 +150,7 @@ async function main() {
 
   await verifyVenues();
   await verifyEvents();
+  await verifySettings();
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
@@ -310,6 +319,81 @@ async function verifyEvents() {
   await deleteVenueForTest(venueId);
   await deleteVenueForTest(otherVenueId);
   check("cleanup: the event list is as we found it", (await fetchEvents()).length === before, `${(await fetchEvents()).length} vs ${before}`);
+}
+
+/** The studio's own row: the letterhead, the VAT rate, and the shape of its meeting.
+ *
+ *  Unlike the others this fixture cannot be created and deleted — there is exactly one settings row
+ *  per studio and the app depends on it existing. So it saves what it finds, exercises the row, and
+ *  puts the original values back at the end. The last two checks prove it did. */
+async function verifySettings() {
+  console.log("\n— settings —");
+  const original = await fetchSettings();
+  const originalFlow = await fetchMeetingFlow();
+
+  const written = await saveSettings({
+    businessName: "בדיקה — סטודיו",
+    ownerName: "בדיקה",
+    phone: "03-0000000",
+    address: "רחוב הבדיקה 1, תל אביב",
+    logoUrl: "https://example.com/logo.png",
+    vatRate: 0.17,
+    currency: "€", // ignored on purpose — see below
+  });
+
+  check("settings round-trip", written.businessName === "בדיקה — סטודיו" && written.ownerName === "בדיקה");
+  check("the address survives", written.address === "רחוב הבדיקה 1, תל אביב", written.address);
+  check("the logo url survives", written.logoUrl === "https://example.com/logo.png");
+  // numeric, not float: a VAT rate multiplies every line of every quote.
+  check("the VAT rate keeps its decimals", written.vatRate === 0.17, String(written.vatRate));
+  // The screen makes this read-only; the ACTION is what enforces it, because the screen is not
+  // where a POST comes from. A quote whose currency symbol can be set by the caller is a quote that
+  // can be made to say anything.
+  check("the currency cannot be set by the caller", written.currency === "₪", written.currency);
+
+  const clamped = await saveSettings({ ...written, vatRate: 18 });
+  check("a VAT rate of 18 is clamped, not multiplied into every quote", clamped.vatRate === 1, String(clamped.vatRate));
+
+  // ── the meeting flow ─────────────────────────────────────────────────────────────────────────
+  const shortened = await saveMeetingFlow(["details", "quote"]);
+  check("a shortened flow persists", shortened.join() === "details,quote", shortened.join());
+  check("…and reads back the same", (await fetchMeetingFlow()).join() === "details,quote");
+
+  // Every later stage reads the event the details stage creates, so it cannot be dropped or moved.
+  // The SERVER normalises, not just the screen — the screen is not where a POST comes from.
+  const bad = await saveMeetingFlow(["quote", "details"] as never);
+  check("the details stage is forced back to first", bad[0] === "details", bad.join());
+  const unknown = await saveMeetingFlow(["details", "not-a-stage", "quote"] as never);
+  check("an unknown stage is dropped", unknown.join() === "details,quote", unknown.join());
+
+  // The distinction the whole reset behaviour rests on: an EMPTY stored list means "never
+  // customised" and answers with whatever the app ships today, rather than freezing a studio at the
+  // default as it stood on the day they signed up.
+  const afterReset = await resetMeetingFlow();
+  check("reset returns the shipped default", afterReset.join() === DEFAULT_FLOW.join(), afterReset.join());
+  check("…and reading it back still gives the default", (await fetchMeetingFlow()).join() === DEFAULT_FLOW.join());
+
+  // Writing the letterhead must not wipe the meeting, and vice versa — one row, two screens.
+  await saveMeetingFlow(["details", "hall", "quote"]);
+  await saveSettings({ ...written, businessName: "בדיקה — שם אחר" });
+  check(
+    "saving the letterhead leaves the meeting flow alone",
+    (await fetchMeetingFlow()).join() === "details,hall,quote",
+    (await fetchMeetingFlow()).join(),
+  );
+
+  // ── put it back ──────────────────────────────────────────────────────────────────────────────
+  await saveSettings(original);
+  if (originalFlow.join() === DEFAULT_FLOW.join()) await resetMeetingFlow();
+  else await saveMeetingFlow(originalFlow);
+
+  const restored = await fetchSettings();
+  check(
+    "cleanup: the settings are as we found them",
+    JSON.stringify(restored) === JSON.stringify(original),
+    `${JSON.stringify(restored)} vs ${JSON.stringify(original)}`,
+  );
+  check("cleanup: the meeting flow is as we found it", (await fetchMeetingFlow()).join() === originalFlow.join());
 }
 
 main().catch((e) => {
