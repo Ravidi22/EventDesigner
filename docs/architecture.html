@@ -428,6 +428,10 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
   color: var(--success);
   font-weight: 700;
 }
+.drow.total { border-top: 1px solid var(--accent-line); }
+.drow.total .who { color: var(--ink); }
+.drow.total .what { color: var(--ink); }
+.drow.total .cost { color: var(--accent-deep); font-weight: 700; font-size: 13.5px; }
 
 /* ── Closing ────────────────────────────────────────────────────────────────────────────── */
 .closer {
@@ -466,8 +470,9 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
     </div>
     <p>
       There is no app to install and no second project called “the backend.” There is one repository that
-      runs in two places at once — and right now, one of those two places is doing nothing at all. This page
-      is what changes when we fix that.
+      runs in two places at once — and the second place is awake now: accounts, events, the catalog, the
+      venues and the studio's settings are rows in a real database. This page is the shape of that, what is
+      still left to move, and the three services it is rented from.
     </p>
     <div class="urlbar">
       <b>https://eve.studio</b>
@@ -483,6 +488,7 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
     <a href="#server">What is “the server”?</a>
     <a href="#trip">What happens when I save?</a>
     <a href="#rented">What lives in the cloud?</a>
+    <a href="#stack">What is the stack?</a>
     <a href="#deploy">What gets deployed?</a>
   </div>
 </nav>
@@ -514,23 +520,24 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
   <!-- ────────────────────────────────────────────────────────────────────── 2 -->
   <section id="today">
     <div class="col">
-      <span class="overline kick">The honest starting point</span>
-      <h2>Today there is no flow — because there is no server half yet.</h2>
+      <span class="overline kick">Where the migration stands</span>
+      <h2>The server half is awake. About half the data has made the trip.</h2>
       <p class="lede">
-        This is why you cannot find the architecture: it isn't hiding. Every screen in Eve is marked
-        <code>"use client"</code>, every byte of data is in <code>localStorage</code>, and the Next.js
-        server currently does one job — hand over the files and go back to sleep.
+        This page used to say the Next.js server did one job — hand over the files and go back to sleep.
+        That is no longer true. Sign-in, events, the catalog, the venues and the studio's settings are rows
+        in Postgres, written through <code>"use server"</code> modules in <code>lib/*/actions.ts</code>.
       </p>
       <p>
-        The schema in <code>lib/db/schema.ts</code> is complete and well-modelled, and nothing imports it at
-        runtime. There are zero API routes. There is not a single <code>"use server"</code> in the codebase.
-        The right-hand side of the picture below is the work we are about to do.
+        Five things have not moved: the <strong>design documents</strong>, the gallery, the quotes, the
+        packing spares and the studio's people. They are still in <code>localStorage</code> — and the design
+        document is the most valuable object in the product, which makes it next. Still true, and worth
+        keeping true: there are no API routes. The server half is server <em>files</em>, not a second app.
       </p>
     </div>
 
     <figure>
       <div class="fig-scroll">
-        <svg viewBox="0 0 960 520" role="img" aria-label="Two panels compared. Today: the whole app and all of its data sit inside the browser, and the Next.js server only hands over files. After the backend: the browser keeps the canvas and interaction, the Next.js server checks the session and writes, and three rented services — Postgres, an S3 bucket and an auth provider — sit beneath it.">
+        <svg viewBox="0 0 960 520" role="img" aria-label="Two panels compared. Where we started: the whole app and all of its data sat inside the browser, and the Next.js server only handed over files. The target, now half built: the browser keeps the canvas and interaction, the Next.js server checks the session and writes, and three rented services — Neon Postgres, a Cloudflare R2 bucket and Clerk for auth — sit beneath it.">
           <defs>
             <marker id="arw-cmp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7889"/>
@@ -544,7 +551,7 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
           <line class="d-seam" x1="480" y1="16" x2="480" y2="500"/>
 
           <!-- ── PANEL A — today ───────────────────────────────────────── -->
-          <text class="d-ov" x="24" y="26">TODAY · ONE BROWSER TAB</text>
+          <text class="d-ov" x="24" y="26">WHERE WE STARTED · ONE BROWSER TAB</text>
 
           <rect class="d-card" x="24" y="44" width="432" height="212" rx="14"/>
           <text class="d-ov" x="44" y="70">BROWSER</text>
@@ -577,7 +584,7 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
           <text class="d-m" x="240" y="477" text-anchor="middle">nothing rented, and nothing to lose it to</text>
 
           <!-- ── PANEL B — after ───────────────────────────────────────── -->
-          <text class="d-ov-a" x="504" y="26">AFTER THE BACKEND</text>
+          <text class="d-ov-a" x="504" y="26">THE TARGET · POSTGRES ALREADY WIRED</text>
 
           <rect class="d-card" x="504" y="44" width="432" height="212" rx="14"/>
           <text class="d-ov" x="524" y="70">BROWSER</text>
@@ -615,27 +622,30 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
 
           <rect class="d-card" x="504" y="432" width="136" height="60" rx="12"/>
           <text class="d-h" x="572" y="458" text-anchor="middle">Postgres</text>
-          <text class="d-m" x="572" y="477" text-anchor="middle">rented</text>
+          <text class="d-m" x="572" y="477" text-anchor="middle">Neon · connected</text>
           <rect class="d-card" x="652" y="432" width="136" height="60" rx="12"/>
           <text class="d-h" x="720" y="458" text-anchor="middle">File storage</text>
-          <text class="d-m" x="720" y="477" text-anchor="middle">rented</text>
+          <text class="d-m" x="720" y="477" text-anchor="middle">Cloudflare R2</text>
           <rect class="d-card" x="800" y="432" width="136" height="60" rx="12"/>
           <text class="d-h" x="868" y="458" text-anchor="middle">Auth</text>
-          <text class="d-m" x="868" y="477" text-anchor="middle">rented</text>
+          <text class="d-m" x="868" y="477" text-anchor="middle">Clerk</text>
         </svg>
       </div>
       <figcaption>
-        <b>The difference is the wire.</b> Today the browser talks to nothing after the first load, so the
-        data has nowhere to live but the tab it was typed into. Adding the backend does not move the canvas —
-        it adds one labelled arrow out of the browser, and three rented boxes underneath it.
+        <b>The difference is the wire.</b> At the start the browser talked to nothing after the first load,
+        so data had nowhere to live but the tab it was typed into. Adding the backend did not move the
+        canvas — it added one labelled arrow out of the browser, and three rented boxes underneath it. The
+        left-hand box is connected. The bucket and the login provider are chosen but not yet wired.
       </figcaption>
     </figure>
 
     <div class="col" style="margin-top: 26px;">
       <div class="note-alert">
-        <b>This is the real blocker, not a nicety.</b> A design document is a business asset — the requirements
-        doc says so (NFR-3). Right now one browser profile is the entire database, and the only backup that
-        exists is the “download JSON” button in Settings. You cannot run a real client meeting on that.
+        <b>Still the real blocker, and now a narrower one.</b> A design document is a business asset — the
+        requirements doc says so (NFR-3). Events and the catalog survive a lost laptop today; the plans
+        themselves do not. Until <code>lib/studio/storage.ts</code> makes the same trip its siblings already
+        made, one browser profile is the only copy of every design document, backed up by a “download JSON”
+        button in Settings. You cannot run a real client meeting on that.
       </div>
     </div>
   </section>
@@ -725,12 +735,19 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
     </figure>
 
     <div class="col" style="margin-top: 26px;">
-      <h3>Why the migration is small</h3>
+      <h3>Why the migration is small — and the proof</h3>
       <p>
         Every storage call in Eve already goes through a <code>lib/*/storage.ts</code> module — no component
         anywhere touches <code>localStorage</code> directly. That was built on purpose, and it is the reason
         the backend is a per-module job rather than a rewrite: each of those files swaps its body from a
         browser write to a database write, and the twenty screens above them carry on unchanged.
+      </p>
+      <p>
+        That claim has now been tested five times. Events, the catalog, the venues, the studio settings and
+        the accounts each crossed behind their own seam, and no screen was rewritten to do it. What is left
+        in those <code>storage.ts</code> files is the honest remainder — which event this device has open,
+        which venue it is looking at. Per-device UI position was never studio data, and it stays local on
+        purpose: the designer's laptop drives the meeting while the client's tablet sits on the gallery.
       </p>
     </div>
   </section>
@@ -834,7 +851,7 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
           <h4>Postgres</h4>
           <span class="pick">Neon</span>
         </div>
-        <p>Events, catalog, venues, and the design documents as JSONB — the schema you already wrote.</p>
+        <p>Events, catalog, venues, accounts — and the design documents as JSONB once the studio seam moves. Already connected: today <code>DATABASE_URL</code> points at Docker on your laptop, and going live is that one line changing.</p>
         <div class="why"><b>Why outside:</b> a database is a running program that owns a disk. Your app is given no disk it can keep.</div>
       </div>
       <div class="svc">
@@ -842,16 +859,16 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
           <h4>File storage</h4>
           <span class="pick">Cloudflare R2</span>
         </div>
-        <p>Gallery photos, product images, venue plan underlays — the entire visual half of the product.</p>
-        <div class="why"><b>Why outside:</b> same disk problem, plus photos are big and need a CDN, not a trip through your Node process.</div>
+        <p>Gallery photos, product images, venue plan underlays — the entire visual half of the product. Nothing is wired yet, which is exactly why the gallery is empty.</p>
+        <div class="why"><b>Why outside:</b> same disk problem, plus photos are big and need a CDN, not a trip through your Node process. R2 over S3 for one reason that decides it here: <b>egress is free</b>, and this product mails photographs at clients for a living.</div>
       </div>
       <div class="svc">
         <div class="svc-top">
           <h4>Auth</h4>
           <span class="pick">Clerk</span>
         </div>
-        <p>Who is signed in, which studio they belong to — the check every server action starts with.</p>
-        <div class="why"><b>Why outside:</b> password hashing, sessions, reset mail, 2FA. Every one is a security bug waiting to be written.</div>
+        <p>Who is signed in — the check every server action starts with. This one exists already, hand-written in <code>lib/auth/</code>; Clerk retires it.</p>
+        <div class="why"><b>Why outside:</b> password hashing, sessions, reset mail, 2FA. Every one is a security bug waiting to be written — and four of them are already written here.</div>
       </div>
     </div>
 
@@ -866,47 +883,167 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
       <p>
         The single exception that doc carved out — a background worker for heavy PDF vision processing — is
         now moot, since PDF import was dropped from the product and hall sketches are drawn in the app.
+        The other service that never materialised is a PDF renderer: operational maps and quotes print
+        through the browser (<code>window.print()</code>), so no headless Chromium runs anywhere.
+      </p>
+    </div>
+
+    <div class="callout">
+      <h4>One rule for Clerk</h4>
+      <p>
+        Clerk answers <em>who</em>, and nothing else. Which studio a person belongs to, and what they are
+        allowed to see, stays in our own <code>organizations</code>, <code>users</code> and
+        <code>venue_grants</code> tables — the multi-tenant model ADR-2 committed to on day one, and the
+        reason studio members and venue guests can be two different ladders. Moving that into Clerk
+        Organizations buys nothing and puts a $100/mo B2B add-on between you and your own roles.
+      </p>
+      <p>
+        What retires when Clerk lands: the password hashing, the <code>sessions</code> table, and the cookie
+        guard — around 570 lines in <code>lib/auth/</code> that are a liability to own. What stays: the
+        <code>users</code> row, re-keyed to Clerk's user id.
       </p>
     </div>
 
     <div class="col" style="margin-top: 26px;">
-      <h3>One order-of-work note</h3>
+      <h3>The order of what is left</h3>
       <p>
-        File storage unblocks more than it looks like: gallery photography, product images, and tracing a
-        venue's real floor plan are all the same missing capability. The gallery is currently coloured tiles
-        and <code>PlanUnderlay</code> is a type with no renderer — both are waiting on the same bucket.
+        <b>Design documents first.</b> They are the last thing of real value living in a browser profile,
+        and the seam is already cut — <code>lib/studio/storage.ts</code> changes, nothing above it does.
+        The gallery, quotes and packing spares follow it on the same pattern.
+      </p>
+      <p>
+        <b>Then the bucket.</b> File storage unblocks more than it looks like: gallery photography, product
+        images, and tracing a venue's real floor plan are all the same missing capability. The gallery shows
+        an empty state and <code>PlanUnderlay</code> is a type with no renderer — both are waiting on R2.
+      </p>
+      <p>
+        <b>Clerk last.</b> Sign-in already works, so this is the one piece of the target architecture that
+        blocks nothing. It is half a day of deleting code you would rather not own, done when convenient —
+        ideally before the first outside studio has an account, because migrating real passwords is worse
+        than migrating none.
       </p>
     </div>
   </section>
 
   <!-- ────────────────────────────────────────────────────────────────────── 6 -->
+  <section id="stack">
+    <div class="col">
+      <span class="overline kick">The roster</span>
+      <h2>Every piece, and which side of the line it runs on.</h2>
+      <p class="lede">
+        Three of these differ from what the architecture doc originally recommended, and each difference is
+        a cost or a dependency that never happened.
+      </p>
+    </div>
+
+    <div class="deploy">
+      <div class="deploy-rows">
+        <div class="drow">
+          <span class="who">language</span>
+          <span class="what">TypeScript 5, strict — one language across the line, which is the whole point of the monolith (ADR-6)</span>
+          <span class="cost">both halves</span>
+        </div>
+        <div class="drow">
+          <span class="who">framework</span>
+          <span class="what">Next.js 16.2 App Router with React 19 — server components by default, <code>"use client"</code> to opt out</span>
+          <span class="cost">both halves</span>
+        </div>
+        <div class="drow">
+          <span class="who">styling</span>
+          <span class="what">Tailwind v4 with the design tokens declared in <code>app/globals.css</code>; lucide-react for icons. No component library</span>
+          <span class="cost">browser</span>
+        </div>
+        <div class="drow">
+          <span class="who">canvas</span>
+          <span class="what"><code>components/plan-canvas.tsx</code> — 2,362 lines of hand-written SVG. <b>Not Konva</b>, which the tech table recommended; nothing was gained by a library here and a dependency was avoided</span>
+          <span class="cost">browser</span>
+        </div>
+        <div class="drow">
+          <span class="who">data access</span>
+          <span class="what">Drizzle ORM over postgres.js, one lazily-opened pool cached across hot reloads (<code>lib/db/index.ts</code>)</span>
+          <span class="cost">server</span>
+        </div>
+        <div class="drow">
+          <span class="who">schema</span>
+          <span class="what">21 tables. Every entity a studio owns carries <code>organization_id</code> (ADR-2); join tables inherit the tenant through their parents, and <code>venue_grants</code> crosses it on purpose. JSONB where the object is read and written whole: design documents, venue plans, zone geometry</span>
+          <span class="cost">Neon</span>
+        </div>
+        <div class="drow">
+          <span class="who">migrations</span>
+          <span class="what">drizzle-kit — <code>db:push</code> while iterating, <code>db:generate</code> + <code>db:migrate</code> once there is data worth keeping</span>
+          <span class="cost">your terminal</span>
+        </div>
+        <div class="drow">
+          <span class="who">auth</span>
+          <span class="what">Hand-written today (<code>lib/auth/</code>, sessions in Postgres) → Clerk. Roles and tenancy stay in our tables either way</span>
+          <span class="cost">server</span>
+        </div>
+        <div class="drow">
+          <span class="who">files</span>
+          <span class="what">Presigned PUT from the browser straight into R2, public read through a custom domain — the bytes never pass through Node</span>
+          <span class="cost">browser ↔ R2</span>
+        </div>
+        <div class="drow">
+          <span class="who">PDF output</span>
+          <span class="what">Maps and quotes print from the browser (<code>window.print()</code>). <b>Not Playwright</b> — the doc's server-side HTML→PDF renderer would have been the most expensive thing on the bill and the only reason to run a container</span>
+          <span class="cost">browser</span>
+        </div>
+        <div class="drow">
+          <span class="who">tests</span>
+          <span class="what">17 <code>tsx</code> self-check scripts (<code>npm run check:*</code>) over the pure logic — geometry, snapping, aggregation, pricing — plus <code>tsc --noEmit</code> as the gate. No test framework</span>
+          <span class="cost">your terminal</span>
+        </div>
+        <div class="drow">
+          <span class="who">local dev</span>
+          <span class="what">Postgres in Docker via <code>docker-compose.yml</code>, seeded with <code>npm run db:seed</code></span>
+          <span class="cost">your laptop</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="col" style="margin-top: 22px;">
+      <p>
+        The third departure from the original table is not on this list at all: <b>pdf.js and the OpenCV
+        job</b>. Semi-automatic floor-plan import (ADR-3) was the largest planned piece of the system, and
+        it is gone — halls are drawn in the app instead. Its dependency is still sitting in
+        <code>package.json</code> as <code>pdfjs-dist</code>, imported by nothing.
+      </p>
+    </div>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────────────────── 7 -->
   <section id="deploy">
     <div class="col">
       <span class="overline kick">The finished picture</span>
-      <h2>Three things exist in production. You write one of them.</h2>
+      <h2>Four things exist in production. You write one of them.</h2>
     </div>
 
     <div class="deploy">
       <div class="deploy-rows">
         <div class="drow">
           <span class="who">git push</span>
-          <span class="what">Vercel builds and hosts the Next.js app — both halves of it, one deployment</span>
-          <span class="cost own">yours</span>
+          <span class="what">Vercel builds and hosts the Next.js app — both halves of it, one deployment. Pro, because Hobby is non-commercial and this runs a business</span>
+          <span class="cost">$20 / mo</span>
         </div>
         <div class="drow">
           <span class="who">DATABASE_URL</span>
-          <span class="what">Neon hosts the Postgres instance</span>
-          <span class="cost">≈ $0–19 / mo</span>
+          <span class="what">Neon hosts the Postgres instance — pooled connection for the app, direct for migrations. Compute-hours are the whole bill; the rows are nothing</span>
+          <span class="cost">≈ $5–19 / mo</span>
         </div>
         <div class="drow">
           <span class="who">S3 credentials</span>
-          <span class="what">R2 hosts and serves the photos</span>
-          <span class="cost">≈ $0–5 / mo</span>
+          <span class="what">R2 stores and serves the photos. 10 GB free, then $0.015/GB — and a client browsing a gallery costs nothing, because egress is free</span>
+          <span class="cost">≈ $0–2 / mo</span>
         </div>
         <div class="drow">
           <span class="who">CLERK_KEY</span>
-          <span class="what">Clerk handles sign-in and sessions</span>
-          <span class="cost">free at this size</span>
+          <span class="what">Clerk handles sign-in, sessions, and the verification and reset mail that goes with them — which is why there is no email provider on this list</span>
+          <span class="cost">free to 50k users</span>
+        </div>
+        <div class="drow total">
+          <span class="who">per month</span>
+          <span class="what">one studio, real client data, backups that actually exist, plus ~$1 of domain</span>
+          <span class="cost">$26–44</span>
         </div>
       </div>
     </div>
@@ -916,6 +1053,18 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
         No servers to patch, no Docker in production. The <code>docker-compose.yml</code> in the repo only
         runs Postgres on your own machine while developing — it never ships.
       </p>
+      <p>
+        What is deliberately <em>not</em> on that list is as informative as what is: no headless-browser
+        service (printing is the browser's job), no queue or worker (the one job that needed one was
+        dropped with PDF import), no Redis, no search service, no email provider, no second deploy of any
+        kind. Each of those is a monthly bill that the architecture avoided by not needing it.
+      </p>
+      <p>
+        Only one line grows with success, and it grows slowly: photographs. Ten times the gallery is still
+        under $2 of storage, because the bytes that go out to clients — the part that would dominate the
+        bill on S3 — are free on R2. If this ever becomes a product for twenty studios rather than one, the
+        realistic number is roughly $100–150/mo, and the shape of the bill does not change.
+      </p>
     </div>
 
     <p class="closer">
@@ -924,7 +1073,8 @@ figcaption b { color: var(--ink-soft); font-weight: 700; }
       stays in the browser because it has to feel instant; the document goes to the server because it has to
       survive. And the only pieces that belong outside your app are the database, the file bucket, and the
       login provider, because all three need to own disk or secrets that a deploy platform will never hand to
-      your code.
+      your code. Those three are <b>Neon</b>, <b>Cloudflare R2</b> and <b>Clerk</b> — and with Vercel under
+      them, the studio's entire infrastructure costs less per month than one delivery of chair covers.
     </p>
   </section>
 
