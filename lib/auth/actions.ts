@@ -7,10 +7,11 @@
 // They return `{ error }` rather than throwing. An unhandled throw in a server action reaches the
 // browser as a generic "an error occurred", which is the right amount of detail for a bug and the
 // wrong amount for "that password is incorrect" — a person needs to be told which field to fix.
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
+import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, isAccountKind, type AccountKind } from "./kinds";
 import { hashPassword, passwordProblem, verifyPassword } from "./password";
 import { createSession, currentSession, destroySession, pruneExpiredSessions, type Session } from "./session";
@@ -73,13 +74,27 @@ export async function signUp(input: {
 
   const database = db();
   const [existing] = await database
-    .select({ id: users.id })
+    .select({ id: users.id, state: users.state, inviteTokenHash: users.inviteTokenHash })
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
   // Sign-UP is the one place an "this email is taken" message is unavoidable — the person has to be
   // told to sign in instead. (Sign-IN never distinguishes; see below.)
-  if (existing) return { error: "כבר קיים חשבון עם האימייל הזה", field: "email" };
+  //
+  // The invited case gets its own sentence, and it is not politeness: an invitation writes a real
+  // row for an address whose owner has no password yet, so without this they would be refused here
+  // AND at sign-in, with a message telling them to do the thing they were just refused. They are
+  // not turned into an account holder here either — the link is what proves the invitation reached
+  // the person it was addressed to, and claiming a seat by knowing an email address is not proof.
+  if (existing) {
+    return {
+      error:
+        existing.state === "pending" && existing.inviteTokenHash
+          ? "הכתובת הזו הוזמנה לסטודיו — הצטרפו דרך קישור ההזמנה שקיבלתם"
+          : "כבר קיים חשבון עם האימייל הזה",
+      field: "email",
+    };
+  }
 
   const passwordHash = await hashPassword(password);
   // A client creates NO organisation. They own nothing here — an organisation for a client would be
@@ -203,6 +218,86 @@ export async function signIn(input: { email: string; password: string }): Promis
   // about your account, not a thing to make you declare at the door — and a chooser on the sign-in
   // screen would be a way to ask "does this email belong to a designer?" without a password.
   return { home: HOME_FOR[user.kind] };
+}
+
+/**
+ * What the join screen shows before anyone types: which studio, and which address was invited.
+ *
+ * Returns null for a token that is wrong, expired or already used — the screen shows one "this link
+ * is no longer valid" state for all three, because telling a stranger which of those it is turns
+ * this into a way to test tokens.
+ *
+ * The email is returned and NOT editable on that screen: the invitation was addressed to it, and an
+ * editable address would let whoever holds the link join under any address they like.
+ */
+export async function inviteInfo(
+  token: string,
+): Promise<{ email: string; name: string | null; studioName: string } | null> {
+  const value = String(token ?? "");
+  if (!value) return null;
+
+  const [row] = await db()
+    .select({ email: users.email, name: users.name, studioName: organizations.name })
+    .from(users)
+    .innerJoin(organizations, eq(organizations.id, users.organizationId))
+    .where(
+      and(
+        eq(users.inviteTokenHash, hashInviteToken(value)),
+        eq(users.state, "pending"),
+        gt(users.inviteExpiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Claim an invitation: set a password, become active, and land signed in.
+ *
+ * The whole thing is ONE conditional UPDATE. The conditions — this token, still pending, not yet
+ * expired — are in the WHERE clause rather than in an `if` after a SELECT, so two people opening
+ * the same link at the same moment cannot both succeed: the first update flips `state` and clears
+ * the hash, and the second matches no rows.
+ */
+export async function acceptInvite(input: {
+  token: string;
+  name: string;
+  password: string;
+}): Promise<AuthResult> {
+  const token = String(input?.token ?? "");
+  const name = String(input?.name ?? "").trim();
+  const password = String(input?.password ?? "");
+
+  if (!token) return { error: "קישור ההזמנה אינו תקין" };
+  if (!name) return { error: "יש להזין שם מלא", field: "name" };
+  const problem = passwordProblem(password);
+  if (problem) return { error: problem, field: "password" };
+
+  const passwordHash = await hashPassword(password);
+  const [row] = await db()
+    .update(users)
+    .set({
+      name,
+      passwordHash,
+      state: "active",
+      joinedAt: today(),
+      // The link is spent. A used invitation must not still be a way into the account it created.
+      inviteTokenHash: null,
+      inviteExpiresAt: null,
+    })
+    .where(
+      and(
+        eq(users.inviteTokenHash, hashInviteToken(token)),
+        eq(users.state, "pending"),
+        gt(users.inviteExpiresAt, new Date()),
+      ),
+    )
+    .returning({ id: users.id, kind: users.kind });
+
+  if (!row) return { error: "קישור ההזמנה פג או כבר נוצל. בקשו מהסטודיו קישור חדש." };
+
+  await createSession(row.id);
+  return { home: HOME_FOR[row.kind] };
 }
 
 export async function signOut(): Promise<void> {

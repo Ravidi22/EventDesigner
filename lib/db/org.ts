@@ -14,6 +14,7 @@
 // edit. It imports next/headers (through the session module), which is itself an error in a client
 // bundle.
 import { currentSession } from "@/lib/auth/session";
+import type { StudioRole } from "@/lib/team/types";
 
 /** The organization the seed creates, and the one the verification script acts as.
  *
@@ -58,11 +59,39 @@ export function actAsOrgForScript(organizationId: string): void {
  * venues, events or prices" became true in one place rather than forty.
  */
 export async function currentOrg(): Promise<string> {
-  if (scriptOrg) return scriptOrg;
+  return (await currentActor()).organizationId;
+}
+
+/**
+ * Who is acting, not just which studio they belong to.
+ *
+ * `currentOrg()` answers the tenant question (ADR-2) and is enough for anything the whole studio
+ * shares — the catalog, the events, the settings. It is NOT enough for anything that differs
+ * BETWEEN members of one studio, and there is now one such thing: which properties you may open
+ * (lib/venues/access.ts). A designer and the owner have the same organizationId and must not see
+ * the same venue list.
+ *
+ * ⚠ SERVER ONLY, for the same reason as currentOrg().
+ */
+export interface Actor {
+  organizationId: string;
+  /** ⚠ NULL in a command-line script — out there, nobody is signed in. Anything that writes a row
+   *  naming a person (a venue grant, an invitation) must skip it rather than invent one. */
+  userId: string | null;
+  role: StudioRole;
+}
+
+export async function currentActor(): Promise<Actor> {
+  // A script has no cookie and therefore no person. It acts as an owner because that is exactly the
+  // access it has had all along — actAsOrgForScript() predates roles and was never filtered by
+  // anything — and because the alternative, a script silently seeing a subset of the venues it just
+  // wrote, would make `npm run db:verify` fail in a way that says nothing about the app.
+  if (scriptOrg) return { organizationId: scriptOrg, userId: null, role: "owner" };
+
   const session = await currentSession();
   if (!session) throw new Error("not signed in");
   if (session.kind !== "studio" || !session.organizationId) {
     throw new Error("this account is not a studio account");
   }
-  return session.organizationId;
+  return { organizationId: session.organizationId, userId: session.userId, role: session.role };
 }

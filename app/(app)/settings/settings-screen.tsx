@@ -13,7 +13,7 @@ import { DataSection } from "./data-section";
 //
 //   העסק / החשבון שלי  — the studio and the person, one letterhead and one profile.
 //   מצב פגישה          — the shape of a client meeting (lib/meeting/steps.ts).
-//   צוות והרשאות       — who works in this business (lib/team/storage.ts).
+//   צוות והרשאות       — who works in this business (lib/team/types.ts).
 //   מתחמים ושיתוף      — who may open a property (lib/venues/access.ts).
 //   נתונים             — the backup, while the store is still this browser.
 //

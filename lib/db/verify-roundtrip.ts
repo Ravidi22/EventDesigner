@@ -31,9 +31,15 @@ import {
   saveVenuePlan,
   fetchVenuePlan,
   fetchVenueGeometry,
+  fetchVenueGrants,
+  shareVenue,
+  setGrantRole,
+  revokeGrant,
 } from "@/lib/venues/actions";
 import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import type { Zone } from "@/lib/venues/zone";
+import { fetchMembers, inviteMember, regenerateInvite, removeMember } from "@/lib/team/actions";
+import { inviteInfo, signUp } from "@/lib/auth/actions";
 import { fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import {
@@ -149,6 +155,8 @@ async function main() {
   check("the catalog is exactly as we found it", afterDelete.length === before, `${afterDelete.length} vs ${before}`);
 
   await verifyVenues();
+  await verifyGrants();
+  await verifyInvites();
   await verifyEvents();
   await verifySettings();
 
@@ -215,6 +223,87 @@ async function verifyVenues() {
 
   await deleteVenueForTest(id);
   check("cleanup: the venue list is as we found it", (await fetchVenues()).length === before, `${(await fetchVenues()).length} vs ${before}`);
+}
+
+/**
+ * Invitations: the link that stands in for the email nobody sends.
+ *
+ * ⚠ WHAT THIS CANNOT REACH. `acceptInvite()` ends by setting a session cookie, and a script has no
+ * response to set one on — so the claim itself is exercised by rendering /join/<token> against the
+ * dev server instead. Everything up to it is here, including the two assertions that matter for a
+ * credential: a bad token resolves to nothing, and re-issuing a link kills the previous one.
+ */
+async function verifyInvites() {
+  console.log("\n— invitations —");
+  const address = `shira+${Date.now()}@eve.studio`;
+
+  const invited = await inviteMember("שירה לוי", address, "designer");
+  check("inviteMember returns a link", Boolean(invited.link), invited.error ?? invited.link);
+  check("the invited person is pending", invited.members.find((m) => m.email === address)?.status === "invited");
+
+  const token = invited.link!.split("/").pop()!;
+  const info = await inviteInfo(token);
+  check("the token resolves to the invited address", info?.email === address, info?.email);
+  check("…and names the studio doing the inviting", Boolean(info?.studioName), info?.studioName);
+
+  check("a token that was never issued resolves to nothing", (await inviteInfo("not-a-real-token")) === null);
+  check("an empty token resolves to nothing", (await inviteInfo("")) === null);
+
+  // The address is real now, so signing up with it must not be refused as "taken" — that message
+  // sends someone to a sign-in form that will also refuse them, which is the dead end this whole
+  // flow exists to close.
+  const blocked = await signUp({ kind: "studio", studioName: "x", name: "שירה", email: address, password: "hunter2hunter2" });
+  check("signing up with an invited address points at the link", blocked.error?.includes("קישור ההזמנה") === true, blocked.error);
+
+  // Re-issuing invalidates. One hash per row, so the link a designer forwarded to the wrong person
+  // stops working the moment they generate another.
+  const reissued = await regenerateInvite(invited.members.find((m) => m.email === address)!.id);
+  check("regenerateInvite returns a new link", Boolean(reissued.link) && reissued.link !== invited.link);
+  check("…and the OLD token is dead", (await inviteInfo(token)) === null);
+  check("…while the new one works", (await inviteInfo(reissued.link!.split("/").pop()!))?.email === address);
+
+  await removeMember(invited.members.find((m) => m.email === address)!.id);
+  check("cleanup: the invitation is gone", (await fetchMembers()).every((m) => m.email !== address));
+}
+
+/**
+ * Sharing a property: the grant rows behind "every member can reach different venues".
+ *
+ * ⚠ WHAT THIS CANNOT REACH. A script has no session, so currentActor() hands it an OWNER with no
+ * user id (see lib/db/org.ts) — which is exactly the caller that BYPASSES grant filtering. So this
+ * covers the guest half, which needs no account: write a grant, change its level, take it away.
+ * The member half — a designer seeing a shorter venue list than the owner — needs two signed-in
+ * users and belongs in a test that can hold a session, not here. What is verified here is that the
+ * rows and the level round-trip; the filtering itself is asserted by the pure policy check in
+ * lib/venues/access.ts (`npm run check:access`).
+ */
+async function verifyGrants() {
+  console.log("\n— venue sharing —");
+  const { id: venueId } = await createVenue();
+
+  check("a new property starts unshared", (await fetchVenueGrants(venueId)).length === 0);
+
+  const address = `maya+${Date.now()}@gorenstudio.co.il`;
+  const shared = await shareVenue({ venueId, name: "מאיה גורן", email: address, kind: "guest", role: "viewer" });
+  check("shareVenue wrote a grant", !shared.error && shared.grants.length === 1, shared.error);
+  const grant = shared.grants[0];
+  check("a guest lands as viewer", grant?.role === "viewer");
+  // A guest has no account yet, so there is something for them to accept. (A member would be
+  // `active` on the spot — they are already in the studio.)
+  check("a guest grant is pending", grant?.status === "pending");
+  check("a guest carries no member id", grant?.memberId === undefined);
+
+  const again = await shareVenue({ venueId, name: "מאיה", email: address, kind: "guest", role: "manager" });
+  check("the same address cannot be granted twice", Boolean(again.error) && again.grants.length === 1, again.error);
+
+  const promoted = await setGrantRole(grant.id, "editor");
+  check("setGrantRole landed", promoted[0]?.role === "editor");
+
+  const emptied = await revokeGrant(grant.id);
+  check("revokeGrant removed it", emptied.length === 0);
+
+  // Deleting the venue takes its grants with it (ON DELETE CASCADE) — nothing else to clean up.
+  await deleteVenueForTest(venueId);
 }
 
 /** The event half: a client record standing on zones of a property. Needs a venue and a zone to

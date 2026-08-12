@@ -18,7 +18,19 @@ import { SESSION_COOKIE } from "@/lib/auth/cookie-name";
 
 /** Where you may go without a session: the two account screens, and the marketing home. */
 const AUTH_PAGES = ["/login", "/signup"];
-const PUBLIC = [...AUTH_PAGES, "/"];
+/**
+ * …plus the invitation links. `/join/<token>` is public BY DEFINITION — the person opening it has
+ * no account yet, which is the whole reason they were sent it. Guarding it sent them to a sign-in
+ * form they cannot complete, holding the one credential that would have worked.
+ *
+ * It is not in AUTH_PAGES on purpose: that list is "pages a signed-in person should be bounced away
+ * from", and someone already signed in may legitimately open an invitation — accepting it just
+ * replaces their session with the invited account, which is what holding the link means.
+ *
+ * The token in the path is not a secret this layer can leak: it goes no further than the server
+ * component that resolves it, and an invalid one renders a dead-link page rather than an error.
+ */
+const PUBLIC = [...AUTH_PAGES, "/join", "/"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

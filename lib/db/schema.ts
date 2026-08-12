@@ -83,7 +83,7 @@ export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
 // to be keeping a client out of the whole studio.
 export const accountKindEnum = pgEnum("account_kind", ["studio", "client"]);
 // People. Two ladders, because they answer two different questions: what you are inside this
-// studio (lib/team/storage.ts), and what you may do to one property (lib/venues/access.ts).
+// studio (lib/team/types.ts), and what you may do to one property (lib/venues/access.ts).
 export const studioRoleEnum = pgEnum("studio_role", ["owner", "designer", "crew"]);
 export const venueRoleEnum = pgEnum("venue_role", ["viewer", "editor", "manager"]);
 export const grantKindEnum = pgEnum("grant_kind", ["member", "guest"]);
@@ -106,7 +106,7 @@ export const organizations = pgTable("organizations", {
   createdAt: created(),
 });
 
-/** Everyone with an account: the studio's own people (StudioMember, lib/team/storage.ts) and the
+/** Everyone with an account: the studio's own people (StudioMember, lib/team/types.ts) and the
  *  clients whose events they are designing.
  *
  *  ONE table, not two, because a person has one set of credentials. Two tables would mean two
@@ -138,12 +138,28 @@ export const users = pgTable(
      *  password until they accept. A NOT NULL column would force an invitation to invent a
      *  credential nobody chose, which is a credential that can be guessed. */
     passwordHash: text("password_hash"),
+    /** The invitation, when this row is one.
+     *
+     *  ⚠ A HASH of the token, never the token — same rule as sessions, for the same reason: this
+     *  link IS an account, so a leaked database dump must not be a way to walk into a studio. The
+     *  consequence is deliberate and visible in the UI: the link can be SHOWN once, when it is
+     *  minted. A designer who loses it generates a new one, which invalidates the old.
+     *
+     *  Cleared on acceptance, so a used link stops working — the row keeps no memory of it. */
+    inviteTokenHash: text("invite_token_hash"),
+    /** Invitations expire. An address that was invited and never joined must not stay claimable
+     *  forever, because the row also blocks that address from signing up on its own. */
+    inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
     /** The day they joined the studio, as the settings list prints it — a calendar date, not the
      *  instant the row was written, which is what createdAt already says. */
     joinedAt: date("joined_at"),
     createdAt: created(),
   },
-  (t) => [index("users_org_idx").on(t.organizationId)],
+  (t) => [
+    index("users_org_idx").on(t.organizationId),
+    // The join screen's only lookup: one token, one row.
+    uniqueIndex("users_invite_token_key").on(t.inviteTokenHash),
+  ],
 );
 
 /** A signed-in browser.

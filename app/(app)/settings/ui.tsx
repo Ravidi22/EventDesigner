@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Check, Trash2 } from "lucide-react";
-import { initialsOf } from "@/lib/team/storage";
+import { initialsOf } from "@/lib/team/types";
 
 // The pieces every settings section is built from. Kept here rather than in components/ because
 // nothing outside this route uses them yet — the moment a second screen wants a Panel, it moves.

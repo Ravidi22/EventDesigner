@@ -6,7 +6,8 @@
 // to geometry). Only three things actually need translating — the epoch-millisecond timestamps the
 // app uses, and the two directions of null/undefined.
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
-import type { venues, zones, venueStructures } from "@/lib/db/schema";
+import type { venues, zones, venueStructures, venueGrants } from "@/lib/db/schema";
+import type { GrantKind, VenueGrant, VenueRole } from "./access";
 import type { Venue, VenuePlan } from "./types";
 import type { Zone, ZoneKind, ZoneSource, ZoneCapacity } from "./zone";
 import type { VenueStructure } from "./structure";
@@ -68,6 +69,29 @@ export function toZoneRow(z: Zone, organizationId: string): ZoneInsert {
     capacity: z.capacity ?? null,
     style: z.style ?? null,
     createdAt: new Date(z.createdAt),
+  };
+}
+
+export type GrantRow = InferSelectModel<typeof venueGrants>;
+
+/** A grant row as the sharing screen reads it.
+ *
+ *  Two column names change meaning on the way out. `granteeUserId` becomes `memberId` — from the
+ *  screen's side the interesting fact is "this is one of my people", not which table the id came
+ *  from. And `state` becomes `status`, whose two words are the same two values (schema note on
+ *  inviteStateEnum). */
+export function toGrant(row: GrantRow): VenueGrant {
+  return {
+    id: row.id,
+    venueId: row.venueId,
+    memberId: orUndefined(row.granteeUserId),
+    // An address invited before it has an account has no name of its own to show.
+    name: row.granteeName?.trim() || row.granteeEmail.split("@")[0],
+    email: row.granteeEmail,
+    kind: row.kind as GrantKind,
+    role: row.role as VenueRole,
+    status: row.state === "active" ? "active" : "pending",
+    invitedAt: row.invitedAt ?? "",
   };
 }
 
