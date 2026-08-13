@@ -1,23 +1,36 @@
 "use client";
 
-import { CircleDot, DoorOpen, Layers, Shapes, Trash2, X } from "lucide-react";
-import { wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import { CircleDot, DoorOpen, Footprints, Layers, Shapes, Trash2, X } from "lucide-react";
+import { bulgeDepthMm, maxBulgeDepthMm, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import type { ElementStyle } from "@/lib/element-style";
 import {
   FEATURE_KIND_LABEL,
   addEntrance,
+  addStairs,
   moveNode,
   nodeMap,
+  removeStairs,
   setWallAngle,
+  setWallBulge,
   setWallLength,
   updateEntrance,
   updateFeature,
+  updateStairs,
   updateWall,
   wallPoints,
   type FeatureKind,
+  type StructureFeature,
   type VenueStructure,
   type WallKind,
 } from "@/lib/venues/structure";
+import {
+  MAX_STEPS,
+  STAIRS_SIDES,
+  STAIRS_SIDE_LABEL,
+  stairsRiserMm,
+  stepsForRise,
+  type StairsSide,
+} from "@/lib/venues/stairs";
 import { ZONE_KIND_LABEL, type Zone, type ZoneKind } from "@/lib/venues/zone";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
 import { Button } from "@/components/button";
@@ -162,6 +175,24 @@ export function VenueInspector({
             value={Math.round(wallAngleDeg(pts.a, pts.b))}
             onChange={(deg) => apply((s) => setWallAngle(s, wall.id, deg))}
             className="w-16"
+          />
+        </InspectorGroup>
+        <InspectorDivider />
+        {/* How far the wall bows out of the straight line between its corners — the number behind
+            the diamond handle on the plan. 0 straightens it. The ceiling is the wall's own: a bow
+            deeper than the wall is long is a curve nobody drew on purpose. */}
+        <InspectorGroup>
+          <NumberField
+            layout="inline"
+            label={`עיקום (ס״מ, עד ${Math.round(maxBulgeDepthMm(wallLengthMm(pts.a, pts.b)) / 10)})`}
+            decimals={0}
+            min={0}
+            max={Math.round(maxBulgeDepthMm(wallLengthMm(pts.a, pts.b)) / 10)}
+            step={5}
+            commitOnBlur
+            value={Math.round(bulgeDepthMm(pts.a, pts.b, wall.curve ?? null) / 10)}
+            onChange={(cm) => apply((s) => setWallBulge(s, wall.id, cm * 10))}
+            className="w-20"
           />
         </InspectorGroup>
         <InspectorDivider />
@@ -381,9 +412,108 @@ export function VenueInspector({
         <StyleFields style={feature.style} onChange={(style: ElementStyle | undefined) => patch({ style })} strokeWidthDefault={1.25} />
       </InspectorGroup>
       <InspectorDivider />
+      <StairsFields feature={feature} apply={apply} />
       {deleteBtn}
       {closeBtn}
     </div>
+  );
+}
+
+// Stairs onto a raised feature. One button while there are none — the count and the step height are
+// worked out from the deck's own height, so the common case is a single click and nothing to fill in
+// — and the fields to correct it once there are.
+//
+// The two numbers are two views of one fact, not two independent settings: risers must add up to the
+// deck height exactly, so the count is what is stored and the height is derived from it (see
+// lib/venues/stairs.ts). Typing a height therefore asks for the count that lands nearest it, and the
+// field snaps to the height that count actually produces — which is the honest answer, since no
+// other height would reach the stage.
+function StairsFields({
+  feature,
+  apply,
+}: {
+  feature: StructureFeature;
+  apply: (fn: (s: VenueStructure) => VenueStructure) => void;
+}) {
+  // Offered on anything raised enough to need them, rather than on the stage alone: a 60cm built
+  // platform labelled מבנה needs steps for exactly the same reason a stage does.
+  if (feature.kind !== "stage" && feature.heightMm < 300) return null;
+
+  const stairs = feature.stairs;
+  if (!stairs) {
+    return (
+      <>
+        <Button variant="ghost" size="sm" onClick={() => apply((s) => addStairs(s, feature.id))}>
+          <Footprints className="h-4 w-4" strokeWidth={2} />
+          הוספת מדרגות
+        </Button>
+        <InspectorDivider />
+      </>
+    );
+  }
+
+  const riserMm = stairsRiserMm(feature);
+  const set = (patch: Partial<typeof stairs>) => apply((s) => updateStairs(s, feature.id, patch));
+  return (
+    <>
+      <InspectorGroup>
+        <SegmentedToggle
+          value={stairs.side}
+          options={STAIRS_SIDES.map((side) => ({ value: side as StairsSide, label: STAIRS_SIDE_LABEL[side] }))}
+          onChange={(side) => set({ side })}
+          ariaLabel="צד המדרגות"
+        />
+      </InspectorGroup>
+      <InspectorGroup>
+        <NumberField
+          layout="inline"
+          label="מדרגות"
+          decimals={0}
+          min={1}
+          max={MAX_STEPS}
+          value={stairs.steps}
+          onChange={(steps) => set({ steps })}
+          className="w-14"
+        />
+        <NumberField
+          layout="inline"
+          label="גובה מדרגה (ס״מ)"
+          decimals={1}
+          min={1}
+          step={1}
+          commitOnBlur
+          value={Math.round(riserMm) / 10}
+          onChange={(cm) => set({ steps: stepsForRise(feature.heightMm, cm * 10) })}
+          className="w-16"
+        />
+        <NumberField
+          layout="inline"
+          label="עומק מדרגה (ס״מ)"
+          decimals={0}
+          min={20}
+          step={5}
+          commitOnBlur
+          value={Math.round(stairs.treadMm / 10)}
+          onChange={(cm) => set({ treadMm: cm * 10 })}
+          className="w-16"
+        />
+        <NumberField
+          layout="inline"
+          label="רוחב (מ׳)"
+          decimals={2}
+          min={0.4}
+          step={0.1}
+          commitOnBlur
+          value={stairs.widthMm / 1000}
+          onChange={(m) => set({ widthMm: Math.round(m * 1000) })}
+          className="w-20"
+        />
+        <IconButton label="הסרת המדרגות" onClick={() => apply((s) => removeStairs(s, feature.id))}>
+          <Trash2 className="h-4 w-4" strokeWidth={2} />
+        </IconButton>
+      </InspectorGroup>
+      <InspectorDivider />
+    </>
   );
 }
 

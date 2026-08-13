@@ -23,7 +23,9 @@ import {
   addFeature,
   addNode,
   addWall,
+  bulgeWall,
   moveNode,
+  moveWallControlPoint,
   nearestWall,
   newFeature,
   removeEntrance,
@@ -31,8 +33,10 @@ import {
   removeNode,
   removeWall,
   updateFeature,
+  updateStairs,
   type WallKind,
 } from "@/lib/venues/structure";
+import { stairsPlacementAt } from "@/lib/venues/stairs";
 import { detectFaces, faceAt } from "@/lib/venues/faces";
 import {
   ZONE_KIND_LABEL,
@@ -75,7 +79,7 @@ const MODES: { id: Mode; label: string; icon: typeof MousePointer2; hint: string
     id: "select",
     label: "בחירה",
     icon: MousePointer2,
-    hint: "לחצו על קיר, פינה, כניסה או אזור כדי לערוך אותו · גררו פינה כדי להזיז את כל הקירות שנוגעים בה · קליק ימני להוספת אלמנט",
+    hint: "לחצו על קיר, פינה, כניסה או אזור כדי לערוך אותו · גררו פינה כדי להזיז את כל הקירות שנוגעים בה · גררו את היהלום שבאמצע הקיר כדי לעקם אותו · קליק ימני להוספת אלמנט",
   },
   {
     id: "walls",
@@ -239,6 +243,18 @@ export function HallsScreen() {
       });
     },
     [selection, structure, dragStructure],
+  );
+
+  // Dragging a stage's stairs. The layer reports the world point they were dropped on; which edge of
+  // the deck that is — and how far along it — is the model's answer, so a flight dragged round a
+  // corner re-hangs itself on the side the pointer went out of instead of drifting off the stage.
+  const moveStairs = useCallback(
+    (id: string, p: Point) => {
+      const feature = structure.features.find((f) => f.id === id);
+      if (!feature) return;
+      dragStructure((s) => updateStairs(s, id, stairsPlacementAt(feature, p)));
+    },
+    [structure, dragStructure],
   );
 
   // End of one gesture: close the history entry and drop the frozen origins together, so the next
@@ -482,6 +498,17 @@ export function HallsScreen() {
             onMoveWallHandle={() => {}}
             graph={structure}
             onMoveGraphNode={isSelectMode ? (id, p) => moveWithGroup("node", id, p) : undefined}
+            // Bowing a wall is a drag like any other: amended into one history entry, closed by
+            // onCommit. A wall is bowed in place — no node moves — so the rooms either side of a
+            // shared wall follow the curve together, exactly as they follow a dragged corner.
+            onCurveGraphWall={
+              isSelectMode
+                ? (wallId, which, p) =>
+                    dragStructure((s) =>
+                      which === "bulge" ? bulgeWall(s, wallId, p) : moveWallControlPoint(s, wallId, which, p),
+                    )
+                : undefined
+            }
             graphSelection={graphSelection}
             onSelectGraph={isSelectMode ? (ref, additive) => pick(ref, additive) : undefined}
             onMarquee={isSelectMode ? marqueeSelect : undefined}
@@ -523,6 +550,7 @@ export function HallsScreen() {
                   selectedIds={selection.filter((s) => s.kind === "feature").map((s) => s.id)}
                   onSelect={isSelectMode ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
                   onMove={isSelectMode ? (id, p) => moveWithGroup("feature", id, p) : undefined}
+                  onMoveStairs={isSelectMode ? moveStairs : undefined}
                   onCommit={endGesture}
                   clientToMm={clientToMm}
                 />
