@@ -63,4 +63,24 @@ export interface VenueGeometry {
    *  has to see the hall it opens off. */
   zones: Zone[];
   mmPerUnit: number;
+  /** WHY this geometry is empty, when it is.
+   *
+   *  Events belong to the whole studio; venues are granted per member. So a designer can open an
+   *  event booked into a hall nobody shared with them, and the honest answers "there is no plan
+   *  yet" and "there is a plan and it is not yours to see" are two different sentences that used to
+   *  arrive as the same empty room.
+   *
+   *  ⚠ It is NOT enough to draw a blank plane in that case: a drape measures its metres off the
+   *  wall it hangs on, and with no wall it falls back to the product's catalog width (see
+   *  lib/design-document/measure.ts). A 14-metre wall then quotes as 3 metres of fabric — a wrong
+   *  PRICE, silently, on a screen that looked merely empty. Any surface that measures or prices has
+   *  to check this field and say so. */
+  access: VenueAccessState;
 }
+
+/**
+ *   none    — the event has not picked a venue yet. A normal mid-details state, nothing to say.
+ *   granted — the plan below is the real one.
+ *   denied  — a property exists here and this person has no grant on it.
+ */
+export type VenueAccessState = "none" | "granted" | "denied";

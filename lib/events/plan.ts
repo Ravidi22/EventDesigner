@@ -17,7 +17,7 @@ import { detectFaces } from "@/lib/venues/faces";
 import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import { resolveZones, zonesBounds, type ResolvedZone } from "@/lib/venues/zone";
 import { outlineBounds, type Bounds } from "@/lib/studio/geometry";
-import type { VenueGeometry } from "@/lib/venues/types";
+import type { VenueAccessState, VenueGeometry } from "@/lib/venues/types";
 import type { Zone } from "@/lib/venues/zone";
 import type { EventSummary } from "./types";
 
@@ -32,6 +32,10 @@ export interface EventPlan {
    *  yet, so an event mid-details-step still opens on something rather than on the origin. */
   bounds: Bounds;
   mmPerUnit: number;
+  /** Carried through from the geometry: whether this plane is empty because nobody picked a
+   *  property, or because this property was never shared with whoever is looking. Screens render
+   *  the difference — see VenueGeometry.access for why an empty plane alone is not enough. */
+  access: VenueAccessState;
 }
 
 export const EMPTY_PLAN: EventPlan = {
@@ -40,6 +44,7 @@ export const EMPTY_PLAN: EventPlan = {
   zones: [],
   bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0, widthMm: 0, heightMm: 0 },
   mmPerUnit: 1,
+  access: "none",
 };
 
 /** The box around every node the structure has — the fallback frame when no zone is selected. */
@@ -48,7 +53,11 @@ function structureBounds(structure: VenueStructure): Bounds {
 }
 
 export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): EventPlan {
+  // An event with no venue has no plan and nothing to explain — but one WITH a venue that came back
+  // denied still has no geometry to draw, and that difference has to survive this function rather
+  // than collapsing into the same EMPTY_PLAN both used to return.
   if (!event?.venueId) return EMPTY_PLAN;
+  if (geometry.access === "denied") return { ...EMPTY_PLAN, venueId: event.venueId, access: "denied" };
   const { structure, zones: allZones, mmPerUnit } = geometry;
   const faces = detectFaces(structure);
   const all = resolveZones(allZones, faces);
@@ -65,6 +74,7 @@ export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): 
     zones,
     bounds: framed.widthMm || framed.heightMm ? framed : EMPTY_PLAN.bounds,
     mmPerUnit,
+    access: geometry.access,
   };
 }
 

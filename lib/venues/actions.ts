@@ -189,17 +189,22 @@ export async function fetchVenuePlan(
  * ⚠ Returns an EMPTY geometry rather than throwing when the caller has no grant on the event's
  * venue. Events belong to the whole studio while venues do not, so this combination is reachable:
  * a designer opens an event booked into a hall nobody shared with them. Throwing would take down
- * the studio screen mid-meeting; an empty plane draws the event's own tables on blank ground.
- * Neither is a good answer, and the honest fix is for the screen to SAY so — a "you have no access
- * to this property" state next to the plan, rather than a silent empty room. Not built yet.
+ * the studio screen mid-meeting, which is the last thing anyone needs with a client in the room.
+ *
+ * But an empty plane on its own was a LIE by omission, and an expensive one — a drape with no wall
+ * to measure falls back to its catalog width, so the quote silently under-charges (see
+ * VenueGeometry.access). So the answer now carries its reason: `access` says whether this is a
+ * property nobody picked, a property you may see, or a property that is not yours to open. The
+ * screens render that; nothing has to infer it from an empty room.
  */
 export async function fetchVenueGeometry(venueId: string | undefined): Promise<VenueGeometry> {
+  const empty = { structure: emptyStructure(), zones: [], mmPerUnit: 1 };
   // An event whose details step has not picked a venue yet is a normal state, not a bad request.
-  if (!venueId) return { structure: emptyStructure(), zones: [], mmPerUnit: 1 };
+  if (!venueId) return { ...empty, access: "none" };
   assertId(venueId, "venueId");
   const actor = await currentActor();
   const role = await venueRoleFor(actor, venueId);
-  if (!role) return { structure: emptyStructure(), zones: [], mmPerUnit: 1 };
+  if (!role) return { ...empty, access: "denied" };
 
   const [venueRow] = await db()
     .select({ plan: venues.plan })
@@ -212,6 +217,7 @@ export async function fetchVenueGeometry(venueId: string | undefined): Promise<V
     structure,
     zones: zoneList,
     mmPerUnit: (venueRow?.plan as { mmPerUnit?: number } | undefined)?.mmPerUnit ?? 1,
+    access: "granted",
   };
 }
 
