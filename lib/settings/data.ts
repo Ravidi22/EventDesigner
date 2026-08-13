@@ -1,14 +1,19 @@
 // Everything THIS BROWSER is still holding for the studio, as one file.
 //
-// It used to be the only backup that existed, because everything lived here. That shrinks with each
-// module that moves: the catalog, the venues, the events and the studio's own settings are rows in
-// Postgres now, backed up by whatever backs up the database. What this still covers is the design
-// documents, the gallery, the issued quotes, the packing spares, the team list and the venue
-// grants — which is why it is still worth having, and why it will stop being worth having.
+// It used to be the only backup that existed, because everything lived here. It shrank with each
+// module that crossed, and the crossing is now finished: the catalog, the venues, the events, the
+// settings, the design documents, the gallery, the issued quotes and the packing spares are all
+// rows in Postgres, backed up by whatever backs up the database.
 //
-// ⚠ A file exported from one browser and imported into another carries the drawings but not the
-// events they belong to, since those are no longer in here. Both halves are needed for it to mean
-// anything, and that is a reason to finish the migration rather than to grow this file.
+// ⚠ WHAT IS LEFT IS NOT A BACKUP OF THE STUDIO. Three keys survive, and all three are per-DEVICE
+// position rather than studio data: which event this browser has open, which venue it has open, and
+// a scratch drawing made before any event existed to attach it to. A file exported here and
+// imported elsewhere moves a cursor, not a business.
+//
+// The panel that renders this says exactly that (app/(app)/settings/data-section.tsx). It has to:
+// a backup button that implies your plans are in this file, when they are in Postgres, teaches a
+// designer to trust the wrong copy — and the whole point of the migration was that the drawings
+// stop depending on one laptop.
 import { storagePrefix } from "@/lib/storage-keys";
 
 export interface SnapshotStats {
@@ -70,9 +75,10 @@ export function importSnapshot(json: string): number {
 /** Drops every `eve.*` key.
  *
  *  This USED to mean "back to the sample studio", because each storage module fell back to seed
- *  data. There is no seed data any more, so it now means what it says: the drawings, gallery,
- *  quotes and spares held in this browser are gone. What is in Postgres — the catalog, the venues,
- *  the events, the settings — is untouched, and this cannot reach it. */
+ *  data. Then it meant "the drawings held in this browser are gone". It now means the smallest
+ *  thing it has ever meant: this device forgets which event and which venue it had open, and
+ *  discards a scratch drawing if one was ever made. Nothing in Postgres is touched, and nothing
+ *  here can reach it. */
 export function resetAll(): void {
   for (const key of eveKeys()) window.localStorage.removeItem(key);
 }

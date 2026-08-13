@@ -46,7 +46,7 @@ export function DataSection() {
   return (
     <Panel
       title="נתונים וגיבוי"
-      hint="כל הנתונים של הסטודיו — קטלוג, מתחמים, אירועים ותוכניות — שמורים כרגע בדפדפן הזה בלבד."
+      hint="הנתונים של הסטודיו — קטלוג, מתחמים, אירועים, תוכניות, גלריה והצעות — שמורים בשרת ומגובים שם. מה שנשמר במכשיר הזה הוא רק המיקום שלכם בעבודה."
     >
       <div className="mb-5 flex items-center gap-6 rounded-md border border-inset-border bg-inset px-4 py-3.5">
         <Stat label="רשומות" value={String(stats.keys)} />
@@ -78,7 +78,7 @@ export function DataSection() {
 
         {confirming ? (
           <span className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-alert">למחוק הכול ולחזור לנתוני הדוגמה?</span>
+            <span className="text-[13px] font-semibold text-alert">לנקות את מה שהמכשיר הזה זוכר?</span>
             {/* Outline geometry with the alert stroke, written out: passing border-alert to the
                 outline Button would collide with its own border colour. */}
             <button
@@ -98,7 +98,7 @@ export function DataSection() {
         ) : (
           <Button size="sm" variant="danger" onClick={() => setConfirming(true)}>
             <RotateCcw className="h-4 w-4" strokeWidth={1.8} />
-            איפוס לנתוני דוגמה
+            ניקוי נתוני המכשיר
           </Button>
         )}
       </div>
@@ -107,8 +107,9 @@ export function DataSection() {
 
       <div className="mt-5">
         <Note icon={<TriangleAlert className="h-4 w-4" strokeWidth={1.6} />}>
-          ניקוי נתוני הדפדפן, מחיקת ההיסטוריה או מעבר למחשב אחר — כל אחד מהם מוחק את העבודה. עד
-          שהנתונים יעברו לשרת, כדאי לייצא גיבוי אחרי כל ערב עבודה משמעותי.
+          הקובץ הזה אינו גיבוי של הסטודיו: הוא מכיל רק את מה שהמכשיר הזה זוכר — איזה אירוע ואיזה
+          מתחם פתוחים, וסקיצה שנוצרה לפני שהיה אירוע לשייך אותה אליו. העבודה עצמה יושבת בשרת, ומעבר
+          למחשב אחר אינו מוחק דבר.
         </Note>
       </div>
     </Panel>
