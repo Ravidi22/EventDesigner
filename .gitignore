@@ -54,3 +54,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local file storage: the stand-in for the R2 bucket (lib/files/driver-local.ts).
+# A designer's photographs, not source — and they do not survive a deploy either way.
+/.uploads/

@@ -32,7 +32,9 @@
     "check:aggregate": "tsx lib/outputs/aggregate.ts",
     "check:quote": "tsx lib/outputs/quote.ts",
     "check:password": "tsx lib/auth/password.ts",
-    "check:access": "tsx lib/venues/access.ts"
+    "check:access": "tsx lib/venues/access.ts",
+    "check:files": "tsx lib/files/keys.ts",
+    "check:sigv4": "tsx lib/files/sigv4.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
