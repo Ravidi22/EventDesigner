@@ -8,7 +8,17 @@ import { defineConfig } from "drizzle-kit";
 config({ path: ".env.local" });
 config(); // fallback, and CI where the value is a plain environment variable
 
-const url = process.env.DATABASE_URL;
+// DIRECT_URL wins when it is set, and only migrations read this file.
+//
+// A hosted Postgres gives you two connection strings: a POOLED one for the app (a serverless
+// function opens a connection per invocation and would otherwise exhaust the server's limit) and a
+// DIRECT one. Schema changes need the direct host, because a migration is a real session holding
+// locks across statements — run it through the pooler and it hangs with no error to read, which is
+// a bad thing to be discovering on the evening you first put real data somewhere.
+//
+// Locally there is one database and no pooler, so DATABASE_URL is the answer and this falls
+// through to it. Nothing to configure until Neon exists.
+const url = process.env.DIRECT_URL || process.env.DATABASE_URL;
 if (!url) {
   throw new Error(
     "DATABASE_URL is not set. Run `cp .env.example .env.local`, then `docker compose up -d`.",
