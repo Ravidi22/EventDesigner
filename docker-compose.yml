@@ -1,16 +1,34 @@
-# Local Postgres for development. Hosted provider (Neon/Supabase) deferred — see docs/02 §5.
+# Local Postgres for development. Production is Neon in eu-central-1 (ADR-7); this container is
+# only ever this machine's copy, and .env.local points at it rather than at Neon on purpose.
 # Requires Docker Desktop. Start with: docker compose up -d
+#
+# ⚠ The major version tracks Neon's, so that a query which works here works there. Changing it is
+# NOT just this line: a Postgres data directory is not forward-compatible, so the volume has to be
+# dumped, dropped (`docker compose down -v`) and restored — the container will refuse to start on
+# an older directory otherwise, with an error that reads like corruption rather than a version gap.
 services:
   db:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_USER: eve
       POSTGRES_PASSWORD: eve
       POSTGRES_DB: eve
     ports:
       - "5432:5432"
+    # Mounted at /var/lib/postgresql, NOT /var/lib/postgresql/data — this changed in the 18 image.
+    # 18+ keeps data in a major-version-specific subdirectory (so `pg_upgrade --link` can see both
+    # versions inside one mount). Point the volume at .../data as 17 wanted and the container exits
+    # immediately with a message about "unused mount/volume" that sounds like corruption.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
+    # `docker compose up -d --wait` returns only once this passes, so `npm run db:push` cannot race
+    # a container that is up but still initialising — a race whose error reads like a bad
+    # connection string rather than a database that simply is not listening yet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eve -d eve"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
 
 volumes:
   pgdata:
