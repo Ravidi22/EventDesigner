@@ -16,7 +16,7 @@
 import { cache } from "react";
 import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
-import { and, eq, gt, lt } from "drizzle-orm";
+import { and, eq, gt, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sessions, users } from "@/lib/db/schema";
 import { SESSION_COOKIE as COOKIE } from "./cookie-name";
@@ -126,6 +126,32 @@ export async function destroySession(): Promise<void> {
  *  table growing forever. */
 export async function pruneExpiredSessions(): Promise<void> {
   await db().delete(sessions).where(lt(sessions.expiresAt, new Date()));
+}
+
+/**
+ * Sign this user out EVERYWHERE ELSE, keeping the browser that asked.
+ *
+ * What a password change is for, in practice: someone believes another person has their password.
+ * Changing it while that person's session stays alive answers the fear without addressing it —
+ * their cookie is a bearer token and keeps working until it expires.
+ *
+ * The current browser is spared by its token, not by trusting a caller-supplied id: this reads the
+ * cookie itself, so there is no way for one user's request to name another user's session as the
+ * one to keep. A caller with no cookie at all revokes every session, which is the safe direction to
+ * fail in.
+ *
+ * @returns how many sessions ended, so the screen can say "you were signed out on 2 other devices".
+ */
+export async function revokeOtherSessions(userId: string): Promise<number> {
+  const store = await cookies();
+  const token = store.get(COOKIE)?.value;
+  const mine = token ? hashToken(token) : null;
+
+  const removed = await db()
+    .delete(sessions)
+    .where(mine ? and(eq(sessions.userId, userId), ne(sessions.tokenHash, mine)) : eq(sessions.userId, userId))
+    .returning({ id: sessions.id });
+  return removed.length;
 }
 
 export { SESSION_COOKIE } from "./cookie-name";

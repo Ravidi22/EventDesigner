@@ -14,7 +14,14 @@ import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, isAccountKind, type AccountKind } from "./kinds";
 import { hashPassword, passwordProblem, verifyPassword } from "./password";
-import { createSession, currentSession, destroySession, pruneExpiredSessions, type Session } from "./session";
+import {
+  createSession,
+  currentSession,
+  destroySession,
+  pruneExpiredSessions,
+  revokeOtherSessions,
+  type Session,
+} from "./session";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -302,6 +309,60 @@ export async function acceptInvite(input: {
 
 export async function signOut(): Promise<void> {
   await destroySession();
+}
+
+/**
+ * Change your own password.
+ *
+ * This one needs NO email, which is exactly why it exists ahead of reset-by-email: a person who
+ * knows their current password should never have been unable to change it just because there is no
+ * sending domain yet. Reset-by-email is the other half — for someone who has FORGOTTEN it — and
+ * that genuinely waits on delivery.
+ *
+ * Three things it does that are worth stating:
+ *
+ *  1. IT REQUIRES THE CURRENT PASSWORD. Not ceremony: a session cookie is a bearer token, so a
+ *     borrowed laptop or a stolen cookie must not be enough to lock the real owner out of their own
+ *     account. Knowing the old password is what proves this is the owner and not the browser.
+ *  2. IT REVOKES EVERY OTHER SESSION. Changing a password is what a person does when they think
+ *     someone else has it, and a change that leaves the intruder's session alive answers the fear
+ *     without addressing it. This browser's own session survives, so they are not signed out of the
+ *     screen they are standing on.
+ *  3. IT REFUSES TO REUSE THE OLD ONE, so "change your password" cannot be satisfied by typing the
+ *     same thing twice.
+ */
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<AuthResult> {
+  const session = await currentSession();
+  if (!session) return { error: "יש להתחבר מחדש" };
+
+  const currentPassword = String(input?.currentPassword ?? "");
+  const newPassword = String(input?.newPassword ?? "");
+  if (!currentPassword) return { error: "יש להזין את הסיסמה הנוכחית", field: "password" };
+
+  const [user] = await db()
+    .select({ id: users.id, passwordHash: users.passwordHash })
+    .from(users)
+    .where(and(eq(users.id, session.userId), eq(users.state, "active")))
+    .limit(1);
+  if (!user) return { error: "יש להתחבר מחדש" };
+
+  const ok = await verifyPassword(currentPassword, user.passwordHash ?? (await noSuchUserHash()));
+  if (!ok) return { error: "הסיסמה הנוכחית שגויה", field: "password" };
+
+  const problem = passwordProblem(newPassword);
+  if (problem) return { error: problem, field: "password" };
+  if (newPassword === currentPassword) {
+    return { error: "הסיסמה החדשה זהה לנוכחית", field: "password" };
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  await db().update(users).set({ passwordHash }).where(eq(users.id, user.id));
+  await revokeOtherSessions(user.id);
+
+  return {};
 }
 
 /** The signed-in user, for the shell. Null rather than a throw — the shell has to be able to render

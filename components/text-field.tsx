@@ -16,6 +16,7 @@ export function TextField({
   className = "",
   wrapperClassName = "",
   autoFocus,
+  autoComplete,
   readOnly,
   multiline = false,
   rows = 3,
@@ -24,7 +25,10 @@ export function TextField({
   label?: string;
   value: string;
   onChange: (value: string) => void;
-  type?: "text" | "tel" | "email" | "date";
+  /** `password` is here for the settings screen's own change-password fields. The sign-in and
+   *  sign-up pages use `Field` in components/auth-shell.tsx instead — that one is styled for the
+   *  auth pages; this one matches every other field in the app. */
+  type?: "text" | "tel" | "email" | "date" | "password";
   dir?: "ltr" | "rtl";
   placeholder?: string;
   required?: boolean;
@@ -35,6 +39,9 @@ export function TextField({
   /** Classes for the outer <label> — e.g. a grid col-span the input's own className can't reach. */
   wrapperClassName?: string;
   autoFocus?: boolean;
+  /** Let the browser's password manager do its job — without it, a change-password form is three
+   *  anonymous boxes it will offer to fill with the wrong thing. */
+  autoComplete?: string;
   readOnly?: boolean;
   /** Renders a <textarea> instead of a single-line input. */
   multiline?: boolean;
@@ -76,6 +83,7 @@ export function TextField({
           dir={dir}
           required={required}
           autoFocus={autoFocus}
+          autoComplete={autoComplete}
           readOnly={readOnly}
           aria-readonly={readOnly}
           aria-label={ariaLabel}
