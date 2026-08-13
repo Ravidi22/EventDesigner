@@ -12,14 +12,16 @@
 // endpoints together (structure.addNode) so drawn walls do share nodes; a proper segment-
 // intersection pass is only needed if free-floating crossings ever become a real drawing style.
 import type { Point } from "@/lib/studio/hall";
-import { polygonAreaMm2 } from "@/lib/studio/geometry";
-import { nodeMap, type VenueStructure } from "./structure";
+import { bulgeToCurve, polygonAreaMm2, sampleEdgePoints } from "@/lib/studio/geometry";
+import { nodeMap, type VenueStructure, type Wall } from "./structure";
 import { isMain } from "../self-check";
 
 export interface Face {
   /** Node ids around the region, in traversal order. */
   nodeIds: string[];
-  /** The region's polygon, ready to render or hit-test. */
+  /** The region's polygon, ready to render or hit-test. A bowed wall contributes points along its
+   *  curve, not just its two corners — so the room's tint, its area and a click inside it all agree
+   *  with the wall as drawn instead of cutting the chord the bow leaves behind. */
   boundary: Point[];
   areaMm2: number;
 }
@@ -59,6 +61,13 @@ export function detectFaces(structure: VenueStructure): Face[] {
   }
 
   const key = (a: string, b: string) => `${a}>${b}`;
+  // The wall joining any two adjacent nodes, reachable from either end — a face walks a wall in
+  // whichever direction its traversal took, while the wall stores its bow in one fixed direction.
+  const wallBetween = new Map<string, Wall>();
+  for (const wall of structure.walls) {
+    wallBetween.set(key(wall.a, wall.b), wall);
+    wallBetween.set(key(wall.b, wall.a), wall);
+  }
   const visited = new Set<string>();
   const faces: Face[] = [];
 
@@ -91,10 +100,21 @@ export function detectFaces(structure: VenueStructure): Face[] {
       }
 
       if (nodeIds.length < 3) continue;
-      const boundary = nodeIds.map((id) => {
-        const n = nodes.get(id)!;
-        return { x: n.x, y: n.y };
-      });
+      const boundary: Point[] = [];
+      for (let i = 0; i < nodeIds.length; i++) {
+        const fromId = nodeIds[i];
+        const toId = nodeIds[(i + 1) % nodeIds.length];
+        const from = nodes.get(fromId)!;
+        boundary.push({ x: from.x, y: from.y });
+        const wall = wallBetween.get(key(fromId, toId));
+        if (!wall?.curve) continue;
+        const a = nodes.get(wall.a)!;
+        const b = nodes.get(wall.b)!;
+        const along = sampleEdgePoints({ x: a.x, y: a.y }, { x: b.x, y: b.y }, wall.curve);
+        // The curve is stored a→b; a face walking that wall the other way meets its points in
+        // reverse, and inserting them as stored would fold the boundary back on itself.
+        boundary.push(...(wall.a === fromId ? along : along.reverse()));
+      }
       const signed = signedAreaMm2(boundary);
       // Enclosed regions come out positive under this traversal; the single outer region that
       // wraps the whole drawing comes out negative and is not a room.
@@ -166,6 +186,19 @@ if (isMain(import.meta.url)) {
     two.every((f) => f.nodeIds.includes("B") && f.nodeIds.includes("E")),
     "the single shared wall bounds both rooms",
   );
+
+  // A bowed wall bounds its room along the curve, not along the chord: the room gains the area the
+  // bow adds, and a point out in the bulge — beyond where the straight wall used to run — is inside.
+  const bowed = build({ A: [0, 0], B: [1000, 0], C: [1000, 1000], D: [0, 1000] }, [
+    ["A", "B"], ["B", "C"], ["C", "D"], ["D", "A"],
+  ]);
+  bowed.walls[1].curve = bulgeToCurve({ x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 1300, y: 500 });
+  const bowedFace = detectFaces(bowed)[0];
+  assert(bowedFace !== undefined, "a room with a bowed wall still closes");
+  assert(bowedFace.areaMm2 > 1_100_000, "the bow adds its own area to the room rather than being ignored");
+  assert(pointInPolygon({ x: 1200, y: 500 }, bowedFace.boundary), "a point out in the bulge is inside the room");
+  assert(!pointInPolygon({ x: 1200, y: 60 }, bowedFace.boundary), "…while one beside the corner, where the wall barely bows, is not");
+  assert(bowedFace.nodeIds.length === 4, "the room still has four corners — the curve adds boundary points, not corners");
 
   // An open shape encloses nothing, which is what makes the קוליסאום need a drawn region instead.
   const open = build({ A: [0, 0], B: [1000, 0], C: [1000, 1000] }, [["A", "B"], ["B", "C"]]);

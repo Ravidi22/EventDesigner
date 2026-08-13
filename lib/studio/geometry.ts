@@ -121,6 +121,18 @@ export function edgeMidpoint(a: Point, b: Point, curve?: EdgeCurve | null): Poin
   return cubicPointAt(a, c1, c2, b, 0.5);
 }
 
+// The points *along* a bowed edge, so anything that works in straight lines (a room's polygon, its
+// area, a click's hit test) can follow the bow instead of cutting the chord. Endpoints are excluded
+// deliberately: the caller already holds them, and a boundary walk is vertex → interior → vertex.
+// A straight edge yields nothing at all, which is exactly right — its two endpoints are the edge.
+export function sampleEdgePoints(a: Point, b: Point, curve: EdgeCurve | null | undefined, steps = 12): Point[] {
+  if (!curve || steps < 2) return [];
+  const { c1, c2 } = absoluteControlPoints(a, b, curve);
+  const points: Point[] = [];
+  for (let i = 1; i < steps; i++) points.push(cubicPointAt(a, c1, c2, b, i / steps));
+  return points;
+}
+
 // Sane ceiling for how far a wall can bow, or a bezier handle can sit, relative to the wall's own
 // length — without this a runaway drag (or a corrupted save) produces a curve stretching for
 // kilometres, which is what "עיקום" showing a huge number was: nothing was ever clamping it.
@@ -556,6 +568,13 @@ if (isMain(import.meta.url)) {
   const mid = edgeMidpoint(a, b, curve);
   assert(Math.abs(mid.x - 500) < 1e-9 && Math.abs(mid.y - 200) < 1e-9, "bulge lands the curve midpoint on the drag target");
   assert(edgePathD(a, b, curve).startsWith("M 0 0 C "), "curved edge path uses a bezier command");
+  // Sampling a bow: the points have to leave the chord, stay between the endpoints, and be none at
+  // all on a straight edge (a straight edge's polygon is its two corners, nothing in between).
+  const sampled = sampleEdgePoints(a, b, curve, 8);
+  assert(sampled.length === 7, "sampling an edge in 8 steps yields the 7 points strictly between its ends");
+  assert(sampled.every((p) => p.x > 0 && p.x < 1000), "sampled points stay between the edge's two vertices");
+  assert(Math.abs(sampled[3].y - 200) < 1e-9, "the middle sample sits on the bulge, not on the chord");
+  assert(sampleEdgePoints(a, b, null).length === 0, "a straight edge samples to nothing");
   // Moving vertex b: since c2 is stored as an offset from b, absoluteControlPoints must move with it.
   const movedB = { x: 1200, y: 0 };
   const { c2 } = absoluteControlPoints(a, movedB, curve);

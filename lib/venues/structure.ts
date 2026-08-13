@@ -11,7 +11,16 @@
 // rather than a re-trace of walls that are already on screen.
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
-import { endpointFromLengthAngle, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import {
+  bulgeDepthMm,
+  bulgeToCurve,
+  clampEdgeCurve,
+  endpointFromLengthAngle,
+  setBulgeDepth,
+  wallAngleDeg,
+  wallLengthMm,
+} from "@/lib/studio/geometry";
+import { defaultStairs, normalizeStairs, type FeatureStairs } from "./stairs";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -64,6 +73,10 @@ export interface StructureFeature {
   /** Per-element look (fill/stroke/dash). Absent = the renderer's own default, so features saved
    *  before styling existed draw exactly as they always did. See lib/element-style.ts. */
   style?: ElementStyle;
+  /** Steps up onto a raised feature — the stage, in practice. Part of the feature rather than a
+   *  feature of its own: the flight turns and travels with the deck, and its risers are derived
+   *  from that deck's height. See ./stairs.ts. */
+  stairs?: FeatureStairs;
 }
 
 export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
@@ -177,6 +190,57 @@ export function setWallAngle(s: VenueStructure, wallId: string, angleDeg: number
   return pts ? reaimWall(s, wallId, wallLengthMm(pts.a, pts.b), angleDeg) : s;
 }
 
+// --- curved walls ----------------------------------------------------------
+// A wall bows as a cubic bezier whose control points are stored as offsets from its own two nodes
+// (the EdgeCurve convention from lib/studio/hall), so a bow survives its corners being dragged: move
+// a node and the curve travels with it instead of staying anchored to where that corner used to be.
+// A straight wall stores no curve at all — `undefined` and "not bowed" are the same state, which is
+// what keeps every plan drawn before this feature existing exactly as straight as it was.
+
+/** How far a wall bows away from the straight line between its corners. 0 for a straight wall. */
+export function wallBulgeMm(s: VenueStructure, wallId: string): number {
+  const wall = s.walls.find((w) => w.id === wallId);
+  const pts = wall ? wallPoints(s, wall) : null;
+  return wall && pts ? bulgeDepthMm(pts.a, pts.b, wall.curve ?? null) : 0;
+}
+
+/** Bows a wall so its middle passes through `p` — the drag of the bow handle. Dragging back onto
+ *  the chord straightens the wall outright rather than leaving a curve too shallow to see but still
+ *  stored: the threshold scales with the wall, since a 5cm bow reads as straight on a 12m wall and
+ *  as a deliberate curve on a 40cm one. */
+export function bulgeWall(s: VenueStructure, wallId: string, p: Point): VenueStructure {
+  const wall = s.walls.find((w) => w.id === wallId);
+  const pts = wall ? wallPoints(s, wall) : null;
+  if (!wall || !pts) return s;
+  const curve = clampEdgeCurve(pts.a, pts.b, bulgeToCurve(pts.a, pts.b, p));
+  const straightEnough = Math.max(20, wallLengthMm(pts.a, pts.b) * 0.01);
+  return updateWall(s, wallId, { curve: bulgeDepthMm(pts.a, pts.b, curve) < straightEnough ? null : curve });
+}
+
+/** Sets a wall's bow by depth alone, keeping whichever side it already bows toward — the numeric
+ *  counterpart to dragging the handle. 0 straightens it. */
+export function setWallBulge(s: VenueStructure, wallId: string, depthMm: number): VenueStructure {
+  const wall = s.walls.find((w) => w.id === wallId);
+  const pts = wall ? wallPoints(s, wall) : null;
+  if (!wall || !pts) return s;
+  const curve = setBulgeDepth(pts.a, pts.b, wall.curve ?? null, depthMm);
+  return updateWall(s, wallId, { curve: curve && clampEdgeCurve(pts.a, pts.b, curve) });
+}
+
+/** Moves one of a bowed wall's two bezier control points to `p` — the fine control, for a wall that
+ *  should lean into its curve rather than bow symmetrically. A straight wall has no handles to move,
+ *  so this is a no-op there rather than a way to invent a curve out of one dragged point. */
+export function moveWallControlPoint(s: VenueStructure, wallId: string, which: "c1" | "c2", p: Point): VenueStructure {
+  const wall = s.walls.find((w) => w.id === wallId);
+  const pts = wall ? wallPoints(s, wall) : null;
+  if (!wall?.curve || !pts) return s;
+  const anchor = which === "c1" ? pts.a : pts.b; // each control point is stored relative to its own end
+  const offset = { x: p.x - anchor.x, y: p.y - anchor.y };
+  return updateWall(s, wallId, {
+    curve: clampEdgeCurve(pts.a, pts.b, { ...wall.curve, [which]: offset }),
+  });
+}
+
 /** The wall nearest a point, with how far along its chord the point projects — where a dropped door
  *  lands. Returns null on a structure with no walls (there is nothing to hang a door on). */
 export function nearestWall(s: VenueStructure, p: Point): { wallId: string; distanceMm: number } | null {
@@ -219,7 +283,38 @@ export function addFeature(s: VenueStructure, f: Omit<StructureFeature, "id">): 
 }
 
 export function updateFeature(s: VenueStructure, id: string, patch: Partial<Omit<StructureFeature, "id">>): VenueStructure {
-  return { ...s, features: s.features.map((f) => (f.id === id ? { ...f, ...patch } : f)) };
+  return {
+    ...s,
+    features: s.features.map((f) => {
+      if (f.id !== id) return f;
+      const next = { ...f, ...patch };
+      // Any edit to the deck is also an edit to what its stairs are allowed to be: narrow a stage
+      // and a flight wider than its new edge has to come in with it, or it hangs in mid-air off a
+      // stage that no longer reaches it. Re-checked here, once, rather than at each of the callers
+      // that can resize a feature.
+      return next.stairs ? { ...next, stairs: normalizeStairs(next, next.stairs) } : next;
+    }),
+  };
+}
+
+// --- stairs ----------------------------------------------------------------
+
+/** Gives a feature its first flight of stairs, sized to the deck it climbs (see ./stairs.ts). */
+export function addStairs(s: VenueStructure, featureId: string): VenueStructure {
+  const feature = s.features.find((f) => f.id === featureId);
+  if (!feature || feature.stairs) return s;
+  return updateFeature(s, featureId, { stairs: defaultStairs(feature) });
+}
+
+export function removeStairs(s: VenueStructure, featureId: string): VenueStructure {
+  return updateFeature(s, featureId, { stairs: undefined });
+}
+
+/** Patches a flight — count, tread, width, which edge it hangs off — keeping it on its deck. */
+export function updateStairs(s: VenueStructure, featureId: string, patch: Partial<FeatureStairs>): VenueStructure {
+  const feature = s.features.find((f) => f.id === featureId);
+  if (!feature?.stairs) return s;
+  return updateFeature(s, featureId, { stairs: normalizeStairs(feature, { ...feature.stairs, ...patch }) });
 }
 
 export function removeFeature(s: VenueStructure, id: string): VenueStructure {
@@ -347,6 +442,43 @@ if (isMain(import.meta.url)) {
   assert(withPool.features[0].shape === "ellipse" && withPool.features[0].heightMm === 0, "a pool starts as a flat ellipse");
   assert(updateFeature(withPool, featureId, { x: 3000 }).features[0].y === 2000, "moving a feature in x leaves y alone");
   assert(removeFeature(withPool, featureId).features.length === 0, "a feature can be removed");
+
+  // --- curved walls -----------------------------------------------------------------------------
+  // w-shared runs (5000,0)→(5000,4000). Bowing it 500mm to the left has to leave both corners put:
+  // the wall belongs to two rooms, and a bow that moved a node would reshape the room next door.
+  const bowed = bulgeWall(base, "w-shared", { x: 4500, y: 2000 });
+  assert(Math.abs(wallBulgeMm(bowed, "w-shared") - 500) < 1e-6, "dragging the bow handle curves the wall to the drag point");
+  assert(at(bowed, "n2").x === 5000 && at(bowed, "n3").y === 4000, "…without moving either corner it hangs between");
+  assert(bowed.walls.filter((w) => w.curve).length === 1, "only the wall that was dragged is curved");
+  // Straightness is stored as the absence of a curve, not as a curve of depth zero — otherwise
+  // every renderer would have to decide for itself how flat is flat.
+  assert(!setWallBulge(bowed, "w-shared", 0).walls.find((w) => w.id === "w-shared")!.curve, "a bow of zero straightens the wall outright");
+  assert(!bulgeWall(bowed, "w-shared", { x: 5001, y: 2000 }).walls.find((w) => w.id === "w-shared")!.curve, "dragging the handle back onto the chord straightens it too");
+  assert(Math.abs(wallBulgeMm(setWallBulge(base, "w-shared", 300), "w-shared") - 300) < 1e-6, "a bow can be dialled in by depth alone");
+  // The bow travels with its corners: it is stored against the wall's ends, so stretching the wall
+  // must not leave the curve behind at the old corner.
+  const bowedThenStretched = setWallLength(bowed, "w-shared", 8000);
+  assert(at(bowedThenStretched, "n3").y === 8000, "the stretched wall's far corner moved");
+  assert(!!bowedThenStretched.walls.find((w) => w.id === "w-shared")!.curve, "…and the wall is still bowed afterwards");
+  const leaned = moveWallControlPoint(bowed, "w-shared", "c1", { x: 3000, y: 1000 });
+  assert(wallBulgeMm(leaned, "w-shared") > 500, "dragging a control point out deepens the curve past its symmetric bow");
+  assert(moveWallControlPoint(base, "w-shared", "c1", { x: 3000, y: 1000 }) === base, "a straight wall has no control point to move");
+  assert(bulgeWall(base, "no-such-wall", { x: 0, y: 0 }) === base, "an unknown wall id is a no-op");
+
+  // --- stairs -----------------------------------------------------------------------------------
+  const { structure: withStage, featureId: stageId } = addFeature(base, newFeature("stage", { x: 2500, y: 2000 }));
+  const stageOf = (s: VenueStructure) => s.features.find((f) => f.id === stageId)!;
+  assert(!stageOf(withStage).stairs, "a stage arrives without stairs — they are added deliberately");
+  const stepped = addStairs(withStage, stageId);
+  const flight = stageOf(stepped).stairs!;
+  assert(flight.steps === 4 && flight.side === "front", "a 60cm stage gets four steps on its front edge");
+  assert(addStairs(stepped, stageId) === stepped, "adding stairs to a stage that has them changes nothing");
+  assert(updateStairs(stepped, stageId, { steps: 3 }).features.find((f) => f.id === stageId)!.stairs!.steps === 3, "the step count is editable");
+  // The deck and its flight cannot disagree: shrinking the stage takes the stairs in with it.
+  const shrunkStage = updateFeature(stepped, stageId, { widthMm: 900 });
+  assert(stageOf(shrunkStage).stairs!.widthMm === 900, "narrowing a stage narrows the flight hanging off it");
+  assert(!stageOf(removeStairs(stepped, stageId)).stairs, "stairs can be taken off again");
+  assert(updateStairs(withStage, stageId, { steps: 2 }) === withStage, "a stage without stairs has no flight to patch");
 
   console.log("venue structure self-check passed");
 }
