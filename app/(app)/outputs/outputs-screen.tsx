@@ -4,19 +4,27 @@ import { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
-import { loadDoc } from "@/lib/studio/storage";
+import { fetchDocument } from "@/lib/studio/actions";
+import { loadScratch } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
 import { fetchVenueGeometry } from "@/lib/venues/actions";
-import { markExported, nextExportVersion } from "@/lib/outputs/storage";
+import { fetchNextExportNumber, recordExport, type ExportType } from "@/lib/outputs/actions";
 import { zonesLabelOf, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { PackingList } from "./packing-list";
 import { PlacementMap } from "./placement-map";
+import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
 
 type View = "packing" | "map" | "quote";
 const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר" };
+/** Which kind of sheet each view produces, for the export log (F-6.4). */
+const EXPORT_OF: Record<View, ExportType> = {
+  packing: "packing_list",
+  map: "placement_map",
+  quote: "quote",
+};
 
 type Paper = "A4" | "A3";
 type Orient = "portrait" | "landscape";
@@ -39,10 +47,16 @@ export function OutputsScreen() {
     void (async () => {
       const ev = await activeEvent();
       if (!live) return;
-      const saved = loadDoc(ev?.id ?? null);
+      // A studio with no events at all can still have a scratch drawing (lib/studio/storage.ts);
+      // everything that belongs to an event comes from the server.
+      const saved = ev ? (await fetchDocument(ev.id))?.content : loadScratch();
+      if (!live) return;
       if (saved) setDoc(saved);
       setEvent(ev);
-      if (ev) setVersion(nextExportVersion(ev.id));
+      if (ev) {
+        const next = await fetchNextExportNumber(ev.id);
+        if (live) setVersion(next);
+      }
       const geometry = await fetchVenueGeometry(ev?.venueId);
       if (live) setPlan(eventPlan(ev, geometry));
     })();
@@ -51,14 +65,27 @@ export function OutputsScreen() {
     };
   }, []);
 
-  // F-6.4: every export carries date + a running version number, bumped per print.
-  const print = () => {
-    if (event) {
-      markExported(event.id, version);
-      setVersion((v) => v + 1);
+  // F-6.4: every export carries a date and a running number — and now a ROW, which also seals the
+  // drawing it was made from, so a sheet in a crew's hands stays checkable against the design it
+  // came from rather than merely being numbered.
+  const print = async () => {
+    if (!event) {
+      window.print();
+      return;
     }
-    // Print the just-stamped version (state updates after; the stamp below uses `version`).
+    let printed = version;
+    try {
+      printed = await recordExport(event.id, EXPORT_OF[view]);
+    } catch {
+      // Recording failed. The sheet still prints: a crew waiting on paper is not helped by a failed
+      // log write. It simply doesn't enter the history, which is the honest outcome.
+    }
+    setVersion(printed);
+    // Let React paint the number before the print dialog freezes the page — the sheet has to carry
+    // the number that was actually recorded, not the one it was showing a moment ago.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     window.print();
+    setVersion(printed + 1);
   };
 
   const today = new Date().toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
@@ -119,6 +146,14 @@ export function OutputsScreen() {
             {today} · גרסה {version}
           </p>
         </div>
+        {/* The map's own case: no walls, no room to draw one on. The list and the quote carry their
+            own notice instead of being told from here, because both are rendered straight from the
+            meeting flow too, where this screen is nowhere in the tree.
+            `no-print` on purpose — this explains the sheet to whoever is producing it; it is not
+            part of what a client or a crew receives. */}
+        {view === "map" && plan.access === "denied" && (
+          <VenueAccessNotice tone="plan" className="no-print mb-6" />
+        )}
         {view === "packing" ? (
           <PackingList doc={doc} eventId={event?.id ?? null} />
         ) : view === "map" ? (

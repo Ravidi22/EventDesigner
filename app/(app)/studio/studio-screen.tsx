@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { dispatch, undo, redo, initHistory, type History } from "@/lib/design-document/actions";
-import type { Layer as LayerId } from "@/lib/design-document/types";
+import type { DesignDocumentContent, Layer as LayerId } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { activeEvent } from "@/lib/events/storage";
 import { fetchVenueGeometry } from "@/lib/venues/actions";
-import { loadDoc, saveDoc } from "@/lib/studio/storage";
+import { fetchDocument, saveDocument } from "@/lib/studio/actions";
+import { loadScratch, saveScratch } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
 import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
@@ -21,6 +22,7 @@ import { Inspector } from "./inspector";
 // A plain import now that the canvas is the app's shared SVG one: it renders on the server like any
 // other component, so there is nothing left to defer and no "loading the studio" flash to cover.
 import { CanvasStage, type Selection } from "./canvas-stage";
+import { VenueAccessNotice } from "@/components/venue-access-notice";
 
 const uid = () => crypto.randomUUID();
 
@@ -61,6 +63,11 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   // Which event this drawing belongs to. A ref, not state: the autosave timeout below reads it when
   // it FIRES rather than when it was scheduled, so the id cannot go stale in a closure.
   const eventId = useRef<string | null>(null);
+  // The autosave queue. `pending` is the newest document not yet written, `inFlight` whether a write
+  // is in the air, `persisted` the last content known to be on the server — see the note on flush().
+  const pending = useRef<DesignDocumentContent | null>(null);
+  const inFlight = useRef(false);
+  const persisted = useRef<DesignDocumentContent | null>(null);
   // Whether the restore below has finished. It gates the autosave, and it has to: resolving which
   // event we are in is a round trip now, and the 500ms debounce would otherwise beat it — writing
   // the blank starting document under the "default" key (clobbering a scratch drawing) and then
@@ -77,8 +84,16 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
       const event = await activeEvent();
       if (!live) return;
       eventId.current = event?.id ?? null;
-      const saved = loadDoc(eventId.current);
-      if (saved) setHistory(initHistory(saved));
+      // The document is a server read now (lib/studio/actions.ts). A studio with no events at all
+      // has nothing to attach a drawing to, so that one case still reads the local scratch.
+      const saved = event ? (await fetchDocument(event.id))?.content : loadScratch();
+      if (!live) return;
+      if (saved) {
+        setHistory(initHistory(saved));
+        // What is already on the server, so the first render after a restore doesn't write it
+        // straight back. Against localStorage that redundant save was free; it is a round trip now.
+        persisted.current = saved;
+      }
       setRestored(true);
       // The geometry is a server read too. The canvas renders on EMPTY_PLAN for the moment it takes,
       // which is the same blank plane it showed before the walls were fetched — never a wrong plan.
@@ -90,20 +105,59 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
     };
   }, []);
 
-  // Continuous autosave (F-3.5) — debounced, no save button. The indicator only
-  // claims "saved" when the write actually landed; a failed write shows an error + retry.
+  // Continuous autosave (F-3.5) — debounced, no save button. The indicator only claims "saved" when
+  // the write actually landed; a failed write shows an error + retry.
+  //
+  // ⚠ WRITES ARE SEQUENCED, not just debounced. A save is a request now, and requests can overlap
+  // and land out of order — which against a single-row document means an older drawing overwriting
+  // a newer one, silently, with the screen showing "נשמר". So at most one is in the air at a time
+  // and the newest document waits its turn in `pending`.
+  const flush = useCallback(async () => {
+    if (inFlight.current) return; // the running save will pick up whatever is pending when it lands
+    const next = pending.current;
+    if (!next) return;
+
+    inFlight.current = true;
+    setSaveState("saving");
+    let ok = true;
+    try {
+      const id = eventId.current;
+      if (id) await saveDocument(id, next);
+      else ok = saveScratch(next);
+    } catch {
+      ok = false;
+    }
+    inFlight.current = false;
+
+    if (!ok) {
+      // `pending` deliberately keeps the document: retrySave and the next edit both resend it.
+      setSaveState("error");
+      return;
+    }
+    persisted.current = next;
+    if (pending.current === next) {
+      pending.current = null;
+      setSaveState("saved");
+    } else {
+      // An edit arrived while this write was in the air — send that one too.
+      void flush();
+    }
+  }, []);
+
   useEffect(() => {
     if (!restored) return;
+    // Nothing to do for the render that follows a restore: this is the document we just read.
+    if (doc === persisted.current) return;
+    pending.current = doc;
     setSaveState("saving");
-    const t = setTimeout(() => {
-      setSaveState(saveDoc(eventId.current, doc) ? "saved" : "error");
-    }, 500);
+    const t = setTimeout(() => void flush(), 500);
     return () => clearTimeout(t);
-  }, [doc, restored]);
+  }, [doc, restored, flush]);
 
   const retrySave = useCallback(() => {
-    setSaveState(saveDoc(eventId.current, doc) ? "saved" : "error");
-  }, [doc]);
+    pending.current ??= doc;
+    void flush();
+  }, [doc, flush]);
 
   // Warn before leaving while a write is still pending or has failed — don't let a plan slip away unsaved.
   useEffect(() => {
@@ -313,6 +367,16 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
               />
             </div>
           </div>
+          {/* The event is booked into a property this designer was never granted. The canvas stays
+              usable — items can still be placed and the meeting can go on — but the blank ground
+              under them gets a reason instead of being mistaken for an undrawn hall. */}
+          {plan.access === "denied" && (
+            <div className="pointer-events-none absolute inset-inline-start-4 top-4">
+              <div className="pointer-events-auto">
+                <VenueAccessNotice />
+              </div>
+            </div>
+          )}
           {/* Stable live region so the drop hint / smart-apply confirmation is announced, not just shown. */}
           <div
             className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center"

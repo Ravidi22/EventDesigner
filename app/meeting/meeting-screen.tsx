@@ -14,7 +14,8 @@ import { fetchMeetingFlow } from "@/lib/settings/actions";
 import { loadActiveVenueId, type Venue, type Zone } from "@/lib/venues/storage";
 import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
-import { loadDoc } from "@/lib/studio/storage";
+import { fetchDocument } from "@/lib/studio/actions";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
 import { MultiSelect } from "@/components/multi-select";
@@ -360,12 +361,34 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
 // F-1.9: close the meeting with a quote — the one stage where prices are shown on purpose.
 // The Quote component itself carries issue / re-issue / share (F-7.1–F-7.4).
 function QuoteStep({ event }: { event: EventSummary }) {
-  const [doc] = useState(() => loadDoc(event.id));
+  // The drawing is a server read now, so "not loaded yet" and "no drawing" are two different
+  // states — and this stage runs with the client in the room, where "עדיין אין עיצוב" flashing
+  // before their own plan appears would be its own small disaster.
+  const [doc, setDoc] = useState<DesignDocumentContent | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+    void fetchDocument(event.id).then((stored) => {
+      if (!live) return;
+      setDoc(stored?.content ?? null);
+      setLoading(false);
+    });
+    return () => {
+      live = false;
+    };
+  }, [event.id]);
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">
       <h2 className="mb-6 border-b border-ink pb-3 font-display text-h2 text-ink">סגירה — הצעת מחיר</h2>
-      {doc ? <Quote doc={doc} /> : <p className="py-16 text-center text-sm text-muted">עדיין אין עיצוב לאירוע {event.clientName}.</p>}
+      {loading ? (
+        <p className="py-16 text-center text-sm text-muted">טוען את העיצוב…</p>
+      ) : doc ? (
+        <Quote doc={doc} />
+      ) : (
+        <p className="py-16 text-center text-sm text-muted">עדיין אין עיצוב לאירוע {event.clientName}.</p>
+      )}
 
       {/* The operational half (F-6) is prepared later, in management mode — the client is still in
           the room here, and a packing list is not theirs to read. This is the door to it, not the

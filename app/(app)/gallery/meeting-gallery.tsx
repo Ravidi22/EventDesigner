@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { Heart } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { activeEvent } from "@/lib/events/storage";
-import { loadFolder, toggleLike, loadImages, loadPresentations } from "@/lib/gallery/storage";
+import { fetchFolder, toggleLike, fetchImages, fetchPresentations } from "@/lib/gallery/actions";
 import { PresentationCard } from "./gallery-screen";
+import { Photo } from "@/components/photo";
 
 type View = "presentations" | "folder";
 
@@ -26,17 +27,27 @@ export function MeetingGalleryScreen() {
   const [folder, setFolder] = useState<string[]>([]);
   const [view, setView] = useState<View>("presentations");
 
-  // Hydrate after mount: the images and the folder are still client storage, the event is a server
-  // read now.
+  // Hydrate after mount. All of it is a server read now — which is the point for the folder: the
+  // client is liking photos on a tablet while the designer draws on a laptop, and a like that lands
+  // in one browser's storage is a like the other device never sees.
   useEffect(() => {
     let live = true;
-    setImages(loadImages());
-    setPresentations(loadPresentations());
-    void activeEvent().then((ev) => {
+    void (async () => {
+      const [loadedImages, loadedPresentations] = await Promise.all([
+        fetchImages(),
+        fetchPresentations(),
+      ]);
+      if (!live) return;
+      setImages(loadedImages);
+      setPresentations(loadedPresentations);
+    })();
+    void activeEvent().then(async (ev) => {
       if (!live) return;
       setEventId(ev?.id ?? null);
       setClientName(ev?.clientName ?? "");
-      if (ev) setFolder(loadFolder(ev.id));
+      if (!ev) return;
+      const liked = await fetchFolder(ev.id);
+      if (live) setFolder(liked);
     });
     return () => {
       live = false;
@@ -79,7 +90,18 @@ export function MeetingGalleryScreen() {
           folder={folder}
           imageById={imageById}
           clientName={clientName}
-          onUnlike={(imageId) => eventId && setFolder(toggleLike(eventId, imageId))}
+          onUnlike={(imageId) => {
+            if (!eventId) return;
+            // Optimistic: the heart clears under the finger, and the server answer replaces the
+            // list a moment later. A like is one row either way, so the two cannot drift far.
+            setFolder((prev) => prev.filter((x) => x !== imageId));
+            void toggleLike(eventId, imageId)
+              .then(setFolder)
+              .catch(() => {
+                // Put it back rather than lie about what the client chose.
+                void fetchFolder(eventId).then(setFolder);
+              });
+          }}
         />
       )}
     </div>
@@ -131,12 +153,7 @@ function FolderView({
       {items.map((img) => (
         <article key={img.id} className="group flex flex-col">
           <div className="relative">
-            <div
-              className="aspect-[4/5] w-full rounded-lg border border-border"
-              style={{ background: img.tone }}
-              role="img"
-              aria-label={img.name}
-            />
+            <Photo image={img} className="aspect-[4/5] w-full rounded-lg border border-border object-cover" />
             <button
               type="button"
               onClick={() => onUnlike(img.id)}

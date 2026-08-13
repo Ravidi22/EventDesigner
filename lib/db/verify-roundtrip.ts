@@ -10,7 +10,7 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 config();
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { actAsOrgForScript, SINGLE_ORG_ID } from "@/lib/db/org";
 
 // This script is a plain Node process: there is no request and no session cookie for currentOrg()
@@ -50,8 +50,28 @@ import {
   resetMeetingFlow,
 } from "@/lib/settings/actions";
 import { DEFAULT_FLOW } from "@/lib/meeting/steps";
+import { fetchDocument, saveDocument, sealDocument } from "@/lib/studio/actions";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
+import {
+  fetchSpares,
+  saveSpare,
+  fetchNextExportNumber,
+  recordExport,
+  fetchExports,
+} from "@/lib/outputs/actions";
+import {
+  fetchImages,
+  saveImage,
+  fetchPresentations,
+  savePresentation,
+  deletePresentation,
+  fetchFolder,
+  toggleLike,
+} from "@/lib/gallery/actions";
+import { likedProductIds } from "@/lib/gallery/folder-logic";
+import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { db } from "@/lib/db";
-import { venues, events } from "@/lib/db/schema";
+import { venues, events, designDocuments, galleryImages } from "@/lib/db/schema";
 
 /** There is no deleteVenue or deleteEvent action — the app has no such button, only archive — so
  *  fixtures are removed directly. A test must not be the reason a destructive production action
@@ -159,6 +179,9 @@ async function main() {
   await verifyInvites();
   await verifyEvents();
   await verifySettings();
+  await verifyDocuments();
+  await verifyOutputs();
+  await verifyGallery();
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
@@ -218,8 +241,18 @@ async function verifyVenues() {
   const geometry = await fetchVenueGeometry(id);
   check("geometry carries the walls", geometry.structure.walls.length === 1);
   check("geometry carries the venue's scale", geometry.mmPerUnit === 1);
+  check("…and says the plan is really ours to see", geometry.access === "granted", geometry.access);
 
-  check("an absent venue yields empty geometry, not an error", (await fetchVenueGeometry(undefined)).zones.length === 0);
+  const noVenue = await fetchVenueGeometry(undefined);
+  check("an absent venue yields empty geometry, not an error", noVenue.zones.length === 0);
+  // The distinction the screens hang on: "nobody picked a property" is not "that property is not
+  // yours". An empty plane meant both until this field existed, and the second one silently
+  // under-prices every per-metre item (see VenueGeometry.access).
+  check("…and calls that 'none', not a refusal", noVenue.access === "none", noVenue.access);
+  // `denied` is deliberately NOT asserted here: this script acts as an owner, and an owner reaches
+  // every property in the studio by definition (reachesAllVenues). Reaching it would mean signing
+  // in as a second, ungranted member, which is a session this process does not have. The policy
+  // behind it is asserted in `npm run check:access`.
 
   await deleteVenueForTest(id);
   check("cleanup: the venue list is as we found it", (await fetchVenues()).length === before, `${(await fetchVenues()).length} vs ${before}`);
@@ -483,6 +516,301 @@ async function verifySettings() {
     `${JSON.stringify(restored)} vs ${JSON.stringify(original)}`,
   );
   check("cleanup: the meeting flow is as we found it", (await fetchMeetingFlow()).join() === originalFlow.join());
+}
+
+/** The design document: the drawing itself, and what a version actually means.
+ *
+ *  The versioning rule is the part worth proving, because it is the one that would be expensive to
+ *  get wrong quietly: autosave must NOT mint a version (or an evening's dragging becomes thousands
+ *  of rows), and a seal must make the drawing it froze unreachable by any later save (or a quote
+ *  points at a document that changed under it). */
+async function verifyDocuments() {
+  console.log("\n— design documents —");
+  const eventId = await makeEvent("בדיקה — מסמך עיצוב");
+
+  check("an event with no drawing answers null", (await fetchDocument(eventId)) === null);
+
+  const tableId = crypto.randomUUID();
+  const doc: DesignDocumentContent = {
+    calibration: { mmPerUnit: 2.5 },
+    tables: [
+      { id: tableId, type: "עגול", number: 1, position: { x: 1200, y: 800 }, rotation: 45, diameterMm: 1800, seats: 12 },
+    ],
+    placements: [
+      {
+        id: crypto.randomUUID(),
+        variantId: crypto.randomUUID(),
+        layer: "table",
+        quantity: 1,
+        tableId,
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        scale: 1,
+      },
+      {
+        id: crypto.randomUUID(),
+        variantId: crypto.randomUUID(),
+        layer: "ceiling",
+        quantity: 1,
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        scale: 1,
+        span: { wallId: crypto.randomUUID(), from: 0.25, to: 0.75 },
+      },
+    ],
+    exceptions: [{ tableId, variantId: crypto.randomUUID() }],
+  };
+
+  const saved = await saveDocument(eventId, doc);
+  check("the first save opens version 1", saved.version === 1, String(saved.version));
+
+  const read = await fetchDocument(eventId);
+  check("the document round-trips identically", stable(read?.content) === stable(doc), stable(read?.content));
+  check("calibration survives as a number, not a string", read?.content.calibration.mmPerUnit === 2.5);
+  check("a drape keeps its run along the wall", read?.content.placements[1]?.span?.from === 0.25);
+  check("smart-apply exceptions survive", read?.content.exceptions?.length === 1);
+
+  // ── autosave does not mint versions ──────────────────────────────────────────────────────────
+  const edited = { ...doc, tables: [{ ...doc.tables[0], number: 7 }] };
+  const again = await saveDocument(eventId, edited);
+  check("a second save stays on version 1", again.version === 1, String(again.version));
+  const rows = await db().select().from(designDocuments).where(eq(designDocuments.eventId, eventId));
+  check("…and it is still ONE row, not a copy per save", rows.length === 1, `${rows.length} rows`);
+  check("the edit landed", (await fetchDocument(eventId))?.content.tables[0]?.number === 7);
+
+  // ── sealing ──────────────────────────────────────────────────────────────────────────────────
+  const sealed = await sealDocument(eventId);
+  check("sealing pins the current version", sealed.version === 1, String(sealed.version));
+  check("sealing twice does not burn a version", (await sealDocument(eventId)).version === 1);
+
+  const afterSeal = { ...edited, tables: [{ ...edited.tables[0], number: 9 }] };
+  const bumped = await saveDocument(eventId, afterSeal);
+  check("the first edit after a seal opens version 2", bumped.version === 2, String(bumped.version));
+
+  const frozen = await db()
+    .select()
+    .from(designDocuments)
+    .where(and(eq(designDocuments.eventId, eventId), eq(designDocuments.version, 1)))
+    .limit(1);
+  check(
+    "the sealed drawing is UNCHANGED — this is what a quote points at",
+    frozen[0]?.content.tables[0]?.number === 7,
+    String(frozen[0]?.content.tables[0]?.number),
+  );
+  check("…and the current read is the new version", (await fetchDocument(eventId))?.version === 2);
+
+  // ── the race that used to lose a drawing ─────────────────────────────────────────────────────
+  //
+  // A designer keeps editing while a colleague issues the quote. The seal lands between saveDocument
+  // reading the current row and writing to it, so the write — guarded by `sealed = false` so a
+  // quoted drawing can never move — matches NOTHING. It used to return "saved" anyway, and the
+  // studio would show נשמר over an edit that was never written.
+  //
+  // Simulated exactly: seal the row out from under a save by sealing between the two.
+  const racy = { ...afterSeal, tables: [{ ...afterSeal.tables[0], number: 21 }] };
+  await sealDocument(eventId); // the colleague's quote, landing mid-edit
+  const rescued = await saveDocument(eventId, racy);
+  check("a save whose row is sealed mid-flight opens the next version", rescued.version === 3, String(rescued.version));
+  check(
+    "…and the edit is actually on disk, not merely reported saved",
+    (await fetchDocument(eventId))?.content.tables[0]?.number === 21,
+  );
+  check(
+    "…while the drawing the quote was issued from is untouched",
+    (await versionContent(eventId, 2))?.tables[0]?.number === 9,
+  );
+
+  // ── what it refuses ──────────────────────────────────────────────────────────────────────────
+  await refuses("a document without tables", () =>
+    saveDocument(eventId, { calibration: { mmPerUnit: 1 }, placements: [] } as never),
+  );
+  await refuses("a calibration of zero (every measurement would be zero)", () =>
+    saveDocument(eventId, { ...doc, calibration: { mmPerUnit: 0 } }),
+  );
+  await refuses("a drawing for an event that does not exist", () =>
+    saveDocument(crypto.randomUUID(), doc),
+  );
+
+  await deleteEventForTest(eventId);
+  check("cleanup: the documents go with the event", (await documentRows(eventId)) === 0);
+}
+
+/** The operational half: reserves, and the log of what was printed. */
+async function verifyOutputs() {
+  console.log("\n— outputs —");
+  const eventId = await makeEvent("בדיקה — פלטים");
+  // A "variantId" is a variant's id OR a product's own id. This one is a bare uuid belonging to
+  // neither, which is exactly what the missing foreign key has to allow.
+  const variantId = crypto.randomUUID();
+
+  check("no reserves to begin with", Object.keys(await fetchSpares(eventId)).length === 0);
+  const withSpare = await saveSpare(eventId, variantId, 3);
+  check("a reserve persists", withSpare[variantId] === 3, JSON.stringify(withSpare));
+  const raised = await saveSpare(eventId, variantId, 5);
+  check("raising it updates in place", raised[variantId] === 5, JSON.stringify(raised));
+  const cleared = await saveSpare(eventId, variantId, 0);
+  check("zero deletes the row rather than storing a zero", cleared[variantId] === undefined);
+  await refuses("a fractional reserve", () => saveSpare(eventId, variantId, 1.5));
+  await refuses("a negative reserve", () => saveSpare(eventId, variantId, -1));
+
+  // ── the export log ───────────────────────────────────────────────────────────────────────────
+  check("the first sheet is number 1", (await fetchNextExportNumber(eventId)) === 1);
+  await saveDocument(eventId, { calibration: { mmPerUnit: 1 }, tables: [], placements: [] });
+  const first = await recordExport(eventId, "packing_list");
+  check("printing records number 1", first === 1, String(first));
+  check("the next sheet is 2", (await fetchNextExportNumber(eventId)) === 2);
+  const second = await recordExport(eventId, "placement_map");
+  check("a second sheet takes the next number", second === 2, String(second));
+
+  const log = await fetchExports(eventId);
+  check("both sheets are in the log, newest first", log.map((e) => e.number).join() === "2,1", log.map((e) => e.number).join());
+  check("each sheet names the drawing it came from", log.every((e) => e.documentVersion >= 1));
+  check(
+    "printing SEALED the drawing, so the sheet stays checkable",
+    (await fetchDocument(eventId))?.sealed === true,
+  );
+  await refuses("an unknown kind of sheet", () => recordExport(eventId, "invoice" as never));
+
+  await deleteEventForTest(eventId);
+}
+
+/** The gallery: photos, curated presentations, and the folder a client fills in a meeting. */
+async function verifyGallery() {
+  console.log("\n— gallery —");
+  const beforeImages = (await fetchImages()).length;
+  const beforePresentations = (await fetchPresentations()).length;
+
+  const product = fixture();
+  await saveProduct(product);
+
+  const image: GalleryImage = {
+    id: crypto.randomUUID(),
+    name: "בדיקה — שנדליר",
+    description: "מעל החופה",
+    productId: product.id,
+    productName: "ignored on the way in — the server joins the real one",
+    tone: "oklch(0.86 0.045 20)",
+  };
+  const images = await saveImage(image);
+  const storedImage = images.find((i) => i.id === image.id);
+  check("saveImage created it", !!storedImage);
+  check("the description survives", storedImage?.description === "מעל החופה");
+  check("the tone survives", storedImage?.tone === "oklch(0.86 0.045 20)");
+  check(
+    "productName is JOINED from the catalog, not the copy that was sent",
+    storedImage?.productName === product.name,
+    storedImage?.productName,
+  );
+
+  // Renaming the product re-captions every photo of it — the whole point of joining rather than
+  // denormalising. This is the bug the mock had and nobody could see.
+  await saveProduct({ ...product, name: "בדיקה — שם חדש" });
+  check(
+    "renaming the product re-captions its photos",
+    (await fetchImages()).find((i) => i.id === image.id)?.productName === "בדיקה — שם חדש",
+  );
+
+  // ── presentations ────────────────────────────────────────────────────────────────────────────
+  const second: GalleryImage = { ...image, id: crypto.randomUUID(), name: "בדיקה — סידור" };
+  await saveImage(second);
+
+  const presentation: Presentation = {
+    id: crypto.randomUUID(),
+    name: "בדיקה — חופה קלאסית",
+    imageIds: [second.id, image.id], // second FIRST: the order is the designer's
+    createdAt: Date.now(),
+  };
+  const saved = await savePresentation(presentation);
+  const storedPresentation = saved.find((p) => p.id === presentation.id);
+  check("savePresentation created it", !!storedPresentation);
+  check(
+    "the photo order is the designer's, not the table's",
+    storedPresentation?.imageIds.join() === [second.id, image.id].join(),
+    storedPresentation?.imageIds.join(),
+  );
+
+  const reordered = await savePresentation({ ...presentation, imageIds: [image.id] });
+  check(
+    "a SHORTER list replaces wholesale rather than adding",
+    reordered.find((p) => p.id === presentation.id)?.imageIds.join() === image.id,
+  );
+  await refuses("a presentation naming a photo nobody owns", () =>
+    savePresentation({ ...presentation, imageIds: [crypto.randomUUID()] }),
+  );
+  await refuses("a nameless presentation", () => savePresentation({ ...presentation, name: "  " }));
+
+  // ── the event folder (F-2.3) ─────────────────────────────────────────────────────────────────
+  const eventId = await makeEvent("בדיקה — תיק אירוע");
+  check("the folder starts empty", (await fetchFolder(eventId)).length === 0);
+  const liked = await toggleLike(eventId, image.id);
+  check("a like lands", liked.join() === image.id, liked.join());
+  const twoLikes = await toggleLike(eventId, second.id);
+  check("the newest like comes first", twoLikes.join() === [second.id, image.id].join(), twoLikes.join());
+  const unliked = await toggleLike(eventId, image.id);
+  check("liking again removes it", unliked.join() === second.id, unliked.join());
+  await refuses("a like on a photo nobody owns", () => toggleLike(eventId, crypto.randomUUID()));
+
+  // The bridge into the studio rail: the products behind what the client loved, deduped.
+  check(
+    "the folder resolves to the products the rail pins",
+    likedProductIds(await fetchImages(), await fetchFolder(eventId)).join() === product.id,
+  );
+
+  // ── put it back ──────────────────────────────────────────────────────────────────────────────
+  await deleteEventForTest(eventId);
+  await deletePresentation(presentation.id);
+  await db().delete(galleryImages).where(eq(galleryImages.id, image.id));
+  await db().delete(galleryImages).where(eq(galleryImages.id, second.id));
+  await removeProduct(product.id);
+  check("cleanup: the gallery is as we found it", (await fetchImages()).length === beforeImages);
+  check("cleanup: the presentations are as we found them", (await fetchPresentations()).length === beforePresentations);
+}
+
+/** An event to hang the fixtures off. Every one of these domains is a leaf of one. */
+async function makeEvent(clientName: string): Promise<string> {
+  const event: EventSummary = {
+    id: crypto.randomUUID(),
+    clientName,
+    phone: "050-0000000",
+    date: "2026-09-01",
+    zoneIds: [],
+    zonesLabel: "",
+    guests: 100,
+    step: 0,
+    createdAt: Date.now(),
+  };
+  await saveEvent(event);
+  return event.id;
+}
+
+async function documentRows(eventId: string): Promise<number> {
+  const rows = await db().select().from(designDocuments).where(eq(designDocuments.eventId, eventId));
+  return rows.length;
+}
+
+/** One specific stored version, read straight from the table — how a sealed drawing is proved to
+ *  have stayed exactly as it was issued. */
+async function versionContent(
+  eventId: string,
+  version: number,
+): Promise<DesignDocumentContent | null> {
+  const [row] = await db()
+    .select({ content: designDocuments.content })
+    .from(designDocuments)
+    .where(and(eq(designDocuments.eventId, eventId), eq(designDocuments.version, version)))
+    .limit(1);
+  return row?.content ?? null;
+}
+
+/** Assert that an action REFUSES something. A write that should have been rejected and wasn't is
+ *  the failure mode these modules exist to prevent, so "it threw" is the passing result. */
+async function refuses(label: string, run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run();
+    check(`refuses ${label}`, false, "it was accepted");
+  } catch {
+    check(`refuses ${label}`, true);
+  }
 }
 
 main().catch((e) => {

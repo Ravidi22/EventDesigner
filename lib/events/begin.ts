@@ -5,7 +5,7 @@
 // resolve on read (lib/events/plan.ts). Tables aren't copied either (F-3.1) — they are drawn per
 // event, in the meeting's hall-sketch stage.
 import { emptyDocument } from "@/lib/design-document/types";
-import { saveDoc } from "@/lib/studio/storage";
+import { saveDocument } from "@/lib/studio/actions";
 import { saveEvent } from "./actions";
 import { setActiveEventId } from "./storage";
 import type { EventSummary } from "./types";
@@ -45,7 +45,8 @@ export async function beginEvent(input: {
   await saveEvent(ev);
   setActiveEventId(ev.id);
   // Seeded under this event's own id, explicitly — not dependent on setActiveEventId having run
-  // first, which was an ordering rule enforced only by a comment.
-  saveDoc(ev.id, emptyDocument(input.mmPerUnit ?? 1));
+  // first, which was an ordering rule enforced only by a comment. Awaited now that it is a round
+  // trip: the hall-sketch stage opens straight after this returns, and it reads what this wrote.
+  await saveDocument(ev.id, emptyDocument(input.mmPerUnit ?? 1));
   return ev;
 }

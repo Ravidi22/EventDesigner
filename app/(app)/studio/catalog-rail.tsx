@@ -5,7 +5,8 @@ import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, STYLE_TAGS, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
-import { loadFolder, likedProductIds, loadImages } from "@/lib/gallery/storage";
+import { fetchFolder, fetchImages } from "@/lib/gallery/actions";
+import { likedProductIds } from "@/lib/gallery/folder-logic";
 import { activeEvent } from "@/lib/events/storage";
 import { EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState } from "../catalog/filters";
 import { SearchInput } from "@/components/search-input";
@@ -38,14 +39,19 @@ export function CatalogRail({
   // looking at the same list by construction.
   const products = useMemo(() => all.filter((p) => !p.archived), [all]); // F-4.5: archived stay off the rail
 
-  // Which event we are in is a server read; the folder of liked images within it is still client
-  // storage. Until both land the rail simply shows no hearts, which is what an event with no likes
-  // shows anyway.
+  // The event, the photo library and the event's folder are all server reads. Until they land the
+  // rail shows no hearts, which is what an event with no likes shows anyway.
+  //
+  // This is the read that the folder's crossing was for: the likes happened on the client's tablet,
+  // and this rail is on the designer's laptop.
   useEffect(() => {
     let live = true;
-    void activeEvent().then((ev) => {
-      if (live && ev) setLikedIds(likedProductIds(loadImages(), loadFolder(ev.id)));
-    });
+    void (async () => {
+      const ev = await activeEvent();
+      if (!live || !ev) return;
+      const [images, folder] = await Promise.all([fetchImages(), fetchFolder(ev.id)]);
+      if (live) setLikedIds(likedProductIds(images, folder));
+    })();
     return () => {
       live = false;
     };

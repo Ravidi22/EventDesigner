@@ -1,4 +1,4 @@
-// Data model — the tables behind lib/*/storage.ts.
+// Data model — the tables behind lib/*/actions.ts.
 //
 // THE RULE OF THIS FILE: the TypeScript types in lib/*/types.ts are the source of truth, and every
 // column here exists to hold one of them. When the two disagree, this file is what's wrong — the
@@ -185,8 +185,9 @@ export const sessions = pgTable(
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
-/** BusinessSettings (lib/settings/storage.ts) + the configured meeting flow
- *  (lib/meeting/storage.ts). One row per organization, so the organization id IS the key: a studio
+/** BusinessSettings (lib/settings/types.ts) + the configured meeting flow
+ *  (lib/meeting/steps.ts). Both are written by lib/settings/actions.ts — see the note there on why
+ *  one module owns both halves. One row per organization, so the organization id IS the key: a studio
  *  has one letterhead and one meeting shape, and a table that can hold two of either invites the
  *  question of which one is live. */
 export const studioSettings = pgTable("studio_settings", {
@@ -495,9 +496,24 @@ export const eventClients = pgTable(
 );
 
 /** DesignDocumentContent (lib/design-document/types.ts) — the heart of the system (ADR-4).
- *  Placements live as JSONB because the canvas reads and writes them as one value; each save is a
- *  new row, so `version` is real history and a quote can pin itself to the drawing it was made
- *  from (F-6.4, F-7.4). */
+ *  Placements live as JSONB because the canvas reads and writes them as one value.
+ *
+ *  ⚠ A VERSION IS NOT A SAVE. The comment here used to say "each save is a new row", and that is
+ *  what the schema was built for — but the studio autosaves on a 500ms debounce with no save button
+ *  (F-3.5), so a row per save is a row every half-second a designer is dragging. An evening's work
+ *  would be thousands of copies of a document that is tens of kilobytes each, which is a bill and a
+ *  backup problem rather than history anybody asked for.
+ *
+ *  So a row is minted when something PINS it, and `sealed` is that mark:
+ *
+ *    • autosave UPDATES the current unsealed row in place — the working drawing, one row per event;
+ *    • issuing a quote or producing an export SEALS it (lib/studio/actions.ts `sealDocument`),
+ *      freezing that content forever and pinning the output's `document_version` to it;
+ *    • the next edit after a seal opens version + 1, because the sealed row may never move again.
+ *
+ *  That is what F-6.4 and F-7.4 actually need: a quote compares two integers, and the drawing it was
+ *  made from is still on disk to compare against. Versions therefore count issued outputs, not
+ *  keystrokes. */
 export const designDocuments = pgTable(
   "design_documents",
   {
@@ -508,7 +524,12 @@ export const designDocuments = pgTable(
       .references(() => events.id, { onDelete: "cascade" }),
     version: integer("version").notNull().default(1),
     content: jsonb("content").$type<DesignDocumentContent>().notNull(),
+    /** Pinned by an output, and immutable from then on — see the note above. */
+    sealed: boolean("sealed").notNull().default(false),
     createdAt: created(),
+    /** When the drawing last changed. `createdAt` stops meaning that the moment autosave updates a
+     *  row in place, and "when was this last touched" is the one a designer would ask for. */
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("design_documents_org_idx").on(t.organizationId),
@@ -599,16 +620,22 @@ export const eventLikedImages = pgTable(
 
 /** F-6.3: the manual spare quantity a designer adds to a packing-list row before printing. Stored
  *  so the "no hand-corrections" success metric covers reserves too, instead of them being added in
- *  pen on the printed page. */
+ *  pen on the printed page.
+ *
+ *  ⚠ `variant_id` HAS NO FOREIGN KEY, and that is not an oversight. Throughout the app a
+ *  "variantId" is a variant's id OR — for a product with no variants — the PRODUCT's own id: the
+ *  implicit default a drop lands on (`defaultVariantId`, lib/studio/catalog-resolver.ts). A
+ *  reference to product_variants would therefore reject a spare on any un-varianted product, which
+ *  is most of a real catalog. A key that can name a row in either of two tables cannot be a foreign
+ *  key, so it is a plain uuid, resolved the same way every placement in a design document is.
+ *  issued_quotes.hidden_variant_ids holds the same kind of id, for the same reason. */
 export const packingSpares = pgTable(
   "packing_spares",
   {
     eventId: uuid("event_id")
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
-    variantId: uuid("variant_id")
-      .notNull()
-      .references(() => productVariants.id, { onDelete: "cascade" }),
+    variantId: uuid("variant_id").notNull(),
     quantity: integer("quantity").notNull(),
   },
   (t) => [
@@ -645,11 +672,13 @@ export const exports = pgTable(
   ],
 );
 
-/** IssuedQuote (lib/quotes/storage.ts) — F-7.4: a quote locks to the design-document version it was
+/** IssuedQuote (lib/quotes/actions.ts) — F-7.4: a quote locks to the design-document version it was
  *  produced from, so a later edit lights the "העיצוב השתנה מאז ההצעה האחרונה" indicator.
  *
- *  One row per event, matching what the app does today: re-issuing overwrites. The mock compared
- *  serialised JSON to detect a change; with real versions it compares two integers instead. */
+ *  One row per event, matching what the app does: re-issuing overwrites. The mock compared
+ *  serialised JSON to detect a change; it compares two integers now — and because issuing SEALS the
+ *  document version it names, the drawing the client was shown is still on disk to be compared
+ *  against, which the string snapshot could never manage. */
 export const issuedQuotes = pgTable(
   "issued_quotes",
   {

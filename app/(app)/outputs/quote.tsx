@@ -12,12 +12,14 @@ import { fetchVenueGeometry } from "@/lib/venues/actions";
 import { formatAmount, formatPrice, formatUnitPrice } from "@/lib/catalog/format";
 import { fetchSettings } from "@/lib/settings/actions";
 import type { BusinessSettings } from "@/lib/settings/types";
-import { loadIssuedQuote, saveIssuedQuote, designChangedSince, type IssuedQuote } from "@/lib/quotes/storage";
+import { fetchIssuedQuote, issueQuote, type IssuedQuote } from "@/lib/quotes/actions";
+import { fetchDocument } from "@/lib/studio/actions";
 import { activeEvent } from "@/lib/events/storage";
 import { patchEvent } from "@/lib/events/actions";
 import { formatEventDate, zonesLabelOf, type EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
+import { VenueAccessNotice } from "@/components/venue-access-notice";
 
 // F-7.1–F-7.4: the quote — a renderer over the design document. Variant-level rows, category
 // subtotals, hide/merge before showing, discount, VAT from settings, version lock + re-issue.
@@ -25,6 +27,11 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   const [settings, setSettings] = useState<BusinessSettings | null>(null);
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [issued, setIssued] = useState<IssuedQuote | null>(null);
+  // The version the drawing is on NOW. F-7.4 is the comparison between this and the version the
+  // quote was sealed at — two integers, where it used to be two serialised documents.
+  const [currentVersion, setCurrentVersion] = useState<number | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [issueFailed, setIssueFailed] = useState(false);
   const [discountType, setDiscountType] = useState<DiscountType>("percent");
   const [discountValue, setDiscountValue] = useState(0);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -32,6 +39,9 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   // The walls the drapes hang on: a per-metre line charges for the run it actually covers, and the
   // wall that decides that length lives at the venue, not in this document (lib/.../measure.ts).
   const [structure, setStructure] = useState<VenueStructure | undefined>(undefined);
+  // …and when those walls are unreachable, every per-metre line falls back to a catalog width and
+  // this quote under-charges. That is a price being wrong, so it is said out loud.
+  const [venueDenied, setVenueDenied] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -43,7 +53,9 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
       if (!live) return;
       setEvent(ev);
       if (ev) {
-        const q = loadIssuedQuote(ev.id);
+        const [q, stored] = await Promise.all([fetchIssuedQuote(ev.id), fetchDocument(ev.id)]);
+        if (!live) return;
+        setCurrentVersion(stored?.version ?? null);
         setIssued(q);
         if (q) {
           setDiscountType(q.discountType);
@@ -53,7 +65,10 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
         }
       }
       const geometry = await fetchVenueGeometry(ev?.venueId);
-      if (live) setStructure(eventPlan(ev, geometry).structure);
+      if (live) {
+        setStructure(eventPlan(ev, geometry).structure);
+        setVenueDenied(geometry.access === "denied");
+      }
     })();
     return () => {
       live = false;
@@ -80,23 +95,36 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
   const unpriced = groups.reduce((n, g) => n + g.lines.filter((l) => !l.priced).length, 0);
   const totals = quoteTotals(subtotal, { discountType, discountValue, vatRate });
 
-  const changed = issued ? designChangedSince(issued, doc) : false;
+  // F-7.4: the design moved on if the drawing is on a later version than the one this quote was
+  // sealed at. Unknown until both have loaded — and "unknown" must not light the warning, since a
+  // designer who learns to distrust the indicator has lost it.
+  const changed = issued !== null && currentVersion !== null && currentVersion !== issued.documentVersion;
 
-  const issue = () => {
-    if (!event) return;
-    const record: IssuedQuote = {
-      issuedAt: Date.now(),
-      docJson: JSON.stringify(doc),
-      discountType,
-      discountValue,
-      hiddenVariantIds: [...hidden],
-      mergedCategoryIds: [...merged],
-      total: totals.total,
-    };
-    saveIssuedQuote(event.id, record);
-    setIssued(record);
-    // F-1.9: the stamp that moves the event to "נשלחה הצעה" on every list in the app.
-    void patchEvent(event.id, { quoteSentAt: record.issuedAt });
+  const issue = async () => {
+    if (!event || issuing) return;
+    setIssuing(true);
+    setIssueFailed(false);
+    try {
+      const record = await issueQuote(event.id, {
+        discountType,
+        discountValue,
+        hiddenVariantIds: [...hidden],
+        mergedCategoryIds: [...merged],
+        total: totals.total,
+      });
+      setIssued(record);
+      // Issuing SEALED the drawing at this version, so the two now agree by definition — until the
+      // next edit in the studio opens the next version and lights the indicator above.
+      setCurrentVersion(record.documentVersion);
+      // F-1.9: the stamp that moves the event to "נשלחה הצעה" on every list in the app.
+      void patchEvent(event.id, { quoteSentAt: record.issuedAt });
+    } catch {
+      // Said out loud rather than swallowed: a designer who believes a quote was issued, and a
+      // client who never receives one, is the worst outcome this screen has.
+      setIssueFailed(true);
+    } finally {
+      setIssuing(false);
+    }
   };
 
   const share = async () => {
@@ -139,6 +167,8 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
 
   return (
     <div className="space-y-8">
+      {venueDenied && <VenueAccessNotice tone="measure" className="no-print" />}
+
       {/* F-7.2: business + client header */}
       <header className="flex items-start justify-between gap-4 border-b border-border pb-4">
         <div>
@@ -175,14 +205,20 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
         ) : (
           <p className="text-sm text-muted">טרם הופקה הצעה לאירוע הזה.</p>
         )}
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {issueFailed && (
+            <p className="inline-flex items-center gap-1.5 text-sm text-warn-ink">
+              <TriangleAlert className="h-4 w-4" strokeWidth={2} />
+              ההפקה נכשלה — נסו שוב
+            </p>
+          )}
           <Button variant="ghost" onClick={share}>
             <Share2 className="h-4 w-4" strokeWidth={2} />
             שיתוף
           </Button>
-          <Button onClick={issue} disabled={!event}>
+          <Button onClick={issue} disabled={!event || issuing}>
             <Send className="h-4 w-4" strokeWidth={2} />
-            {issued ? (changed ? "הפקת הצעה עדכנית" : "הפקה מחדש") : "הפקת ההצעה"}
+            {issuing ? "מפיק…" : issued ? (changed ? "הפקת הצעה עדכנית" : "הפקה מחדש") : "הפקת ההצעה"}
           </Button>
         </div>
       </div>

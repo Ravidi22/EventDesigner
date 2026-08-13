@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { Heart, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { activeEvent } from "@/lib/events/storage";
-import { loadFolder, toggleLike, loadImages, loadPresentations } from "@/lib/gallery/storage";
+import { fetchFolder, toggleLike, fetchImages, fetchPresentations } from "@/lib/gallery/actions";
 import { IconButton } from "@/components/icon-button";
+import { Photo } from "@/components/photo";
 
 // F-2.4 present mode: fullscreen flip through ONE presentation. `meeting` gates the client-only
 // bits — like / "תיק האירוע" — so a studio preview of the same presentation stays a plain
@@ -24,26 +25,30 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
 
   useEffect(() => {
     let live = true;
-    const all = loadPresentations();
-    const p = (presentationId && all.find((x) => x.id === presentationId)) || all[0] || null;
-    setPresentation(p);
-    setImages(loadImages());
-    // A studio preview has no event to save likes into, so it needs no round trip at all.
-    if (!meeting) {
-      setReady(true);
-      return;
-    }
-    void activeEvent()
-      .then((ev) => {
-        if (!live || !ev) return;
-        setEvent({ id: ev.id, clientName: ev.clientName });
-        setFolder(loadFolder(ev.id));
-      })
-      // `finally`, not `then`: a failed lookup still has to open the presentation. The client is
-      // sitting in front of this screen; losing the like button is a nuisance, a blank screen is not.
-      .finally(() => {
-        if (live) setReady(true);
-      });
+    void (async () => {
+      const [all, loadedImages] = await Promise.all([fetchPresentations(), fetchImages()]);
+      if (!live) return;
+      const p = (presentationId && all.find((x) => x.id === presentationId)) || all[0] || null;
+      setPresentation(p);
+      setImages(loadedImages);
+      // A studio preview has no event to save likes into, so it stops here.
+      if (!meeting) {
+        setReady(true);
+        return;
+      }
+      try {
+        const ev = await activeEvent();
+        if (live && ev) {
+          setEvent({ id: ev.id, clientName: ev.clientName });
+          const liked = await fetchFolder(ev.id);
+          if (live) setFolder(liked);
+        }
+      } catch {
+        // Swallowed on purpose: a failed lookup still has to open the presentation. The client is
+        // sitting in front of this screen; losing the like button is a nuisance, a blank one is not.
+      }
+      if (live) setReady(true);
+    })();
     return () => {
       live = false;
     };
@@ -62,10 +67,19 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
   const go = useCallback((delta: number) => setIndex((i) => (total ? (i + delta + total) % total : 0)), [total]);
   const close = useCallback(() => router.back(), [router]);
   const like = useCallback(() => {
-    if (event && current) {
-      setFolder(toggleLike(event.id, current.id));
-      setPulse(true);
-    }
+    if (!event || !current) return;
+    const imageId = current.id;
+    // Optimistic, and here it is not a nicety: the heart animates under a client's finger, and a
+    // round trip's worth of nothing-happening in front of them reads as a broken screen.
+    setFolder((prev) => (prev.includes(imageId) ? prev.filter((x) => x !== imageId) : [imageId, ...prev]));
+    setPulse(true);
+    void toggleLike(event.id, imageId)
+      .then(setFolder)
+      .catch(() => {
+        // The server is the record of what the client actually chose — ask it again rather than
+        // leave a heart lit over a like that never landed.
+        void fetchFolder(event.id).then(setFolder).catch(() => {});
+      });
   }, [event, current]);
 
   // Keyboard: RTL arrows (right = previous, left = next), Escape closes, Enter/L likes.
@@ -121,7 +135,9 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
           key={current.id}
           className="present-in relative aspect-[16/9] w-[min(88vw,135vh)] shrink overflow-hidden rounded-xl border border-border shadow-dialog"
         >
-          <div className="absolute inset-0" style={{ background: current.tone }} />
+          {/* `contain`, not `cover`: this is the screen a client is looking at, and cropping the
+              photograph they were shown to fit a 16:9 box is not ours to do. */}
+          <Photo image={current} fit="contain" className="absolute inset-0 h-full w-full" />
 
           {/* Name + description overlay the photo's lower edge, over an ink scrim for legibility. */}
           <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/85 via-ink/25 to-transparent px-5 pb-4 pt-14">
@@ -169,11 +185,11 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
               aria-label={`מעבר אל ${img.name}`}
               aria-current={i === index ? "true" : undefined}
               className={
-                "relative h-14 w-11 shrink-0 rounded-md border transition-[outline,border] " +
+                "relative h-14 w-11 shrink-0 overflow-hidden rounded-md border transition-[outline,border] " +
                 (i === index ? "border-accent outline outline-2 outline-accent" : "border-border opacity-70 hover:opacity-100")
               }
-              style={{ background: img.tone }}
             >
+              <Photo image={img} className="h-full w-full object-cover" />
               {event && folder.includes(img.id) && (
                 <Heart
                   className="absolute -end-1 -top-1 h-3.5 w-3.5 text-accent"
