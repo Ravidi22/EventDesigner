@@ -4,9 +4,11 @@ August 2026 · companion to [01 — requirements](01-מסמך-דרישות.md) a
 
 Those two say what the product *is*. This one says where it stands. Ordered by what unblocks what, not by size — the first item is next for a reason, and every item names the file that actually changes.
 
-**Where it stands.** Every screen in the product exists and works. Every domain lives in Postgres — the design document included, which was the last thing of real value sitting in a browser profile. Files upload, to a folder on disk today and to R2 the moment five environment variables are set. What is missing is not features: it is that **nothing is hosted anywhere yet**.
+**Where it stands.** Every screen in the product exists and works. Every domain lives in Postgres — the design document included, which was the last thing of real value sitting in a browser profile. Files upload, to a folder on disk today and to R2 the moment five environment variables are set. **It is hosted now**: Neon in `eu-central-1`, Vercel deploying from `master`, schema applied by a generated migration rather than by `db:push`.
 
-**What is left is now almost entirely accounts.** Everything that can be built without signing up for a service has been. Four blockers are credentials — Neon, Vercel, R2, Clerk — and everything else is either a decision only you can make or a piece of work nobody has started.
+**What is left is now almost entirely accounts.** Everything that can be built without signing up for a service has been. Two blockers are still credentials — R2 and Clerk — and everything else is either a decision only you can make or a piece of work nobody has started.
+
+**The one thing hosting did not buy:** files. `lib/files/driver-local.ts` writes to a disk that a serverless instance does not keep, so gallery photography — which is *built* — accepts an upload in production and loses the bytes when the container recycles. R2 is not only for the unbuilt half.
 
 ---
 
@@ -27,7 +29,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 
 | What | Blocked on | Size |
 | --- | --- | --- |
-| **Neon + Vercel** — go live | 🔑 accounts | The next thing to do |
+| ~~**Neon + Vercel** — go live~~ | **done** | Frankfurt, migrations, deployed. Only the first real organisation is left |
 | **Turn R2 on** | 🔑 account | Five env vars + CORS and public-read on Cloudflare's side |
 | **Clerk** — retire ~570 lines of our own auth | 🔑 account | Do it *before* the first outside studio signs up |
 | **Email** — password reset, quotes to clients, guest invitations | 🔑 a sending domain | Resend, free to 3,000/month |
@@ -108,14 +110,16 @@ Two things the crossing turned up, both fixed here:
 
 Ordered by what unblocks what. Some sections below carry a checked item among the unchecked ones — that is deliberate: half of "account management" is done and half waits on email, and separating them would put the reason for one on a different page from the other.
 
-### 1. Go live — Neon + Vercel · **next**
+### 1. Go live — Neon + Vercel · **done, bar one item**
 
-The migration is done, so hosting is now the only thing between this and real backups instead of a device-bound app in the cloud. **Blocked on credentials, not on code.**
-
-- [ ] Point `DATABASE_URL` at Neon's **pooled** host
+- [x] Point `DATABASE_URL` at Neon's **pooled** host — project `Eve` / `icy-rice-92083559`, `aws-eu-central-1`, Postgres 18. Frankfurt rather than Ohio because no Neon region is nearer Israel, and the region cannot be changed after a project is created
 - [x] `drizzle.config.ts` prefers `DIRECT_URL` and falls back to `DATABASE_URL` — migrations take the direct host, the app takes the pooled one (a migration through a pooler hangs with no error to read)
-- [ ] Switch from `db:push` to generated migrations, since there will be data worth not losing. Do it **at the cut-over**, against the fresh Neon database: the local one has been `db:push`ed past the last snapshot many times, so a migration generated here would sweep up unrelated drift and could not be applied to it anyway
-- [ ] First real organisation instead of the seed's placeholder
+- [x] Switch from `db:push` to generated migrations. Done at the cut-over as planned, against an empty Neon: the two stale files (19 tables, never applied anywhere) were archived, `drizzle/0000_baseline.sql` generated from `schema.ts` — 21 tables, 57 indexes and constraints — the `public` schema dropped, and the baseline *applied*, so the schema is produced by the migration rather than merely resembling it. `__drizzle_migrations` has one row
+- [x] `vercel.json` pins functions to `fra1`, so they run beside the database rather than across an ocean from it
+- [x] The local container tracks Neon's major version (18). Not a one-line change: the 18 image moved its mount to `/var/lib/postgresql`, and a data directory cannot be upgraded in place
+- [ ] **First real organisation instead of the seed's placeholder** — the only step left, and it is a signup form
+
+**Deploying does not run migrations.** Nothing applies `drizzle/*.sql` to Neon on push; a schema change reaches production only when someone runs `db:migrate` with `DIRECT_URL` set to the direct host. Worth automating before the first schema change that matters, and worth remembering until then.
 
 Budget: **$26–44/month** all in — see §9 of the architecture doc.
 

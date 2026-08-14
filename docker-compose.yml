@@ -21,7 +21,7 @@ services:
     # immediately with a message about "unused mount/volume" that sounds like corruption.
     volumes:
       - pgdata:/var/lib/postgresql
-    # `docker compose up -d --wait` returns only once this passes, so `npm run db:push` cannot race
+    # `docker compose up -d --wait` returns only once this passes, so `npm run db:migrate` cannot race
     # a container that is up but still initialising — a race whose error reads like a bad
     # connection string rather than a database that simply is not listening yet.
     healthcheck:

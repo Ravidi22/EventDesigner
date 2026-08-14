@@ -1,6 +1,6 @@
 // `dotenv/config` reads .env only, but the app's connection string lives in .env.local — that is
 // what README tells you to create and what Next.js itself loads. Loading .env.local first (and
-// falling back to .env) is what makes `npm run db:push` and `npm run dev` agree about which
+// falling back to .env) is what makes `npm run db:migrate` and `npm run dev` agree about which
 // database they are talking to.
 import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";

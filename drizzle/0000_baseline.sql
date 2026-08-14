@@ -1,3 +1,4 @@
+CREATE TYPE "public"."account_kind" AS ENUM('studio', 'client');--> statement-breakpoint
 CREATE TYPE "public"."discount_type" AS ENUM('amount', 'percent');--> statement-breakpoint
 CREATE TYPE "public"."export_type" AS ENUM('placement_map', 'packing_list', 'quote');--> statement-breakpoint
 CREATE TYPE "public"."grant_kind" AS ENUM('member', 'guest');--> statement-breakpoint
@@ -6,6 +7,7 @@ CREATE TYPE "public"."layer" AS ENUM('table', 'floor', 'ceiling');--> statement-
 CREATE TYPE "public"."price_unit" AS ENUM('unit', 'm', 'm2');--> statement-breakpoint
 CREATE TYPE "public"."studio_role" AS ENUM('owner', 'designer', 'crew');--> statement-breakpoint
 CREATE TYPE "public"."venue_role" AS ENUM('viewer', 'editor', 'manager');--> statement-breakpoint
+CREATE TYPE "public"."product_visibility" AS ENUM('private', 'public');--> statement-breakpoint
 CREATE TYPE "public"."zone_kind" AS ENUM('hall', 'canopy', 'open', 'service');--> statement-breakpoint
 CREATE TABLE "design_documents" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -13,7 +15,16 @@ CREATE TABLE "design_documents" (
 	"event_id" uuid NOT NULL,
 	"version" integer DEFAULT 1 NOT NULL,
 	"content" jsonb NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"sealed" boolean DEFAULT false NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "event_clients" (
+	"event_id" uuid NOT NULL,
+	"user_id" uuid NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "event_clients_event_id_user_id_pk" PRIMARY KEY("event_id","user_id")
 );
 --> statement-breakpoint
 CREATE TABLE "event_liked_images" (
@@ -144,8 +155,18 @@ CREATE TABLE "products" (
 	"style_tags" text[] DEFAULT '{}' NOT NULL,
 	"appearance" jsonb,
 	"archived" boolean DEFAULT false NOT NULL,
+	"visibility" "product_visibility" DEFAULT 'private' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "sessions" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"token_hash" text NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "sessions_token_hash_unique" UNIQUE("token_hash")
 );
 --> statement-breakpoint
 CREATE TABLE "studio_settings" (
@@ -163,11 +184,15 @@ CREATE TABLE "studio_settings" (
 --> statement-breakpoint
 CREATE TABLE "users" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"organization_id" uuid NOT NULL,
+	"organization_id" uuid,
+	"kind" "account_kind" DEFAULT 'studio' NOT NULL,
 	"email" text NOT NULL,
 	"name" text,
 	"role" "studio_role" DEFAULT 'designer' NOT NULL,
 	"state" "invite_state" DEFAULT 'pending' NOT NULL,
+	"password_hash" text,
+	"invite_token_hash" text,
+	"invite_expires_at" timestamp with time zone,
 	"joined_at" date,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "users_email_unique" UNIQUE("email")
@@ -219,6 +244,8 @@ CREATE TABLE "zones" (
 );
 --> statement-breakpoint
 ALTER TABLE "design_documents" ADD CONSTRAINT "design_documents_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "event_clients" ADD CONSTRAINT "event_clients_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "event_clients" ADD CONSTRAINT "event_clients_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "event_liked_images" ADD CONSTRAINT "event_liked_images_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "event_liked_images" ADD CONSTRAINT "event_liked_images_image_id_gallery_images_id_fk" FOREIGN KEY ("image_id") REFERENCES "public"."gallery_images"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "event_zones" ADD CONSTRAINT "event_zones_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -230,10 +257,10 @@ ALTER TABLE "gallery_images" ADD CONSTRAINT "gallery_images_product_id_products_
 ALTER TABLE "issued_quotes" ADD CONSTRAINT "issued_quotes_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issued_quotes" ADD CONSTRAINT "issued_quotes_design_document_id_design_documents_id_fk" FOREIGN KEY ("design_document_id") REFERENCES "public"."design_documents"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "packing_spares" ADD CONSTRAINT "packing_spares_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "packing_spares" ADD CONSTRAINT "packing_spares_variant_id_product_variants_id_fk" FOREIGN KEY ("variant_id") REFERENCES "public"."product_variants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "presentation_images" ADD CONSTRAINT "presentation_images_presentation_id_presentations_id_fk" FOREIGN KEY ("presentation_id") REFERENCES "public"."presentations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "presentation_images" ADD CONSTRAINT "presentation_images_image_id_gallery_images_id_fk" FOREIGN KEY ("image_id") REFERENCES "public"."gallery_images"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_products_id_fk" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "studio_settings" ADD CONSTRAINT "studio_settings_organization_id_organizations_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "venue_grants" ADD CONSTRAINT "venue_grants_venue_id_venues_id_fk" FOREIGN KEY ("venue_id") REFERENCES "public"."venues"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "venue_grants" ADD CONSTRAINT "venue_grants_grantee_user_id_users_id_fk" FOREIGN KEY ("grantee_user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -241,6 +268,7 @@ ALTER TABLE "venue_structures" ADD CONSTRAINT "venue_structures_venue_id_venues_
 ALTER TABLE "zones" ADD CONSTRAINT "zones_venue_id_venues_id_fk" FOREIGN KEY ("venue_id") REFERENCES "public"."venues"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "design_documents_org_idx" ON "design_documents" USING btree ("organization_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "design_documents_event_version_key" ON "design_documents" USING btree ("event_id","version");--> statement-breakpoint
+CREATE INDEX "event_clients_user_idx" ON "event_clients" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "event_liked_images_image_idx" ON "event_liked_images" USING btree ("image_id");--> statement-breakpoint
 CREATE INDEX "event_zones_zone_idx" ON "event_zones" USING btree ("zone_id");--> statement-breakpoint
 CREATE INDEX "events_org_idx" ON "events" USING btree ("organization_id");--> statement-breakpoint
@@ -260,7 +288,9 @@ CREATE INDEX "variants_org_idx" ON "product_variants" USING btree ("organization
 CREATE INDEX "variants_product_idx" ON "product_variants" USING btree ("product_id","position");--> statement-breakpoint
 CREATE INDEX "products_org_idx" ON "products" USING btree ("organization_id");--> statement-breakpoint
 CREATE INDEX "products_org_live_idx" ON "products" USING btree ("organization_id","category") WHERE "products"."archived" = false;--> statement-breakpoint
+CREATE INDEX "sessions_user_idx" ON "sessions" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "users_org_idx" ON "users" USING btree ("organization_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "users_invite_token_key" ON "users" USING btree ("invite_token_hash");--> statement-breakpoint
 CREATE INDEX "venue_grants_venue_idx" ON "venue_grants" USING btree ("venue_id");--> statement-breakpoint
 CREATE INDEX "venue_grants_grantor_idx" ON "venue_grants" USING btree ("grantor_org_id");--> statement-breakpoint
 CREATE INDEX "venue_grants_grantee_org_idx" ON "venue_grants" USING btree ("grantee_org_id");--> statement-breakpoint
