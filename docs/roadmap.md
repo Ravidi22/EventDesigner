@@ -34,7 +34,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 | **Clerk** — retire ~570 lines of our own auth | 🔑 account | Do it *before* the first outside studio signs up |
 | **Email** — password reset, quotes to clients, guest invitations | 🔑 a sending domain | Resend, free to 3,000/month |
 | **Product images** | nothing | ~3 lines; the catalog drawer just is not wired |
-| **Underlay tracing (F-3.5) + calibration (F-3.4)** | nothing | Real canvas work. The upload half already exists |
+| ~~**Underlay tracing (F-3.5) + calibration (F-3.4)**~~ | **done** | Placed, calibrated and traced over. Needs R2 to survive a deploy |
 | **Outputs redesign** | 🤔 your design direction | The quote stage was always marked provisional |
 | **Cross-studio hall availability** | 🤔 a modelling decision | See §6 — two studios cannot book one hall today, by construction |
 | **Notification bell** | deferred on purpose | Worth building once there is more than one thing to announce |
@@ -133,8 +133,10 @@ The shape is R2's on purpose, not the local driver's: the browser asks for a tic
 - [x] **Gallery photography** — pick a file when adding a photo; a photo-less row is still valid and renders its `tone` tile. One `<Photo>` component now serves all five places that used to each render the tile themselves
 - [x] Replacing a photograph deletes the one it replaced, so re-uploads do not quietly accumulate objects on a bill nobody is watching
 - [ ] **Product images** — same three lines (`uploadFile` → store the url); the catalog drawer just has not been wired yet
-- [ ] **Underlay tracing** (F-3.5) — place a photo or scan under the wall graph and draw over it. The upload half exists (`kind: "underlay"`); the canvas half does not
-- [ ] **Calibration** (F-3.4) — `mmPerUnit` is hardcoded to `1` at every call site today; tracing a real plan is the moment it starts to matter
+- [x] **Underlay tracing** (F-3.5) — upload a photo or scan, place it under the wall graph, draw over it. `PlanUnderlayLayer` renders it first in the canvas backdrop, so every zone tint, feature, door and wall sits above it. Locked by default: once walls are traced onto an image, nudging the image invalidates all of them silently, so moving it is something you switch on
+- [x] **Calibration** (F-3.4) — mark two points on the plan, type what that distance really is, and the image is scaled until it reads true. `lib/venues/underlay.ts` + `npm run check:underlay`
+
+  **`mmPerUnit` is NOT what calibration writes, and is not a stub.** The plane is millimetres, so the factor is 1 by definition; it survives only from the cancelled PDF import (ADR-3), the one thing that ever put foreign units here. Putting an image's scale there instead would make a 3-metre drape a different size per building (catalog widths are mm), give scale two sources of truth that drift, and route the compensation through `measure.ts` / `quote.ts` / `aggregate.ts` — i.e. prices. So the picture is resized and every millimetre downstream keeps meaning a millimetre. Scaling is uniform-only and anchored at the first point clicked; degenerate spans, non-positive lengths and absurd results are refused with a sentence rather than applied
 
 **What is verified, and what is not.** The local path was exercised end to end against a running server: an authenticated PUT stores bytes, a public GET returns them byte-identical with immutable cache headers, and every boundary refuses — another studio's key prefix (404), an SVG (415), an empty body (400), no session (401), a traversal key (rejected). The R2 path is checked against published SHA-256 and RFC 4231 vectors and asserted for structure and determinism, but **no byte has ever landed in a real bucket** — that needs an account. If the first PUT returns 403, the canonical request is where to look. Cloudflare also needs two things set on its side that no environment variable here can express: CORS allowing PUT from the app's origin, and public read on the custom domain.
 

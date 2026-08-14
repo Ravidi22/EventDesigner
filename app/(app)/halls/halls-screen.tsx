@@ -1,7 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DoorOpen, Layers, MousePointer2, PenLine, Ruler, Shapes, Users } from "lucide-react";
+import {
+  DoorOpen,
+  // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
+  Image as ImageIcon,
+  Layers,
+  Lock,
+  MousePointer2,
+  PenLine,
+  Ruler,
+  Shapes,
+  Trash2,
+  Unlock,
+  Upload,
+  Users,
+} from "lucide-react";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
@@ -9,7 +23,15 @@ import {
   type VenueStructure,
   type Zone,
 } from "@/lib/venues/storage";
-import { fetchVenues, fetchVenuePlan, saveVenuePlan } from "@/lib/venues/actions";
+import { fetchVenues, fetchVenuePlan, saveVenuePlan, saveVenue } from "@/lib/venues/actions";
+import { fileProblem, uploadFile } from "@/lib/files/upload";
+import {
+  calibrateUnderlay,
+  clampOpacity,
+  placeUnderlay,
+  type CalibrationResult,
+} from "@/lib/venues/underlay";
+import type { PlanUnderlay } from "@/lib/venues/types";
 import {
   FEATURE_KIND_LABEL,
   addEntrance,
@@ -42,7 +64,13 @@ import {
   type ZoneKind,
   type ZoneSource,
 } from "@/lib/venues/zone";
-import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
+import {
+  ZoneRegions,
+  StructureFeatures,
+  StructureDoors,
+  PlanUnderlayLayer,
+  CalibrationOverlay,
+} from "@/components/venue-plan";
 import { VenueInspector, ZoneFields, FEATURE_KINDS } from "@/components/venue-inspector";
 import {
   hitsInBox,
@@ -64,6 +92,20 @@ interface PlanState {
   venueId: string; // travels with the snapshot so a venue switch can't persist the outgoing plan under the incoming id
   structure: VenueStructure;
   zones: Zone[];
+}
+
+/** An uploaded image's intrinsic pixel size, so it can be placed at its own proportions.
+ *
+ *  Resolves rather than rejects on failure: a plan that could not be measured is still placeable
+ *  (placeUnderlay falls back to a square), and refusing the upload over it would be a worse answer
+ *  than a shape the designer can calibrate anyway. */
+function imageSize(url: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve({ width: 0, height: 0 });
+    img.src = url;
+  });
 }
 
 type Mode = "select" | "walls" | "zones";
@@ -305,6 +347,14 @@ export function HallsScreen() {
   // Nothing re-rounds that point: a length typed into the canvas's value box arrives exact, and a
   // second snap here would quietly throw those digits away.
   const onPick = (p: Point) => {
+    // Calibration owns the click while it is running — before the wall tools, so a stray click
+    // during it marks a measurement instead of starting a wall nobody asked for.
+    if (calib) {
+      if (!calib.from) setCalib({ from: p, to: null });
+      else if (!calib.to) setCalib({ from: calib.from, to: p });
+      return;
+    }
+
     if (region) {
       setRegion([...region, p]);
       return;
@@ -356,6 +406,98 @@ export function HallsScreen() {
   };
 
   const venue = venues.find((v) => v.id === venueId);
+
+  // ── The traced-over floor plan (F-3.5 / F-3.4) ──────────────────────────────────────────────
+  //
+  // Held locally as well as on the venue because dragging it fires per pointer-move; the server
+  // sees the result of a gesture, not the gesture. Same reason the wall graph has a history.
+  const [underlay, setUnderlay] = useState<PlanUnderlay | undefined>(undefined);
+  // Locked by default, and that is the whole safety of the feature: once walls have been traced
+  // onto the image, nudging the image invalidates every one of them, silently. So moving it is a
+  // thing you turn on, not a thing you can do by accident.
+  const [underlayUnlocked, setUnderlayUnlocked] = useState(false);
+  // null = not calibrating. `from` set, `to` null = one point marked, waiting for the second.
+  const [calib, setCalib] = useState<{ from: Point | null; to: Point | null } | null>(null);
+  const [calibAnswer, setCalibAnswer] = useState("");
+  const [underlayBusy, setUnderlayBusy] = useState(false);
+  const [underlayNote, setUnderlayNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUnderlay(venue?.plan.underlay);
+    setUnderlayUnlocked(false);
+    setCalib(null);
+    setUnderlayNote(null);
+  }, [venueId, venue?.plan.underlay]);
+
+  /** Write the plan back to the venue. Separate from saveVenuePlan (walls and zones): this is the
+   *  venue RECORD, and it needs `manager` where the graph needs `editor`. */
+  const persistUnderlay = useCallback(
+    async (next: PlanUnderlay | undefined) => {
+      if (!venue) return;
+      try {
+        const list = await saveVenue({ ...venue, plan: { ...venue.plan, underlay: next } });
+        setVenues(list);
+      } catch {
+        // Put the stored version back rather than leaving the screen showing a placement that was
+        // never saved — a plan that looks moved but reverts on reload is worse than one that never
+        // moved, because the walls traced in between would be against a position nobody has.
+        setUnderlay(venue.plan.underlay);
+        setUnderlayNote("לא ניתן לשמור את תוכנית הרקע — נסו שוב");
+      }
+    },
+    [venue],
+  );
+
+  const onUploadUnderlay = async (file: File) => {
+    const problem = fileProblem(file);
+    if (problem) {
+      setUnderlayNote(problem);
+      return;
+    }
+    setUnderlayBusy(true);
+    setUnderlayNote(null);
+    try {
+      const { url } = await uploadFile(file, "underlay");
+      // The image's own proportions decide the placement, so it never arrives stretched — and a
+      // stretched underlay cannot be made true by any later calibration.
+      const { width, height } = await imageSize(url);
+      const placed = placeUnderlay(url, file.name, width, height);
+      setUnderlay(placed);
+      setUnderlayUnlocked(true); // it has just landed in the middle of the plane; it needs placing
+      await persistUnderlay(placed);
+      setUnderlayNote("כעת כיילו: סמנו קטע שאורכו ידוע לכם");
+    } catch {
+      setUnderlayNote("ההעלאה נכשלה — נסו שוב");
+    } finally {
+      setUnderlayBusy(false);
+    }
+  };
+
+  const patchUnderlay = (patch: Partial<PlanUnderlay>) =>
+    setUnderlay((u) => (u ? { ...u, ...patch } : u));
+
+  const removeUnderlay = async () => {
+    setUnderlay(undefined);
+    setUnderlayUnlocked(false);
+    setCalib(null);
+    await persistUnderlay(undefined);
+  };
+
+  /** Second click of a calibration: ask for the real length, apply it, save. */
+  const finishCalibration = (from: Point, to: Point, answer: string) => {
+    if (!underlay) return;
+    // Entered in metres, because that is the unit a designer reads off a plan and says out loud.
+    const metres = Number(answer.replace(",", "."));
+    const result: CalibrationResult = calibrateUnderlay(underlay, from, to, metres * 1000);
+    if (!result.ok) {
+      setUnderlayNote(result.reason);
+      return;
+    }
+    setUnderlay(result.underlay);
+    setCalib(null);
+    setUnderlayNote(null);
+    void persistUnderlay(result.underlay);
+  };
   const totalArea = useMemo(() => Math.round(resolved.reduce((s, r) => s + zoneAreaM2(r), 0)), [resolved]);
   const namedFaces = resolved.filter((r) => r.zone.source.type === "face" && !r.detached).length;
   const unnamed = Math.max(0, faces.length - namedFaces);
@@ -549,6 +691,17 @@ export function HallsScreen() {
             }
             backdrop={({ clientToMm, mm }) => (
               <>
+                {/* FIRST — the traced-over plan sits under the zone tints, the features and the
+                    walls the canvas draws itself. Draggable only while explicitly unlocked, and
+                    never while a calibration is being marked (the clicks belong to that). */}
+                <PlanUnderlayLayer
+                  underlay={underlay}
+                  clientToMm={clientToMm}
+                  onMove={
+                    underlayUnlocked && !calib ? (p) => patchUnderlay({ x: p.x, y: p.y }) : undefined
+                  }
+                  onCommit={() => void persistUnderlay(underlay)}
+                />
                 <ZoneRegions
                   zones={resolved}
                   selectedIds={selectedZoneIds}
@@ -578,13 +731,17 @@ export function HallsScreen() {
                 )}
               </>
             )}
-            overlay={
-              <StructureDoors
-                structure={structure}
-                selectedIds={selection.filter((s) => s.kind === "door").map((s) => s.id)}
-                onSelect={isSelectMode ? (id, additive) => pick({ kind: "door", id }, additive) : undefined}
-              />
-            }
+            overlay={({ mm }) => (
+              <>
+                <StructureDoors
+                  structure={structure}
+                  selectedIds={selection.filter((s) => s.kind === "door").map((s) => s.id)}
+                  onSelect={isSelectMode ? (id, additive) => pick({ kind: "door", id }, additive) : undefined}
+                />
+                {/* Above the walls: the span being measured has to stay readable over a dark scan. */}
+                <CalibrationOverlay from={calib?.from ?? null} to={calib?.to ?? null} mm={mm} />
+              </>
+            )}
           />
 
           {/* Sits above the canvas's own bottom-start toolbar, centred, exactly as the hall editor
@@ -606,6 +763,172 @@ export function HallsScreen() {
         </section>
 
         <aside className="flex max-h-[68vh] flex-col gap-2 overflow-y-auto">
+          {/* Tracing panel (F-3.5 + F-3.4). Above the zone list because it is what you use FIRST:
+              place the plan, calibrate it, then draw. */}
+          <div className="rounded-md border border-border bg-card p-3.5">
+            <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-ink">
+              <ImageIcon className="h-[18px] w-[18px] text-muted" strokeWidth={1.4} />
+              תוכנית רקע
+            </h3>
+
+            {!underlay?.url ? (
+              <>
+                <p className="mb-2.5 text-xs leading-relaxed text-ink-soft">
+                  העלו תצלום או סריקה של תוכנית המקום, כיילו אותה לפי מידה ידועה, וציירו את הקירות
+                  מעליה.
+                </p>
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset">
+                  <Upload className="h-4 w-4" strokeWidth={1.4} />
+                  {underlayBusy ? "מעלה…" : "העלאת תוכנית"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={underlayBusy}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      // Cleared so choosing the SAME file again still fires a change event — the
+                      // obvious thing to do after a failed upload.
+                      e.target.value = "";
+                      if (f) void onUploadUnderlay(f);
+                    }}
+                  />
+                </label>
+              </>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                <p className="truncate text-xs text-ink-soft" title={underlay.fileName}>
+                  {underlay.fileName}
+                </p>
+
+                {/* Calibration — the one control that makes traced walls mean anything. */}
+                {calib ? (
+                  <div className="rounded-sm border border-accent-line bg-accent-tint p-2.5">
+                    {!calib.to ? (
+                      <p className="text-xs leading-relaxed text-accent-deep">
+                        {calib.from
+                          ? "סמנו את הקצה השני של אותו קטע."
+                          : "סמנו על התוכנית קצה אחד של קטע שאורכו ידוע לכם."}
+                      </p>
+                    ) : (
+                      <>
+                        <label className="mb-1.5 block text-xs font-semibold text-accent-deep">
+                          מה האורך האמיתי של הקטע? (מטרים)
+                        </label>
+                        <div className="flex gap-1.5">
+                          <input
+                            autoFocus
+                            inputMode="decimal"
+                            value={calibAnswer}
+                            onChange={(e) => setCalibAnswer(e.target.value)}
+                            onKeyDown={(e) =>
+                              e.key === "Enter" &&
+                              calib.from &&
+                              calib.to &&
+                              finishCalibration(calib.from, calib.to, calibAnswer)
+                            }
+                            placeholder="12.5"
+                            dir="ltr"
+                            className="w-24 rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
+                          />
+                          <button
+                            onClick={() =>
+                              calib.from && calib.to && finishCalibration(calib.from, calib.to, calibAnswer)
+                            }
+                            className="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-deep"
+                          >
+                            כיול
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    <button
+                      onClick={() => {
+                        setCalib(null);
+                        setUnderlayNote(null);
+                      }}
+                      className="mt-2 text-xs font-semibold text-muted hover:text-ink"
+                    >
+                      ביטול
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setCalib({ from: null, to: null });
+                      setCalibAnswer("");
+                      setUnderlayNote(null);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset"
+                  >
+                    <Ruler className="h-4 w-4" strokeWidth={1.4} />
+                    כיול לפי מידה ידועה
+                  </button>
+                )}
+
+                <label className="flex items-center gap-2 text-xs text-ink-soft">
+                  <span className="w-14 shrink-0">שקיפות</span>
+                  <input
+                    type="range"
+                    min={5}
+                    max={100}
+                    value={Math.round(clampOpacity(underlay.opacity) * 100)}
+                    onChange={(e) => patchUnderlay({ opacity: Number(e.target.value) / 100 })}
+                    onPointerUp={() => void persistUnderlay(underlay)}
+                    className="flex-1 accent-[var(--color-accent)]"
+                  />
+                </label>
+
+                <label className="flex items-center gap-2 text-xs text-ink-soft">
+                  <span className="w-14 shrink-0">סיבוב</span>
+                  <input
+                    type="number"
+                    step={0.5}
+                    value={underlay.rotationDeg}
+                    dir="ltr"
+                    onChange={(e) => patchUnderlay({ rotationDeg: Number(e.target.value) || 0 })}
+                    onBlur={() => void persistUnderlay(underlay)}
+                    className="w-20 rounded-sm border border-border bg-canvas px-2 py-1 text-sm text-ink focus-visible:border-accent focus-visible:outline-none"
+                  />
+                  <span className="text-muted">°</span>
+                </label>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => setUnderlayUnlocked((v) => !v)}
+                    className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-xs font-semibold ${
+                      underlayUnlocked
+                        ? "border-accent-line bg-accent-tint text-accent"
+                        : "border-border bg-canvas text-ink hover:bg-inset"
+                    }`}
+                  >
+                    {underlayUnlocked ? (
+                      <Unlock className="h-3.5 w-3.5" strokeWidth={1.6} />
+                    ) : (
+                      <Lock className="h-3.5 w-3.5" strokeWidth={1.6} />
+                    )}
+                    {underlayUnlocked ? "נעילת מיקום" : "שחרור להזזה"}
+                  </button>
+                  <button
+                    onClick={() => void removeUnderlay()}
+                    className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-xs font-semibold text-alert hover:bg-inset"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" strokeWidth={1.6} />
+                    הסרה
+                  </button>
+                </div>
+
+                {underlayUnlocked && (
+                  <p className="text-xs leading-relaxed text-alert">
+                    התוכנית פתוחה להזזה. הזזתה אחרי שציירתם קירות מעליה תסיט אותם ממנה.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {underlayNote && <p className="mt-2 text-xs leading-relaxed text-accent-deep">{underlayNote}</p>}
+          </div>
+
           {/* Naming panel — appears the moment an area is picked */}
           {draftZone && (
             <div className="rounded-md border border-accent-line bg-accent-tint p-3.5">

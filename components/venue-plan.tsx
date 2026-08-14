@@ -4,7 +4,10 @@ import { outlinePathD, polygonAreaMm2, polygonCentroid, wallLengthMm, wallSegmen
 import { resolveStyle } from "@/lib/element-style";
 import { nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { stairsGeometry } from "@/lib/venues/stairs";
+import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
+import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
+import type { Point } from "@/lib/studio/hall";
 
 // World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
 //
@@ -20,6 +23,172 @@ import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 //
 // Zone kind reads by fill AND label, so nothing depends on colour alone and the plan survives the
 // B&W print path.
+
+// ── The traced-over floor plan (F-3.5) ─────────────────────────────────────────────────────────
+
+// The photograph or scan the walls are drawn on top of. FIRST in the backdrop, so everything else
+// on the plan — zone tints, features, doors, and the canvas's own walls — sits above it.
+//
+// ⚠ `preserveAspectRatio="none"` is REQUIRED, not a style choice. SVG's default letterboxes the
+// image inside the rectangle, so the pixels would stop spanning `widthMm` and every calibration
+// measured against them would be wrong by the size of the letterbox. The rectangle is kept at the
+// image's own ratio by placeUnderlay/scaleUnderlayAbout, so "none" distorts nothing — it just makes
+// the rectangle mean what the maths in lib/venues/underlay.ts assumes it means.
+//
+// Not interactive unless `onMove` is supplied. That default matters: while tracing, a stray drag
+// that shifted the plan under the walls already drawn on it would silently invalidate all of them,
+// so /halls keeps the image locked and asks for it to be unlocked on purpose.
+export function PlanUnderlayLayer({
+  underlay,
+  onMove,
+  onCommit,
+  clientToMm,
+}: {
+  underlay?: PlanUnderlay;
+  onMove?: (p: Point) => void;
+  onCommit?: () => void;
+  clientToMm?: (clientX: number, clientY: number) => Point;
+}) {
+  // A row written before file storage existed carries a fileName and no url; there is nothing to
+  // draw for it, and an <image> with an empty href renders a broken-image glyph on the plan.
+  if (!underlay?.url) return null;
+
+  const c = underlayCentre(underlay);
+  const movable = Boolean(onMove && clientToMm);
+  const drag = movable ? draggableUnderlay(underlay, onMove, onCommit, clientToMm) : {};
+
+  return (
+    <g transform={`rotate(${underlay.rotationDeg} ${c.x} ${c.y})`}>
+      <image
+        href={underlay.url}
+        x={underlay.x}
+        y={underlay.y}
+        width={underlay.widthMm}
+        height={underlay.heightMm}
+        opacity={clampOpacity(underlay.opacity)}
+        preserveAspectRatio="none"
+        className={movable ? "cursor-move" : "pointer-events-none"}
+        {...drag}
+      />
+      {/* While unlocked, the outline says where the image's edges are — a pale scan can otherwise
+          fade into the plane, leaving nothing to aim a drag at. */}
+      {movable && (
+        <rect
+          x={underlay.x}
+          y={underlay.y}
+          width={underlay.widthMm}
+          height={underlay.heightMm}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth={2}
+          strokeDasharray="8 6"
+          vectorEffect="non-scaling-stroke"
+          className="pointer-events-none"
+        />
+      )}
+    </g>
+  );
+}
+
+const underlayDrag = new Map<number, { x: number; y: number; ux: number; uy: number; dragging: boolean }>();
+
+// Same 4px threshold as every other draggable thing here, so a click meant to select can't nudge
+// the plan. Reports a DELTA from where the press began rather than the pointer's position, so the
+// image doesn't jump its own centre to the cursor on the first move.
+function draggableUnderlay(
+  u: PlanUnderlay,
+  onMove?: (p: Point) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => Point,
+) {
+  if (!onMove || !clientToMm) return {};
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    if (underlayDrag.get(e.pointerId)?.dragging) onCommit?.();
+    underlayDrag.delete(e.pointerId);
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      underlayDrag.set(e.pointerId, { x: e.clientX, y: e.clientY, ux: u.x, uy: u.y, dragging: false });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const origin = underlayDrag.get(e.pointerId);
+      if (!origin || e.buttons !== 1) return;
+      if (!origin.dragging) {
+        if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 4) return;
+        origin.dragging = true;
+      }
+      const from = clientToMm(origin.x, origin.y);
+      const to = clientToMm(e.clientX, e.clientY);
+      onMove({ x: Math.round(origin.ux + to.x - from.x), y: Math.round(origin.uy + to.y - from.y) });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+}
+
+/**
+ * The two points being marked for calibration (F-3.4), with what they currently measure.
+ *
+ * Drawn in the OVERLAY rather than the backdrop: it has to be readable over the photograph it is
+ * measuring, and a scan is often darkest exactly where a wall is.
+ *
+ * The readout shows the length *as currently placed* — the number the designer is about to correct.
+ * Seeing "1,340 מ״מ" over a wall they know is 12 metres is what makes the next step obvious.
+ */
+export function CalibrationOverlay({
+  from,
+  to,
+  mm,
+}: {
+  from: Point | null;
+  to: Point | null;
+  mm: (px: number) => number;
+}) {
+  if (!from) return null;
+  const dot = mm(5);
+  if (!to) return <circle cx={from.x} cy={from.y} r={dot} fill="var(--color-accent)" className="pointer-events-none" />;
+
+  const measured = spanMm(from, to);
+  const midX = (from.x + to.x) / 2;
+  const midY = (from.y + to.y) / 2;
+  return (
+    <g className="pointer-events-none">
+      <line
+        x1={from.x}
+        y1={from.y}
+        x2={to.x}
+        y2={to.y}
+        stroke="var(--color-accent)"
+        strokeWidth={2}
+        vectorEffect="non-scaling-stroke"
+      />
+      <circle cx={from.x} cy={from.y} r={dot} fill="var(--color-accent)" />
+      <circle cx={to.x} cy={to.y} r={dot} fill="var(--color-accent)" />
+      {/* direction:ltr — a measurement is a number with a unit, and it reads left-to-right even on
+          an RTL screen. As a style rather than the `dir` attribute, which SVG text does not take. */}
+      <text
+        x={midX}
+        y={midY - mm(10)}
+        textAnchor="middle"
+        fontSize={mm(13)}
+        fill="var(--color-accent)"
+        className="font-semibold"
+        style={{
+          direction: "ltr",
+          paintOrder: "stroke",
+          stroke: "var(--color-card)",
+          strokeWidth: mm(4),
+        }}
+      >
+        {Math.round(measured).toLocaleString("en-US")} mm
+      </text>
+    </g>
+  );
+}
 
 const ZONE_FILL: Record<string, string> = {
   hall: "var(--color-accent-tint)",

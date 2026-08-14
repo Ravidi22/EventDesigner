@@ -17,8 +17,13 @@ import type { VenueStructure } from "./structure";
 // This is the ONLY place an imported drawing still belongs. The meeting used to import a per-event
 // table layout drawn in an outside tool and align it over the hall; tables are drawn in the meeting
 // itself now (lib/meeting/steps.ts — סקיצת אולם), so nothing per-event is imported any more.
-// ponytail: fileName only for now — real image pixels arrive with file storage.
+//
+// `x`/`y` is the top-left of the UNROTATED rectangle and `rotationDeg` turns it about its centre —
+// the placement maths in ./underlay.ts depends on reading that the same way the renderer does.
 export interface PlanUnderlay {
+  /** Where the bytes live — `lib/files/` minted it, and it is a bucket URL or this app's own file
+   *  route depending on which driver is configured. Empty for a row written before file storage. */
+  url: string;
   fileName: string;
   x: number;
   y: number;
@@ -29,8 +34,13 @@ export interface PlanUnderlay {
 }
 
 export interface VenuePlan {
-  // Calibration lives here, not per zone: scale is a property of the property, so measuring once
-  // off the site plan keeps every zone on it honest to each other.
+  /** ⚠ PINNED TO 1, AND NOT A STUB. The plane is millimetres (lib/studio/hall.ts), so a "unit" IS
+   *  a millimetre and the factor is 1 by definition.
+   *
+   *  It survives from the cancelled PDF import (ADR-3), which was the only thing that ever put
+   *  foreign units on this plane. Calibrating a traced plan (F-3.4) scales the UNDERLAY instead —
+   *  see lib/venues/underlay.ts for why putting an image's scale here would make a product's size
+   *  depend on which building it is in, and would reach the quote. */
   mmPerUnit: number;
   boundary?: Point[]; // the property line, if the designer bothered to draw it
   underlay?: PlanUnderlay;
