@@ -21,7 +21,7 @@
     "check:measure": "tsx lib/design-document/measure.ts",
     "check:anchor": "tsx lib/studio/anchor.ts",
     "db:seed": "tsx lib/db/seed.ts",
-    "db:reset": "drizzle-kit push --force && tsx lib/db/seed.ts",
+    "db:reset": "tsx lib/db/reset.ts && tsx lib/db/seed.ts",
     "db:verify": "tsx lib/db/verify-roundtrip.ts",
     "check:outline": "tsx lib/studio/use-outline-editor.ts",
     "check:faces": "tsx lib/venues/faces.ts",
