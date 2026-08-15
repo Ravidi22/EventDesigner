@@ -48,7 +48,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 
 ### The product surfaces
 
-- [x] **Dashboard** — calendar, today's focus, statistics, event drawer
+- [x] **Dashboard** — calendar, today's focus, statistics, event drawer, and booking a meeting on any day of it
 - [x] **Meeting mode** (`/meeting`) — the guided client flow, stage by stage
 - [x] **Catalog** — products, variants, category fields, map appearance, custom shapes, CSV import
 - [x] **Halls** (`/halls`) — the venue's wall graph drawn and edited in-app: walls, doors, fixed features, zones over regions
@@ -70,6 +70,7 @@ Every domain goes through a `lib/<domain>/` module, so each crossing is a one-fi
 
 - [x] **Accounts and sessions** — `lib/auth/`, sessions revocable, token stored hashed
 - [x] **Events** — `lib/events/actions.ts`, status derived from the meeting stage
+- [x] **Scheduled meetings** — `lib/appointments/actions.ts`. Its own table, not the `events.meetingDate` column it replaced: that one held a single meeting per event, could not exist before the event did, and no form in the app ever wrote to it — so the dashboard's פגישות tab had rendered its empty state on every day since it shipped
 - [x] **Catalog** — `lib/catalog/actions.ts`
 - [x] **Venues, structures, zones** — `lib/venues/actions.ts`
 - [x] **Studio settings + meeting flow** — `lib/settings/actions.ts`
