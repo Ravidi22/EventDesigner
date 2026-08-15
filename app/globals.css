@@ -48,9 +48,13 @@
   --color-success: #3f9d76;
   --color-success-tint: #dcefe5;
   --color-warn: #c79a2e;
-  --color-warn-ink: #a97e1f;
+  /* The "extra depth" the note above calls for. Was #a97e1f, which missed AA at both jobs it has —
+     3.1:1 on warn-tint, 4.0:1 on white. This is 4.8:1 and 5.6:1. */
+  --color-warn-ink: #856212;
   --color-warn-tint: #f6ecd6;
   --color-alert: #c9603f;
+  /* alert had no ink of its own; it is 3.2:1 on its own tint. This is 4.7:1 there, 5.8:1 on white. */
+  --color-alert-ink: #a8482b;
   --color-alert-tint: #f6e3dc;
 
   /* --- Geometry --- */
