@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Heart } from "lucide-react";
+import { GalleryVerticalEnd, Heart } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { activeEvent } from "@/lib/events/storage";
 import { fetchFolder, toggleLike, fetchImages, fetchPresentations } from "@/lib/gallery/actions";
 import { PresentationCard } from "./gallery-screen";
 import { Photo } from "@/components/photo";
+import { EmptyState } from "@/components/empty-state";
 
 type View = "presentations" | "folder";
 
@@ -70,7 +71,13 @@ export function MeetingGalleryScreen() {
 
       {view === "presentations" ? (
         presentations.length === 0 ? (
-          <p className="py-20 text-center text-sm text-muted">אין עדיין תצוגות.</p>
+          // No create action here on purpose: this screen runs with a client in the room, and the
+          // fix ("build a presentation") is studio work for afterwards, not something to open now.
+          <EmptyState
+            icon={GalleryVerticalEnd}
+            title="אין עדיין תצוגות"
+            body="התצוגות נבנות במסך ״גלריה ותצוגות״ בסטודיו. אפשר להמשיך בפגישה בלעדיהן ולחזור לכאן אחר כך."
+          />
         ) : (
           <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
             {presentations.map((p) => (
@@ -138,14 +145,11 @@ function FolderView({
   const items = folder.map((id) => imageById.get(id)).filter((i): i is GalleryImage => !!i);
   if (items.length === 0) {
     return (
-      <div className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
-        <Heart className="mb-4 h-8 w-8 text-muted" strokeWidth={1.5} />
-        <h2 className="font-display text-h2 text-ink">תיק האירוע עדיין ריק</h2>
-        <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-          עברו עם {clientName || "הלקוח"} על התצוגות וסמנו ♥ את מה שאהב — התמונות ייאספו לכאן, והמוצרים
-          המקושרים יחכו לכם בראש מסילת הסטודיו.
-        </p>
-      </div>
+      <EmptyState
+        icon={Heart}
+        title="תיק האירוע עדיין ריק"
+        body={`עברו עם ${clientName || "הלקוח"} על התצוגות וסמנו ♥ את מה שאהב — התמונות ייאספו לכאן, והמוצרים המקושרים יחכו לכם בראש מסילת הסטודיו.`}
+      />
     );
   }
   return (

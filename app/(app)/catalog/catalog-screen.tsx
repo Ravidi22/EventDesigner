@@ -1,15 +1,17 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { PackagePlus, Plus } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORIES } from "@/lib/catalog/categories";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { parseCsvProducts } from "@/lib/catalog/csv";
 import { useHeaderSearch } from "@/components/header-search-context";
+import { Button } from "@/components/button";
+import { EmptyState, NoResults } from "@/components/empty-state";
 import { ProductCard } from "./product-card";
 import { Filters, EMPTY_FILTERS, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
-import { FirstRunEmpty, NoResults } from "./empty-state";
 
 export function CatalogScreen() {
   // The catalog now comes from Postgres through a server action; the hook fetches it, primes the
@@ -81,7 +83,19 @@ export function CatalogScreen() {
         </p>
       )}
       {visible.length === 0 ? (
-        <FirstRunEmpty onAdd={() => setEditing(blankProduct())} />
+        // First run (F-2.3): an empty catalog is the adoption blocker, so this teaches what the
+        // catalog is for and makes adding the first product the obvious next move.
+        <EmptyState
+          icon={PackagePlus}
+          title="הקטלוג עדיין ריק"
+          body="הקטלוג הוא מאגר הפריטים שאיתו תלביש כל אירוע — מפות, כיסאות, שנדליירים ועוד. כל פריט שתוסיף כאן יהיה זמין לגרירה על מפת האולם, ויזין אוטומטית את רשימת הציוד ואת הצעת המחיר."
+          action={
+            <Button onClick={() => setEditing(blankProduct())}>
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+              הוסף מוצר ראשון
+            </Button>
+          }
+        />
       ) : (
         <>
           <input
@@ -115,6 +129,8 @@ export function CatalogScreen() {
 
           {filtered.length === 0 ? (
             <NoResults
+              title="לא נמצאו מוצרים"
+              body="נסה לשנות את החיפוש או להסיר חלק מהסינון."
               onClear={() => {
                 setFilters(EMPTY_FILTERS);
                 setSearch("");
