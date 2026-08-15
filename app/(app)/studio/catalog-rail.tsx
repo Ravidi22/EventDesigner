@@ -144,7 +144,7 @@ export function CatalogRail({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="scroll-slim flex-1 overflow-y-auto p-2">
         {liked.length > 0 && (
           <>
             <SectionLabel>
