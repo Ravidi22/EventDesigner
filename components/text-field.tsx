@@ -27,7 +27,12 @@ export function TextField({
   onChange: (value: string) => void;
   /** `password` is here for the settings screen's own change-password fields. The sign-in and
    *  sign-up pages use `Field` in components/auth-shell.tsx instead — that one is styled for the
-   *  auth pages; this one matches every other field in the app. */
+   *  auth pages; this one matches every other field in the app.
+   *
+   *  No `time`, and no `date` in practice: both OS controls draw their own popup in the browser's
+   *  locale and ignore our RTL layout, so they get hand-built siblings instead — components/
+   *  date-field.tsx and components/time-field.tsx. `date` survives here only as a plain text-ish
+   *  input for anything that needs one without a picker. */
   type?: "text" | "tel" | "email" | "date" | "password";
   dir?: "ltr" | "rtl";
   placeholder?: string;
