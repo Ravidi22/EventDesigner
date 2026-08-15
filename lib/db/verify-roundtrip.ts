@@ -43,6 +43,13 @@ import { inviteInfo, signUp } from "@/lib/auth/actions";
 import { fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import {
+  fetchAppointments,
+  saveAppointment,
+  setAppointmentDone,
+  deleteAppointment,
+} from "@/lib/appointments/actions";
+import type { Appointment } from "@/lib/appointments/types";
+import {
   fetchSettings,
   saveSettings,
   fetchMeetingFlow,
@@ -178,6 +185,7 @@ async function main() {
   await verifyGrants();
   await verifyInvites();
   await verifyEvents();
+  await verifyAppointments();
   await verifySettings();
   await verifyDocuments();
   await verifyOutputs();
@@ -339,6 +347,102 @@ async function verifyGrants() {
   await deleteVenueForTest(venueId);
 }
 
+/** The diary: meetings with clients (lib/appointments/). Three things are actually at risk here and
+ *  each gets an assertion — that a meeting can exist with NO event (the prospect case this table was
+ *  built for), that the date and the clock survive the round trip without a Date ever touching them,
+ *  and that a meeting cannot be hung off a record this studio does not own. */
+async function verifyAppointments() {
+  console.log("\n— appointments —");
+  const before = (await fetchAppointments()).length;
+
+  const { id: venueId } = await createVenue();
+  const eventId = await makeEvent("בדיקה — יומן");
+
+  // A meeting with nobody's event: the first sit-down, before there is anything to attach it to.
+  const prospect: Appointment = {
+    id: crypto.randomUUID(),
+    clientName: "בדיקה — זוג מתעניין",
+    phone: "050-1111111",
+    // The same trap as the wedding day above: this is a Sunday, the machine is at UTC+3, and
+    // anything that parses it into a Date and formats it back lands on the 14th.
+    date: "2026-06-15",
+    time: "17:00",
+    durationMin: 90,
+    kind: "consultation",
+    note: "היכרות ראשונה",
+    createdAt: Date.now(),
+  };
+  const afterFirst = await saveAppointment(prospect);
+  const back = afterFirst.find((a) => a.id === prospect.id);
+  check("a meeting with no event at all is accepted", !!back);
+
+  if (back) {
+    const a = JSON.parse(JSON.stringify(prospect)) as Record<string, unknown>;
+    const b = JSON.parse(JSON.stringify(back)) as Record<string, unknown>;
+    const diffs = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+      .filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]))
+      .map((k) => `${k}: sent=${JSON.stringify(a[k])} got=${JSON.stringify(b[k])}`);
+    check("the whole meeting round-trips identically", diffs.length === 0, diffs.join(" | "));
+    check("the day is the same CALENDAR DAY", back.date === "2026-06-15", back.date);
+    check("the hour survives as HH:mm", back.time === "17:00", String(back.time));
+    check("an unheld meeting has no done key", back.done === undefined, String(back.done));
+  }
+
+  // The same couple, later, once they have booked something — a SECOND meeting on one event, which
+  // is the whole reason this is a table and not the column it replaced.
+  const first: Appointment = { ...prospect, id: crypto.randomUUID(), eventId, venueId, date: "2026-05-04", kind: "walkthrough" };
+  const second: Appointment = { ...prospect, id: crypto.randomUUID(), eventId, venueId, date: "2026-07-20", kind: "followup", time: undefined };
+  await saveAppointment(first);
+  const list = await saveAppointment(second);
+  check("one event carries more than one meeting", list.filter((a) => a.eventId === eventId).length === 2);
+  check("a meeting with no hour is allowed", list.find((a) => a.id === second.id)?.time === undefined);
+
+  const dates = list.filter((a) => a.clientName === prospect.clientName).map((a) => a.date);
+  check("the diary comes back soonest-first", dates.join() === [...dates].sort().join(), dates.join());
+
+  // ── done is set, not inferred ────────────────────────────────────────────────────────────────
+  const held = await setAppointmentDone(first.id, true);
+  check("a meeting can be marked held", held.find((a) => a.id === first.id)?.done === true);
+  const unheld = await setAppointmentDone(first.id, false);
+  check("and un-marked, collapsing back to absent", unheld.find((a) => a.id === first.id)?.done === undefined);
+
+  // ── what it refuses ──────────────────────────────────────────────────────────────────────────
+  // A well-formed uuid for a row that is not this studio's. The foreign key alone would catch this
+  // one because the row does not exist at all — the assertion that matters is that the ERROR comes
+  // from assertLinks, before any write, which is the same check that stops a real id from another
+  // organisation.
+  await refuses("an event that is not this studio's", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), eventId: crypto.randomUUID() }),
+  );
+  await refuses("a venue that is not this studio's", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), venueId: crypto.randomUUID() }),
+  );
+  await refuses("a date that passes the regex but does not exist", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), date: "2026-02-31" }),
+  );
+  await refuses("an hour that is not on a clock", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), time: "25:00" }),
+  );
+  await refuses("a kind that is not one of the four", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), kind: "dinner" as Appointment["kind"] }),
+  );
+  await refuses("a meeting with no date", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), date: "" }),
+  );
+
+  // ── cleanup, which is itself the cascade assertion ───────────────────────────────────────────
+  const afterDelete = await deleteAppointment(prospect.id);
+  check("a cancelled meeting is gone, not archived", !afterDelete.some((a) => a.id === prospect.id));
+
+  // Deleting the event takes its two meetings with it (ON DELETE CASCADE): a meeting about an event
+  // that no longer exists is not a diary entry, it is a dangling row.
+  await deleteEventForTest(eventId);
+  const remaining = await fetchAppointments();
+  check("deleting an event takes its meetings with it", !remaining.some((a) => a.eventId === eventId));
+  await deleteVenueForTest(venueId);
+  check("the diary is exactly as we found it", remaining.length === before, `${remaining.length} vs ${before}`);
+}
+
 /** The event half: a client record standing on zones of a property. Needs a venue and a zone to
  *  stand on, so it builds both and takes both down again. */
 async function verifyEvents() {
@@ -370,7 +474,6 @@ async function verifyEvents() {
     // at UTC+3, so anything that parses it into a Date and formats it back lands on the 8th.
     date: "2026-08-09",
     time: "19:30",
-    meetingDate: "2026-06-01",
     venueId,
     // B before A on purpose: the order is the designer's, not the table's.
     zoneIds: [zoneB.id, zoneA.id],
@@ -393,7 +496,6 @@ async function verifyEvents() {
     check("the whole event round-trips identically", diffs.length === 0, diffs.join(" | "));
     check("the wedding is still the same CALENDAR DAY", returned.date === "2026-08-09", returned.date);
     check("the start time survives as HH:mm", returned.time === "19:30", String(returned.time));
-    check("the meeting date is its own date", returned.meetingDate === "2026-06-01", String(returned.meetingDate));
     check("zone order is the designer's, not the table's", returned.zoneIds.join() === [zoneB.id, zoneA.id].join());
     check("an unarchived event has no archived key", returned.archived === undefined, String(returned.archived));
     check("createdAt survives as epoch ms", returned.createdAt === original.createdAt);

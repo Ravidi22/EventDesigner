@@ -166,7 +166,6 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
           contact2Phone: row.contact2Phone,
           eventDate: row.eventDate,
           startTime: row.startTime,
-          meetingDate: row.meetingDate,
           venueId: row.venueId,
           zonesLabel: row.zonesLabel,
           guests: row.guests,

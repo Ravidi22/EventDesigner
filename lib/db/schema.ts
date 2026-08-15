@@ -69,6 +69,13 @@ export const priceUnitEnum = pgEnum("price_unit", ["unit", "m", "m2"]);
 export const visibilityEnum = pgEnum("product_visibility", ["private", "public"]);
 // What a named region of a venue is (lib/venues/zone.ts).
 export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
+// What kind of sit-down a scheduled meeting is (lib/appointments/types.ts).
+export const appointmentKindEnum = pgEnum("appointment_kind", [
+  "consultation",
+  "followup",
+  "walkthrough",
+  "other",
+]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
 // Which SIDE of the product an account is on, and the one distinction that is not a role.
@@ -415,8 +422,8 @@ export const events = pgTable(
     contact2Phone: text("contact2_phone"),
     eventDate: date("event_date"),
     startTime: time("start_time"),
-    /** A scheduled client consultation, distinct from the event day itself. */
-    meetingDate: date("meeting_date"),
+    // ⚠ `meeting_date` used to live here — one nullable date, i.e. exactly one scheduled meeting per
+    // event, ever. It moved out to its own table; see `appointments` below for why.
     venueId: uuid("venue_id").references(() => venues.id, { onDelete: "restrict" }),
     /** The zones' names, joined — denormalised for lists, headers and the quote, which need a label
      *  without loading the venue plan. Rewritten whenever the selection changes. */
@@ -492,6 +499,61 @@ export const eventClients = pgTable(
     primaryKey({ columns: [t.eventId, t.userId] }),
     // "which events may this person see" is the only read the client side ever does.
     index("event_clients_user_idx").on(t.userId),
+  ],
+);
+
+/** Appointment (lib/appointments/types.ts) — a meeting with a client, on the calendar.
+ *
+ *  ⚠ NAMED `appointments`, NOT `meetings`, while every string on screen still says "פגישה". The word
+ *  "meeting" was already spent: lib/meeting/ and /meeting are the guided MEETING FLOW, the stages a
+ *  designer walks a client through. A `lib/meetings/` sitting one character from `lib/meeting/` is a
+ *  mis-import waiting to happen, so the scheduled thing takes a different word in code and keeps the
+ *  Hebrew one in the UI.
+ *
+ *  ⚠ REPLACES `events.meeting_date` (migration 0001, which copies every non-null one in here before
+ *  dropping it). That column held one date on the event row, which is one meeting per event for the
+ *  life of the event — and docs/01 §מצב פגישה says the opposite in as many words: "פגישה שנייה
+ *  ושינויים הם חלק מהתהליך, לא חריגה ממנו". It also could not exist before its event did, so the
+ *  first meeting — the one where you find out whether there is an event at all — had nowhere to go.
+ */
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: id(),
+    organizationId: orgId(),
+    /** The event this is about — NULL while the couple is still a prospect. That is the whole point
+     *  of the table: a meeting may precede its event, or never acquire one. */
+    eventId: uuid("event_id").references(() => events.id, { onDelete: "cascade" }),
+    /** Who it is with, as typed. Denormalised on purpose — same trade as events.zonesLabel: a
+     *  prospect has no event to read a name off, and the calendar wants a label without a join. */
+    clientName: text("client_name").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    /** Which property this concerns — the dashboard scopes to one at a time. NULL means "not tied to
+     *  a property yet", and such a meeting shows on EVERY venue's calendar rather than on none;
+     *  a prospect meeting that is invisible everywhere is worse than one that is visible twice.
+     *  `set null` on delete, not `restrict` like events.venue_id: a property with ten years of past
+     *  meetings against it should still be deletable, and losing the association is not losing the
+     *  meeting. */
+    venueId: uuid("venue_id").references(() => venues.id, { onDelete: "set null" }),
+    /** A `date` plus a `time`, never a timestamptz — the same reasoning as events.event_date. A
+     *  meeting at 17:00 is at 17:00 in the room where it happens; an instant lets a timezone move it. */
+    date: date("date").notNull(),
+    startTime: time("start_time"),
+    durationMin: integer("duration_min").notNull().default(60),
+    kind: appointmentKindEnum("kind").notNull().default("consultation"),
+    note: text("note").notNull().default(""),
+    /** It was actually held. NOT derived from the date being past: a meeting that was booked and
+     *  never happened is a different fact from one that has come and gone, and only the designer
+     *  knows which. */
+    done: boolean("done").notNull().default(false),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    // The one read the dashboard does: this studio's meetings, in date order.
+    index("appointments_org_date_idx").on(t.organizationId, t.date),
+    index("appointments_event_idx").on(t.eventId),
+    index("appointments_venue_idx").on(t.venueId),
   ],
 );
 

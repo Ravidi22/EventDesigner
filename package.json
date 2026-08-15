@@ -37,6 +37,7 @@
     "check:files": "tsx lib/files/keys.ts",
     "check:sigv4": "tsx lib/files/sigv4.ts",
     "check:calendar": "tsx lib/calendar/hebrew.ts",
+    "check:appointments": "tsx lib/appointments/types.ts",
     "gen:calendar": "tsx lib/calendar/generate.mts"
   },
   "dependencies": {
