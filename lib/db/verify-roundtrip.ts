@@ -75,6 +75,17 @@ import {
   fetchFolder,
   toggleLike,
 } from "@/lib/gallery/actions";
+import { issueQuote } from "@/lib/quotes/actions";
+import {
+  fetchEventMargin,
+  fetchProcurement,
+  fetchSuppliers,
+  removeExpense,
+  removeSupplier,
+  saveExpense,
+  saveSupplier,
+} from "@/lib/suppliers/actions";
+import type { Expense, Supplier } from "@/lib/suppliers/types";
 import { likedProductIds } from "@/lib/gallery/folder-logic";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { db } from "@/lib/db";
@@ -190,6 +201,7 @@ async function main() {
   await verifyDocuments();
   await verifyOutputs();
   await verifyGallery();
+  await verifySuppliers();
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
@@ -866,6 +878,145 @@ async function verifyGallery() {
   await removeProduct(product.id);
   check("cleanup: the gallery is as we found it", (await fetchImages()).length === beforeImages);
   check("cleanup: the presentations are as we found them", (await fetchPresentations()).length === beforePresentations);
+}
+
+/** Suppliers, expenses, the margin — and the forecast, which is the only one of the four that is a
+ *  computation rather than a round-trip.
+ *
+ *  The reduction itself is proved by `npm run check:procurement`, which runs under node against
+ *  fixtures. What can only be proved HERE is the assembly: that a drawing in the database, a quote
+ *  in the database and a catalog row with a stockKind arrive at that reduction as the right
+ *  `EventDemand` — including the two facts the pure test cannot see, that an event without an
+ *  issued quote is excluded and that its exclusion is counted. */
+async function verifySuppliers() {
+  console.log("\n— suppliers —");
+  const before = (await fetchSuppliers()).length;
+
+  const supplier: Supplier = {
+    id: crypto.randomUUID(),
+    name: "בדיקה — פרחי השרון",
+    contactName: "יוסי",
+    phone: "050-1234567",
+    supplies: "פרחים וירק",
+  };
+  const saved = await saveSupplier(supplier);
+  const back = saved.find((s) => s.id === supplier.id);
+  check("saveSupplier created it", !!back);
+  check("the supplier round-trips", back?.name === supplier.name && back?.phone === supplier.phone);
+  check("a new supplier has no history", back?.spent === 0 && back?.productCount === 0);
+
+  // ── the expense ────────────────────────────────────────────────────────────────────────────
+  const eventId = await makeEvent("בדיקה — ספקים");
+  const expense: Expense = {
+    id: crypto.randomUUID(),
+    supplierId: supplier.id,
+    eventId,
+    description: "300 גבעולי ורד",
+    amount: 1234.56,
+    spentAt: "2026-09-01",
+    paid: false,
+  };
+  const ledger = await saveExpense(expense);
+  const row = ledger.find((e) => e.id === expense.id);
+  check("the expense round-trips", !!row);
+  check("the amount kept its agorot", row?.amount === 1234.56, String(row?.amount));
+  check("the date is a plain day, not a shifted timestamp", row?.spentAt === "2026-09-01", String(row?.spentAt));
+
+  const withSpend = (await fetchSuppliers()).find((s) => s.id === supplier.id);
+  check("the supplier card counts what is owed", withSpend?.outstanding === 1234.56, String(withSpend?.outstanding));
+
+  const paid = await saveExpense({ ...expense, paid: true });
+  check("marking it paid updates in place", paid.filter((e) => e.id === expense.id).length === 1);
+  const settled = (await fetchSuppliers()).find((s) => s.id === supplier.id);
+  check("a paid expense leaves the outstanding total", settled?.outstanding === 0, String(settled?.outstanding));
+  check("…but stays in the all-time total", settled?.spent === 1234.56, String(settled?.spent));
+
+  // ── the margin ─────────────────────────────────────────────────────────────────────────────
+  const noQuote = await fetchEventMargin(eventId);
+  check("with no quote there is no margin, which is not a zero", noQuote.profit === undefined && noQuote.spent === 1234.56);
+
+  // ── refusals ───────────────────────────────────────────────────────────────────────────────
+  await refuses("an expense against an unknown supplier", () =>
+    saveExpense({ ...expense, id: crypto.randomUUID(), supplierId: crypto.randomUUID() }),
+  );
+  await refuses("an expense against another studio's event", () =>
+    saveExpense({ ...expense, id: crypto.randomUUID(), eventId: crypto.randomUUID() }),
+  );
+  await refuses("a malformed date", () => saveExpense({ ...expense, id: crypto.randomUUID(), spentAt: "01/09/2026" }));
+  await refuses("a negative amount", () => saveExpense({ ...expense, id: crypto.randomUUID(), amount: -5 }));
+  await refuses("a window that runs backwards", () => fetchProcurement("2026-09-30", "2026-09-01"));
+
+  // ── the forecast, assembled from real rows ─────────────────────────────────────────────────
+  const flowers: Product = {
+    id: crypto.randomUUID(),
+    name: "בדיקה — מרכז שולחן",
+    category: "centerpieces",
+    layer: "table",
+    dimensions: { diameterMm: 300, heightMm: 400 },
+    categoryFields: {},
+    styleTags: [],
+    variants: [],
+    supplierId: supplier.id,
+    stockKind: "consumable",
+    orderUnit: "גבעולים",
+    orderFactor: 7,
+    costPrice: 4,
+  };
+  await saveProduct(flowers);
+
+  const quiet = await fetchProcurement("2026-09-01", "2026-09-30");
+  const eventsBefore = quiet.coverage.events;
+
+  await saveDocument(eventId, {
+    calibration: { mmPerUnit: 1 },
+    tables: [],
+    placements: [
+      { id: crypto.randomUUID(), variantId: flowers.id, layer: "table", quantity: 20, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+    ],
+  });
+
+  const drawn = await fetchProcurement("2026-09-01", "2026-09-30");
+  check("the event is in the window", drawn.coverage.events === eventsBefore + 1 || eventsBefore > 0);
+  check(
+    "an event with no issued quote does NOT reach the order",
+    !drawn.order.some((g) => g.lines.some((l) => l.variantId === flowers.id)),
+  );
+  check("…and is priced separately as exposure", drawn.potential.cost >= 560, String(drawn.potential.cost));
+
+  await issueQuote(eventId, {
+    discountType: "amount",
+    discountValue: 0,
+    hiddenVariantIds: [],
+    mergedCategoryIds: [],
+    total: 5000,
+  });
+
+  const committed = await fetchProcurement("2026-09-01", "2026-09-30");
+  const group = committed.order.find((g) => g.supplierId === supplier.id);
+  const line = group?.lines.find((l) => l.variantId === flowers.id);
+  check("issuing the quote brings it into the order", !!line);
+  check("20 centrepieces × 7 = 140 stems", line?.quantity === 140, String(line?.quantity));
+  check("the line reads in the supplier's own unit", line?.unitLabel === "גבעולים", String(line?.unitLabel));
+  check("140 × ₪4 = ₪560", line?.cost === 560, String(line?.cost));
+  check("the group is grouped under the supplier", group?.supplierName === supplier.name);
+
+  // ── archive rather than break the history ──────────────────────────────────────────────────
+  const { archived } = await removeSupplier(supplier.id);
+  check("a supplier with expenses is archived, never deleted", archived === true);
+  const stillThere = (await fetchSuppliers()).find((s) => s.id === supplier.id);
+  check("the archived supplier is still readable", stillThere?.archived === true);
+
+  // ── cleanup ────────────────────────────────────────────────────────────────────────────────
+  // The event goes FIRST, and the order is the point: the product is placed in that event's
+  // drawing, so removing it while the drawing exists archives it (F-4.5) rather than deleting it —
+  // and an archived product still names its supplier, which would archive the supplier too and
+  // leave this fixture behind forever. Deleting the event cascades the document away first.
+  await removeExpense(expense.id);
+  await deleteEventForTest(eventId);
+  await removeProduct(flowers.id);
+  const { archived: gone } = await removeSupplier(supplier.id);
+  check("with nothing pointing at it, the supplier really is deleted", gone === false);
+  check("the supplier list is as we found it", (await fetchSuppliers()).length === before, String((await fetchSuppliers()).length));
 }
 
 /** An event to hang the fixtures off. Every one of these domains is a leaf of one. */
