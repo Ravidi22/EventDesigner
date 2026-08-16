@@ -29,6 +29,7 @@ import {
   type VenueGrant,
   type VenueRole,
 } from "./access";
+import { grantedVenueIds } from "./granted";
 import { emptyStructure, type VenueStructure } from "./structure";
 import { emptyPlan, type Venue, type VenueGeometry } from "./types";
 import type { Zone } from "./zone";
@@ -109,22 +110,9 @@ async function requireVenueAccess(
   return { actor, role };
 }
 
-/** The venue ids this caller may see, or null meaning "no filter — everything in the studio". */
-async function grantedVenueIds(actor: Actor): Promise<string[] | null> {
-  if (reachesAllVenues(actor.role)) return null;
-  if (!actor.userId) return [];
-  const rows = await db()
-    .select({ venueId: venueGrants.venueId })
-    .from(venueGrants)
-    .where(
-      and(
-        eq(venueGrants.granteeUserId, actor.userId),
-        eq(venueGrants.kind, "member"),
-        eq(venueGrants.state, "active"),
-      ),
-    );
-  return rows.map((r) => r.venueId);
-}
+// `grantedVenueIds` moved to ./granted.ts — procurement needs the same answer, and a "use server"
+// module cannot share a helper that takes an Actor without turning it into an endpoint that lets
+// the caller name themselves. See the note in that file.
 
 // ── Venues ─────────────────────────────────────────────────────────────────────────────────────
 
