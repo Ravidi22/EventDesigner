@@ -178,6 +178,18 @@ async function main() {
   const priv = unpublished.find((p) => p.id === original.id);
   check("un-publishing collapses back to absent, not the string", priv?.visibility === undefined, String(priv?.visibility));
 
+  // ── the product image ────────────────────────────────────────────────────────────────────────
+  // Same rule as the letterhead's and the gallery's, and it is wired separately in each, so it is
+  // asserted separately: only a URL naming an object THIS studio uploaded may be stored.
+  const ownImage = `/api/files/${SINGLE_ORG_ID}/product/${crypto.randomUUID()}.jpg`;
+  const pictured = (await saveProduct({ ...original, imageUrl: ownImage })).find((p) => p.id === original.id);
+  check("an uploaded product image survives", pictured?.imageUrl === ownImage, pictured?.imageUrl);
+
+  const external = (await saveProduct({ ...original, imageUrl: "https://example.com/x.jpg" })).find(
+    (p) => p.id === original.id,
+  );
+  check("an external URL is refused as a product image", external?.imageUrl === undefined, external?.imageUrl);
+
   // ── update ───────────────────────────────────────────────────────────────────────────────────
   const edited = { ...original, name: "בדיקה — שם מעודכן", variants: [] };
   const afterEdit = await saveProduct(edited);
@@ -567,19 +579,35 @@ async function verifySettings() {
   const original = await fetchSettings();
   const originalFlow = await fetchMeetingFlow();
 
+  // A URL shaped like one this app issued, for THIS organisation. It has to be: the letterhead is
+  // an uploader now, not a "paste a link" field, so saveSettings stores only URLs that name an
+  // object this studio uploaded (lib/files/owned.ts). The fixture used to be example.com, which is
+  // exactly what the new rule exists to drop.
+  const ownLogo = `/api/files/${SINGLE_ORG_ID}/logo/${crypto.randomUUID()}.png`;
+
   const written = await saveSettings({
     businessName: "בדיקה — סטודיו",
     ownerName: "בדיקה",
     phone: "03-0000000",
     address: "רחוב הבדיקה 1, תל אביב",
-    logoUrl: "https://example.com/logo.png",
+    logoUrl: ownLogo,
     vatRate: 0.17,
     currency: "€", // ignored on purpose — see below
   });
 
   check("settings round-trip", written.businessName === "בדיקה — סטודיו" && written.ownerName === "בדיקה");
   check("the address survives", written.address === "רחוב הבדיקה 1, תל אביב", written.address);
-  check("the logo url survives", written.logoUrl === "https://example.com/logo.png");
+  check("an uploaded logo survives", written.logoUrl === ownLogo, written.logoUrl);
+
+  // The rule that replaced "any string is a logo". An address on the internet, and a well-formed
+  // key belonging to somebody else, are both dropped rather than stored — the first would let a
+  // quote's letterhead be pointed anywhere, the second at another studio's object.
+  const external = await saveSettings({ ...written, logoUrl: "https://example.com/logo.png" });
+  check("an external URL is refused as a logo", external.logoUrl === undefined, external.logoUrl);
+
+  const otherOrg = `/api/files/${crypto.randomUUID()}/logo/${crypto.randomUUID()}.png`;
+  const foreign = await saveSettings({ ...written, logoUrl: otherOrg });
+  check("…and so is another studio's key", foreign.logoUrl === undefined, foreign.logoUrl);
   // numeric, not float: a VAT rate multiplies every line of every quote.
   check("the VAT rate keeps its decimals", written.vatRate === 0.17, String(written.vatRate));
   // The screen makes this read-only; the ACTION is what enforces it, because the screen is not

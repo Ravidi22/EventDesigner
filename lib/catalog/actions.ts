@@ -12,6 +12,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { products, productVariants, designDocuments } from "@/lib/db/schema";
+import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
 import { toProducts, toProductRow, toVariantRows } from "./db-mapping";
 
@@ -98,6 +99,20 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   const row = toProductRow(product, organizationId);
   const variantRows = toVariantRows(product, organizationId);
 
+  // The product photograph is an uploaded object now, not a URL somebody typed, so it gets the two
+  // guarantees every such column needs (lib/files/owned.ts): only a URL this studio uploaded may be
+  // stored, and replacing one deletes the object it replaced. Without the second, every re-upload
+  // would leave an orphan on a bill nobody is watching.
+  row.imageUrl = ownedFileUrl(product.imageUrl, organizationId);
+
+  // Read BEFORE the write: an upsert answers with the new row, so the old URL has to be fetched
+  // while it is still the current one.
+  const [existing] = await db()
+    .select({ imageUrl: products.imageUrl })
+    .from(products)
+    .where(and(eq(products.id, product.id), eq(products.organizationId, organizationId)))
+    .limit(1);
+
   await db().transaction(async (tx) => {
     await tx
       .insert(products)
@@ -119,6 +134,10 @@ export async function saveProduct(product: Product): Promise<Product[]> {
       );
     if (variantRows.length) await tx.insert(productVariants).values(variantRows);
   });
+
+  // Outside the transaction on purpose: deleting an object in a bucket cannot be rolled back, so
+  // doing it inside would risk destroying a file for a save that then failed.
+  await removeReplacedFile(existing?.imageUrl, row.imageUrl, organizationId);
 
   return fetchProducts();
 }

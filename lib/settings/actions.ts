@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { studioSettings } from "@/lib/db/schema";
+import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import { DEFAULT_FLOW, normalizeFlow, type MeetingStepId } from "@/lib/meeting/steps";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "./types";
 
@@ -69,12 +70,27 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
   const rate = Number(input.vatRate);
   const vatRate = Number.isFinite(rate) ? Math.min(Math.max(rate, 0), 1) : DEFAULT_SETTINGS.vatRate;
 
+  // The letterhead logo is an uploaded object now, so it gets the same two guarantees as every
+  // other image column (lib/files/owned.ts): only a URL this studio uploaded may be stored, and
+  // replacing one deletes the object it replaced.
+  //
+  // ⚠ Read BEFORE the write — an upsert answers with the new row. And it matters more here than
+  // elsewhere: this form AUTOSAVES on a 600ms debounce, so a designer who picks a logo and then
+  // edits the business name writes twice, and the second write must not think the first one's file
+  // is a stale one to delete. Comparing previous to next is what makes the no-op a no-op.
+  const [before] = await db()
+    .select({ logoUrl: studioSettings.logoUrl })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+  const logoUrl = ownedFileUrl(input.logoUrl, organizationId);
+
   const values = {
     businessName: clean(input.businessName),
     ownerName: clean(input.ownerName),
     phone: clean(input.phone, 40),
     address: clean(input.address, 300),
-    logoUrl: input.logoUrl ? clean(input.logoUrl, 2000) : null,
+    logoUrl,
     vatRate: String(vatRate),
     // Not taken from the caller: phase 1 is shekels, the field is read-only on the screen, and a
     // currency symbol that can be set to anything is a quote that can be made to say anything.
@@ -88,6 +104,8 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
     // Insert-or-update rather than update: see fetchSettings on why the row may not exist. Note
     // `meetingFlow` is absent from both halves, so writing the letterhead cannot wipe the meeting.
     .onConflictDoUpdate({ target: studioSettings.organizationId, set: values });
+
+  await removeReplacedFile(before?.logoUrl, logoUrl, organizationId);
 
   return fetchSettings();
 }

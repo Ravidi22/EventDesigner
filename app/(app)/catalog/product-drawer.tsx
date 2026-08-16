@@ -26,6 +26,7 @@ import { SwitchRow } from "@/components/toggle";
 import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
+import { ImageField } from "@/components/image-field";
 import { StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
 import { SwatchField } from "@/components/swatch-field";
@@ -333,15 +334,18 @@ export function ProductDrawer({
                 className="w-full"
               />
             </div>
-            <TextField
-              id="p-img"
-              label="קישור תמונה"
-              value={draft.imageUrl ?? ""}
-              onChange={(v) => patch({ imageUrl: v || undefined })}
-              placeholder="https://…"
-              dir="ltr"
-            />
           </div>
+
+          {/* Was a "קישור תמונה" text field — a stopgap from before lib/files/ was wired, which
+              asked a designer to go and host the photograph somewhere else first. An existing URL
+              still renders here, so nothing typed under the old field is lost. */}
+          <ImageField
+            label="תמונת המוצר"
+            hint="התמונה שמופיעה בכרטיס בקטלוג וברשימת הגרירה בסטודיו."
+            value={draft.imageUrl}
+            onChange={(imageUrl) => patch({ imageUrl })}
+            kind="product"
+          />
 
           <div>
             <span className={fieldLabelClassName}>מראה על התוכנית</span>
