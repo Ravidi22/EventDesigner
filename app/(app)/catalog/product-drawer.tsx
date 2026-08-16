@@ -4,13 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import {
   PRICE_UNIT_LABEL,
+  STOCK_KIND_HINT,
+  STOCK_KIND_LABEL,
   VISIBILITY_LABEL,
   VISIBILITY_HINT,
   type Product,
   type Variant,
   type MapAppearance,
   type PriceUnit,
+  type StockKind,
 } from "@/lib/catalog/types";
+import { costUnitLabel } from "@/lib/suppliers/procurement";
+import { useSupplierList } from "@/lib/suppliers/use-suppliers";
 import { resolveFootprint } from "@/lib/studio/footprint";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS, STYLE_TAGS } from "@/lib/catalog/categories";
 import { isPlacedAnywhere } from "@/lib/catalog/actions";
@@ -41,6 +46,8 @@ export function blankProduct(): Product {
     categoryFields: {},
     styleTags: [],
     variants: [],
+    // Seeded from the category, then owned by the product — see CategoryDef.defaultStock.
+    stockKind: c.defaultStock,
   };
 }
 
@@ -74,6 +81,8 @@ export function ProductDrawer({
   const [submitted, setSubmitted] = useState(false);
   const [pickingIcon, setPickingIcon] = useState(false);
   const [shapeModalOpen, setShapeModalOpen] = useState(false);
+  // Loaded once, the first time the drawer opens — the catalog's first paint owes nothing to it.
+  const suppliers = useSupplierList(product !== null);
 
   useEffect(() => {
     if (product) {
@@ -104,7 +113,24 @@ export function ProductDrawer({
   const setField = (key: string, v: number) => setDraft((d) => ({ ...d, categoryFields: { ...d.categoryFields, [key]: v } }));
 
   const changeCategory = (id: string) =>
-    setDraft((d) => ({ ...d, category: id, layer: CATEGORY_BY_ID[id].defaultLayer, categoryFields: {} }));
+    setDraft((d) => ({
+      ...d,
+      category: id,
+      layer: CATEGORY_BY_ID[id].defaultLayer,
+      categoryFields: {},
+      // Re-seeded with the layer and the category fields, for the same reason: the new category's
+      // opinion is a better starting point than the old one's, and it stays editable.
+      stockKind: CATEGORY_BY_ID[id].defaultStock,
+    }));
+
+  // An archived supplier stays selectable while it is the one this product already names —
+  // otherwise opening an old product would silently unlink it and saving would make that real.
+  const supplierOptions = [
+    { value: "", label: "ללא ספק" },
+    ...suppliers
+      .filter((s) => !s.archived || s.id === draft.supplierId)
+      .map((s) => ({ value: s.id, label: s.archived ? `${s.name} (בארכיון)` : s.name })),
+  ];
 
   const toggleTag = (t: string) =>
     setDraft((d) => ({
@@ -429,6 +455,101 @@ export function ProductDrawer({
               ))}
             </div>
           </div>
+
+          {/* ── Procurement (lib/suppliers/) ─────────────────────────────────────────────────
+              Kept AFTER the price and clearly apart from it, because the two numbers on this
+              screen are opposites: `unitPrice` above is what the client pays and appears on a
+              quote; `costPrice` here is what the studio pays and appears nowhere a client can
+              see. Same field styling, different half of the form, so they are never confused. */}
+          <SectionDivider label="רכש ועלות" />
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="p-supplier" className={fieldLabelClassName}>
+                ספק
+              </label>
+              <Select
+                id="p-supplier"
+                value={draft.supplierId ?? ""}
+                onChange={(v) => patch({ supplierId: v || undefined })}
+                options={supplierOptions}
+                className="w-full"
+              />
+            </div>
+            <NumberField
+              id="p-cost"
+              label={`עלות ${costUnitLabel(draft.priceUnit ?? "unit", draft.orderUnit)} (₪)`}
+              min={0}
+              hideZero
+              placeholder="0"
+              value={draft.costPrice ?? 0}
+              onChange={(v) => patch({ costPrice: v || undefined })}
+            />
+          </div>
+
+          <div>
+            <span className={fieldLabelClassName}>סוג המלאי</span>
+            <div className="flex flex-wrap gap-1 rounded-md border border-border p-0.5">
+              {(["owned", "consumable", "rented"] as StockKind[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => patch({ stockKind: k === "owned" ? undefined : k })}
+                  className={
+                    "flex-1 rounded px-2 py-1 text-xs transition-colors " +
+                    ((draft.stockKind ?? "owned") === k
+                      ? "bg-accent text-canvas"
+                      : "text-ink-soft hover:bg-bg")
+                  }
+                >
+                  {STOCK_KIND_LABEL[k]}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              {STOCK_KIND_HINT[draft.stockKind ?? "owned"]}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            {/* Only the owned kind has a count worth keeping: a consumable's stock is gone after
+                the event, and a rental is never yours. Showing the field for those would be
+                inviting a number that means nothing. */}
+            {(draft.stockKind ?? "owned") === "owned" && (
+              <NumberField
+                id="p-stock"
+                label="כמה יש לך"
+                min={0}
+                hideZero
+                placeholder="—"
+                value={draft.stockQty ?? 0}
+                onChange={(v) => patch({ stockQty: v || undefined })}
+              />
+            )}
+            <TextField
+              id="p-order-unit"
+              label="יחידת הזמנה"
+              value={draft.orderUnit ?? ""}
+              onChange={(v) => patch({ orderUnit: v.trim() || undefined })}
+              placeholder="גבעולים"
+            />
+            <NumberField
+              id="p-order-factor"
+              label="כמה ליחידה"
+              min={0}
+              hideZero
+              placeholder="1"
+              value={draft.orderFactor ?? 0}
+              onChange={(v) => patch({ orderFactor: v || undefined })}
+            />
+          </div>
+          <p className="-mt-2 text-xs leading-relaxed text-muted">
+            {draft.orderUnit
+              ? `מסך הרכש יזמין ב${draft.orderUnit} — ${draft.orderFactor || 1} לכל ${
+                  draft.name.trim() || "פריט"
+                } שמוצב על התוכנית.`
+              : "יחידת הזמנה היא מה שהספק מוכר בו, כשזה לא מה שמוצב על התוכנית: פרחים נמכרים בגבעולים ולא במרכזי שולחן."}
+          </p>
 
           <SectionDivider label="נראות" />
 
