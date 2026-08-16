@@ -10,6 +10,7 @@ import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { StatusChip } from "@/components/status-chip";
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/button";
+import { EventMarginCard } from "./event-margin-card";
 
 // Same `.drawer` <dialog> pattern as ProductDrawer (catalog/product-drawer.tsx), but deliberately
 // anchored to the LEFT and floated off the viewport edges (rounded-md, like the sidebar) rather
@@ -167,6 +168,8 @@ export function EventDetailDrawer({
               )}
             </div>
           </div>
+
+          <EventMarginCard eventId={event.id} />
 
           <div>
             <h3 className="mb-2 text-xs font-semibold text-muted">פרטים ליצירת קשר</h3>
