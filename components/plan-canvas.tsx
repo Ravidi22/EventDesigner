@@ -40,7 +40,7 @@ import {
   endpointFromLengthAngle,
 } from "@/lib/studio/geometry";
 import { snapPoint, constrainAngleDeg, type SnapResult } from "@/lib/studio/snap";
-import { isTypingTarget } from "@/lib/keyboard";
+import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
@@ -181,6 +181,12 @@ const pressOrigin = new Map<number, { x: number; y: number; dragging: boolean }>
 // this file only ever has one live drag-then-click sequence in flight at a time (a single pointer),
 // the same assumption pan/marquee already make with their own un-keyed refs.
 let suppressNextClick = false;
+// Set when a graph node's non-additive press has already toggled the selection (so a drag has
+// instant visual feedback — see dragHandlers). The click that follows always fires too (that's
+// dragHandlers' contract), and re-running the exact same non-additive toggle would immediately flip
+// a freshly-solo selection straight back off. Read once by that click, same un-keyed, single-gesture
+// assumption as suppressNextClick above.
+let nodePressAlreadySelected = false;
 
 // Pointer-drag in SVG user-space (mm), via getScreenCTM — robust to zoom/resize/RTL, unlike a
 // manually-tracked px-per-mm factor, and unaffected by any nested rotate() transform since it
@@ -200,7 +206,7 @@ let suppressNextClick = false;
 // cares (multi-select) can tell them apart; one that doesn't (a plain click-to-select) can ignore it.
 function dragHandlers(
   clientToMm: (clientX: number, clientY: number) => Point,
-  onMove: (p: Point, mods: { alt: boolean }) => void,
+  onMove: (p: Point, mods: { alt: boolean; shift: boolean }) => void,
   onSelect?: (mods: { shift: boolean; phase: "press" | "click" }) => void,
   onDragChange?: (dragging: boolean) => void,
   onCommit?: () => void,
@@ -220,9 +226,10 @@ function dragHandlers(
       e.stopPropagation();
       (e.currentTarget as Element).setPointerCapture(e.pointerId);
       pressOrigin.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false });
-      // A shift-press never selects here — only the click phase toggles (see onClick), so a
-      // press+drag combined with shift reads as "drag", not "drag *and* toggle twice".
-      if (!e.shiftKey) onSelect?.({ shift: false, phase: "press" });
+      // An additive-modifier press never selects here — only the click phase toggles (see
+      // onClick), so a press+drag combined with Shift/Ctrl reads as "drag", not "drag *and*
+      // toggle twice".
+      if (!isAdditiveClick(e)) onSelect?.({ shift: false, phase: "press" });
     },
     onPointerMove: (e: React.PointerEvent) => {
       if (e.buttons !== 1) return;
@@ -233,7 +240,7 @@ function dragHandlers(
         origin.dragging = true;
         onDragChange?.(true);
       }
-      onMove(clientToMm(e.clientX, e.clientY), { alt: e.altKey });
+      onMove(clientToMm(e.clientX, e.clientY), { alt: e.altKey, shift: e.shiftKey });
     },
     onPointerUp: end,
     onPointerCancel: end,
@@ -243,7 +250,7 @@ function dragHandlers(
         suppressNextClick = false;
         return;
       }
-      onSelect?.({ shift: e.shiftKey, phase: "click" });
+      onSelect?.({ shift: isAdditiveClick(e), phase: "click" });
     },
   };
 }
@@ -880,6 +887,11 @@ export function PlanCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, outline.length]);
 
+  // A wall between two selected corners reads as selected too, even when only its endpoints were ever
+  // added to the selection — deleting the corners cascades to delete the wall regardless (removeNode
+  // takes its walls with it), so the stroke should already say so before the click that confirms it.
+  const selectedNodeIds = new Set(graphSelection.filter((r) => r.kind === "node").map((r) => r.id));
+
   return (
     <>
     <svg
@@ -983,8 +995,8 @@ export function PlanCanvas({
             marqueeMoved.current = true;
             const { x0, y0, x1, y1 } = marquee.current;
             const box = { minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) };
-            onSelectMany?.(collectMarqueeHits(box), e.shiftKey);
-            onMarquee?.(box, e.shiftKey);
+            onSelectMany?.(collectMarqueeHits(box), isAdditiveClick(e));
+            onMarquee?.(box, isAdditiveClick(e));
           }
           marquee.current = null;
           setMarqueeBox(null);
@@ -1035,7 +1047,11 @@ export function PlanCanvas({
         const b = graphNodeAt(w.b);
         if (!a || !b) return null; // wall left dangling by a deleted node
         const isEdge = w.kind === "edge";
-        const isSelected = graphSelection.some((r) => r.kind === "wall" && r.id === w.id);
+        // Explicit membership drives the click toggle (below); the stroke also lights up when both
+        // endpoints are selected, even though the wall itself was never added — clicking it must
+        // still add *only the wall* rather than reading as "the selected thing" and clearing everything.
+        const explicitlySelected = graphSelection.some((r) => r.kind === "wall" && r.id === w.id);
+        const isSelected = explicitlySelected || (selectedNodeIds.has(w.a) && selectedNodeIds.has(w.b));
         // One path for both the stroke and the hit area, straight or bowed: edgePathD falls back to
         // a plain line when there is no curve, so a straight wall is exactly the geometry it was.
         const d = edgePathD(a, b, w.curve ?? null);
@@ -1046,7 +1062,7 @@ export function PlanCanvas({
               fill="none"
               className={isSelected ? "text-accent" : isEdge ? "text-muted" : "text-ink"}
               stroke="currentColor"
-              strokeWidth={isSelected ? 4 : isEdge ? 1.5 : 2.5}
+              strokeWidth={isSelected ? 5 : isEdge ? 1.5 : 3.5}
               strokeDasharray={isEdge ? "5 4" : undefined}
               strokeLinecap="round"
               vectorEffect="non-scaling-stroke"
@@ -1075,12 +1091,13 @@ export function PlanCanvas({
                 // until a drag really begins — see its onPointerDown.
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectGraph(isSelected && !e.shiftKey ? null : { kind: "wall", id: w.id }, e.shiftKey);
+                  const additive = isAdditiveClick(e);
+                  onSelectGraph(explicitlySelected && !additive ? null : { kind: "wall", id: w.id }, additive);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    onSelectGraph({ kind: "wall", id: w.id }, e.shiftKey);
+                    onSelectGraph({ kind: "wall", id: w.id }, isAdditiveClick(e));
                   }
                 }}
               />
@@ -1161,10 +1178,28 @@ export function PlanCanvas({
           const isSelected = graphSelection.some((r) => r.kind === "node" && r.id === n.id);
           // A plain press on a corner that is already part of a multi-selection leaves the group
           // alone, so a group drag has something left to drag — the same rule the outline's own
-          // handles follow (see selectOrPreserveGroup).
+          // handles follow (see selectOrPreserveGroup). Unlike the outline's onSelect, this one goes
+          // through pick's toggle (see halls-screen.tsx), which is not idempotent — clicking the same
+          // solo selection twice clears it — so the click phase that always follows a handled press
+          // has to skip repeating that exact toggle, or a plain click on an unselected corner would
+          // select it on press and immediately deselect it again on click. nodePressAlreadySelected
+          // carries that "press already handled it" signal across the two phases.
           const select = onSelectGraph
             ? (mods: { shift: boolean; phase: "press" | "click" }) => {
-                if (mods.phase === "press" && graphSelection.length > 1 && isSelected) return;
+                if (mods.phase === "press") {
+                  if (graphSelection.length > 1 && isSelected) {
+                    nodePressAlreadySelected = false;
+                    return;
+                  }
+                  nodePressAlreadySelected = true;
+                  onSelectGraph({ kind: "node", id: n.id }, mods.shift);
+                  return;
+                }
+                if (!mods.shift && nodePressAlreadySelected) {
+                  nodePressAlreadySelected = false;
+                  return;
+                }
+                nodePressAlreadySelected = false;
                 onSelectGraph({ kind: "node", id: n.id }, mods.shift);
               }
             : undefined;
@@ -1181,7 +1216,7 @@ export function PlanCanvas({
             : {
                 onClick: (e: React.MouseEvent) => {
                   e.stopPropagation();
-                  select?.({ shift: e.shiftKey, phase: "click" });
+                  select?.({ shift: isAdditiveClick(e), phase: "click" });
                 },
               };
           return (
@@ -1913,6 +1948,7 @@ function FixtureMarker({
     fill: resolved.fill,
     fillOpacity: resolved.fillOpacity,
     stroke: resolved.stroke,
+    strokeOpacity: resolved.strokeOpacity,
     strokeWidth: resolved.strokeWidth,
     strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
     vectorEffect: "non-scaling-stroke" as const,
@@ -1937,17 +1973,39 @@ function FixtureMarker({
     (dragging) => { if (!dragging) onRotating?.(null); },
     onCommit,
   );
+  // The width:depth ratio the fixture had the instant this drag started — read once, on the first
+  // move past the drag threshold (see the resizeEdgeDrag's onDragChange below), and held fixed for
+  // the rest of the gesture. Computing it fresh from `fixture` on every move would still be correct
+  // (each move's patch already reflects the previous one), but pinning it here is what makes the
+  // lock a property of *this drag*, immune to the rounding a repeated widthMm/depthMm division could
+  // accumulate over hundreds of move events.
+  const aspectAtDragStart = useRef<number | null>(null);
   // sign is which of the two opposing edges this handle sits on, in the fixture's own frame.
+  // Holding Shift locks the fixture's proportions: the perpendicular dimension is resized right
+  // alongside the dragged one, by the same ratio, matching the Shift-to-constrain convention every
+  // design tool gives its own resize handles (Figma, Illustrator, Photoshop) — including on an edge
+  // handle, not just a corner. Because a fixture is stored as centre+size, growing the perpendicular
+  // dimension without touching its centre coordinate already expands it evenly on both sides for
+  // free; only the dragged axis needs resizeFromEdge's anchor-the-opposite-edge math.
   const resizeEdgeDrag = (axis: "width" | "depth", sign: 1 | -1) =>
     dragHandlers(
       clientToMm,
-      (p) => {
+      (p, mods) => {
         const { sizeMm, center: next } = resizeFromEdge(fixture, axis, sign, p, MIN_FIXTURE_MM);
-        const size = axis === "width" ? { widthMm: sizeMm } : { depthMm: sizeMm };
-        onUpdate({ ...size, x: next.x, y: next.y }); // one patch: the new size and the centre it implies
+        const patch: Partial<Fixture> = { x: next.x, y: next.y };
+        if (axis === "width") patch.widthMm = sizeMm; else patch.depthMm = sizeMm;
+        if (mods.shift && aspectAtDragStart.current) {
+          const otherMm = Math.max(MIN_FIXTURE_MM, Math.round(
+            axis === "width" ? sizeMm / aspectAtDragStart.current : sizeMm * aspectAtDragStart.current,
+          ));
+          if (axis === "width") patch.depthMm = otherMm; else patch.widthMm = otherMm;
+        }
+        onUpdate(patch); // one patch: the new size(s) and the centre the dragged edge implies
       },
       undefined,
-      undefined,
+      (dragging) => {
+        if (dragging) aspectAtDragStart.current = fixture.widthMm / fixture.depthMm;
+      },
       onCommit,
     );
   const resizeRadiusDrag = dragHandlers(
@@ -2029,7 +2087,7 @@ function FixtureMarker({
                 <ResizeHandle
                   key={`w${sign}`}
                   {...resizeEdgeDrag("width", sign)}
-                  label="שינוי רוחב — גרירה"
+                  label="שינוי רוחב — גרירה · Shift לשמירה על יחס הממדים"
                   cursor="cursor-ew-resize"
                   cx={fixture.x + sign * halfW}
                   cy={fixture.y}
@@ -2041,7 +2099,7 @@ function FixtureMarker({
                 <ResizeHandle
                   key={`d${sign}`}
                   {...resizeEdgeDrag("depth", sign)}
-                  label="שינוי עומק — גרירה"
+                  label="שינוי עומק — גרירה · Shift לשמירה על יחס הממדים"
                   cursor="cursor-ns-resize"
                   cx={fixture.x}
                   cy={fixture.y + sign * halfD}
@@ -2091,13 +2149,23 @@ export const INSPECTOR_WRAP =
   "flex max-w-4xl flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-2 shadow-floating";
 
 // A cluster of related fields (dimensions, transform, style...) — kept as one flex item so the
-// wrap's flex-wrap breaks between groups, never in the middle of one.
+// wrap's flex-wrap breaks between groups, never in the middle of one. flex-wrap on the group itself
+// is what lets a group too wide for its wrap (a narrow side panel, say) break onto a second line
+// internally instead of forcing the whole row to overflow — a no-op wherever there's already room.
 export function InspectorGroup({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`flex shrink-0 items-center gap-2 ${className}`}>{children}</div>;
+  return <div className={`flex flex-wrap shrink-0 items-center gap-2 ${className}`}>{children}</div>;
 }
 
-export function InspectorDivider() {
-  return <div aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />;
+// A thin rule between sections. "row" (default) is a vertical hairline, for INSPECTOR_WRAP's own
+// horizontal flex-wrap bar. "column" is a horizontal hairline spanning the full width instead — for
+// an inspector a host has stacked into a vertical panel, where a tall vertical tick between two
+// stacked rows would read as noise rather than a separator.
+export function InspectorDivider({ orientation = "row" }: { orientation?: "row" | "column" }) {
+  return orientation === "column" ? (
+    <div aria-hidden className="my-0.5 h-px w-full shrink-0 bg-border" />
+  ) : (
+    <div aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />
+  );
 }
 
 // The identity chip every inspector opens with — an icon so the selected kind reads at a glance,

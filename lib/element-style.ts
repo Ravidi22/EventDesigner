@@ -13,6 +13,7 @@ export interface ElementStyle {
   fill?: string; // CSS colour; absent = the caller's own default (often "no fill")
   fillOpacity?: number; // 0..1; absent = the caller's own default
   stroke?: string; // CSS colour; absent = the caller's own default
+  strokeOpacity?: number; // 0..1; absent = fully opaque
   strokeWidthPx?: number; // screen pixels; absent = the caller's own default
   dash?: DashPattern; // named, not a raw array — survives JSON and the monochrome collapse; absent = "solid"
 }
@@ -23,6 +24,7 @@ export interface ResolvedStyle {
   fill: string;
   fillOpacity: number;
   stroke: string;
+  strokeOpacity: number;
   strokeWidth: number;
   dashArray: number[]; // [] = solid; feed straight into SVG strokeDasharray or Konva's `dash`
 }
@@ -58,6 +60,7 @@ export function resolveStyle(style: ElementStyle | undefined, mode: StyleMode, d
       fill: style.fill ? MONOCHROME_FILL : defaults.fill,
       fillOpacity: 1,
       stroke: MONOCHROME_STROKE,
+      strokeOpacity: 1,
       strokeWidth,
       dashArray,
     };
@@ -66,6 +69,7 @@ export function resolveStyle(style: ElementStyle | undefined, mode: StyleMode, d
     fill: style?.fill ?? defaults.fill,
     fillOpacity: style?.fillOpacity ?? defaults.fillOpacity ?? 1,
     stroke: style?.stroke ?? defaults.stroke,
+    strokeOpacity: style?.strokeOpacity ?? 1,
     strokeWidth,
     dashArray,
   };
@@ -102,7 +106,17 @@ if ((import.meta as { main?: boolean }).main) {
 
   // Partial style: unset sub-fields fall back to the caller's own defaults, not some global one.
   const partial = resolveStyle({ stroke: "#7a4b12" }, "screen", defaults);
-  assert(partial.fill === "#ffffff" && partial.fillOpacity === 1 && partial.strokeWidth === 1.5, "unset style fields fall back to the caller's own defaults");
+  assert(
+    partial.fill === "#ffffff" && partial.fillOpacity === 1 && partial.strokeOpacity === 1 && partial.strokeWidth === 1.5,
+    "unset style fields fall back to the caller's own defaults",
+  );
+
+  // strokeOpacity passes through on screen, and collapses to fully opaque in monochrome — a print
+  // is opaque ink, so a translucent stroke wouldn't mean anything there.
+  const translucentStroke = resolveStyle({ stroke: "#7a4b12", strokeOpacity: 0.4 }, "screen", defaults);
+  assert(translucentStroke.strokeOpacity === 0.4, "screen mode keeps a custom stroke opacity");
+  const translucentMono = resolveStyle({ stroke: "#7a4b12", strokeOpacity: 0.4 }, "monochrome", defaults);
+  assert(translucentMono.strokeOpacity === 1, "monochrome always prints a fully opaque stroke");
 
   console.log("element-style self-check passed");
 }

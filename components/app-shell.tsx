@@ -68,6 +68,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const meta = TITLES.find((t) => t.test(pathname));
   const settingsActive = pathname.startsWith("/settings");
   const isCatalog = pathname.startsWith("/catalog");
+  // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
+  // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
+  const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/gantt");
 
   return (
     <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3">
@@ -175,17 +178,19 @@ export function AppShell({ children }: { children: ReactNode }) {
               shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
           <div className="flex-1" />
 
-          <div className="flex shrink-0 items-center gap-1.5">
-            <Link
-              href="/meeting?new"
-              className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
-            >
-              + יצירת אירוע חדש
-            </Link>
-            <IconButton label="התראות">
-              <Bell className="h-4 w-4" strokeWidth={1.75} />
-            </IconButton>
-          </div>
+          {showHeaderActions && (
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Link
+                href="/meeting?new"
+                className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
+              >
+                + יצירת אירוע חדש
+              </Link>
+              <IconButton label="התראות">
+                <Bell className="h-4 w-4" strokeWidth={1.75} />
+              </IconButton>
+            </div>
+          )}
         </header>
 
         <main className="min-h-0 flex-1 overflow-auto">
