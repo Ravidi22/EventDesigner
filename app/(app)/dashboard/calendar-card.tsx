@@ -7,20 +7,69 @@ import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } f
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import type { MeetingStepId } from "@/lib/meeting/steps";
 import { IconButton } from "@/components/icon-button";
+import { BOOKING_LABEL, calendarDay } from "@/lib/calendar/hebrew";
 import {
   addDays,
   addMonths,
   sameDay,
+  sameWeek,
   toISODate,
   weekGrid,
   weekLabel,
   monthGrid,
   monthLabel,
+  NOTE_THEME,
+  noteTone,
   STATUS_CARD_THEME,
-  holidayName,
   PAST_DAY_BG,
   PAST_DAY_OVERLAY,
 } from "./dashboard-view-utils";
+
+// A day's calendar note, resolved for rendering.
+//
+// The band is drawn on EVERY day inside a period but labelled only where the period starts or
+// where a grid row starts — the same rule a multi-day event follows in any calendar app. That is
+// what makes ספירת העומר or בין המצרים read as one continuous area rather than as the same words
+// stamped into forty consecutive cells.
+//
+// Only the innermost period gets a band. תשעת הימים sits inside בין המצרים, and stacking both
+// would spend a third of the cell's height restating the outer one; the tooltip carries the full
+// nesting instead.
+function dayNotes(days: Date[]) {
+  let previousPeriodId: string | undefined;
+
+  return days.map((d, i) => {
+    const iso = toISODate(d);
+    const day = calendarDay(iso);
+    const period = day.periods[day.periods.length - 1];
+
+    // Label wherever a visual run of band begins: at a row's leading edge (column 0, which RTL
+    // lays out on the right — where a Hebrew reader starts), and wherever the band stops being
+    // the same period as the cell before it. That second test is doing more than catching a
+    // period's first day: ימי הספירה gives way to plain ספירת העומר on ל״ג בעומר mid-row, and
+    // without it the bar would keep flying the label of a period that had already ended.
+    const startsRun = period !== undefined && (period.id !== previousPeriodId || i % 7 === 0);
+    previousPeriodId = period?.id;
+
+    if (day.holidays.length === 0 && period === undefined) return undefined;
+
+    const parts = [...day.holidays.map((h) => h.name), ...day.periods.map((p) => p.name)];
+    if (day.booking !== "open") parts.push(BOOKING_LABEL[day.booking]);
+
+    return {
+      // Two themes, deliberately. The chip answers for the DAY, so ל״ג בעומר shows accent even
+      // though it sits inside the Omer. The band answers for the PERIOD, so it keeps one color
+      // along its whole length instead of flaring up on whichever day inside it happens to be
+      // peak or blocked.
+      chipTheme: NOTE_THEME[noteTone(day.booking, day.peak)],
+      bandTheme: period && NOTE_THEME[noteTone(period.booking, period.peak)],
+      holiday: day.holidays[0]?.name,
+      period,
+      showPeriodLabel: startsRun,
+      title: parts.join(" · "),
+    };
+  });
+}
 
 type Mode = "week" | "month";
 
@@ -75,6 +124,8 @@ export function CalendarCard({
   }, [events]);
 
   const days = mode === "week" ? weekGrid(anchor) : monthGrid(anchor);
+  // One pass for the whole grid, not per cell: a band's label depends on the cell before it.
+  const notes = dayNotes(days);
   const title = mode === "week" ? "השבוע שלי" : "החודש שלי";
   const rangeLabel = mode === "week" ? weekLabel(days) : monthLabel(anchor);
   const maxVisible = mode === "week" ? Infinity : 2;
@@ -91,7 +142,12 @@ export function CalendarCard({
     setExpandedDate(null);
     setAnchor(new Date());
   };
-  const isCurrentRange = sameDay(anchor, today) || (mode === "month" && anchor.getMonth() === today.getMonth() && anchor.getFullYear() === today.getFullYear());
+  // "היום" is dead when today is already on screen. In week mode that is now a same-week test
+  // rather than a same-day one: the grid snaps to Sunday, so any anchor inside this week shows it.
+  const isCurrentRange =
+    mode === "week"
+      ? sameWeek(anchor, today)
+      : anchor.getMonth() === today.getMonth() && anchor.getFullYear() === today.getFullYear();
 
   return (
     <div ref={rootRef} className="rounded-lg border border-border bg-surface px-3 py-5">
@@ -136,7 +192,7 @@ export function CalendarCard({
       </div>
 
       <div className="grid grid-cols-7 gap-2">
-        {days.map((d) => {
+        {days.map((d, i) => {
           const iso = toISODate(d);
           const dayEvents = eventsByDate.get(iso) ?? [];
           const isToday = sameDay(d, today);
@@ -145,7 +201,7 @@ export function CalendarCard({
           const visible = dayEvents.slice(0, maxVisible === Infinity ? dayEvents.length : maxVisible);
           const overflow = dayEvents.length - visible.length;
           const isExpanded = expandedDate === iso;
-          const holiday = holidayName(iso);
+          const note = notes[i];
 
           return (
             <div
@@ -171,9 +227,27 @@ export function CalendarCard({
                 </span>
               </div>
 
-              {holiday && (
-                <span className="truncate px-1 text-[10px] font-semibold text-accent-hover" title={holiday}>
-                  {holiday}
+              {note?.period && (
+                // Full-bleed against the cell's own px-1.5, so consecutive days join into one bar
+                // across the row. Height stays fixed whether or not this cell carries the label,
+                // otherwise the band would step up and down along its own length.
+                <div
+                  className={"-mx-1.5 flex h-[20px] shrink-0 items-center px-2 " + (note.bandTheme?.band ?? "")}
+                  title={note.title}
+                >
+                  {note.showPeriodLabel && (
+                    <span className="truncate text-[11px] font-bold leading-none">{note.period.short}</span>
+                  )}
+                </div>
+              )}
+
+              {note?.holiday && (
+                <span
+                  className={"flex items-center gap-1.5 rounded-sm px-1.5 py-1.5 " + note.chipTheme.chip}
+                  title={note.title}
+                >
+                  <span className={"h-2 w-2 shrink-0 rounded-full " + note.chipTheme.dot} aria-hidden />
+                  <span className="truncate text-[12px] font-bold leading-none">{note.holiday}</span>
                 </span>
               )}
 
