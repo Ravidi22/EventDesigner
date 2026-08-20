@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, ImagePlus, Pencil, Play, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GalleryVerticalEnd, ImagePlus, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import {
@@ -18,6 +18,7 @@ import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { fieldLabelClassName } from "@/components/control";
 import { Photo } from "@/components/photo";
+import { EmptyState } from "@/components/empty-state";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import { ALLOWED_TYPES } from "@/lib/files/keys";
 
@@ -33,6 +34,10 @@ export function GalleryScreen() {
   // asking again mid-render (it used to call loadPresentations() during its own render — free
   // against localStorage, a round trip now).
   const [knownIds, setKnownIds] = useState<Set<string>>(new Set());
+  // "No presentations yet" and "not loaded yet" are the same empty array and mean opposite things.
+  // Without this, a designer with twenty presentations is told the gallery is empty and invited to
+  // build their first one, for the length of one round trip — see the same note in catalog-screen.
+  const [ready, setReady] = useState(false);
 
   // Both are server reads — hydrate after mount, same as every other screen here.
   useEffect(() => {
@@ -46,6 +51,7 @@ export function GalleryScreen() {
       setImages(loadedImages);
       setPresentations(loadedPresentations);
       setKnownIds(new Set(loadedPresentations.map((p) => p.id)));
+      setReady(true);
     })();
     return () => {
       live = false;
@@ -78,22 +84,39 @@ export function GalleryScreen() {
     );
   }
 
+  const startNew = () =>
+    setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() });
+
   return (
     <div className="px-8 py-7">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <h1 className="font-display text-h2 text-ink">תצוגות</h1>
-        <Button
-          onClick={() =>
-            setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() })
-          }
-        >
-          <Plus className="h-4 w-4" strokeWidth={2} />
-          תצוגה חדשה
-        </Button>
+        {/* Hidden on first run: the empty state carries the one action, and two "new presentation"
+            buttons on an otherwise blank screen is one too many. */}
+        {(!ready || presentations.length > 0) && (
+          <Button onClick={startNew}>
+            <Plus className="h-4 w-4" strokeWidth={2} />
+            תצוגה חדשה
+          </Button>
+        )}
       </div>
 
-      {presentations.length === 0 ? (
-        <p className="py-20 text-center text-sm text-muted">אין עדיין תצוגות. צרו את הראשונה.</p>
+      {!ready ? (
+        <p className="py-20 text-center text-sm text-muted" aria-busy="true">
+          טוען את התצוגות…
+        </p>
+      ) : presentations.length === 0 ? (
+        <EmptyState
+          icon={GalleryVerticalEnd}
+          title="אין עדיין תצוגות"
+          body="תצוגה היא רצף תמונות שעוברים עליו מול הלקוח בפגישה — חופה, שולחן אירוח, מרכזי שולחן. כל תמונה נושאת מוצר מהקטלוג, כך שמה שהלקוח מסמן ♥ נאסף לתיק האירוע ומחכה לכם בסטודיו."
+          action={
+            <Button onClick={startNew}>
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+              צור תצוגה ראשונה
+            </Button>
+          }
+        />
       ) : (
         <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
           {presentations.map((p) => (

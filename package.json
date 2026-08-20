@@ -32,11 +32,14 @@
     "check:folder": "tsx lib/gallery/folder-logic.ts",
     "check:aggregate": "tsx lib/outputs/aggregate.ts",
     "check:quote": "tsx lib/outputs/quote.ts",
+    "check:procurement": "tsx lib/suppliers/procurement.ts",
+    "check:costs": "tsx lib/suppliers/cost-boundary.ts",
     "check:password": "tsx lib/auth/password.ts",
     "check:access": "tsx lib/venues/access.ts",
     "check:files": "tsx lib/files/keys.ts",
     "check:sigv4": "tsx lib/files/sigv4.ts",
     "check:calendar": "tsx lib/calendar/hebrew.ts",
+    "check:appointments": "tsx lib/appointments/types.ts",
     "gen:calendar": "tsx lib/calendar/generate.mts"
   },
   "dependencies": {

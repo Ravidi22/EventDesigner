@@ -9,6 +9,7 @@ import {
   Building2,
   LayoutGrid,
   Images,
+  Truck,
   ChevronsLeft,
   Bell,
   LogOut,
@@ -34,6 +35,7 @@ const GENERAL: NavItem[] = [
   { href: "/gantt", label: "אירועים", icon: CalendarHeart },
   { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
+  { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
   { href: "/gallery", label: "גלריה ותצוגות", icon: Images },
 ];
 
@@ -42,6 +44,7 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/gantt"), title: "אירועים" },
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
+  { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },

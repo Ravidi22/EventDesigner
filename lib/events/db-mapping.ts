@@ -30,14 +30,13 @@ export function toEvent(row: EventRow, zoneIds: string[]): EventSummary {
     contactName: orUndefined(row.contactName),
     contact2Name: orUndefined(row.contact2Name),
     contact2Phone: orUndefined(row.contact2Phone),
-    // `date` and `meetingDate` are Postgres `date` columns and arrive as plain "yyyy-mm-dd"
-    // strings, which is exactly what the app stores and what <input type="date"> reads and writes.
-    // Nothing here constructs a Date, and nothing should: `new Date("2026-08-09")` is parsed as
-    // MIDNIGHT UTC, so formatting it anywhere west of Greenwich prints the 8th. A wedding is a
-    // calendar day, not an instant, and the string is already the right shape for it.
+    // `date` is a Postgres `date` column and arrives as a plain "yyyy-mm-dd" string, which is
+    // exactly what the app stores and what the date field reads and writes. Nothing here constructs
+    // a Date, and nothing should: `new Date("2026-08-09")` is parsed as MIDNIGHT UTC, so formatting
+    // it anywhere west of Greenwich prints the 8th. A wedding is a calendar day, not an instant, and
+    // the string is already the right shape for it.
     date: row.eventDate ?? "", // "" = not set yet; every formatter in the app already reads it so
     time: toClock(row.startTime),
-    meetingDate: orUndefined(row.meetingDate),
     venueId: orUndefined(row.venueId),
     zoneIds,
     zonesLabel: row.zonesLabel,
@@ -68,7 +67,6 @@ export function toEventRow(e: EventSummary, organizationId: string): EventInsert
     // date Postgres will accept.
     eventDate: e.date || null,
     startTime: toTimeColumn(e.time),
-    meetingDate: e.meetingDate || null,
     venueId: e.venueId ?? null,
     zonesLabel: e.zonesLabel,
     guests: e.guests,

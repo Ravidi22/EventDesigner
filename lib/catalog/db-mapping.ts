@@ -8,7 +8,7 @@
 // a foreign key to the exact shade). This file is the whole of that translation.
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import type { products, productVariants } from "@/lib/db/schema";
-import type { Product, Variant, PriceUnit, Visibility } from "./types";
+import type { Product, Variant, PriceUnit, Visibility, StockKind } from "./types";
 import type { Layer } from "@/lib/design-document/types";
 
 export type ProductRow = InferSelectModel<typeof products>;
@@ -61,6 +61,15 @@ export function toProduct(row: ProductRow, variantRows: VariantRow[]): Product {
     // Same collapse as priceUnit: the column defaults to 'private', the type says absent = private,
     // so they are one value spelled twice and the round-trip stays lossless.
     visibility: row.visibility === "private" ? undefined : (row.visibility as Visibility),
+    supplierId: orUndefined(row.supplierId),
+    costPrice: toNumber(row.costPrice),
+    // Same collapse as priceUnit and visibility: the column is NOT NULL DEFAULT 'owned' and the
+    // type says absent = owned, so they are one value spelled twice — folding the default back to
+    // undefined is what keeps save → reload lossless.
+    stockKind: row.stockKind === "owned" ? undefined : (row.stockKind as StockKind),
+    stockQty: orUndefined(row.stockQty),
+    orderUnit: orUndefined(row.orderUnit),
+    orderFactor: toNumber(row.orderFactor),
     variants: variantRows
       .slice()
       .sort((a, b) => a.position - b.position)
@@ -105,6 +114,12 @@ export function toProductRow(p: Product, organizationId: string): ProductInsert 
     appearance: p.appearance ?? null,
     visibility: p.visibility ?? "private",
     archived: p.archived ?? false,
+    supplierId: p.supplierId ?? null,
+    costPrice: toNumeric(p.costPrice),
+    stockKind: p.stockKind ?? "owned",
+    stockQty: p.stockQty ?? null,
+    orderUnit: p.orderUnit ?? null,
+    orderFactor: toNumeric(p.orderFactor),
   };
 }
 

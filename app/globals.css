@@ -282,6 +282,89 @@ body {
   outline-offset: 2px;
 }
 
+/* --- Scrollbars ------------------------------------------------------------
+   The one piece of chrome the browser draws for us, and left alone it is a flat grey
+   Windows bar sitting on a lavender plane — the "generic SaaS" tell PRODUCT.md names as an
+   anti-reference. So it follows the same rules as everything else here: pill geometry, a
+   violet cast, and quiet enough that it never competes with the designer's own work.
+
+   The thumb is translucent rather than a flat token on purpose, which is what lets ONE value
+   cover every light ground a scroller can land on — the app plane (--color-bg), a white card,
+   an inset well — instead of needing a token per surface. It does not stretch to a brand
+   surface, though: violet at 26% over the violet TodayFocus card is invisible, so a scroller
+   on a dark/brand ground takes `.scroll-on-dark` below. The two are a pair — pick by the
+   ground under the scroller, not by any theme (this app is light-only by design).
+
+   Firefox takes `scrollbar-width` / `scrollbar-color`; both inherit, so declaring them once
+   on the root dresses every scroller in the app — and re-declaring `scrollbar-color` on a
+   container is how the dark variant reaches Firefox too. Chromium and Safari take the
+   pseudo-elements. Each thumb rule sets `background-color`, never the `background` shorthand,
+   which would reset the `background-clip` that gives the thumb its inset. */
+:root {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(109 85 189 / 0.3) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+/* The transparent border is the inset: the gutter stays a 12px hit target while the bar
+   itself reads as a 6px pill, the way a scrollbar should look next to 14px card corners. */
+::-webkit-scrollbar-thumb {
+  background-color: rgb(109 85 189 / 0.26);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(109 85 189 / 0.42);
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: rgb(109 85 189 / 0.55);
+}
+/* No stepper arrows, and no grey square where two bars meet. */
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* On dark — the same bar inverted, for a scroller sitting on a brand surface: the violet
+   TodayFocus card, or the mesh if a scrolling panel is ever put on it. White at these alphas
+   is the vocabulary that card already speaks (its own rules and captions are text-canvas/75
+   and border-canvas/40), so the thumb reads as part of the card rather than as browser chrome
+   that missed the memo. Sets `scrollbar-color` as well as the pseudo-elements, so Firefox
+   inverts too instead of keeping the root's violet.
+   Composes with .scroll-slim: these two touch no property in common. */
+.scroll-on-dark {
+  scrollbar-color: rgb(255 255 255 / 0.45) transparent;
+}
+.scroll-on-dark::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.42);
+}
+.scroll-on-dark::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.68);
+}
+.scroll-on-dark::-webkit-scrollbar-thumb:active {
+  background-color: rgb(255 255 255 / 0.85);
+}
+
+/* Slim — for popovers and in-card lists, where the 12px gutter above is wider than the
+   panel can spare (a Select's option list, a TimeField column is 68px wide in total).
+   Firefox has no step below `thin`, so there it stays as the root already set it. */
+.scroll-slim::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  border-width: 2px;
+}
+
 /* Edit drawer: a native <dialog> anchored to the inline-end edge, not a centered modal. */
 .drawer {
   max-height: none;

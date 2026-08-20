@@ -18,7 +18,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 
 | Area | State |
 | --- | --- |
-| **Product surfaces** | All eleven screens built: dashboard, meeting flow, catalog, halls, studio 2D, gallery, outputs, Gantt, present mode, client portal, settings |
+| **Product surfaces** | All twelve screens built: dashboard, meeting flow, catalog, halls, studio 2D, gallery, outputs, Gantt, present mode, client portal, settings, **suppliers & procurement** |
 | **Canvas** | One hand-written SVG canvas for every plan surface (ADR-8). No Konva anywhere |
 | **Backend migration** | **Finished.** Twelve domains through `lib/<domain>/actions.ts`. Nothing of the studio's is left in a browser |
 | **People and access** | Accounts, sessions, two role ladders, per-member venue grants enforced on every read and write, invitations by link |
@@ -48,7 +48,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 
 ### The product surfaces
 
-- [x] **Dashboard** — calendar, today's focus, statistics, event drawer
+- [x] **Dashboard** — calendar, today's focus, statistics, event drawer, and booking a meeting on any day of it
 - [x] **Meeting mode** (`/meeting`) — the guided client flow, stage by stage
 - [x] **Catalog** — products, variants, category fields, map appearance, custom shapes, CSV import
 - [x] **Halls** (`/halls`) — the venue's wall graph drawn and edited in-app: walls, doors, fixed features, zones over regions
@@ -59,6 +59,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 - [x] **Present mode** (`/present`) — the client-facing screen, no prices or internal data
 - [x] **Client portal** (`/client`) — a client account seeing their own event
 - [x] **Settings** — business letterhead, configurable meeting flow, account, team, venue sharing, data export
+- [x] **Suppliers & procurement** (`/suppliers`) — the directory, the expense ledger, and a purchase forecast derived from the drawings. See §10
 
 ### The canvas
 
@@ -70,6 +71,7 @@ Every domain goes through a `lib/<domain>/` module, so each crossing is a one-fi
 
 - [x] **Accounts and sessions** — `lib/auth/`, sessions revocable, token stored hashed
 - [x] **Events** — `lib/events/actions.ts`, status derived from the meeting stage
+- [x] **Scheduled meetings** — `lib/appointments/actions.ts`. Its own table, not the `events.meetingDate` column it replaced: that one held a single meeting per event, could not exist before the event did, and no form in the app ever wrote to it — so the dashboard's פגישות tab had rendered its empty state on every day since it shipped
 - [x] **Catalog** — `lib/catalog/actions.ts`
 - [x] **Venues, structures, zones** — `lib/venues/actions.ts`
 - [x] **Studio settings + meeting flow** — `lib/settings/actions.ts`
@@ -79,6 +81,7 @@ Every domain goes through a `lib/<domain>/` module, so each crossing is a one-fi
 - [x] **Design documents** — `lib/studio/actions.ts`. Autosave updates one row; a *version* is minted only when an output seals the drawing, so an evening's dragging is one row rather than thousands, and a sealed drawing can never move again
 - [x] **Issued quotes** — `lib/quotes/actions.ts`. F-7.4 compares two integers instead of two serialised documents, and the drawing a client was quoted from is still on disk to compare against
 - [x] **Packing spares + exports** — `lib/outputs/actions.ts`. An export is a row naming the drawing it came from, not a counter in a browser
+- [x] **Suppliers, expenses and procurement** — `lib/suppliers/actions.ts`, plus four columns on `products`. The only domain whose main screen is a *computation* rather than a round-trip: see §10
 - [x] **Gallery** — `lib/gallery/actions.ts`. The event folder was the half that mattered: the client likes photos on a tablet, and the studio rail that pins what they loved is on the designer's laptop. `productName` is joined from the catalog now, so renaming a product re-captions its photos
 
 Two things the crossing turned up, both fixed here:
@@ -170,6 +173,29 @@ Small, real, and each one is a decision already made rather than an oversight:
 - [ ] **The outputs surface wants a redesign** — the quote stage renders the existing screen and was always marked provisional
 - [x] **`F-8.2` and `F-8.3` are cited in code but were missing from `docs/01`** — §5.8 now carries both: the studio's people, and venue sharing with the guest line written where the requirement can be read rather than only where it is enforced
 
+### 10. Suppliers and procurement · **built**
+
+`/suppliers`, three tabs, and one new domain module. Spec: [2026-08-16-suppliers-procurement-design.md](superpowers/specs/2026-08-16-suppliers-procurement-design.md).
+
+- [x] **ספקים** — the directory. Name, one contact, one phone, what they supply, a note. Archived rather than deleted the moment anything points at them, because `expenses.supplier_id` is `ON DELETE RESTRICT` and a paid expense must not lose who it was paid to
+- [x] **הוצאות** — the ledger. Supplier, amount, date, optionally an event, optionally a catalog item, paid/unpaid. `event_id` is **nullable on purpose**, the same way `appointments.event_id` is: a bulk purchase of 500 candles belongs to no event
+- [x] **רכש** — the forecast, derived from the drawings. No usage is ever typed
+- [x] **Margin per event** — the last issued quote minus that event's expenses, on the event drawer
+- [x] `npm run check:procurement` (the reduction, under node) and `npm run check:costs` (the boundary, a source scan). `db:verify` covers the assembly
+
+**The one idea worth carrying forward.** A monthly *sum* is the wrong question for most of a designer's catalog: one 30-metre carpet laid at four events is 30 metres of asset, not 120 metres of purchasing, and summing it would tell a studio that owns one chuppah to buy four. So every product declares a `stockKind` and the three kinds get three different reductions — `consumable` is summed, `owned` is peaked against `stock_qty` on its busiest single day, `rented` is a list of per-event order lines. Getting this wrong would not have produced an error; it would have produced a confident purchase order.
+
+**What the screen confesses, and why it must.** A forecast reduces the drawings, and drawings do not exist for every booked event. So the screen counts and states three things rather than absorbing them: events in the window with no drawing at all; events counted off catalog widths because the venue's wall graph was unreachable (the same mispricing §6 records for the quote); and events with no issued quote, which are totalled separately as exposure and never added to the order. Only an `issued_quotes` row makes an event feed a purchase — a first meeting is not a reason to buy flowers.
+
+**Two boundaries drawn on purpose:**
+
+- **`cost_price` is not `unit_price`.** One is what the studio pays, the other is what the client pays, and they now sit two fields apart in one drawer. `npm run check:costs` scans `/present`, the client portal, `app/meeting` and `app/(app)/outputs` for any reference to the cost side and fails the build if one appears. The margin card lives on the dashboard's event drawer and **not** on the outputs screen, which is a printing surface
+- **This is not bookkeeping.** No invoice numbers, no VAT, no receipts, no reconciliation, no overheads, no purchase orders sent from the app. Two questions only: what did this job cost, and what do I owe this supplier
+
+**Still open, and small:** a derived consumable — the candles a 5-arm candlestick burns — appears in the order with a real quantity under "ללא ספק", because it has no catalog row of its own to carry a supplier or a cost. Making "נר" a real product is the correct fix and a larger one; the spec records the three options.
+
+**A new risk, R-7: the cost of keeping stock counts true.** `stock_qty` has the shape of R-1 (drawing the halls) and R-6 (curating the gallery) — a number that is only useful while someone maintains it, and a stale one produces confident wrong shortfall alerts. Mitigated by making it optional: an owned product with no count shows demand and claims no shortfall. Worth re-checking after two months of real use.
+
 ---
 
 ## Not scheduled
@@ -188,11 +214,13 @@ Before anything is called done:
 
 ```
 npm run typecheck      # tsc --noEmit; a Stop hook runs this too
-npm run check:actions  # the design-document reducer + undo history
-npm run check:access   # the venue access policy
-npm run check:files    # key shape, path traversal, the upload allowlist
-npm run check:sigv4    # the R2 signing chain, against published crypto vectors
-npm run db:verify      # full roundtrip against a real Postgres
+npm run check:actions      # the design-document reducer + undo history
+npm run check:access       # the venue access policy
+npm run check:files        # key shape, path traversal, the upload allowlist
+npm run check:sigv4        # the R2 signing chain, against published crypto vectors
+npm run check:procurement  # the three procurement reductions (sum / peak / per-event)
+npm run check:costs        # no client-facing surface reads the studio's cost
+npm run db:verify          # full roundtrip against a real Postgres
 ```
 
 `npm run lint` currently reports 20 pre-existing `react-hooks/set-state-in-effect` errors in four `use-*.ts` hooks. They are not in the list above because they predate this work and are not gating it — worth a pass of their own.

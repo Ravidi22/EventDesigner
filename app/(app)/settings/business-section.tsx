@@ -5,6 +5,7 @@ import { fetchSettings, saveSettings } from "@/lib/settings/actions";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/types";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
+import { ImageField } from "@/components/image-field";
 import { Panel, SavedFlag } from "./ui";
 
 // F-8.1 business settings: logo + details (for the quote and outputs), VAT rate, currency (₪ in
@@ -59,13 +60,15 @@ export function BusinessSection() {
         <TextField label="שם בעל/ת העסק" value={s.ownerName} onChange={(v) => patch({ ownerName: v })} />
         <TextField label="טלפון" type="tel" dir="ltr" value={s.phone} onChange={(v) => patch({ phone: v })} className="text-end" />
         <TextField label="כתובת" value={s.address} onChange={(v) => patch({ address: v })} />
-        <TextField
-          label="קישור ללוגו"
-          dir="ltr"
-          value={s.logoUrl ?? ""}
-          onChange={(v) => patch({ logoUrl: v || undefined })}
-          placeholder="https://…"
-          className="text-end"
+        {/* Was a "קישור ללוגו" text field. Wider than square on purpose — a letterhead is a
+            wordmark far more often than it is a badge. */}
+        <ImageField
+          label="לוגו"
+          hint="מופיע בכותרת הצעת המחיר ובפלטים המודפסים."
+          value={s.logoUrl}
+          onChange={(logoUrl) => patch({ logoUrl })}
+          kind="logo"
+          className="h-20 w-36"
           wrapperClassName="col-span-2"
         />
         <NumberField

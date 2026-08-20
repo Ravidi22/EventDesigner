@@ -109,7 +109,7 @@ export function Select({
           id={listboxId}
           role="listbox"
           aria-label={ariaLabel}
-          className="absolute start-0 top-[calc(100%+6px)] z-20 max-h-64 w-full min-w-max overflow-auto rounded-md border border-border bg-surface p-1 shadow-lifted"
+          className="scroll-slim absolute start-0 top-[calc(100%+6px)] z-20 max-h-64 w-full min-w-max overflow-auto rounded-md border border-border bg-surface p-1 shadow-lifted"
         >
           {options.map((opt, index) => {
             const isSelected = opt.value === value;

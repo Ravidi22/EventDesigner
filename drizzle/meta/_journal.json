@@ -8,6 +8,20 @@
       "when": 1786699544278,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786828466024,
+      "tag": "0001_appointments",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786834074565,
+      "tag": "0002_suppliers",
+      "breakpoints": true
     }
   ]
 }

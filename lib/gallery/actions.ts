@@ -24,8 +24,7 @@ import {
   products,
 } from "@/lib/db/schema";
 import { assertEventOwned } from "@/lib/events/ownership";
-import { fileDriver, keyFromUrl } from "@/lib/files/driver";
-import { orgOfKey } from "@/lib/files/keys";
+import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { GalleryImage, Presentation } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -95,13 +94,9 @@ export async function saveImage(image: GalleryImage): Promise<GalleryImage[]> {
     if (!owned) throw new Error("product not found");
   }
 
-  // The photograph is named by its URL, and the URL must be one this app issued for THIS studio —
-  // `keyFromUrl` recognises our own shapes and `orgOfKey` proves the prefix. Without both, a caller
-  // could point a row at another studio's object, or at any address on the internet, and the
-  // gallery would render it. Anything unrecognised is dropped rather than rejected: the field is
-  // optional, and a photo is not worth failing a save over.
-  const imageKey = keyFromUrl(image.imageUrl);
-  const imageUrl = imageKey && orgOfKey(imageKey) === organizationId ? image.imageUrl! : null;
+  // The photograph is named by its URL, and the URL must be one this app issued for THIS studio.
+  // See lib/files/owned.ts for why both the shape and the tenant prefix are checked.
+  const imageUrl = ownedFileUrl(image.imageUrl, organizationId);
 
   // What this row pointed at before, read BEFORE the write — an upsert's RETURNING gives back the
   // new row, so the old URL has to be fetched while it is still the current one.
@@ -128,23 +123,8 @@ export async function saveImage(image: GalleryImage): Promise<GalleryImage[]> {
       set: values,
     });
 
-  // Replacing a photograph deletes the one it replaced. Without this every re-upload leaves an
-  // object nothing references, on a bill nobody is watching — and storage is the one cost in this
-  // architecture that grows on its own.
-  //
-  // Best-effort on purpose: the row already points at the new file, which is the part that matters.
-  // A failed delete leaves one orphan; throwing here would report a save that plainly succeeded as
-  // having failed.
-  if (existing?.imageUrl && existing.imageUrl !== imageUrl) {
-    const stale = keyFromUrl(existing.imageUrl);
-    if (stale && orgOfKey(stale) === organizationId) {
-      try {
-        await fileDriver().remove(stale);
-      } catch {
-        // orphaned; see above
-      }
-    }
-  }
+  // Replacing a photograph deletes the one it replaced — see lib/files/owned.ts.
+  await removeReplacedFile(existing?.imageUrl, imageUrl, organizationId);
 
   return fetchImages();
 }

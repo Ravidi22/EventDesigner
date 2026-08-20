@@ -69,8 +69,26 @@ export const priceUnitEnum = pgEnum("price_unit", ["unit", "m", "m2"]);
 export const visibilityEnum = pgEnum("product_visibility", ["private", "public"]);
 // What a named region of a venue is (lib/venues/zone.ts).
 export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
+// What kind of sit-down a scheduled meeting is (lib/appointments/types.ts).
+export const appointmentKindEnum = pgEnum("appointment_kind", [
+  "consultation",
+  "followup",
+  "walkthrough",
+  "other",
+]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
+// What KIND of stock a catalog item is (Product.stockKind) — the one column the whole procurement
+// forecast turns on, because the three kinds want three different reductions over the same data:
+//
+//   owned      — the studio has it and lays it again at every event. The question is "do I own
+//                enough for the busiest day", so the reduction is PEAK CONCURRENT demand across
+//                overlapping events, compared to stock_qty. Summing it monthly is meaningless: one
+//                30m carpet used at four events is 30m of asset, not 120m of purchasing.
+//   consumable — used up. The monthly SUM is exactly the right number: it is what to buy.
+//   rented     — brought in per event and returned. Neither summed nor peaked: it is a list of
+//                order lines, one per event and date, grouped by supplier.
+export const stockKindEnum = pgEnum("stock_kind", ["owned", "consumable", "rented"]);
 // Which SIDE of the product an account is on, and the one distinction that is not a role.
 //
 // A `studio` account is a designer or supplier: they own an organisation and everything in it —
@@ -297,11 +315,43 @@ export const products = pgTable(
      *  what happens to their design when the owner archives it?) and it needs RLS, which arrives
      *  with auth. The flag is recorded now so the day those land, the data is already there. */
     visibility: visibilityEnum("visibility").notNull().default("private"),
+
+    // ── Procurement (lib/suppliers/) ───────────────────────────────────────────────────────────
+    /** Who this item is bought or rented from. ONE supplier, not a join table: a many-to-many with
+     *  a price per supplier buys exactly one thing — supplier comparison — that nobody has asked
+     *  for, and costs a second place for cost to live. Expenses may name any supplier freely, so
+     *  buying a batch from someone else is already expressible without this column moving. */
+    supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    /** What the STUDIO pays, as opposed to `unitPrice`, which is what the CLIENT pays.
+     *
+     *  ⚠ INTERNAL. This is the first cost number in the product and it must never reach /present,
+     *  the client portal, a quote or a packing list. `npm run check:costs` asserts that line the
+     *  same way check:access asserts the guest one. Per `priceUnit`, like unitPrice — a drape's
+     *  cost is per metre because that is how it is bought. */
+    costPrice: numeric("cost_price", { precision: 12, scale: 2 }),
+    /** owned / consumable / rented — see stockKindEnum. Seeded from the category's default on
+     *  create, then owned by the product: a studio that rents its chairs must be able to say so
+     *  without the category disagreeing, so this is a stored value and not a lookup. */
+    stockKind: stockKindEnum("stock_kind").notNull().default("owned"),
+    /** How many the studio owns. Meaningful only when stockKind = 'owned', and NULLABLE on purpose:
+     *  a count is only useful while someone keeps it true (R-7), so an owned product without one
+     *  shows demand and claims no shortfall rather than inventing a confident wrong number. */
+    stockQty: integer("stock_qty"),
+    /** The unit the SUPPLIER sells in ("גבעולים", "מטרים") when it differs from the unit the plan
+     *  measures in. A florist prices stems; the plan places centrepieces. */
+    orderUnit: text("order_unit"),
+    /** Order-units per placed unit — 7 stems per centrepiece. NULL means 1, which is right for most
+     *  of the catalog. Generalises the `arms` multiplier the packing list already applies. */
+    orderFactor: numeric("order_factor", { precision: 10, scale: 3 }),
+
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [
     index("products_org_idx").on(t.organizationId),
+    // "What do I buy from this supplier?" — the supplier card's own count, and the join the
+    // procurement list makes for every row it groups.
+    index("products_supplier_idx").on(t.supplierId),
     // The catalog screen's default read is "this org's live products" — the partial index serves it
     // without carrying the archived rows nobody lists.
     index("products_org_live_idx")
@@ -415,8 +465,8 @@ export const events = pgTable(
     contact2Phone: text("contact2_phone"),
     eventDate: date("event_date"),
     startTime: time("start_time"),
-    /** A scheduled client consultation, distinct from the event day itself. */
-    meetingDate: date("meeting_date"),
+    // ⚠ `meeting_date` used to live here — one nullable date, i.e. exactly one scheduled meeting per
+    // event, ever. It moved out to its own table; see `appointments` below for why.
     venueId: uuid("venue_id").references(() => venues.id, { onDelete: "restrict" }),
     /** The zones' names, joined — denormalised for lists, headers and the quote, which need a label
      *  without loading the venue plan. Rewritten whenever the selection changes. */
@@ -492,6 +542,61 @@ export const eventClients = pgTable(
     primaryKey({ columns: [t.eventId, t.userId] }),
     // "which events may this person see" is the only read the client side ever does.
     index("event_clients_user_idx").on(t.userId),
+  ],
+);
+
+/** Appointment (lib/appointments/types.ts) — a meeting with a client, on the calendar.
+ *
+ *  ⚠ NAMED `appointments`, NOT `meetings`, while every string on screen still says "פגישה". The word
+ *  "meeting" was already spent: lib/meeting/ and /meeting are the guided MEETING FLOW, the stages a
+ *  designer walks a client through. A `lib/meetings/` sitting one character from `lib/meeting/` is a
+ *  mis-import waiting to happen, so the scheduled thing takes a different word in code and keeps the
+ *  Hebrew one in the UI.
+ *
+ *  ⚠ REPLACES `events.meeting_date` (migration 0001, which copies every non-null one in here before
+ *  dropping it). That column held one date on the event row, which is one meeting per event for the
+ *  life of the event — and docs/01 §מצב פגישה says the opposite in as many words: "פגישה שנייה
+ *  ושינויים הם חלק מהתהליך, לא חריגה ממנו". It also could not exist before its event did, so the
+ *  first meeting — the one where you find out whether there is an event at all — had nowhere to go.
+ */
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: id(),
+    organizationId: orgId(),
+    /** The event this is about — NULL while the couple is still a prospect. That is the whole point
+     *  of the table: a meeting may precede its event, or never acquire one. */
+    eventId: uuid("event_id").references(() => events.id, { onDelete: "cascade" }),
+    /** Who it is with, as typed. Denormalised on purpose — same trade as events.zonesLabel: a
+     *  prospect has no event to read a name off, and the calendar wants a label without a join. */
+    clientName: text("client_name").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    /** Which property this concerns — the dashboard scopes to one at a time. NULL means "not tied to
+     *  a property yet", and such a meeting shows on EVERY venue's calendar rather than on none;
+     *  a prospect meeting that is invisible everywhere is worse than one that is visible twice.
+     *  `set null` on delete, not `restrict` like events.venue_id: a property with ten years of past
+     *  meetings against it should still be deletable, and losing the association is not losing the
+     *  meeting. */
+    venueId: uuid("venue_id").references(() => venues.id, { onDelete: "set null" }),
+    /** A `date` plus a `time`, never a timestamptz — the same reasoning as events.event_date. A
+     *  meeting at 17:00 is at 17:00 in the room where it happens; an instant lets a timezone move it. */
+    date: date("date").notNull(),
+    startTime: time("start_time"),
+    durationMin: integer("duration_min").notNull().default(60),
+    kind: appointmentKindEnum("kind").notNull().default("consultation"),
+    note: text("note").notNull().default(""),
+    /** It was actually held. NOT derived from the date being past: a meeting that was booked and
+     *  never happened is a different fact from one that has come and gone, and only the designer
+     *  knows which. */
+    done: boolean("done").notNull().default(false),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    // The one read the dashboard does: this studio's meetings, in date order.
+    index("appointments_org_date_idx").on(t.organizationId, t.date),
+    index("appointments_event_idx").on(t.eventId),
+    index("appointments_venue_idx").on(t.venueId),
   ],
 );
 
@@ -701,5 +806,87 @@ export const issuedQuotes = pgTable(
   (t) => [
     index("issued_quotes_org_idx").on(t.organizationId),
     index("issued_quotes_document_idx").on(t.designDocumentId),
+  ],
+);
+
+// ── Suppliers and what they cost ───────────────────────────────────────────────────────────────
+
+/** Supplier (lib/suppliers/types.ts) — who the studio buys from.
+ *
+ *  Deliberately NOT a contact-management record: name, one contact person, one phone, what they
+ *  supply, a note. No addresses, no second contact, no tags, no activity. The studio's own people
+ *  are `users` and its clients are `event_clients`; this is the third kind of person in the product
+ *  and it earns the fewest fields of the three, because everything it is for is answered by "what
+ *  do I buy from them and what do I owe them". */
+export const suppliers = pgTable(
+  "suppliers",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    contactName: text("contact_name"),
+    phone: text("phone"),
+    /** Free text — what they supply. Not a category list: a florist who also does drapes is one
+     *  sentence, and forcing it into the catalog's taxonomy would be a taxonomy for the wrong
+     *  thing (what the studio SELLS, not what a supplier stocks). */
+    supplies: text("supplies"),
+    note: text("note"),
+    /** Archived, never deleted, for the same reason as a product: an expense must not lose who it
+     *  was paid to, and a supplier who stops trading is still part of last year's costs. */
+    archived: boolean("archived").notNull().default(false),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    index("suppliers_org_idx").on(t.organizationId),
+    index("suppliers_org_live_idx")
+      .on(t.organizationId, t.name)
+      .where(sql`${t.archived} = false`),
+  ],
+);
+
+/** Expense (lib/suppliers/types.ts) — money paid to a supplier.
+ *
+ *  Scope, stated here because this is the table that would otherwise grow forever: it answers TWO
+ *  questions and no others — what did this event cost me, and what do I owe this supplier. It is
+ *  not bookkeeping. No invoice number, no VAT breakdown, no receipt, no payment reconciliation, no
+ *  aged debt. The studio has an accountant and this is not their system; a column added here to be
+ *  "nearly" an accounting record is worse than none, because it invites a reconciliation nobody can
+ *  finish. */
+export const expenses = pgTable(
+  "expenses",
+  {
+    id: id(),
+    organizationId: orgId(),
+    /** RESTRICT, not cascade: deleting a supplier must not silently delete what was paid to them.
+     *  The screen archives instead, and archiving keeps the history readable. */
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "restrict" }),
+    /** ⚠ NULLABLE ON PURPOSE, the same way appointments.event_id is: a bulk purchase of 500 candles
+     *  belongs to no event, and forcing one would make the designer invent a fake booking to record
+     *  a real cost. `set null` rather than cascade for the same reason — a deleted event must not
+     *  take the money that was spent on it out of the year's totals. */
+    eventId: uuid("event_id").references(() => events.id, { onDelete: "set null" }),
+    /** Which catalog item this was for, when it was for one.
+     *
+     *  ⚠ NO FOREIGN KEY, and it is the same reason written on packing_spares: a "variantId" is a
+     *  PRODUCT's id whenever that product has no variants, so a key into product_variants would
+     *  reject an expense against most of a real catalog. Resolved the way every placement is. */
+    variantId: uuid("variant_id"),
+    description: text("description").notNull().default(""),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    /** The date the money was spent, which is not the date the row was written — a receipt gets
+     *  typed in a week late and still belongs to the week it happened. */
+    spentAt: date("spent_at").notNull(),
+    paid: boolean("paid").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [
+    // The ledger's own read: this studio's expenses over a date window, newest first.
+    index("expenses_org_date_idx").on(t.organizationId, t.spentAt),
+    index("expenses_supplier_idx").on(t.supplierId),
+    // "What did this event cost?" — the margin line on the event drawer and the outputs screen.
+    index("expenses_event_idx").on(t.eventId),
   ],
 );

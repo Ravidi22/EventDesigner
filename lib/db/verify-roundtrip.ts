@@ -43,6 +43,13 @@ import { inviteInfo, signUp } from "@/lib/auth/actions";
 import { fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import {
+  fetchAppointments,
+  saveAppointment,
+  setAppointmentDone,
+  deleteAppointment,
+} from "@/lib/appointments/actions";
+import type { Appointment } from "@/lib/appointments/types";
+import {
   fetchSettings,
   saveSettings,
   fetchMeetingFlow,
@@ -68,6 +75,17 @@ import {
   fetchFolder,
   toggleLike,
 } from "@/lib/gallery/actions";
+import { issueQuote } from "@/lib/quotes/actions";
+import {
+  fetchEventMargin,
+  fetchProcurement,
+  fetchSuppliers,
+  removeExpense,
+  removeSupplier,
+  saveExpense,
+  saveSupplier,
+} from "@/lib/suppliers/actions";
+import type { Expense, Supplier } from "@/lib/suppliers/types";
 import { likedProductIds } from "@/lib/gallery/folder-logic";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { db } from "@/lib/db";
@@ -160,6 +178,18 @@ async function main() {
   const priv = unpublished.find((p) => p.id === original.id);
   check("un-publishing collapses back to absent, not the string", priv?.visibility === undefined, String(priv?.visibility));
 
+  // ── the product image ────────────────────────────────────────────────────────────────────────
+  // Same rule as the letterhead's and the gallery's, and it is wired separately in each, so it is
+  // asserted separately: only a URL naming an object THIS studio uploaded may be stored.
+  const ownImage = `/api/files/${SINGLE_ORG_ID}/product/${crypto.randomUUID()}.jpg`;
+  const pictured = (await saveProduct({ ...original, imageUrl: ownImage })).find((p) => p.id === original.id);
+  check("an uploaded product image survives", pictured?.imageUrl === ownImage, pictured?.imageUrl);
+
+  const external = (await saveProduct({ ...original, imageUrl: "https://example.com/x.jpg" })).find(
+    (p) => p.id === original.id,
+  );
+  check("an external URL is refused as a product image", external?.imageUrl === undefined, external?.imageUrl);
+
   // ── update ───────────────────────────────────────────────────────────────────────────────────
   const edited = { ...original, name: "בדיקה — שם מעודכן", variants: [] };
   const afterEdit = await saveProduct(edited);
@@ -178,10 +208,12 @@ async function main() {
   await verifyGrants();
   await verifyInvites();
   await verifyEvents();
+  await verifyAppointments();
   await verifySettings();
   await verifyDocuments();
   await verifyOutputs();
   await verifyGallery();
+  await verifySuppliers();
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
@@ -339,6 +371,102 @@ async function verifyGrants() {
   await deleteVenueForTest(venueId);
 }
 
+/** The diary: meetings with clients (lib/appointments/). Three things are actually at risk here and
+ *  each gets an assertion — that a meeting can exist with NO event (the prospect case this table was
+ *  built for), that the date and the clock survive the round trip without a Date ever touching them,
+ *  and that a meeting cannot be hung off a record this studio does not own. */
+async function verifyAppointments() {
+  console.log("\n— appointments —");
+  const before = (await fetchAppointments()).length;
+
+  const { id: venueId } = await createVenue();
+  const eventId = await makeEvent("בדיקה — יומן");
+
+  // A meeting with nobody's event: the first sit-down, before there is anything to attach it to.
+  const prospect: Appointment = {
+    id: crypto.randomUUID(),
+    clientName: "בדיקה — זוג מתעניין",
+    phone: "050-1111111",
+    // The same trap as the wedding day above: this is a Sunday, the machine is at UTC+3, and
+    // anything that parses it into a Date and formats it back lands on the 14th.
+    date: "2026-06-15",
+    time: "17:00",
+    durationMin: 90,
+    kind: "consultation",
+    note: "היכרות ראשונה",
+    createdAt: Date.now(),
+  };
+  const afterFirst = await saveAppointment(prospect);
+  const back = afterFirst.find((a) => a.id === prospect.id);
+  check("a meeting with no event at all is accepted", !!back);
+
+  if (back) {
+    const a = JSON.parse(JSON.stringify(prospect)) as Record<string, unknown>;
+    const b = JSON.parse(JSON.stringify(back)) as Record<string, unknown>;
+    const diffs = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+      .filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]))
+      .map((k) => `${k}: sent=${JSON.stringify(a[k])} got=${JSON.stringify(b[k])}`);
+    check("the whole meeting round-trips identically", diffs.length === 0, diffs.join(" | "));
+    check("the day is the same CALENDAR DAY", back.date === "2026-06-15", back.date);
+    check("the hour survives as HH:mm", back.time === "17:00", String(back.time));
+    check("an unheld meeting has no done key", back.done === undefined, String(back.done));
+  }
+
+  // The same couple, later, once they have booked something — a SECOND meeting on one event, which
+  // is the whole reason this is a table and not the column it replaced.
+  const first: Appointment = { ...prospect, id: crypto.randomUUID(), eventId, venueId, date: "2026-05-04", kind: "walkthrough" };
+  const second: Appointment = { ...prospect, id: crypto.randomUUID(), eventId, venueId, date: "2026-07-20", kind: "followup", time: undefined };
+  await saveAppointment(first);
+  const list = await saveAppointment(second);
+  check("one event carries more than one meeting", list.filter((a) => a.eventId === eventId).length === 2);
+  check("a meeting with no hour is allowed", list.find((a) => a.id === second.id)?.time === undefined);
+
+  const dates = list.filter((a) => a.clientName === prospect.clientName).map((a) => a.date);
+  check("the diary comes back soonest-first", dates.join() === [...dates].sort().join(), dates.join());
+
+  // ── done is set, not inferred ────────────────────────────────────────────────────────────────
+  const held = await setAppointmentDone(first.id, true);
+  check("a meeting can be marked held", held.find((a) => a.id === first.id)?.done === true);
+  const unheld = await setAppointmentDone(first.id, false);
+  check("and un-marked, collapsing back to absent", unheld.find((a) => a.id === first.id)?.done === undefined);
+
+  // ── what it refuses ──────────────────────────────────────────────────────────────────────────
+  // A well-formed uuid for a row that is not this studio's. The foreign key alone would catch this
+  // one because the row does not exist at all — the assertion that matters is that the ERROR comes
+  // from assertLinks, before any write, which is the same check that stops a real id from another
+  // organisation.
+  await refuses("an event that is not this studio's", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), eventId: crypto.randomUUID() }),
+  );
+  await refuses("a venue that is not this studio's", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), venueId: crypto.randomUUID() }),
+  );
+  await refuses("a date that passes the regex but does not exist", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), date: "2026-02-31" }),
+  );
+  await refuses("an hour that is not on a clock", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), time: "25:00" }),
+  );
+  await refuses("a kind that is not one of the four", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), kind: "dinner" as Appointment["kind"] }),
+  );
+  await refuses("a meeting with no date", () =>
+    saveAppointment({ ...prospect, id: crypto.randomUUID(), date: "" }),
+  );
+
+  // ── cleanup, which is itself the cascade assertion ───────────────────────────────────────────
+  const afterDelete = await deleteAppointment(prospect.id);
+  check("a cancelled meeting is gone, not archived", !afterDelete.some((a) => a.id === prospect.id));
+
+  // Deleting the event takes its two meetings with it (ON DELETE CASCADE): a meeting about an event
+  // that no longer exists is not a diary entry, it is a dangling row.
+  await deleteEventForTest(eventId);
+  const remaining = await fetchAppointments();
+  check("deleting an event takes its meetings with it", !remaining.some((a) => a.eventId === eventId));
+  await deleteVenueForTest(venueId);
+  check("the diary is exactly as we found it", remaining.length === before, `${remaining.length} vs ${before}`);
+}
+
 /** The event half: a client record standing on zones of a property. Needs a venue and a zone to
  *  stand on, so it builds both and takes both down again. */
 async function verifyEvents() {
@@ -370,7 +498,6 @@ async function verifyEvents() {
     // at UTC+3, so anything that parses it into a Date and formats it back lands on the 8th.
     date: "2026-08-09",
     time: "19:30",
-    meetingDate: "2026-06-01",
     venueId,
     // B before A on purpose: the order is the designer's, not the table's.
     zoneIds: [zoneB.id, zoneA.id],
@@ -393,7 +520,6 @@ async function verifyEvents() {
     check("the whole event round-trips identically", diffs.length === 0, diffs.join(" | "));
     check("the wedding is still the same CALENDAR DAY", returned.date === "2026-08-09", returned.date);
     check("the start time survives as HH:mm", returned.time === "19:30", String(returned.time));
-    check("the meeting date is its own date", returned.meetingDate === "2026-06-01", String(returned.meetingDate));
     check("zone order is the designer's, not the table's", returned.zoneIds.join() === [zoneB.id, zoneA.id].join());
     check("an unarchived event has no archived key", returned.archived === undefined, String(returned.archived));
     check("createdAt survives as epoch ms", returned.createdAt === original.createdAt);
@@ -453,19 +579,35 @@ async function verifySettings() {
   const original = await fetchSettings();
   const originalFlow = await fetchMeetingFlow();
 
+  // A URL shaped like one this app issued, for THIS organisation. It has to be: the letterhead is
+  // an uploader now, not a "paste a link" field, so saveSettings stores only URLs that name an
+  // object this studio uploaded (lib/files/owned.ts). The fixture used to be example.com, which is
+  // exactly what the new rule exists to drop.
+  const ownLogo = `/api/files/${SINGLE_ORG_ID}/logo/${crypto.randomUUID()}.png`;
+
   const written = await saveSettings({
     businessName: "בדיקה — סטודיו",
     ownerName: "בדיקה",
     phone: "03-0000000",
     address: "רחוב הבדיקה 1, תל אביב",
-    logoUrl: "https://example.com/logo.png",
+    logoUrl: ownLogo,
     vatRate: 0.17,
     currency: "€", // ignored on purpose — see below
   });
 
   check("settings round-trip", written.businessName === "בדיקה — סטודיו" && written.ownerName === "בדיקה");
   check("the address survives", written.address === "רחוב הבדיקה 1, תל אביב", written.address);
-  check("the logo url survives", written.logoUrl === "https://example.com/logo.png");
+  check("an uploaded logo survives", written.logoUrl === ownLogo, written.logoUrl);
+
+  // The rule that replaced "any string is a logo". An address on the internet, and a well-formed
+  // key belonging to somebody else, are both dropped rather than stored — the first would let a
+  // quote's letterhead be pointed anywhere, the second at another studio's object.
+  const external = await saveSettings({ ...written, logoUrl: "https://example.com/logo.png" });
+  check("an external URL is refused as a logo", external.logoUrl === undefined, external.logoUrl);
+
+  const otherOrg = `/api/files/${crypto.randomUUID()}/logo/${crypto.randomUUID()}.png`;
+  const foreign = await saveSettings({ ...written, logoUrl: otherOrg });
+  check("…and so is another studio's key", foreign.logoUrl === undefined, foreign.logoUrl);
   // numeric, not float: a VAT rate multiplies every line of every quote.
   check("the VAT rate keeps its decimals", written.vatRate === 0.17, String(written.vatRate));
   // The screen makes this read-only; the ACTION is what enforces it, because the screen is not
@@ -764,6 +906,145 @@ async function verifyGallery() {
   await removeProduct(product.id);
   check("cleanup: the gallery is as we found it", (await fetchImages()).length === beforeImages);
   check("cleanup: the presentations are as we found them", (await fetchPresentations()).length === beforePresentations);
+}
+
+/** Suppliers, expenses, the margin — and the forecast, which is the only one of the four that is a
+ *  computation rather than a round-trip.
+ *
+ *  The reduction itself is proved by `npm run check:procurement`, which runs under node against
+ *  fixtures. What can only be proved HERE is the assembly: that a drawing in the database, a quote
+ *  in the database and a catalog row with a stockKind arrive at that reduction as the right
+ *  `EventDemand` — including the two facts the pure test cannot see, that an event without an
+ *  issued quote is excluded and that its exclusion is counted. */
+async function verifySuppliers() {
+  console.log("\n— suppliers —");
+  const before = (await fetchSuppliers()).length;
+
+  const supplier: Supplier = {
+    id: crypto.randomUUID(),
+    name: "בדיקה — פרחי השרון",
+    contactName: "יוסי",
+    phone: "050-1234567",
+    supplies: "פרחים וירק",
+  };
+  const saved = await saveSupplier(supplier);
+  const back = saved.find((s) => s.id === supplier.id);
+  check("saveSupplier created it", !!back);
+  check("the supplier round-trips", back?.name === supplier.name && back?.phone === supplier.phone);
+  check("a new supplier has no history", back?.spent === 0 && back?.productCount === 0);
+
+  // ── the expense ────────────────────────────────────────────────────────────────────────────
+  const eventId = await makeEvent("בדיקה — ספקים");
+  const expense: Expense = {
+    id: crypto.randomUUID(),
+    supplierId: supplier.id,
+    eventId,
+    description: "300 גבעולי ורד",
+    amount: 1234.56,
+    spentAt: "2026-09-01",
+    paid: false,
+  };
+  const ledger = await saveExpense(expense);
+  const row = ledger.find((e) => e.id === expense.id);
+  check("the expense round-trips", !!row);
+  check("the amount kept its agorot", row?.amount === 1234.56, String(row?.amount));
+  check("the date is a plain day, not a shifted timestamp", row?.spentAt === "2026-09-01", String(row?.spentAt));
+
+  const withSpend = (await fetchSuppliers()).find((s) => s.id === supplier.id);
+  check("the supplier card counts what is owed", withSpend?.outstanding === 1234.56, String(withSpend?.outstanding));
+
+  const paid = await saveExpense({ ...expense, paid: true });
+  check("marking it paid updates in place", paid.filter((e) => e.id === expense.id).length === 1);
+  const settled = (await fetchSuppliers()).find((s) => s.id === supplier.id);
+  check("a paid expense leaves the outstanding total", settled?.outstanding === 0, String(settled?.outstanding));
+  check("…but stays in the all-time total", settled?.spent === 1234.56, String(settled?.spent));
+
+  // ── the margin ─────────────────────────────────────────────────────────────────────────────
+  const noQuote = await fetchEventMargin(eventId);
+  check("with no quote there is no margin, which is not a zero", noQuote.profit === undefined && noQuote.spent === 1234.56);
+
+  // ── refusals ───────────────────────────────────────────────────────────────────────────────
+  await refuses("an expense against an unknown supplier", () =>
+    saveExpense({ ...expense, id: crypto.randomUUID(), supplierId: crypto.randomUUID() }),
+  );
+  await refuses("an expense against another studio's event", () =>
+    saveExpense({ ...expense, id: crypto.randomUUID(), eventId: crypto.randomUUID() }),
+  );
+  await refuses("a malformed date", () => saveExpense({ ...expense, id: crypto.randomUUID(), spentAt: "01/09/2026" }));
+  await refuses("a negative amount", () => saveExpense({ ...expense, id: crypto.randomUUID(), amount: -5 }));
+  await refuses("a window that runs backwards", () => fetchProcurement("2026-09-30", "2026-09-01"));
+
+  // ── the forecast, assembled from real rows ─────────────────────────────────────────────────
+  const flowers: Product = {
+    id: crypto.randomUUID(),
+    name: "בדיקה — מרכז שולחן",
+    category: "centerpieces",
+    layer: "table",
+    dimensions: { diameterMm: 300, heightMm: 400 },
+    categoryFields: {},
+    styleTags: [],
+    variants: [],
+    supplierId: supplier.id,
+    stockKind: "consumable",
+    orderUnit: "גבעולים",
+    orderFactor: 7,
+    costPrice: 4,
+  };
+  await saveProduct(flowers);
+
+  const quiet = await fetchProcurement("2026-09-01", "2026-09-30");
+  const eventsBefore = quiet.coverage.events;
+
+  await saveDocument(eventId, {
+    calibration: { mmPerUnit: 1 },
+    tables: [],
+    placements: [
+      { id: crypto.randomUUID(), variantId: flowers.id, layer: "table", quantity: 20, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+    ],
+  });
+
+  const drawn = await fetchProcurement("2026-09-01", "2026-09-30");
+  check("the event is in the window", drawn.coverage.events === eventsBefore + 1 || eventsBefore > 0);
+  check(
+    "an event with no issued quote does NOT reach the order",
+    !drawn.order.some((g) => g.lines.some((l) => l.variantId === flowers.id)),
+  );
+  check("…and is priced separately as exposure", drawn.potential.cost >= 560, String(drawn.potential.cost));
+
+  await issueQuote(eventId, {
+    discountType: "amount",
+    discountValue: 0,
+    hiddenVariantIds: [],
+    mergedCategoryIds: [],
+    total: 5000,
+  });
+
+  const committed = await fetchProcurement("2026-09-01", "2026-09-30");
+  const group = committed.order.find((g) => g.supplierId === supplier.id);
+  const line = group?.lines.find((l) => l.variantId === flowers.id);
+  check("issuing the quote brings it into the order", !!line);
+  check("20 centrepieces × 7 = 140 stems", line?.quantity === 140, String(line?.quantity));
+  check("the line reads in the supplier's own unit", line?.unitLabel === "גבעולים", String(line?.unitLabel));
+  check("140 × ₪4 = ₪560", line?.cost === 560, String(line?.cost));
+  check("the group is grouped under the supplier", group?.supplierName === supplier.name);
+
+  // ── archive rather than break the history ──────────────────────────────────────────────────
+  const { archived } = await removeSupplier(supplier.id);
+  check("a supplier with expenses is archived, never deleted", archived === true);
+  const stillThere = (await fetchSuppliers()).find((s) => s.id === supplier.id);
+  check("the archived supplier is still readable", stillThere?.archived === true);
+
+  // ── cleanup ────────────────────────────────────────────────────────────────────────────────
+  // The event goes FIRST, and the order is the point: the product is placed in that event's
+  // drawing, so removing it while the drawing exists archives it (F-4.5) rather than deleting it —
+  // and an archived product still names its supplier, which would archive the supplier too and
+  // leave this fixture behind forever. Deleting the event cascades the document away first.
+  await removeExpense(expense.id);
+  await deleteEventForTest(eventId);
+  await removeProduct(flowers.id);
+  const { archived: gone } = await removeSupplier(supplier.id);
+  check("with nothing pointing at it, the supplier really is deleted", gone === false);
+  check("the supplier list is as we found it", (await fetchSuppliers()).length === before, String((await fetchSuppliers()).length));
 }
 
 /** An event to hang the fixtures off. Every one of these domains is a leaf of one. */

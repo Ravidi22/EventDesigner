@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, PenTool, Printer } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, CalendarArrowDown, CalendarArrowUp, CalendarHeart, PenTool, Plus, Printer } from "lucide-react";
 import type { EventSummary, EventStatus } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, monogram, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { stepAt, type MeetingStepId } from "@/lib/meeting/steps";
@@ -12,6 +12,8 @@ import { useEvents } from "@/lib/events/use-events";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { SearchInput } from "@/components/search-input";
 import { StatusChip } from "@/components/status-chip";
+import { Button } from "@/components/button";
+import { EmptyState, NoResults } from "@/components/empty-state";
 
 type Filter = "active" | EventStatus;
 const FILTERS: { id: Filter; label: string }[] = [
@@ -27,15 +29,23 @@ const FILTERS: { id: Filter; label: string }[] = [
 // favor of this view.
 export function GanttScreen() {
   const router = useRouter();
-  const { events, patch } = useEvents();
+  const { events, ready, patch } = useEvents();
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const { activeVenueId } = useActiveVenueScope();
   const flow = useMeetingFlow();
 
+  // Kept apart from `filtered`: an empty screen means something different when this venue has no
+  // events at all (first run — teach and offer to create one) than when the filter simply hid them
+  // (offer the way back). Both look like an empty array downstream.
+  const inVenue = useMemo(
+    () => events.filter((e) => e.venueId === activeVenueId),
+    [events, activeVenueId],
+  );
+
   const filtered = useMemo(() => {
-    const byVenue = events.filter((e) => e.venueId === activeVenueId);
+    const byVenue = inVenue;
     const byTab =
       filter === "active"
         ? byVenue.filter((e) => !e.archived)
@@ -44,7 +54,7 @@ export function GanttScreen() {
           : byVenue.filter((e) => eventStatus(e, flow) === filter);
     const q = query.trim().toLowerCase();
     return q ? byTab.filter((e) => `${e.clientName} ${e.zonesLabel}`.toLowerCase().includes(q)) : byTab;
-  }, [events, filter, query, activeVenueId, flow]);
+  }, [inVenue, filter, query, flow]);
 
   const shown = useMemo(() => {
     const sign = sortDir === "desc" ? -1 : 1;
@@ -121,14 +131,57 @@ export function GanttScreen() {
         <span className="nums text-sm text-muted">{shown.length} אירועים</span>
       </div>
 
-      {shown.length === 0 ? (
-        <p className="py-16 text-center text-sm text-muted">
-          {query.trim()
-            ? "לא נמצאו אירועים התואמים לחיפוש."
-            : filter === "archived"
-              ? "הארכיון ריק."
-              : "אין אירועים בסינון הזה."}
+      {!ready ? (
+        <p className="py-16 text-center text-sm text-muted" aria-busy="true">
+          טוען את האירועים…
         </p>
+      ) : shown.length === 0 ? (
+        query.trim() ? (
+          <NoResults
+            title="לא נמצאו אירועים"
+            body={`אין אירוע שתואם ל״${query.trim()}״ בסינון הזה. החיפוש עובר על שם הלקוח ועל האזורים באולם.`}
+            onClear={() => setQuery("")}
+            clearLabel="נקה חיפוש"
+          />
+        ) : inVenue.length === 0 ? (
+          // First run: this venue has no events at all. Not a filter problem — there is nothing to
+          // filter, so this teaches where an event comes from and opens the meeting that starts it.
+          <EmptyState
+            icon={CalendarHeart}
+            title="אין עדיין אירועים"
+            body="כל אירוע מתחיל בפגישה — שם הלקוח, התאריך והאזורים שהוא לוקח באולם. משם ממשיכים לגלריה, לסטודיו, ולפלטים שהצוות והמחסן מקבלים."
+            action={
+              <Button onClick={() => router.push("/meeting?new")}>
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
+                צור אירוע ראשון
+              </Button>
+            }
+          />
+        ) : filter === "archived" ? (
+          <EmptyState
+            icon={Archive}
+            title="הארכיון ריק"
+            body="אירוע שהסתיים אפשר להעביר לארכיון מכרטיס האירוע — הוא יורד מרשימת הפעילים, והעיצוב, ההצעה ורשימת הציוד שלו נשמרים כמו שהם."
+          />
+        ) : filter === "active" ? (
+          // Events exist, but every one of them is archived. Sending this to the branch below would
+          // offer "show all active" as the way out of a list that IS all active and empty.
+          <NoResults
+            icon={Archive}
+            title="אין אירועים פעילים"
+            body="כל האירועים במתחם הזה נמצאים בארכיון."
+            onClear={() => setFilter("archived")}
+            clearLabel="פתח את הארכיון"
+          />
+        ) : (
+          <NoResults
+            icon={CalendarHeart}
+            title="אין אירועים בשלב הזה"
+            body={`אף אירוע פעיל לא נמצא כרגע בשלב ״${FILTERS.find((f) => f.id === filter)?.label}״.`}
+            onClear={() => setFilter("active")}
+            clearLabel="הצג את כל הפעילים"
+          />
+        )
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((e) => (

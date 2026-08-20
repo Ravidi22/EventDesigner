@@ -762,7 +762,7 @@ export function HallsScreen() {
           )}
         </section>
 
-        <aside className="flex max-h-[68vh] flex-col gap-2 overflow-y-auto">
+        <aside className="scroll-slim flex max-h-[68vh] flex-col gap-2 overflow-y-auto">
           {/* Tracing panel (F-3.5 + F-3.4). Above the zone list because it is what you use FIRST:
               place the plan, calibrate it, then draw. */}
           <div className="rounded-md border border-border bg-card p-3.5">

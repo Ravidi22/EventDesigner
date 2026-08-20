@@ -17,7 +17,7 @@ import {
   Milestone,
   type LucideIcon,
 } from "lucide-react";
-import type { Layer } from "./types";
+import type { Layer, StockKind } from "./types";
 
 export interface CategoryField {
   key: string;
@@ -83,13 +83,20 @@ export interface CategoryDef {
   fields: CategoryField[]; // count-multipliers only (F-4.3); always numeric
   anchor?: Anchor; // absent = "free"
   sizing?: Sizing; // absent = "fixed"
+  /** What a NEW product of this category starts as in the procurement model — absent = "owned",
+   *  which is most of a designer's catalog. It is a SEED for the drawer, not a lookup: the value is
+   *  then stored on the product, so a studio that rents its chairs rather than owning them can say
+   *  so without the category disagreeing with the row. */
+  defaultStock?: StockKind;
 }
 
 export const CATEGORIES: CategoryDef[] = [
   { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
   { id: "chairs", label: "כיסאות", group: "grp-seating", defaultLayer: "floor", icon: Armchair, dims: "box", fields: [] },
   { id: "tablecloths", label: "מפות", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], anchor: "table" },
-  { id: "centerpieces", label: "מרכזי שולחן", group: "grp-table-design", defaultLayer: "table", icon: Flower2, dims: "round", fields: [] },
+  // The one category that defaults to consumable: a centrepiece is flowers far more often than it
+  // is the vase they stand in, and a designer who stocks reusable pieces changes one field.
+  { id: "centerpieces", label: "מרכזי שולחן", group: "grp-table-design", defaultLayer: "table", icon: Flower2, dims: "round", fields: [], defaultStock: "consumable" },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch" },
