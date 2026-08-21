@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Trash2, X } from "lucide-react";
 import type { Appointment, AppointmentKind } from "@/lib/appointments/types";
-import { APPOINTMENT_KINDS, APPOINTMENT_KIND_LABEL } from "@/lib/appointments/types";
+import { APPOINTMENT_KINDS, APPOINTMENT_KIND_LABEL, isClientKind } from "@/lib/appointments/types";
 import type { EventSummary } from "@/lib/events/types";
 import { formatEventDate } from "@/lib/events/types";
 import { Button } from "@/components/button";
@@ -19,7 +19,13 @@ import { fieldLabelClassName } from "@/components/control";
 // designer actually gives, and a free number invites 47 minutes.
 const DURATIONS = [30, 45, 60, 90, 120, 180];
 
-/** Book or edit one meeting — the write half of the dashboard calendar, which had none until now.
+/** Book or edit one diary entry — the write half of the dashboard calendar, which had none until now.
+ *
+ *  ⚠ IT IS NOT ONLY A MEETING. The kind picker at the top decides what the rest of the form asks:
+ *  the three client kinds (and `other`) want a couple, a phone and an event to attach to; אילוץ,
+ *  חופשה, אספקה and אישי want none of those, and showing them four fields they will never fill is
+ *  how a form teaches you to skim past it. The date, hour, duration and note are shared by all of
+ *  them, because they are what "occupies a day" means.
  *
  *  Centred `.modal`, not the left-anchored `.drawer` the event detail uses: this one is reached by
  *  clicking a specific day, so it should not slide in over the calendar the click was aimed at. */
@@ -90,6 +96,9 @@ export function AppointmentDialog({
 
   // Attaching an event fills in who it is with — but only over blank fields. A meeting whose
   // contact is the מארגנת rather than the couple is exactly the case worth not overwriting.
+  // What the rest of the form asks depends on this one answer.
+  const forClient = isClientKind(kind);
+
   const chooseEvent = (id: string) => {
     setEventId(id);
     const chosen = events.find((e) => e.id === id);
@@ -108,9 +117,12 @@ export function AppointmentDialog({
         // A new meeting mints its id here, in the browser, like every other record in this app —
         // and an edit keeps its own, which is what makes this an UPDATE rather than a duplicate.
         id: appointment?.id ?? crypto.randomUUID(),
-        eventId: eventId || undefined,
-        clientName: clientName.trim(),
-        phone: phone.trim(),
+        // Cleared, not merely hidden, when the kind has no client: a חופשה typed over a meeting
+        // would otherwise keep the couple's name and phone on a row that no longer shows either,
+        // and they would reappear the moment someone switched the kind back.
+        eventId: (forClient && eventId) || undefined,
+        clientName: forClient ? clientName.trim() : "",
+        phone: forClient ? phone.trim() : "",
         // A meeting keeps the venue it was booked under. Only a NEW one takes the sidebar's active
         // venue — re-saving from another venue's dashboard must not quietly move it.
         venueId: appointment ? appointment.venueId : defaultVenueId,
@@ -119,12 +131,12 @@ export function AppointmentDialog({
         durationMin,
         kind,
         note: note.trim(),
-        done: done || undefined,
+        done: (forClient && done) || undefined,
         createdAt: appointment?.createdAt ?? Date.now(),
       });
       onClose();
     } catch {
-      setError("לא ניתן לשמור את הפגישה. נסו שוב.");
+      setError("לא ניתן לשמור את הרשומה. נסו שוב.");
       setSaving(false);
     }
   };
@@ -137,7 +149,7 @@ export function AppointmentDialog({
       await onDelete(appointment.id);
       onClose();
     } catch {
-      setError("לא ניתן לבטל את הפגישה. נסו שוב.");
+      setError("לא ניתן למחוק את הרשומה. נסו שוב.");
       setSaving(false);
     }
   };
@@ -164,7 +176,7 @@ export function AppointmentDialog({
           leave the footer stranded under it. */}
       <form onSubmit={submit} className="flex max-h-[calc(100dvh-2rem)] flex-col">
         <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
-          <h2 className="text-base font-semibold text-ink">{appointment ? "עריכת פגישה" : "פגישה חדשה"}</h2>
+          <h2 className="text-base font-semibold text-ink">{appointment ? "עריכת רשומה" : "רשומה חדשה"}</h2>
           <IconButton label="סגירה" onClick={onClose}>
             <X className="h-5 w-5" strokeWidth={2} />
           </IconButton>
@@ -184,12 +196,12 @@ export function AppointmentDialog({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <span className={fieldLabelClassName}>סוג הפגישה</span>
+              <span className={fieldLabelClassName}>סוג הרשומה</span>
               <Select
                 value={kind}
                 onChange={(v) => setKind(v as AppointmentKind)}
                 options={APPOINTMENT_KINDS.map((k) => ({ value: k, label: APPOINTMENT_KIND_LABEL[k] }))}
-                aria-label="סוג הפגישה"
+                aria-label="סוג הרשומה"
                 className="w-full"
               />
             </div>
@@ -199,39 +211,44 @@ export function AppointmentDialog({
                 value={String(durationMin)}
                 onChange={(v) => setDurationMin(Number(v))}
                 options={DURATIONS.map((m) => ({ value: String(m), label: m >= 60 ? `${m / 60} שעות` : `${m} דקות` }))}
-                aria-label="משך הפגישה"
+                aria-label="משך הרשומה"
                 className="w-full"
               />
             </div>
           </div>
 
-          <div>
-            <span className={fieldLabelClassName}>אירוע משויך</span>
-            <Select
-              value={eventId}
-              onChange={chooseEvent}
-              options={[
-                { value: "", label: "ללא — פגישה ראשונה" },
-                ...events.map((e) => ({ value: e.id, label: `${e.clientName} · ${formatEventDate(e.date)}` })),
-              ]}
-              aria-label="אירוע משויך"
-              className="w-full"
-            />
-            <p className="mt-1.5 text-xs leading-relaxed text-muted">
-              פגישה ראשונה נקבעת לפני שיש אירוע. אפשר לשייך אותה לאירוע בהמשך, וגם לקבוע עוד פגישות לאותו אירוע.
-            </p>
-          </div>
+          {forClient && (
+            <>
+              <div>
+                <span className={fieldLabelClassName}>אירוע משויך</span>
+                <Select
+                  value={eventId}
+                  onChange={chooseEvent}
+                  options={[
+                    { value: "", label: "ללא — פגישה ראשונה" },
+                    ...events.map((e) => ({ value: e.id, label: `${e.clientName} · ${formatEventDate(e.date)}` })),
+                  ]}
+                  aria-label="אירוע משויך"
+                  className="w-full"
+                />
+                <p className="mt-1.5 text-xs leading-relaxed text-muted">
+                  פגישה ראשונה נקבעת לפני שיש אירוע. אפשר לשייך אותה לאירוע בהמשך, וגם לקבוע עוד פגישות לאותו אירוע.
+                </p>
+              </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <TextField label="שם הלקוח" value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
-            <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
-          </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <TextField label="שם הלקוח" value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
+                <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
+              </div>
+            </>
+          )}
 
           <TextField label="הערה" multiline rows={2} value={note} onChange={setNote} placeholder="מה צריך להביא, על מה מדברים" />
 
-          {/* Only when editing: a meeting cannot have been held before it was booked, and offering
-              the switch on a new one just invites marking the future done. */}
-          {appointment && (
+          {/* Only when editing a CLIENT kind. A meeting cannot have been held before it was booked,
+              so offering this on a new one just invites marking the future done — and "התקיימה" is
+              not a question you ask of a חופשה. */}
+          {appointment && forClient && (
             <div className="flex items-center justify-between rounded-sm border border-border bg-inset px-3 py-2.5">
               <span className="text-sm text-ink-soft">הפגישה התקיימה</span>
               <Switch checked={done} onChange={setDone} label="הפגישה התקיימה" />
@@ -249,7 +266,7 @@ export function AppointmentDialog({
           {appointment ? (
             <Button type="button" variant="danger" size="sm" onClick={remove} disabled={saving}>
               <Trash2 className="h-4 w-4" strokeWidth={2} />
-              ביטול הפגישה
+              מחיקה
             </Button>
           ) : (
             <span />
@@ -259,7 +276,7 @@ export function AppointmentDialog({
               סגירה
             </Button>
             <Button type="submit" size="sm" disabled={saving || !date}>
-              {saving ? "שומר…" : appointment ? "שמירה" : "קביעת הפגישה"}
+              {saving ? "שומר…" : appointment ? "שמירה" : "הוספה"}
             </Button>
           </div>
         </div>

@@ -30,7 +30,7 @@ import { toISODate } from "./dashboard-view-utils";
 export function DashboardScreen() {
   const router = useRouter();
   const { events } = useEvents();
-  const { appointments, save, setDone, remove } = useAppointments();
+  const { appointments, save, remove } = useAppointments();
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
   const { activeVenueId } = useActiveVenueScope();
@@ -128,7 +128,6 @@ export function DashboardScreen() {
           onOpenEvent={openInMeeting}
           onOpenAppointment={editAppointment}
           onCreateAppointment={bookToday}
-          onToggleDone={(a, done) => void setDone(a.id, done)}
         />
         <EventStats events={visibleEvents} />
       </div>

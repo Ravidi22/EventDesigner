@@ -23,8 +23,6 @@ import {
   NOTE_THEME,
   noteTone,
   STATUS_CARD_THEME,
-  PAST_DAY_BG,
-  PAST_DAY_OVERLAY,
 } from "./dashboard-view-utils";
 
 // A day's calendar note, resolved for rendering.
@@ -241,21 +239,24 @@ export function CalendarCard({
             return (
               <div
                 key={iso}
-                style={isPast ? PAST_DAY_BG : undefined}
                 className={
                   "group relative flex flex-col gap-2 rounded-md px-1.5 py-2 " +
-                  (mode === "week" ? "min-h-44" : "min-h-40") +
-                  (isPast ? "" : " " + (isToday ? "bg-accent-tint" : inMonth ? "bg-inset" : "bg-inset/50"))
+                  (mode === "week" ? "min-h-44" : "min-h-40") + " " +
+                  // A past day is the app plane showing through, one step deeper than the `bg-inset`
+                  // well a live day sits in — no darker tint of its own, and no hatch. The date and
+                  // the weekday keep their ordinary inks on it: history is quieter than today, not
+                  // less readable than today.
+                  (isPast ? "bg-bg" : isToday ? "bg-accent-tint" : inMonth ? "bg-inset" : "bg-inset/50")
                 }
               >
                 <div className="flex items-center justify-between px-1">
-                  <span className={"text-xs font-medium " + (isPast ? "text-faint" : inMonth ? "text-muted" : "text-faint")}>
+                  <span className={"text-xs font-medium " + (inMonth ? "text-muted" : "text-faint")}>
                     {d.toLocaleDateString("he-IL", { weekday: "short" })}
                   </span>
                   <span
                     className={
                       "nums flex h-6 w-6 items-center justify-center rounded-full text-xs " +
-                      (isToday ? "bg-accent font-semibold text-canvas" : isPast ? "text-faint" : inMonth ? "text-ink-soft" : "text-faint")
+                      (isToday ? "bg-accent font-semibold text-canvas" : inMonth ? "text-ink-soft" : "text-faint")
                     }
                   >
                     {d.getDate()}
@@ -286,7 +287,10 @@ export function CalendarCard({
                   </span>
                 )}
 
-                <div className="flex flex-col gap-1.5">
+                {/* The one thing that actually fades on a past day: what was ON it. The header keeps
+                    full contrast above (see the cell's own classes), so the cue costs no legibility
+                    where the numbers are. */}
+                <div className={"flex flex-col gap-1.5" + (isPast ? " opacity-75" : "")}>
                   {(isExpanded ? dayEvents : visible).map((e) => (
                     <EventCard key={e.id} event={e} flow={flow} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
                   ))}
@@ -309,15 +313,24 @@ export function CalendarCard({
                     real label, so keyboard focus brings it back into view (focus-visible:opacity-100)
                     and a screen reader reaches it either way. `mt-auto` pins it to the bottom of the
                     cell rather than letting it float under whatever the day happens to hold. */}
-                <button
-                  type="button"
-                  onClick={() => onCreateAppointment(iso)}
-                  aria-label={`קביעת פגישה ב-${d.toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`}
-                  className="z-[2] mt-auto flex items-center justify-center gap-1 rounded-sm border border-dashed border-border-soft py-1 text-[11px] font-medium text-muted opacity-0 transition-opacity hover:border-accent-line hover:text-accent-hover focus-visible:opacity-100 group-hover:opacity-100"
-                >
-                  <Plus className="h-3 w-3" strokeWidth={2.5} />
-                  פגישה
-                </button>
+                {/* NOT ON A DAY THAT HAS BEEN AND GONE. Hovering last Tuesday used to offer to book
+                    a meeting on it, which is an offer the calendar cannot keep — and it was the only
+                    thing that lit up on the past half of a month view, drawing the eye backwards
+                    across the grid. Today still offers it: a meeting later this afternoon is a
+                    perfectly ordinary thing to add at noon.
+                    Says "הוספה", not "פגישה": what lands here is whatever occupies a day — a sit-down,
+                    an אילוץ, a חופשה, an אספקה — and the kind is chosen in the dialog. */}
+                {!isPast && (
+                  <button
+                    type="button"
+                    onClick={() => onCreateAppointment(iso)}
+                    aria-label={`הוספה ליומן ב-${d.toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`}
+                    className="z-[2] mt-auto flex items-center justify-center gap-1 rounded-sm border border-dashed border-border-soft py-1 text-[11px] font-medium text-muted opacity-0 transition-opacity hover:border-accent-line hover:text-accent-hover focus-visible:opacity-100 group-hover:opacity-100"
+                  >
+                    <Plus className="h-3 w-3" strokeWidth={2.5} />
+                    הוספה
+                  </button>
+                )}
 
                 {/* ⚠ "+N נוספים" USED TO OPEN A FLOATING PANEL here — `absolute start-1 top-full w-56`,
                     hanging out of the cell. Three things were wrong with it and the third is fatal:
@@ -330,11 +343,6 @@ export function CalendarCard({
                     Expanding IN PLACE has none of those problems: the row simply gets taller, every
                     cell in it stretches to match, and there is no position, no width and no edge to
                     get wrong at any viewport. */}
-
-                {/* Layered above the header + cards (not just the empty cell background) so a
-                    past day with events reads as "already happened, slightly faded" rather than
-                    the pattern only showing in whatever gaps happen to be empty. */}
-                {isPast && <div aria-hidden className="pointer-events-none absolute inset-0 z-[1] rounded-md" style={PAST_DAY_OVERLAY} />}
               </div>
             );
           })}
@@ -353,7 +361,11 @@ export function CalendarCard({
 // note in lib/db/schema.ts).
 function AppointmentChip({ appointment: a, onClick }: { appointment: Appointment; onClick: () => void }) {
   const time = appointmentTimeLabel(a);
-  const parts = [APPOINTMENT_KIND_LABEL[a.kind], appointmentLabel(a), time, a.note].filter(Boolean);
+  const name = appointmentLabel(a);
+  const kind = APPOINTMENT_KIND_LABEL[a.kind];
+  // The kind only earns a place in the tooltip when it isn't already the name: a חופשה has no
+  // client, so `appointmentLabel` falls back to the kind, and "חופשה · חופשה" is not a tooltip.
+  const parts = [name, name === kind ? "" : kind, time, a.note].filter(Boolean);
 
   return (
     <button

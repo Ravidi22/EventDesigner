@@ -1,6 +1,5 @@
 // Shared by weekly-calendar.tsx and today-focus.tsx — the two views that both need to place
 // events on real dates and color them by status.
-import type { CSSProperties } from "react";
 import type { Booking } from "@/lib/calendar/hebrew";
 import type { StatusTone } from "@/lib/events/types";
 
@@ -70,17 +69,12 @@ export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
   success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success" },
 };
 
-// Past days: a visibly darker, textured surface (not just a fainter version of "today") so
-// "this already happened" reads at a glance, not just on close inspection. Split in two so the
-// hatch can be layered as its own overlay ON TOP of the day's event cards (fading them slightly)
-// while the solid tint stays the cell's own base — a single opaque style would just hide the
-// cards underneath instead of fading them.
-export const PAST_DAY_BG: CSSProperties = { backgroundColor: "#e4e2ea" };
-export const PAST_DAY_OVERLAY: CSSProperties = {
-  backgroundColor: "rgb(228 226 234 / 0.4)",
-  backgroundImage:
-    "repeating-linear-gradient(135deg, rgb(124 120 137 / 0.22) 0px, rgb(124 120 137 / 0.22) 2px, transparent 2px, transparent 10px)",
-};
+// ⚠ PAST DAYS USED TO BE A HAND-MIXED #e4e2ea PLUS A DIAGONAL HATCH, layered over the whole cell.
+// It was the loudest thing on a calendar whose whole job is to be quiet — a fortnight of history
+// read as a construction sign — and the hatch sat on top of the day's own numbers, dragging them
+// under AA on the way past. Both constants are gone. A past day is `bg-bg` now: the app plane
+// itself, so the cell reads as a well the card stopped covering rather than as a stain, while its
+// contents stay at full contrast. See calendar-card.tsx.
 
 // Holidays used to live here as a hand-transcribed map of 2026 only — which meant paging the month
 // view to January 2027 emptied the calendar with no error, and two of the fifteen dates in it were

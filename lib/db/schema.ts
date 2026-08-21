@@ -69,12 +69,23 @@ export const priceUnitEnum = pgEnum("price_unit", ["unit", "m", "m2"]);
 export const visibilityEnum = pgEnum("product_visibility", ["private", "public"]);
 // What a named region of a venue is (lib/venues/zone.ts).
 export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
-// What kind of sit-down a scheduled meeting is (lib/appointments/types.ts).
+// What kind of entry occupies a day in the diary (lib/appointments/types.ts). The first three are
+// sit-downs with a client; the middle four are not — a blocked date, a holiday, a delivery, a
+// personal errand — and they carry no client, no phone and no event. They share one enum, and one
+// table, because they all answer "what is on the 12th?".
+//
+// ⚠ APPEND ONLY. Postgres can add a value to an enum but cannot remove one, and the four non-client
+// kinds were added in migration 0004 for exactly that reason: reordering this list would generate a
+// migration that drops and recreates the type, taking the column's data with it.
 export const appointmentKindEnum = pgEnum("appointment_kind", [
   "consultation",
   "followup",
   "walkthrough",
   "other",
+  "constraint",
+  "vacation",
+  "supply",
+  "personal",
 ]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
