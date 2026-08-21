@@ -40,6 +40,7 @@ export const priceLookup: QuoteLookup = (variantId) => {
   const cat = CATEGORY_BY_ID[r.product.category];
   return {
     label: r.label,
+    productId: r.product.id,
     categoryId: r.product.category,
     categoryLabel: cat?.label ?? r.product.category,
     categoryOrder: catOrder.get(r.product.category) ?? 99,

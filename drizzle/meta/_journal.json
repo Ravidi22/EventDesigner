@@ -22,6 +22,13 @@
       "when": 1786834074565,
       "tag": "0002_suppliers",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787239733906,
+      "tag": "0003_clean_marvel_zombies",
+      "breakpoints": true
     }
   ]
 }

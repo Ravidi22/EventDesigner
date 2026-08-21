@@ -48,9 +48,13 @@ export async function fetchSettings(): Promise<BusinessSettings> {
     ownerName: row.ownerName,
     phone: row.phone,
     address: row.address,
+    businessNumber: row.businessNumber,
+    email: row.email,
     logoUrl: row.logoUrl ?? undefined,
     vatRate: toRate(row.vatRate),
     currency: row.currency,
+    quoteValidityDays: row.quoteValidityDays,
+    quoteTerms: row.quoteTerms,
   };
 }
 
@@ -90,8 +94,17 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
     ownerName: clean(input.ownerName),
     phone: clean(input.phone, 40),
     address: clean(input.address, 300),
+    businessNumber: clean(input.businessNumber, 40),
+    email: clean(input.email, 120),
     logoUrl,
     vatRate: String(vatRate),
+    // Clamped, not rejected, for the same reason as the VAT rate: it is a number input on an
+    // autosaving form, so it passes through 0 and through half-typed values on the way to 30.
+    // A quote in force for a negative number of days is not a state a client should ever see.
+    quoteValidityDays: Number.isFinite(Number(input.quoteValidityDays))
+      ? Math.min(Math.max(Math.round(Number(input.quoteValidityDays)), 0), 365)
+      : DEFAULT_SETTINGS.quoteValidityDays,
+    quoteTerms: clean(input.quoteTerms, 4000),
     // Not taken from the caller: phase 1 is shekels, the field is read-only on the screen, and a
     // currency symbol that can be set to anything is a quote that can be made to say anything.
     currency: DEFAULT_SETTINGS.currency,

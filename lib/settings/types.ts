@@ -7,10 +7,34 @@ export interface BusinessSettings {
   ownerName: string;
   phone: string;
   address: string;
+  /** ע.מ / ח.פ — printed under the business name on the quote. */
+  businessNumber: string;
+  email: string;
   logoUrl?: string;
   vatRate: number; // 0.18 = 18%
   currency: string; // display symbol; phase 1 is ₪
+  /** Days an issued quote holds its price, printed as "בתוקף עד …". */
+  quoteValidityDays: number;
+  /** The clauses at the foot of the quote — payment schedule, cancellation, exclusions. One per
+   *  line; the sheet renders each line as a bullet. */
+  quoteTerms: string;
 }
+
+/**
+ * Shown as the terms field's PLACEHOLDER, never written into the row.
+ *
+ * A studio that never opened the settings screen must not send a client terms it did not agree to —
+ * same rule as the blank business name below. This is here so that filling the field is a matter of
+ * reading a sensible draft and editing it, rather than facing an empty box and skipping it, which is
+ * how a quote goes out with no payment schedule and no cancellation clause on it.
+ */
+export const SUGGESTED_QUOTE_TERMS = [
+  "תשלום: 50% במעמד אישור ההצעה, היתרה עד 7 ימים לפני האירוע.",
+  "המחירים אינם כוללים הובלה, הקמה ופירוק מחוץ לשעות הפעילות, מנוף או חשמל ייעודי.",
+  "פריטים המסופקים בהשאלה מוחזרים בתום האירוע; באחריות הלקוח נזק או אובדן.",
+  "ביטול עד 30 יום לפני האירוע — החזר המקדמה בניכוי 10%; לאחר מכן המקדמה אינה מוחזרת.",
+  "התמונות בהצעה להמחשה בלבד; זנים ופריטים עשויים להשתנות בהתאם לזמינות בעונה.",
+].join("\n");
 
 /**
  * What a studio starts with.
@@ -30,6 +54,10 @@ export const DEFAULT_SETTINGS: BusinessSettings = {
   ownerName: "",
   phone: "",
   address: "",
+  businessNumber: "",
+  email: "",
   vatRate: 0.18,
   currency: "₪",
+  quoteValidityDays: 14,
+  quoteTerms: "",
 };

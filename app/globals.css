@@ -431,6 +431,16 @@ body {
   .grain::after {
     display: none !important;
   }
+  /* The outputs preview draws the sheet at its real trim size on the lavender plane, with the
+     page margin as its own padding, so the screen and the PDF break lines in the same places
+     (app/(app)/outputs/outputs-screen.tsx). On paper the printer owns all three: @page supplies
+     the margin, the paper supplies the white, and the sheet is simply the flow. */
+  .sheet {
+    max-width: none !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
   @page {
     margin: 16mm;
   }

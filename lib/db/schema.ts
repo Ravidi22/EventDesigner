@@ -217,6 +217,16 @@ export const studioSettings = pgTable("studio_settings", {
   phone: text("phone").notNull().default(""),
   address: text("address").notNull().default(""),
   logoUrl: text("logo_url"),
+  /** ע.מ / ח.פ. A quote from a business with no registration number on it is an offer from an
+   *  Instagram handle — the one field a client's accountant looks for first. */
+  businessNumber: text("business_number").notNull().default(""),
+  email: text("email").notNull().default(""),
+  /** How long an issued quote holds its price. Without it the price is open forever. */
+  quoteValidityDays: integer("quote_validity_days").notNull().default(14),
+  /** Payment schedule, cancellation, what is excluded — free text, one line per clause, printed
+   *  at the foot of every quote. Free text rather than columns because the clauses themselves
+   *  differ per studio and none of them is ever queried into. */
+  quoteTerms: text("quote_terms").notNull().default(""),
   /** 0.18 = 18%. numeric, never float — this multiplies money. */
   vatRate: numeric("vat_rate", { precision: 5, scale: 4 }).notNull().default("0.18"),
   currency: text("currency").notNull().default("₪"),

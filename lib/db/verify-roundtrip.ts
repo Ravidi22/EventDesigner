@@ -590,13 +590,29 @@ async function verifySettings() {
     ownerName: "בדיקה",
     phone: "03-0000000",
     address: "רחוב הבדיקה 1, תל אביב",
+    businessNumber: "515151515",
+    email: "studio@example.com",
     logoUrl: ownLogo,
     vatRate: 0.17,
     currency: "€", // ignored on purpose — see below
+    quoteValidityDays: 21,
+    quoteTerms: "תשלום: 50% במעמד האישור.\nביטול עד 30 יום.",
   });
 
   check("settings round-trip", written.businessName === "בדיקה — סטודיו" && written.ownerName === "בדיקה");
   check("the address survives", written.address === "רחוב הבדיקה 1, תל אביב", written.address);
+  check("the quote letterhead survives", written.businessNumber === "515151515" && written.email === "studio@example.com");
+  // Multi-line, because the sheet splits this on newlines into one bullet per clause — a column
+  // that collapsed them would print the whole terms block as a single run-on sentence.
+  check("the terms survive whole", written.quoteTerms.split("\n").length === 2, written.quoteTerms);
+  check("the validity period survives", written.quoteValidityDays === 21, String(written.quoteValidityDays));
+
+  const negativeValidity = await saveSettings({ ...written, quoteValidityDays: -5 });
+  check(
+    "a negative validity is clamped, not stored",
+    negativeValidity.quoteValidityDays === 0,
+    String(negativeValidity.quoteValidityDays),
+  );
   check("an uploaded logo survives", written.logoUrl === ownLogo, written.logoUrl);
 
   // The rule that replaced "any string is a logo". An address on the internet, and a well-formed
