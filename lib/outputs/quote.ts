@@ -7,6 +7,10 @@ import { isMain } from "../self-check";
 
 export interface QuoteItemInfo {
   label: string;
+  /** The catalog PRODUCT behind this variant. Not used to price anything — it is how the sheet
+   *  finds the photographs of the item (GalleryImage.productId), which is what turns a table of
+   *  rows into the document a client actually reads. */
+  productId: string;
   categoryId: string;
   categoryLabel: string;
   categoryOrder: number;
@@ -18,6 +22,7 @@ export type QuoteLookup = (variantId: string) => QuoteItemInfo | undefined;
 
 export interface QuoteLine {
   variantId: string;
+  productId: string;
   label: string;
   /** Billable amount: a count for ordinary items, metres or square metres for the ones drawn to
    *  fit (lib/design-document/measure.ts). The unit travels with it so the line can say so. */
@@ -50,7 +55,7 @@ export function quoteGroups(doc: DesignDocumentContent, lookup: QuoteLookup, ctx
     if (!info) continue;
     const priced = typeof info.unitPrice === "number";
     const lineTotal = round2((info.unitPrice ?? 0) * quantity);
-    const line: QuoteLine = { variantId, label: info.label, quantity, priceUnit: info.priceUnit ?? "unit", unitPrice: info.unitPrice, lineTotal, priced };
+    const line: QuoteLine = { variantId, productId: info.productId, label: info.label, quantity, priceUnit: info.priceUnit ?? "unit", unitPrice: info.unitPrice, lineTotal, priced };
     const g = groups.get(info.categoryId) ?? {
       categoryId: info.categoryId,
       label: info.categoryLabel,
@@ -113,11 +118,11 @@ if (isMain(import.meta.url)) {
   };
   const lookup: QuoteLookup = (id) =>
     id === "cloth-gold"
-      ? { label: "מפה · זהב", categoryId: "cloths", categoryLabel: "מפות", categoryOrder: 0, unitPrice: 50 }
+      ? { label: "מפה · זהב", productId: "p-cloth", categoryId: "cloths", categoryLabel: "מפות", categoryOrder: 0, unitPrice: 50 }
       : id === "chair"
-        ? { label: "כיסא", categoryId: "chairs", categoryLabel: "כיסאות", categoryOrder: 1, unitPrice: 12.5 }
+        ? { label: "כיסא", productId: "p-chair", categoryId: "chairs", categoryLabel: "כיסאות", categoryOrder: 1, unitPrice: 12.5 }
         : id === "noprice"
-          ? { label: "פריט ללא מחיר", categoryId: "misc", categoryLabel: "שונות", categoryOrder: 2 }
+          ? { label: "פריט ללא מחיר", productId: "p-misc", categoryId: "misc", categoryLabel: "שונות", categoryOrder: 2 }
           : undefined;
 
   const groups = quoteGroups(doc, lookup);

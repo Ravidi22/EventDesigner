@@ -1,17 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dispatch, undo, redo, initHistory, type History } from "@/lib/design-document/actions";
 import type { DesignDocumentContent, Layer as LayerId } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
-import { activeEvent } from "@/lib/events/storage";
-import { fetchVenueGeometry } from "@/lib/venues/actions";
-import { fetchDocument, saveDocument } from "@/lib/studio/actions";
+import { useEventWorkspace } from "@/lib/events/use-workspace";
+import { saveDocument } from "@/lib/studio/actions";
 import { loadScratch, saveScratch } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
 import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
+import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
 import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
@@ -42,10 +42,21 @@ const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = 
   design: { groups: DESIGN_PASS_GROUPS, hint: "גרור פריט עיצוב. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה." },
 };
 
-export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
-  // Fetched once here, for the whole studio: it fills the rail below AND primes the synchronous
-  // cache that the canvas's resolver and dropProduct() read during render and mid-drag.
-  const { products: catalog } = useCatalog();
+export function StudioScreen({
+  mode = "full",
+  initialProducts,
+}: {
+  mode?: StudioMode;
+  /** From the server, when this screen is a page of its own (app/(app)/studio/page.tsx). Absent
+   *  inside the meeting flow, which embeds this screen bare — see app/meeting/meeting-screen.tsx —
+   *  and where the hook falls back to fetching for itself. */
+  initialProducts?: Product[];
+}) {
+  // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
+  // that the canvas's resolver and dropProduct() read during render and mid-drag.
+  const { products: catalog } = useCatalog(initialProducts);
+  // Resolved once for this whole event surface — the event, its document and its venue geometry.
+  const { workspace, ready } = useEventWorkspace();
   // An EMPTY document, not a fabricated one. The studio used to open on a sample plan built out of
   // sample products — invented tables, invented placements — which the restore effect below then
   // replaced. With the catalog on Postgres that fiction is worse than useless: it would draw items
@@ -53,7 +64,14 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
   // plan nobody drew. An event's real document is loaded below; a new one starts empty, which is
   // what beginEvent() already writes.
   const [history, setHistory] = useState<History>(() => initHistory(emptyDocument()));
-  const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
+  // DERIVED, not state: the plane an event sits on is a pure function of its venue and zones, and
+  // nothing on this screen edits it — the designer draws ON the walls, never the walls themselves
+  // (that is /halls). Holding it in state meant an effect to fill it and a second copy to keep
+  // honest. EMPTY_PLAN until the geometry lands, which is the same blank plane it showed before.
+  const plan: EventPlan = useMemo(
+    () => (workspace ? eventPlan(workspace.event, workspace.geometry) : EMPTY_PLAN),
+    [workspace],
+  );
   const [selection, setSelection] = useState<Selection>(null);
   const [layerVisible, setLayerVisible] = useState<Record<LayerId, boolean>>({ table: true, floor: true, ceiling: true });
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
@@ -76,34 +94,31 @@ export function StudioScreen({ mode = "full" }: { mode?: StudioMode }) {
 
   const doc = history.present;
 
-  // Restore the saved document once, on the client (keeps SSR deterministic), and resolve the
-  // geometry it sits on from the active event's venue + zones — never from a stored copy.
+  // Open the editor on the saved drawing, once the one read that resolved this event surface has
+  // landed (lib/events/workspace.ts). This used to be a chain of three server actions — resolve the
+  // event, then its document, then its venue geometry — each a separate POST that could not start
+  // until the previous one returned.
+  //
+  // This one stays an EFFECT rather than becoming a render-phase adjustment like the others in this
+  // change, and the reason is the two refs: `eventId` and `persisted` are read by the autosave when
+  // it FIRES, and writing a ref during render is the thing that makes a concurrent re-render see a
+  // value from a render that was thrown away. Seeding an editing session with an undo history from
+  // data that arrived asynchronously is what an effect is actually for.
   useEffect(() => {
-    let live = true;
-    void (async () => {
-      const event = await activeEvent();
-      if (!live) return;
-      eventId.current = event?.id ?? null;
-      // The document is a server read now (lib/studio/actions.ts). A studio with no events at all
-      // has nothing to attach a drawing to, so that one case still reads the local scratch.
-      const saved = event ? (await fetchDocument(event.id))?.content : loadScratch();
-      if (!live) return;
-      if (saved) {
-        setHistory(initHistory(saved));
-        // What is already on the server, so the first render after a restore doesn't write it
-        // straight back. Against localStorage that redundant save was free; it is a round trip now.
-        persisted.current = saved;
-      }
-      setRestored(true);
-      // The geometry is a server read too. The canvas renders on EMPTY_PLAN for the moment it takes,
-      // which is the same blank plane it showed before the walls were fetched — never a wrong plan.
-      const geometry = await fetchVenueGeometry(event?.venueId);
-      if (live) setPlan(eventPlan(event, geometry));
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
+    if (!ready) return;
+    const event = workspace?.event ?? null;
+    eventId.current = event?.id ?? null;
+    // A studio with no events at all has nothing to attach a drawing to, so that one case still
+    // reads the local scratch.
+    const saved = event ? workspace?.document?.content : loadScratch();
+    if (saved) {
+      setHistory(initHistory(saved));
+      // What is already on the server, so the first render after a restore doesn't write it
+      // straight back. Against localStorage that redundant save was free; it is a round trip now.
+      persisted.current = saved;
+    }
+    setRestored(true);
+  }, [ready, workspace]);
 
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only claims "saved" when
   // the write actually landed; a failed write shows an error + retry.

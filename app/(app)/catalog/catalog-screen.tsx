@@ -13,10 +13,10 @@ import { ProductCard } from "./product-card";
 import { Filters, EMPTY_FILTERS, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 
-export function CatalogScreen() {
-  // The catalog now comes from Postgres through a server action; the hook fetches it, primes the
-  // studio's synchronous cache, and hands back the list plus the three write paths.
-  const { products, ready, error, save, remove, importMany } = useCatalog();
+export function CatalogScreen({ initialProducts }: { initialProducts: Product[] }) {
+  // The catalog comes from page.tsx's server-side read; the hook primes the studio's synchronous
+  // cache with it and hands back the list plus the three write paths.
+  const { products, ready, error, save, remove, importMany } = useCatalog(initialProducts);
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<Product | null>(null);

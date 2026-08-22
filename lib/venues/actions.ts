@@ -18,6 +18,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, type Actor } from "@/lib/db/org";
+import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
 import { users, venues, venueGrants, zones, venueStructures } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
 import {
@@ -149,19 +150,40 @@ export async function fetchVenuePlan(
   venueId: string,
 ): Promise<{ structure: VenueStructure; zones: Zone[] }> {
   const { actor } = await requireVenueAccess(venueId, "viewer");
+  return venuePlanFor(actor.organizationId, venueId);
+}
+
+/**
+ * The plan itself, for a caller that has ALREADY established access.
+ *
+ * Not exported, and that is the point of it: in a "use server" module every export is a public POST
+ * endpoint, so a function that skips the access check must be unreachable from outside this file.
+ * The two callers below both check first — fetchVenuePlan through requireVenueAccess, and
+ * fetchVenueGeometry through the venueRoleFor it already ran.
+ *
+ * Splitting it out is what stopped the check happening TWICE per geometry read: fetchVenueGeometry
+ * resolved the role, then called fetchVenuePlan, which resolved it again — two extra queries on the
+ * path of every studio and outputs screen, to re-answer a question already answered.
+ *
+ * The two reads are independent, so they go out together rather than one after the other.
+ */
+async function venuePlanFor(
+  organizationId: string,
+  venueId: string,
+): Promise<{ structure: VenueStructure; zones: Zone[] }> {
   const database = db();
-
-  const [structureRow] = await database
-    .select()
-    .from(venueStructures)
-    .where(and(eq(venueStructures.venueId, venueId), eq(venueStructures.organizationId, actor.organizationId)))
-    .limit(1);
-
-  const zoneRows = await database
-    .select()
-    .from(zones)
-    .where(and(eq(zones.venueId, venueId), eq(zones.organizationId, actor.organizationId)))
-    .orderBy(asc(zones.createdAt));
+  const [[structureRow], zoneRows] = await Promise.all([
+    database
+      .select()
+      .from(venueStructures)
+      .where(and(eq(venueStructures.venueId, venueId), eq(venueStructures.organizationId, organizationId)))
+      .limit(1),
+    database
+      .select()
+      .from(zones)
+      .where(and(eq(zones.venueId, venueId), eq(zones.organizationId, organizationId)))
+      .orderBy(asc(zones.createdAt)),
+  ]);
 
   return {
     // A property nobody has drawn yet has no structure row at all — an empty graph, not an error.
@@ -194,13 +216,18 @@ export async function fetchVenueGeometry(venueId: string | undefined): Promise<V
   const role = await venueRoleFor(actor, venueId);
   if (!role) return { ...empty, access: "denied" };
 
-  const [venueRow] = await db()
-    .select({ plan: venues.plan })
-    .from(venues)
-    .where(and(eq(venues.id, venueId), eq(venues.organizationId, actor.organizationId)))
-    .limit(1);
+  // venuePlanFor, not fetchVenuePlan: the access check is the two queries directly above, and going
+  // back through the public entry point would run venueRoleFor a second time for the same answer.
+  // The scale lives on the venue row and the geometry in its own tables, so both go out at once.
+  const [[venueRow], { structure, zones: zoneList }] = await Promise.all([
+    db()
+      .select({ plan: venues.plan })
+      .from(venues)
+      .where(and(eq(venues.id, venueId), eq(venues.organizationId, actor.organizationId)))
+      .limit(1),
+    venuePlanFor(actor.organizationId, venueId),
+  ]);
 
-  const { structure, zones: zoneList } = await fetchVenuePlan(venueId);
   return {
     structure,
     zones: zoneList,
@@ -296,6 +323,7 @@ export async function createVenue(): Promise<{ venues: Venue[]; id: string }> {
     }
   });
 
+  revalidateShell();
   return { venues: await fetchVenues(), id };
 }
 
@@ -306,6 +334,7 @@ export async function renameVenue(id: string, name: string): Promise<Venue[]> {
     .update(venues)
     .set({ name: name.trim(), updatedAt: new Date() })
     .where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
+  revalidateShell();
   return fetchVenues();
 }
 
@@ -328,6 +357,7 @@ export async function saveVenue(venue: Venue): Promise<Venue[]> {
       setWhere: eq(venues.organizationId, actor.organizationId),
       set: { name: row.name, logoUrl: row.logoUrl, plan: row.plan, updatedAt: new Date() },
     });
+  revalidateShell();
   return fetchVenues();
 }
 
@@ -420,6 +450,7 @@ export async function shareVenue(input: {
     return { error: "הכתובת הזו כבר קיבלה גישה למתחם", grants: await grantsOf(venueId) };
   }
 
+  revalidateSettings();
   return { grants: await grantsOf(venueId) };
 }
 
@@ -437,6 +468,7 @@ export async function setGrantRole(id: string, role: VenueRole): Promise<VenueGr
   const venueId = await venueOfGrant(id);
   await requireVenueAccess(venueId, "manager");
   await db().update(venueGrants).set({ role }).where(eq(venueGrants.id, id));
+  revalidateSettings();
   return grantsOf(venueId);
 }
 
@@ -459,5 +491,6 @@ export async function revokeGrant(id: string): Promise<VenueGrant[]> {
   }
 
   await db().delete(venueGrants).where(eq(venueGrants.id, id));
+  revalidateSettings();
   return grantsOf(venueId);
 }

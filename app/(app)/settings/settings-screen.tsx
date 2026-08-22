@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
+import type { BusinessSettings } from "@/lib/settings/types";
+import type { StudioMember } from "@/lib/team/types";
 import { BusinessSection } from "./business-section";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
@@ -31,7 +33,18 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
-export function SettingsScreen() {
+// The shared reads arrive from page.tsx and are handed to whichever section is open. Sections mount
+// one at a time (only the selected one renders below), so seeding them here is also what makes
+// SWITCHING sections instant — each used to fetch its own data on mount, every time you clicked it.
+export function SettingsScreen({
+  initialSettings,
+  initialMe,
+  initialMembers,
+}: {
+  initialSettings: BusinessSettings;
+  initialMe: StudioMember | null;
+  initialMembers: StudioMember[];
+}) {
   const [section, setSection] = useState<SectionId>("business");
 
   // The section lives in the hash rather than in a query param: it makes /settings#sharing
@@ -75,11 +88,11 @@ export function SettingsScreen() {
       </nav>
 
       <div className="min-w-0 flex-1">
-        {section === "business" && <BusinessSection />}
-        {section === "account" && <AccountSection />}
+        {section === "business" && <BusinessSection initialSettings={initialSettings} />}
+        {section === "account" && <AccountSection initialMe={initialMe} />}
         {section === "meeting" && <MeetingSection />}
-        {section === "team" && <TeamSection />}
-        {section === "sharing" && <SharingSection />}
+        {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} />}
+        {section === "sharing" && <SharingSection initialMembers={initialMembers} initialMe={initialMe} />}
         {section === "data" && <DataSection />}
       </div>
     </div>

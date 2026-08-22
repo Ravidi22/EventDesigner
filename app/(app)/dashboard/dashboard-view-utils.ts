@@ -70,16 +70,26 @@ export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
   success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success" },
 };
 
-// Past days: a visibly darker, textured surface (not just a fainter version of "today") so
-// "this already happened" reads at a glance, not just on close inspection. Split in two so the
-// hatch can be layered as its own overlay ON TOP of the day's event cards (fading them slightly)
-// while the solid tint stays the cell's own base — a single opaque style would just hide the
-// cards underneath instead of fading them.
-export const PAST_DAY_BG: CSSProperties = { backgroundColor: "#e4e2ea" };
-export const PAST_DAY_OVERLAY: CSSProperties = {
-  backgroundColor: "rgb(228 226 234 / 0.4)",
+// PAST DAYS: a light hatch, under everything.
+//
+// This has been three things now, and the middle one is why the current one is shaped the way it
+// is. It began as a hand-mixed #e4e2ea fill plus a 22%-opacity diagonal hatch layered OVER the
+// cell — including over the day's own numbers, which dragged them under AA — and a fortnight of
+// history read as a construction sign. Removing both went too far the other way: `bg-bg` is
+// DARKER than the `bg-inset` well a live day sits in, so a past day was simultaneously the
+// heaviest cell in the grid and the one carrying no signal at all.
+//
+// So: a hatch again, but a third of the old ink and half its width, and applied as the cell's own
+// `background-image` rather than as an overlay. Two consequences, both of them the point —
+// children paint on top of it, so an event card covers the hatch instead of being veiled by it,
+// and the fill underneath can back almost all the way off, because texture is doing the work that
+// darkness was failing to do. `PAST_DAY_FILL` is `--color-bg` at 45% over the card's white —
+// about #f7f7fa, three levels under a live day's `bg-inset` where flat `bg-bg` was twelve. The
+// tokens, in other words, not a fourth hand-mixed grey.
+export const PAST_DAY_FILL = "bg-bg/45";
+export const PAST_DAY_HATCH: CSSProperties = {
   backgroundImage:
-    "repeating-linear-gradient(135deg, rgb(124 120 137 / 0.22) 0px, rgb(124 120 137 / 0.22) 2px, transparent 2px, transparent 10px)",
+    "repeating-linear-gradient(135deg, rgb(124 120 137 / 0.08) 0px, rgb(124 120 137 / 0.08) 1px, transparent 1px, transparent 9px)",
 };
 
 // Holidays used to live here as a hand-transcribed map of 2026 only — which meant paging the month

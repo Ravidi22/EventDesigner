@@ -27,9 +27,10 @@ const FILTERS: { id: Filter; label: string }[] = [
 // Moved here from the Dashboard (F-1.1): the event grid — with its filters and search — now
 // lives on the Gantt tab. The room-booking timeline that used to live here was removed in
 // favor of this view.
-export function GanttScreen() {
+export function GanttScreen({ initialEvents }: { initialEvents: EventSummary[] }) {
   const router = useRouter();
-  const { events, ready, patch } = useEvents();
+  // Seeded by page.tsx's server-side read; the hook keeps `patch`, which is a real write.
+  const { events, ready, patch } = useEvents(initialEvents);
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");

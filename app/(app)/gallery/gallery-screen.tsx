@@ -5,13 +5,8 @@ import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, GalleryVerticalEnd, ImagePlus, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
-import {
-  fetchImages,
-  saveImage,
-  fetchPresentations,
-  savePresentation,
-  deletePresentation,
-} from "@/lib/gallery/actions";
+// Reads live in page.tsx now; what is left here are the three writes, which return the fresh list.
+import { saveImage, savePresentation, deletePresentation } from "@/lib/gallery/actions";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { Select } from "@/components/select";
@@ -25,38 +20,40 @@ import { ALLOWED_TYPES } from "@/lib/files/keys";
 // v0.3 studio gallery (F-2.1–F-2.2): create, order, and edit designer-curated presentations.
 // This is management only — client-facing browsing, liking a photo, and the per-event "תיק
 // האירוע" folder are meeting concerns and live in meeting-gallery.tsx instead.
-export function GalleryScreen() {
+export function GalleryScreen({
+  initialImages,
+  initialPresentations,
+}: {
+  initialImages: GalleryImage[];
+  initialPresentations: Presentation[];
+}) {
   const router = useRouter();
-  const [images, setImages] = useState<GalleryImage[]>([]);
-  const [presentations, setPresentations] = useState<Presentation[]>([]);
+  const [images, setImages] = useState<GalleryImage[]>(initialImages);
+  const [presentations, setPresentations] = useState<Presentation[]>(initialPresentations);
   const [editing, setEditing] = useState<Presentation | null>(null);
   // Which presentations exist on the server, so the builder can tell a new one from an edit without
   // asking again mid-render (it used to call loadPresentations() during its own render — free
   // against localStorage, a round trip now).
-  const [knownIds, setKnownIds] = useState<Set<string>>(new Set());
-  // "No presentations yet" and "not loaded yet" are the same empty array and mean opposite things.
-  // Without this, a designer with twenty presentations is told the gallery is empty and invited to
-  // build their first one, for the length of one round trip — see the same note in catalog-screen.
-  const [ready, setReady] = useState(false);
+  const [knownIds, setKnownIds] = useState<Set<string>>(
+    () => new Set(initialPresentations.map((p) => p.id)),
+  );
 
-  // Both are server reads — hydrate after mount, same as every other screen here.
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      const [loadedImages, loadedPresentations] = await Promise.all([
-        fetchImages(),
-        fetchPresentations(),
-      ]);
-      if (!live) return;
-      setImages(loadedImages);
-      setPresentations(loadedPresentations);
-      setKnownIds(new Set(loadedPresentations.map((p) => p.id)));
-      setReady(true);
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
+  // Both lists arrive from page.tsx's server-side read, so there is no "not loaded yet" window left
+  // to distinguish: `ready` was here because "no presentations" and "not fetched yet" are the same
+  // empty array and mean opposite things, and a designer with twenty presentations was told the
+  // gallery was empty for the length of one round trip. That round trip no longer happens on this
+  // screen, so the empty state below is now always the true one.
+  const ready = true;
+
+  // Newer lists on a later navigation replace what this component was holding — adjusted during
+  // render rather than in an effect, which is React's own pattern for state derived from a prop.
+  const [seed, setSeed] = useState({ initialImages, initialPresentations });
+  if (seed.initialImages !== initialImages || seed.initialPresentations !== initialPresentations) {
+    setSeed({ initialImages, initialPresentations });
+    setImages(initialImages);
+    setPresentations(initialPresentations);
+    setKnownIds(new Set(initialPresentations.map((p) => p.id)));
+  }
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
 

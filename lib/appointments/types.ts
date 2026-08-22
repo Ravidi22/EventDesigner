@@ -13,7 +13,23 @@
 // out whether there is going to be an event at all, had nowhere to be written down.
 import { isMain } from "@/lib/self-check";
 
-export type AppointmentKind = "consultation" | "followup" | "walkthrough" | "other";
+// ⚠ NOT ONLY MEETINGS ANYMORE. The diary holds whatever occupies a day: a client sit-down, but also
+// a blocked date, a holiday the studio is away for, a delivery to be there for. They share this one
+// table rather than getting one each, because every one of them answers the same question — "what is
+// on the 12th?" — and a second table would have to be joined into every read that asks it.
+//
+// The list is FIXED, in an enum, on purpose: a studio-defined type would need a settings surface, a
+// text column and a migration of every existing row, to earn a label the four built-in ones already
+// cover. When a studio actually asks for its own, that is the moment to spend it.
+export type AppointmentKind =
+  | "consultation"
+  | "followup"
+  | "walkthrough"
+  | "constraint"
+  | "vacation"
+  | "supply"
+  | "personal"
+  | "other";
 
 export interface Appointment {
   id: string;
@@ -40,6 +56,10 @@ export const APPOINTMENT_KINDS: readonly AppointmentKind[] = [
   "consultation",
   "followup",
   "walkthrough",
+  "constraint",
+  "vacation",
+  "supply",
+  "personal",
   "other",
 ] as const;
 
@@ -47,8 +67,20 @@ export const APPOINTMENT_KIND_LABEL: Record<AppointmentKind, string> = {
   consultation: "פגישת היכרות",
   followup: "פגישת המשך",
   walkthrough: "סיור במתחם",
+  constraint: "אילוץ",
+  vacation: "חופשה",
+  supply: "אספקה",
+  personal: "אישי",
   other: "אחר",
 };
+
+/** Is this entry ABOUT A CLIENT? Only these carry a couple, a phone and an event — a חופשה has no
+ *  client to name, and showing it three blank fields is how a form teaches you to ignore it.
+ *  `other` counts as one: it predates the non-client kinds and rows already exist under it with
+ *  names on them, so hiding those fields would make old records uneditable. */
+export function isClientKind(kind: AppointmentKind): boolean {
+  return kind === "consultation" || kind === "followup" || kind === "walkthrough" || kind === "other";
+}
 
 /** Guard for the action layer: `kind` arrives over HTTP from whoever chose to POST it, and the
  *  column is an enum that rejects anything else with a 500 rather than a message. */
@@ -56,10 +88,11 @@ export function isAppointmentKind(v: unknown): v is AppointmentKind {
   return typeof v === "string" && (APPOINTMENT_KINDS as readonly string[]).includes(v);
 }
 
-/** What to print where the meeting is named — a prospect meeting booked before the couple gave a
- *  name still has to say something. */
-export function appointmentLabel(a: Pick<Appointment, "clientName">): string {
-  return a.clientName.trim() || "פגישה";
+/** What to print where the entry is named — a prospect meeting booked before the couple gave a name
+ *  still has to say something, and a חופשה never has a name to give. Falls back to the kind, which
+ *  is the whole label for the non-client kinds. */
+export function appointmentLabel(a: Pick<Appointment, "clientName" | "kind">): string {
+  return a.clientName.trim() || APPOINTMENT_KIND_LABEL[a.kind];
 }
 
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -92,6 +125,20 @@ export function appointmentTimeLabel(a: Pick<Appointment, "time" | "durationMin"
   // LRM around the pair: the en dash between two Latin-digit clock times flips to the wrong side in
   // an RTL paragraph, which reads as 18:30–17:00.
   return end && end !== a.time ? `‎${a.time}–${end}` : `‎${a.time}`;
+}
+
+/** Its hour has come and gone, measured against `nowMinutes` (minutes past midnight) ON ITS OWN DAY
+ *  — the caller has already filtered to today, so this is a clock comparison, not a date one.
+ *
+ *  ⚠ NOT the same fact as `done`. This says the time is behind us; `done` says the designer confirms
+ *  it happened. Today's Focus crosses out on THIS, because a list of today's hours re-reading its
+ *  own clock is worth more than a switch nobody remembers to flip — but the column stays, because
+ *  "booked and never held" is still a thing only a person can tell you.
+ *
+ *  An entry with no hour never passes: a day it belongs to is all it claims. */
+export function hasPassed(a: Pick<Appointment, "time" | "durationMin">, nowMinutes: number): boolean {
+  const end = minutesOfDay(appointmentEnd(a));
+  return end !== null && end <= nowMinutes;
 }
 
 /** Day order: timed meetings first, in clock order; undated-hour ones after them. `Array#sort` is
@@ -149,8 +196,15 @@ if (isMain(import.meta.url)) {
   assert(appointmentTimeLabel(at("17:00", 0)) === "‎17:00", "no duration, no dash");
   assert(appointmentTimeLabel(at(undefined)) === "", "a day without an hour prints nothing");
 
-  assert(appointmentLabel({ clientName: "  " }) === "פגישה", "a blank name still says something");
-  assert(appointmentLabel({ clientName: "נועה ואיתי" }) === "נועה ואיתי", "a real name is used");
+  assert(appointmentLabel({ clientName: "  ", kind: "consultation" }) === "פגישת היכרות", "a blank name falls back to the kind");
+  assert(appointmentLabel({ clientName: "", kind: "vacation" }) === "חופשה", "a nameless kind names itself");
+  assert(appointmentLabel({ clientName: "נועה ואיתי", kind: "followup" }) === "נועה ואיתי", "a real name is used");
+
+  assert(hasPassed(at("09:00", 60), 10 * 60), "an hour that ended is behind us");
+  assert(!hasPassed(at("09:00", 60), 9 * 60 + 59), "one minute short is not");
+  assert(hasPassed(at("09:00", 60), 10 * 60) && !hasPassed(at("09:00", 90), 10 * 60), "the DURATION decides, not the start");
+  assert(!hasPassed(at(undefined), 23 * 60), "an entry with no hour never passes");
+  assert(hasPassed(at("00:00", 0), 0), "a zero-length entry passes at its own minute");
 
   const day = [at("17:00"), at(undefined), at("09:00")];
   const sorted = [...day].sort(byStartTime);
@@ -161,7 +215,9 @@ if (isMain(import.meta.url)) {
   assert(grouped.size === 2, "two dates, two buckets");
   assert(grouped.get("2026-08-16")?.[0].time === "08:00", "each bucket is sorted");
 
-  assert(isAppointmentKind("walkthrough") && !isAppointmentKind("dinner"), "the kind guard holds");
+  assert(isAppointmentKind("walkthrough") && isAppointmentKind("vacation") && !isAppointmentKind("dinner"), "the kind guard holds");
+  assert(APPOINTMENT_KINDS.every((k) => APPOINTMENT_KIND_LABEL[k]), "every kind has a Hebrew label");
+  assert(!isClientKind("vacation") && isClientKind("other"), "only the client kinds ask for a client");
 
   console.log("appointments self-check passed");
 }

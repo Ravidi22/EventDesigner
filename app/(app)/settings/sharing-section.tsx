@@ -1,15 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Building2, Check, Eye, Share2, X } from "lucide-react";
-import { VENUE_CHANGED_EVENT, loadActiveVenueId, type Venue } from "@/lib/venues/storage";
-import {
-  fetchVenueGrants,
-  fetchVenues,
-  revokeGrant,
-  setGrantRole,
-  shareVenue,
-} from "@/lib/venues/actions";
+import { useVenues } from "@/lib/venues/use-venues";
+import { fetchVenueGrants, revokeGrant, setGrantRole, shareVenue } from "@/lib/venues/actions";
 import {
   GRANT_KIND_LABEL,
   SCOPE_LABEL,
@@ -21,7 +15,6 @@ import {
   type VenueGrant,
   type VenueRole,
 } from "@/lib/venues/access";
-import { fetchCurrentMember, fetchMembers } from "@/lib/team/actions";
 import type { StudioMember } from "@/lib/team/types";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
@@ -36,12 +29,22 @@ const SCOPE_KEYS: (keyof GrantScope)[] = ["plan", "availability", "events", "mon
 // Sharing a property. The screen exists because a site plan is expensive to draw and a property
 // outlives whoever drew it: the second designer working that hall should inherit the wall graph
 // instead of tracing it again — while your clients and your prices stay on your side of the line.
-export function SharingSection() {
-  const [venues, setVenues] = useState<Venue[]>([]);
-  const [venueId, setVenueId] = useState<string | null>(null);
+export function SharingSection({
+  initialMembers,
+  initialMe,
+}: {
+  initialMembers: StudioMember[];
+  initialMe: StudioMember | null;
+}) {
+  // The venue list and the active selection come from VenuesProvider — the same copy the sidebar's
+  // switcher is showing. This screen used to fetch its own list and re-resolve the stored id against
+  // it, which was a second answer to a question already answered one component up.
+  const { venues, activeVenueId } = useVenues();
+  const [venueId, setVenueId] = useState<string | null>(activeVenueId);
   const [grants, setGrants] = useState<VenueGrant[]>([]);
-  const [members, setMembers] = useState<StudioMember[]>([]);
-  const [me, setMe] = useState<StudioMember | null>(null);
+  // From page.tsx, shared with the team and account sections.
+  const members = initialMembers;
+  const me = initialMe;
 
   const [kind, setKind] = useState<GrantKind>("guest");
   const [memberId, setMemberId] = useState("");
@@ -50,51 +53,41 @@ export function SharingSection() {
   const [role, setRole] = useState<VenueRole>("viewer");
   const [error, setError] = useState("");
 
-  // The grants are a server read now, so retargeting this screen is asynchronous: the selection
-  // changes first and the list follows. `wanted` records which property the newest request was for,
-  // so a slow answer about the venue you just navigated away from cannot land on the one you are
-  // looking at now.
-  const wanted = useRef<string | null>(null);
-  const showGrantsFor = useCallback((id: string | null) => {
-    wanted.current = id;
-    setVenueId(id);
-    if (!id) return setGrants([]);
-    void fetchVenueGrants(id)
-      .then((list) => {
-        if (wanted.current === id) setGrants(list);
-      })
-      // A property you may open but not manage still answers here; anything else (it was deleted,
-      // it was never yours) leaves the list empty rather than showing the previous venue's people.
-      .catch(() => {
-        if (wanted.current === id) setGrants([]);
-      });
-  }, []);
+  // Follow the sidebar. `activeVenueId` is already resolved against the list that exists (a stored
+  // id naming a deleted property falls back to the first one), so this screen no longer resolves it
+  // itself — switching venues in the switcher retargets this panel because the same value changes.
+  //
+  // It is still local state on top, because the panel has a picker of its own: you can look at one
+  // property's share list here without moving the whole app to it.
+  const [followingSidebar, setFollowingSidebar] = useState(activeVenueId);
+  if (activeVenueId !== followingSidebar) {
+    setFollowingSidebar(activeVenueId);
+    setVenueId(activeVenueId);
+  }
 
+  // The grants are a server read, so retargeting is asynchronous: the selection changes first and
+  // the list follows. `live` is what stops a slow answer about the property you just navigated away
+  // from landing on the one you are looking at now — the cleanup runs before the next request goes
+  // out, so at most one result can ever be adopted.
   useEffect(() => {
-    void Promise.all([fetchMembers(), fetchCurrentMember()]).then(([list, current]) => {
-      setMembers(list);
-      setMe(current);
-    });
-
-    void fetchVenues().then((list) => {
-      setVenues(list);
-      // The sidebar's stored selection is a per-device UI preference, and it can name a property
-      // this person cannot open — it is written by whoever used this browser last. Resolving it
-      // against the list the SERVER just returned is what keeps that from becoming a blank screen.
-      const stored = loadActiveVenueId();
-      showGrantsFor(list.some((v) => v.id === stored) ? stored : (list[0]?.id ?? null));
-    });
-
-    // Follow the sidebar: switching venues there while this screen is open should retarget it,
-    // rather than leaving the designer editing shares for a property they just navigated away from.
-    const onVenueChanged = () => showGrantsFor(loadActiveVenueId());
-    window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
-    return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
-  }, [showGrantsFor]);
+    let live = true;
+    // A property you may open but not manage still answers here; anything else (it was deleted, it
+    // was never yours) leaves the list empty rather than showing the previous venue's people.
+    void (venueId ? fetchVenueGrants(venueId) : Promise.resolve([]))
+      .then((list) => {
+        if (live) setGrants(list);
+      })
+      .catch(() => {
+        if (live) setGrants([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [venueId]);
 
   const pick = (id: string) => {
     setError("");
-    showGrantsFor(id);
+    setVenueId(id);
   };
 
   const venue = venues.find((v) => v.id === venueId);
