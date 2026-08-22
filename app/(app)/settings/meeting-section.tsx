@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Lock, RotateCcw } from "lucide-react";
 import {
   DEFAULT_FLOW,
@@ -9,7 +9,8 @@ import {
   toggleStep,
   type MeetingStepId,
 } from "@/lib/meeting/steps";
-import { fetchMeetingFlow, resetMeetingFlow, saveMeetingFlow } from "@/lib/settings/actions";
+import { resetMeetingFlow, saveMeetingFlow } from "@/lib/settings/actions";
+import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/button";
 import { Panel, SavedFlag, Switch } from "./ui";
@@ -24,19 +25,23 @@ import { Panel, SavedFlag, Switch } from "./ui";
 // can't be switched off or moved — every later stage reads the event it creates.
 export function MeetingSection() {
   const router = useRouter();
-  const [flow, setFlow] = useState<MeetingStepId[]>(DEFAULT_FLOW);
+  // The studio's flow already came down with the (app) layout, through MeetingFlowProvider — this
+  // section used to fetch it a second time on mount, opening on DEFAULT_FLOW and correcting itself
+  // when the answer landed, which showed the designer a meeting shape that was not theirs.
+  //
+  // Local state on top of it, because edits here are optimistic: the list moves the instant a stage
+  // is switched off, and the write follows. The effect re-syncs whenever the layout's copy changes,
+  // which is what router.refresh() below causes after a save.
+  const studioFlow = useMeetingFlow();
+  const [flow, setFlow] = useState<MeetingStepId[]>(studioFlow);
+  const [seed, setSeed] = useState(studioFlow);
   const [saved, setSaved] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  useEffect(() => {
-    let live = true;
-    void fetchMeetingFlow().then((saved) => {
-      if (live) setFlow(saved);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
+  if (studioFlow !== seed) {
+    setSeed(studioFlow);
+    setFlow(studioFlow);
+  }
 
   const flash = () => {
     setSaved(true);

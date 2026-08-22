@@ -17,6 +17,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
+import { revalidateAppointments } from "@/lib/db/revalidate";
 import { appointments, events, venues } from "@/lib/db/schema";
 import type { Appointment } from "./types";
 import { isAppointmentKind } from "./types";
@@ -133,6 +134,7 @@ export async function saveAppointment(appointment: Appointment): Promise<Appoint
         updatedAt: row.updatedAt,
       },
     });
+  revalidateAppointments();
   return fetchAppointments();
 }
 
@@ -147,6 +149,7 @@ export async function setAppointmentDone(id: string, done: boolean): Promise<App
     .update(appointments)
     .set({ done, updatedAt: new Date() })
     .where(and(eq(appointments.id, id), eq(appointments.organizationId, organizationId)));
+  revalidateAppointments();
   return fetchAppointments();
 }
 
@@ -159,5 +162,6 @@ export async function deleteAppointment(id: string): Promise<Appointment[]> {
   await db()
     .delete(appointments)
     .where(and(eq(appointments.id, id), eq(appointments.organizationId, organizationId)));
+  revalidateAppointments();
   return fetchAppointments();
 }

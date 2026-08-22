@@ -16,6 +16,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
+import { revalidateGallery } from "@/lib/db/revalidate";
 import {
   eventLikedImages,
   galleryImages,
@@ -126,6 +127,7 @@ export async function saveImage(image: GalleryImage): Promise<GalleryImage[]> {
   // Replacing a photograph deletes the one it replaced — see lib/files/owned.ts.
   await removeReplacedFile(existing?.imageUrl, imageUrl, organizationId);
 
+  revalidateGallery();
   return fetchImages();
 }
 
@@ -218,6 +220,7 @@ export async function savePresentation(presentation: Presentation): Promise<Pres
     }
   });
 
+  revalidateGallery();
   return fetchPresentations();
 }
 
@@ -228,6 +231,7 @@ export async function deletePresentation(id: string): Promise<Presentation[]> {
   await db()
     .delete(presentations)
     .where(and(eq(presentations.id, id), eq(presentations.organizationId, organizationId)));
+  revalidateGallery();
   return fetchPresentations();
 }
 

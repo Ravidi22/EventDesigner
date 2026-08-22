@@ -27,10 +27,19 @@ import { toISODate } from "./dashboard-view-utils";
 // clicking an event opens its drawer or jumps into the meeting flow. Booking a meeting happens
 // here, on the day it belongs to, because that is where a designer is standing when a client asks
 // "can you do the 12th?".
-export function DashboardScreen() {
+export function DashboardScreen({
+  initialEvents,
+  initialAppointments,
+}: {
+  initialEvents: EventSummary[];
+  initialAppointments: Appointment[];
+}) {
   const router = useRouter();
-  const { events } = useEvents();
-  const { appointments, save, remove } = useAppointments();
+  // Seeded by page.tsx's server-side read, so both lists are here for the first paint. The hooks
+  // still own the mutations — booking and deleting a meeting go back through the server and return
+  // the whole list, which is what keeps a laptop and a tablet in the same meeting agreeing.
+  const { events } = useEvents(initialEvents);
+  const { appointments, save, remove } = useAppointments(initialAppointments);
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
   const { activeVenueId } = useActiveVenueScope();

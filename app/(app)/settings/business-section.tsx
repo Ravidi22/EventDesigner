@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fetchSettings, saveSettings } from "@/lib/settings/actions";
-import { DEFAULT_SETTINGS, SUGGESTED_QUOTE_TERMS, type BusinessSettings } from "@/lib/settings/types";
+import { saveSettings } from "@/lib/settings/actions";
+import { SUGGESTED_QUOTE_TERMS, type BusinessSettings } from "@/lib/settings/types";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { ImageField } from "@/components/image-field";
@@ -13,21 +13,14 @@ import { Panel, SavedFlag } from "./ui";
 //
 // Studio-level, not venue-level: a designer working three properties still has one VAT rate and
 // one letterhead. The things that vary per property live in the מתחמים ושיתוף section.
-export function BusinessSection() {
-  const [s, setS] = useState<BusinessSettings>(DEFAULT_SETTINGS);
+export function BusinessSection({ initialSettings }: { initialSettings: BusinessSettings }) {
+  // Seeded by the server read in page.tsx. It used to open on DEFAULT_SETTINGS and correct itself
+  // when the fetch landed, which showed the designer a blank letterhead — and briefly the wrong VAT
+  // rate — for one round trip.
+  const [s, setS] = useState<BusinessSettings>(initialSettings);
   const [saved, setSaved] = useState(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  useEffect(() => {
-    let live = true;
-    void fetchSettings().then((loaded) => {
-      if (live) setS(loaded);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
 
   // Typing stays instant and the write follows 600ms later. Every field here autosaves on change,
   // which against localStorage was free; against a database, "שם העסק" would be one request per

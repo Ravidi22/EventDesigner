@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { Printer } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
-import { fetchDocument } from "@/lib/studio/actions";
 import { loadScratch } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
-import { activeEvent } from "@/lib/events/storage";
-import { fetchVenueGeometry } from "@/lib/venues/actions";
-import { fetchNextExportNumber, recordExport, type ExportType } from "@/lib/outputs/actions";
-import { zonesLabelOf, type EventSummary } from "@/lib/events/types";
+import { useEventWorkspace } from "@/lib/events/use-workspace";
+import { recordExport, type ExportType } from "@/lib/outputs/actions";
+import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { PackingList } from "./packing-list";
 import { PlacementMap } from "./placement-map";
@@ -40,38 +38,46 @@ const MARGIN_MM = 16;
 export function OutputsScreen() {
   // Empty until the event's real document loads. A packing list is the one screen that must never
   // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
-  const [doc, setDoc] = useState<DesignDocumentContent>(() => emptyDocument());
-  const [plan, setPlan] = useState<EventPlan>(EMPTY_PLAN);
-  const [event, setEvent] = useState<EventSummary | null>(null);
   const [view, setView] = useState<View>("packing");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("landscape");
   const [version, setVersion] = useState(1);
+  // EventSurface resolved all of this in one call for the whole surface.
+  const { workspace, ready } = useEventWorkspace();
 
-  // Read the design document the studio autosaved (keeps SSR deterministic), and resolve the plan
-  // it sits on from the event's venue + zones — the same geometry the studio drew it against.
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      const ev = await activeEvent();
-      if (!live) return;
-      // A studio with no events at all can still have a scratch drawing (lib/studio/storage.ts);
-      // everything that belongs to an event comes from the server.
-      const saved = ev ? (await fetchDocument(ev.id))?.content : loadScratch();
-      if (!live) return;
-      if (saved) setDoc(saved);
-      setEvent(ev);
-      if (ev) {
-        const next = await fetchNextExportNumber(ev.id);
-        if (live) setVersion(next);
-      }
-      const geometry = await fetchVenueGeometry(ev?.venueId);
-      if (live) setPlan(eventPlan(ev, geometry));
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
+  // The document, the event, the sheet number and the geometry all arrive together, from the one
+  // read EventSurface makes for this whole surface (lib/events/workspace.ts). This used to be a
+  // four-step chain of server actions — resolve the event, then its document, then its export
+  // number, then its venue geometry — each a separate POST that could not start until the previous
+  // one had landed.
+  //
+  // Three of the four are DERIVED here rather than copied into state, because nothing on this screen
+  // ever changes them: outputs renders a drawing, it does not edit one. State plus an effect to fill
+  // it would have been a second copy that can only ever go stale.
+  const event = workspace?.event ?? null;
+
+  // Empty until the event's real document loads. A packing list is the one screen that must never
+  // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
+  // A studio with no events at all can still have a scratch drawing (lib/studio/storage.ts);
+  // everything that belongs to an event comes from the server.
+  const doc: DesignDocumentContent = useMemo(() => {
+    if (!ready) return emptyDocument();
+    return (event ? workspace?.document?.content : loadScratch()) ?? emptyDocument();
+  }, [ready, event, workspace]);
+
+  const plan: EventPlan = useMemo(
+    () => (workspace ? eventPlan(event, workspace.geometry) : EMPTY_PLAN),
+    [workspace, event],
+  );
+
+  // The sheet number is the one that IS state: printing bumps it (see `print` below), so it is not a
+  // pure function of what the server sent. Seeded from the workspace during render rather than in an
+  // effect — React's own pattern for state derived from a prop.
+  const [numberedFrom, setNumberedFrom] = useState(workspace);
+  if (workspace !== numberedFrom) {
+    setNumberedFrom(workspace);
+    if (workspace) setVersion(workspace.nextExportNumber);
+  }
 
   // F-6.4: every export carries a date and a running number — and now a ROW, which also seals the
   // drawing it was made from, so a sheet in a crew's hands stays checkable against the design it

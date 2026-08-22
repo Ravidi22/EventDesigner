@@ -14,6 +14,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
+import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
 import { studioSettings } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import { DEFAULT_FLOW, normalizeFlow, type MeetingStepId } from "@/lib/meeting/steps";
@@ -120,6 +121,7 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
 
   await removeReplacedFile(before?.logoUrl, logoUrl, organizationId);
 
+  revalidateSettings();
   return fetchSettings();
 }
 
@@ -160,6 +162,7 @@ export async function saveMeetingFlow(flow: readonly MeetingStepId[]): Promise<M
       set: { meetingFlow: next, updatedAt: new Date() },
     });
 
+  revalidateShell();
   return next;
 }
 
@@ -175,5 +178,6 @@ export async function resetMeetingFlow(): Promise<MeetingStepId[]> {
       target: studioSettings.organizationId,
       set: { meetingFlow: [], updatedAt: new Date() },
     });
+  revalidateShell();
   return [...DEFAULT_FLOW];
 }

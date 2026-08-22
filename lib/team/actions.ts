@@ -13,6 +13,7 @@
 import { and, asc, eq, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/db/org";
+import { revalidateSettings } from "@/lib/db/revalidate";
 import { users } from "@/lib/db/schema";
 import { invitePath, mintInviteToken } from "@/lib/auth/invite-token";
 import {
@@ -156,6 +157,7 @@ export async function inviteMember(
     joinedAt: null,
   });
 
+  revalidateSettings();
   return { members: await membersOf(actor.organizationId), link: invitePath(invite.token) };
 }
 
@@ -190,6 +192,7 @@ export async function regenerateInvite(id: string): Promise<InviteResult> {
 
   const members = await membersOf(actor.organizationId);
   if (!row) return { error: "אין הזמנה פתוחה לאדם הזה", members };
+  revalidateSettings();
   return { members, link: invitePath(invite.token) };
 }
 
@@ -206,6 +209,7 @@ export async function setMemberRole(id: string, role: StudioRole): Promise<Studi
     .update(users)
     .set({ role })
     .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+  revalidateSettings();
   return membersOf(actor.organizationId);
 }
 
@@ -236,6 +240,7 @@ export async function removeMember(id: string): Promise<StudioMember[]> {
         ne(users.role, "owner"),
       ),
     );
+  revalidateSettings();
   return membersOf(actor.organizationId);
 }
 
@@ -252,5 +257,6 @@ export async function updateMyName(name: string): Promise<StudioMember | null> {
     .update(users)
     .set({ name: trimmed })
     .where(and(eq(users.id, userId), eq(users.organizationId, organizationId)));
+  revalidateSettings();
   return fetchCurrentMember();
 }

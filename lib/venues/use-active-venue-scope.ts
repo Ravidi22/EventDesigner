@@ -1,8 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { VENUE_CHANGED_EVENT, loadActiveVenueId } from "./storage";
-
 // The sidebar's globally-active venue, live. Shared by every screen that scopes to "the venue
 // you're currently working in" (Dashboard, Gantt) so they can never drift apart, and so switching
 // venues in the sidebar reaches them all the same way.
@@ -13,15 +10,15 @@ import { VENUE_CHANGED_EVENT, loadActiveVenueId } from "./storage";
 // It starts NULL rather than at a first sample venue, because on a fresh studio there is genuinely
 // no active venue until one is created. Screens read this as "show everything / show the empty
 // state", never as "something went wrong".
+//
+// ⚠ IT NO LONGER READS localStorage ITSELF. It delegates to VenuesProvider, which resolves the
+// stored id against the list that actually exists. Reading the raw stored value here — which is
+// what this file used to do — meant a device whose remembered venue had been deleted got a live
+// switcher pointing at the first property and a dashboard filtering by the dead id, i.e. an empty
+// screen next to a populated sidebar. The two answers are one answer now; see use-venues.tsx.
+import { useVenues } from "./use-venues";
+
 export function useActiveVenueScope() {
-  const [activeVenueId, setActiveVenueId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setActiveVenueId(loadActiveVenueId());
-    const onVenueChanged = () => setActiveVenueId(loadActiveVenueId());
-    window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
-    return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
-  }, []);
-
+  const { activeVenueId } = useVenues();
   return { activeVenueId };
 }

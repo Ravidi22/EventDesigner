@@ -25,9 +25,17 @@ export interface CatalogHandle {
   reload: () => Promise<void>;
 }
 
-export function useCatalog(): CatalogHandle {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [ready, setReady] = useState(false);
+export function useCatalog(initial?: Product[]): CatalogHandle {
+  // ⚠ PRIMED IN THE STATE INITIALISER, not in an effect — and that ordering is the whole point.
+  // The studio's canvas resolves a placement's product WHILE RENDERING (lib/catalog/storage.ts), so
+  // the synchronous cache has to be warm before any child of this hook's component draws. An effect
+  // runs after that first paint, which would give the canvas one frame of an empty catalog and a
+  // plan full of unresolved placements. The initialiser runs once, before the first render commits.
+  const [products, setProducts] = useState<Product[]>(() => {
+    if (initial) primeCatalog(initial);
+    return initial ?? [];
+  });
+  const [ready, setReady] = useState(initial !== undefined);
   const [error, setError] = useState<string | null>(null);
 
   // Every path that receives a list lands here, so priming can never be forgotten at a call site.
@@ -36,6 +44,17 @@ export function useCatalog(): CatalogHandle {
     setProducts(list);
     setError(null);
   }, []);
+
+  // A newer list from the server on a later navigation replaces the seeded one — and RE-PRIMES, or
+  // the canvas would keep resolving against the catalog as it was when this component mounted.
+  //
+  // During render, not in an effect: the resolver is synchronous and reads the cache while drawing,
+  // so priming has to happen before this render's children do — see the note on the initialiser.
+  const [seed, setSeed] = useState(initial);
+  if (initial !== seed) {
+    setSeed(initial);
+    if (initial) adopt(initial);
+  }
 
   const reload = useCallback(async () => {
     try {
@@ -48,6 +67,9 @@ export function useCatalog(): CatalogHandle {
   }, [adopt]);
 
   useEffect(() => {
+    // The server already answered; nothing to ask for. The gallery's on-demand image form is the
+    // remaining caller that legitimately has no seed — it opens long after its screen mounted.
+    if (initial !== undefined) return;
     let live = true;
     fetchProducts()
       .then((list) => {
@@ -63,6 +85,7 @@ export function useCatalog(): CatalogHandle {
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adopt]);
 
   const save = useCallback(

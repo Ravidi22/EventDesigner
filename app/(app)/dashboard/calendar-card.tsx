@@ -23,6 +23,8 @@ import {
   NOTE_THEME,
   noteTone,
   STATUS_CARD_THEME,
+  PAST_DAY_FILL,
+  PAST_DAY_HATCH,
 } from "./dashboard-view-utils";
 
 // A day's calendar note, resolved for rendering.
@@ -73,11 +75,12 @@ function dayNotes(days: Date[]) {
 
 type Mode = "week" | "month";
 
-// "השבוע שלי" / "החודש שלי" (F-1.1): one card, two grids. Week is the default (a designer's
-// week is the unit that matters day to day); month is a toggle for the wider view. There is no
-// venue filter here anymore — `events` arrives from the parent already scoped to whichever
-// venue is active in the sidebar, the one place that scoping decision lives. `onOpenEvent` is
-// likewise supplied by the parent; each event's own card color comes from `STATUS_CARD_THEME`,
+// "השבוע שלי" / "החודש שלי" (F-1.1): one card, two grids. MONTH is the default: the dashboard
+// is the first thing opened in the morning, and the question it gets asked is "what is coming" —
+// which a week answers only until Thursday. Week is the toggle now, for the days actually in
+// hand. There is no venue filter here anymore — `events` arrives from the parent already scoped
+// to whichever venue is active in the sidebar, the one place that scoping decision lives.
+// `onOpenEvent` is likewise supplied by the parent; each event's own card color comes from `STATUS_CARD_THEME`,
 // keyed to its status, so no external color resolver is needed here.
 //
 // TWO KINDS OF THING LAND IN A DAY, and they are drawn to be told apart at arm's length. An EVENT
@@ -99,7 +102,7 @@ export function CalendarCard({
   /** Book a meeting on this ISO date — the day the designer clicked. */
   onCreateAppointment: (iso: string) => void;
 }) {
-  const [mode, setMode] = useState<Mode>("week");
+  const [mode, setMode] = useState<Mode>("month");
   const [anchor, setAnchor] = useState(() => new Date());
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
   // Read once here, not in each card: a month view renders dozens of them, all measuring progress
@@ -239,14 +242,17 @@ export function CalendarCard({
             return (
               <div
                 key={iso}
+                // A past day is crossed by a faint diagonal hatch and sits a whisper — not a step —
+                // under a live day: struck through rather than dimmed down. The hatch is the cell's
+                // own background-image, so it lies UNDER the day's numbers and under whatever the
+                // day held (see the note in dashboard-view-utils.ts) — the date and the weekday keep
+                // their ordinary inks, because history is quieter than today, not less readable
+                // than today.
+                style={isPast ? PAST_DAY_HATCH : undefined}
                 className={
                   "group relative flex flex-col gap-2 rounded-md px-1.5 py-2 " +
                   (mode === "week" ? "min-h-44" : "min-h-40") + " " +
-                  // A past day is the app plane showing through, one step deeper than the `bg-inset`
-                  // well a live day sits in — no darker tint of its own, and no hatch. The date and
-                  // the weekday keep their ordinary inks on it: history is quieter than today, not
-                  // less readable than today.
-                  (isPast ? "bg-bg" : isToday ? "bg-accent-tint" : inMonth ? "bg-inset" : "bg-inset/50")
+                  (isPast ? PAST_DAY_FILL : isToday ? "bg-accent-tint" : inMonth ? "bg-inset" : "bg-inset/50")
                 }
               >
                 <div className="flex items-center justify-between px-1">
@@ -287,10 +293,10 @@ export function CalendarCard({
                   </span>
                 )}
 
-                {/* The one thing that actually fades on a past day: what was ON it. The header keeps
-                    full contrast above (see the cell's own classes), so the cue costs no legibility
-                    where the numbers are. */}
-                <div className={"flex flex-col gap-1.5" + (isPast ? " opacity-75" : "")}>
+                {/* A past day's cards fade a little, but only a little: the hatch behind them is
+                    saying "this is behind us" now, so the fade is a second voice rather than the
+                    only one, and last week's wedding stays legible at a glance. */}
+                <div className={"flex flex-col gap-1.5" + (isPast ? " opacity-85" : "")}>
                   {(isExpanded ? dayEvents : visible).map((e) => (
                     <EventCard key={e.id} event={e} flow={flow} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
                   ))}

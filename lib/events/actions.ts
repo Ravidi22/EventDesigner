@@ -13,6 +13,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
+import { revalidateEvents } from "@/lib/db/revalidate";
 import { events, eventZones, venues, zones } from "@/lib/db/schema";
 import type { EventSummary } from "./types";
 import { toEvent, toEvents, toEventRow, toEventZoneRows } from "./db-mapping";
@@ -85,24 +86,32 @@ async function assertPlacement(
 export async function fetchEvents(): Promise<EventSummary[]> {
   const organizationId = await currentOrg();
   const database = db();
-  const rows = await database
-    .select()
-    .from(events)
-    .where(eq(events.organizationId, organizationId))
-    .orderBy(desc(events.createdAt));
-  if (!rows.length) return [];
 
   // One join-table read for the whole page rather than one per event: the N+1 that turns a season's
   // worth of events into a season's worth of round trips.
-  const zoneRows = await database
-    .select()
-    .from(eventZones)
-    .where(
-      inArray(
-        eventZones.eventId,
-        rows.map((r) => r.id),
+  //
+  // The zone read names its events with a SUBQUERY rather than with the ids from the first result,
+  // which is what lets the two go out together instead of one after the other. Passing the ids in
+  // would have made this a waterfall — a second round trip that cannot start until the first lands —
+  // and against a hosted database that round trip is the expensive part, not the query.
+  const [rows, zoneRows] = await Promise.all([
+    database
+      .select()
+      .from(events)
+      .where(eq(events.organizationId, organizationId))
+      .orderBy(desc(events.createdAt)),
+    database
+      .select()
+      .from(eventZones)
+      .where(
+        inArray(
+          eventZones.eventId,
+          database.select({ id: events.id }).from(events).where(eq(events.organizationId, organizationId)),
+        ),
       ),
-    );
+  ]);
+
+  if (!rows.length) return [];
   return toEvents(rows, zoneRows);
 }
 
@@ -110,13 +119,20 @@ export async function fetchEvent(id: string): Promise<EventSummary | null> {
   assertId(id, "id");
   const organizationId = await currentOrg();
   const database = db();
-  const [row] = await database
-    .select()
-    .from(events)
-    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
-    .limit(1);
+
+  // Both reads key off the id we were handed rather than off each other's results, so they go out
+  // together. The zone read is scoped by the event's own id and the row below is scoped by the
+  // organisation — an event belonging to another studio is simply not found, and its zones are
+  // discarded unread.
+  const [[row], zoneRows] = await Promise.all([
+    database
+      .select()
+      .from(events)
+      .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+      .limit(1),
+    database.select().from(eventZones).where(eq(eventZones.eventId, id)),
+  ]);
   if (!row) return null;
-  const zoneRows = await database.select().from(eventZones).where(eq(eventZones.eventId, id));
   return toEvent(
     row,
     zoneRows.sort((a, b) => a.position - b.position).map((z) => z.zoneId),
@@ -177,6 +193,7 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
     await tx.delete(eventZones).where(eq(eventZones.eventId, event.id));
     if (zoneIds.length) await tx.insert(eventZones).values(toEventZoneRows(event.id, zoneIds));
   });
+  revalidateEvents();
   return fetchEvents();
 }
 
@@ -211,5 +228,6 @@ export async function reachStep(id: string, step: number): Promise<EventSummary[
     .update(events)
     .set({ step: sql`greatest(${events.step}, ${step})` })
     .where(and(eq(events.id, id), eq(events.organizationId, organizationId)));
+  revalidateEvents();
   return fetchEvents();
 }

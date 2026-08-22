@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, Copy, Link2, Mail, MessageCircle, UserPlus, X } from "lucide-react";
 import {
   ROLE_CAPABILITIES,
@@ -11,8 +11,6 @@ import {
   type StudioRole,
 } from "@/lib/team/types";
 import {
-  fetchCurrentMember,
-  fetchMembers,
   inviteMember,
   regenerateInvite,
   removeMember,
@@ -36,9 +34,18 @@ const ROLE_OPTIONS = ASSIGNABLE.map((r) => ({ value: r, label: STUDIO_ROLE_LABEL
 // Membership of the studio — the people who work for this business. Access to a specific property
 // is the other section (מתחמים ושיתוף); a designer can be on the team and still reach only the
 // two venues they were granted.
-export function TeamSection() {
-  const [members, setMembers] = useState<StudioMember[]>([]);
-  const [me, setMe] = useState<StudioMember | null>(null);
+export function TeamSection({
+  initialMembers,
+  initialMe,
+}: {
+  initialMembers: StudioMember[];
+  initialMe: StudioMember | null;
+}) {
+  // Both from page.tsx. The Promise.all that used to be here looked like one round trip and was in
+  // fact two: on the client, Next dispatches server actions one at a time, so the second waited for
+  // the first. On the server, in page.tsx, that same Promise.all is genuine concurrency.
+  const [members, setMembers] = useState<StudioMember[]>(initialMembers);
+  const me = initialMe;
   const [inviting, setInviting] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -48,13 +55,6 @@ export function TeamSection() {
   // no "show it again". Holding it in state is what keeps it on screen until the designer has
   // actually sent it.
   const [invite, setInvite] = useState<{ email: string; url: string } | null>(null);
-
-  useEffect(() => {
-    void Promise.all([fetchMembers(), fetchCurrentMember()]).then(([list, current]) => {
-      setMembers(list);
-      setMe(current);
-    });
-  }, []);
 
   // Only the owner may change the studio's people. The server enforces this on every call; hiding
   // the controls here is so a designer is not shown buttons that answer them with an error.

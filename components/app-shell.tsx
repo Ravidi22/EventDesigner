@@ -64,10 +64,16 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const [collapsed, setCollapsed] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [headerSearch, setHeaderSearch] = useState("");
-  // Venues come from the server now; the switcher's own selection stays in this browser.
+  // Venues come from the (app) layout's server-side read, through VenuesProvider — the switcher does
+  // not fetch them, and neither does anything else that needs them. The selection itself still lives
+  // in this browser; the provider resolves it against the list and publishes one answer.
+  //
+  // There is no local `selected` mirror here any more. It was a second copy of a fact the provider
+  // already holds, and the two could disagree: clicking a venue set `selected`, but a venue deleted
+  // in another tab left it pointing at a row no longer in the list, which the provider's own
+  // fallback would have corrected. Writing through setActiveVenueId fires VENUE_CHANGED_EVENT and
+  // the provider re-resolves, so the switcher stays live without holding state of its own.
   const { venues, activeVenueId, add, rename } = useVenues();
-  const [selected, setSelected] = useState<string | null>(null);
-  const current = selected ?? activeVenueId;
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -141,12 +147,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
 
         <VenueSwitcher
           venues={venues}
-          activeId={current}
+          activeId={activeVenueId}
           collapsed={collapsed}
-          onSelect={(id) => {
-            setSelected(id);
-            setActiveVenueId(id);
-          }}
+          onSelect={(id) => setActiveVenueId(id)}
           onAdd={() => {
             void add().then(() => {
               // A venue with nothing drawn on it isn't a real state — send the designer straight

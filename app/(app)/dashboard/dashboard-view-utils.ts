@@ -1,5 +1,6 @@
 // Shared by weekly-calendar.tsx and today-focus.tsx — the two views that both need to place
 // events on real dates and color them by status.
+import type { CSSProperties } from "react";
 import type { Booking } from "@/lib/calendar/hebrew";
 import type { StatusTone } from "@/lib/events/types";
 
@@ -69,12 +70,27 @@ export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
   success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success" },
 };
 
-// ⚠ PAST DAYS USED TO BE A HAND-MIXED #e4e2ea PLUS A DIAGONAL HATCH, layered over the whole cell.
-// It was the loudest thing on a calendar whose whole job is to be quiet — a fortnight of history
-// read as a construction sign — and the hatch sat on top of the day's own numbers, dragging them
-// under AA on the way past. Both constants are gone. A past day is `bg-bg` now: the app plane
-// itself, so the cell reads as a well the card stopped covering rather than as a stain, while its
-// contents stay at full contrast. See calendar-card.tsx.
+// PAST DAYS: a light hatch, under everything.
+//
+// This has been three things now, and the middle one is why the current one is shaped the way it
+// is. It began as a hand-mixed #e4e2ea fill plus a 22%-opacity diagonal hatch layered OVER the
+// cell — including over the day's own numbers, which dragged them under AA — and a fortnight of
+// history read as a construction sign. Removing both went too far the other way: `bg-bg` is
+// DARKER than the `bg-inset` well a live day sits in, so a past day was simultaneously the
+// heaviest cell in the grid and the one carrying no signal at all.
+//
+// So: a hatch again, but a third of the old ink and half its width, and applied as the cell's own
+// `background-image` rather than as an overlay. Two consequences, both of them the point —
+// children paint on top of it, so an event card covers the hatch instead of being veiled by it,
+// and the fill underneath can back almost all the way off, because texture is doing the work that
+// darkness was failing to do. `PAST_DAY_FILL` is `--color-bg` at 45% over the card's white —
+// about #f7f7fa, three levels under a live day's `bg-inset` where flat `bg-bg` was twelve. The
+// tokens, in other words, not a fourth hand-mixed grey.
+export const PAST_DAY_FILL = "bg-bg/45";
+export const PAST_DAY_HATCH: CSSProperties = {
+  backgroundImage:
+    "repeating-linear-gradient(135deg, rgb(124 120 137 / 0.08) 0px, rgb(124 120 137 / 0.08) 1px, transparent 1px, transparent 9px)",
+};
 
 // Holidays used to live here as a hand-transcribed map of 2026 only — which meant paging the month
 // view to January 2027 emptied the calendar with no error, and two of the fifteen dates in it were

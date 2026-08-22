@@ -11,6 +11,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
+import { revalidateCatalog } from "@/lib/db/revalidate";
 import { products, productVariants, designDocuments } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
@@ -139,6 +140,7 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   // doing it inside would risk destroying a file for a save that then failed.
   await removeReplacedFile(existing?.imageUrl, row.imageUrl, organizationId);
 
+  revalidateCatalog();
   return fetchProducts();
 }
 
@@ -225,6 +227,7 @@ export async function removeProduct(
       .where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
   }
 
+  revalidateCatalog();
   return { products: await fetchProducts(), archived: placed };
 }
 
@@ -242,5 +245,6 @@ export async function importProducts(list: Product[]): Promise<Product[]> {
     if (variantRows.length) await tx.insert(productVariants).values(variantRows);
   });
 
+  revalidateCatalog();
   return fetchProducts();
 }
