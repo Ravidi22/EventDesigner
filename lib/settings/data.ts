@@ -1,10 +1,19 @@
-// Everything this browser is holding for the studio, as one file.
+// Everything THIS BROWSER is still holding for the studio, as one file.
 //
-// While the backend seam is still localStorage, the designer's catalog, venues, events and plans
-// live in exactly one browser profile — clearing site data loses the lot. So "export" here is not
-// a nicety, it is the only backup that exists, and "reset" is the only way back to the seed data
-// once a demo has been drawn over. Both belong behind a storage module rather than in the screen,
-// same rule as everywhere else: when this swaps to Postgres, these two become an endpoint each.
+// It used to be the only backup that existed, because everything lived here. It shrank with each
+// module that crossed, and the crossing is now finished: the catalog, the venues, the events, the
+// settings, the design documents, the gallery, the issued quotes and the packing spares are all
+// rows in Postgres, backed up by whatever backs up the database.
+//
+// ⚠ WHAT IS LEFT IS NOT A BACKUP OF THE STUDIO. Three keys survive, and all three are per-DEVICE
+// position rather than studio data: which event this browser has open, which venue it has open, and
+// a scratch drawing made before any event existed to attach it to. A file exported here and
+// imported elsewhere moves a cursor, not a business.
+//
+// The panel that renders this says exactly that (app/(app)/settings/data-section.tsx). It has to:
+// a backup button that implies your plans are in this file, when they are in Postgres, teaches a
+// designer to trust the wrong copy — and the whole point of the migration was that the drawings
+// stop depending on one laptop.
 import { storagePrefix } from "@/lib/storage-keys";
 
 export interface SnapshotStats {
@@ -63,8 +72,13 @@ export function importSnapshot(json: string): number {
   return written;
 }
 
-/** Drops every `eve.*` key. The next read from each storage module falls back to its seed data,
- *  so this is "back to the sample studio", not "empty app". */
+/** Drops every `eve.*` key.
+ *
+ *  This USED to mean "back to the sample studio", because each storage module fell back to seed
+ *  data. Then it meant "the drawings held in this browser are gone". It now means the smallest
+ *  thing it has ever meant: this device forgets which event and which venue it had open, and
+ *  discards a scratch drawing if one was ever made. Nothing in Postgres is touched, and nothing
+ *  here can reach it. */
 export function resetAll(): void {
   for (const key of eveKeys()) window.localStorage.removeItem(key);
 }

@@ -11,6 +11,7 @@
 // caller that has no plan to hand — the server rendering a quote from stored JSON — gets the honest
 // fallback of the item's own count. See lib/outputs/lookup.ts for the wiring.
 import type { DesignDocumentContent, Placement } from "./types";
+import { isMain } from "../self-check";
 
 /** What a placement's amount is counted in, decided by the product's price unit. */
 export type MeasureUnit = "unit" | "m" | "m2";
@@ -64,7 +65,7 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/design-document/measure.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

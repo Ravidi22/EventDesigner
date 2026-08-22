@@ -70,9 +70,20 @@ export function EventStats({ events }: { events: EventSummary[] }) {
 
 function StatTile({ value, label, tone }: { value: number; label: string; tone: "neutral" | "accent" | "success" }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded-md bg-inset p-3">
+    <div className="flex min-w-0 flex-col gap-1.5 rounded-md bg-inset p-3">
       <p className="font-display text-h2 text-ink">{value}</p>
-      <span className={"self-start rounded-pill px-2 py-0.5 text-[11px] font-medium " + TONE_CLASS[tone]}>{label}</span>
+      {/* `block max-w-full truncate` (+ the title) instead of letting the pill size to its text. A
+          third of a narrow card is about 67px of usable width, and "נשלחה הצעה" needs ~78px — so the
+          longest of the three labels used to wrap to two lines INSIDE the pill, which made that one
+          tile taller than the two beside it. It now clips with an ellipsis and keeps the row level;
+          the full label is still one hover away. `min-w-0` on the tile is what lets it clip at all —
+          a grid item's default `min-width: auto` refuses to go below its content. */}
+      <span
+        title={label}
+        className={"block max-w-full self-start truncate rounded-pill px-2 py-0.5 text-[11px] font-medium " + TONE_CLASS[tone]}
+      >
+        {label}
+      </span>
     </div>
   );
 }

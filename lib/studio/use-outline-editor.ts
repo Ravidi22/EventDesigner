@@ -13,6 +13,7 @@ import {
   wallAngleDeg,
   wallLengthMm,
 } from "./geometry";
+import { isMain } from "../self-check";
 
 const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
 
@@ -589,7 +590,7 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/use-outline-editor.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

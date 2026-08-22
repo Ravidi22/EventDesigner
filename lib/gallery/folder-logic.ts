@@ -1,3 +1,4 @@
+import { isMain } from "../self-check";
 // Pure event-folder logic (no imports — keeps the self-check runnable under plain node).
 // Run: node --experimental-strip-types lib/gallery/folder-logic.ts
 
@@ -18,7 +19,7 @@ export function likedProductIds(images: { id: string; productId: string }[], fol
   return out;
 }
 
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const empty: string[] = [];
   const added = nextFolder(empty, "a");
   console.assert(added.length === 1 && added[0] === "a", "adds when absent");

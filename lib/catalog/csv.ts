@@ -4,6 +4,7 @@
 // Run: node --experimental-strip-types lib/catalog/csv.ts
 import type { Layer } from "../design-document/types";
 import type { Product } from "./types";
+import { isMain } from "../self-check";
 
 const COLS: Record<string, string> = {
   "שם": "name", name: "name",
@@ -52,7 +53,7 @@ export function parseCsvProducts(text: string, categories: CsvCategory[], makeId
   return out;
 }
 
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

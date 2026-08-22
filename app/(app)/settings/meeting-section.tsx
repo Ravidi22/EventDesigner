@@ -9,7 +9,8 @@ import {
   toggleStep,
   type MeetingStepId,
 } from "@/lib/meeting/steps";
-import { loadFlow, resetFlow, saveFlow } from "@/lib/meeting/storage";
+import { fetchMeetingFlow, resetMeetingFlow, saveMeetingFlow } from "@/lib/settings/actions";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/button";
 import { Panel, SavedFlag, Switch } from "./ui";
 
@@ -22,11 +23,20 @@ import { Panel, SavedFlag, Switch } from "./ui";
 // seeing the skipped stage sitting between the two it used to join is the whole point. פרטי האירוע
 // can't be switched off or moved — every later stage reads the event it creates.
 export function MeetingSection() {
+  const router = useRouter();
   const [flow, setFlow] = useState<MeetingStepId[]>(DEFAULT_FLOW);
   const [saved, setSaved] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  useEffect(() => setFlow(loadFlow()), []);
+  useEffect(() => {
+    let live = true;
+    void fetchMeetingFlow().then((saved) => {
+      if (live) setFlow(saved);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const flash = () => {
     setSaved(true);
@@ -34,16 +44,31 @@ export function MeetingSection() {
     timer.current = setTimeout(() => setSaved(false), 1600);
   };
 
+  // No debounce here, unlike the business form: each change is a whole deliberate act — a stage
+  // switched off, a stage moved one place — not a keystroke, and there is no burst to collapse.
+  //
+  // The list moves immediately and the write follows. The server normalises what it stores (the
+  // details stage stays first and required), so the answer is adopted when it lands rather than
+  // assumed. router.refresh() re-runs the (app) layout, which is where every other screen reads
+  // this flow from — without it the dashboard would keep measuring progress against the old list
+  // until a full reload.
   const commit = (next: MeetingStepId[]) => {
-    setFlow(saveFlow(next));
+    setFlow(next);
     flash();
+    void saveMeetingFlow(next).then((stored) => {
+      setFlow(stored);
+      router.refresh();
+    });
   };
 
-  // Not commit(DEFAULT_FLOW): resetFlow drops the stored list entirely, so a studio that never
-  // customised its meeting keeps following the app's default if that default ever changes.
+  // Not commit(DEFAULT_FLOW): reset stores an EMPTY list, so a studio that never customised its
+  // meeting keeps following the app's default if that default ever changes.
   const reset = () => {
-    setFlow(resetFlow());
     flash();
+    void resetMeetingFlow().then((stored) => {
+      setFlow(stored);
+      router.refresh();
+    });
   };
 
   const isDefault = flow.length === DEFAULT_FLOW.length && flow.every((id, i) => id === DEFAULT_FLOW[i]);

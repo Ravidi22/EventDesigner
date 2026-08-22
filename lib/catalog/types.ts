@@ -38,10 +38,56 @@ export interface Variant {
  *  Absent = "unit", which is every ordinary countable product. */
 export type PriceUnit = "unit" | "m" | "m2";
 
+/** Who may see a catalog item.
+ *
+ *  `private` — it exists only in this studio's catalog. `public` — other studios may see it.
+ *
+ *  Absent means private, and that direction is not an accident: an item with no stated opinion about
+ *  who may see it stays in. Publishing is something the designer does on purpose, in the drawer,
+ *  one product at a time. */
+export type Visibility = "private" | "public";
+
+export const VISIBILITY_LABEL: Record<Visibility, string> = {
+  private: "פרטי",
+  public: "ציבורי",
+};
+
+export const VISIBILITY_HINT: Record<Visibility, string> = {
+  private: "רק בקטלוג שלך.",
+  public: "מעצבים אחרים יוכלו לראות את הפריט. המחיר שלך נשאר פרטי.",
+};
+
 export const PRICE_UNIT_LABEL: Record<PriceUnit, string> = {
   unit: "ליחידה",
   m: "למטר",
   m2: 'למ"ר',
+};
+
+/** What kind of stock an item is — and therefore which question the procurement forecast may
+ *  honestly ask about it (lib/suppliers/procurement.ts).
+ *
+ *  `owned` — the studio has it and lays it again at every event. Never summed over a month: one
+ *  30m carpet used at four events is 30m of asset, not 120m to buy. Its report is peak concurrent
+ *  demand against `stockQty`.
+ *
+ *  `consumable` — used up. The sum over a window IS the order.
+ *
+ *  `rented` — brought in for one event and returned. Neither summed nor peaked: a list of order
+ *  lines, one per event and date.
+ *
+ *  Absent = `owned`, which is what most of a designer's catalog is. */
+export type StockKind = "owned" | "consumable" | "rented";
+
+export const STOCK_KIND_LABEL: Record<StockKind, string> = {
+  owned: "בבעלות",
+  consumable: "מתכלה",
+  rented: "בהשכרה",
+};
+
+export const STOCK_KIND_HINT: Record<StockKind, string> = {
+  owned: "יש לך את זה ואתה מציב שוב בכל אירוע. ברכש נבדק השיא — כמה צריך ביום העמוס ביותר.",
+  consumable: "נגמר אחרי השימוש. ברכש מסוכם כמה צריך להזמין בטווח.",
+  rented: "מובא מספק לאירוע אחד וחוזר. ברכש מופיע כשורת הזמנה לכל אירוע בנפרד.",
 };
 
 // A stretch product (a drape, a carpet — see CategoryDef.sizing) has no width or depth here: it is
@@ -70,5 +116,18 @@ export interface Product {
   styleTags: string[];
   variants: Variant[];
   appearance?: MapAppearance; // absent → derived from dimensions (see resolveFootprint)
+  visibility?: Visibility; // absent = private (see Visibility) — publishing is always explicit
   archived?: boolean; // F-4.5: hidden from the catalog but still resolvable by placements
+
+  // ── Procurement (lib/suppliers/) ─────────────────────────────────────────────────────────────
+  supplierId?: string; // who it is bought or rented from
+  /** What the STUDIO pays, per `priceUnit` — the mirror of `unitPrice`, which is what the CLIENT
+   *  pays. ⚠ Internal: never rendered in /present, the client portal, a quote or a packing list. */
+  costPrice?: number;
+  stockKind?: StockKind; // absent = "owned" (see StockKind)
+  /** How many the studio owns. Only meaningful for `owned`, and absent is a real answer — it means
+   *  "I haven't counted", and the forecast then shows demand without claiming a shortfall. */
+  stockQty?: number;
+  orderUnit?: string; // what the SUPPLIER sells in ("גבעולים") when it isn't the placed unit
+  orderFactor?: number; // order-units per placed unit; absent = 1
 }

@@ -15,8 +15,10 @@ export interface EventSummary {
   contact2Name?: string; // a second contact person, if the couple gave one (e.g. a parent, planner)
   contact2Phone?: string;
   date: string; // ISO yyyy-mm-dd ("" = not set yet) — the wedding/event day itself
-  time?: string; // HH:mm — start time on `date` (or on `meetingDate`, if that's what's shown)
-  meetingDate?: string; // ISO yyyy-mm-dd — a scheduled client consultation, distinct from `date`
+  time?: string; // HH:mm — when it starts on `date`
+  // ⚠ `meetingDate?` used to sit here — one scheduled consultation per event, for the life of the
+  // event. Meetings are their own records now (lib/appointments/), because there is normally more
+  // than one and the first of them happens before the event exists.
   venueId?: string; // the property; absent until the details step picks one
   zoneIds: string[]; // the regions of that venue this event occupies (F-1.3) — order is the designer's
   /** The zones' names, joined — denormalised for the lists, headers and the quote, which need a

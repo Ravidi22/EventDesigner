@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, Pencil, Play, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GalleryVerticalEnd, ImagePlus, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
-import type { Product } from "@/lib/catalog/types";
-import { loadProducts } from "@/lib/catalog/storage";
-import { loadImages, saveImage, loadPresentations, savePresentation, deletePresentation } from "@/lib/gallery/storage";
+import { useCatalog } from "@/lib/catalog/use-catalog";
+import {
+  fetchImages,
+  saveImage,
+  fetchPresentations,
+  savePresentation,
+  deletePresentation,
+} from "@/lib/gallery/actions";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { fieldLabelClassName } from "@/components/control";
+import { Photo } from "@/components/photo";
+import { EmptyState } from "@/components/empty-state";
+import { fileProblem, uploadFile } from "@/lib/files/upload";
+import { ALLOWED_TYPES } from "@/lib/files/keys";
 
 // v0.3 studio gallery (F-2.1–F-2.2): create, order, and edit designer-curated presentations.
 // This is management only — client-facing browsing, liking a photo, and the per-event "תיק
@@ -21,11 +30,32 @@ export function GalleryScreen() {
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [presentations, setPresentations] = useState<Presentation[]>([]);
   const [editing, setEditing] = useState<Presentation | null>(null);
+  // Which presentations exist on the server, so the builder can tell a new one from an edit without
+  // asking again mid-render (it used to call loadPresentations() during its own render — free
+  // against localStorage, a round trip now).
+  const [knownIds, setKnownIds] = useState<Set<string>>(new Set());
+  // "No presentations yet" and "not loaded yet" are the same empty array and mean opposite things.
+  // Without this, a designer with twenty presentations is told the gallery is empty and invited to
+  // build their first one, for the length of one round trip — see the same note in catalog-screen.
+  const [ready, setReady] = useState(false);
 
-  // localStorage is client-only — hydrate after mount.
+  // Both are server reads — hydrate after mount, same as every other screen here.
   useEffect(() => {
-    setImages(loadImages());
-    setPresentations(loadPresentations());
+    let live = true;
+    void (async () => {
+      const [loadedImages, loadedPresentations] = await Promise.all([
+        fetchImages(),
+        fetchPresentations(),
+      ]);
+      if (!live) return;
+      setImages(loadedImages);
+      setPresentations(loadedPresentations);
+      setKnownIds(new Set(loadedPresentations.map((p) => p.id)));
+      setReady(true);
+    })();
+    return () => {
+      live = false;
+    };
   }, []);
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
@@ -35,13 +65,18 @@ export function GalleryScreen() {
       <PresentationBuilder
         draft={editing}
         images={images}
-        onImageCreated={(img) => setImages(saveImage(img))}
-        onSave={(p) => {
-          setPresentations(savePresentation(p));
+        isNew={!knownIds.has(editing.id)}
+        onImageCreated={async (img) => setImages(await saveImage(img))}
+        onSave={async (p) => {
+          const next = await savePresentation(p);
+          setPresentations(next);
+          setKnownIds(new Set(next.map((x) => x.id)));
           setEditing(null);
         }}
-        onDelete={(id) => {
-          setPresentations(deletePresentation(id));
+        onDelete={async (id) => {
+          const next = await deletePresentation(id);
+          setPresentations(next);
+          setKnownIds(new Set(next.map((x) => x.id)));
           setEditing(null);
         }}
         onCancel={() => setEditing(null)}
@@ -49,22 +84,39 @@ export function GalleryScreen() {
     );
   }
 
+  const startNew = () =>
+    setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() });
+
   return (
     <div className="px-8 py-7">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <h1 className="font-display text-h2 text-ink">תצוגות</h1>
-        <Button
-          onClick={() =>
-            setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() })
-          }
-        >
-          <Plus className="h-4 w-4" strokeWidth={2} />
-          תצוגה חדשה
-        </Button>
+        {/* Hidden on first run: the empty state carries the one action, and two "new presentation"
+            buttons on an otherwise blank screen is one too many. */}
+        {(!ready || presentations.length > 0) && (
+          <Button onClick={startNew}>
+            <Plus className="h-4 w-4" strokeWidth={2} />
+            תצוגה חדשה
+          </Button>
+        )}
       </div>
 
-      {presentations.length === 0 ? (
-        <p className="py-20 text-center text-sm text-muted">אין עדיין תצוגות. צרו את הראשונה.</p>
+      {!ready ? (
+        <p className="py-20 text-center text-sm text-muted" aria-busy="true">
+          טוען את התצוגות…
+        </p>
+      ) : presentations.length === 0 ? (
+        <EmptyState
+          icon={GalleryVerticalEnd}
+          title="אין עדיין תצוגות"
+          body="תצוגה היא רצף תמונות שעוברים עליו מול הלקוח בפגישה — חופה, שולחן אירוח, מרכזי שולחן. כל תמונה נושאת מוצר מהקטלוג, כך שמה שהלקוח מסמן ♥ נאסף לתיק האירוע ומחכה לכם בסטודיו."
+          action={
+            <Button onClick={startNew}>
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+              צור תצוגה ראשונה
+            </Button>
+          }
+        />
       ) : (
         <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
           {presentations.map((p) => (
@@ -110,7 +162,7 @@ export function PresentationCard({
           <span className="flex flex-1 items-center justify-center text-sm text-muted">ריקה</span>
         ) : (
           cover.map((img, i) => (
-            <span key={img.id + i} className="h-full flex-1 rounded-[6px]" style={{ background: img.tone }} />
+            <Photo key={img.id + i} image={img} className="h-full flex-1 rounded-[6px] object-cover" />
           ))
         )}
       </button>
@@ -135,12 +187,14 @@ export function PresentationCard({
   );
 }
 
-// F-2.1–F-2.2 builder: name + ordered photos; each photo carries name, description and ONE
-// product link. New photos are placeholder tiles for now — real upload arrives with the
-// backend (the storage seam already persists whatever the image carries).
+// F-2.1–F-2.2 builder: name + ordered photos; each photo carries name, description, ONE product
+// link and — since file storage landed (lib/files/) — an actual photograph. A photo-less row is
+// still a real state and renders as its `tone` tile, because a designer adding a series should not
+// have to find the file before they can name the thing.
 function PresentationBuilder({
   draft,
   images,
+  isNew,
   onImageCreated,
   onSave,
   onDelete,
@@ -148,18 +202,19 @@ function PresentationBuilder({
 }: {
   draft: Presentation;
   images: GalleryImage[];
-  onImageCreated: (img: GalleryImage) => void;
-  onSave: (p: Presentation) => void;
-  onDelete: (id: string) => void;
+  isNew: boolean;
+  onImageCreated: (img: GalleryImage) => void | Promise<void>;
+  onSave: (p: Presentation) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(draft.name);
   const [imageIds, setImageIds] = useState<string[]>(draft.imageIds);
   const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
   const available = images.filter((i) => !imageIds.includes(i.id));
-  const isNew = !loadPresentations().some((p) => p.id === draft.id);
 
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -189,7 +244,7 @@ function PresentationBuilder({
           if (!img) return null;
           return (
             <li key={id} className="flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2">
-              <span className="h-9 w-9 shrink-0 rounded-md border border-border" style={{ background: img.tone }} />
+              <Photo image={img} className="h-9 w-9 shrink-0 rounded-md border border-border object-cover" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm text-ink">{img.name}</span>
                 <span className="block truncate text-xs text-muted">
@@ -235,8 +290,10 @@ function PresentationBuilder({
       {adding && (
         <NewImageForm
           onCancel={() => setAdding(false)}
-          onCreate={(img) => {
-            onImageCreated(img);
+          onCreate={async (img) => {
+            // Awaited: the photo has to EXIST before this presentation claims to contain it, or
+            // saving the presentation would be rejected for naming an image nobody has.
+            await onImageCreated(img);
             setImageIds((ids) => [...ids, img.id]);
             setAdding(false);
           }}
@@ -245,7 +302,7 @@ function PresentationBuilder({
 
       <div className="mt-10 flex items-center justify-between border-t border-border pt-5">
         {!isNew ? (
-          <Button variant="danger" onClick={() => onDelete(draft.id)}>
+          <Button variant="danger" onClick={() => void onDelete(draft.id)}>
             <Trash2 className="h-4 w-4" strokeWidth={2} />
             מחיקת התצוגה
           </Button>
@@ -255,10 +312,17 @@ function PresentationBuilder({
         <div className="flex gap-2">
           <Button variant="ghost" onClick={onCancel}>ביטול</Button>
           <Button
-            disabled={!name.trim()}
-            onClick={() => onSave({ ...draft, name: name.trim(), imageIds })}
+            disabled={!name.trim() || saving}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                await onSave({ ...draft, name: name.trim(), imageIds });
+              } finally {
+                setSaving(false);
+              }
+            }}
           >
-            שמירת התצוגה
+            {saving ? "שומר…" : "שמירת התצוגה"}
           </Button>
         </div>
       </div>
@@ -268,30 +332,141 @@ function PresentationBuilder({
 
 // ponytail: "upload" is a placeholder tone tile until the backend exists — the form still
 // captures the real metadata (name, description, one product link) that F-2.2 requires.
+/** What the file picker offers. Built from the same allowlist the server enforces, so the two
+ *  can never drift into a dialog that offers a type the upload will refuse. */
+const ACCEPT = Object.keys(ALLOWED_TYPES).join(",");
+
 const TONES = ["oklch(0.86 0.045 20)", "oklch(0.88 0.03 90)", "oklch(0.84 0.05 145)", "oklch(0.85 0.035 280)", "oklch(0.88 0.025 250)", "oklch(0.83 0.05 170)"];
 
-function NewImageForm({ onCreate, onCancel }: { onCreate: (img: GalleryImage) => void; onCancel: () => void }) {
-  const [products] = useState<Product[]>(() => loadProducts().filter((p) => !p.archived));
+function NewImageForm({
+  onCreate,
+  onCancel,
+}: {
+  onCreate: (img: GalleryImage) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  // Its own fetch: this form is opened on demand, long after the gallery screen mounted, and it is
+  // the only thing here that needs the catalog.
+  const { products: all } = useCatalog();
+  const products = useMemo(() => all.filter((p) => !p.archived), [all]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [productId, setProductId] = useState(products[0]?.id ?? "");
+  const [file, setFile] = useState<File | null>(null);
+  // A local object URL, so the designer sees the photograph they picked before it goes anywhere.
+  const [preview, setPreview] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
 
-  const create = () => {
+  // Revoke on unmount or replacement: an object URL pins its blob in memory until it is released,
+  // and a designer adding twenty photographs in one sitting would pin all twenty.
+  useEffect(() => {
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const pick = (chosen: File | null) => {
+    setError(null);
+    if (!chosen) {
+      setFile(null);
+      return;
+    }
+    // Checked before anything is sent, so a wrong file is refused instantly rather than after an
+    // upload. The server checks the same things again — a browser check is never the control.
+    const problem = fileProblem(chosen);
+    if (problem) {
+      setError(problem);
+      setFile(null);
+      return;
+    }
+    setFile(chosen);
+  };
+
+  const create = async () => {
     const product = products.find((p) => p.id === productId);
-    if (!product || !name.trim()) return;
-    onCreate({
-      id: crypto.randomUUID(),
-      name: name.trim(),
-      description: description.trim() || undefined,
-      productId: product.id,
-      productName: product.name,
-      tone: TONES[Math.floor(Math.random() * TONES.length)],
-    });
+    if (!product || !name.trim() || uploading) return;
+    setError(null);
+    setUploading(true);
+    try {
+      // The photograph goes to storage FIRST, so the row is never written pointing at a file that
+      // failed to upload. A photo-less row is a real state (the tile stands in for it); a row whose
+      // photograph is a broken link is not.
+      const uploaded = file ? await uploadFile(file, "gallery") : null;
+      await onCreate({
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        description: description.trim() || undefined,
+        productId: product.id,
+        // Sent for the local render; the server answers with the name JOINED from the catalog, so
+        // this copy never becomes the stale caption it used to be after a product was renamed.
+        productName: product.name,
+        imageUrl: uploaded?.url,
+        // Still minted, still used: it is the tile shown wherever there is no photograph, and it is
+        // what a photo-less row renders as.
+        tone: TONES[Math.floor(Math.random() * TONES.length)],
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "ההעלאה נכשלה");
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
     <div className="mt-4 rounded-lg border border-border bg-surface p-4">
       <h4 className="mb-3 text-sm font-semibold text-ink">תמונה חדשה</h4>
+
+      <div className="mb-3 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => filePicker.current?.click()}
+          className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-dashed border-border bg-inset text-muted transition-colors hover:border-accent hover:text-accent"
+          aria-label={file ? `החלפת התמונה (${file.name})` : "בחירת קובץ תמונה"}
+        >
+          {preview ? (
+            // eslint-disable-next-line @next/next/no-img-element -- a local blob: URL, never optimised
+            <img src={preview} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <ImagePlus className="h-6 w-6" strokeWidth={1.6} />
+          )}
+        </button>
+        <div className="min-w-0 text-[13px] leading-relaxed">
+          {file ? (
+            <>
+              <p className="truncate font-medium text-ink">{file.name}</p>
+              <button
+                type="button"
+                onClick={() => pick(null)}
+                className="mt-0.5 text-muted transition-colors hover:text-ink"
+              >
+                הסרת התמונה
+              </button>
+            </>
+          ) : (
+            <p className="text-muted">
+              אפשר להוסיף תמונה — JPG, PNG, WebP או AVIF, עד 25MB. גם בלי תמונה התצוגה עובדת.
+            </p>
+          )}
+        </div>
+        <input
+          ref={filePicker}
+          type="file"
+          accept={ACCEPT}
+          className="hidden"
+          onChange={(e) => {
+            pick(e.target.files?.[0] ?? null);
+            // Cleared so picking the SAME file again still fires a change event.
+            e.target.value = "";
+          }}
+        />
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField label="שם התמונה" value={name} onChange={setName} placeholder="שנדליר מעל החופה" />
         <div>
@@ -311,9 +486,12 @@ function NewImageForm({ onCreate, onCancel }: { onCreate: (img: GalleryImage) =>
           wrapperClassName="sm:col-span-2"
         />
       </div>
-      <div className="mt-4 flex justify-end gap-2">
-        <Button variant="ghost" onClick={onCancel}>ביטול</Button>
-        <Button onClick={create} disabled={!name.trim()}>הוספה</Button>
+      <div className="mt-4 flex items-center justify-end gap-2">
+        {error && <p className="me-auto text-[13px] font-medium text-alert">{error}</p>}
+        <Button variant="ghost" onClick={onCancel} disabled={uploading}>ביטול</Button>
+        <Button onClick={create} disabled={!name.trim() || uploading}>
+          {uploading ? "מעלה…" : "הוספה"}
+        </Button>
       </div>
     </div>
   );

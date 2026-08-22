@@ -1,83 +1,49 @@
-// Catalog persistence (F-4.4–F-4.5). localStorage for now; the swap to a server action lives
-// here and nowhere else (same seam as lib/events/storage.ts).
-import { storageKey, storagePrefix } from "@/lib/storage-keys";
-import type { DesignDocumentContent } from "../design-document/types";
+// The catalog, in the browser's memory.
+//
+// This file used to BE the catalog store (localStorage). It isn't any more — Postgres is, behind
+// lib/catalog/actions.ts. What survives here is the half that has to stay synchronous, and the
+// reason is the studio:
+//
+//   • catalog-resolver.ts resolves a placement's variantId to its product WHILE RENDERING the
+//     canvas, once per placed item. A render cannot await.
+//   • studio-screen.tsx looks a product up in the middle of a DROP, to decide whether the thing
+//     being dragged belongs on a table, on a wall, or wherever the pointer let go. A drag that
+//     waits on a network round-trip is a drag that feels broken.
+//
+// So the catalog is loaded ONCE per session and held here. That is not a workaround; it is what the
+// catalog is — a few hundred rows of reference data that change when the designer edits them and
+// at no other time. The write path goes to the server and hands the fresh list back to primeCatalog,
+// so the cache and the database cannot disagree for longer than one round-trip.
+//
+// Nothing in this file reads or writes storage of any kind. It is memory, and it is empty until
+// something primes it (see useCatalog in ./use-catalog).
 import type { Product } from "./types";
-import { SAMPLE_PRODUCTS } from "./sample-data";
 
-const KEY = storageKey("catalog.products");
+let cache: Product[] = [];
 
-// Bumped on every write so the studio's resolver index knows to rebuild (no import cycle).
+/** Bumped on every prime so the studio's resolver index knows to rebuild (no import cycle). */
 export let catalogVersion = 0;
 
-export function loadProducts(): Product[] {
-  if (typeof window === "undefined") return SAMPLE_PRODUCTS;
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    if (!raw) return SAMPLE_PRODUCTS;
-    const saved = JSON.parse(raw) as Product[];
-    return saved.length ? saved : SAMPLE_PRODUCTS;
-  } catch {
-    return SAMPLE_PRODUCTS;
-  }
-}
-
-export function saveProducts(products: Product[]): void {
-  try {
-    window.localStorage.setItem(KEY, JSON.stringify(products));
-  } catch {
-    // non-fatal
-  }
+/** Replace the cached catalog. Called with whatever a server action just returned — every action in
+ *  lib/catalog/actions.ts answers with the full list precisely so this stays a single assignment
+ *  rather than a merge that could drift. */
+export function primeCatalog(list: Product[]): void {
+  cache = list;
   catalogVersion++;
 }
 
-export function upsertProduct(p: Product): Product[] {
-  const existing = loadProducts();
-  const next = existing.some((x) => x.id === p.id) ? existing.map((x) => (x.id === p.id ? p : x)) : [p, ...existing];
-  saveProducts(next);
-  return next;
+/** Every product this studio has, archived included — callers filter. Empty before the first prime,
+ *  which is a real state: a screen rendering at that moment shows its loading or empty view. */
+export function loadProducts(): Product[] {
+  return cache;
 }
 
 export function productById(id: string): Product | undefined {
-  return loadProducts().find((p) => p.id === id);
+  return cache.find((p) => p.id === id);
 }
 
-// Every variant id a placement could reference for this product (incl. the implicit
-// product-id default used when a product has no variants).
-function variantIdsOf(p: Product): string[] {
+/** Every variant id a placement could reference for this product — including the product's own id,
+ *  which is the implicit default used when a product has no variants of its own. */
+export function variantIdsOf(p: Product): string[] {
   return [p.id, ...p.variants.map((v) => v.id)];
-}
-
-// F-4.5: is any of these variant ids placed in ANY event's design document?
-// Scans the per-event doc keys (B) — a design document must never point at nothing.
-export function isPlacedAnywhere(variantIds: string[]): boolean {
-  if (typeof window === "undefined") return false;
-  const ids = new Set(variantIds);
-  for (let i = 0; i < window.localStorage.length; i++) {
-    const key = window.localStorage.key(i);
-    if (!key?.startsWith(storagePrefix("studio.doc."))) continue;
-    try {
-      const doc = JSON.parse(window.localStorage.getItem(key) ?? "") as DesignDocumentContent;
-      if (doc.placements?.some((pl) => ids.has(pl.variantId))) return true;
-    } catch {
-      // unreadable doc — ignore
-    }
-  }
-  return false;
-}
-
-// F-4.5: delete a product — or archive it (hidden from the catalog) when it's placed
-// somewhere. Returns the action taken so the UI can say which happened.
-export function deleteOrArchiveProduct(id: string): { products: Product[]; archived: boolean } {
-  const existing = loadProducts();
-  const p = existing.find((x) => x.id === id);
-  if (!p) return { products: existing, archived: false };
-  if (isPlacedAnywhere(variantIdsOf(p))) {
-    const products = existing.map((x) => (x.id === id ? { ...x, archived: true } : x));
-    saveProducts(products);
-    return { products, archived: true };
-  }
-  const products = existing.filter((x) => x.id !== id);
-  saveProducts(products);
-  return { products, archived: false };
 }

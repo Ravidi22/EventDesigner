@@ -9,11 +9,15 @@ import {
   Building2,
   LayoutGrid,
   Images,
+  Truck,
   ChevronsLeft,
   Bell,
+  LogOut,
   type LucideIcon,
 } from "lucide-react";
-import { DEFAULT_VENUES, addVenue, loadActiveVenueId, loadVenues, renameVenue, setActiveVenueId, type Venue } from "@/lib/venues/storage";
+import { signOut } from "@/lib/auth/actions";
+import { setActiveVenueId } from "@/lib/venues/storage";
+import { useVenues } from "@/lib/venues/use-venues";
 import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
@@ -31,6 +35,7 @@ const GENERAL: NavItem[] = [
   { href: "/gantt", label: "אירועים", icon: CalendarHeart },
   { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
+  { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
   { href: "/gallery", label: "גלריה ותצוגות", icon: Images },
 ];
 
@@ -39,24 +44,30 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/gantt"), title: "אירועים" },
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
+  { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
   { test: (p) => p.startsWith("/outputs"), title: "פלטים" },
 ];
 
-export function AppShell({ children }: { children: ReactNode }) {
+/** Who is signed in. Handed down from the (app) layout, which has already resolved the session
+ *  server-side — the shell does not re-fetch it, and cannot be rendered without one. */
+export interface ShellUser {
+  name: string | null;
+  email: string;
+}
+
+export function AppShell({ children, user }: { children: ReactNode; user: ShellUser }) {
   const pathname = usePathname() || "";
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
-  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
-  const [activeVenueId, setActiveVenue] = useState(DEFAULT_VENUES[0].id);
+  const [leaving, setLeaving] = useState(false);
   const [headerSearch, setHeaderSearch] = useState("");
-
-  useEffect(() => {
-    setVenues(loadVenues());
-    setActiveVenue(loadActiveVenueId());
-  }, []);
+  // Venues come from the server now; the switcher's own selection stays in this browser.
+  const { venues, activeVenueId, add, rename } = useVenues();
+  const [selected, setSelected] = useState<string | null>(null);
+  const current = selected ?? activeVenueId;
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -71,6 +82,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
   // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
   const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/gantt");
+
+  // Someone who signed up without giving a name still needs something to see themselves as, and the
+  // local part of their own email is the thing they will recognise.
+  const displayName = user.name?.trim() || user.email.split("@")[0];
+  // Hebrew, Latin or otherwise — the first character of whatever they are called. Not initials from
+  // two words: plenty of people have one.
+  const initial = displayName.slice(0, 1).toUpperCase();
+
+  const leave = async () => {
+    setLeaving(true);
+    await signOut();
+    // replace, not push: the studio must not be one Back button away from a signed-out browser.
+    router.replace("/login");
+    router.refresh();
+  };
 
   return (
     <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3">
@@ -118,21 +144,20 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <VenueSwitcher
           venues={venues}
-          activeId={activeVenueId}
+          activeId={current}
           collapsed={collapsed}
           onSelect={(id) => {
-            setActiveVenue(id);
+            setSelected(id);
             setActiveVenueId(id);
           }}
           onAdd={() => {
-            const next = addVenue();
-            setVenues(next);
-            setActiveVenue(loadActiveVenueId());
-            // A venue with zero halls isn't a real state — send the designer straight
-            // into adding its first room.
-            router.push("/halls");
+            void add().then(() => {
+              // A venue with nothing drawn on it isn't a real state — send the designer straight
+              // into drawing its first room.
+              router.push("/halls");
+            });
           }}
-          onRename={(id, name) => setVenues(renameVenue(id, name))}
+          onRename={(id, name) => void rename(id, name)}
         />
 
         <nav className="flex flex-col gap-[3px]">
@@ -141,27 +166,57 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        <Link
-          href="/settings"
-          aria-current={settingsActive ? "page" : undefined}
-          title={collapsed ? "הגדרות · דניאל אמסלם" : undefined}
+        {/* The profile card. Its geometry is pinned by the design spec (14px radius, p-[11px],
+            gap-[11px], border hairline on bg-inset) — what changed is that it is now a CONTAINER
+            holding two controls rather than one link, because a button cannot legally nest inside
+            an anchor and sign-out has to be reachable from every screen. Every pinned number is
+            carried by the container, so the box is the same box. */}
+        <div
           className={
-            "mt-auto flex items-center gap-[11px] rounded-md border border-border bg-inset transition-colors hover:bg-accent-tint " +
-            (collapsed ? "justify-center px-0 py-[11px]" : "p-[11px]") +
-            " " +
-            (settingsActive ? "font-bold text-accent" : "")
+            "mt-auto flex items-center rounded-md border border-border bg-inset transition-colors hover:bg-accent-tint " +
+            (collapsed ? "flex-col gap-2 px-0 py-[11px]" : "gap-[11px] p-[11px]")
           }
         >
-          <span className="grad-cta flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[15px] font-bold text-canvas">
-            ד
-          </span>
-          {!collapsed && (
-            <span className="leading-tight">
-              <span className="block text-[14px] font-semibold leading-[1.25] text-ink">דניאל אמסלם</span>
-              <span className="block text-xs text-quiet">מעצב · חשבון יחיד</span>
+          <Link
+            href="/settings"
+            aria-current={settingsActive ? "page" : undefined}
+            title={collapsed ? `הגדרות · ${displayName}` : undefined}
+            className={
+              "flex min-w-0 items-center gap-[11px] " +
+              (collapsed ? "justify-center" : "flex-1") +
+              " " +
+              (settingsActive ? "font-bold text-accent" : "")
+            }
+          >
+            <span className="grad-cta flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[15px] font-bold text-canvas">
+              {initial}
             </span>
-          )}
-        </Link>
+            {!collapsed && (
+              <span className="min-w-0 leading-tight">
+                <span className="block truncate text-[14px] font-semibold leading-[1.25] text-ink">
+                  {displayName}
+                </span>
+                {/* The email, not a role label: it is what tells you WHICH account this browser is
+                    signed into, which is the question a profile card in a multi-tenant app is
+                    actually being asked. */}
+                <span className="block truncate text-xs text-quiet" dir="ltr">
+                  {user.email}
+                </span>
+              </span>
+            )}
+          </Link>
+
+          <button
+            type="button"
+            onClick={leave}
+            disabled={leaving}
+            title="יציאה מהחשבון"
+            aria-label="יציאה מהחשבון"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+          >
+            <LogOut className="h-[18px] w-[18px]" strokeWidth={1.4} />
+          </button>
+        </div>
       </aside>
 
       {/* Main */}

@@ -83,3 +83,15 @@ export interface DesignDocumentContent {
 export function emptyDocument(mmPerUnit = 1): DesignDocumentContent {
   return { calibration: { mmPerUnit }, tables: [], placements: [] };
 }
+
+/** A document as it comes back from the database (lib/studio/actions.ts): the drawing, plus the two
+ *  facts that only exist once it is stored.
+ *
+ *  `version` counts issued outputs, not saves — the studio autosaves continuously and that does not
+ *  mint versions. `sealed` says this exact content is pinned by a quote or an export and will never
+ *  change again; the next edit opens `version + 1`. See the note on the table in lib/db/schema.ts. */
+export interface StoredDocument {
+  version: number;
+  content: DesignDocumentContent;
+  sealed: boolean;
+}

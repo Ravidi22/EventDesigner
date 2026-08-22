@@ -21,6 +21,7 @@ import {
   wallLengthMm,
 } from "@/lib/studio/geometry";
 import { defaultStairs, normalizeStairs, type FeatureStairs } from "./stairs";
+import { isMain } from "../self-check";
 
 export interface StructureNode {
   id: string;
@@ -342,7 +343,7 @@ export function newFeature(kind: FeatureKind, at: Point): Omit<StructureFeature,
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/venues/structure.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

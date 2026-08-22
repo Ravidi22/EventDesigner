@@ -12,6 +12,7 @@ import type { VenueStructure } from "@/lib/venues/structure";
 import { nodeMap, wallPoints } from "@/lib/venues/structure";
 import { pointAtDistance, projectOntoWall, wallLengthMm } from "./geometry";
 import type { WallSpan } from "@/lib/design-document/types";
+import { isMain } from "../self-check";
 
 export interface WallSegment {
   a: Point;
@@ -94,7 +95,7 @@ function clamp01(n: number): number {
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/anchor.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

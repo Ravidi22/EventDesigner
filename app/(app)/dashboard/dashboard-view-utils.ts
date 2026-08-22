@@ -1,6 +1,7 @@
 // Shared by weekly-calendar.tsx and today-focus.tsx — the two views that both need to place
 // events on real dates and color them by status.
 import type { CSSProperties } from "react";
+import type { Booking } from "@/lib/calendar/hebrew";
 import type { StatusTone } from "@/lib/events/types";
 
 export function toISODate(d: Date): string {
@@ -16,12 +17,17 @@ export const sameDay = (a: Date, b: Date) =>
 export const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 export const addMonths = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth() + n, 1);
 
-// A rolling 7-day window starting at `anchor` itself (not Sunday-snapped) — paired with the
-// "היום" control resetting anchor to today, so "week view" always reads as "today + the next 6
-// days" rather than whichever Sun–Sat box today happens to fall in.
+// The calendar week `anchor` falls in, Sunday through Saturday. Snapping to Sunday (rather than
+// the rolling "today + 6" window this used to return) is what makes the week and month views agree
+// with each other and with every wall calendar in Israel: a given date sits in the same column in
+// both, and "next week" is a week, not seven days from wherever you were standing.
 export function weekGrid(anchor: Date): Date[] {
-  return Array.from({ length: 7 }, (_, i) => addDays(anchor, i));
+  const sunday = addDays(anchor, -anchor.getDay());
+  return Array.from({ length: 7 }, (_, i) => addDays(sunday, i));
 }
+
+/** Same Sunday–Saturday box. Used to tell whether "היום" would move anything. */
+export const sameWeek = (a: Date, b: Date) => sameDay(addDays(a, -a.getDay()), addDays(b, -b.getDay()));
 
 export function weekLabel(days: Date[]): string {
   const fmt = (d: Date) => d.toLocaleDateString("he-IL", { day: "numeric", month: "short" });
@@ -76,28 +82,47 @@ export const PAST_DAY_OVERLAY: CSSProperties = {
     "repeating-linear-gradient(135deg, rgb(124 120 137 / 0.22) 0px, rgb(124 120 137 / 0.22) 2px, transparent 2px, transparent 10px)",
 };
 
-// Israeli public/religious holidays, keyed by ISO date — Gregorian dates for 2026 (5786), Israel
-// observance (e.g. one-day Shemini Atzeret/Simchat Torah, 7-day Pesach), sourced from Hebcal.
-// A flat lookup rather than a date-math generator since these dates don't repeat predictably
-// across years; extend this map when the calendar needs to reach into 2027.
-const HOLIDAYS_2026: Record<string, string> = {
-  "2026-03-03": "פורים",
-  "2026-04-02": "פסח (חג ראשון)",
-  "2026-04-08": "פסח (חג אחרון)",
-  "2026-04-20": "יום הזיכרון",
-  "2026-04-21": "יום העצמאות",
-  "2026-05-22": "שבועות",
-  "2026-07-23": "תשעה באב",
-  "2026-07-29": "ט״ו באב",
-  "2026-09-12": "ראש השנה",
-  "2026-09-13": "ראש השנה",
-  "2026-09-21": "יום כיפור",
-  "2026-09-26": "סוכות (חג ראשון)",
-  "2026-10-02": "הושענא רבה",
-  "2026-10-03": "שמחת תורה",
-  "2026-12-05": "חנוכה",
-};
+// Holidays used to live here as a hand-transcribed map of 2026 only — which meant paging the month
+// view to January 2027 emptied the calendar with no error, and two of the fifteen dates in it were
+// a day off. They now come from lib/calendar/hebrew.ts, computed for 2025-2040. Import that.
 
-export function holidayName(iso: string): string | undefined {
-  return HOLIDAYS_2026[iso];
+// How a day's calendar note is colored. Booking constraint and peak demand are separate facts
+// (lib/calendar/types.ts), but a day cell has room for one color, so they collapse here — with the
+// constraint winning, because "you cannot book this" outranks "everyone wants to".
+export type NoteTone = "blocked" | "restricted" | "peak" | "quiet";
+
+export function noteTone(booking: Booking, peak: boolean): NoteTone {
+  if (booking === "blocked") return "blocked";
+  if (booking === "no-weddings") return "restricted";
+  return peak ? "peak" : "quiet";
 }
+
+export interface NoteTheme {
+  /** Fill + text for the holiday chip. */
+  chip: string;
+  /** The chip's leading dot — where the hue actually lives, so the text can stay quiet. */
+  dot: string;
+  /** Fill + text for the period band running across the cell. */
+  band: string;
+}
+
+// Fills follow the pairings already vetted elsewhere in the app — `bg-warn-tint text-warn-ink` and
+// `bg-accent-wash text-accent-deep` are StatusChip's own (components/status-chip.tsx). A calendar
+// cell is not the place to introduce a fourth color vocabulary.
+//
+// Two departures from StatusChip, both deliberate:
+//
+// `quiet` is tinted accent rather than grey. An ordinary named day — ראש חודש, a minor fast — is
+// still the only thing in that cell worth reading, and grey made it recede further than the plain
+// purple line it replaced.
+//
+// `blocked` uses `text-alert-ink`, not `text-alert`. StatusChip pairs alert with its own tint at
+// 3.2:1, under AA, and this text is smaller than a status chip's rather than larger — so alert got
+// the ink variant warn already had. (warn-ink itself was missing AA too and was darkened in
+// globals.css; that one is a shared token, so it moved for every warn chip in the app, not here.)
+export const NOTE_THEME: Record<NoteTone, NoteTheme> = {
+  blocked: { chip: "bg-alert-tint text-alert-ink", dot: "bg-alert", band: "bg-alert-tint text-alert-ink" },
+  restricted: { chip: "bg-warn-tint text-warn-ink", dot: "bg-warn", band: "bg-warn-tint text-warn-ink" },
+  peak: { chip: "bg-accent-wash text-accent-deep", dot: "bg-accent-deep", band: "bg-accent-wash text-accent-deep" },
+  quiet: { chip: "bg-accent-tint text-accent", dot: "bg-accent", band: "bg-accent-tint text-accent" },
+};

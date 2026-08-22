@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { loadSettings, saveSettings, DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/storage";
+import { fetchSettings, saveSettings } from "@/lib/settings/actions";
+import { DEFAULT_SETTINGS, type BusinessSettings } from "@/lib/settings/types";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
+import { ImageField } from "@/components/image-field";
 import { Panel, SavedFlag } from "./ui";
 
 // F-8.1 business settings: logo + details (for the quote and outputs), VAT rate, currency (₪ in
@@ -14,17 +16,35 @@ import { Panel, SavedFlag } from "./ui";
 export function BusinessSection() {
   const [s, setS] = useState<BusinessSettings>(DEFAULT_SETTINGS);
   const [saved, setSaved] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  useEffect(() => setS(loadSettings()), []);
+  useEffect(() => {
+    let live = true;
+    void fetchSettings().then((loaded) => {
+      if (live) setS(loaded);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Typing stays instant and the write follows 600ms later. Every field here autosaves on change,
+  // which against localStorage was free; against a database, "שם העסק" would be one request per
+  // character. The pending write is cancelled and rescheduled on each keystroke, and the timer is
+  // cleared on unmount so navigating away mid-word does not fire a stale save.
+  useEffect(() => () => clearTimeout(saveTimer.current), []);
 
   const patch = (p: Partial<BusinessSettings>) => {
     const next = { ...s, ...p };
     setS(next);
-    saveSettings(next);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      void saveSettings(next);
+    }, 600);
     setSaved(true);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setSaved(false), 1600);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setSaved(false), 1600);
   };
 
   return (
@@ -40,13 +60,15 @@ export function BusinessSection() {
         <TextField label="שם בעל/ת העסק" value={s.ownerName} onChange={(v) => patch({ ownerName: v })} />
         <TextField label="טלפון" type="tel" dir="ltr" value={s.phone} onChange={(v) => patch({ phone: v })} className="text-end" />
         <TextField label="כתובת" value={s.address} onChange={(v) => patch({ address: v })} />
-        <TextField
-          label="קישור ללוגו"
-          dir="ltr"
-          value={s.logoUrl ?? ""}
-          onChange={(v) => patch({ logoUrl: v || undefined })}
-          placeholder="https://…"
-          className="text-end"
+        {/* Was a "קישור ללוגו" text field. Wider than square on purpose — a letterhead is a
+            wordmark far more often than it is a badge. */}
+        <ImageField
+          label="לוגו"
+          hint="מופיע בכותרת הצעת המחיר ובפלטים המודפסים."
+          value={s.logoUrl}
+          onChange={(logoUrl) => patch({ logoUrl })}
+          kind="logo"
+          className="h-20 w-36"
           wrapperClassName="col-span-2"
         />
         <NumberField

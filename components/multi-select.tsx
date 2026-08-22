@@ -88,7 +88,7 @@ export function MultiSelect({
           role="listbox"
           aria-multiselectable="true"
           aria-label={ariaLabel}
-          className="absolute start-0 top-[calc(100%+6px)] z-20 max-h-72 w-full min-w-max overflow-auto rounded-md border border-border bg-surface p-1 shadow-lifted"
+          className="scroll-slim absolute start-0 top-[calc(100%+6px)] z-20 max-h-72 w-full min-w-max overflow-auto rounded-md border border-border bg-surface p-1 shadow-lifted"
         >
           <div
             role="option"

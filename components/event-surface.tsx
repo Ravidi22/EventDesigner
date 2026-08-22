@@ -16,8 +16,18 @@ import { formatEventDate, zonesLabelOf, type EventSummary } from "@/lib/events/t
 export function EventSurface({ active, children }: { active: "studio" | "outputs"; children: ReactNode }) {
   const [event, setEvent] = useState<EventSummary | null>(null);
 
-  // localStorage is client-only — resolve after mount, same as every other screen.
-  useEffect(() => setEvent(activeEvent()), []);
+  // Resolve after mount, same as every other screen — the pointer is in this browser, the event
+  // itself is a server read. Until it lands the header says "אין אירוע פעיל", which is also what it
+  // says when there genuinely isn't one.
+  useEffect(() => {
+    let live = true;
+    void activeEvent().then((e) => {
+      if (live) setEvent(e);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   return (
     <div className="flex h-full flex-col">

@@ -9,6 +9,7 @@ import type { Point } from "@/lib/studio/hall";
 import { pointAtDistance, polygonCentroid } from "@/lib/studio/geometry";
 import { nodeMap, wallPoints, type VenueStructure } from "./structure";
 import type { ResolvedZone } from "./zone";
+import { isMain } from "../self-check";
 
 export type PlanSelectionKind = "zone" | "wall" | "node" | "door" | "feature";
 
@@ -91,7 +92,7 @@ export function hitsInBox(structure: VenueStructure, zones: ResolvedZone[], box:
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/venues/selection.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

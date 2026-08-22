@@ -1,24 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Building2, Check, Eye, Share2, X } from "lucide-react";
-import { DEFAULT_VENUES, VENUE_CHANGED_EVENT, loadActiveVenueId, loadVenues, type Venue } from "@/lib/venues/storage";
+import { VENUE_CHANGED_EVENT, loadActiveVenueId, type Venue } from "@/lib/venues/storage";
+import {
+  fetchVenueGrants,
+  fetchVenues,
+  revokeGrant,
+  setGrantRole,
+  shareVenue,
+} from "@/lib/venues/actions";
 import {
   GRANT_KIND_LABEL,
   SCOPE_LABEL,
   VENUE_ROLE_LABEL,
   VENUE_ROLE_SUMMARY,
   grantScope,
-  grantsForVenue,
-  revokeGrant,
-  setGrantRole,
-  shareVenue,
   type GrantKind,
   type GrantScope,
   type VenueGrant,
   type VenueRole,
 } from "@/lib/venues/access";
-import { CURRENT_MEMBER_ID, loadMembers, type StudioMember } from "@/lib/team/storage";
+import { fetchCurrentMember, fetchMembers } from "@/lib/team/actions";
+import type { StudioMember } from "@/lib/team/types";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
 import { StatusChip } from "@/components/status-chip";
@@ -33,10 +37,11 @@ const SCOPE_KEYS: (keyof GrantScope)[] = ["plan", "availability", "events", "mon
 // outlives whoever drew it: the second designer working that hall should inherit the wall graph
 // instead of tracing it again — while your clients and your prices stay on your side of the line.
 export function SharingSection() {
-  const [venues, setVenues] = useState<Venue[]>(DEFAULT_VENUES);
-  const [venueId, setVenueId] = useState(DEFAULT_VENUES[0].id);
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [venueId, setVenueId] = useState<string | null>(null);
   const [grants, setGrants] = useState<VenueGrant[]>([]);
   const [members, setMembers] = useState<StudioMember[]>([]);
+  const [me, setMe] = useState<StudioMember | null>(null);
 
   const [kind, setKind] = useState<GrantKind>("guest");
   const [memberId, setMemberId] = useState("");
@@ -45,48 +50,83 @@ export function SharingSection() {
   const [role, setRole] = useState<VenueRole>("viewer");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    setVenues(loadVenues());
-    setMembers(loadMembers());
-    const active = loadActiveVenueId();
-    setVenueId(active);
-    setGrants(grantsForVenue(active));
-    // Follow the sidebar: switching venues there while this screen is open should retarget it,
-    // rather than leaving the designer editing shares for a property they just navigated away from.
-    const onVenueChanged = () => {
-      const id = loadActiveVenueId();
-      setVenueId(id);
-      setGrants(grantsForVenue(id));
-    };
-    window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
-    return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
+  // The grants are a server read now, so retargeting this screen is asynchronous: the selection
+  // changes first and the list follows. `wanted` records which property the newest request was for,
+  // so a slow answer about the venue you just navigated away from cannot land on the one you are
+  // looking at now.
+  const wanted = useRef<string | null>(null);
+  const showGrantsFor = useCallback((id: string | null) => {
+    wanted.current = id;
+    setVenueId(id);
+    if (!id) return setGrants([]);
+    void fetchVenueGrants(id)
+      .then((list) => {
+        if (wanted.current === id) setGrants(list);
+      })
+      // A property you may open but not manage still answers here; anything else (it was deleted,
+      // it was never yours) leaves the list empty rather than showing the previous venue's people.
+      .catch(() => {
+        if (wanted.current === id) setGrants([]);
+      });
   }, []);
 
+  useEffect(() => {
+    void Promise.all([fetchMembers(), fetchCurrentMember()]).then(([list, current]) => {
+      setMembers(list);
+      setMe(current);
+    });
+
+    void fetchVenues().then((list) => {
+      setVenues(list);
+      // The sidebar's stored selection is a per-device UI preference, and it can name a property
+      // this person cannot open — it is written by whoever used this browser last. Resolving it
+      // against the list the SERVER just returned is what keeps that from becoming a blank screen.
+      const stored = loadActiveVenueId();
+      showGrantsFor(list.some((v) => v.id === stored) ? stored : (list[0]?.id ?? null));
+    });
+
+    // Follow the sidebar: switching venues there while this screen is open should retarget it,
+    // rather than leaving the designer editing shares for a property they just navigated away from.
+    const onVenueChanged = () => showGrantsFor(loadActiveVenueId());
+    window.addEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
+    return () => window.removeEventListener(VENUE_CHANGED_EVENT, onVenueChanged);
+  }, [showGrantsFor]);
+
   const pick = (id: string) => {
-    setVenueId(id);
-    setGrants(grantsForVenue(id));
     setError("");
+    showGrantsFor(id);
   };
 
   const venue = venues.find((v) => v.id === venueId);
   const granted = new Set(grants.map((g) => g.email.toLowerCase()));
-  // You already own every venue in this studio, so you are never in your own share list.
-  const addableMembers = members.filter((m) => m.id !== CURRENT_MEMBER_ID && !granted.has(m.email.toLowerCase()));
+  // You are never in your own share list: your access to this property comes from your role or
+  // from the grant you already hold, and the server refuses to write a second one either way.
+  const addableMembers = members.filter((m) => m.id !== me?.id && !granted.has(m.email.toLowerCase()));
 
-  // The storage calls return every grant in the studio; this screen only ever shows one venue's.
-  const apply = (all: VenueGrant[]) => setGrants(all.filter((g) => g.venueId === venueId));
+  const submit = async () => {
+    // Nothing to share until a property exists — the panel below already says so, and this keeps a
+    // stray Enter from calling shareVenue with no venue.
+    if (!venueId) return setError("אין עדיין מתחם לשתף");
 
-  const submit = () => {
-    if (kind === "member") {
-      const member = members.find((m) => m.id === memberId);
-      if (!member) return setError("בחרו חבר צוות");
-      apply(shareVenue({ venueId, name: member.name, email: member.email, kind: "member", role, memberId: member.id }));
-      setMemberId("");
-    } else {
-      const address = email.trim().toLowerCase();
-      if (!EMAIL_RE.test(address)) return setError("כתובת אימייל לא תקינה");
-      if (granted.has(address)) return setError("הכתובת הזו כבר קיבלה גישה למתחם");
-      apply(shareVenue({ venueId, name, email: address, kind: "guest", role }));
+    const input =
+      kind === "member"
+        ? (() => {
+            const member = members.find((m) => m.id === memberId);
+            // The EMAIL is what identifies a member to the server, which looks the id up itself —
+            // a client-supplied user id is exactly the field a hand-made request would forge.
+            return member ? { name: member.name, email: member.email } : null;
+          })()
+        : { name, email: email.trim().toLowerCase() };
+
+    if (!input) return setError("בחרו חבר צוות");
+    if (kind === "guest" && !EMAIL_RE.test(input.email)) return setError("כתובת אימייל לא תקינה");
+
+    const result = await shareVenue({ venueId, ...input, kind, role });
+    setGrants(result.grants);
+    if (result.error) return setError(result.error);
+
+    if (kind === "member") setMemberId("");
+    else {
       setName("");
       setEmail("");
     }
@@ -103,7 +143,7 @@ export function SharingSection() {
         hint="התוכנית של המתחם היא נכס שמשתלם לשתף — מי שעובד באולם הזה יקבל את הקירות והאזורים שציירתם, בלי לצייר אותם מחדש. האירועים, הלקוחות והמחירים שלכם לא נכללים בשיתוף."
         action={
           <Select
-            value={venueId}
+            value={venueId ?? ""}
             onChange={pick}
             options={venues.map((v) => ({ value: v.id, label: v.name }))}
             aria-label="בחירת מתחם"
@@ -147,13 +187,22 @@ export function SharingSection() {
 
                 <Select
                   value={g.role}
-                  onChange={(v) => apply(setGrantRole(g.id, v as VenueRole))}
+                  onChange={(v) => void setGrantRole(g.id, v as VenueRole).then(setGrants)}
                   options={ROLE_OPTIONS}
                   aria-label={`הרשאה — ${g.name}`}
                   className="w-[130px] shrink-0"
                 />
 
-                <RemoveButton label={`ביטול גישה — ${g.name}`} onClick={() => apply(revokeGrant(g.id))} />
+                <RemoveButton
+                  label={`ביטול גישה — ${g.name}`}
+                  onClick={() =>
+                    void revokeGrant(g.id)
+                      .then(setGrants)
+                      // The one refusal a person can actually trigger here is revoking their own
+                      // access, which would lock them out of the property they are standing in.
+                      .catch(() => setError("אי אפשר לבטל את הגישה של עצמכם"))
+                  }
+                />
               </Row>
             ))}
           </div>
@@ -202,7 +251,7 @@ export function SharingSection() {
                   />
                 </label>
                 <RoleField role={role} onChange={setRole} />
-                <ShareButton onClick={submit} />
+                <ShareButton onClick={() => void submit()} />
               </div>
             )
           ) : (

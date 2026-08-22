@@ -3,6 +3,7 @@
 // catalog graph and the self-check runs under node (same shape as aggregate.ts).
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { isMain } from "../self-check";
 
 export interface QuoteItemInfo {
   label: string;
@@ -96,7 +97,7 @@ export function quoteTotals(
 }
 
 // ponytail: self-check for the money paths. Run: node --experimental-strip-types lib/outputs/quote.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

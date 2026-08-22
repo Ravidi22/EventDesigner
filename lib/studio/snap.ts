@@ -1,4 +1,5 @@
 import type { Point } from "./hall";
+import { isMain } from "../self-check";
 
 // Snapping for the shape canvas, pulled out of the component so both modes share one rule set:
 // dragging a vertex/fixture (alignment only) and drawing a new wall (alignment + an angle lock off
@@ -131,7 +132,7 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/snap.ts
-if ((import.meta as { main?: boolean }).main) {
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };

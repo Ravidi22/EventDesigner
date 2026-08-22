@@ -5,14 +5,17 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Check, ChevronRight, LogOut } from "lucide-react";
 import { type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
-import { activeEvent, reachStep, updateEvent } from "@/lib/events/storage";
+import { activeEvent } from "@/lib/events/storage";
+import { patchEvent, reachStep } from "@/lib/events/actions";
 import { beginEvent } from "@/lib/events/begin";
 import { labelForZones } from "@/lib/events/plan";
 import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
-import { loadFlow } from "@/lib/meeting/storage";
-import { findVenue, loadActiveVenueId, loadVenues, zonesForVenue, type Venue, type Zone } from "@/lib/venues/storage";
+import { fetchMeetingFlow } from "@/lib/settings/actions";
+import { loadActiveVenueId, type Venue, type Zone } from "@/lib/venues/storage";
+import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
-import { loadDoc } from "@/lib/studio/storage";
+import { fetchDocument } from "@/lib/studio/actions";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { Button } from "@/components/button";
 import { Select } from "@/components/select";
 import { MultiSelect } from "@/components/multi-select";
@@ -41,29 +44,39 @@ export function MeetingScreen() {
   const [view, setView] = useState(0);
   const [ready, setReady] = useState(false);
 
-  // The flow is read here rather than through useMeetingFlow: resuming has to land on the right
-  // stage on the first paint, and that needs the list and the event in the same pass.
+  // The flow is read here rather than from the (app) layout's context: /meeting sits outside that
+  // group, and resuming has to land on the right stage on the first paint — which needs the list
+  // and the event in the same pass, since the stage to resume at is `event.step` clamped to the
+  // flow's length. Fetched together, for that reason.
   useEffect(() => {
-    const saved = loadFlow();
-    setFlow(saved);
-    if (params.get("new") !== null) {
-      setEvent(null);
-      setView(0);
-    } else {
-      const ev = activeEvent();
-      setEvent(ev);
-      setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
-    }
-    setReady(true);
+    let live = true;
+    const isNew = params.get("new") !== null;
+    // `ready` gates the first paint deliberately: a meeting that flickered through the details form
+    // on its way to the stage the designer left off at would do it in front of the client.
+    void Promise.all([fetchMeetingFlow(), isNew ? Promise.resolve(null) : activeEvent()])
+      .then(([saved, ev]) => {
+        if (!live) return;
+        setFlow(saved);
+        setEvent(ev);
+        setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
+      })
+      .finally(() => {
+        if (live) setReady(true);
+      });
+    return () => {
+      live = false;
+    };
   }, [params]);
 
   const advance = useCallback(
     (next: number) => {
-      if (event) {
-        const list = reachStep(event.id, next);
-        setEvent(list.find((e) => e.id === event.id) ?? event);
-      }
+      // The stage moves NOW and the record catches up: the designer clicked "continue" with a client
+      // watching, and a stage that waits on a round trip to change is a stage that looks broken.
       setView(next);
+      if (event) {
+        setEvent({ ...event, step: Math.max(event.step, next) });
+        void reachStep(event.id, next);
+      }
     },
     [event],
   );
@@ -127,9 +140,9 @@ export function MeetingScreen() {
   // A freshly created event opens on whatever the studio put after the details stage.
   function advanceFor(ev: EventSummary) {
     const next = Math.min(1, flow.length - 1);
-    const list = reachStep(ev.id, next);
-    setEvent(list.find((e) => e.id === ev.id) ?? ev);
+    setEvent({ ...ev, step: Math.max(ev.step, next) });
     setView(next);
+    void reachStep(ev.id, next);
     router.replace("/meeting"); // drop ?new so a refresh resumes the event, not the blank form
   }
 }
@@ -219,12 +232,23 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
   const [guests, setGuests] = useState(event?.guests ?? 0);
 
   useEffect(() => {
-    setVenues(loadVenues());
-    setVenueId((current) => current || event?.venueId || loadActiveVenueId());
+    void fetchVenues().then(setVenues);
+    setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
   }, [event?.venueId]);
 
+  // The zones offered depend on the venue picked above, so this refetches when that changes.
   useEffect(() => {
-    setZones(venueId ? zonesForVenue(venueId) : []);
+    if (!venueId) {
+      setZones([]);
+      return;
+    }
+    let live = true;
+    void fetchVenuePlan(venueId).then(({ zones: list }) => {
+      if (live) setZones(list);
+    });
+    return () => {
+      live = false;
+    };
   }, [venueId]);
 
   useEffect(() => {
@@ -235,7 +259,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       setContact2Name(event.contact2Name ?? "");
       setContact2Phone(event.contact2Phone ?? "");
       setDate(event.date);
-      setVenueId(event.venueId ?? loadActiveVenueId());
+      setVenueId(event.venueId ?? loadActiveVenueId() ?? "");
       setZoneIds(event.zoneIds);
       setGuests(event.guests ?? 0);
     }
@@ -249,7 +273,7 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
     setZoneIds([]);
   };
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     const picked = zoneIds.map((id) => zones.find((z) => z.id === id)).filter((z): z is Zone => !!z);
     const fields = {
@@ -264,11 +288,16 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
       zoneIds: picked.map((z) => z.id),
       zonesLabel: labelForZones(picked),
     };
+    // Unlike every other stage, this one WAITS for the write. The whole meeting hangs off the event
+    // existing — the sketch stages save a document under its id, the quote stamps it — so advancing
+    // before the row is there would leave the next stage drawing into nothing.
     if (event) {
-      const list = updateEvent(event.id, fields);
+      const list = await patchEvent(event.id, fields);
       onSaved(list.find((x) => x.id === event.id) ?? event);
     } else {
-      onSaved(beginEvent({ ...fields, mmPerUnit: findVenue(venueId)?.plan.mmPerUnit ?? 1 }));
+      // The venue list is already in state from the picker above — no need to go back to the server
+      // for a scale we are holding.
+      onSaved(await beginEvent({ ...fields, mmPerUnit: venues.find((v) => v.id === venueId)?.plan.mmPerUnit ?? 1 }));
     }
   };
 
@@ -332,12 +361,34 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
 // F-1.9: close the meeting with a quote — the one stage where prices are shown on purpose.
 // The Quote component itself carries issue / re-issue / share (F-7.1–F-7.4).
 function QuoteStep({ event }: { event: EventSummary }) {
-  const [doc] = useState(() => loadDoc());
+  // The drawing is a server read now, so "not loaded yet" and "no drawing" are two different
+  // states — and this stage runs with the client in the room, where "עדיין אין עיצוב" flashing
+  // before their own plan appears would be its own small disaster.
+  const [doc, setDoc] = useState<DesignDocumentContent | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+    void fetchDocument(event.id).then((stored) => {
+      if (!live) return;
+      setDoc(stored?.content ?? null);
+      setLoading(false);
+    });
+    return () => {
+      live = false;
+    };
+  }, [event.id]);
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">
       <h2 className="mb-6 border-b border-ink pb-3 font-display text-h2 text-ink">סגירה — הצעת מחיר</h2>
-      {doc ? <Quote doc={doc} /> : <p className="py-16 text-center text-sm text-muted">עדיין אין עיצוב לאירוע {event.clientName}.</p>}
+      {loading ? (
+        <p className="py-16 text-center text-sm text-muted">טוען את העיצוב…</p>
+      ) : doc ? (
+        <Quote doc={doc} />
+      ) : (
+        <p className="py-16 text-center text-sm text-muted">עדיין אין עיצוב לאירוע {event.clientName}.</p>
+      )}
 
       {/* The operational half (F-6) is prepared later, in management mode — the client is still in
           the room here, and a packing list is not theirs to read. This is the door to it, not the

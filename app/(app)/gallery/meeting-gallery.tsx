@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Heart } from "lucide-react";
+import { GalleryVerticalEnd, Heart } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
 import { activeEvent } from "@/lib/events/storage";
-import { loadFolder, toggleLike, loadImages, loadPresentations } from "@/lib/gallery/storage";
+import { fetchFolder, toggleLike, fetchImages, fetchPresentations } from "@/lib/gallery/actions";
 import { PresentationCard } from "./gallery-screen";
+import { Photo } from "@/components/photo";
+import { EmptyState } from "@/components/empty-state";
 
 type View = "presentations" | "folder";
 
@@ -26,14 +28,31 @@ export function MeetingGalleryScreen() {
   const [folder, setFolder] = useState<string[]>([]);
   const [view, setView] = useState<View>("presentations");
 
-  // localStorage is client-only — hydrate after mount.
+  // Hydrate after mount. All of it is a server read now — which is the point for the folder: the
+  // client is liking photos on a tablet while the designer draws on a laptop, and a like that lands
+  // in one browser's storage is a like the other device never sees.
   useEffect(() => {
-    setImages(loadImages());
-    setPresentations(loadPresentations());
-    const ev = activeEvent();
-    setEventId(ev?.id ?? null);
-    setClientName(ev?.clientName ?? "");
-    if (ev) setFolder(loadFolder(ev.id));
+    let live = true;
+    void (async () => {
+      const [loadedImages, loadedPresentations] = await Promise.all([
+        fetchImages(),
+        fetchPresentations(),
+      ]);
+      if (!live) return;
+      setImages(loadedImages);
+      setPresentations(loadedPresentations);
+    })();
+    void activeEvent().then(async (ev) => {
+      if (!live) return;
+      setEventId(ev?.id ?? null);
+      setClientName(ev?.clientName ?? "");
+      if (!ev) return;
+      const liked = await fetchFolder(ev.id);
+      if (live) setFolder(liked);
+    });
+    return () => {
+      live = false;
+    };
   }, []);
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
@@ -52,7 +71,13 @@ export function MeetingGalleryScreen() {
 
       {view === "presentations" ? (
         presentations.length === 0 ? (
-          <p className="py-20 text-center text-sm text-muted">אין עדיין תצוגות.</p>
+          // No create action here on purpose: this screen runs with a client in the room, and the
+          // fix ("build a presentation") is studio work for afterwards, not something to open now.
+          <EmptyState
+            icon={GalleryVerticalEnd}
+            title="אין עדיין תצוגות"
+            body="התצוגות נבנות במסך ״גלריה ותצוגות״ בסטודיו. אפשר להמשיך בפגישה בלעדיהן ולחזור לכאן אחר כך."
+          />
         ) : (
           <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
             {presentations.map((p) => (
@@ -72,7 +97,18 @@ export function MeetingGalleryScreen() {
           folder={folder}
           imageById={imageById}
           clientName={clientName}
-          onUnlike={(imageId) => eventId && setFolder(toggleLike(eventId, imageId))}
+          onUnlike={(imageId) => {
+            if (!eventId) return;
+            // Optimistic: the heart clears under the finger, and the server answer replaces the
+            // list a moment later. A like is one row either way, so the two cannot drift far.
+            setFolder((prev) => prev.filter((x) => x !== imageId));
+            void toggleLike(eventId, imageId)
+              .then(setFolder)
+              .catch(() => {
+                // Put it back rather than lie about what the client chose.
+                void fetchFolder(eventId).then(setFolder);
+              });
+          }}
         />
       )}
     </div>
@@ -109,14 +145,11 @@ function FolderView({
   const items = folder.map((id) => imageById.get(id)).filter((i): i is GalleryImage => !!i);
   if (items.length === 0) {
     return (
-      <div className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
-        <Heart className="mb-4 h-8 w-8 text-muted" strokeWidth={1.5} />
-        <h2 className="font-display text-h2 text-ink">תיק האירוע עדיין ריק</h2>
-        <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-          עברו עם {clientName || "הלקוח"} על התצוגות וסמנו ♥ את מה שאהב — התמונות ייאספו לכאן, והמוצרים
-          המקושרים יחכו לכם בראש מסילת הסטודיו.
-        </p>
-      </div>
+      <EmptyState
+        icon={Heart}
+        title="תיק האירוע עדיין ריק"
+        body={`עברו עם ${clientName || "הלקוח"} על התצוגות וסמנו ♥ את מה שאהב — התמונות ייאספו לכאן, והמוצרים המקושרים יחכו לכם בראש מסילת הסטודיו.`}
+      />
     );
   }
   return (
@@ -124,12 +157,7 @@ function FolderView({
       {items.map((img) => (
         <article key={img.id} className="group flex flex-col">
           <div className="relative">
-            <div
-              className="aspect-[4/5] w-full rounded-lg border border-border"
-              style={{ background: img.tone }}
-              role="img"
-              aria-label={img.name}
-            />
+            <Photo image={img} className="aspect-[4/5] w-full rounded-lg border border-border object-cover" />
             <button
               type="button"
               onClick={() => onUnlike(img.id)}

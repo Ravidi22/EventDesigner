@@ -25,12 +25,31 @@ docs/                      requirements + architecture (source of truth)
 ```bash
 cp .env.example .env.local     # DATABASE_URL for local Postgres
 docker compose up -d           # local Postgres (needs Docker Desktop)
-npm run db:push                # apply the schema
+npm run db:migrate             # apply drizzle/*.sql (NOT db:push — see below)
 npm run dev                    # http://localhost:3000
 ```
 
 Other: `npm run check:actions` (reducer/undo-redo self-check), `npm run db:studio`,
 `npm run build`.
+
+### Changing the schema
+
+The database is on **generated migrations**, not `db:push`. Since August 2026 there is a hosted
+database with data worth not losing, and `push` reaches a schema without leaving a record of how —
+which is fine until two databases have to agree.
+
+```bash
+# 1. edit lib/db/schema.ts
+npm run db:generate            # writes drizzle/NNNN_<name>.sql + a snapshot
+npm run db:migrate             # applies it locally
+# 3. commit the .sql, the snapshot AND drizzle/meta/_journal.json together
+```
+
+`db:push` still exists for throwaway experiments against a scratch database. Do not point it at
+Neon: it would reach the same schema while leaving `__drizzle_migrations` claiming otherwise, and
+the next real migration would then be generated against a snapshot that no longer describes
+anything. Production is applied by running `db:migrate` with `DIRECT_URL` set to Neon's direct
+host — deploying does **not** run migrations on its own.
 
 ## Status
 

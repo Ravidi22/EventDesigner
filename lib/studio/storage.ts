@@ -1,42 +1,50 @@
-// Continuous autosave of the design document to localStorage (F-5.5 — no save button).
-// The swap to a server action lives here and nowhere else.
-// Keys are derived from the ACTIVE EVENT (F-1.2): each event's document + hall park and
-// resume independently, so leaving mid-flow and reopening another event is always safe.
-// Only the DOCUMENT lives here. The hall used to be snapshotted alongside it, per event; it isn't
-// any more — geometry belongs to the venue and resolves on read (lib/events/plan.ts), so there is
-// nothing here that could go stale against the property it draws.
+"use client";
+// The SCRATCH drawing — the one design document that has no event to belong to.
+//
+// This file used to be the document store: per-event keys in localStorage, autosaved by the studio.
+// It isn't any more. Postgres is, behind lib/studio/actions.ts, and every drawing that belongs to an
+// event lives there — which was the whole point, since a plan in a browser profile does not survive
+// the laptop it was drawn on.
+//
+// What survives here is the case the database cannot hold. design_documents.event_id is NOT NULL
+// with a foreign key, so a drawing made before any event exists has nothing to hang off: a studio
+// with no events at all opens /studio on a blank plane, and someone sketching there is sketching
+// against a row that cannot be written yet. That drawing stayed local before this migration, and it
+// stays local now — under the same "default" key it always used, so a sketch started before the
+// crossing is still there after it.
+//
+// It is the same kind of thing as `events.active` (lib/events/storage.ts): per-device state, not
+// studio data. The moment the event exists, beginEvent() writes the real document to the server and
+// this key stops being consulted.
 import { storageKey } from "@/lib/storage-keys";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
-import { activeEvent } from "@/lib/events/storage";
 
-// activeEvent() (not the raw id) so the fallback event resolves to the same key the
-// gallery folder uses — one notion of "the active event" everywhere.
-const docKey = () => storageKey(`studio.doc.${activeEvent()?.id ?? "default"}`);
+const SCRATCH_KEY = storageKey("studio.doc.default");
 
-export function loadDoc(): DesignDocumentContent | null {
+export function loadScratch(): DesignDocumentContent | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(docKey());
+    const raw = window.localStorage.getItem(SCRATCH_KEY);
     return raw ? (JSON.parse(raw) as DesignDocumentContent) : null;
   } catch {
     return null;
   }
 }
 
-// Returns whether the write landed. The studio surfaces a failed save rather than
-// claiming "saved" — a plan that silently didn't persist is the exact drift this tool exists to prevent.
-export function saveDoc(content: DesignDocumentContent): boolean {
+/** Returns whether the write landed — the studio surfaces a failed save rather than claiming
+ *  "saved", here for the same reason it does for the server path. A plan that silently didn't
+ *  persist is the exact drift this tool exists to prevent. */
+export function saveScratch(content: DesignDocumentContent): boolean {
   if (typeof window === "undefined") return false;
   try {
-    window.localStorage.setItem(docKey(), JSON.stringify(content));
+    window.localStorage.setItem(SCRATCH_KEY, JSON.stringify(content));
     return true;
   } catch {
-    // Storage full, blocked, or private-mode — non-fatal; the in-memory doc is still the source of truth.
+    // Storage full, blocked, or private-mode — non-fatal; the in-memory doc is still what renders.
     return false;
   }
 }
 
-export function clearDoc(): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(docKey());
-}
+// There is no clearScratch(). Nothing called the old clearDoc() either, and the one place that
+// wants this gone — "ניקוי נתוני המכשיר" in settings — drops every `eve.*` key at once
+// (lib/settings/data.ts). A second way to delete the same thing is a second thing to keep correct.
