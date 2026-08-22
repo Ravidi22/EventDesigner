@@ -115,8 +115,12 @@ export function VenueInspector({
 }) {
   if (selection.length === 0) return null;
 
+  // Paired with each branch's own InspectorHeader, at the top — not down in the footer with
+  // deleteBtn, which is where it used to live back when this panel was one horizontal row and
+  // "top" wasn't a place that meant anything yet. shrink-0 keeps it from ever being squeezed by a
+  // long header label sharing its row.
   const closeBtn = (
-    <IconButton label="סגירת בחירה" className="ms-auto" onClick={onClose}>
+    <IconButton label="סגירת בחירה" className="shrink-0" onClick={onClose}>
       <X className="h-4 w-4" strokeWidth={2} />
     </IconButton>
   );
@@ -135,7 +139,10 @@ export function VenueInspector({
     // with geometry (marquee over a room catches its tint and its walls at once).
     return (
       <div className={WRAP}>
-        <InspectorHeader icon={Layers} label={`${selection.length} ${kind ? KIND_NOUN[kind] : "פריטים"} נבחרו`} />
+        <div className="flex items-center justify-between gap-2">
+          <InspectorHeader icon={Layers} label={`${selection.length} ${kind ? KIND_NOUN[kind] : "פריטים"} נבחרו`} />
+          {closeBtn}
+        </div>
         <InspectorDivider orientation="column" />
         {/* A field only appears for a group when it means the same thing for every member. Length
             doesn't (six walls have six lengths); kind does. */}
@@ -172,10 +179,7 @@ export function VenueInspector({
           </InspectorGroup>
         )}
         <InspectorDivider orientation="column" />
-        <div className={FOOTER}>
-          {deleteBtn}
-          {closeBtn}
-        </div>
+        <div className={FOOTER}>{deleteBtn}</div>
       </div>
     );
   }
@@ -190,7 +194,10 @@ export function VenueInspector({
     const doors = structure.entrances.filter((e) => e.wallId === wall.id).length;
     return (
       <div className={WRAP}>
-        <InspectorHeader icon={Shapes} label={wall.kind === "edge" ? "גבול שטח" : "קיר"} />
+        <div className="flex items-center justify-between gap-2">
+          <InspectorHeader icon={Shapes} label={wall.kind === "edge" ? "גבול שטח" : "קיר"} />
+          {closeBtn}
+        </div>
         <InspectorDivider orientation="column" />
         <InspectorGroup>
           <NumberField
@@ -276,10 +283,7 @@ export function VenueInspector({
           {doors > 0 && <span className="shrink-0 text-xs text-muted nums">{doors} כניסות</span>}
         </div>
         <InspectorDivider orientation="column" />
-        <div className={FOOTER}>
-          {deleteBtn}
-          {closeBtn}
-        </div>
+        <div className={FOOTER}>{deleteBtn}</div>
       </div>
     );
   }
@@ -290,7 +294,10 @@ export function VenueInspector({
     const attached = structure.walls.filter((w) => w.a === node.id || w.b === node.id).length;
     return (
       <div className={WRAP}>
-        <InspectorHeader icon={CircleDot} label="פינה" />
+        <div className="flex items-center justify-between gap-2">
+          <InspectorHeader icon={CircleDot} label="פינה" />
+          {closeBtn}
+        </div>
         <InspectorDivider orientation="column" />
         <InspectorGroup>
           <NumberField
@@ -318,10 +325,7 @@ export function VenueInspector({
           <span className="nums">{attached}</span> קירות נפגשים כאן
         </span>
         <InspectorDivider orientation="column" />
-        <div className={FOOTER}>
-          {deleteBtn}
-          {closeBtn}
-        </div>
+        <div className={FOOTER}>{deleteBtn}</div>
       </div>
     );
   }
@@ -333,7 +337,10 @@ export function VenueInspector({
     if (!door || !pts) return null;
     return (
       <div className={WRAP}>
-        <InspectorHeader icon={DoorOpen} label="כניסה" />
+        <div className="flex items-center justify-between gap-2">
+          <InspectorHeader icon={DoorOpen} label="כניסה" />
+          {closeBtn}
+        </div>
         <InspectorDivider orientation="column" />
         <InspectorGroup>
           <NumberField
@@ -380,10 +387,7 @@ export function VenueInspector({
           />
         </div>
         <InspectorDivider orientation="column" />
-        <div className={FOOTER}>
-          {deleteBtn}
-          {closeBtn}
-        </div>
+        <div className={FOOTER}>{deleteBtn}</div>
       </div>
     );
   }
@@ -393,7 +397,10 @@ export function VenueInspector({
   const patch = (p: Parameters<typeof updateFeature>[2]) => apply((s) => updateFeature(s, feature.id, p));
   return (
     <div className={WRAP}>
-      <InspectorHeader icon={Shapes} label={FEATURE_KIND_LABEL[feature.kind]} />
+      <div className="flex items-center justify-between gap-2">
+        <InspectorHeader icon={Shapes} label={FEATURE_KIND_LABEL[feature.kind]} />
+        {closeBtn}
+      </div>
       <InspectorDivider orientation="column" />
       <InspectorGroup>
         <input
@@ -460,10 +467,7 @@ export function VenueInspector({
       </InspectorGroup>
       <InspectorDivider orientation="column" />
       <StairsFields feature={feature} apply={apply} />
-      <div className={FOOTER}>
-        {deleteBtn}
-        {closeBtn}
-      </div>
+      <div className={FOOTER}>{deleteBtn}</div>
     </div>
   );
 }

@@ -146,6 +146,24 @@ const HALO = {
 
 const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
 
+// The grid pattern's own on-screen cell size, kept roughly constant across zoom levels rather than
+// the world-space interval (gridMm) being what's constant. A fixed-mm grid inverts what a designer
+// actually wants: zoomed OUT over a whole property, its lines pack together into a dense, near-solid
+// wash; zoomed IN on one corner, the same lines spread into one or two squares big enough to lose
+// entirely. Stepping the interval itself through a 1-2-5 sequence — the standard axis-tick
+// progression — is what keeps each cell landing in a comfortable pixel range at every zoom instead:
+// bigger world-space squares once zoomed out, smaller ones once zoomed in. Snapping stays on the
+// caller's own fixed gridMm regardless — that one is a precision choice, not a display choice, and
+// has no reason to drift with how far the view happens to be zoomed at the moment.
+function adaptiveGridMm(mmPerPx: number, targetPx = 64): number {
+  const targetMm = targetPx * mmPerPx;
+  const magnitude = 10 ** Math.floor(Math.log10(targetMm));
+  for (const step of [1, 2, 5, 10]) {
+    if (step * magnitude >= targetMm) return step * magnitude;
+  }
+  return 10 * magnitude;
+}
+
 // Frames the closed shape (doors are plain gaps in the wall now, so there's no swing arc to keep
 // in view). Only used in edit mode — while drawing we hold a fixed frame instead (see below).
 function computeViewBox(outline: Point[], stage: Fixture | undefined, bars: Fixture[], padMm: number, minExtent: { w: number; h: number }, extra: Point[] = []) {
@@ -318,6 +336,7 @@ export function PlanCanvas({
   padMm = PAD_MM,
   minExtentMm = DEFAULT_EXTENT,
   gridMm = 1000,
+  gridColorClassName = "text-border",
 }: {
   mode: "draw" | "edit";
   outline: Point[];
@@ -411,6 +430,11 @@ export function PlanCanvas({
   padMm?: number; // frame padding + minimum extent + grid spacing — hall-scale by default, smaller for
   minExtentMm?: { w: number; h: number }; // product footprints (cm-scale) so a small shape isn't tiny
   gridMm?: number;
+  /** The grid's own line colour — a `text-*` class, read via currentColor. Defaults to the
+   *  hairline every canvas used against its old white background; a host that paints its own
+   *  bg-canvas a colour close to text-border in value (the halls screen's light-purple canvas,
+   *  say) needs a line with more contrast against it, or the grid just disappears. */
+  gridColorClassName?: string;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [cursorRaw, setCursorRaw] = useState<Point | null>(null); // unsnapped pointer, in mm — the snap is re-derived per render
@@ -550,6 +574,9 @@ export function PlanCanvas({
   }, [rect.w, rect.h]);
 
   const mm = (px: number) => px * mmPerPx; // screen px → world mm, for markers that stay a fixed screen size
+  // The grid pattern's own interval — see adaptiveGridMm. Independent of gridMm, which still drives
+  // snapping untouched.
+  const displayGridMm = adaptiveGridMm(mmPerPx);
 
   const clientToMm = (clientX: number, clientY: number): Point => {
     const svg = svgRef.current;
@@ -910,7 +937,14 @@ export function PlanCanvas({
             ? "cursor-pointer"
             : mode === "draw" || cursor === "crosshair"
               ? "cursor-crosshair"
-              : "cursor-default")
+              // The only remaining case is edit mode's own resting cursor, which is a hand rather
+              // than an arrow: a plain drag on empty canvas here already pans (see onPointerDown
+              // below — marquee now needs the additive modifier), so the cursor should say so
+              // before the user ever presses, the way a drawing app's canvas-pan gesture always
+              // reads as a hand. Any handle the pointer is actually over still wins — each sets its
+              // own cursor-* class directly on itself, which the DOM resolves ahead of this root
+              // default regardless.
+              : "cursor-grab active:cursor-grabbing")
       }
       role="img"
       aria-label={ariaLabel}
@@ -922,7 +956,13 @@ export function PlanCanvas({
           cancelFocus(); // the view is the user's again the instant they grab it
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           pan.current = { x: e.clientX, y: e.clientY, moved: false, ax: e.clientX, ay: e.clientY };
-        } else if (mode === "edit" && canMarquee) {
+        } else if (mode === "edit" && canMarquee && isAdditiveClick(e)) {
+          // Marquee now lives behind the same additive modifier (Shift/Ctrl/Cmd) as adding to a
+          // selection — a plain drag pans instead (see the next branch), matching every drawing
+          // app's own "the canvas always pans, rubber-band select is the modified gesture" split,
+          // and giving a plain drag on empty canvas the one behaviour its resting cursor (a hand,
+          // see above) now promises.
+          //
           // A press that reached the svg missed every *draggable* handle (those stopPropagation),
           // but it may still be a plain click on something selectable in a host layer — a zone
           // tint, a wall, a door — since those have to let the press through or a marquee could
@@ -935,9 +975,10 @@ export function PlanCanvas({
           const p = clientToMm(e.clientX, e.clientY);
           marquee.current = { anchorClientX: e.clientX, anchorClientY: e.clientY, x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
         } else if (mode === "edit") {
-          // No marquee to draw here (the host takes no multi-selection), so a drag on empty canvas
-          // means the only other thing it could mean: move the view. Same deferred capture as the
-          // marquee, for the same reason — a press that never travels is still a click.
+          // Either there's no marquee host at all, or this press isn't holding the modifier marquee
+          // now needs — either way, a drag on empty canvas means the only other thing it could mean:
+          // move the view. Same deferred capture as the marquee, for the same reason — a press that
+          // never travels is still a click.
           pan.current = { x: e.clientX, y: e.clientY, moved: false, deferred: true, ax: e.clientX, ay: e.clientY };
         }
       }}
@@ -1030,8 +1071,8 @@ export function PlanCanvas({
       }
     >
       <defs>
-        <pattern id="plan-canvas-grid" width={gridMm} height={gridMm} patternUnits="userSpaceOnUse">
-          <path d={`M ${gridMm} 0 L 0 0 0 ${gridMm}`} fill="none" className="text-border" stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <pattern id="plan-canvas-grid" width={displayGridMm} height={displayGridMm} patternUnits="userSpaceOnUse">
+          <path d={`M ${displayGridMm} 0 L 0 0 0 ${displayGridMm}`} fill="none" className={gridColorClassName} stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
         </pattern>
       </defs>
       <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#plan-canvas-grid)" />
@@ -1623,6 +1664,23 @@ export function PlanCanvas({
           const mid = edgeMidpoint(a, b, curve);
           return (
             <text key={i} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
+              {(wallLengthMm(a, b) / 1000).toFixed(2)}
+            </text>
+          );
+        })}
+
+      {/* The graph's own counterpart to the overlay above — a host built on the wall graph (the
+          venue plan) has no `outline` at all, so its walls never got a length label no matter what
+          the ruler toggle said. Same toggle, same placement, just reading graph.walls/graphNodeAt
+          instead of the outline array. */}
+      {showDims &&
+        graph?.walls.map((w) => {
+          const a = graphNodeAt(w.a);
+          const b = graphNodeAt(w.b);
+          if (!a || !b) return null;
+          const mid = edgeMidpoint(a, b, w.curve ?? null);
+          return (
+            <text key={w.id} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
               {(wallLengthMm(a, b) / 1000).toFixed(2)}
             </text>
           );
