@@ -61,17 +61,34 @@ export function CanvasStage({
   onDropProduct: (productId: string, x: number, y: number) => void;
   onPlaceTable?: (x: number, y: number) => void;
 }) {
-  // Frame the event's zones once, and only once there is something to frame — the plan resolves
-  // from storage after mount, so framing on the first render would spend the one move on an empty
-  // box and leave the event off-screen. The nonce never changes after that, so the designer's own
-  // panning is never yanked back mid-work.
+  // Frame the event's zones, and only once there is something to frame — the plan resolves from the
+  // server after mount, so framing on the first render would spend the move on an empty box and
+  // leave the event off-screen.
+  //
+  // Keyed on the BOX, not on a "have I framed yet" flag. The box is a pure function of the event and
+  // the zones it occupies, so it changes exactly when the answer to "what am I looking at" changes —
+  // another event opened from the sidebar, or the designer editing which zones this one occupies in
+  // the details stage and stepping back here. It does NOT change while drawing, so the designer's own
+  // panning is still never yanked back mid-work.
+  //
+  // The first framing CUTS and every later one TRAVELS (CanvasFocus.immediate): opening a stage is
+  // not a journey from a default frame nobody asked to see, but being moved from the חופה to the
+  // hall is a journey, and the travel is what says so.
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
-  const framed = useRef(false);
+  const framedBox = useRef<string | null>(null);
+  const nonce = useRef(0);
+  const { minX, minY, maxX, maxY, widthMm, heightMm } = plan.bounds;
   useEffect(() => {
-    if (framed.current || !plan.bounds.widthMm) return;
-    framed.current = true;
-    setFocus({ ...plan.bounds, nonce: 1 });
-  }, [plan.bounds]);
+    // widthMm OR heightMm: a zone drawn as a narrow strip is degenerate on one axis and still a real
+    // place to be taken to.
+    if (!widthMm && !heightMm) return;
+    const box = `${minX},${minY},${maxX},${maxY}`;
+    if (framedBox.current === box) return;
+    const first = framedBox.current === null;
+    framedBox.current = box;
+    nonce.current += 1;
+    setFocus({ minX, minY, maxX, maxY, nonce: nonce.current, immediate: first });
+  }, [minX, minY, maxX, maxY, widthMm, heightMm]);
 
   const eventZoneIds = plan.zones.map((r) => r.zone.id);
   const others = plan.all.filter((r) => !eventZoneIds.includes(r.zone.id));

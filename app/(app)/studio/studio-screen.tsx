@@ -169,6 +169,22 @@ export function StudioScreen({
     return () => clearTimeout(t);
   }, [doc, restored, flush]);
 
+  // ⚠ THE DEBOUNCE DOES NOT SURVIVE AN UNMOUNT. The effect above clears its own timer on the way
+  // out, so a document still inside the 500ms window was simply dropped — and this screen is
+  // unmounted constantly: the meeting steps it in and out (hall → gallery → design), and "יציאה"
+  // navigates away from it. Place a table, press "השלב הבא" half a second later, and the table was
+  // gone, silently, with the client watching. beforeunload never saw any of it — that fires for a
+  // closing tab, not for a client-side route change.
+  //
+  // Flushing here rather than lengthening the window: the write outlives the component, and a save
+  // that has already been decided on should not depend on the screen staying mounted to finish.
+  useEffect(
+    () => () => {
+      if (pending.current) void flush();
+    },
+    [flush],
+  );
+
   const retrySave = useCallback(() => {
     pending.current ??= doc;
     void flush();
