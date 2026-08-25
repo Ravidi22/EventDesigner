@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
+import { CalendarSync, Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
+import type { GoogleStatus } from "@/lib/google/actions";
 import type { StudioMember } from "@/lib/team/types";
 import { BusinessSection } from "./business-section";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
 import { TeamSection } from "./team-section";
 import { SharingSection } from "./sharing-section";
+import { CalendarSection } from "./calendar-section";
 import { DataSection } from "./data-section";
 
 // Settings, in six sections along the axis each one belongs to:
@@ -28,6 +30,7 @@ const SECTIONS = [
   { id: "meeting", label: "מצב פגישה", icon: ListChecks },
   { id: "team", label: "צוות והרשאות", icon: Users },
   { id: "sharing", label: "מתחמים ושיתוף", icon: Share2 },
+  { id: "calendar", label: "יומן Google", icon: CalendarSync },
   { id: "data", label: "נתונים", icon: Database },
 ] as const;
 
@@ -40,10 +43,12 @@ export function SettingsScreen({
   initialSettings,
   initialMe,
   initialMembers,
+  initialGoogle,
 }: {
   initialSettings: BusinessSettings;
   initialMe: StudioMember | null;
   initialMembers: StudioMember[];
+  initialGoogle: GoogleStatus;
 }) {
   const [section, setSection] = useState<SectionId>("business");
 
@@ -93,6 +98,7 @@ export function SettingsScreen({
         {section === "meeting" && <MeetingSection />}
         {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} />}
         {section === "sharing" && <SharingSection initialMembers={initialMembers} initialMe={initialMe} />}
+        {section === "calendar" && <CalendarSection initialStatus={initialGoogle} />}
         {section === "data" && <DataSection />}
       </div>
     </div>

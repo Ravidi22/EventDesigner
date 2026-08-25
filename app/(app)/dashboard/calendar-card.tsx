@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronRight, Clock, Plus } from "lucide-react";
+import { CheckCircle2, ChevronRight, Lock, Plus } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
 import { APPOINTMENT_KIND_LABEL, appointmentLabel, appointmentTimeLabel, byDate } from "@/lib/appointments/types";
+import type { BusyBlock } from "@/lib/google/types";
+import type { BusyHandle } from "@/lib/google/use-busy";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import type { MeetingStepId } from "@/lib/meeting/steps";
 import { IconButton } from "@/components/icon-button";
@@ -23,6 +25,8 @@ import {
   NOTE_THEME,
   noteTone,
   STATUS_CARD_THEME,
+  KIND_ICON,
+  kindTheme,
   PAST_DAY_FILL,
   PAST_DAY_HATCH,
 } from "./dashboard-view-utils";
@@ -83,20 +87,32 @@ type Mode = "week" | "month";
 // `onOpenEvent` is likewise supplied by the parent; each event's own card color comes from `STATUS_CARD_THEME`,
 // keyed to its status, so no external color resolver is needed here.
 //
-// TWO KINDS OF THING LAND IN A DAY, and they are drawn to be told apart at arm's length. An EVENT
-// is the wedding — a filled card in its status colour, with a progress bar, because it is a body of
-// work. An APPOINTMENT is an hour in a diary — a thin outlined chip with a clock — because it is
-// not. Clicking an event opens its drawer; clicking a chip opens the meeting for editing; and the
-// day's own "+" books a new one on that date, which is the write this calendar never had.
+// TWO KINDS OF THING LAND IN A DAY, and they now wear ONE CARD. An EVENT is the wedding — filled in
+// its status colour, with a progress bar, because it is a body of work. A DIARY ENTRY is an hour in
+// a diary, filled in its KIND's colour — a sit-down, an אילוץ, a חופשה, a delivery — because what
+// kind of thing it is, is the only fact it has to give. Same radius, same padding, same type sizes:
+// a day's contents read as one list of what is happening, not as two competing widget styles.
+//
+// (This is a deliberate reversal. The diary entry used to be a thin outlined chip, drawn unlike an
+// event on purpose so the two could be told apart at arm's length. They still can be — by the kind
+// icon and the 3px hue rail that only a diary card wears — but the difference is now carried by the
+// card's CONTENT rather than by giving one species a second-class shape.)
+//
+// Clicking an event opens its drawer; clicking a diary card opens it for editing; and the day's own
+// "+" books a new one on that date, which is the write this calendar never had.
 export function CalendarCard({
   events,
   appointments,
+  busy,
   onOpenEvent,
   onOpenAppointment,
   onCreateAppointment,
 }: {
   events: EventSummary[];
   appointments: Appointment[];
+  /** The designer's own Google entries (lib/google/use-busy.ts). An OVERLAY: it never gains a click
+   *  handler and never counts as the studio's work — see BusyChip below. */
+  busy: BusyHandle;
   onOpenEvent: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
   /** Book a meeting on this ISO date — the day the designer clicked. */
@@ -144,6 +160,14 @@ export function CalendarCard({
   const appointmentsByDate = useMemo(() => byDate(appointments), [appointments]);
 
   const days = mode === "week" ? weekGrid(anchor) : monthGrid(anchor);
+  // Ask Google for whatever this grid is showing. In an effect rather than during render, because
+  // it can set state; `ensureRange` is idempotent and returns immediately when the range is already
+  // loaded, so the cost of running it on every navigation is a string comparison.
+  const firstDay = toISODate(days[0]);
+  const lastDay = toISODate(days[days.length - 1]);
+  useEffect(() => {
+    busy.ensureRange(firstDay, lastDay);
+  }, [busy, firstDay, lastDay]);
   // One pass for the whole grid, not per cell: a band's label depends on the cell before it.
   const notes = dayNotes(days);
   const title = mode === "week" ? "השבוע שלי" : "החודש שלי";
@@ -226,6 +250,7 @@ export function CalendarCard({
             const iso = toISODate(d);
             const dayEvents = eventsByDate.get(iso) ?? [];
             const dayAppointments = appointmentsByDate.get(iso) ?? [];
+            const dayBusy = busy.byDate.get(iso) ?? [];
             const isToday = sameDay(d, today);
             const isPast = !isToday && iso < todayIso;
             const inMonth = mode === "week" || d.getMonth() === anchor.getMonth();
@@ -233,9 +258,16 @@ export function CalendarCard({
             // it can't push the wedding out of its own cell.
             const visible = dayEvents.slice(0, maxVisible);
             const visibleAppointments = dayAppointments.slice(0, maxVisible);
+            // ONE busy block visible in a month cell, not two. These are the designer's private
+            // errands, not the studio's work: they earn a place in the cell so a day that looks free
+            // is not quietly double-booked, and they must not be the reason a wedding is hidden.
+            const visibleBusy = dayBusy.slice(0, mode === "week" ? maxVisible : 1);
             // One "+N נוספים" for the whole day, counting both kinds — a cell with two hidden meetings
             // and one hidden event has three more things in it, and that is what it should say.
-            const overflow = dayEvents.length - visible.length + (dayAppointments.length - visibleAppointments.length);
+            const overflow =
+              dayEvents.length - visible.length +
+              (dayAppointments.length - visibleAppointments.length) +
+              (dayBusy.length - visibleBusy.length);
             const isExpanded = expandedDate === iso;
             const note = notes[i];
 
@@ -301,7 +333,15 @@ export function CalendarCard({
                     <EventCard key={e.id} event={e} flow={flow} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
                   ))}
                   {(isExpanded ? dayAppointments : visibleAppointments).map((a) => (
-                    <AppointmentChip key={a.id} appointment={a} onClick={() => onOpenAppointment(a)} />
+                    <AppointmentChip
+                      key={a.id}
+                      appointment={a}
+                      compact={mode === "month"}
+                      onClick={() => onOpenAppointment(a)}
+                    />
+                  ))}
+                  {(isExpanded ? dayBusy : visibleBusy).map((b) => (
+                    <BusyChip key={b.id} block={b} compact={mode === "month"} />
                   ))}
                   {overflow > 0 && (
                     <button
@@ -358,20 +398,45 @@ export function CalendarCard({
   );
 }
 
-// A meeting in a day cell. Deliberately NOT an EventCard: no fill, no progress bar, no status word —
-// an hour in a diary has no stages to be at. One outlined row with a clock, which also keeps it
-// legible against the status colours the events beside it are wearing.
+// A diary entry in a day cell. THE SAME CARD AN EVENT GETS — same radius, same padding, same type
+// sizes, the same lift on hover — because a designer scanning a day wants to read what is happening
+// on it, not to decode two widget vocabularies. What differs is what each card can honestly say: an
+// event spends its last two lines on a progress bar and a status word, and a diary entry has neither
+// (an hour in a diary has no stages to be at), so it spends its lines on the note and the kind.
+//
+// COLOUR IS THE KIND HERE, not the status — see KIND_CARD_THEME. The fill is the kind's tint, the
+// leading 3px rail is the kind's full hue, and the icon is its glyph. The rail and the icon are also
+// the tell between the species: no event card carries either, so a wedding and a walkthrough sitting
+// in one cell in two greens are still not the same object.
 //
 // A held meeting (`done`) goes grey with a tick rather than disappearing: the record of having met
 // is most of what makes a diary worth keeping, and a past date is not the same claim (see the column
 // note in lib/db/schema.ts).
-function AppointmentChip({ appointment: a, onClick }: { appointment: Appointment; onClick: () => void }) {
+const CHIP_SIZE = {
+  compact: { card: "gap-1.5 p-2", icon: "h-3 w-3", name: "text-xs", time: "text-[11px]", meta: "text-[10px]" },
+  full: { card: "gap-2 p-2.5", icon: "h-3.5 w-3.5", name: "text-sm", time: "text-xs", meta: "text-xs" },
+} as const;
+
+function AppointmentChip({
+  appointment: a,
+  compact,
+  onClick,
+}: {
+  appointment: Appointment;
+  compact: boolean;
+  onClick: () => void;
+}) {
   const time = appointmentTimeLabel(a);
   const name = appointmentLabel(a);
   const kind = APPOINTMENT_KIND_LABEL[a.kind];
-  // The kind only earns a place in the tooltip when it isn't already the name: a חופשה has no
-  // client, so `appointmentLabel` falls back to the kind, and "חופשה · חופשה" is not a tooltip.
-  const parts = [name, name === kind ? "" : kind, time, a.note].filter(Boolean);
+  const theme = kindTheme(a.kind, a.done);
+  const Icon = a.done ? CheckCircle2 : KIND_ICON[a.kind];
+  const size = compact ? CHIP_SIZE.compact : CHIP_SIZE.full;
+  // The kind only earns a line (or a place in the tooltip) when it isn't already the name: a חופשה
+  // has no client, so `appointmentLabel` falls back to the kind, and "חופשה · חופשה" is not a
+  // tooltip. The icon and the colour are still saying which kind it is either way.
+  const namesItself = name === kind;
+  const parts = [name, namesItself ? "" : kind, time, a.note].filter(Boolean);
 
   return (
     <button
@@ -379,24 +444,71 @@ function AppointmentChip({ appointment: a, onClick }: { appointment: Appointment
       onClick={onClick}
       title={parts.join(" · ")}
       className={
-        "flex items-center gap-1.5 rounded-sm border px-1.5 py-1 text-start transition-colors " +
-        (a.done
-          ? "border-border bg-inset text-muted hover:border-accent-line"
-          : "border-accent-line bg-surface text-ink hover:bg-accent-tint")
+        "flex flex-col rounded-md border-s-[3px] text-start transition-transform hover:-translate-y-px hover:shadow-floating " +
+        size.card + " " + theme.bg + " " + theme.rail
       }
     >
-      {a.done ? (
-        <CheckCircle2 className="h-3 w-3 shrink-0 text-muted" strokeWidth={2} />
-      ) : (
-        <Clock className="h-3 w-3 shrink-0 text-accent" strokeWidth={2} />
-      )}
+      <div className={"flex items-center " + (compact ? "gap-1.5" : "gap-2")}>
+        <Icon className={size.icon + " shrink-0 " + theme.text} strokeWidth={2} />
+        <span
+          className={
+            "min-w-0 flex-1 truncate font-semibold " + size.name + " " +
+            (a.done ? "text-muted line-through" : "text-ink")
+          }
+        >
+          {name}
+        </span>
+        {time && (
+          <span className={"nums shrink-0 font-semibold " + size.time + " " + theme.text} dir="ltr">
+            {time}
+          </span>
+        )}
+      </div>
+      {/* The note is a WEEK-VIEW line. A month cell already carries up to two of these cards plus
+          two event cards, and every line one of them grows is a line all 42 cells grow with it —
+          the note is the first thing that can go, because the tooltip still has it and the month is
+          a scanning view. Week has the room and is where the day is actually being worked. */}
+      {!compact && a.note && <span className={"truncate text-ink-soft " + size.meta}>{a.note}</span>}
+      {!namesItself && <span className={"truncate font-semibold " + size.meta + " " + theme.text}>{kind}</span>}
+    </button>
+  );
+}
+
+// An entry from the designer's OWN Google calendar (lib/google/). The quietest thing that can
+// appear in a day cell, and deliberately so.
+//
+// ⚠ NOT A BUTTON. Every other card in this grid is clickable because it belongs to the studio and
+// can be opened, edited or advanced. This one is somebody's dentist appointment: there is nothing
+// in this app to open, and making it look pressable would promise a screen that does not exist. It
+// is a `div` with a tooltip, and that is the whole interaction.
+//
+// It is also the only card here with NO hue. Events carry their status colour and diary entries
+// carry their kind's; both of those are the studio's own vocabulary, and lending a piece of it to
+// an external event would say this is one of ours. Grey, dashed, with a lock glyph — present
+// enough that a day which looks free is not quietly double-booked, recessive enough that it never
+// competes with the work.
+function BusyChip({ block, compact }: { block: BusyBlock; compact: boolean }) {
+  const size = compact ? CHIP_SIZE.compact : CHIP_SIZE.full;
+  // LRM before the range, same as appointmentTimeLabel: an en dash between two Latin-digit clock
+  // times flips to the wrong side in an RTL paragraph and reads as 18:30-17:00.
+  const time = block.time ? (block.endTime ? `‎${block.time}–${block.endTime}` : `‎${block.time}`) : "";
+
+  return (
+    <div
+      title={[block.title, time, block.calendarName, "מיומן Google"].filter(Boolean).join(" · ")}
+      className={
+        "flex items-center rounded-md border border-dashed border-border bg-inset/60 " +
+        size.card + " " + (compact ? "gap-1.5" : "gap-2")
+      }
+    >
+      <Lock className={size.icon + " shrink-0 text-faint"} strokeWidth={1.8} aria-hidden />
+      <span className={"min-w-0 flex-1 truncate font-medium text-muted " + size.name}>{block.title}</span>
       {time && (
-        <span className={"nums shrink-0 text-[10px] font-bold " + (a.done ? "text-muted" : "text-accent-hover")} dir="ltr">
+        <span className={"nums shrink-0 font-medium text-faint " + size.time} dir="ltr">
           {time}
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{appointmentLabel(a)}</span>
-    </button>
+    </div>
   );
 }
 

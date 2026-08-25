@@ -7,6 +7,8 @@ import { setActiveEventId } from "@/lib/events/storage";
 import { useEvents } from "@/lib/events/use-events";
 import type { Appointment } from "@/lib/appointments/types";
 import { useAppointments } from "@/lib/appointments/use-appointments";
+import type { BusyBlock } from "@/lib/google/types";
+import { useBusy } from "@/lib/google/use-busy";
 import { venueSwatchClass } from "@/lib/venues/storage";
 import { useVenues } from "@/lib/venues/use-venues";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
@@ -30,9 +32,18 @@ import { toISODate } from "./dashboard-view-utils";
 export function DashboardScreen({
   initialEvents,
   initialAppointments,
+  initialBusy,
+  busyWindow,
+  googleConnected,
 }: {
   initialEvents: EventSummary[];
   initialAppointments: Appointment[];
+  /** The signed-in designer's own Google entries, read on the server with everything else. */
+  initialBusy: BusyBlock[];
+  busyWindow: { from: string; to: string };
+  /** Whether there is a connection with the pull switched on — see useBusy, which goes inert
+   *  without one rather than asking the server the same empty question on every month click. */
+  googleConnected: boolean;
 }) {
   const router = useRouter();
   // Seeded by page.tsx's server-side read, so both lists are here for the first paint. The hooks
@@ -42,6 +53,7 @@ export function DashboardScreen({
   const { appointments, save, remove } = useAppointments(initialAppointments);
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
+  const busy = useBusy(initialBusy, busyWindow, googleConnected);
   const { activeVenueId } = useActiveVenueScope();
   const { venues } = useVenues();
 
@@ -133,6 +145,7 @@ export function DashboardScreen({
         <TodayFocus
           events={visibleEvents}
           appointments={visibleAppointments}
+          busy={busy.byDate.get(toISODate(new Date())) ?? []}
           venueColor={getVenueColor}
           onOpenEvent={openInMeeting}
           onOpenAppointment={editAppointment}
@@ -144,6 +157,7 @@ export function DashboardScreen({
       <CalendarCard
         events={visibleEvents}
         appointments={visibleAppointments}
+        busy={busy}
         onOpenEvent={setSelectedEvent}
         onOpenAppointment={editAppointment}
         onCreateAppointment={bookOn}
