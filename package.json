@@ -27,6 +27,8 @@
     "check:faces": "tsx lib/venues/faces.ts",
     "check:underlay": "tsx lib/venues/underlay.ts",
     "check:csv": "tsx lib/catalog/csv.ts",
+    "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",
+    "catalog:standard": "tsx lib/catalog/standard/backfill.ts",
     "check:format": "tsx lib/catalog/format.ts",
     "check:style": "tsx lib/element-style.ts",
     "check:folder": "tsx lib/gallery/folder-logic.ts",

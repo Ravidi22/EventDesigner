@@ -1,48 +1,69 @@
-import { Copy, Globe, Layers, Palette, Pencil } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import { Copy, Globe, Layers, Palette, Pencil, Trash2 } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, LAYER_LABEL } from "@/lib/catalog/categories";
 import { formatDimensions, formatPrice } from "@/lib/catalog/format";
-import { IconButton } from "@/components/icon-button";
+import { Menu, type MenuItem } from "@/components/menu";
 import { ProductImage } from "./product-image";
 
-// The whole card is one click target (opens the drawer), but Edit/Duplicate need their own
-// click handlers — nesting a <button> in a <button> isn't valid HTML, so the "whole card
-// clickable" affordance is an absolutely-positioned cover <button> BEHIND the visible content
-// (which is pointer-events-none so clicks fall through to it), with the quick actions as a
-// separate, later sibling that re-enables pointer-events for itself and sits on top.
+// The whole card is one click target (opens the drawer), but the actions need their own click
+// handlers — nesting a <button> in a <button> isn't valid HTML, so the "whole card clickable"
+// affordance is an absolutely-positioned cover <button> BEHIND the visible content (which is
+// pointer-events-none so clicks fall through to it), and anything interactive inside that content
+// re-enables pointer-events for itself and sits on top.
+//
+// The actions live behind one "…" (components/menu.tsx) rather than appearing on hover. Two buttons
+// fading in over the card had three problems and no advantage: they landed on the corner where the
+// ציבורי badge already is, they told a touch screen nothing at all, and a third action would have
+// had nowhere to go. The dot is always there, in the title row, at the weight of ordinary muted
+// text — one quiet affordance instead of an interface that appears and disappears.
 export function ProductCard({
   product,
   layout = "grid",
   onEdit,
   onDuplicate,
+  onDelete,
 }: {
   product: Product;
   layout?: "grid" | "list";
   onEdit: (p: Product) => void;
   onDuplicate: (p: Product) => void;
+  /** ASKS to delete — the card raises the question and the screen owns the confirmation, so there
+   *  is one dialog on the page rather than one per card. */
+  onDelete: (p: Product) => void;
 }) {
   const category = CATEGORY_BY_ID[product.category];
   const tags = product.styleTags;
+  // The open panel hangs past the bottom of the card, and the next card in the grid is later in the
+  // DOM — so without lifting this one out of the flow the menu is painted underneath its neighbour.
+  // (The card also becomes its own stacking context while hovered, because of the -translate-y, so
+  // a z-index on the panel alone cannot reach past the card.)
+  const [menuOpen, setMenuOpen] = useState(false);
+  const lifted = menuOpen ? " z-30" : "";
 
-  const quickActions = (
-    <div
-      className={
-        "pointer-events-auto relative flex shrink-0 gap-1 rounded-pill border border-canvas/60 bg-canvas/80 p-1 opacity-0 shadow-floating backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" +
-        (layout === "list" ? " border-none bg-transparent p-0 shadow-none backdrop-blur-none" : "")
-      }
-    >
-      <IconButton label={`עריכת ${product.name}`} onClick={() => onEdit(product)}>
-        <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
-      </IconButton>
-      <IconButton label={`שכפול ${product.name}`} onClick={() => onDuplicate(product)}>
-        <Copy className="h-3.5 w-3.5" strokeWidth={2} />
-      </IconButton>
-    </div>
+  const actions: MenuItem[] = [
+    { label: "עריכה", icon: Pencil, onSelect: () => onEdit(product) },
+    { label: "שכפול", icon: Copy, onSelect: () => onDuplicate(product) },
+    { label: "מחיקה", icon: Trash2, onSelect: () => onDelete(product), danger: true },
+  ];
+  const menu = (
+    <Menu
+      label={`אפשרויות ל${product.name}`}
+      items={actions}
+      onOpenChange={setMenuOpen}
+      // -me-1 pulls the dot's own padding back out, so the icon lines up with the card's content
+      // edge rather than sitting a button's worth of air inside it.
+      className="pointer-events-auto -me-1 shrink-0"
+    />
   );
 
   if (layout === "list") {
     return (
-      <div className="group relative flex items-center gap-3 rounded-lg border border-border bg-surface p-2 text-right transition duration-150 ease-fluid hover:shadow-floating">
+      <div
+        className={`relative flex items-center gap-3 rounded-lg border border-border bg-surface p-2 text-right transition duration-150 ease-fluid hover:shadow-floating${lifted}`}
+      >
         <button
           type="button"
           onClick={() => onEdit(product)}
@@ -82,7 +103,7 @@ export function ProductCard({
           {product.unitPrice != null && <span className="text-xs text-muted">ליחידה</span>}
         </span>
 
-        {quickActions}
+        {menu}
       </div>
     );
   }
@@ -91,7 +112,9 @@ export function ProductCard({
   const extraTags = tags.length - shownTags.length;
 
   return (
-    <div className="group relative flex flex-col rounded-lg border border-border bg-surface p-2 text-right transition duration-150 ease-fluid hover:-translate-y-0.5 hover:shadow-floating">
+    <div
+      className={`relative flex flex-col rounded-lg border border-border bg-surface p-2 text-right transition duration-150 ease-fluid hover:-translate-y-0.5 hover:shadow-floating${lifted}`}
+    >
       <button
         type="button"
         onClick={() => onEdit(product)}
@@ -118,7 +141,13 @@ export function ProductCard({
           )}
         </div>
 
-        <h3 className="font-display text-base leading-tight text-ink">{product.name}</h3>
+        {/* The "…" sits beside the title rather than over the image: the two corners of the image
+            are already spoken for by the גוונים and ציבורי badges, and a menu button that lands on
+            top of a badge is a menu button that lands on top of a badge. */}
+        <div className="flex items-start justify-between gap-1">
+          <h3 className="font-display text-base leading-tight text-ink">{product.name}</h3>
+          {menu}
+        </div>
 
         <p className="nums mt-1 text-sm text-muted">{formatDimensions(product.dimensions)}</p>
 
@@ -147,8 +176,6 @@ export function ProductCard({
           <span className="nums text-lg font-bold text-ink">{formatPrice(product.unitPrice)}</span>
         </div>
       </div>
-
-      <div className="pointer-events-none absolute inset-x-2 top-2 flex justify-end">{quickActions}</div>
     </div>
   );
 }

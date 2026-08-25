@@ -9,6 +9,7 @@
 // wrong amount for "that password is incorrect" — a person needs to be told which field to fix.
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { hashInviteToken } from "./invite-token";
@@ -134,6 +135,21 @@ export async function signUp(input: {
     // across both kinds — which is deliberate: a designer who is also somebody's client is one
     // person, and two rows would be two passwords to keep in step.
     return { error: "כבר קיים חשבון עם האימייל הזה", field: "email" };
+  }
+
+  // A new studio opens a catalog that already knows what an עגול 180 is (lib/catalog/standard).
+  //
+  // AFTER the account exists, not beside the organisation: an install into an organisation whose
+  // user row then lost a race would be seven rows in a studio nobody can sign into. BEST-EFFORT for
+  // the mirror-image reason — the account is real, the session is about to be created, and refusing
+  // someone their sign-up over a shelf of furniture is the wrong trade. `npm run catalog:standard`
+  // is the retry, and it is idempotent.
+  if (organizationId) {
+    try {
+      await installStandardCatalog(organizationId);
+    } catch (error) {
+      console.error("standard catalog install failed for", organizationId, error);
+    }
   }
 
   await createSession(userId);

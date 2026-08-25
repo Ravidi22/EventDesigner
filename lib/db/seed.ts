@@ -8,6 +8,11 @@
 // the designer adds their real items. A shelf of invented products is not a head start, it is
 // something to delete before you can trust what you are looking at.
 //
+// The base library — the standard tables every hall stacks against the wall — is not an exception
+// to that: it is not invented, and it is not seeded here. It belongs to a STUDIO, so it is
+// installed per organisation, at sign-up (lib/catalog/standard), and `npm run catalog:standard`
+// hands it to a studio that predates it.
+//
 // Idempotent: `onConflictDoNothing` means running it twice does nothing the second time, and it
 // never overwrites a value you have since edited.
 //
