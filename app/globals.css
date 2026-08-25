@@ -41,11 +41,22 @@
   --color-gold: #f3d98a; /* the wordmark dot and overlines on a dark ground */
   --color-magenta: #c77fc4;
   --color-blush: #e8bcce;
+  /* Tint + ink for the two warm hues the diary borrows (see KIND_CARD_THEME,
+     dashboard-view-utils.ts). Each tint is its own hue laid over white — magenta at 14%, blush at
+     30% — and each ink is that hue darkened until it clears AA on that tint (5.3:1 and 4.9:1); the
+     raw swatches above are dots and fills, never small text. */
+  --color-magenta-tint: #f7edf7;
+  --color-magenta-ink: #8e4a8b;
+  --color-blush-tint: #f8ebf0;
+  --color-blush-ink: #a2496a;
   --color-peach: #efc9ae;
 
   /* --- Semantic. Values are the design system's own swatches; `warn` carries a separate
          chip label because amber needs the extra depth on its tint. --- */
   --color-success: #3f9d76;
+  /* success had no ink of its own, and the swatch itself is 2.8:1 on its own tint — the same gap
+     warn and alert already closed below. This is 4.8:1 there and 5.7:1 on white. */
+  --color-success-ink: #2a7355;
   --color-success-tint: #dcefe5;
   --color-warn: #c79a2e;
   /* The "extra depth" the note above calls for. Was #a97e1f, which missed AA at both jobs it has —
