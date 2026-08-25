@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowLeft, Calendar, CalendarClock, CheckCircle2, Clock, MapPin, Phone, Plus, User, Users, X } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Clock, MapPin, Phone, Plus, User, Users, X } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -10,6 +10,7 @@ import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { StatusChip } from "@/components/status-chip";
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/button";
+import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
 import { EventMarginCard } from "./event-margin-card";
 
 // Same `.drawer` <dialog> pattern as ProductDrawer (catalog/product-drawer.tsx), but deliberately
@@ -139,32 +140,36 @@ export function EventDetailDrawer({
               {appointments.length === 0 ? (
                 <p className="px-4 py-3.5 text-ink-soft">לא נקבעו פגישות לאירוע הזה.</p>
               ) : (
-                appointments.map((a, i) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => onOpenAppointment(a)}
-                    className={
-                      "flex w-full items-center gap-2.5 px-4 py-3 text-start transition-colors hover:bg-accent-tint " +
-                      (i > 0 ? "border-t border-border-soft" : "")
-                    }
-                  >
-                    {a.done ? (
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                    ) : (
-                      <CalendarClock className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
-                    )}
-                    <span className={"min-w-0 flex-1 truncate " + (a.done ? "text-muted" : "text-ink")}>
-                      {formatEventDate(a.date)}
-                      <span className="text-ink-soft"> · {APPOINTMENT_KIND_LABEL[a.kind]}</span>
-                    </span>
-                    {a.time && (
-                      <span className="nums shrink-0 text-xs font-semibold text-ink-soft" dir="ltr">
-                        {appointmentTimeLabel(a)}
+                // Same glyph and same ink the day cell gives this kind (KIND_CARD_THEME) — the
+                // colour has to mean one thing in both places or it teaches nothing. There is no
+                // tint fill here: these rows are a list on white, and eight fills stacked in a
+                // hairline-ruled table is a paint chart, not a diary.
+                appointments.map((a, i) => {
+                  const theme = kindTheme(a.kind, a.done);
+                  const KindIcon = a.done ? CheckCircle2 : KIND_ICON[a.kind];
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => onOpenAppointment(a)}
+                      className={
+                        "flex w-full items-center gap-2.5 px-4 py-3 text-start transition-colors hover:bg-accent-tint " +
+                        (i > 0 ? "border-t border-border-soft" : "")
+                      }
+                    >
+                      <KindIcon className={"h-4 w-4 shrink-0 " + theme.text} strokeWidth={1.75} />
+                      <span className={"min-w-0 flex-1 truncate " + (a.done ? "text-muted" : "text-ink")}>
+                        {formatEventDate(a.date)}
+                        <span className={"font-medium " + theme.text}> · {APPOINTMENT_KIND_LABEL[a.kind]}</span>
                       </span>
-                    )}
-                  </button>
-                ))
+                      {a.time && (
+                        <span className="nums shrink-0 text-xs font-semibold text-ink-soft" dir="ltr">
+                          {appointmentTimeLabel(a)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>
