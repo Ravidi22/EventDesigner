@@ -22,6 +22,7 @@ import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
 import { HeaderSearchProvider } from "@/components/header-search-context";
+import { EventDialog } from "@/components/event-dialog";
 
 interface NavItem {
   href: string;
@@ -64,6 +65,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const [collapsed, setCollapsed] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [headerSearch, setHeaderSearch] = useState("");
+  const [creating, setCreating] = useState(false);
   // Venues come from the (app) layout's server-side read, through VenuesProvider — the switcher does
   // not fetch them, and neither does anything else that needs them. The selection itself still lives
   // in this browser; the provider resolves it against the list and publishes one answer.
@@ -234,12 +236,16 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           <div className="flex-1" />
 
           <div className="flex shrink-0 items-center gap-1.5">
-            <Link
-              href="/meeting?new"
+            {/* Opens the details form in place rather than navigating to /meeting?new: answering
+                six questions is not worth losing the screen you were on. The dialog walks into the
+                meeting itself once the event exists — see components/event-dialog.tsx. */}
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
               className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
             >
               + יצירת אירוע חדש
-            </Link>
+            </button>
             <IconButton label="התראות">
               <Bell className="h-4 w-4" strokeWidth={1.75} />
             </IconButton>
@@ -249,6 +255,11 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         <main className="min-h-0 flex-1 overflow-auto">
           <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
         </main>
+
+        {/* Mounted at the shell, so "אירוע חדש" is reachable from every page without each of them
+            carrying its own copy. A <dialog> renders in the top layer — where it sits in the tree
+            has no bearing on where it appears. */}
+        <EventDialog open={creating} onClose={() => setCreating(false)} />
       </div>
     </div>
   );
