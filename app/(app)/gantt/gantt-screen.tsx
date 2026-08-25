@@ -14,6 +14,7 @@ import { SearchInput } from "@/components/search-input";
 import { StatusChip } from "@/components/status-chip";
 import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
+import { EventDialog } from "@/components/event-dialog";
 
 type Filter = "active" | EventStatus;
 const FILTERS: { id: Filter; label: string }[] = [
@@ -34,6 +35,7 @@ export function GanttScreen({ initialEvents }: { initialEvents: EventSummary[] }
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+  const [creating, setCreating] = useState(false);
   const { activeVenueId } = useActiveVenueScope();
   const flow = useMeetingFlow();
 
@@ -152,7 +154,7 @@ export function GanttScreen({ initialEvents }: { initialEvents: EventSummary[] }
             title="אין עדיין אירועים"
             body="כל אירוע מתחיל בפגישה — שם הלקוח, התאריך והאזורים שהוא לוקח באולם. משם ממשיכים לגלריה, לסטודיו, ולפלטים שהצוות והמחסן מקבלים."
             action={
-              <Button onClick={() => router.push("/meeting?new")}>
+              <Button onClick={() => setCreating(true)}>
                 <Plus className="h-4 w-4" strokeWidth={2.5} />
                 צור אירוע ראשון
               </Button>
@@ -198,6 +200,8 @@ export function GanttScreen({ initialEvents }: { initialEvents: EventSummary[] }
           ))}
         </div>
       )}
+
+      <EventDialog open={creating} onClose={() => setCreating(false)} />
     </div>
   );
 }
