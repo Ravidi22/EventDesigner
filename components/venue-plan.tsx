@@ -1,14 +1,16 @@
 "use client";
 
-import { outlinePathD, polygonAreaMm2, polygonCentroid, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
+import { outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { detectFaces, type Face } from "@/lib/venues/faces";
 import { stairsGeometry } from "@/lib/venues/stairs";
 import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 import type { Point } from "@/lib/studio/hall";
+import { EntranceDoor } from "@/components/plan-canvas";
 
 // World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
 //
@@ -671,24 +673,58 @@ function resizableRadius(
   };
 }
 
-/** Door openings, painted over the wall the canvas already stroked so they read as gaps. Drawn as
- *  part of the overlay layer that sits *above* the walls. */
+// Which side of a wall reads as "inward" for a door hung on it — the centroid of whichever
+// enclosed face that wall directly borders (its two nodes appear adjacent in the face's own
+// cycle), the graph-structure counterpart to the outline system's one whole-shape centroid: this
+// plan can have several rooms, so there is no single interior to point at. A wall with no face on
+// either side (open to nothing yet) has no interior to reference at all, so it falls back to an
+// arbitrary but consistent perpendicular offset — doorGeometry only reads the SIGN of which side
+// that point is on, and a door hung on an open wall has no "correct" side for that to disagree with.
+function wallInteriorHint(faces: Face[], a: Point, b: Point, aId: string, bId: string): Point {
+  for (const f of faces) {
+    const n = f.nodeIds.length;
+    for (let i = 0; i < n; i++) {
+      const x = f.nodeIds[i];
+      const y = f.nodeIds[(i + 1) % n];
+      if ((x === aId && y === bId) || (x === bId && y === aId)) return polygonCentroid(f.boundary);
+    }
+  }
+  return { x: (a.x + b.x) / 2 - (b.y - a.y), y: (a.y + b.y) / 2 + (b.x - a.x) };
+}
+
+/** Door openings: the gap is painted over the wall the canvas already stroked so it reads as a
+ *  hole (unconditional, purely visual), and — when a wall lookup is available — the actual door
+ *  leaf(es) + swing arc on top of it (EntranceDoor, shared with the outline system's own doors;
+ *  see plan-canvas.tsx), draggable along the wall when `onMove` is supplied. Drawn as part of the
+ *  overlay layer that sits *above* the walls. */
 export function StructureDoors({
   structure,
   selectedIds,
   onSelect,
+  onMove,
+  onCommit,
+  clientToMm,
+  mm,
 }: {
   structure: VenueStructure;
   selectedIds?: string[];
   onSelect?: (id: string, additive: boolean) => void;
+  /** Absent = the door leaf/arc still shows, but has no drag handle (mid-draw, or any mode that
+   *  doesn't edit the built plan) — same "supplying it is what turns the affordance on" rule as
+   *  every other draggable layer here (see StructureFeatures). */
+  onMove?: (id: string, distanceMm: number) => void;
+  onCommit?: () => void;
+  clientToMm?: (clientX: number, clientY: number) => Point;
+  mm?: (px: number) => number;
 }) {
   const nodes = nodeMap(structure);
+  const faces = detectFaces(structure);
   return (
     <>
       {structure.entrances.map((e) => {
         const w = structure.walls.find((x) => x.id === e.wallId);
         const pts = w ? wallPoints(structure, w, nodes) : null;
-        if (!pts) return null;
+        if (!w || !pts) return null;
         const selected = selectedIds?.includes(e.id) ?? false;
         // The gap is cut along the wall as drawn, bow and all — a straight strike across a curved
         // wall would leave the opening floating beside the wall it is supposed to be a hole in.
@@ -698,7 +734,7 @@ export function StructureDoors({
         const half = e.widthMm / 2;
         const t0 = Math.max(0, (e.distanceMm - half) / len);
         const t1 = Math.min(1, (e.distanceMm + half) / len);
-        const d = wallSegmentD(pts.a, pts.b, w?.curve ?? null, t0, t1);
+        const d = wallSegmentD(pts.a, pts.b, w.curve ?? null, t0, t1);
         return (
           <g key={e.id}>
             <path
@@ -709,19 +745,24 @@ export function StructureDoors({
               vectorEffect="non-scaling-stroke"
               className="pointer-events-none"
             />
-            {onSelect && (
-              <path
-                d={d}
-                fill="none"
-                stroke="transparent"
-                strokeWidth={Math.max(e.widthMm * 0.7, 600)}
-                strokeLinecap="butt"
-                className="cursor-pointer"
-                aria-label="כניסה — בחירה לעריכה"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  onSelect(e.id, isAdditiveClick(ev));
-                }}
+            {clientToMm && mm && (
+              <EntranceDoor
+                entrance={e}
+                a={pts.a}
+                b={pts.b}
+                curve={w.curve ?? null}
+                interiorHint={wallInteriorHint(faces, pts.a, pts.b, w.a, w.b)}
+                selected={selected}
+                // Click phase only — pick() (halls-screen.tsx) toggles a solo selection off on a
+                // repeat click, unlike the outline system's plain onSelect(ref) that EntranceDoor
+                // was built for; also firing on the press phase would select-then-instantly-
+                // deselect an already-selected door on a plain re-click. StructureFeatures' own
+                // onSelect (above) makes the same call by using a plain onClick in the first place.
+                onSelect={(mods) => mods.phase === "click" && onSelect?.(e.id, mods.shift)}
+                onMove={(p) => onMove?.(e.id, projectOntoWall(pts.a, pts.b, p))}
+                onCommit={onCommit}
+                clientToMm={clientToMm}
+                mm={mm}
               />
             )}
           </g>

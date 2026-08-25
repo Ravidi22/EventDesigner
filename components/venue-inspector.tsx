@@ -46,7 +46,7 @@ import {
   stepsForRise,
   type StairsSide,
 } from "@/lib/venues/stairs";
-import { ZONE_KIND_LABEL, type Zone, type ZoneKind } from "@/lib/venues/zone";
+import { ZONE_KIND_LABEL, type Zone, type ZoneKind, type ZoneSource } from "@/lib/venues/zone";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
@@ -96,14 +96,20 @@ const FOOTER = "flex items-center gap-2";
 // metres for spans, centimetres for a door leaf — because the whole point of this panel is that the
 // plan stops being approximately what you dragged and becomes exactly what you measured.
 //
-// Zones are not here: a zone has no geometry of its own (see lib/venues/zone.ts), so its fields
-// belong beside its name in the list, not floating over the drawing.
+// An EXISTING zone's fields still live beside its name in the list (lib/venues/zone.ts: a zone has
+// no geometry of its own), not here. A zone that doesn't exist yet — draftZone, below — is the one
+// exception: it has nothing in the list to sit beside, so naming it happens on this panel like
+// everything else the plan just picked.
 export function VenueInspector({
   selection,
   structure,
   apply,
   onDelete,
   onClose,
+  draftZone,
+  onDraftZoneChange,
+  onSaveDraftZone,
+  onCancelDraftZone,
 }: {
   selection: PlanSelection[];
   structure: VenueStructure;
@@ -112,7 +118,63 @@ export function VenueInspector({
   /** Deletes the whole selection. The host owns it — a mixed group spans four collections. */
   onDelete: () => void;
   onClose: () => void;
+  /** A picked-but-not-yet-real area (F-1.3-adjacent) — a face just closed by a wall, or a freehand
+   *  region just closed. Not a `PlanSelection`: it has no id yet, so it takes over the panel on its
+   *  own rather than through the selection branches below. */
+  draftZone?: { source: ZoneSource; name: string; kind: ZoneKind } | null;
+  onDraftZoneChange?: (patch: { name?: string; kind?: ZoneKind }) => void;
+  onSaveDraftZone?: () => void;
+  onCancelDraftZone?: () => void;
 }) {
+  if (draftZone) {
+    return (
+      <div className={WRAP}>
+        <div className="flex items-center justify-between gap-2">
+          <InspectorHeader
+            icon={Layers}
+            label={draftZone.source.type === "face" ? "מתן שם לשטח הסגור" : "מתן שם לשטח המסומן"}
+          />
+          <IconButton label="ביטול" className="shrink-0" onClick={onCancelDraftZone}>
+            <X className="h-4 w-4" strokeWidth={2} />
+          </IconButton>
+        </div>
+        <InspectorDivider orientation="column" />
+        <input
+          autoFocus
+          value={draftZone.name}
+          onChange={(e) => onDraftZoneChange?.({ name: e.target.value })}
+          onKeyDown={(e) => e.key === "Enter" && onSaveDraftZone?.()}
+          placeholder="שם האזור"
+          className="w-full rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
+        />
+        <div className="flex flex-wrap gap-1">
+          {(Object.keys(ZONE_KIND_LABEL) as ZoneKind[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => onDraftZoneChange?.({ kind: k })}
+              aria-pressed={draftZone.kind === k}
+              className={`rounded-pill border px-2.5 py-1 text-[11px] transition-colors ${
+                draftZone.kind === k ? "border-accent bg-accent text-white" : "border-badge-line bg-canvas text-muted"
+              }`}
+            >
+              {ZONE_KIND_LABEL[k]}
+            </button>
+          ))}
+        </div>
+        <InspectorDivider orientation="column" />
+        <div className={FOOTER}>
+          <Button size="sm" onClick={onSaveDraftZone} disabled={!draftZone.name.trim()}>
+            שמירה
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onCancelDraftZone}>
+            ביטול
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (selection.length === 0) return null;
 
   // Paired with each branch's own InspectorHeader, at the top — not down in the footer with

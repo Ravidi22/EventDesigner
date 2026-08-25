@@ -8,7 +8,7 @@
 // would add a second source of truth to keep honest for no benefit.
 import { useCallback, useEffect, useState } from "react";
 import type { Venue } from "./types";
-import { fetchVenues, createVenue, renameVenue as renameVenueAction } from "./actions";
+import { fetchVenues, createVenue, renameVenue as renameVenueAction, deleteVenue as deleteVenueAction } from "./actions";
 import { loadActiveVenueId, setActiveVenueId } from "./storage";
 
 export interface VenuesHandle {
@@ -22,6 +22,9 @@ export interface VenuesHandle {
   activeVenueId: string | null;
   add: () => Promise<string>;
   rename: (id: string, name: string) => Promise<void>;
+  /** Resolves to an error message if the venue could not be deleted (still has events on it),
+   *  null on success — the switcher shows the message rather than needing a thrown error. */
+  remove: (id: string) => Promise<string | null>;
   reload: () => Promise<void>;
 }
 
@@ -66,9 +69,19 @@ export function useVenues(): VenuesHandle {
     setVenues(await renameVenueAction(id, name));
   }, []);
 
+  const remove = useCallback(async (id: string): Promise<string | null> => {
+    const result = await deleteVenueAction(id);
+    if (!Array.isArray(result)) return result.error;
+    setVenues(result);
+    // The active selection only lives in this browser (see storage.ts) — if it just got deleted,
+    // fall back to whatever is first rather than pointing at a venue that no longer exists.
+    setActiveId((current) => (current === id ? (result[0]?.id ?? null) : current));
+    return null;
+  }, []);
+
   const reload = useCallback(async () => {
     await load();
   }, [load]);
 
-  return { venues, ready, error, activeVenueId: activeId, add, rename, reload };
+  return { venues, ready, error, activeVenueId: activeId, add, rename, remove, reload };
 }

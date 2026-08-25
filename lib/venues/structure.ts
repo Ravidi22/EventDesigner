@@ -12,9 +12,11 @@
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
 import {
+  absoluteControlPoints,
   bulgeDepthMm,
   bulgeToCurve,
   clampEdgeCurve,
+  cubicPointAt,
   endpointFromLengthAngle,
   setBulgeDepth,
   wallAngleDeg,
@@ -253,9 +255,36 @@ export function nearestWall(s: VenueStructure, p: Point): { wallId: string; dist
     const dy = pts.b.y - pts.a.y;
     const lenSq = dx * dx + dy * dy;
     if (lenSq === 0) continue;
-    const t = Math.max(0, Math.min(1, ((p.x - pts.a.x) * dx + (p.y - pts.a.y) * dy) / lenSq));
-    const distSq = (p.x - (pts.a.x + dx * t)) ** 2 + (p.y - (pts.a.y + dy * t)) ** 2;
-    if (!best || distSq < best.distSq) best = { wallId: wall.id, distanceMm: t * Math.sqrt(lenSq), distSq };
+    const len = Math.sqrt(lenSq);
+    let t: number;
+    let proj: Point;
+    if (wall.curve) {
+      // Straight-chord projection finds the nearest point on the line the wall bows AWAY from, not
+      // on the wall itself — a door hung from that hit lands wherever doorGeometry's own curve
+      // sampling actually puts it, which is somewhere the designer never clicked. Coarse-sample the
+      // bow, then refine one step around the best sample — plenty for a hit test, not worth a real
+      // numerical solve.
+      const { c1, c2 } = absoluteControlPoints(pts.a, pts.b, wall.curve);
+      const sample = (lo: number, hi: number, steps: number) => {
+        let bt = lo;
+        let bd = Infinity;
+        for (let i = 0; i <= steps; i++) {
+          const ct = lo + ((hi - lo) * i) / steps;
+          const q = cubicPointAt(pts.a, c1, c2, pts.b, ct);
+          const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2;
+          if (d < bd) { bd = d; bt = ct; }
+        }
+        return bt;
+      };
+      const coarse = sample(0, 1, 24);
+      t = sample(Math.max(0, coarse - 1 / 24), Math.min(1, coarse + 1 / 24), 24);
+      proj = cubicPointAt(pts.a, c1, c2, pts.b, t);
+    } else {
+      t = Math.max(0, Math.min(1, ((p.x - pts.a.x) * dx + (p.y - pts.a.y) * dy) / lenSq));
+      proj = { x: pts.a.x + dx * t, y: pts.a.y + dy * t };
+    }
+    const distSq = (p.x - proj.x) ** 2 + (p.y - proj.y) ** 2;
+    if (!best || distSq < best.distSq) best = { wallId: wall.id, distanceMm: t * len, distSq };
   }
   return best ? { wallId: best.wallId, distanceMm: Math.round(best.distanceMm) } : null;
 }
@@ -422,6 +451,27 @@ if (isMain(import.meta.url)) {
   assert(nearestWall(oneWall, { x: -5000, y: 100 })!.distanceMm === 0, "a point beyond the start clamps to the start, never to a negative distance");
   assert(nearestWall(oneWall, { x: 9000, y: 100 })!.distanceMm === 4000, "a point beyond the end clamps to the end, never past it");
   assert(nearestWall(emptyStructure(), { x: 0, y: 0 }) === null, "with no walls there is nothing to hang a door on");
+
+  // A bowed wall: the nearest point is wherever the wall actually bends to, not on the straight
+  // chord it bows away from — the bug that put a newly-hung door somewhere the designer never
+  // clicked (see doorGeometry's own curve handling in geometry.ts, fixed alongside this).
+  const bowCurve = bulgeToCurve({ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 2000, y: 800 });
+  const bowedWall: VenueStructure = {
+    nodes: [
+      { id: "a", x: 0, y: 0 },
+      { id: "b", x: 4000, y: 0 },
+    ],
+    walls: [{ id: "w", a: "a", b: "b", kind: "wall", curve: bowCurve }],
+    entrances: [],
+    features: [],
+  };
+  const nearBowed = nearestWall(bowedWall, { x: 2000, y: 800 })!;
+  const { c1: bc1, c2: bc2 } = absoluteControlPoints({ x: 0, y: 0 }, { x: 4000, y: 0 }, bowCurve);
+  const onCurve = cubicPointAt({ x: 0, y: 0 }, bc1, bc2, { x: 4000, y: 0 }, nearBowed.distanceMm / 4000);
+  assert(
+    Math.hypot(onCurve.x - 2000, onCurve.y - 800) < 50,
+    "a click on a bowed wall's curve lands within 5cm of it, not on the straight chord ~800mm away",
+  );
 
   // --- doors and features -----------------------------------------------------------------------
   const { structure: withDoor, entranceId } = addEntrance(base, {

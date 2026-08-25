@@ -106,7 +106,7 @@ export function ProductDrawer({
   const category = CATEGORY_BY_ID[draft.category];
   const isEdit = draft.id !== "";
   const nameError = submitted && draft.name.trim() === "";
-  const heightError = submitted && !draft.dimensions.heightMm;
+  const heightError = submitted && category.needsHeight !== false && !draft.dimensions.heightMm;
 
   const patch = (p: Partial<Product>) => setDraft((d) => ({ ...d, ...p }));
   const setDim = (key: keyof Product["dimensions"], cm: number) =>
@@ -169,7 +169,7 @@ export function ProductDrawer({
 
   const save = () => {
     setSubmitted(true);
-    if (draft.name.trim() === "" || !draft.dimensions.heightMm) return;
+    if (draft.name.trim() === "" || (category.needsHeight !== false && !draft.dimensions.heightMm)) return;
     if (draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3) {
       setSubmitted(true);
       return;
@@ -181,12 +181,16 @@ export function ProductDrawer({
     onClose();
   };
 
-  // A stretch category (a drape, a carpet) is cut or laid to whatever it has to cover, so it has
-  // no width or depth here — those are drawn per placement in the studio. Height still matters:
-  // a 2.8m drape and a 4m drape are different stock.
+  // A stretch category (a drape, a rug) is cut or laid to whatever it has to cover, so it has no
+  // width or depth here — those are drawn per placement in the studio.
   const stretch = category.sizing === "stretch";
   const showDiameter = !stretch && (category.dims === "round" || category.dims === "both");
   const showBox = !stretch && (category.dims === "box" || category.dims === "both");
+  // Most categories keep asking for height regardless of `stretch` — a drape's height is its DROP,
+  // the one dimension that still tells two rolls of the same curtain apart. needsHeight is the
+  // explicit opt-out for the categories where height isn't a dimension of the item at all: see the
+  // comment on CategoryDef.
+  const showHeight = category.needsHeight !== false;
 
   return (
     <dialog
@@ -269,16 +273,18 @@ export function ProductDrawer({
                   <NumberField label="עומק" hideZero value={mmToCm(draft.dimensions.depthMm)} onChange={(v) => setDim("depthMm", v)} min={0} />
                 </>
               )}
-              <NumberField
-                label="גובה"
-                required
-                hideZero
-                min={0}
-                error={heightError}
-                errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
-                value={mmToCm(draft.dimensions.heightMm)}
-                onChange={(v) => setDim("heightMm", v)}
-              />
+              {showHeight && (
+                <NumberField
+                  label="גובה"
+                  required
+                  hideZero
+                  min={0}
+                  error={heightError}
+                  errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
+                  value={mmToCm(draft.dimensions.heightMm)}
+                  onChange={(v) => setDim("heightMm", v)}
+                />
+              )}
             </div>
           </fieldset>
 

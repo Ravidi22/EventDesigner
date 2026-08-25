@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
+import { Check, ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
 import type { Venue } from "@/lib/venues/storage";
 
 // Circular venue mark: the designer's uploaded logo when set, else the venue name's initial —
@@ -33,6 +33,7 @@ export function VenueSwitcher({
   onSelect,
   onAdd,
   onRename,
+  onDelete,
 }: {
   venues: Venue[];
   /** Null on a studio with no venues yet — the switcher shows its own empty state. */
@@ -41,20 +42,37 @@ export function VenueSwitcher({
   onSelect: (id: string) => void;
   onAdd: () => void;
   onRename: (id: string, name: string) => void;
+  /** Resolves to an error message (e.g. "still has events on it") if the delete was refused. */
+  onDelete: (id: string) => Promise<string | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  // Armed by a first click on the trash icon; a second click on the SAME row actually deletes.
+  // Losing a venue also loses its whole wall graph and zone list, which a mis-click on a row this
+  // quick to reach is not a cost worth risking for the one extra click.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const active = venues.find((v) => v.id === activeId) ?? venues[0];
+
+  // Closing the dropdown always drops the armed confirm and any error from a previous attempt —
+  // reopening it later should not still be one click away from deleting something. Done at every
+  // call site that closes the menu, not in an effect keyed on `open`: an effect that turns around
+  // and calls setState the moment it sees the closed value is just this same reset one render late.
+  const closeMenu = () => {
+    setOpen(false);
+    setConfirmDeleteId(null);
+    setDeleteError(null);
+  };
 
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) closeMenu();
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") closeMenu();
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -73,6 +91,18 @@ export function VenueSwitcher({
     setRenamingId(null);
   };
 
+  const handleDeleteClick = (v: Venue) => {
+    if (confirmDeleteId !== v.id) {
+      setConfirmDeleteId(v.id);
+      setDeleteError(null);
+      return;
+    }
+    setConfirmDeleteId(null);
+    void onDelete(v.id).then((error) => {
+      if (error) setDeleteError(error);
+    });
+  };
+
   return (
     <div ref={rootRef} className={"relative mb-6 " + (collapsed ? "px-0" : "px-2")}>
       <button
@@ -81,7 +111,7 @@ export function VenueSwitcher({
         aria-expanded={open}
         aria-label={collapsed ? `אולם נבחר: ${active?.name ?? ""}` : undefined}
         title={collapsed ? active?.name : undefined}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? closeMenu() : setOpen(true))}
         className={
           "flex w-full items-center gap-2.5 rounded-md border border-border bg-canvas text-start transition-colors hover:border-accent-line " +
           (collapsed ? "justify-center px-0 py-2" : "px-3 py-2")
@@ -108,7 +138,9 @@ export function VenueSwitcher({
           role="listbox"
           aria-label="בחירת אולם"
           className={
-            "absolute top-[calc(100%+6px)] z-20 w-max min-w-[14rem] overflow-hidden rounded-md border border-border bg-surface p-1 shadow-lifted " +
+            // z-40: above the sidebar's own floating collapse toggle (app-shell.tsx, z-30) — an open
+            // menu is focused, active UI and must never render underneath a piece of persistent chrome.
+            "absolute top-[calc(100%+6px)] z-40 w-max min-w-[14rem] overflow-hidden rounded-md border border-border bg-surface p-1 shadow-lifted " +
             (collapsed ? "start-0" : "start-0 w-full")
           }
         >
@@ -141,7 +173,7 @@ export function VenueSwitcher({
                 aria-selected={selected}
                 onClick={() => {
                   onSelect(v.id);
-                  setOpen(false);
+                  closeMenu();
                 }}
                 className={
                   "group flex cursor-pointer items-center gap-2.5 rounded-sm px-3 py-2 text-sm transition-colors " +
@@ -164,9 +196,32 @@ export function VenueSwitcher({
                 >
                   <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
+                <button
+                  type="button"
+                  aria-label={confirmDeleteId === v.id ? `לאשר מחיקת ${v.name}` : `מחיקת ${v.name}`}
+                  title={confirmDeleteId === v.id ? "לחצו שוב לאישור מחיקה" : undefined}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteClick(v);
+                  }}
+                  className={
+                    "shrink-0 rounded-sm p-1 transition-colors " +
+                    (confirmDeleteId === v.id
+                      ? "bg-alert-tint text-alert opacity-100"
+                      : "text-ink-soft opacity-0 hover:bg-canvas hover:text-alert group-hover:opacity-100")
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
+                </button>
               </div>
             );
           })}
+
+          {deleteError && (
+            <p className="w-full break-words rounded-sm bg-alert-tint px-4 py-3 text-xs leading-relaxed text-alert">
+              {deleteError}
+            </p>
+          )}
 
           <div className="my-1 border-t border-border-soft" />
 
@@ -174,7 +229,7 @@ export function VenueSwitcher({
             type="button"
             onClick={() => {
               onAdd();
-              setOpen(false);
+              closeMenu();
             }}
             className="flex w-full items-center gap-2.5 rounded-sm px-3 py-2 text-sm text-accent transition-colors hover:bg-accent-tint"
           >

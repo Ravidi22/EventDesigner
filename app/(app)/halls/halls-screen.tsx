@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Building2,
+  ChevronsLeft,
   ChevronUp,
   DoorOpen,
   GlassWater,
@@ -58,6 +59,7 @@ import {
   removeFeature,
   removeNode,
   removeWall,
+  updateEntrance,
   updateFeature,
   updateStairs,
   type WallKind,
@@ -65,7 +67,6 @@ import {
 import { stairsPlacementAt } from "@/lib/venues/stairs";
 import { detectFaces, faceAt } from "@/lib/venues/faces";
 import {
-  ZONE_KIND_LABEL,
   isOpenAir,
   newZone,
   resolveZones,
@@ -206,6 +207,10 @@ export function HallsScreen() {
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
   const focusNonce = useRef(0);
   const [ready, setReady] = useState(false); // storage has been read; before this, nothing is written back
+  // The zone-definition / background-plan panel, collapsible exactly like the app's own sidebar
+  // (components/app-shell.tsx) — a designer mid-drawing wants the canvas at full width without
+  // losing the panel entirely, the same tradeoff the main nav's own collapse toggle makes.
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
   // Position, inside the canvas, of the floating instruction tooltip that follows the cursor while a
   // drawing tool is armed — null (and so unrendered) the instant the pointer leaves the canvas or the
   // tool goes back to "select", rather than lingering at its last spot. `w` is the canvas's own
@@ -469,8 +474,24 @@ export function HallsScreen() {
       // Clicking an existing corner reuses it rather than stacking a new one on top — this is how
       // walls come to share endpoints, and therefore how enclosed areas ever get detected.
       const { structure: withNode, nodeId } = addNode(structure, p);
-      editStructure(() => (runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode));
+      const nextStructure = runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode;
+      editStructure(() => nextStructure);
       setRunNodeId(nodeId);
+
+      // A wall that just closed a loop back onto itself created a brand new room — offer to name
+      // it right away instead of making the designer end the run, switch to "zones" mode, and
+      // click inside it separately. `faces` is still the pre-click set (memoised off the
+      // structure before this edit), so comparing against it tells a genuinely new room apart from
+      // one that already existed — and already-named ones are, by definition, not new.
+      if (!draftZone) {
+        const priorSignatures = new Set(faces.map((f) => [...f.nodeIds].sort().join(",")));
+        const newFace = detectFaces(nextStructure).find(
+          (f) => !priorSignatures.has([...f.nodeIds].sort().join(",")),
+        );
+        if (newFace) {
+          setDraftZone({ source: { type: "face", anchor: polygonCentroid(newFace.boundary) }, name: "", kind: "hall" });
+        }
+      }
       return;
     }
 
@@ -702,7 +723,7 @@ export function HallsScreen() {
           for. min-h-0 is load-bearing: without it a grid row won't shrink below its content's
           natural size, and the canvas's own min-h-96 would then win a fight with "fill exactly what
           remains" instead of losing to it gracefully once space is tight. */}
-      <div className="grid min-h-0 flex-1 gap-x-4 gap-y-3 lg:grid-cols-[1fr_300px]">
+      <div className="grid min-h-0 flex-1 gap-x-4 gap-y-3 lg:grid-cols-[1fr_auto]">
         <section
           className="relative min-h-96 overflow-hidden rounded-md border border-border bg-accent-tint lg:h-full lg:min-h-0"
           onPointerMove={(e) => {
@@ -868,12 +889,16 @@ export function HallsScreen() {
                 </>
               );
             }}
-            overlay={({ mm }) => (
+            overlay={({ mm, clientToMm }) => (
               <>
                 <StructureDoors
                   structure={structure}
                   selectedIds={selection.filter((s) => s.kind === "door").map((s) => s.id)}
                   onSelect={isSelectMode ? (id, additive) => pick({ kind: "door", id }, additive) : undefined}
+                  onMove={isSelectMode ? (id, distanceMm) => dragStructure((s) => updateEntrance(s, id, { distanceMm })) : undefined}
+                  onCommit={endGesture}
+                  clientToMm={clientToMm}
+                  mm={mm}
                 />
                 {/* Above the walls: the span being measured has to stay readable over a dark scan. */}
                 <CalibrationOverlay from={calib?.from ?? null} to={calib?.to ?? null} mm={mm} />
@@ -1000,7 +1025,7 @@ export function HallsScreen() {
               still sizes to its content — short selections don't get stretched, they just have real
               room to scroll into once they don't. A lone zone is the one selection with nothing to
               show here: its fields live in the list. */}
-          {!soleZoneId && selection.length > 0 && (
+          {(draftZone || (!soleZoneId && selection.length > 0)) && (
             <div className="pointer-events-none absolute inset-y-4 right-4 z-10 flex items-start justify-end">
               <div className="pointer-events-auto h-full w-72">
                 <VenueInspector
@@ -1009,6 +1034,10 @@ export function HallsScreen() {
                   apply={editStructure}
                   onDelete={deleteSelection}
                   onClose={() => setSelection([])}
+                  draftZone={draftZone}
+                  onDraftZoneChange={(patch) => draftZone && setDraftZone({ ...draftZone, ...patch })}
+                  onSaveDraftZone={saveDraftZone}
+                  onCancelDraftZone={() => setDraftZone(null)}
                 />
               </div>
             </div>
@@ -1027,7 +1056,73 @@ export function HallsScreen() {
             actually reads as "a sidebar", as opposed to "a card that happens to have a border". A
             list too long for that fixed height scrolls inside the panel (overflow-y-auto) instead
             of growing the page, now that the panel has a real height to scroll within. */}
-        <aside className="flex flex-col gap-3 overflow-y-auto rounded-lg bg-bg p-4 lg:col-start-2 lg:h-full">
+        <aside
+          className={
+            "group/panel relative flex flex-col overflow-y-auto rounded-lg bg-bg transition-[width] duration-200 ease-fluid lg:col-start-2 lg:h-full " +
+            (panelCollapsed ? "gap-0 p-0 lg:w-20" : "gap-3 p-4 lg:w-[300px]")
+          }
+        >
+          {/* Collapse toggle — the same "liquid glass" puck the main sidebar uses
+              (components/app-shell.tsx), straddling this panel's own edge so the affordance reads
+              as the identical control rather than a bespoke one-off. Sits at the panel's
+              inline-start (the edge bordering the canvas) instead of inline-end, since this panel
+              is the one being tucked away, not the thing everything else collapses toward. Hidden
+              below lg: the two-column layout it collapses doesn't exist at that width, so there is
+              nothing here to toggle. */}
+          {/* True 50% of this panel's own box does NOT line up with the main sidebar's puck
+              (components/app-shell.tsx) — that one sits in a box with equal chrome above and below
+              (p-3 both sides), while this panel sits below the shared header (p-3 + h-16 header +
+              gap-3 ≈ 104px of chrome above it) but only p-3 + this page's own p-4 (≈28px) below it.
+              50% would land 38px lower than the sidebar's puck; shifting up by that half-difference
+              puts both on the same screen line. */}
+          <button
+            type="button"
+            onClick={() => setPanelCollapsed((c) => !c)}
+            aria-label={panelCollapsed ? "הרחבת לוח האזורים" : "כיווץ לוח האזורים"}
+            style={{ insetInlineStart: "-14px" }}
+            className="absolute top-[calc(50%-38px)] z-30 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-white/60 bg-white/50 text-ink-soft opacity-40 shadow-floating backdrop-blur-md transition-all duration-150 hover:opacity-100 hover:bg-white/80 hover:text-accent focus-visible:opacity-100 group-hover/panel:opacity-100 lg:flex"
+          >
+            <ChevronsLeft
+              className={"h-4 w-4 transition-transform duration-200 " + (panelCollapsed ? "" : "rotate-180")}
+              strokeWidth={2}
+            />
+          </button>
+
+          {/* Collapsed rail — two icon chips standing in for the two cards below, so the panel
+              still reads as "background plan" + "zones (n)" even shrunk to a strip, the same way
+              the main sidebar keeps its nav icons rather than going blank when collapsed. Either
+              chip re-expands the panel; lg-only, matching the toggle above, so a narrow viewport
+              always gets the full stacked layout regardless of this state. */}
+          {panelCollapsed && (
+            <div className="hidden flex-1 flex-col items-center gap-2.5 rounded-md border border-border bg-inset p-2 lg:flex">
+              <button
+                type="button"
+                onClick={() => setPanelCollapsed(false)}
+                title="תוכנית רקע"
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-muted transition-colors hover:border-accent-line hover:text-accent"
+              >
+                <ImageIcon className="h-[18px] w-[18px]" strokeWidth={1.4} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPanelCollapsed(false)}
+                title="הגדרת אזורים"
+                className="relative flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-muted transition-colors hover:border-accent-line hover:text-accent"
+              >
+                <Shapes className="h-[18px] w-[18px]" strokeWidth={1.4} />
+                <span className="absolute -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-canvas" style={{ insetInlineEnd: "-6px" }}>
+                  {zones.length}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* The full panel content — always rendered so mobile (below lg, where the collapse
+              toggle is hidden and the columns stack) never loses it, and only actually hidden at lg
+              once panelCollapsed says so. Same rounded-md/border-border/bg-inset backing as the
+              collapsed rail above, so expanding the panel doesn't drop the gray card it was just
+              sitting on. */}
+          <div className={"flex flex-col gap-3 rounded-md border border-border bg-inset p-2 " + (panelCollapsed ? "lg:hidden" : "")}>
           {/* Tracing panel (F-3.5 + F-3.4) — its own card, sibling to the zone-definition card
               below: a background plan you place/calibrate isn't part of "defining zones", so it
               keeps that card focused on just that instead of growing a second concern into it. */}
@@ -1220,56 +1315,10 @@ export function HallsScreen() {
                   </p>
                 </div>
 
-                {/* Naming panel — appears the moment an area is picked. A tinted card standing out
-                    against the list's own white, the reverse of when the list itself was purple. */}
-                {draftZone && (
-                  <div className="rounded-md border border-accent-line bg-accent-tint p-3.5">
-                    <h3 className="mb-2 text-sm font-bold text-accent-deep">
-                      {draftZone.source.type === "face" ? "מתן שם לשטח הסגור" : "מתן שם לשטח המסומן"}
-                    </h3>
-                    <input
-                      autoFocus
-                      value={draftZone.name}
-                      onChange={(e) => setDraftZone({ ...draftZone, name: e.target.value })}
-                      onKeyDown={(e) => e.key === "Enter" && saveDraftZone()}
-                      placeholder="שם האזור"
-                      className="w-full rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
-                    />
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {(Object.keys(ZONE_KIND_LABEL) as ZoneKind[]).map((k) => (
-                        <button
-                          key={k}
-                          type="button"
-                          onClick={() => setDraftZone({ ...draftZone, kind: k })}
-                          aria-pressed={draftZone.kind === k}
-                          className={`rounded-pill border px-2.5 py-1 text-[11px] transition-colors ${
-                            draftZone.kind === k ? "border-accent bg-accent text-white" : "border-badge-line bg-canvas text-muted"
-                          }`}
-                        >
-                          {ZONE_KIND_LABEL[k]}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={saveDraftZone}
-                        disabled={!draftZone.name.trim()}
-                        className="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
-                      >
-                        שמירה
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDraftZone(null)}
-                        className="rounded-sm px-3 py-1.5 text-sm font-semibold text-muted hover:bg-canvas"
-                      >
-                        ביטול
-                      </button>
-                    </div>
-                  </div>
-                )}
-
+                {/* Naming now happens on the canvas's own right-side panel (VenueInspector, below)
+                    — the same place every other selection's fields already live — not here; a
+                    picked-but-unnamed area is still shown as "picked" via the unnamed-count line
+                    right below, not by a second copy of the form in two places at once. */}
                 {mode === "zones" && !draftZone && unnamed > 0 && (
                   <p className="rounded-md border border-dashed border-accent-line bg-accent-tint/60 p-3 text-xs leading-relaxed text-accent-deep">
                     זוהו {faces.length} שטחים סגורים במבנה, {unnamed} מהם עדיין ללא שם. לחצו בתוך שטח כדי להגדיר אותו כאזור.
@@ -1380,6 +1429,7 @@ export function HallsScreen() {
                   </p>
                 )}
           </div>
+          </div>
         </aside>
       </div>
     </div>
@@ -1390,6 +1440,10 @@ export function HallsScreen() {
 // member, plus entrance) instead of a flat text list, so picking an element reads more like
 // choosing a product than reading a menu. Opens upward, not down, since the dock it sits in is
 // pinned to the canvas's bottom edge — there is no room below it to pop into.
+const FLYOUT_WIDTH = 420;
+const FLYOUT_GAP = 8;
+const FLYOUT_MARGIN = 16; // never closer than this to the viewport edge
+
 function AddElementFlyout({
   open,
   onOpenChange,
@@ -1404,19 +1458,40 @@ function AddElementFlyout({
   entranceDisabled: boolean;
 }) {
   const [search, setSearch] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Screen-space (not `absolute` inside the canvas): the toolbar dock lives inside the canvas's own
+  // `overflow-hidden` section (it clips the SVG's corners), and an `absolute` popup wide enough to
+  // run past that section's edge got its own corner sheared off along with it — "cuts the card".
+  // `fixed` escapes that ancestor entirely; the position is plain viewport math instead of
+  // RTL-logical insets because `fixed` coordinates are physical regardless of `dir`. Measured at the
+  // moment of the click that opens it (a DOM read the trigger's own handler is already in a position
+  // to make), not in an effect reacting to `open` — there is nowhere else `open` ever turns true.
+  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
   useEffect(() => {
     if (!open) setSearch("");
   }, [open]);
   const filtered = ADD_TOOLS.filter((t) => ADD_TOOL_LABEL[t].includes(search.trim()));
   const TriggerIcon = armedTool ? ADD_TOOL_ICON[armedTool] : Shapes;
+  const openFlyout = () => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (r) {
+      const left = Math.max(
+        FLYOUT_MARGIN,
+        Math.min(r.right - FLYOUT_WIDTH, window.innerWidth - FLYOUT_WIDTH - FLYOUT_MARGIN),
+      );
+      setPos({ left, bottom: window.innerHeight - r.top + FLYOUT_GAP });
+    }
+    onOpenChange(true);
+  };
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         type="button"
         title="הוספת אלמנט"
         aria-pressed={!!armedTool}
         aria-expanded={open}
-        onClick={() => onOpenChange(!open)}
+        onClick={() => (open ? onOpenChange(false) : openFlyout())}
         className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
           armedTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
         }`}
@@ -1428,14 +1503,15 @@ function AddElementFlyout({
         אלמנט
       </button>
 
-      {open && (
+      {open && pos && (
         <>
           {/* A full-screen, invisible backdrop is what makes "click anywhere else" close the menu —
               the same pattern the canvas's own (now-retired) right-click menu used. */}
           <div className="fixed inset-0 z-40" onClick={() => onOpenChange(false)} />
           <div
             role="menu"
-            className="absolute bottom-full start-0 z-50 mb-2 w-72 rounded-md border border-border bg-surface p-3 shadow-floating"
+            className="fixed z-50 rounded-md border border-border bg-surface p-3 shadow-floating"
+            style={{ left: pos.left, bottom: pos.bottom, width: FLYOUT_WIDTH }}
           >
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted" style={{ insetInlineStart: 10 }} strokeWidth={1.75} />
@@ -1450,7 +1526,7 @@ function AddElementFlyout({
               />
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid grid-cols-4 gap-2">
               {filtered.map((tool) => {
                 const Icon = ADD_TOOL_ICON[tool];
                 const disabled = tool === "entrance" && entranceDisabled;
@@ -1469,14 +1545,14 @@ function AddElementFlyout({
                       e.dataTransfer.effectAllowed = "copy";
                     }}
                     onClick={() => onPick(tool)}
-                    className={`flex flex-col items-center gap-1.5 rounded-md border p-2.5 text-xs font-semibold transition-colors ${
+                    className={`flex flex-col items-center gap-1.5 rounded-md border p-2 text-xs font-semibold transition-colors ${
                       armedTool === tool
                         ? "border-accent bg-accent-tint text-accent"
                         : "border-border text-ink hover:border-accent-line hover:bg-inset"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                   >
                     <span
-                      className="flex h-9 w-9 items-center justify-center rounded-md"
+                      className="flex h-11 w-11 items-center justify-center rounded-md"
                       style={{ backgroundColor: ADD_TOOL_PREVIEW[tool] }}
                     >
                       <Icon className="h-4 w-4 text-ink/70" strokeWidth={1.75} />
@@ -1485,7 +1561,7 @@ function AddElementFlyout({
                   </button>
                 );
               })}
-              {filtered.length === 0 && <p className="col-span-2 py-4 text-center text-xs text-muted">לא נמצאו אלמנטים</p>}
+              {filtered.length === 0 && <p className="col-span-4 py-4 text-center text-xs text-muted">לא נמצאו אלמנטים</p>}
             </div>
 
             <p className="mt-3 text-center text-[11px] leading-relaxed text-muted">

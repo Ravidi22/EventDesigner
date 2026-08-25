@@ -88,18 +88,25 @@ export interface CategoryDef {
    *  then stored on the product, so a studio that rents its chairs rather than owning them can say
    *  so without the category disagreeing with the row. */
   defaultStock?: StockKind;
+  /** Absent/true = the drawer asks for height and will not save without one (most of the catalog —
+   *  it is what the 3D visualisation stands the item up with). False = this category has no height
+   *  of its own to ask for: a cloth drapes over its table's height rather than carrying one, and a
+   *  rug lies flat on the floor it is drawn onto. Independent of `sizing: "stretch"` — a stretch
+   *  drape's height is its DROP, the one thing that still tells two rolls of curtain apart, so that
+   *  category keeps asking. */
+  needsHeight?: boolean;
 }
 
 export const CATEGORIES: CategoryDef[] = [
   { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
   { id: "chairs", label: "כיסאות", group: "grp-seating", defaultLayer: "floor", icon: Armchair, dims: "box", fields: [] },
-  { id: "tablecloths", label: "מפות", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], anchor: "table" },
+  { id: "tablecloths", label: "מפות", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], anchor: "table", needsHeight: false },
   // The one category that defaults to consumable: a centrepiece is flowers far more often than it
   // is the vase they stand in, and a designer who stocks reusable pieces changes one field.
   { id: "centerpieces", label: "מרכזי שולחן", group: "grp-table-design", defaultLayer: "table", icon: Flower2, dims: "round", fields: [], defaultStock: "consumable" },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
-  { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch" },
+  { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
   { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [] },
   { id: "bars", label: "ברים", group: "grp-bars", defaultLayer: "floor", icon: Wine, dims: "both", fields: [] },
   { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [] },

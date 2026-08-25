@@ -65,7 +65,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const [leaving, setLeaving] = useState(false);
   const [headerSearch, setHeaderSearch] = useState("");
   // Venues come from the server now; the switcher's own selection stays in this browser.
-  const { venues, activeVenueId, add, rename } = useVenues();
+  const { venues, activeVenueId, add, rename, remove } = useVenues();
   const [selected, setSelected] = useState<string | null>(null);
   const current = selected ?? activeVenueId;
 
@@ -158,6 +158,14 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
             });
           }}
           onRename={(id, name) => void rename(id, name)}
+          onDelete={async (id) => {
+            const error = await remove(id);
+            // `selected` is this component's own override of the hook's activeVenueId (see
+            // `current` above) — clearing it here is what lets the fallback venue the hook already
+            // picked actually take effect instead of `current` staying pinned to a deleted id.
+            if (!error && current === id) setSelected(null);
+            return error;
+          }}
         />
 
         <nav className="flex flex-col gap-[3px]">

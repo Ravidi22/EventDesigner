@@ -437,6 +437,11 @@ export function PlanCanvas({
   gridColorClassName?: string;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  // Last known pointer position in CLIENT px, kept alongside cursorRaw (which is in world mm and
+  // only updates on an actual pointermove): the edge-autopan loop below still needs to know where
+  // the cursor is sitting on frames where the mouse itself hasn't moved — which is exactly every
+  // frame while it is pinned against the canvas edge, the situation it exists to handle.
+  const lastClientPos = useRef<{ x: number; y: number } | null>(null);
   const [cursorRaw, setCursorRaw] = useState<Point | null>(null); // unsnapped pointer, in mm — the snap is re-derived per render
   const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   const [rect, setRect] = useState({ w: 0, h: 0 });
@@ -510,9 +515,14 @@ export function PlanCanvas({
     ? { minX: center.x - (rect.w * mmPerPx) / 2, minY: center.y - (rect.h * mmPerPx) / 2, w: rect.w * mmPerPx, h: rect.h * mmPerPx }
     : contentBox;
 
+  const clampZoom = (m: number) => Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, m));
   const fitTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
     if (rw === 0 || rh === 0) return;
-    setMmPerPx(Math.max(box.w / rw, box.h / rh) * 1.06);
+    // Clamped through the same ceiling manual zoom obeys (see clampZoom below) — otherwise a plan
+    // big enough to need more than MAX_MM_PER_PX to fit lands the view beyond what a manual zoom-out
+    // can ever reach, and the first scroll or tap of "-" snaps it back down to the ceiling instead of
+    // continuing outward, which reads as "zooming out doesn't work" rather than "already at the limit".
+    setMmPerPx(clampZoom(Math.max(box.w / rw, box.h / rh) * 1.06));
     setCenter({ x: box.minX + box.w / 2, y: box.minY + box.h / 2 });
   };
 
@@ -601,7 +611,6 @@ export function PlanCanvas({
     return { x: screen.x, y: screen.y };
   };
 
-  const clampZoom = (m: number) => Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, m));
   const zoomByCenter = (factor: number) => {
     cancelFocus();
     setMmPerPx((m) => clampZoom(m * factor));
@@ -777,6 +786,42 @@ export function PlanCanvas({
   // Which side of a wall reads as "inward", for a door's swing direction — the outline's own
   // centroid, same reference point the old (and now-restored) doorGeometry always used.
   const interiorHint = outline.length >= 3 ? polygonCentroid(outline) : { x: 0, y: 0 };
+
+  // Edge autopan while a wall/outline run is live: without this, the segment being drawn can only
+  // reach as far as the cursor can physically travel inside the canvas element, so a run longer
+  // than the current view just stops dead at whichever edge the pointer hit first — the fix isn't
+  // to draw further than the mouse moves, it's to keep the mouse's OWN point on the plan advancing
+  // by panning the view under a pointer that has stopped moving. Runs for as long as there is an
+  // anchor to extend from; Enter (which clears the run) or leaving draw mode ends it.
+  const drawGestureActive = mode === "draw" && drawAnchor !== null;
+  const autopanFrame = useRef<number | null>(null);
+  useEffect(() => {
+    if (!drawGestureActive) return;
+    const EDGE_PX = 48; // margin from the canvas edge that starts panning
+    const MAX_PX_PER_FRAME = 16; // pan speed at full penetration into the margin (cursor pinned at the edge)
+    const push = (distanceIntoEdge: number) =>
+      distanceIntoEdge >= EDGE_PX ? 0 : MAX_PX_PER_FRAME * (1 - distanceIntoEdge / EDGE_PX);
+    const tick = () => {
+      const svg = svgRef.current;
+      const pos = lastClientPos.current;
+      if (svg && pos) {
+        const r = svg.getBoundingClientRect();
+        const dx = pos.x - r.left < EDGE_PX ? -push(pos.x - r.left) : r.right - pos.x < EDGE_PX ? push(r.right - pos.x) : 0;
+        const dy = pos.y - r.top < EDGE_PX ? -push(pos.y - r.top) : r.bottom - pos.y < EDGE_PX ? push(r.bottom - pos.y) : 0;
+        if (dx || dy) {
+          const { mmPerPx: mpp } = viewRef.current;
+          setCenter((c) => ({ x: c.x + dx * mpp, y: c.y + dy * mpp }));
+          setCursorRaw(clientToMm(pos.x, pos.y));
+        }
+      }
+      autopanFrame.current = requestAnimationFrame(tick);
+    };
+    autopanFrame.current = requestAnimationFrame(tick);
+    return () => {
+      if (autopanFrame.current !== null) cancelAnimationFrame(autopanFrame.current);
+      autopanFrame.current = null;
+    };
+  }, [drawGestureActive]);
 
   // Commits the typed segment: exact length along the typed (or currently inferred) direction.
   const commitEntry = () => {
@@ -1022,7 +1067,10 @@ export function PlanCanvas({
           return;
         }
         if (e.altKey !== altHeld) setAltHeld(e.altKey); // the modifier can be pressed while the window was unfocused
-        if (mode === "draw") setCursorRaw(clientToMm(e.clientX, e.clientY));
+        if (mode === "draw") {
+          lastClientPos.current = { x: e.clientX, y: e.clientY };
+          setCursorRaw(clientToMm(e.clientX, e.clientY));
+        }
       }}
       onPointerUp={(e) => {
         if (pan.current) {
@@ -1504,6 +1552,7 @@ export function PlanCanvas({
             entrance={en}
             a={a}
             b={b}
+            curve={edgeCurves[en.wallIndex] ?? null}
             interiorHint={interiorHint}
             selected={isSel("entrance", en.id)}
             onSelect={selectOrPreserveGroup(ref)}
@@ -1718,13 +1767,16 @@ export function PlanCanvas({
       );
     })()}
 
-    {/* The pending wall's readout, and the value box it turns into once a digit is typed. */}
+    {/* The pending wall's readout, and the value box it turns into once a digit is typed. Anchored
+        to the moving endpoint (not the segment's midpoint) so it tracks the point the designer is
+        actually placing — a small fixed offset off it, never on top of it, so the badge never
+        covers the cursor or the vertex it is about to drop. */}
     {hasRect && drawAnchor && (pending || entry) && (() => {
-      const at = worldToPx(pending ? edgeMidpoint(drawAnchor, pending.point) : drawAnchor);
+      const at = worldToPx(pending ? pending.point : drawAnchor);
       const lenText = `${(pendingLenMm / 1000).toFixed(2)} מ׳`;
       const angText = `${Math.round(pendingAngleDeg)}°`;
       return (
-        <div className="absolute" style={{ left: at.x, top: at.y, transform: "translate(-50%, -170%)" }}>
+        <div className="absolute" style={{ left: at.x, top: at.y, transform: "translate(12px, -50%)" }}>
           {entry ? (
             <div className="flex items-center gap-1.5 rounded-full border border-accent bg-surface px-2.5 py-1 text-xs shadow-floating">
               <input
@@ -1762,7 +1814,7 @@ export function PlanCanvas({
       );
     })()}
 
-    <div className="absolute bottom-4 start-4 flex items-center gap-0.5 rounded-md border border-border bg-surface p-1 shadow-floating">
+    <div className="absolute top-4 end-4 flex items-center gap-0.5 rounded-md border border-border bg-surface p-1 shadow-floating">
       {onUndo && onRedo && (
         <>
           <IconButton label="ביטול פעולה" onClick={onUndo} disabled={!canUndo}>
@@ -1851,14 +1903,18 @@ function BezierHandles({
   );
 }
 
-// A door cut into a wall: the gap itself is rendered by the wall above (stub segments); this
-// draws the leaf(es) + swing arc — single or double, swinging in or out per entrance.swingInward/
-// doubleDoor (see doorGeometry) — and gives the door a drag handle that slides it along its wall
-// (world-space drag points get projected back onto the wall's chord by the caller).
-function EntranceDoor({
+// A door cut into a wall: the gap itself is rendered by the wall above (stub segments in the
+// outline system; a canvas-coloured overstrike in the graph system — see venue-plan.tsx's
+// StructureDoors, the other caller); this draws the leaf(es) + swing arc — single or double,
+// swinging in or out per entrance.swingInward/doubleDoor (see doorGeometry) — and gives the door a
+// drag handle that slides it along its wall (world-space drag points get projected back onto the
+// wall's chord by the caller). `entrance` only needs the four fields the geometry actually reads —
+// not the outline system's own id/wallIndex — so a venue's StructureEntrance satisfies it too.
+export function EntranceDoor({
   entrance,
   a,
   b,
+  curve,
   interiorHint,
   selected,
   onSelect,
@@ -1867,9 +1923,13 @@ function EntranceDoor({
   clientToMm,
   mm,
 }: {
-  entrance: Entrance;
+  entrance: Pick<Entrance, "distanceMm" | "widthMm" | "swingInward" | "doubleDoor">;
   a: Point;
   b: Point;
+  /** The wall's own bow, if any — absent/null for a straight wall. Without this, every point below
+   *  would be lerped along the straight a→b chord while the wall itself is drawn bowed away from
+   *  it, landing the whole symbol beside the opening instead of in it. */
+  curve?: EdgeCurve | null;
   interiorHint: Point; // which side of the wall reads as "inward" — see doorGeometry
   selected: boolean;
   onSelect: (mods: { shift: boolean; phase: "press" | "click" }) => void;
@@ -1879,10 +1939,14 @@ function EntranceDoor({
   mm: (px: number) => number;
 }) {
   const half = entrance.widthMm / 2;
-  const gapStart = pointAtDistance(a, b, entrance.distanceMm - half);
-  const gapEnd = pointAtDistance(a, b, entrance.distanceMm + half);
-  const mid = pointAtDistance(a, b, entrance.distanceMm);
-  const door = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, entrance.swingInward, interiorHint, entrance.doubleDoor);
+  const door = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, entrance.swingInward, interiorHint, entrance.doubleDoor, curve);
+  // The hitbox/handle and the keyboard nudge still reason in the door's own local jamb-to-jamb
+  // frame (gapStart/gapEnd/center), now sourced from the same curve-aware geometry as the leaves —
+  // a separate straight-chord copy of these here is exactly how the handle and the symbol it is
+  // supposed to sit on used to drift apart on a bowed wall.
+  const gapStart = door.gapStart;
+  const gapEnd = door.gapEnd;
+  const mid = door.center;
   const drag = dragHandlers(clientToMm, onMove, onSelect, undefined, onCommit);
 
   // The door slides along its wall, but the wall's own direction can run either way — so an arrow
@@ -1927,7 +1991,7 @@ function EntranceDoor({
         width={entrance.widthMm + mm(8)}
         height={mm(18)}
         rx={mm(5)}
-        transform={`rotate(${wallAngleDeg(a, b)} ${mid.x} ${mid.y})`}
+        transform={`rotate(${wallAngleDeg(gapStart, gapEnd)} ${mid.x} ${mid.y})`}
       />
       <line x1={gapStart.x} y1={gapStart.y} x2={gapEnd.x} y2={gapEnd.y} stroke="transparent" strokeWidth={mm(14)} />
       {/* The door leaf(es) — a straight line from hinge to the open tip — and the quarter-circle

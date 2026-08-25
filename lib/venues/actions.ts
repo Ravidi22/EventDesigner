@@ -15,10 +15,10 @@
 // not studio data — it belongs in this browser, changes when you click the switcher, and would be
 // actively wrong to share between a designer's laptop and their tablet mid-setup. It stays in
 // lib/venues/storage.ts.
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, type Actor } from "@/lib/db/org";
-import { users, venues, venueGrants, zones, venueStructures } from "@/lib/db/schema";
+import { users, venues, venueGrants, zones, venueStructures, events } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
 import {
   atLeast,
@@ -306,6 +306,27 @@ export async function renameVenue(id: string, name: string): Promise<Venue[]> {
     .update(venues)
     .set({ name: name.trim(), updatedAt: new Date() })
     .where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
+  return fetchVenues();
+}
+
+/** Delete a venue and everything that is only its own — the wall graph, its zones, and any grants
+ *  handed out on it all cascade with it (ON DELETE CASCADE in the schema).
+ *
+ *  Checked up front rather than left to the database: `events.venue_id` is ON DELETE RESTRICT on
+ *  purpose, so a venue with a real event on it would otherwise fail with a stack trace instead of a
+ *  sentence — the record of where that event happened is a bigger loss than the click that
+ *  triggered this one. */
+export async function deleteVenue(id: string): Promise<Venue[] | { error: string }> {
+  const { actor } = await requireVenueAccess(id, "manager");
+  const database = db();
+
+  const [booked] = await database
+    .select({ count: sql<number>`count(*)::int` })
+    .from(events)
+    .where(and(eq(events.venueId, id), eq(events.organizationId, actor.organizationId)));
+  if ((booked?.count ?? 0) > 0) return { error: "לא ניתן למחוק מתחם שיש בו אירועים — הסירו קודם את השיוך שלהם" };
+
+  await database.delete(venues).where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
   return fetchVenues();
 }
 
