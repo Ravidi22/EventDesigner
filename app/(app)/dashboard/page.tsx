@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { requireStudio } from "@/lib/auth/guard";
 import { fetchEvents } from "@/lib/events/actions";
 import { fetchAppointments } from "@/lib/appointments/actions";
+import { fetchGoogleBusy, fetchGoogleStatus } from "@/lib/google/actions";
+import { defaultBusyWindow } from "@/lib/google/mapping";
 import { DashboardScreen } from "./dashboard-screen";
 
 export const metadata: Metadata = { title: "לוח בקרה · Eve" };
@@ -23,6 +25,30 @@ export default async function DashboardPage() {
   // therefore cannot gate it. See lib/auth/guard.ts — it is free, and it is what turns a signed-out
   // visit into a redirect rather than "not signed in" thrown out of fetchEvents.
   await requireStudio();
-  const [events, appointments] = await Promise.all([fetchEvents(), fetchAppointments()]);
-  return <DashboardScreen initialEvents={events} initialAppointments={appointments} />;
+
+  // The Google window is computed here so the server's read and the client hook's idea of "what is
+  // already loaded" are the same range — see defaultBusyWindow.
+  const today = new Date().toISOString().slice(0, 10);
+  const busyWindow = defaultBusyWindow(today);
+
+  // Google joins the same Promise.all, and it is the one read here that can be SLOW — it talks to
+  // somebody else's servers. It is safe in this position for one reason: fetchGoogleBusy resolves
+  // to an empty array on every failure rather than rejecting (lib/google/sync.ts), so a Google
+  // outage costs this page its overlay and its patience, never its render.
+  const [events, appointments, busy, google] = await Promise.all([
+    fetchEvents(),
+    fetchAppointments(),
+    fetchGoogleBusy(busyWindow.from, busyWindow.to),
+    fetchGoogleStatus(),
+  ]);
+
+  return (
+    <DashboardScreen
+      initialEvents={events}
+      initialAppointments={appointments}
+      initialBusy={busy}
+      busyWindow={busyWindow}
+      googleConnected={google.connection?.pullEnabled ?? false}
+    />
+  );
 }

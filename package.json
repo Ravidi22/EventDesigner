@@ -40,6 +40,7 @@
     "check:sigv4": "tsx lib/files/sigv4.ts",
     "check:calendar": "tsx lib/calendar/hebrew.ts",
     "check:appointments": "tsx lib/appointments/types.ts",
+    "check:google": "tsx lib/google/types.ts && tsx lib/google/config.ts && tsx lib/google/secret-box.ts && tsx lib/google/mapping.ts && tsx lib/google/oauth.ts && tsx lib/google/api.ts",
     "gen:calendar": "tsx lib/calendar/generate.mts"
   },
   "dependencies": {

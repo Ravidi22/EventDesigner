@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, CalendarCheck, MapPin, Plus, Users } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Lock, MapPin, Plus, Users } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -12,9 +12,10 @@ import {
   byStartTime,
   hasPassed,
 } from "@/lib/appointments/types";
+import type { BusyBlock } from "@/lib/google/types";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { EmptyState } from "@/components/empty-state";
-import { toISODate, TONE_CLASS } from "./dashboard-view-utils";
+import { KIND_ICON, toISODate, TONE_CLASS } from "./dashboard-view-utils";
 
 type Tab = "events" | "meetings";
 
@@ -29,6 +30,7 @@ type Tab = "events" | "meetings";
 export function TodayFocus({
   events,
   appointments,
+  busy,
   venueColor,
   onOpenEvent,
   onOpenAppointment,
@@ -36,6 +38,9 @@ export function TodayFocus({
 }: {
   events: EventSummary[];
   appointments: Appointment[];
+  /** TODAY's entries from the designer's own Google calendar. Read-only, and listed under the
+   *  studio's own meetings — see the note at the row below. */
+  busy: BusyBlock[];
   venueColor: (e: EventSummary) => string;
   onOpenEvent: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
@@ -86,7 +91,10 @@ export function TodayFocus({
     .filter((a) => a.date > todayIso)
     .sort((a, b) => (a.date === b.date ? byStartTime(a, b) : a.date < b.date ? -1 : 1))[0];
 
-  const isEmpty = tab === "events" ? todayEvents.length === 0 : todayAppointments.length === 0;
+  // A day with nothing of the studio's own but a dentist appointment in Google is NOT an empty day,
+  // and saying "אין פגישות היום" over the top of one would be the overlay's worst failure: it would
+  // make the screen wrong rather than merely incomplete.
+  const isEmpty = tab === "events" ? todayEvents.length === 0 : todayAppointments.length + busy.length === 0;
 
   // Nothing is HIDDEN — the day's record is the point of a diary, and a meeting that ran over is
   // still the thing you want to see at 15:05. The list just stops standing at 08:00 all day: it
@@ -248,6 +256,11 @@ export function TodayFocus({
               // A חופשה has no client, so the label already IS the kind — printing it again
               // underneath is the row saying "חופשה / חופשה".
               const meta = [name === kind ? "" : kind, a.note].filter(Boolean).join(" · ");
+              // The kind's GLYPH but not its colour. Everywhere else a diary entry appears it wears
+              // both (KIND_CARD_THEME) — but those inks are tuned to clear AA on a near-white tint,
+              // and this row's ground is the violet gradient, where every one of them goes muddy.
+              // The icon carries the kind here and white carries the contrast.
+              const KindIcon = KIND_ICON[a.kind];
               return (
                 // ⚠ GLASS, NOT `bg-canvas`. A white card on the violet gradient is the highest-contrast
                 // pairing on the page — brighter than the page header, on the one card that is meant to
@@ -270,6 +283,10 @@ export function TodayFocus({
                   className="glass-deep flex shrink-0 flex-col gap-1 rounded-md p-3 text-start transition-transform hover:-translate-y-px"
                 >
                   <div className="flex items-center gap-2">
+                    <KindIcon
+                      className={"h-3.5 w-3.5 shrink-0 " + (behind ? "text-canvas/70" : "text-canvas/85")}
+                      strokeWidth={1.75}
+                    />
                     <span
                       className={
                         "min-w-0 flex-1 truncate text-sm font-semibold " +
@@ -297,6 +314,31 @@ export function TodayFocus({
                 </button>
               );
             })}
+
+            {/* The designer's own Google entries for today, under the studio's meetings and visibly
+                not one of them. Not a button, for the same reason as BusyChip in calendar-card.tsx:
+                there is nothing in this app to open.
+
+                DASHED AND DIMMER, but no dimmer than AA allows — `text-canvas/70` is the documented
+                floor on this gradient (5:1); anything below it fails at this size. The lock glyph
+                and the dashed edge carry the "not yours" message that colour is not allowed to. */}
+            {busy.map((b) => (
+              <div
+                key={b.id}
+                title={[b.title, b.calendarName, "יומן Google"].filter(Boolean).join(" · ")}
+                className="flex shrink-0 flex-col gap-1 rounded-md border border-dashed border-canvas/35 p-3"
+              >
+                <div className="flex items-center gap-2">
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-canvas/70" strokeWidth={1.75} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-canvas/70">{b.title}</span>
+                  {b.time && (
+                    <span className="nums shrink-0 rounded-pill bg-canvas/12 px-2 py-0.5 text-[11px] font-bold text-canvas/75" dir="ltr">
+                      {b.endTime ? `‎${b.time}–${b.endTime}` : `‎${b.time}`}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
           <button
             type="button"
