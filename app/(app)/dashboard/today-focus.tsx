@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, CalendarCheck, Lock, MapPin, Plus, Users } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Lock, Plus, Users } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
+import { formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
 import {
   APPOINTMENT_KIND_LABEL,
@@ -13,9 +13,8 @@ import {
   hasPassed,
 } from "@/lib/appointments/types";
 import type { BusyBlock } from "@/lib/google/types";
-import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { EmptyState } from "@/components/empty-state";
-import { KIND_ICON, toISODate, TONE_CLASS } from "./dashboard-view-utils";
+import { KIND_ICON, toISODate } from "./dashboard-view-utils";
 
 type Tab = "events" | "meetings";
 
@@ -31,7 +30,6 @@ export function TodayFocus({
   events,
   appointments,
   busy,
-  venueColor,
   onOpenEvent,
   onOpenAppointment,
   onCreateAppointment,
@@ -41,13 +39,11 @@ export function TodayFocus({
   /** TODAY's entries from the designer's own Google calendar. Read-only, and listed under the
    *  studio's own meetings — see the note at the row below. */
   busy: BusyBlock[];
-  venueColor: (e: EventSummary) => string;
   onOpenEvent: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
   onCreateAppointment: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("events");
-  const flow = useMeetingFlow();
   const today = new Date();
   const todayIso = toISODate(today);
 
@@ -213,31 +209,54 @@ export function TodayFocus({
         // scroller in the app, so this is the one place that pairing is needed.
         <div className="scroll-slim scroll-on-dark flex max-h-72 flex-col gap-3 overflow-y-auto pe-0.5">
           {todayEvents.map((e) => {
-            const status = eventStatus(e, flow);
-            const progress = eventProgress(e, flow);
+            // WHAT A ROW ON THE DAY ITSELF IS FOR. This card used to carry the zone dot, the status
+            // chip and the progress bar — the three things the event GRID exists to show, and not
+            // one of them a question anyone is asking on the morning of the wedding. The stage an
+            // event is parked on stops being news once the trucks are loading, and a progress bar on
+            // a day that has already arrived is reporting on paperwork. What is worth reading at
+            // 07:00 is when it starts, which zones it takes and how many people are coming — so the
+            // row is the meeting row's shape exactly: name + time, one quiet line of detail under it.
+            const meta = [zonesLabelOf(e), e.guests > 0 ? `${e.guests} אורחים` : ""].filter(Boolean).join(" · ");
             return (
+              // ⚠ GLASS, NOT `bg-canvas` — the same row the meetings tab wears, for the same reason.
+              // A white card on the violet gradient is the highest-contrast pairing on the page, on
+              // the one card meant to be a quiet brand moment, and a Saturday's six of them read as
+              // six holes punched in it. `.glass-deep` keeps the row a surface while white type on
+              // it clears 8:1. The meetings tab was moved off white months ago; this tab is the half
+              // that stayed behind, so the two segments of one card didn't agree with each other.
               <button
                 key={e.id}
                 type="button"
+                // THE DRAWER, NOT /meeting. This row used to push straight into the meeting flow — a
+                // whole-screen navigation off the dashboard, from a card whose job is a glance. On
+                // the day itself the designer is reaching for one thing (the plan, the sketch, the
+                // client's phone), and the drawer is where those are; the calendar's own event cards
+                // have always opened it. The flow is still one click further in, on the drawer's own
+                // "מעבר לסקיצה" — it is just no longer what a stray click on the dashboard does.
                 onClick={() => onOpenEvent(e)}
                 // shrink-0 because this is a flex column with a max-height: without it the cards
                 // squash to fit instead of scrolling, and a six-event day renders as six slivers.
-                className="flex shrink-0 flex-col gap-2 rounded-md bg-canvas p-3 text-start shadow-floating transition-all hover:shadow-lifted"
+                //
+                // The lift, not a border/background hover: `.glass-deep` sets `border` and
+                // `background` as unlayered CSS, which outranks Tailwind's layered `hover:`
+                // utilities no matter the specificity — see the meetings row below.
+                className="glass-deep flex shrink-0 flex-col gap-1 rounded-md p-3 text-start transition-transform hover:-translate-y-px"
               >
                 <div className="flex items-center gap-2">
-                  <span className={"h-2.5 w-2.5 shrink-0 rounded-full " + venueColor(e)} aria-hidden />
-                  <span className="flex-1 truncate text-sm font-semibold text-ink">{e.clientName}</span>
-                  <span className={"shrink-0 rounded-pill px-2 py-0.5 text-[11px] font-medium " + TONE_CLASS[STATUS_TONE[status]]}>
-                    {STATUS_LABEL[status]}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-canvas">{e.clientName}</span>
+                  {/* The meeting row's time pill, on the field that is its counterpart — `events.time`,
+                      when the day itself starts. It is optional until the details step sets it, and
+                      the row simply doesn't wear a pill until then. */}
+                  {e.time && (
+                    <span
+                      className="nums shrink-0 rounded-pill bg-canvas/20 px-2 py-0.5 text-[11px] font-bold text-canvas"
+                      dir="ltr"
+                    >
+                      {e.time}
+                    </span>
+                  )}
                 </div>
-                <span className="flex items-center gap-1 text-xs font-medium text-ink-soft">
-                  <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-                  {zonesLabelOf(e)}
-                </span>
-                <div className="h-1.5 overflow-hidden rounded-full bg-bg">
-                  <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
-                </div>
+                <span className="truncate text-xs text-canvas/80">{meta}</span>
               </button>
             );
           })}
