@@ -262,9 +262,14 @@ async function verifyVenues() {
   check("zone round-trips", JSON.stringify(plan.zones) === JSON.stringify([zone]), JSON.stringify(plan.zones[0]?.capacity));
   check("zone createdAt survives as epoch ms", plan.zones[0]?.createdAt === zone.createdAt);
 
-  // Saving again replaces wholesale — the undo path. Two saves must not leave two zones.
+  // The list is a snapshot, so saving it again must UPDATE the zone it already holds rather than
+  // add a second one — and rather than delete and re-create it, which is what event_zones' foreign
+  // key made unsurvivable (see saveVenuePlan).
+  await saveVenuePlan(id, structure, [{ ...zone, name: "האולם הקטן" }]);
+  const resaved = await fetchVenuePlan(id);
+  check("re-saving does not duplicate zones", resaved.zones.length === 1, String(resaved.zones.length));
+  check("…it edits the zone in place, under the same id", resaved.zones[0]?.name === "האולם הקטן" && resaved.zones[0]?.id === zone.id);
   await saveVenuePlan(id, structure, [zone]);
-  check("re-saving does not duplicate zones", (await fetchVenuePlan(id)).zones.length === 1);
 
   // Removing a zone from the list is how an undo expresses itself.
   await saveVenuePlan(id, structure, []);
@@ -532,6 +537,29 @@ async function verifyEvents() {
   check("patch landed", one?.guests === 260, String(one?.guests));
   check("a shorter zone list drops the zone", one?.zoneIds.join() === zoneA.id, String(one?.zoneIds));
   check("patch left untouched fields alone", one?.clientName === original.clientName && one?.date === "2026-08-09");
+
+  // ── the plan still saves once events stand on it ─────────────────────────────────────────────
+  // ⚠ THE REGRESSION THESE FOUR CHECKS EXIST FOR, and it needs an event to reproduce, which is why
+  // it lives here rather than beside the other venue checks. The editor autosaves the WHOLE zone
+  // list; this event is booked into zoneA; event_zones.zone_id is ON DELETE RESTRICT. A
+  // saveVenuePlan that cleared the venue's zones before re-inserting them therefore died on a zone
+  // nobody was removing — and the wall graph, in the same transaction, went down with it. From the
+  // first booking onwards that property's plan silently stopped saving, forever, while the screen
+  // showed every edit as accepted.
+  const drawn = { ...emptyStructure(), nodes: [{ id: crypto.randomUUID(), x: 0, y: 0 }] };
+  const keptAll = await saveVenuePlan(venueId, drawn, [zoneA, zoneB]);
+  const withWall = await fetchVenuePlan(venueId);
+  check("a plan saves while an event stands on one of its zones", withWall.structure.nodes.length === 1, String(withWall.structure.nodes.length));
+  check("…and removes nothing", keptAll.blocked.length === 0 && withWall.zones.length === 2, String(withWall.zones.length));
+
+  // Dropping both from the list: the booked one survives and says so, the free one goes, and the
+  // walls are written either way — one refused zone must never cost a designer their drawing.
+  const refused = await saveVenuePlan(venueId, emptyStructure(), []);
+  const afterRefusal = await fetchVenuePlan(venueId);
+  check("a booked zone is not deleted", refused.blocked.join() === zoneA.name, refused.blocked.join());
+  check("…the unbooked zone in the same save is", afterRefusal.zones.length === 1 && afterRefusal.zones[0]?.id === zoneA.id, String(afterRefusal.zones.length));
+  check("…and the walls saved anyway", afterRefusal.structure.nodes.length === 0, String(afterRefusal.structure.nodes.length));
+  await saveVenuePlan(venueId, emptyStructure(), [zoneA, zoneB]); // as the checks below expect it
 
   const stamped = await patchEvent(original.id, { quoteSentAt: 1_760_000_000_000, archived: true });
   const sent = stamped.find((e) => e.id === original.id);

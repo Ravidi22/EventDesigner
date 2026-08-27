@@ -15,11 +15,11 @@
 // not studio data — it belongs in this browser, changes when you click the switcher, and would be
 // actively wrong to share between a designer's laptop and their tablet mid-setup. It stays in
 // lib/venues/storage.ts.
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, type Actor } from "@/lib/db/org";
 import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
-import { users, venues, venueGrants, zones, venueStructures } from "@/lib/db/schema";
+import { users, venues, venueGrants, zones, venueStructures, eventZones } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
 import {
   atLeast,
@@ -238,10 +238,21 @@ export async function fetchVenueGeometry(venueId: string | undefined): Promise<V
 
 /** Save the plan editor's current state. Structure and zones move together, in ONE transaction.
  *
- *  Zones are replaced wholesale rather than diffed, and that is the only shape that can express an
- *  UNDO: stepping back over "I named that room" leaves the list simply SHORTER than what is stored,
- *  with no per-zone delete to derive from a snapshot. Deleting and re-inserting inside a transaction
- *  means a reader never sees a property with no zones, and a failure leaves the previous plan whole.
+ *  The zone list is a SNAPSHOT — stepping back over "I named that room" leaves it simply shorter
+ *  than what is stored, with no per-zone delete to replay — so this has to derive the difference
+ *  itself: upsert everything in the list, delete only what has actually left it.
+ *
+ *  ⚠ IT USED TO DELETE EVERY ZONE OF THE VENUE AND RE-INSERT THE LIST, and that is a bug worth
+ *  naming because it was invisible until a studio had done some work. `event_zones.zone_id` is ON
+ *  DELETE RESTRICT — deliberately, so a region four events are booked into cannot be deleted out
+ *  from under them (see the schema note on that table). The wholesale delete therefore hit RESTRICT
+ *  on a zone NOBODY WAS REMOVING, the transaction aborted, and the WALLS went down with it: the
+ *  moment one event booked one zone, that property's plan silently stopped saving forever. Every
+ *  edit after that looked accepted on screen and reached nothing.
+ *
+ *  A zone that HAS left the list but still has events standing on it is not deleted either, and
+ *  does not take the save down: its name comes back in `blocked` so the editor can say why it is
+ *  still there. Unbooking it is a change to those events, which is not this endpoint's to make.
  *
  *  Needs `editor`: there is one wall graph per property and no private copy, so saving over it is a
  *  real permission — see VENUE_ROLE_SUMMARY.
@@ -252,7 +263,7 @@ export async function saveVenuePlan(
   venueId: string,
   structure: VenueStructure,
   zoneList: Zone[],
-): Promise<void> {
+): Promise<{ blocked: string[] }> {
   const { actor } = await requireVenueAccess(venueId, "editor");
   if (!structure || typeof structure !== "object") throw new Error("structure must be an object");
   if (!Array.isArray(zoneList)) throw new Error("zones must be an array");
@@ -262,7 +273,7 @@ export async function saveVenuePlan(
   }
   const organizationId = actor.organizationId;
 
-  await db().transaction(async (tx) => {
+  return db().transaction(async (tx) => {
     const row = toStructureRow(venueId, structure, organizationId);
     await tx
       .insert(venueStructures)
@@ -273,12 +284,66 @@ export async function saveVenuePlan(
         set: { structure: row.structure, updatedAt: row.updatedAt },
       });
 
-    await tx
-      .delete(zones)
+    // What this property holds today, so "what left the list" is a set difference rather than a
+    // delete of everything.
+    const stored = await tx
+      .select({ id: zones.id, name: zones.name })
+      .from(zones)
       .where(and(eq(zones.venueId, venueId), eq(zones.organizationId, organizationId)));
-    if (zoneList.length) {
-      await tx.insert(zones).values(zoneList.map((z) => toZoneRow(z, organizationId)));
+
+    const inList = new Set(zoneList.map((z) => z.id));
+    const gone = stored.filter((z) => !inList.has(z.id));
+    const blocked: string[] = [];
+
+    if (gone.length) {
+      // The reverse lookup the schema's note on event_zones asks for, done BEFORE the delete rather
+      // than discovered as a constraint violation that would roll the walls back too.
+      const booked = await tx
+        .select({ zoneId: eventZones.zoneId })
+        .from(eventZones)
+        .where(inArray(eventZones.zoneId, gone.map((z) => z.id)));
+      const bookedIds = new Set(booked.map((b) => b.zoneId));
+
+      for (const z of gone) if (bookedIds.has(z.id)) blocked.push(z.name);
+      const deletable = gone.filter((z) => !bookedIds.has(z.id)).map((z) => z.id);
+      if (deletable.length) {
+        await tx
+          .delete(zones)
+          .where(
+            and(
+              eq(zones.venueId, venueId),
+              eq(zones.organizationId, organizationId),
+              inArray(zones.id, deletable),
+            ),
+          );
+      }
     }
+
+    if (zoneList.length) {
+      // Upsert, so a zone that already exists is EDITED rather than deleted and re-created. Its id
+      // is what event_zones points at; re-creating it under the same id inside one transaction
+      // happened to work, but only because nothing looked in between.
+      //
+      // `setWhere` pins the update to a row already on THIS venue of THIS studio: an id belonging
+      // to another property would otherwise be quietly moved here by naming it in the list.
+      await tx
+        .insert(zones)
+        .values(zoneList.map((z) => toZoneRow(z, organizationId)))
+        .onConflictDoUpdate({
+          target: zones.id,
+          setWhere: and(eq(zones.organizationId, organizationId), eq(zones.venueId, venueId)),
+          set: {
+            name: sql`excluded.name`,
+            kind: sql`excluded.kind`,
+            source: sql`excluded.source`,
+            ceilingHeightMm: sql`excluded.ceiling_height_mm`,
+            capacity: sql`excluded.capacity`,
+            style: sql`excluded.style`,
+          },
+        });
+    }
+
+    return { blocked };
   });
 }
 

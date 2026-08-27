@@ -163,6 +163,9 @@ export function HallsScreen() {
   const inFlight = useRef(false);
   const persisted = useRef<PlanState | null>(null);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
+  // Something the save did differently from what the screen shows — today, only a zone it refused
+  // to delete. Not an error: everything else was written.
+  const [planNote, setPlanNote] = useState<string | null>(null);
 
   /**
    * Write the queued plan, and only ever one at a time.
@@ -185,7 +188,15 @@ export function HallsScreen() {
     setSaveState("saving");
     let ok = true;
     try {
-      await saveVenuePlan(next.venueId, next.structure, next.zones);
+      const { blocked } = await saveVenuePlan(next.venueId, next.structure, next.zones);
+      // A zone events are booked into stays on the property whatever the editor's history says, so
+      // it will be back on the next load. Saying so is the difference between a plan that argued
+      // with you and one that looks broken.
+      setPlanNote(
+        blocked.length
+          ? `${blocked.join(" · ")} — לא נמחק, יש אירועים שמשובצים לשטח הזה`
+          : null,
+      );
     } catch {
       ok = false;
     }
@@ -230,6 +241,7 @@ export function HallsScreen() {
       persisted.current = snapshot;
       pending.current = null;
       setSaveState("saved");
+      setPlanNote(null);
       hist.reset(snapshot);
       setSelection([]);
       setRunNodeId(null);
@@ -721,6 +733,12 @@ export function HallsScreen() {
         <p className="min-w-0 flex-1 truncate text-xs text-muted">
           {region !== null ? "לחצו נקודות סביב השטח · Enter לסגירה · Esc לביטול" : activeMode.hint}
         </p>
+
+        {planNote && (
+          <p className="shrink-0 rounded-sm bg-warn-tint px-2 py-1 text-xs font-medium text-warn-ink">
+            {planNote}
+          </p>
+        )}
 
         {/* There is no save button on this screen and never was — so a write that fails has to say
             so itself, or a designer traces a whole hall over an error nobody reported. */}
