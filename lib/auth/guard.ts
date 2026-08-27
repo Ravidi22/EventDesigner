@@ -13,6 +13,19 @@
 import { redirect } from "next/navigation";
 import { currentSession, type Session } from "./session";
 
+// ⚠ A LAYOUT'S GUARD DOES NOT GATE ITS PAGES. Layouts and pages render in PARALLEL — the router
+// does not wait for (app)/layout.tsx to resolve before it starts (app)/dashboard/page.tsx. So a
+// page that reads on the server begins its queries while the layout is still deciding whether this
+// person may see anything at all, and for a signed-out visitor currentOrg() throws "not signed in"
+// out of a page whose response is already a redirect to /login. The redirect still wins; what is
+// left is an unhandled error in the log for what is simply a signed-out visit, and a page whose
+// correctness depends on which of two racing promises settles first.
+//
+// The cure is one line at the top of every page that fetches: await the guard before the reads.
+// It costs NOTHING — currentSession() is React-cache()d for the request, so the page's await
+// resolves off the very promise the layout already has in flight, and the same redirect happens
+// from the page instead of an exception.
+
 /** Signed in, as anyone. */
 export async function requireSession(): Promise<Session> {
   const session = await currentSession();

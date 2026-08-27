@@ -106,6 +106,11 @@ export interface CanvasFocus {
   maxX: number;
   maxY: number;
   nonce: number;
+  /** Cut to the box instead of travelling to it. For the framing a surface OPENS on: the designer
+   *  never asked to see the default frame, so sliding away from it reads as the screen correcting
+   *  itself rather than as motion with a meaning. A focus the user asked for (clicking a zone in a
+   *  list) leaves this off — there, the travel is what says which of five zones you were taken to. */
+  immediate?: boolean;
 }
 
 const FOCUS_MS = 300; // long enough to read as travel between two places, short enough not to wait on
@@ -539,17 +544,30 @@ export function PlanCanvas({
     if (focusAnim.current !== null) cancelAnimationFrame(focusAnim.current);
     focusAnim.current = null;
   };
+  // Where a focused box wants the view to sit — one calculation, so a cut and a tween land in
+  // exactly the same place and "show me this" cannot mean two different frames.
+  const focusTarget = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => ({
+    x: box.minX + box.w / 2,
+    y: box.minY + box.h / 2,
+    mmPerPx: Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, Math.max(box.w / rw, box.h / rh) * 1.18)),
+  });
+
+  // Straight to the box, no travel — see CanvasFocus.immediate.
+  const jumpTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
+    cancelFocus();
+    if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
+    const to = focusTarget(box, rw, rh);
+    setCenter({ x: to.x, y: to.y });
+    setMmPerPx(to.mmPerPx);
+  };
+
   // Eased travel to a box, rather than a cut. Any pan or zoom the user starts mid-flight cancels it
   // — the view is theirs the moment they touch it.
   const animateTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
     cancelFocus();
     if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
     const from = { ...viewRef.current.center, mmPerPx: viewRef.current.mmPerPx };
-    const to = {
-      x: box.minX + box.w / 2,
-      y: box.minY + box.h / 2,
-      mmPerPx: Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, Math.max(box.w / rw, box.h / rh) * 1.18)),
-    };
+    const to = focusTarget(box, rw, rh);
     const t0 = performance.now();
     const step = (now: number) => {
       const k = easeOutCubic(Math.min(1, (now - t0) / FOCUS_MS));
@@ -924,7 +942,9 @@ export function PlanCanvas({
     const w = focus.maxX - focus.minX;
     const h = focus.maxY - focus.minY;
     if (w <= 0 || h <= 0) return;
-    animateTo({ minX: focus.minX, minY: focus.minY, w, h }, rect.w, rect.h);
+    const box = { minX: focus.minX, minY: focus.minY, w, h };
+    if (focus.immediate) jumpTo(box, rect.w, rect.h);
+    else animateTo(box, rect.w, rect.h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusNonce, rect.w, rect.h]);
 

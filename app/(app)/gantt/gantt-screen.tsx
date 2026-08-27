@@ -24,6 +24,7 @@ import { SearchInput } from "@/components/search-input";
 import { StatusChip } from "@/components/status-chip";
 import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
+import { EventDialog } from "@/components/event-dialog";
 
 type View = "pipeline" | "archived";
 const VIEWS: { id: View; label: string }[] = [
@@ -41,11 +42,15 @@ const COLUMN_TINTS = ["#f6df9b", "#f3c6d6", "#d9d1f2", "#bcdcf5", "#c7e8cf", "#f
 // Moved here from the Dashboard (F-1.1): the event grid — with its filters and search — now lives
 // on the Gantt tab. Rebuilt as a pipeline board (one column per configured meeting stage) so the
 // stage an event is parked on is a place it sits, not a filter you have to already know to apply.
-export function GanttScreen() {
+export function GanttScreen({ initialEvents }: { initialEvents: EventSummary[] }) {
   const router = useRouter();
-  const { events, ready, patch } = useEvents();
+  // Seeded by page.tsx's server-side read; the hook keeps `patch`, which is a real write.
+  const { events, ready, patch } = useEvents(initialEvents);
   const [view, setView] = useState<View>("pipeline");
   const [query, setQuery] = useState("");
+  // Opens the shared creation dialog (components/event-dialog.tsx) in place, rather than
+  // navigating to /meeting?new — answering six questions isn't worth losing the board you were on.
+  const [creating, setCreating] = useState(false);
   const { activeVenueId } = useActiveVenueScope();
   const flow = useMeetingFlow();
 
@@ -146,7 +151,7 @@ export function GanttScreen() {
           title="אין עדיין אירועים"
           body="כל אירוע מתחיל בפגישה — שם הלקוח, התאריך והאזורים שהוא לוקח באולם. משם ממשיכים לגלריה, לסטודיו, ולפלטים שהצוות והמחסן מקבלים."
           action={
-            <Button onClick={() => router.push("/meeting?new")}>
+            <Button onClick={() => setCreating(true)}>
               <Plus className="h-4 w-4" strokeWidth={2.5} />
               צור אירוע ראשון
             </Button>
@@ -198,10 +203,12 @@ export function GanttScreen() {
           onOutputs={openOutputs}
           onArchive={toggleArchive}
           onMove={moveToStep}
-          onCreate={() => router.push("/meeting?new")}
+          onCreate={() => setCreating(true)}
           onEnableStep={enableStep}
         />
       )}
+
+      <EventDialog open={creating} onClose={() => setCreating(false)} />
     </div>
   );
 }

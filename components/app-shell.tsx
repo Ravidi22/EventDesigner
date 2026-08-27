@@ -22,6 +22,7 @@ import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
 import { HeaderSearchProvider } from "@/components/header-search-context";
+import { EventDialog } from "@/components/event-dialog";
 
 interface NavItem {
   href: string;
@@ -64,10 +65,19 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const [collapsed, setCollapsed] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [headerSearch, setHeaderSearch] = useState("");
-  // Venues come from the server now; the switcher's own selection stays in this browser.
+  const [creating, setCreating] = useState(false);
+  // Venues come from the (app) layout's server-side read, through VenuesProvider — the switcher does
+  // not fetch them, and neither does anything else that needs them. The selection itself still lives
+  // in this browser; the provider resolves it against the list and publishes one answer.
+  //
+  // There is no local `selected` mirror here any more. It was a second copy of a fact the provider
+  // already holds, and the two could disagree: clicking a venue set `selected`, but a venue deleted
+  // in another tab left it pointing at a row no longer in the list, which the provider's own
+  // fallback would have corrected. Writing through setActiveVenueId fires VENUE_CHANGED_EVENT and
+  // the provider re-resolves, so the switcher stays live without holding state of its own. `remove`
+  // needs no such override either — deleting a venue updates the provider's own list, and its
+  // activeVenueId falls back on its own once the deleted id is no longer in it.
   const { venues, activeVenueId, add, rename, remove } = useVenues();
-  const [selected, setSelected] = useState<string | null>(null);
-  const current = selected ?? activeVenueId;
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -144,12 +154,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
 
         <VenueSwitcher
           venues={venues}
-          activeId={current}
+          activeId={activeVenueId}
           collapsed={collapsed}
-          onSelect={(id) => {
-            setSelected(id);
-            setActiveVenueId(id);
-          }}
+          onSelect={(id) => setActiveVenueId(id)}
           onAdd={() => {
             void add().then(() => {
               // A venue with nothing drawn on it isn't a real state — send the designer straight
@@ -158,14 +165,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
             });
           }}
           onRename={(id, name) => void rename(id, name)}
-          onDelete={async (id) => {
-            const error = await remove(id);
-            // `selected` is this component's own override of the hook's activeVenueId (see
-            // `current` above) — clearing it here is what lets the fallback venue the hook already
-            // picked actually take effect instead of `current` staying pinned to a deleted id.
-            if (!error && current === id) setSelected(null);
-            return error;
-          }}
+          onDelete={(id) => remove(id)}
         />
 
         <nav className="flex flex-col gap-[3px]">
@@ -243,12 +243,16 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
 
           {showHeaderActions && (
             <div className="flex shrink-0 items-center gap-1.5">
-              <Link
-                href="/meeting?new"
+              {/* Opens the details form in place rather than navigating to /meeting?new: answering
+                  six questions is not worth losing the screen you were on. The dialog walks into
+                  the meeting itself once the event exists — see components/event-dialog.tsx. */}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
                 className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
               >
                 + יצירת אירוע חדש
-              </Link>
+              </button>
               <IconButton label="התראות">
                 <Bell className="h-4 w-4" strokeWidth={1.75} />
               </IconButton>
@@ -259,6 +263,11 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         <main className="min-h-0 flex-1 overflow-auto">
           <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
         </main>
+
+        {/* Mounted at the shell, so "אירוע חדש" is reachable from every page without each of them
+            carrying its own copy. A <dialog> renders in the top layer — where it sits in the tree
+            has no bearing on where it appears. */}
+        <EventDialog open={creating} onClose={() => setCreating(false)} />
       </div>
     </div>
   );

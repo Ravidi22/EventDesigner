@@ -9,17 +9,21 @@ import { parseCsvProducts } from "@/lib/catalog/csv";
 import { useHeaderSearch } from "@/components/header-search-context";
 import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ProductCard } from "./product-card";
 import { Filters, EMPTY_FILTERS, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 
-export function CatalogScreen() {
-  // The catalog now comes from Postgres through a server action; the hook fetches it, primes the
-  // studio's synchronous cache, and hands back the list plus the three write paths.
-  const { products, ready, error, save, remove, importMany } = useCatalog();
+export function CatalogScreen({ initialProducts }: { initialProducts: Product[] }) {
+  // The catalog comes from page.tsx's server-side read; the hook primes the studio's synchronous
+  // cache with it and hands back the list plus the three write paths.
+  const { products, ready, error, save, remove, importMany } = useCatalog(initialProducts);
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<Product | null>(null);
+  // The product the "…" menu has asked to delete. ONE dialog for the whole screen rather than one
+  // per card, and it is here because this is where the delete itself already lives.
+  const [deleting, setDeleting] = useState<Product | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // The visible search box lives in the top header now (AppShell) — its value flows down
@@ -39,6 +43,14 @@ export function CatalogScreen() {
   const deleteProduct = async (id: string) => {
     const { archived } = await remove(id);
     setNotice(archived ? "המוצר משובץ באירועים ולכן הועבר לארכיון — ההצבות נשמרו." : null);
+  };
+  const confirmDelete = () => {
+    // Closed first, and the delete is not awaited: the row is gone from the list the moment the
+    // hook's optimistic state updates, and a dialog still sitting over it while that happens reads
+    // as a question that was not answered.
+    const target = deleting;
+    setDeleting(null);
+    if (target) void deleteProduct(target.id);
   };
   // Fresh id for the product AND every variant — a duplicate must never alias the original's
   // variant ids, or isPlacedAnywhere (lib/catalog/actions.ts) would treat it as already placed
@@ -139,7 +151,14 @@ export function CatalogScreen() {
           ) : viewMode === "list" ? (
             <div className="mt-6 flex flex-col gap-2">
               {filtered.map((p) => (
-                <ProductCard key={p.id} product={p} layout="list" onEdit={setEditing} onDuplicate={duplicateProduct} />
+                <ProductCard
+                  key={p.id}
+                  product={p}
+                  layout="list"
+                  onEdit={setEditing}
+                  onDuplicate={duplicateProduct}
+                  onDelete={setDeleting}
+                />
               ))}
             </div>
           ) : (
@@ -148,7 +167,13 @@ export function CatalogScreen() {
               style={{ gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))" }}
             >
               {filtered.map((p) => (
-                <ProductCard key={p.id} product={p} onEdit={setEditing} onDuplicate={duplicateProduct} />
+                <ProductCard
+                  key={p.id}
+                  product={p}
+                  onEdit={setEditing}
+                  onDuplicate={duplicateProduct}
+                  onDelete={setDeleting}
+                />
               ))}
             </div>
           )}
@@ -158,8 +183,20 @@ export function CatalogScreen() {
       <ProductDrawer
         product={editing}
         onSave={saveProduct}
-        onDelete={deleteProduct}
+        // The drawer's מחיקה asks the same question the menu's does — it is the same destructive
+        // act, and it was the one path that used to delete with no question at all. The drawer
+        // closes itself on the way out, so the two dialogs are never open at once.
+        onDelete={(id) => setDeleting(products.find((p) => p.id === id) ?? null)}
         onClose={() => setEditing(null)}
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        title={`למחוק את ${deleting?.name ?? ""}?`}
+        body="הפריט יוסר מהקטלוג. אם הוא כבר משובץ באירועים הוא יועבר לארכיון במקום להימחק, וההצבות יישמרו."
+        confirmLabel="מחיקה"
+        onConfirm={confirmDelete}
+        onClose={() => setDeleting(null)}
       />
     </div>
   );

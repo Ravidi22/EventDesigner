@@ -5,6 +5,9 @@
 // this loads it before anything renders. Every mutation returns the whole list from the server
 // rather than patching local state, so a meeting moved on the laptop is the same meeting on the
 // tablet the next time either one writes.
+//
+// ⚠ PASS `initial` FROM THE SERVER, as the dashboard's page.tsx does. The mount fetch below is the
+// fallback for a caller with none; it is not the normal path. See lib/events/use-events.ts.
 import { useCallback, useEffect, useState } from "react";
 import type { Appointment } from "./types";
 import {
@@ -17,7 +20,8 @@ import {
 export interface AppointmentsHandle {
   appointments: Appointment[];
   /** False until the first fetch resolves. "No meetings yet" and "not loaded yet" are identical in
-   *  the data and mean opposite things to a screen deciding whether to show an empty state. */
+   *  the data and mean opposite things to a screen deciding whether to show an empty state.
+   *  True from the first render when the server sent the list. */
   ready: boolean;
   error: string | null;
   /** These three throw on failure rather than swallowing it — the dialog that calls them shows the
@@ -28,16 +32,25 @@ export interface AppointmentsHandle {
   reload: () => Promise<void>;
 }
 
-export function useAppointments(): AppointmentsHandle {
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [ready, setReady] = useState(false);
+export function useAppointments(initial?: Appointment[]): AppointmentsHandle {
+  const [appointments, setAppointments] = useState<Appointment[]>(initial ?? []);
+  const [seed, setSeed] = useState(initial);
+  const [ready, setReady] = useState(initial !== undefined);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setAppointments(await fetchAppointments());
   }, []);
 
+  // A newer list from the server wins over what this component was holding. Adjusted during render
+  // rather than in an effect — see the note on the same line in lib/events/use-events.ts.
+  if (initial !== seed) {
+    setSeed(initial);
+    setAppointments(initial ?? []);
+  }
+
   useEffect(() => {
+    if (initial !== undefined) return;
     let live = true;
     load()
       .catch(() => {
@@ -49,6 +62,7 @@ export function useAppointments(): AppointmentsHandle {
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
   const save = useCallback(async (appointment: Appointment) => {

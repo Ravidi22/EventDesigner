@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowLeft, CalendarCheck, MapPin, Plus, Users } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, CalendarCheck, Lock, MapPin, Plus, Users } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -10,11 +10,12 @@ import {
   appointmentLabel,
   appointmentTimeLabel,
   byStartTime,
+  hasPassed,
 } from "@/lib/appointments/types";
+import type { BusyBlock } from "@/lib/google/types";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { EmptyState } from "@/components/empty-state";
-import { Switch } from "@/components/toggle";
-import { toISODate, TONE_CLASS } from "./dashboard-view-utils";
+import { KIND_ICON, toISODate, TONE_CLASS } from "./dashboard-view-utils";
 
 type Tab = "events" | "meetings";
 
@@ -29,28 +30,56 @@ type Tab = "events" | "meetings";
 export function TodayFocus({
   events,
   appointments,
+  busy,
   venueColor,
   onOpenEvent,
   onOpenAppointment,
   onCreateAppointment,
-  onToggleDone,
 }: {
   events: EventSummary[];
   appointments: Appointment[];
+  /** TODAY's entries from the designer's own Google calendar. Read-only, and listed under the
+   *  studio's own meetings — see the note at the row below. */
+  busy: BusyBlock[];
   venueColor: (e: EventSummary) => string;
   onOpenEvent: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
   onCreateAppointment: () => void;
-  /** Mark a meeting held, straight from the card — the one action worth not opening a dialog for. */
-  onToggleDone: (a: Appointment, done: boolean) => void;
 }) {
   const [tab, setTab] = useState<Tab>("events");
   const flow = useMeetingFlow();
   const today = new Date();
   const todayIso = toISODate(today);
 
+  // ⚠ THE MEETINGS TAB USED TO CARRY A SWITCH PER ROW — "סימון הפגישה כהתקיימה" — and the strike
+  // through waited on someone flipping it. Nobody flips it: a designer walking out of a meeting is
+  // holding a bag, not a laptop, so by evening the card still claimed every meeting of the day was
+  // ahead. The clock knows this without being told, so the list reads it instead.
+  //
+  // `null` until mounted, deliberately: the hour is not the same fact on the server as in the
+  // browser, and rendering the crossings straight away is a hydration mismatch. Nothing is crossed
+  // on the first paint; the effect crosses it a tick later. It re-reads every minute, which is the
+  // resolution the times themselves have.
+  //
+  // The `done` COLUMN stays and is still edited in the dialog — "booked and never held" is a fact
+  // only a person knows, and it is a different one from "that hour is behind us".
+  const [nowMinutes, setNowMinutes] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setNowMinutes(now.getHours() * 60 + now.getMinutes());
+    };
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   const todayEvents = events.filter((e) => e.date === todayIso);
   const todayAppointments = appointments.filter((a) => a.date === todayIso).sort(byStartTime);
+  const isBehind = (a: Appointment) => !!a.done || (nowMinutes !== null && hasPassed(a, nowMinutes));
+  // The first entry still ahead — where the list should be standing. -1 once the whole day is
+  // behind us, which the effect below reads as "scroll to the end".
+  const firstAhead = todayAppointments.findIndex((a) => !isBehind(a));
 
   // The soonest thing still ahead on this tab's own timeline. An empty day is the common case for a
   // designer with three events a month, so the card answers "then when?" rather than just reporting
@@ -62,7 +91,30 @@ export function TodayFocus({
     .filter((a) => a.date > todayIso)
     .sort((a, b) => (a.date === b.date ? byStartTime(a, b) : a.date < b.date ? -1 : 1))[0];
 
-  const isEmpty = tab === "events" ? todayEvents.length === 0 : todayAppointments.length === 0;
+  // A day with nothing of the studio's own but a dentist appointment in Google is NOT an empty day,
+  // and saying "אין פגישות היום" over the top of one would be the overlay's worst failure: it would
+  // make the screen wrong rather than merely incomplete.
+  const isEmpty = tab === "events" ? todayEvents.length === 0 : todayAppointments.length + busy.length === 0;
+
+  // Nothing is HIDDEN — the day's record is the point of a diary, and a meeting that ran over is
+  // still the thing you want to see at 15:05. The list just stops standing at 08:00 all day: it
+  // parks the next entry at the top and leaves the morning above the fold, one scroll away.
+  //
+  // Keyed on `firstAhead`, NOT on `nowMinutes`: a minute ticking by must not yank the list out from
+  // under someone reading it. It re-parks only when an entry actually crosses over, which is the
+  // moment the list is wrong.
+  const listRef = useRef<HTMLDivElement>(null);
+  const aheadRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (tab !== "meetings") return;
+    const list = listRef.current;
+    if (!list) return;
+    const ahead = aheadRef.current;
+    // offsetTop is measured from the same offsetParent for both (neither is positioned), so the
+    // difference is the row's position inside the scroller — and unlike scrollIntoView it cannot
+    // scroll the PAGE to get there.
+    list.scrollTop = ahead ? ahead.offsetTop - list.offsetTop : list.scrollHeight;
+  }, [tab, firstAhead]);
 
   return (
     // The one brand-toned card on this page — a quiet echo of the accent, not the full mesh
@@ -196,37 +248,95 @@ export function TodayFocus({
         // full day of meetings to reach is one nobody finds.
         <div className="flex min-h-0 flex-col gap-3">
           {/* Same dark-ground scrollbar as the events tab above. */}
-          <div className="scroll-slim scroll-on-dark flex max-h-72 flex-col gap-3 overflow-y-auto pe-0.5">
-            {todayAppointments.map((a) => (
-              // NOT a <button> wrapping everything, unlike the event card above: this row carries a
-              // switch of its own, and a control inside a button is neither valid HTML nor operable
-              // with a keyboard. The name is the button; the switch is its own.
-              <div key={a.id} className="flex shrink-0 items-center gap-3 rounded-md bg-canvas p-3 shadow-floating">
+          <div ref={listRef} className="scroll-slim scroll-on-dark flex max-h-72 flex-col gap-3 overflow-y-auto pe-0.5">
+            {todayAppointments.map((a, i) => {
+              const behind = isBehind(a);
+              const name = appointmentLabel(a);
+              const kind = APPOINTMENT_KIND_LABEL[a.kind];
+              // A חופשה has no client, so the label already IS the kind — printing it again
+              // underneath is the row saying "חופשה / חופשה".
+              const meta = [name === kind ? "" : kind, a.note].filter(Boolean).join(" · ");
+              // The kind's GLYPH but not its colour. Everywhere else a diary entry appears it wears
+              // both (KIND_CARD_THEME) — but those inks are tuned to clear AA on a near-white tint,
+              // and this row's ground is the violet gradient, where every one of them goes muddy.
+              // The icon carries the kind here and white carries the contrast.
+              const KindIcon = KIND_ICON[a.kind];
+              return (
+                // ⚠ GLASS, NOT `bg-canvas`. A white card on the violet gradient is the highest-contrast
+                // pairing on the page — brighter than the page header, on the one card that is meant to
+                // be a quiet brand moment — and three of them stacked read as three holes punched in it.
+                // `.glass-deep` frosts toward the gradient's deep end instead, which keeps the row a
+                // surface (blur, hairline, inset highlight) while white text on it clears 8:1; plain
+                // `.glass` would be 4.1:1 and fail AA at this size. See app/globals.css.
+                //
+                // The whole row IS the button again now that the switch is gone — there is no control
+                // left inside it to make that invalid.
                 <button
+                  key={a.id}
+                  ref={i === firstAhead ? aheadRef : undefined}
                   type="button"
                   onClick={() => onOpenAppointment(a)}
-                  className="flex min-w-0 flex-1 flex-col gap-1 text-start"
+                  // The lift, not a border/background hover: `.glass-deep` sets `border` and `background`
+                  // as unlayered CSS, which outranks Tailwind's layered `hover:` utilities no matter
+                  // the specificity — a `hover:border-canvas/45` here would simply never fire. The
+                  // same lift the calendar's event cards use.
+                  className="glass-deep flex shrink-0 flex-col gap-1 rounded-md p-3 text-start transition-transform hover:-translate-y-px"
                 >
                   <div className="flex items-center gap-2">
-                    <span className={"min-w-0 flex-1 truncate text-sm font-semibold " + (a.done ? "text-muted line-through" : "text-ink")}>
-                      {appointmentLabel(a)}
+                    <KindIcon
+                      className={"h-3.5 w-3.5 shrink-0 " + (behind ? "text-canvas/70" : "text-canvas/85")}
+                      strokeWidth={1.75}
+                    />
+                    <span
+                      className={
+                        "min-w-0 flex-1 truncate text-sm font-semibold " +
+                        // Dimmed, but only as far as AA allows on this ground: white at 70% is
+                        // 5:1 here, white at 55% is 3.4:1. The line through carries the rest of
+                        // the message.
+                        (behind ? "text-canvas/70 line-through" : "text-canvas")
+                      }
+                    >
+                      {name}
                     </span>
                     {a.time && (
-                      <span className="nums shrink-0 rounded-pill bg-accent-tint px-2 py-0.5 text-[11px] font-bold text-accent-hover" dir="ltr">
+                      <span
+                        className={
+                          "nums shrink-0 rounded-pill px-2 py-0.5 text-[11px] font-bold " +
+                          (behind ? "bg-canvas/12 text-canvas/75" : "bg-canvas/20 text-canvas")
+                        }
+                        dir="ltr"
+                      >
                         {appointmentTimeLabel(a)}
                       </span>
                     )}
                   </div>
-                  <span className="truncate text-xs text-ink-soft">
-                    {APPOINTMENT_KIND_LABEL[a.kind]}
-                    {a.note && ` · ${a.note}`}
-                  </span>
+                  {meta && <span className={"truncate text-xs " + (behind ? "text-canvas/70" : "text-canvas/80")}>{meta}</span>}
                 </button>
-                <Switch
-                  checked={!!a.done}
-                  onChange={(next) => onToggleDone(a, next)}
-                  label={`סימון הפגישה עם ${appointmentLabel(a)} כהתקיימה`}
-                />
+              );
+            })}
+
+            {/* The designer's own Google entries for today, under the studio's meetings and visibly
+                not one of them. Not a button, for the same reason as BusyChip in calendar-card.tsx:
+                there is nothing in this app to open.
+
+                DASHED AND DIMMER, but no dimmer than AA allows — `text-canvas/70` is the documented
+                floor on this gradient (5:1); anything below it fails at this size. The lock glyph
+                and the dashed edge carry the "not yours" message that colour is not allowed to. */}
+            {busy.map((b) => (
+              <div
+                key={b.id}
+                title={[b.title, b.calendarName, "יומן Google"].filter(Boolean).join(" · ")}
+                className="flex shrink-0 flex-col gap-1 rounded-md border border-dashed border-canvas/35 p-3"
+              >
+                <div className="flex items-center gap-2">
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-canvas/70" strokeWidth={1.75} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-canvas/70">{b.title}</span>
+                  {b.time && (
+                    <span className="nums shrink-0 rounded-pill bg-canvas/12 px-2 py-0.5 text-[11px] font-bold text-canvas/75" dir="ltr">
+                      {b.endTime ? `‎${b.time}–${b.endTime}` : `‎${b.time}`}
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>

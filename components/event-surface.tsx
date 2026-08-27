@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight, PenTool, Printer } from "lucide-react";
-import { activeEvent } from "@/lib/events/storage";
-import { formatEventDate, zonesLabelOf, type EventSummary } from "@/lib/events/types";
+import { EventWorkspaceProvider, useEventWorkspace } from "@/lib/events/use-workspace";
+import { formatEventDate, zonesLabelOf } from "@/lib/events/types";
 
 // The studio and the operational outputs are surfaces OF an event, not pages of the app — which is
 // why neither sits in the sidebar. You arrive by opening an event (from the flow, or from the Gantt
@@ -14,20 +14,21 @@ import { formatEventDate, zonesLabelOf, type EventSummary } from "@/lib/events/t
 // It is `no-print` throughout: the outputs underneath are the deliverable, and app chrome on a page
 // the crew carries around the hall is noise.
 export function EventSurface({ active, children }: { active: "studio" | "outputs"; children: ReactNode }) {
-  const [event, setEvent] = useState<EventSummary | null>(null);
+  // THE surface's one read, for the header AND for the screen inside it — see lib/events/
+  // use-workspace.tsx. The header used to resolve the event for itself while the screen resolved
+  // the same event again a moment later, which was two round trips for one answer.
+  return (
+    <EventWorkspaceProvider>
+      <SurfaceChrome active={active}>{children}</SurfaceChrome>
+    </EventWorkspaceProvider>
+  );
+}
 
-  // Resolve after mount, same as every other screen — the pointer is in this browser, the event
-  // itself is a server read. Until it lands the header says "אין אירוע פעיל", which is also what it
-  // says when there genuinely isn't one.
-  useEffect(() => {
-    let live = true;
-    void activeEvent().then((e) => {
-      if (live) setEvent(e);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
+function SurfaceChrome({ active, children }: { active: "studio" | "outputs"; children: ReactNode }) {
+  // Until the one round trip lands the header says "אין אירוע פעיל", which is also what it says
+  // when there genuinely isn't one.
+  const { workspace } = useEventWorkspace();
+  const event = workspace?.event ?? null;
 
   return (
     <div className="flex h-full flex-col">

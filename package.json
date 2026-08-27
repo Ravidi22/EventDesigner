@@ -27,6 +27,8 @@
     "check:faces": "tsx lib/venues/faces.ts",
     "check:underlay": "tsx lib/venues/underlay.ts",
     "check:csv": "tsx lib/catalog/csv.ts",
+    "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",
+    "catalog:standard": "tsx lib/catalog/standard/backfill.ts",
     "check:format": "tsx lib/catalog/format.ts",
     "check:style": "tsx lib/element-style.ts",
     "check:folder": "tsx lib/gallery/folder-logic.ts",
@@ -40,6 +42,7 @@
     "check:sigv4": "tsx lib/files/sigv4.ts",
     "check:calendar": "tsx lib/calendar/hebrew.ts",
     "check:appointments": "tsx lib/appointments/types.ts",
+    "check:google": "tsx lib/google/types.ts && tsx lib/google/config.ts && tsx lib/google/secret-box.ts && tsx lib/google/mapping.ts && tsx lib/google/oauth.ts && tsx lib/google/api.ts",
     "gen:calendar": "tsx lib/calendar/generate.mts"
   },
   "dependencies": {

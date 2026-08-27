@@ -15,9 +15,12 @@
 // gates is the property and its plan, which is a different question and is answered in
 // lib/venues/actions.ts.
 import { and, asc, eq } from "drizzle-orm";
+import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
+import { revalidateAppointments } from "@/lib/db/revalidate";
 import { appointments, events, venues } from "@/lib/db/schema";
+import { linksForAppointment, pushAppointment, removeFromGoogle } from "@/lib/google/sync";
 import type { Appointment } from "./types";
 import { isAppointmentKind } from "./types";
 import { toAppointment, toAppointmentRow } from "./db-mapping";
@@ -133,12 +136,27 @@ export async function saveAppointment(appointment: Appointment): Promise<Appoint
         updatedAt: row.updatedAt,
       },
     });
+  revalidateAppointments();
+
+  // Google, after the response. Deferred rather than awaited: the meeting is already committed and
+  // the screen is already correct, so making the designer wait on a round trip to Google — or worse,
+  // watch the save fail because Google was slow — would be paying for someone else's latency. The
+  // push records its own failures on the connection row; see the note at the top of lib/google/sync.ts.
+  //
+  // It runs when Google is not configured too, and costs one `googleConfig()` check to find out.
+  afterResponse(() => pushAppointment(appointment, organizationId));
+
   return fetchAppointments();
 }
 
 /** Mark a meeting held, or un-mark it. Its own action rather than a saveAppointment round trip: this
  *  is one click on a calendar chip, and reading the whole record back to send it again would let two
- *  devices in the same studio overwrite each other's edits with stale fields. */
+ *  devices in the same studio overwrite each other's edits with stale fields.
+ *
+ *  NO GOOGLE PUSH HERE, and that is not an oversight: `done` is not one of the fields
+ *  `toGoogleEvent` carries (lib/google/mapping.ts), so the pushed event is byte-identical either
+ *  way. Pushing anyway would spend a request per connected designer to send Google exactly what it
+ *  already has — which the content-hash check would then discard on the other side. */
 export async function setAppointmentDone(id: string, done: boolean): Promise<Appointment[]> {
   assertId(id, "id");
   if (typeof done !== "boolean") throw new Error("done must be a boolean");
@@ -147,6 +165,7 @@ export async function setAppointmentDone(id: string, done: boolean): Promise<App
     .update(appointments)
     .set({ done, updatedAt: new Date() })
     .where(and(eq(appointments.id, id), eq(appointments.organizationId, organizationId)));
+  revalidateAppointments();
   return fetchAppointments();
 }
 
@@ -156,8 +175,20 @@ export async function setAppointmentDone(id: string, done: boolean): Promise<App
 export async function deleteAppointment(id: string): Promise<Appointment[]> {
   assertId(id, "id");
   const organizationId = await currentOrg();
+
+  // ⚠ READ THE GOOGLE LINKS BEFORE THE DELETE, NOT AFTER. `google_event_links.appointment_id`
+  // cascades, so the row naming which Google event this became disappears in the same statement as
+  // the appointment — and the remote copy becomes unreachable, sitting in every connected
+  // designer's calendar forever with nothing left in this app able to name it. Reading first is the
+  // whole difference between a cancelled meeting vanishing from a phone and haunting it.
+  const links = await linksForAppointment(id, organizationId);
+
   await db()
     .delete(appointments)
     .where(and(eq(appointments.id, id), eq(appointments.organizationId, organizationId)));
+  revalidateAppointments();
+
+  afterResponse(() => removeFromGoogle(links, organizationId));
+
   return fetchAppointments();
 }

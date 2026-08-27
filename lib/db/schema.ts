@@ -69,12 +69,23 @@ export const priceUnitEnum = pgEnum("price_unit", ["unit", "m", "m2"]);
 export const visibilityEnum = pgEnum("product_visibility", ["private", "public"]);
 // What a named region of a venue is (lib/venues/zone.ts).
 export const zoneKindEnum = pgEnum("zone_kind", ["hall", "canopy", "open", "service"]);
-// What kind of sit-down a scheduled meeting is (lib/appointments/types.ts).
+// What kind of entry occupies a day in the diary (lib/appointments/types.ts). The first three are
+// sit-downs with a client; the middle four are not — a blocked date, a holiday, a delivery, a
+// personal errand — and they carry no client, no phone and no event. They share one enum, and one
+// table, because they all answer "what is on the 12th?".
+//
+// ⚠ APPEND ONLY. Postgres can add a value to an enum but cannot remove one, and the four non-client
+// kinds were added in migration 0004 for exactly that reason: reordering this list would generate a
+// migration that drops and recreates the type, taking the column's data with it.
 export const appointmentKindEnum = pgEnum("appointment_kind", [
   "consultation",
   "followup",
   "walkthrough",
   "other",
+  "constraint",
+  "vacation",
+  "supply",
+  "personal",
 ]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
@@ -217,6 +228,16 @@ export const studioSettings = pgTable("studio_settings", {
   phone: text("phone").notNull().default(""),
   address: text("address").notNull().default(""),
   logoUrl: text("logo_url"),
+  /** ע.מ / ח.פ. A quote from a business with no registration number on it is an offer from an
+   *  Instagram handle — the one field a client's accountant looks for first. */
+  businessNumber: text("business_number").notNull().default(""),
+  email: text("email").notNull().default(""),
+  /** How long an issued quote holds its price. Without it the price is open forever. */
+  quoteValidityDays: integer("quote_validity_days").notNull().default(14),
+  /** Payment schedule, cancellation, what is excluded — free text, one line per clause, printed
+   *  at the foot of every quote. Free text rather than columns because the clauses themselves
+   *  differ per studio and none of them is ever queried into. */
+  quoteTerms: text("quote_terms").notNull().default(""),
   /** 0.18 = 18%. numeric, never float — this multiplies money. */
   vatRate: numeric("vat_rate", { precision: 5, scale: 4 }).notNull().default("0.18"),
   currency: text("currency").notNull().default("₪"),
@@ -888,5 +909,109 @@ export const expenses = pgTable(
     index("expenses_supplier_idx").on(t.supplierId),
     // "What did this event cost?" — the margin line on the event drawer and the outputs screen.
     index("expenses_event_idx").on(t.eventId),
+  ],
+);
+
+// ── Google Calendar (lib/google/) ──────────────────────────────────────────────────────────────
+
+/** One designer's connected Google account (GoogleConnection, lib/google/types.ts).
+ *
+ *  ⚠ KEYED BY USER, NOT BY ORGANIZATION, and it is the one table here where that is the point. The
+ *  diary is studio-wide, but a Google account belongs to a PERSON: the owner and a designer in the
+ *  same studio each connect their own, each gets the studio's meetings in their own calendar, and
+ *  disconnecting one must not disconnect the other. organizationId rides along anyway, because
+ *  every query in this app filters by it (ADR-2) and because a member who moves studios must not
+ *  drag a connection into the new one — the row is scoped by both, always.
+ *
+ *  CASCADE FROM users: when an account is deleted the tokens must go with it. There is nothing to
+ *  preserve — a refresh token outliving the person it belonged to is a liability, not a record. */
+export const googleConnections = pgTable(
+  "google_connections",
+  {
+    id: id(),
+    organizationId: orgId(),
+    /** UNIQUE: one Google account per user. Connecting a second replaces the first rather than
+     *  accumulating, because "which calendar do my meetings go to" has to have one answer. */
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Which Google account this is, so the settings screen can say so. Google's, not ours — a
+     *  designer whose Eve login is one address and whose business calendar is another needs to see
+     *  which one they actually authorised. */
+    googleEmail: text("google_email").notNull(),
+    /** The refresh token, SEALED — see lib/google/secret-box.ts for the threat this closes and the
+     *  one it does not. Never selected into anything that crosses to a client component. */
+    refreshToken: text("refresh_token").notNull(),
+    /** The current access token and its expiry, cached so that a page render does not spend a round
+     *  trip to Google's token endpoint refreshing something that is still valid for 40 minutes.
+     *  Sealed as well: it is shorter-lived than the refresh token and just as usable while it
+     *  lasts. Both nullable — a fresh connection has not minted one yet. */
+    accessToken: text("access_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    /** The calendar THIS APP created inside that account, and the only one it ever writes to. Its
+     *  name is stored alongside the id purely so settings can name it without a round trip. */
+    calendarId: text("calendar_id").notNull(),
+    calendarName: text("calendar_name").notNull().default(""),
+    /** The two directions, independently switchable. Both default on — someone who has just gone
+     *  through a consent screen has said what they want. */
+    pushEnabled: boolean("push_enabled").notNull().default(true),
+    pullEnabled: boolean("pull_enabled").notNull().default(true),
+    lastPushAt: timestamp("last_push_at", { withTimezone: true }),
+    /** The most recent failure, in Hebrew, or NULL when the last attempt succeeded.
+     *
+     *  A COLUMN RATHER THAN A LOG LINE because the person who needs it is the designer, not an
+     *  operator: a revoked token shows up as "my meetings stopped appearing", and the only place
+     *  they will look is the settings screen. Cleared on the next success. */
+    lastError: text("last_error"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    uniqueIndex("google_connections_user_key").on(t.userId),
+    index("google_connections_org_idx").on(t.organizationId),
+  ],
+);
+
+/** Which Google event an appointment became, in one person's calendar.
+ *
+ *  ⚠ THE PAIR IS THE KEY, not the appointment. One appointment pushed to three connected members is
+ *  three different Google events with three different ids, and a table keyed on appointmentId alone
+ *  would let the third push overwrite the second's id — after which the second member's calendar
+ *  holds an event nothing can ever update or delete again. That row is unreachable: not in the app,
+ *  which no longer knows its id, and not by the designer, who will not think to go looking for it.
+ *
+ *  This is the entire reason the table exists. Without it, editing a meeting would create a second
+ *  Google event beside the stale one instead of moving it, and deleting a meeting would leave the
+ *  Google copy behind forever.
+ *
+ *  CASCADE FROM BOTH SIDES: deleting the appointment or the connection makes the mapping
+ *  meaningless. Note that the appointment cascade fires BEFORE the remote event can be deleted, so
+ *  lib/google/actions.ts reads the link first and removes the remote copy after — see
+ *  `deleteAppointment` there. */
+export const googleEventLinks = pgTable(
+  "google_event_links",
+  {
+    id: id(),
+    organizationId: orgId(),
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => googleConnections.id, { onDelete: "cascade" }),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    /** Google's id for the event in that person's calendar. */
+    googleEventId: text("google_event_id").notNull(),
+    /** A fingerprint of what was last pushed (lib/google/actions.ts `fingerprint`).
+     *
+     *  Saves the round trip that dominates this feature's cost: the diary re-pushes on every write
+     *  to any appointment, and most writes change one meeting while the others are byte-identical
+     *  to what Google already holds. Comparing a hash locally is free; PATCHing forty unchanged
+     *  events is forty requests against a quota. */
+    contentHash: text("content_hash").notNull().default(""),
+    updatedAt: updated(),
+  },
+  (t) => [
+    uniqueIndex("google_event_links_pair_key").on(t.connectionId, t.appointmentId),
+    index("google_event_links_appointment_idx").on(t.appointmentId),
   ],
 );

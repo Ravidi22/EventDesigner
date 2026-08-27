@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Lock, ShieldCheck } from "lucide-react";
 import { ROLE_SUMMARY, STUDIO_ROLE_LABEL, type StudioMember } from "@/lib/team/types";
-import { fetchCurrentMember, updateMyName } from "@/lib/team/actions";
+import { updateMyName } from "@/lib/team/actions";
 import { changePassword } from "@/lib/auth/actions";
 import { Button } from "@/components/button";
 import { TextField } from "@/components/text-field";
@@ -21,19 +21,21 @@ import { Avatar, Note, Panel, SavedFlag } from "./ui";
 // account signs in with, so changing it is an identity change that needs the new address verified
 // before the old one stops working. A text field that silently swaps your login is worse than no
 // field at all.
-export function AccountSection() {
-  const [me, setMe] = useState<StudioMember | null>(null);
+export function AccountSection({ initialMe }: { initialMe: StudioMember | null }) {
+  // The row comes from page.tsx's server read — the same one the team and sharing sections use, so
+  // opening all three costs one lookup rather than three.
+  const [me, setMe] = useState<StudioMember | null>(initialMe);
   const [saved, setSaved] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  useEffect(() => {
-    void fetchCurrentMember().then(setMe);
-    return () => {
+  useEffect(
+    () => () => {
       clearTimeout(saveTimer.current);
       clearTimeout(flashTimer.current);
-    };
-  }, []);
+    },
+    [],
+  );
 
   if (!me) return null;
 

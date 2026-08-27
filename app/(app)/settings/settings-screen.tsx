@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
+import { CalendarSync, Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
+import type { BusinessSettings } from "@/lib/settings/types";
+import type { GoogleStatus } from "@/lib/google/actions";
+import type { StudioMember } from "@/lib/team/types";
 import { BusinessSection } from "./business-section";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
 import { TeamSection } from "./team-section";
 import { SharingSection } from "./sharing-section";
+import { CalendarSection } from "./calendar-section";
 import { DataSection } from "./data-section";
 
 // Settings, in six sections along the axis each one belongs to:
@@ -26,12 +30,26 @@ const SECTIONS = [
   { id: "meeting", label: "מצב פגישה", icon: ListChecks },
   { id: "team", label: "צוות והרשאות", icon: Users },
   { id: "sharing", label: "מתחמים ושיתוף", icon: Share2 },
+  { id: "calendar", label: "יומן Google", icon: CalendarSync },
   { id: "data", label: "נתונים", icon: Database },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
-export function SettingsScreen() {
+// The shared reads arrive from page.tsx and are handed to whichever section is open. Sections mount
+// one at a time (only the selected one renders below), so seeding them here is also what makes
+// SWITCHING sections instant — each used to fetch its own data on mount, every time you clicked it.
+export function SettingsScreen({
+  initialSettings,
+  initialMe,
+  initialMembers,
+  initialGoogle,
+}: {
+  initialSettings: BusinessSettings;
+  initialMe: StudioMember | null;
+  initialMembers: StudioMember[];
+  initialGoogle: GoogleStatus;
+}) {
   const [section, setSection] = useState<SectionId>("business");
 
   // The section lives in the hash rather than in a query param: it makes /settings#sharing
@@ -75,11 +93,12 @@ export function SettingsScreen() {
       </nav>
 
       <div className="min-w-0 flex-1">
-        {section === "business" && <BusinessSection />}
-        {section === "account" && <AccountSection />}
+        {section === "business" && <BusinessSection initialSettings={initialSettings} />}
+        {section === "account" && <AccountSection initialMe={initialMe} />}
         {section === "meeting" && <MeetingSection />}
-        {section === "team" && <TeamSection />}
-        {section === "sharing" && <SharingSection />}
+        {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} />}
+        {section === "sharing" && <SharingSection initialMembers={initialMembers} initialMe={initialMe} />}
+        {section === "calendar" && <CalendarSection initialStatus={initialGoogle} />}
         {section === "data" && <DataSection />}
       </div>
     </div>

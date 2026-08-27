@@ -42,11 +42,22 @@
   --color-gold: #f3d98a; /* the wordmark dot and overlines on a dark ground */
   --color-magenta: #c77fc4;
   --color-blush: #e8bcce;
+  /* Tint + ink for the two warm hues the diary borrows (see KIND_CARD_THEME,
+     dashboard-view-utils.ts). Each tint is its own hue laid over white — magenta at 14%, blush at
+     30% — and each ink is that hue darkened until it clears AA on that tint (5.3:1 and 4.9:1); the
+     raw swatches above are dots and fills, never small text. */
+  --color-magenta-tint: #f7edf7;
+  --color-magenta-ink: #8e4a8b;
+  --color-blush-tint: #f8ebf0;
+  --color-blush-ink: #a2496a;
   --color-peach: #efc9ae;
 
   /* --- Semantic. Values are the design system's own swatches; `warn` carries a separate
          chip label because amber needs the extra depth on its tint. --- */
   --color-success: #3f9d76;
+  /* success had no ink of its own, and the swatch itself is 2.8:1 on its own tint — the same gap
+     warn and alert already closed below. This is 4.8:1 there and 5.7:1 on white. */
+  --color-success-ink: #2a7355;
   --color-success-tint: #dcefe5;
   --color-warn: #c79a2e;
   /* The "extra depth" the note above calls for. Was #a97e1f, which missed AA at both jobs it has —
@@ -221,6 +232,20 @@ body {
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.5),
     0 16px 30px -14px rgb(50 25 90 / 0.5);
+}
+
+/* The same frosted recipe, tinted DARK instead of light — for a row that has to hold READING TEXT
+   while sitting on the accent gradient (Today's Focus). `.glass` cannot: white at 16% over #6d55bd
+   lands on ~#8470c8, and white text on that is 4.1:1, under AA at 13-14px. Tinting toward the deep
+   end instead puts the row at ~#554096, where white clears 8:1 — and a frosted panel darker than
+   its ground is as much a glass as one lighter than it.
+   ⚠ Still glass, so still only over the mesh or the accent gradient — never over a flat surface. */
+.glass-deep {
+  background: rgb(37 22 74 / 0.34);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgb(255 255 255 / 0.22);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
 }
 
 /* Button fills. Kept as classes so the two gradients are defined once. */
@@ -424,13 +449,24 @@ body {
   .mesh,
   .grad-cta,
   .grad-soft,
-  .glass {
+  .glass,
+  .glass-deep {
     background: #fff !important;
     box-shadow: none !important;
   }
   .mesh::before,
   .grain::after {
     display: none !important;
+  }
+  /* The outputs preview draws the sheet at its real trim size on the lavender plane, with the
+     page margin as its own padding, so the screen and the PDF break lines in the same places
+     (app/(app)/outputs/outputs-screen.tsx). On paper the printer owns all three: @page supplies
+     the margin, the paper supplies the white, and the sheet is simply the flow. */
+  .sheet {
+    max-width: none !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
   }
   @page {
     margin: 16mm;

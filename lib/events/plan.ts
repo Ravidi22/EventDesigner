@@ -66,7 +66,13 @@ export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): 
   const zones = event.zoneIds
     .map((id) => all.find((r) => r.zone.id === id))
     .filter((r): r is ResolvedZone => !!r);
-  const framed = zones.length ? zonesBounds(zones) : structureBounds(structure);
+  // A DETACHED zone resolves to an empty boundary (its anchoring face was opened or deleted at the
+  // venue), and so does a region zone saved with fewer than three points — so "the event has zones"
+  // is not the same as "those zones have a box". Falling straight through to the zero box there left
+  // every canvas framing the world origin while the property itself sat somewhere else entirely:
+  // the plan was drawn, just not looked at. The property's own extent is the honest fallback.
+  const zoned = zones.length ? zonesBounds(zones) : null;
+  const framed = zoned && (zoned.widthMm || zoned.heightMm) ? zoned : structureBounds(structure);
   return {
     venueId: event.venueId,
     structure,
