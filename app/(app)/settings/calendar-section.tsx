@@ -9,6 +9,7 @@ import {
   syncGoogleNow,
   type GoogleStatus,
 } from "@/lib/google/actions";
+import { redirectUriBlocks, type RedirectVerdict } from "@/lib/google/types";
 import { Button } from "@/components/button";
 import { Note, Panel, Row, Switch } from "./ui";
 
@@ -35,6 +36,34 @@ const OUTCOME: Record<string, { tone: "ok" | "bad"; text: string }> = {
   mismatch: { tone: "bad", text: "החיבור התחיל בחשבון אחר. התחל מחדש מהמכשיר הזה." },
 };
 
+/** The deployment's redirect URI, as a line a person can act on.
+ *
+ *  ⚠ A DESIGNER CANNOT FIX ANY OF THESE — they are environment variables and a Google Cloud
+ *  project. The line is here anyway, because the alternative is a connect button that either does
+ *  nothing or walks them through a consent screen and drops them on a dead page. Naming the two
+ *  hostnames is what turns "it doesn't work" into something forwardable. */
+function redirectNotice(verdict: RedirectVerdict): { tone: "warn" | "bad"; text: string } | null {
+  switch (verdict.state) {
+    case "ok":
+      return null;
+    case "preview":
+      return {
+        tone: "bad",
+        text: "חיבור ל-Google Calendar אינו זמין בפריסת תצוגה מקדימה (preview) — לכל פריסה כזו כתובת משלה, שאינה רשומה אצל Google. יש להתחבר מהכתובת הראשית של המערכת.",
+      };
+    case "local-in-production":
+      return {
+        tone: "bad",
+        text: `כתובת החזרה של Google מוגדרת לכתובת מקומית (${verdict.configured}) בעוד המערכת רצה על ${verdict.deployment}. החיבור מושבת עד שיעודכן GOOGLE_REDIRECT_URI ותירשם אותה כתובת בדיוק בפרויקט ב-Google Cloud.`,
+      };
+    case "host-differs":
+      return {
+        tone: "warn",
+        text: `כתובת החזרה של Google (${verdict.configured}) שונה מהכתובת שבה המערכת עונה (${verdict.deployment}). אם זו כתובת רשומה בפרויקט ב-Google Cloud — אפשר להתעלם.`,
+      };
+  }
+}
+
 export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus }) {
   const [status, setStatus] = useState(initialStatus);
   const [outcome, setOutcome] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
@@ -54,6 +83,10 @@ export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus
   }, []);
 
   const connection = status.connection;
+  const notice = redirectNotice(status.redirect);
+  // Blocked means the flow cannot complete, so the button does not offer to start it. `host-differs`
+  // is not blocked — it prints its line and lets the designer through, because it may be right.
+  const blocked = redirectUriBlocks(status.redirect);
 
   const connect = () =>
     startTransition(async () => {
@@ -108,13 +141,26 @@ export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus
             נתק
           </Button>
         ) : (
-          <Button size="sm" onClick={connect} disabled={pending}>
+          <Button size="sm" onClick={connect} disabled={pending || blocked}>
             <CalendarSync className="h-4 w-4" strokeWidth={1.8} />
             חבר יומן Google
           </Button>
         )
       }
     >
+      {notice && (
+        <div
+          className={`mb-5 flex items-start gap-2 rounded-md border px-4 py-3 text-[13px] leading-relaxed ${
+            notice.tone === "bad"
+              ? "border-alert-tint bg-alert-tint text-alert"
+              : "border-border bg-inset text-muted"
+          }`}
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.8} />
+          <span>{notice.text}</span>
+        </div>
+      )}
+
       {outcome && (
         <div
           aria-live="polite"
