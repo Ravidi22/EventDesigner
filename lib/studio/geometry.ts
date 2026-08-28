@@ -367,6 +367,7 @@ export interface DoorLeaf {
 export interface DoorGeometry {
   gapStart: Point;
   gapEnd: Point;
+  center: Point;
   leaves: DoorLeaf[]; // 1 for a single door, 2 for a double door (most event-hall entrances)
 }
 
@@ -385,10 +386,39 @@ function doorLeaf(hinge: Point, arcTo: Point, leafLenMm: number, swx: number, sw
 // which side of the wall is "inward" so swingInward is meaningful regardless of wall winding
 // direction. A double door splits the opening into two equal leaves hinged at each jamb, both
 // swinging the same way and meeting in the middle — the common case for an event-hall entrance.
-export function doorGeometry(a: Point, b: Point, distanceMm: number, widthMm: number, swingInward: boolean, interiorHint: Point, doubleDoor = false): DoorGeometry {
+//
+// `curve` is optional and only changes WHERE the gap/jambs/leaves land, not the math above: on a
+// bowed wall, a jamb placed by lerping the straight a→b chord sits off the wall's own drawn path by
+// however far it bows there — the symbol floats beside the opening instead of in it. Sampling the
+// same cubic wallSegmentD already cuts the gap from (via distanceMm/len as the curve parameter,
+// not an arc-length one — consistent with how the gap itself is cut) keeps the door where the wall
+// actually is. The swing direction then follows the LOCAL tangent between the two jambs rather than
+// the wall's end-to-end chord — the difference that matters right at the door, not the average over
+// a wall that might bow well past it.
+export function doorGeometry(
+  a: Point,
+  b: Point,
+  distanceMm: number,
+  widthMm: number,
+  swingInward: boolean,
+  interiorHint: Point,
+  doubleDoor = false,
+  curve?: EdgeCurve | null,
+): DoorGeometry {
   const len = wallLengthMm(a, b) || 1;
-  const ux = (b.x - a.x) / len;
-  const uy = (b.y - a.y) / len;
+  const at = curve
+    ? (d: number) => {
+        const { c1, c2 } = absoluteControlPoints(a, b, curve);
+        return cubicPointAt(a, c1, c2, b, Math.max(0, Math.min(1, d / len)));
+      }
+    : (d: number) => pointAtDistance(a, b, d);
+  const half = widthMm / 2;
+  const gapStart = at(distanceMm - half);
+  const gapEnd = at(distanceMm + half);
+  const center = at(distanceMm);
+  const localLen = wallLengthMm(gapStart, gapEnd) || 1;
+  const ux = (gapEnd.x - gapStart.x) / localLen;
+  const uy = (gapEnd.y - gapStart.y) / localLen;
   const nx = -uy;
   const ny = ux;
   const midX = (a.x + b.x) / 2;
@@ -397,17 +427,14 @@ export function doorGeometry(a: Point, b: Point, distanceMm: number, widthMm: nu
   const sign = normalPointsInward === swingInward ? 1 : -1;
   const swx = nx * sign;
   const swy = ny * sign;
-  const half = widthMm / 2;
-  const gapStart = pointAtDistance(a, b, distanceMm - half);
-  const gapEnd = pointAtDistance(a, b, distanceMm + half);
   if (!doubleDoor) {
-    return { gapStart, gapEnd, leaves: [doorLeaf(gapStart, gapEnd, widthMm, swx, swy, ux, uy)] };
+    return { gapStart, gapEnd, center, leaves: [doorLeaf(gapStart, gapEnd, widthMm, swx, swy, ux, uy)] };
   }
-  const mid = pointAtDistance(a, b, distanceMm);
   return {
     gapStart,
     gapEnd,
-    leaves: [doorLeaf(gapStart, mid, half, swx, swy, ux, uy), doorLeaf(gapEnd, mid, half, swx, swy, -ux, -uy)],
+    center,
+    leaves: [doorLeaf(gapStart, center, half, swx, swy, ux, uy), doorLeaf(gapEnd, center, half, swx, swy, -ux, -uy)],
   };
 }
 
@@ -638,6 +665,13 @@ if (isMain(import.meta.url)) {
   assert(Math.abs(wallLengthMm(doubleDoor.leaves[1].hinge, doubleDoor.leaves[1].tip) - 450) < 1e-6, "the second leaf matches the first in length");
   const doorMid = pointAtDistance(a, b, 500);
   assert(Math.abs(doubleDoor.leaves[0].arcTo.x - doorMid.x) < 1e-6 && Math.abs(doubleDoor.leaves[1].arcTo.x - doorMid.x) < 1e-6, "both double-door leaves swing to meet at the opening's midpoint");
+
+  // A door on a bowed wall sits ON the bow, not on the straight chord it bows away from — the bug
+  // this curve parameter exists to fix (the symbol used to land beside the opening, not in it).
+  const bowedDoor = doorGeometry(a, b, 500, 900, true, { x: 500, y: 500 }, false, bowed);
+  const chordCenter = pointAtDistance(a, b, 500);
+  assert(Math.abs(bowedDoor.center.y - chordCenter.y) > 10, "a bowed wall's door centre follows the curve away from the straight chord");
+  assert(Math.abs(wallLengthMm(bowedDoor.gapStart, bowedDoor.gapEnd) - 900) < 5, "the door gap still spans ~the door width when sampled off a curve");
 
   // Locked walls: a vertex with one locked neighbour is pinned to that wall's original length.
   const lockSquare: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 0, y: 1000 }];

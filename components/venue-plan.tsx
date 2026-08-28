@@ -1,13 +1,16 @@
 "use client";
 
-import { outlinePathD, polygonAreaMm2, polygonCentroid, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
+import { outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
+import { isAdditiveClick } from "@/lib/keyboard";
 import { nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { detectFaces, type Face } from "@/lib/venues/faces";
 import { stairsGeometry } from "@/lib/venues/stairs";
 import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 import type { Point } from "@/lib/studio/hall";
+import { EntranceDoor } from "@/components/plan-canvas";
 
 // World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
 //
@@ -180,7 +183,7 @@ export function CalibrationOverlay({
         style={{
           direction: "ltr",
           paintOrder: "stroke",
-          stroke: "var(--color-card)",
+          stroke: "var(--color-canvas)",
           strokeWidth: mm(4),
         }}
       >
@@ -190,10 +193,13 @@ export function CalibrationOverlay({
   );
 }
 
+// A finished plan reads its zone kinds by fill, at a glance, before anyone reads a label: a warm
+// neutral for the rooms you build (indoor halls), a cool tint for the ones the sky roofs (a חופה
+// open to the air, a lawn/plaza/pool deck), and plain grey for the parts nobody designs into.
 const ZONE_FILL: Record<string, string> = {
-  hall: "var(--color-accent-tint)",
-  canopy: "var(--color-indigo-50)",
-  open: "var(--color-inset)",
+  hall: "var(--color-inset)", // soft off-white — an indoor room
+  canopy: "#e8f1fb", // soft pale blue — open to the sky
+  open: "var(--color-success-tint)", // soft pale green — outdoor ground
   service: "var(--color-bg)",
 };
 
@@ -204,6 +210,7 @@ const ZONE_FILL: Record<string, string> = {
 const ZONE_NAME_PX = 15;
 const ZONE_SUB_PX = 11;
 const FEATURE_LABEL_PX = 11;
+const MIN_FEATURE_MM = 200; // a feature can't be resized smaller than this — same floor the studio's own fixtures use
 
 // These layers deliberately do NOT stop the press from reaching the <svg>: that is what lets a
 // marquee drag start on top of a zone tint instead of only in the gaps between them. Clicks still
@@ -239,10 +246,24 @@ export function ZoneRegions({
             stroke: selected ? "var(--color-accent)" : "none",
             strokeWidth: selected ? 2.5 : 0,
           });
+
+          // How wide this zone reads on SCREEN right now (not in plan mm, which says nothing about
+          // whether two neighbouring labels are about to collide at the current zoom) — small or
+          // stacked-close zones lose the kind/area line first, and truncate the name itself, rather
+          // than spilling text past their own boundary into the zone next door.
+          const xs = r.boundary.map((p) => p.x);
+          const boxWidthMm = Math.max(...xs) - Math.min(...xs);
+          const pxPerMm = 1 / mm(1);
+          const screenWidthPx = boxWidthMm * pxPerMm;
+          const showSub = screenWidthPx > 90;
+          const maxNameChars = Math.max(3, Math.floor((screenWidthPx * 0.88) / (ZONE_NAME_PX * 0.58)));
+          const displayName =
+            r.zone.name.length > maxNameChars ? `${r.zone.name.slice(0, maxNameChars - 1)}…` : r.zone.name;
+
           return (
             <g
               key={r.zone.id}
-              onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(r.zone.id, e.shiftKey); } : undefined}
+              onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(r.zone.id, isAdditiveClick(e)); } : undefined}
               className={onSelect ? "cursor-pointer" : undefined}
             >
               <path
@@ -250,32 +271,36 @@ export function ZoneRegions({
                 fill={style.fill}
                 fillOpacity={style.fillOpacity}
                 stroke={selected ? "var(--color-accent)" : style.stroke}
+                strokeOpacity={style.strokeOpacity}
                 strokeWidth={selected ? 2.5 : style.strokeWidth}
                 strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
                 vectorEffect="non-scaling-stroke"
               />
               <text
                 x={centre.x}
-                y={centre.y - mm(ZONE_NAME_PX * 0.35)}
+                y={showSub ? centre.y - mm(ZONE_NAME_PX * 0.35) : centre.y}
                 textAnchor="middle"
                 dominantBaseline="central"
                 fill={selected ? "var(--color-accent-deep)" : "var(--color-ink)"}
                 style={{ fontSize: mm(ZONE_NAME_PX), fontWeight: 700 }}
                 className="pointer-events-none"
               >
-                {r.zone.name}
+                <title>{r.zone.name}</title>
+                {displayName}
               </text>
-              <text
-                x={centre.x}
-                y={centre.y + mm(ZONE_NAME_PX * 0.8)}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fill={selected ? "var(--color-accent)" : "var(--color-muted)"}
-                style={{ fontSize: mm(ZONE_SUB_PX) }}
-                className="pointer-events-none"
-              >
-                {ZONE_KIND_LABEL[r.zone.kind]} · {areaM2} מ״ר
-              </text>
+              {showSub && (
+                <text
+                  x={centre.x}
+                  y={centre.y + mm(ZONE_NAME_PX * 0.8)}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill={selected ? "var(--color-accent)" : "var(--color-muted)"}
+                  style={{ fontSize: mm(ZONE_SUB_PX) }}
+                  className="pointer-events-none"
+                >
+                  {ZONE_KIND_LABEL[r.zone.kind]} · {areaM2} מ״ר
+                </text>
+              )}
             </g>
           );
         })}
@@ -291,6 +316,7 @@ export function StructureFeatures({
   onSelect,
   onMove,
   onMoveStairs,
+  onResize,
   onCommit,
   clientToMm,
 }: {
@@ -304,6 +330,10 @@ export function StructureFeatures({
    *  edge of the deck that means (and how far along it) is the model's call, not the layer's.
    *  See lib/venues/stairs.ts's stairsPlacementAt. */
   onMoveStairs?: (id: string, p: { x: number; y: number }) => void;
+  /** Dragging a resize handle. Absent = a selected feature shows no handles at all (mid-draw, or
+   *  any mode that doesn't edit the built plan) — same "supplying it is what turns the affordance
+   *  on" rule as onMove/onMoveStairs. */
+  onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
 }) {
@@ -320,6 +350,7 @@ export function StructureFeatures({
           fill: style.fill,
           fillOpacity: style.fillOpacity,
           stroke: selected ? "var(--color-accent)" : style.stroke,
+          strokeOpacity: style.strokeOpacity,
           strokeWidth: selected ? 2.5 : style.strokeWidth,
           strokeDasharray: (f.style?.dash ? style.dashArray.join(" ") : "4 3") || undefined,
           vectorEffect: "non-scaling-stroke" as const,
@@ -335,7 +366,7 @@ export function StructureFeatures({
             {stairs && (
               <g
                 {...stairsDrag}
-                onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, e.shiftKey); } : undefined}
+                onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
                 className={onMoveStairs ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
                 aria-label={`${f.label} — מדרגות`}
               >
@@ -365,7 +396,7 @@ export function StructureFeatures({
             <g
               transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}
               {...drag}
-              onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, e.shiftKey); } : undefined}
+              onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
               className={onMove ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
             >
               {f.shape === "circle" ? (
@@ -386,11 +417,83 @@ export function StructureFeatures({
               >
                 {f.label}
               </text>
+
+              {/* Resize handles — only on a selected feature, and only once a host is actually
+                  listening (see onResize's doc). Sit inside this same rotated group so they turn
+                  with the shape for free, exactly like the move handle above. A circle gets one
+                  corner handle that scales its diameter evenly about its own centre — there's no
+                  separate width/depth to keep proportional, so Shift has nothing to do here. A
+                  rect/ellipse gets one handle per edge; holding Shift while dragging any of them
+                  resizes the perpendicular dimension by the same ratio, matching the Shift-to-
+                  constrain convention every design tool gives its resize handles. */}
+              {selected && onResize && (
+                f.shape === "circle" ? (
+                  <ResizeHandle
+                    {...resizableRadius(f, onResize, onCommit, clientToMm)}
+                    cursor="cursor-nesw-resize"
+                    label={`שינוי קוטר של ${f.label} — גרירה`}
+                    cx={f.x + f.widthMm / 2}
+                    cy={f.y}
+                    mm={mm}
+                  />
+                ) : (
+                  <>
+                    {([1, -1] as const).map((sign) => (
+                      <ResizeHandle
+                        key={`w${sign}`}
+                        {...resizable(f, "width", sign, onResize, onCommit, clientToMm)}
+                        cursor="cursor-ew-resize"
+                        label={`שינוי רוחב של ${f.label} — גרירה · Shift לשמירה על יחס הממדים`}
+                        cx={f.x + sign * (f.widthMm / 2)}
+                        cy={f.y}
+                        mm={mm}
+                      />
+                    ))}
+                    {([1, -1] as const).map((sign) => (
+                      <ResizeHandle
+                        key={`d${sign}`}
+                        {...resizable(f, "depth", sign, onResize, onCommit, clientToMm)}
+                        cursor="cursor-ns-resize"
+                        label={`שינוי עומק של ${f.label} — גרירה · Shift לשמירה על יחס הממדים`}
+                        cx={f.x}
+                        cy={f.y + sign * (f.depthMm / 2)}
+                        mm={mm}
+                      />
+                    ))}
+                  </>
+                )
+              )}
             </g>
           </g>
         );
       })}
     </>
+  );
+}
+
+// One resize handle: the square, its hit area and its cursor. The drag props are spread in by the
+// caller (resizable/resizableRadius below), which owns all the maths — this only draws.
+function ResizeHandle({
+  label,
+  cursor,
+  cx,
+  cy,
+  mm,
+  ...drag
+}: ReturnType<typeof resizable> & { label: string; cursor: string; cx: number; cy: number; mm: (px: number) => number }) {
+  const size = mm(10);
+  return (
+    <g {...drag} tabIndex={0} role="button" aria-label={label} className={`${cursor} touch-none`}>
+      <circle cx={cx} cy={cy} r={mm(11)} fill="transparent" />
+      <rect
+        x={cx - size / 2}
+        y={cy - size / 2}
+        width={size}
+        height={size}
+        className="text-accent hover:text-accent-deep"
+        fill="currentColor"
+      />
+    </g>
   );
 }
 
@@ -476,24 +579,152 @@ function draggableStairs(
   };
 }
 
-/** Door openings, painted over the wall the canvas already stroked so they read as gaps. Drawn as
- *  part of the overlay layer that sits *above* the walls. */
+// Where each live resize-handle drag started, keyed by pointerId — same shape and reasoning as
+// featureDrag above, plus the feature's own width:depth ratio at the moment the drag began. Read
+// once (on the first move past the threshold) rather than recomputed every move, so the lock is a
+// property of *this* gesture and immune to any rounding repeated division could accumulate.
+const featureResize = new Map<number, { x: number; y: number; dragging: boolean; ratio: number }>();
+
+// One edge of one feature. `axis`/`sign` pick which edge, same convention as plan-canvas.tsx's own
+// resizeEdgeDrag (which this mirrors) — that one lives inside the canvas for its stage/bar fixtures;
+// this is the equivalent for a host-drawn layer's features, sharing the same resizeFromEdge maths so
+// "drag the opposite edge stays put" behaves identically everywhere on the app's one canvas.
+function resizable(
+  f: StructureFeature,
+  axis: "width" | "depth",
+  sign: 1 | -1,
+  onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+) {
+  if (!onResize || !clientToMm) return {};
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    if (featureResize.get(e.pointerId)?.dragging) onCommit?.();
+    featureResize.delete(e.pointerId);
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      featureResize.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false, ratio: f.widthMm / f.depthMm });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const origin = featureResize.get(e.pointerId);
+      if (!origin || e.buttons !== 1) return;
+      if (!origin.dragging) {
+        if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 4) return;
+        origin.dragging = true;
+      }
+      const { sizeMm, center } = resizeFromEdge(f, axis, sign, clientToMm(e.clientX, e.clientY), MIN_FEATURE_MM);
+      let widthMm = f.widthMm;
+      let depthMm = f.depthMm;
+      if (axis === "width") widthMm = sizeMm; else depthMm = sizeMm;
+      // Shift locks proportions: the perpendicular dimension follows the dragged one by the ratio
+      // captured at drag-start. Its own centre coordinate is untouched, which is enough to keep it
+      // centred — a feature is stored as centre+size, so growing depthMm without moving y already
+      // expands it evenly on both sides for free.
+      if (e.shiftKey) {
+        const other = Math.max(MIN_FEATURE_MM, Math.round(axis === "width" ? sizeMm / origin.ratio : sizeMm * origin.ratio));
+        if (axis === "width") depthMm = other; else widthMm = other;
+      }
+      onResize(f.id, { widthMm, depthMm, x: center.x, y: center.y });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+}
+
+// A circle's handle is a radius, not an edge: it stays centre-anchored so a round pool/table grows
+// evenly about the spot it was placed on instead of walking sideways as it's resized.
+function resizableRadius(
+  f: StructureFeature,
+  onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+) {
+  if (!onResize || !clientToMm) return {};
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    if (featureResize.get(e.pointerId)?.dragging) onCommit?.();
+    featureResize.delete(e.pointerId);
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      featureResize.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false, ratio: 1 });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const origin = featureResize.get(e.pointerId);
+      if (!origin || e.buttons !== 1) return;
+      if (!origin.dragging) {
+        if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 4) return;
+        origin.dragging = true;
+      }
+      const p = clientToMm(e.clientX, e.clientY);
+      const d = Math.max(MIN_FEATURE_MM, Math.round(Math.hypot(p.x - f.x, p.y - f.y) * 2));
+      onResize(f.id, { widthMm: d, depthMm: d, x: f.x, y: f.y });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+}
+
+// Which side of a wall reads as "inward" for a door hung on it — the centroid of whichever
+// enclosed face that wall directly borders (its two nodes appear adjacent in the face's own
+// cycle), the graph-structure counterpart to the outline system's one whole-shape centroid: this
+// plan can have several rooms, so there is no single interior to point at. A wall with no face on
+// either side (open to nothing yet) has no interior to reference at all, so it falls back to an
+// arbitrary but consistent perpendicular offset — doorGeometry only reads the SIGN of which side
+// that point is on, and a door hung on an open wall has no "correct" side for that to disagree with.
+function wallInteriorHint(faces: Face[], a: Point, b: Point, aId: string, bId: string): Point {
+  for (const f of faces) {
+    const n = f.nodeIds.length;
+    for (let i = 0; i < n; i++) {
+      const x = f.nodeIds[i];
+      const y = f.nodeIds[(i + 1) % n];
+      if ((x === aId && y === bId) || (x === bId && y === aId)) return polygonCentroid(f.boundary);
+    }
+  }
+  return { x: (a.x + b.x) / 2 - (b.y - a.y), y: (a.y + b.y) / 2 + (b.x - a.x) };
+}
+
+/** Door openings: the gap is painted over the wall the canvas already stroked so it reads as a
+ *  hole (unconditional, purely visual), and — when a wall lookup is available — the actual door
+ *  leaf(es) + swing arc on top of it (EntranceDoor, shared with the outline system's own doors;
+ *  see plan-canvas.tsx), draggable along the wall when `onMove` is supplied. Drawn as part of the
+ *  overlay layer that sits *above* the walls. */
 export function StructureDoors({
   structure,
   selectedIds,
   onSelect,
+  onMove,
+  onCommit,
+  clientToMm,
+  mm,
 }: {
   structure: VenueStructure;
   selectedIds?: string[];
   onSelect?: (id: string, additive: boolean) => void;
+  /** Absent = the door leaf/arc still shows, but has no drag handle (mid-draw, or any mode that
+   *  doesn't edit the built plan) — same "supplying it is what turns the affordance on" rule as
+   *  every other draggable layer here (see StructureFeatures). */
+  onMove?: (id: string, distanceMm: number) => void;
+  onCommit?: () => void;
+  clientToMm?: (clientX: number, clientY: number) => Point;
+  mm?: (px: number) => number;
 }) {
   const nodes = nodeMap(structure);
+  const faces = detectFaces(structure);
   return (
     <>
       {structure.entrances.map((e) => {
         const w = structure.walls.find((x) => x.id === e.wallId);
         const pts = w ? wallPoints(structure, w, nodes) : null;
-        if (!pts) return null;
+        if (!w || !pts) return null;
         const selected = selectedIds?.includes(e.id) ?? false;
         // The gap is cut along the wall as drawn, bow and all — a straight strike across a curved
         // wall would leave the opening floating beside the wall it is supposed to be a hole in.
@@ -503,7 +734,7 @@ export function StructureDoors({
         const half = e.widthMm / 2;
         const t0 = Math.max(0, (e.distanceMm - half) / len);
         const t1 = Math.min(1, (e.distanceMm + half) / len);
-        const d = wallSegmentD(pts.a, pts.b, w?.curve ?? null, t0, t1);
+        const d = wallSegmentD(pts.a, pts.b, w.curve ?? null, t0, t1);
         return (
           <g key={e.id}>
             <path
@@ -514,19 +745,24 @@ export function StructureDoors({
               vectorEffect="non-scaling-stroke"
               className="pointer-events-none"
             />
-            {onSelect && (
-              <path
-                d={d}
-                fill="none"
-                stroke="transparent"
-                strokeWidth={Math.max(e.widthMm * 0.7, 600)}
-                strokeLinecap="butt"
-                className="cursor-pointer"
-                aria-label="כניסה — בחירה לעריכה"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  onSelect(e.id, ev.shiftKey);
-                }}
+            {clientToMm && mm && (
+              <EntranceDoor
+                entrance={e}
+                a={pts.a}
+                b={pts.b}
+                curve={w.curve ?? null}
+                interiorHint={wallInteriorHint(faces, pts.a, pts.b, w.a, w.b)}
+                selected={selected}
+                // Click phase only — pick() (halls-screen.tsx) toggles a solo selection off on a
+                // repeat click, unlike the outline system's plain onSelect(ref) that EntranceDoor
+                // was built for; also firing on the press phase would select-then-instantly-
+                // deselect an already-selected door on a plain re-click. StructureFeatures' own
+                // onSelect (above) makes the same call by using a plain onClick in the first place.
+                onSelect={(mods) => mods.phase === "click" && onSelect?.(e.id, mods.shift)}
+                onMove={(p) => onMove?.(e.id, projectOntoWall(pts.a, pts.b, p))}
+                onCommit={onCommit}
+                clientToMm={clientToMm}
+                mm={mm}
               />
             )}
           </g>

@@ -74,8 +74,10 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // already holds, and the two could disagree: clicking a venue set `selected`, but a venue deleted
   // in another tab left it pointing at a row no longer in the list, which the provider's own
   // fallback would have corrected. Writing through setActiveVenueId fires VENUE_CHANGED_EVENT and
-  // the provider re-resolves, so the switcher stays live without holding state of its own.
-  const { venues, activeVenueId, add, rename } = useVenues();
+  // the provider re-resolves, so the switcher stays live without holding state of its own. `remove`
+  // needs no such override either — deleting a venue updates the provider's own list, and its
+  // activeVenueId falls back on its own once the deleted id is no longer in it.
+  const { venues, activeVenueId, add, rename, remove } = useVenues();
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -87,6 +89,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const meta = TITLES.find((t) => t.test(pathname));
   const settingsActive = pathname.startsWith("/settings");
   const isCatalog = pathname.startsWith("/catalog");
+  // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
+  // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
+  const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/gantt");
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
   // local part of their own email is the thing they will recognise.
@@ -160,6 +165,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
             });
           }}
           onRename={(id, name) => void rename(id, name)}
+          onDelete={(id) => remove(id)}
         />
 
         <nav className="flex flex-col gap-[3px]">
@@ -235,21 +241,23 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
           <div className="flex-1" />
 
-          <div className="flex shrink-0 items-center gap-1.5">
-            {/* Opens the details form in place rather than navigating to /meeting?new: answering
-                six questions is not worth losing the screen you were on. The dialog walks into the
-                meeting itself once the event exists — see components/event-dialog.tsx. */}
-            <button
-              type="button"
-              onClick={() => setCreating(true)}
-              className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
-            >
-              + יצירת אירוע חדש
-            </button>
-            <IconButton label="התראות">
-              <Bell className="h-4 w-4" strokeWidth={1.75} />
-            </IconButton>
-          </div>
+          {showHeaderActions && (
+            <div className="flex shrink-0 items-center gap-1.5">
+              {/* Opens the details form in place rather than navigating to /meeting?new: answering
+                  six questions is not worth losing the screen you were on. The dialog walks into
+                  the meeting itself once the event exists — see components/event-dialog.tsx. */}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
+              >
+                + יצירת אירוע חדש
+              </button>
+              <IconButton label="התראות">
+                <Bell className="h-4 w-4" strokeWidth={1.75} />
+              </IconButton>
+            </div>
+          )}
         </header>
 
         <main className="min-h-0 flex-1 overflow-auto">

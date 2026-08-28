@@ -8,6 +8,7 @@
   --color-bg: #eeedf3; /* the app plane behind cards */
   --color-surface: #ffffff; /* cards and panels */
   --color-inset: #faf9fd; /* a well recessed inside a card */
+  --color-tray: #dcdae2; /* a grouping lane (e.g. Kanban columns) one step darker than --color-bg — reads as its own zone instead of blending into the page plane */
   --color-border: #e9e7f0; /* Line */
   --color-border-soft: #f0eef5; /* hairline between rows inside a card */
   --color-inset-border: #eae8f0; /* the stroke around an inset well */

@@ -2,20 +2,31 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Box,
+  Building2,
+  ChevronsLeft,
+  ChevronUp,
   DoorOpen,
+  GlassWater,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
   Layers,
   Lock,
   MousePointer2,
   PenLine,
+  Plus,
+  Presentation,
   Ruler,
+  Search as SearchIcon,
   Shapes,
   Trash2,
   Unlock,
   Upload,
   Users,
+  Waves,
+  type LucideIcon,
 } from "lucide-react";
+import { polygonCentroid } from "@/lib/studio/geometry";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
@@ -48,6 +59,7 @@ import {
   removeFeature,
   removeNode,
   removeWall,
+  updateEntrance,
   updateFeature,
   updateStairs,
   type WallKind,
@@ -55,7 +67,6 @@ import {
 import { stairsPlacementAt } from "@/lib/venues/stairs";
 import { detectFaces, faceAt } from "@/lib/venues/faces";
 import {
-  ZONE_KIND_LABEL,
   isOpenAir,
   newZone,
   resolveZones,
@@ -82,7 +93,7 @@ import {
 } from "@/lib/venues/selection";
 import { PlanCanvas, type CanvasFocus } from "@/components/plan-canvas";
 import { useHistory } from "@/lib/studio/use-history";
-import { isTypingTarget } from "@/lib/keyboard";
+import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import type { Point } from "@/lib/studio/hall";
 
 // Everything one Ctrl+Z has to be able to take back, in one snapshot. The structure and the zones
@@ -110,24 +121,61 @@ function imageSize(url: string): Promise<{ width: number; height: number }> {
 
 type Mode = "select" | "walls" | "zones";
 
+// What the floating add-toolbar offers: the same six things the old right-click menu did (an
+// entrance plus every FEATURE_KINDS member), each keyed to a distinct icon so the row reads at a
+// glance instead of six identical squares.
+type AddTool = "entrance" | (typeof FEATURE_KINDS)[number];
+const ADD_TOOL_ICON: Record<AddTool, LucideIcon> = {
+  entrance: DoorOpen,
+  pool: Waves,
+  stage: Presentation,
+  bar: GlassWater,
+  structure: Box,
+  other: Shapes,
+};
+const ADD_TOOL_LABEL: Record<AddTool, string> = { entrance: "כניסה", ...FEATURE_KIND_LABEL };
+const ADD_TOOLS: AddTool[] = ["entrance", ...FEATURE_KINDS];
+// A pastel swatch per kind, so the picker's cards read as a little gallery of colours rather than
+// six identical grey tiles — there's no product photo to preview, so the colour + icon combination
+// is standing in for one.
+const ADD_TOOL_PREVIEW: Record<AddTool, string> = {
+  entrance: "#f3c6d6",
+  pool: "#bcdcf5",
+  stage: "#f6df9b",
+  bar: "#f3c99b",
+  structure: "#d9d1f2",
+  other: "#c7e8cf",
+};
+
+// A solid dot per zone kind, for the sidebar list — a saturated sibling to venue-plan.tsx's own
+// ZONE_FILL, which is deliberately pale (it tints a whole room on the plan, not a 12px legend dot
+// that pale would just read as grey). Kept local rather than exported/shared: the plan's tint and
+// the list's dot are allowed to diverge exactly here, since only one of them has to stay print-safe.
+const ZONE_DOT_COLOR: Record<ZoneKind, string> = {
+  hall: "var(--color-accent)",
+  canopy: "#5b9bd5",
+  open: "var(--color-success)",
+  service: "var(--color-muted)",
+};
+
 const MODES: { id: Mode; label: string; icon: typeof MousePointer2; hint: string }[] = [
   {
     id: "select",
     label: "בחירה",
     icon: MousePointer2,
-    hint: "לחצו על קיר, פינה, כניסה או אזור כדי לערוך אותו · גררו פינה כדי להזיז את כל הקירות שנוגעים בה · גררו את היהלום שבאמצע הקיר כדי לעקם אותו · קליק ימני להוספת אלמנט",
+    hint: "לחצו על קיר, פינה, כניסה או אזור כדי לערוך אותו · גררו פינה כדי להזיז את כל הקירות שנוגעים בה · גררו את היהלום שבאמצע הקיר כדי לעקם אותו · הוסיפו אלמנטים מסרגל הכלים בתחתית",
   },
   {
     id: "walls",
     label: "שרטוט קירות",
     icon: PenLine,
-    hint: "לחצו כדי להניח פינה, המשיכו ללחוץ כדי לשרשר קירות · הקלידו מספר לאורך מדויק · Esc לסיום",
+    hint: "לחצו להנחת פינה · הקלידו אורך מדויק · Enter לסיום",
   },
   {
     id: "zones",
     label: "הגדרת אזורים",
     icon: Shapes,
-    hint: "לחצו בתוך שטח סגור כדי לתת לו שם · לשטח פתוח שאין סביבו קירות, השתמשו ב״סימון שטח״",
+    hint: "לחצו בשטח סגור לשם · לשטח פתוח: ״סימון שטח״",
   },
 ];
 
@@ -149,9 +197,39 @@ export function HallsScreen() {
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
   const [region, setRegion] = useState<Point[] | null>(null); // freehand zone boundary in progress
   const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind } | null>(null);
+  // Which add-toolbar button is armed, if any — the next click on empty canvas places one of it and
+  // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
+  // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
+  const [armedTool, setArmedTool] = useState<AddTool | null>(null);
+  // The add-element flyout — closed by picking a row (which arms it), by Escape, or by a click
+  // anywhere else (see the backdrop next to it).
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
   const focusNonce = useRef(0);
   const [ready, setReady] = useState(false); // storage has been read; before this, nothing is written back
+  // The zone-definition / background-plan panel, collapsible exactly like the app's own sidebar
+  // (components/app-shell.tsx) — a designer mid-drawing wants the canvas at full width without
+  // losing the panel entirely, the same tradeoff the main nav's own collapse toggle makes.
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  // Position, inside the canvas, of the floating instruction tooltip that follows the cursor while a
+  // drawing tool is armed — null (and so unrendered) the instant the pointer leaves the canvas or the
+  // tool goes back to "select", rather than lingering at its last spot. `w` is the canvas's own
+  // measured width, so the tooltip can flip to the cursor's other side near the edge instead of
+  // running past it and getting clipped by the canvas's own overflow-hidden.
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number; w: number } | null>(null);
+  // Hover state for the region tool's closing target — the first vertex, once the boundary has
+  // enough points to close. Purely cosmetic (a bigger, brighter dot), so a plain boolean is enough.
+  const [hoverCloseRegion, setHoverCloseRegion] = useState(false);
+  // Whichever of the several setRegion(null) call sites ends a region (Enter, a near-first-vertex
+  // click, Esc, the toggle button), the hover ring shouldn't outlive it and greet the next one already lit.
+  useEffect(() => {
+    if (region === null) setHoverCloseRegion(false);
+  }, [region]);
+  // 16 screen px worth of world mm at the current zoom, refreshed every render from inside the
+  // canvas's backdrop (the only place a px→mm conversion is available) and read back from onPick,
+  // which only ever sees mm points — this is how a click "near" the first vertex gets detected at
+  // all zoom levels instead of only at one fixed mm radius.
+  const closeSnapMmRef = useRef(16);
 
   useEffect(() => {
     void fetchVenues().then((list) => {
@@ -310,6 +388,16 @@ export function HallsScreen() {
     [structure, dragStructure],
   );
 
+  // Dragging one of a feature's resize handles — the layer has already done the geometry (which
+  // edge stays anchored, whether Shift is locking width:depth together), this just amends it into
+  // the live drag's history entry the same way every other in-progress edit on this plan does.
+  const resizeFeature = useCallback(
+    (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => {
+      dragStructure((s) => updateFeature(s, id, patch));
+    },
+    [dragStructure],
+  );
+
   // End of one gesture: close the history entry and drop the frozen origins together, so the next
   // drag can't reuse a snapshot taken before this one moved everything.
   const endGesture = useCallback(() => {
@@ -317,9 +405,19 @@ export function HallsScreen() {
     hist.commit();
   }, [hist]);
 
-  // Esc ends a wall run or abandons a half-drawn region; Enter closes a region; Delete removes
-  // whatever is selected. The typing guard is load-bearing on that last one — without it, a
-  // Backspace while correcting a zone's name would delete the zone.
+  // Shared by Enter and by clicking back near the first vertex (in onPick, below) — the two ways to
+  // close a region boundary. Takes the boundary as an argument rather than reading `region` itself so
+  // a caller that already has the point-to-close-with in hand doesn't need a redundant state update.
+  const finishRegion = useCallback((boundary: Point[]) => {
+    setDraftZone({ source: { type: "region", boundary }, name: "", kind: "open" });
+    setRegion(null);
+  }, []);
+
+  // Esc still ends a wall run or abandons a half-drawn region (and always clears the selection) —
+  // but Enter is the documented way to finish a wall run now, closer to how Enter closes a region
+  // a few lines down than to a "cancel" key. Delete removes whatever is selected. The typing guard
+  // is load-bearing on that last one — without it, a Backspace while correcting a zone's name
+  // would delete the zone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -327,12 +425,16 @@ export function HallsScreen() {
         setRegion(null);
         setDraftZone(null);
         setSelection([]);
+        setArmedTool(null);
+        setAddMenuOpen(false);
         return;
       }
       if (isTypingTarget()) return;
-      if (e.key === "Enter" && region && region.length >= 3) {
-        setDraftZone({ source: { type: "region", boundary: region }, name: "", kind: "open" });
-        setRegion(null);
+      if (e.key === "Enter" && mode === "walls" && runNodeId) {
+        e.preventDefault();
+        setRunNodeId(null);
+      } else if (e.key === "Enter" && region && region.length >= 3) {
+        finishRegion(region);
       } else if ((e.key === "Delete" || e.key === "Backspace") && selection.length > 0) {
         e.preventDefault();
         deleteSelection();
@@ -340,7 +442,7 @@ export function HallsScreen() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [region, selection, deleteSelection]);
+  }, [mode, runNodeId, region, selection, deleteSelection, finishRegion]);
 
   // PlanCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
   // against every existing corner — so this only decides what a click *means* in the current mode.
@@ -356,6 +458,14 @@ export function HallsScreen() {
     }
 
     if (region) {
+      // Clicking back near the first vertex closes the boundary, exactly like Enter — the outline
+      // tool elsewhere in this canvas already works this way; this is the same affordance for a
+      // freehand region. Distance is compared in mm, using a threshold that itself tracks the current
+      // zoom (see closeSnapMmRef), so "near" means the same 16px at any scale.
+      if (region.length >= 3 && Math.hypot(p.x - region[0].x, p.y - region[0].y) <= closeSnapMmRef.current) {
+        finishRegion(region);
+        return;
+      }
       setRegion([...region, p]);
       return;
     }
@@ -364,18 +474,41 @@ export function HallsScreen() {
       // Clicking an existing corner reuses it rather than stacking a new one on top — this is how
       // walls come to share endpoints, and therefore how enclosed areas ever get detected.
       const { structure: withNode, nodeId } = addNode(structure, p);
-      editStructure(() => (runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode));
+      const nextStructure = runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode;
+      editStructure(() => nextStructure);
       setRunNodeId(nodeId);
+
+      // A wall that just closed a loop back onto itself created a brand new room — offer to name
+      // it right away instead of making the designer end the run, switch to "zones" mode, and
+      // click inside it separately. `faces` is still the pre-click set (memoised off the
+      // structure before this edit), so comparing against it tells a genuinely new room apart from
+      // one that already existed — and already-named ones are, by definition, not new.
+      if (!draftZone) {
+        const priorSignatures = new Set(faces.map((f) => [...f.nodeIds].sort().join(",")));
+        const newFace = detectFaces(nextStructure).find(
+          (f) => !priorSignatures.has([...f.nodeIds].sort().join(",")),
+        );
+        if (newFace) {
+          setDraftZone({ source: { type: "face", anchor: polygonCentroid(newFace.boundary) }, name: "", kind: "hall" });
+        }
+      }
       return;
     }
 
-    if (mode === "zones") {
-      const face = faceAt(faces, p);
-      if (!face) return; // nothing enclosed here — the region tool is the way to name open ground
-      const taken = resolved.some((r) => r.zone.source.type === "face" && faceAt(faces, r.zone.source.anchor) === face);
-      if (taken) return;
-      setDraftZone({ source: { type: "face", anchor: p }, name: "", kind: "hall" });
-    }
+    if (mode === "zones") tryNameEnclosedFace(p);
+  };
+
+  // Clicking an already-enclosed, not-yet-named area starts naming it — pulled out so both the old
+  // "zones" mode (still reachable mid-region, or from anywhere else that calls onPick) and a plain
+  // select-mode click on the canvas (see onCanvasClick below) share the one rule for what counts as
+  // "click a room to name it", instead of a dedicated mode being the only door to it.
+  const tryNameEnclosedFace = (p: Point): boolean => {
+    const face = faceAt(faces, p);
+    if (!face) return false; // nothing enclosed here — the region tool is the way to name open ground
+    const taken = resolved.some((r) => r.zone.source.type === "face" && faceAt(faces, r.zone.source.anchor) === face);
+    if (taken) return false;
+    setDraftZone({ source: { type: "face", anchor: p }, name: "", kind: "hall" });
+    return true;
   };
 
   const saveDraftZone = () => {
@@ -498,14 +631,30 @@ export function HallsScreen() {
     setUnderlayNote(null);
     void persistUnderlay(result.underlay);
   };
-  const totalArea = useMemo(() => Math.round(resolved.reduce((s, r) => s + zoneAreaM2(r), 0)), [resolved]);
   const namedFaces = resolved.filter((r) => r.zone.source.type === "face" && !r.detached).length;
   const unnamed = Math.max(0, faces.length - namedFaces);
   const activeMode = MODES.find((m) => m.id === mode)!;
   const runNode = runNodeId ? structure.nodes.find((n) => n.id === runNodeId) : null;
   const selectedZoneIds = selection.filter((s) => s.kind === "zone").map((s) => s.id);
   const soleZoneId = selection.length === 1 && selection[0].kind === "zone" ? selection[0].id : null;
+  const soleFeatureId = selection.length === 1 && selection[0].kind === "feature" ? selection[0].id : null;
   const isSelectMode = mode === "select";
+
+  // Selecting a product on the plan — a stage, a bar, a pool — frames it the same way picking a
+  // zone from the list does (see focusZone): the object you just picked is the thing you're about
+  // to edit, so the view should already be centred on it rather than leaving that to a manual pan,
+  // and the inspector (docked at the canvas's top edge, see below) can never land on top of
+  // something that's sitting dead centre.
+  useEffect(() => {
+    if (!soleFeatureId) return;
+    const f = structure.features.find((x) => x.id === soleFeatureId);
+    if (!f) return;
+    const halfW = f.widthMm / 2;
+    const halfD = (f.shape === "circle" ? f.widthMm : f.depthMm) / 2;
+    focusNonce.current += 1;
+    setFocus({ minX: f.x - halfW, minY: f.y - halfD, maxX: f.x + halfW, maxY: f.y + halfD, nonce: focusNonce.current });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleFeatureId]);
   const graphSelection = useMemo(
     () =>
       selection
@@ -536,105 +685,64 @@ export function HallsScreen() {
     setSelection([{ kind: "door", id: entranceId }]);
   };
 
+  // What an armed add-toolbar button means once the next canvas click reports a point — the same
+  // two placement paths the old right-click menu items called, now behind one-shot arming instead
+  // of a menu that already had the point in hand. Always disarms after one placement, matching how
+  // the menu closed itself the moment you picked something.
+  const placeArmedTool = (p: Point) => {
+    if (!armedTool) return;
+    if (armedTool === "entrance") addDoorNear(p);
+    else addFeatureAt(armedTool, p);
+    setArmedTool(null);
+  };
+
+  // A plain click on empty canvas, in select mode. With a tool armed it places it (unchanged); with
+  // none armed, it's now also how a room gets named — landing inside an enclosed, unnamed area
+  // starts naming it, the same thing the old dedicated "zones" mode's own click did. That mode's own
+  // top-level toggle is gone (see the header row above); this is what keeps "click a room to name
+  // it" reachable without it, straight from the mode you're already in for everything else.
+  const onSelectModeCanvasClick = (p: Point) => {
+    if (armedTool) { placeArmedTool(p); return; }
+    tryNameEnclosedFace(p);
+  };
+
   return (
-    <div className="px-8 py-8">
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-ink">{venue?.name ?? "מקום"}</h2>
-          <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-soft">
-            מבנה אחד לכל המקום — הקירות משותפים בין האזורים. האזורים הם סימון על גבי המבנה, לא ציור נפרד.
-          </p>
-        </div>
-        <dl className="flex shrink-0 gap-6 text-sm">
-          <div>
-            <dt className="text-xs text-muted">אזורים</dt>
-            <dd className="nums text-base font-bold text-ink">{zones.length}</dd>
+    <div className="flex h-full flex-col p-4">
+      {/* A real two-column layout: the zone-definition list is a dedicated sidebar next to the
+          canvas, not a layer floating on top of it (see the aside at the end). No header row above
+          either of them any more — "הגדרת אזורים" isn't a mode you switch into any more (see
+          onSelectModeCanvasClick above: naming an enclosed room now works straight from select
+          mode) and its "סימון שטח פתוח" companion is fully covered by the sidebar's own "+ שרטוט
+          אזור חדש", which already both arms the region tool and starts drawing in one click. With
+          nothing above them, the canvas and the sidebar's tops align for free — no shared grid row
+          needed just to keep them level.
+          min-h-0 flex-1 on the grid (rather than a guessed vh height) is what makes the canvas fill
+          every bit of vertical space this page has — a fixed vh number always either overshoots
+          (forcing the page itself to scroll under a supposedly-fixed layout) or leaves a gap under
+          the fold, depending on the viewport's actual height once the chrome above it is accounted
+          for. min-h-0 is load-bearing: without it a grid row won't shrink below its content's
+          natural size, and the canvas's own min-h-96 would then win a fight with "fill exactly what
+          remains" instead of losing to it gracefully once space is tight. */}
+      <div className="grid min-h-0 flex-1 gap-x-4 gap-y-3 lg:grid-cols-[1fr_auto]">
+        <section
+          className="relative min-h-96 overflow-hidden rounded-md border border-border bg-accent-tint lg:h-full lg:min-h-0"
+          onPointerMove={(e) => {
+            if (mode === "select") return;
+            const r = e.currentTarget.getBoundingClientRect();
+            setCursorPos({ x: e.clientX - r.left, y: e.clientY - r.top, w: r.width });
+          }}
+          onPointerLeave={() => setCursorPos(null)}
+        >
+          {/* The venue's name, floating on the canvas itself — white, so it reads as its own chip
+              sitting on the purple canvas rather than blending into it. */}
+          <div className="pointer-events-none absolute right-4 top-4 z-10 inline-flex w-fit shrink-0 items-center gap-2 rounded-md border border-border bg-canvas px-4 py-2 text-sm font-bold text-accent-deep shadow-floating">
+            <Building2 className="h-4 w-4 text-accent" strokeWidth={1.75} />
+            {venue?.name ?? "מקום"}
           </div>
-          <div>
-            <dt className="text-xs text-muted">שטח כולל</dt>
-            <dd className="nums text-base font-bold text-ink">{totalArea} מ״ר</dd>
-          </div>
-          {/* The count of walls was a developer's number. What a designer needs to see from across
-              the room is whether anything on the plan is still waiting to be named. */}
-          <div>
-            <dt className="text-xs text-muted">ללא שם</dt>
-            <dd className={`nums text-base font-bold ${unnamed > 0 ? "text-accent" : "text-ink"}`}>{unnamed}</dd>
-          </div>
-        </dl>
-      </header>
 
-      {/* Toolbar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 rounded-md border border-border bg-surface p-1">
-          {MODES.map((m) => {
-            const Icon = m.icon;
-            const on = mode === m.id;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => {
-                  setMode(m.id);
-                  setRunNodeId(null);
-                  setRegion(null);
-                  setDraftZone(null);
-                  if (m.id !== "select") setSelection([]);
-                }}
-                aria-pressed={on}
-                className={`inline-flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm transition-colors ${
-                  on ? "bg-accent-tint font-bold text-accent" : "font-semibold text-muted hover:bg-inset"
-                }`}
-              >
-                <Icon className="h-[18px] w-[18px]" strokeWidth={1.4} />
-                {m.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {mode === "walls" && (
-          <div className="flex gap-1 rounded-md border border-border bg-surface p-1">
-            {(["wall", "edge"] as WallKind[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setWallKind(k)}
-                aria-pressed={wallKind === k}
-                className={`rounded-sm px-3 py-1.5 text-sm transition-colors ${
-                  wallKind === k ? "bg-accent-tint font-bold text-accent" : "font-semibold text-muted hover:bg-inset"
-                }`}
-              >
-                {k === "wall" ? "קיר" : "גבול שטח"}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {mode === "zones" && (
-          <button
-            type="button"
-            onClick={() => setRegion(region ? null : [])}
-            aria-pressed={region !== null}
-            className={`rounded-md border px-3 py-2 text-sm transition-colors ${
-              region !== null
-                ? "border-accent-line bg-accent-tint font-bold text-accent"
-                : "border-border bg-surface font-semibold text-muted hover:bg-inset"
-            }`}
-          >
-            {region !== null ? "סיימו עם Enter" : "סימון שטח פתוח"}
-          </button>
-        )}
-
-        <p className="min-w-0 flex-1 truncate text-xs text-muted">
-          {region !== null ? "לחצו נקודות סביב השטח · Enter לסגירה · Esc לביטול" : activeMode.hint}
-        </p>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-        <section className="relative h-[68vh] min-h-96 overflow-hidden rounded-md border border-border bg-canvas">
-          {/* The app's one canvas. It owns the viewport, grid, pan/zoom, snapping, undo buttons and
-              the wall graph itself; this screen supplies only the zone tints beneath, the doors
-              above, and what a click means in the current mode. */}
+            {/* The app's one canvas. It owns the viewport, grid, pan/zoom, snapping, undo buttons and
+                the wall graph itself; this screen supplies only the zone tints beneath, the doors
+                above, and what a click means in the current mode. */}
           <PlanCanvas
             mode={isSelectMode ? "edit" : "draw"}
             outline={[]}
@@ -672,71 +780,125 @@ export function HallsScreen() {
             onRedo={hist.redo}
             focus={focus}
             drawFrom={region?.length ? region[region.length - 1] : runNode ? { x: runNode.x, y: runNode.y } : null}
-            contextMenuItems={
+            // The floating add-toolbar arms one of these instead of a right-click menu handing over
+            // a point directly — so placement goes through the same "next empty-canvas click" path
+            // every other click-to-place tool on this canvas already uses.
+            cursor={armedTool ? "crosshair" : "default"}
+            onCanvasClick={isSelectMode ? onSelectModeCanvasClick : undefined}
+            // The grid pattern's own line colour is tuned for the white bg-canvas every other host
+            // still uses; against this screen's own light-purple canvas it was nearly invisible
+            // (text-border and accent-tint sit a hair apart in value). accent-line is the same
+            // family, several steps darker, chosen for contrast against this one background.
+            gridColorClassName="text-accent-line"
+            onDropAt={
               isSelectMode
-                ? (point) => [
-                    {
-                      label: "כניסה",
-                      icon: DoorOpen,
-                      disabled: !structure.walls.some((w) => w.kind === "wall"),
-                      onSelect: () => addDoorNear(point),
-                    },
-                    ...FEATURE_KINDS.map((k) => ({
-                      label: FEATURE_KIND_LABEL[k],
-                      icon: Shapes,
-                      onSelect: () => addFeatureAt(k, point),
-                    })),
-                  ]
+                ? (e, p) => {
+                    const kind = e.dataTransfer.getData("text/plain") as AddTool | "";
+                    if (kind === "entrance") addDoorNear(p);
+                    else if (kind && (FEATURE_KINDS as string[]).includes(kind)) addFeatureAt(kind as (typeof FEATURE_KINDS)[number], p);
+                  }
                 : undefined
             }
-            backdrop={({ clientToMm, mm }) => (
-              <>
-                {/* FIRST — the traced-over plan sits under the zone tints, the features and the
-                    walls the canvas draws itself. Draggable only while explicitly unlocked, and
-                    never while a calibration is being marked (the clicks belong to that). */}
-                <PlanUnderlayLayer
-                  underlay={underlay}
-                  clientToMm={clientToMm}
-                  onMove={
-                    underlayUnlocked && !calib ? (p) => patchUnderlay({ x: p.x, y: p.y }) : undefined
-                  }
-                  onCommit={() => void persistUnderlay(underlay)}
-                />
-                <ZoneRegions
-                  zones={resolved}
-                  selectedIds={selectedZoneIds}
-                  onSelect={isSelectMode ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
-                  mm={mm}
-                />
-                <StructureFeatures
-                  structure={structure}
-                  mm={mm}
-                  selectedIds={selection.filter((s) => s.kind === "feature").map((s) => s.id)}
-                  onSelect={isSelectMode ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
-                  onMove={isSelectMode ? (id, p) => moveWithGroup("feature", id, p) : undefined}
-                  onMoveStairs={isSelectMode ? moveStairs : undefined}
-                  onCommit={endGesture}
-                  clientToMm={clientToMm}
-                />
-                {region && region.length > 0 && (
-                  <polyline
-                    points={[...region, region[0]].map((p) => `${p.x},${p.y}`).join(" ")}
-                    fill="var(--color-accent-tint)"
-                    fillOpacity={0.6}
-                    stroke="var(--color-accent)"
-                    strokeWidth={2}
-                    strokeDasharray="6 4"
-                    vectorEffect="non-scaling-stroke"
+            backdrop={({ clientToMm, mm }) => {
+              closeSnapMmRef.current = mm(16); // 16px, matching the outline tool's own SNAP_PX
+              const closable = region !== null && region.length >= 3;
+              return (
+                <>
+                  {/* FIRST — the traced-over plan sits under the zone tints, the features and the
+                      walls the canvas draws itself. Draggable only while explicitly unlocked, and
+                      never while a calibration is being marked (the clicks belong to that). */}
+                  <PlanUnderlayLayer
+                    underlay={underlay}
+                    clientToMm={clientToMm}
+                    onMove={
+                      underlayUnlocked && !calib ? (p) => patchUnderlay({ x: p.x, y: p.y }) : undefined
+                    }
+                    onCommit={() => void persistUnderlay(underlay)}
                   />
-                )}
-              </>
-            )}
-            overlay={({ mm }) => (
+                  <ZoneRegions
+                    zones={resolved}
+                    selectedIds={selectedZoneIds}
+                    onSelect={isSelectMode ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
+                    mm={mm}
+                  />
+                  <StructureFeatures
+                    structure={structure}
+                    mm={mm}
+                    selectedIds={selection.filter((s) => s.kind === "feature").map((s) => s.id)}
+                    onSelect={isSelectMode ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
+                    onMove={isSelectMode ? (id, p) => moveWithGroup("feature", id, p) : undefined}
+                    onMoveStairs={isSelectMode ? moveStairs : undefined}
+                    onResize={isSelectMode ? resizeFeature : undefined}
+                    onCommit={endGesture}
+                    clientToMm={clientToMm}
+                  />
+                  {region && region.length > 1 && (
+                    <polyline
+                      points={[...region, region[0]].map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill="var(--color-accent-tint)"
+                      fillOpacity={0.6}
+                      stroke="var(--color-accent)"
+                      strokeWidth={2}
+                      strokeDasharray="6 4"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )}
+                  {/* A dot per placed point — without this, a first click gave no feedback at all:
+                      one point makes a zero-length polyline (invisible), so the boundary looked like
+                      it hadn't registered anything until a second click finally drew a line. The
+                      first vertex doubles as the closing target once the boundary can close, with a
+                      hover ring — the same "click here to finish" affordance the outline tool gives
+                      Studio/catalog shapes, ported to this freehand region. */}
+                  {region && region.length > 0 && (
+                    <g>
+                      {region.map((p, i) => (
+                        <circle
+                          key={i}
+                          cx={p.x}
+                          cy={p.y}
+                          r={mm(i === 0 && closable ? (hoverCloseRegion ? 10 : 7) : 5)}
+                          className="text-accent"
+                          fill="currentColor"
+                        />
+                      ))}
+                      {closable && hoverCloseRegion && (
+                        <circle
+                          cx={region[0].x}
+                          cy={region[0].y}
+                          r={mm(15)}
+                          className="text-accent"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      )}
+                      {closable && (
+                        <circle
+                          cx={region[0].x}
+                          cy={region[0].y}
+                          r={mm(16)}
+                          fill="transparent"
+                          className="cursor-pointer"
+                          onPointerEnter={() => setHoverCloseRegion(true)}
+                          onPointerLeave={() => setHoverCloseRegion(false)}
+                        />
+                      )}
+                    </g>
+                  )}
+                </>
+              );
+            }}
+            overlay={({ mm, clientToMm }) => (
               <>
                 <StructureDoors
                   structure={structure}
                   selectedIds={selection.filter((s) => s.kind === "door").map((s) => s.id)}
                   onSelect={isSelectMode ? (id, additive) => pick({ kind: "door", id }, additive) : undefined}
+                  onMove={isSelectMode ? (id, distanceMm) => dragStructure((s) => updateEntrance(s, id, { distanceMm })) : undefined}
+                  onCommit={endGesture}
+                  clientToMm={clientToMm}
+                  mm={mm}
                 />
                 {/* Above the walls: the span being measured has to stay readable over a dark scan. */}
                 <CalibrationOverlay from={calib?.from ?? null} to={calib?.to ?? null} mm={mm} />
@@ -744,28 +906,227 @@ export function HallsScreen() {
             )}
           />
 
-          {/* Sits above the canvas's own bottom-start toolbar, centred, exactly as the hall editor
-              places its inspector — same object, same place, whichever editor you are in. A lone
-              zone is the one selection with nothing to show here: its fields live in the list. */}
-          {!soleZoneId && selection.length > 0 && (
-            <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
-              <div className="pointer-events-auto">
+          {/* A short instruction that follows the cursor while a drawing tool is armed — reading it
+              never means looking away from the shape you're mid-way through drawing. Flips to the
+              cursor's other side once it's within its own width of the canvas edge, so it can never
+              run past the canvas's own overflow-hidden and get clipped mid-word. */}
+          {mode !== "select" && cursorPos && (
+            <div
+              className="pointer-events-none absolute z-20 whitespace-nowrap rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-canvas shadow-lifted"
+              style={
+                cursorPos.x > cursorPos.w - 260
+                  ? { right: cursorPos.w - cursorPos.x + 16, top: cursorPos.y + 18 }
+                  : { left: cursorPos.x + 16, top: cursorPos.y + 18 }
+              }
+            >
+              {region !== null ? "הקיפו בנקודות · Enter לסגירה · Esc לביטול" : activeMode.hint}
+            </div>
+          )}
+
+          {/* The bottom dock — one toolbar, not two side by side: "שרטוט קירות" (with its
+              wall/boundary sub-control inline beside it, walls mode only), then a divider, then the
+              add-element trigger (select mode only) and the pointer, always at the far end. */}
+          <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
+            <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-floating">
+              <button
+                type="button"
+                title="שרטוט קירות"
+                onClick={() => {
+                  setMode("walls");
+                  setRunNodeId(null);
+                  setRegion(null);
+                  setDraftZone(null);
+                  setArmedTool(null);
+                  setAddMenuOpen(false);
+                  setSelection([]);
+                }}
+                aria-pressed={mode === "walls"}
+                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  mode === "walls" ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
+                }`}
+              >
+                <PenLine className="h-[18px] w-[18px]" strokeWidth={1.4} />
+                שרטוט
+              </button>
+
+              {mode === "walls" && (
+                <>
+                  <div className="mx-0.5 h-5 w-px bg-border" />
+                  {(["wall", "edge"] as WallKind[]).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setWallKind(k)}
+                      aria-pressed={wallKind === k}
+                      className={`rounded-sm px-3 py-1.5 text-sm transition-colors ${
+                        wallKind === k ? "bg-accent-tint font-bold text-accent" : "font-semibold text-muted hover:bg-inset"
+                      }`}
+                    >
+                      {k === "wall" ? "קיר" : "גבול שטח"}
+                    </button>
+                  ))}
+                </>
+              )}
+
+              <div className="mx-0.5 h-5 w-px bg-border" />
+
+              {isSelectMode && (
+                <>
+                  <AddElementFlyout
+                    open={addMenuOpen}
+                    onOpenChange={setAddMenuOpen}
+                    armedTool={armedTool}
+                    onPick={(tool) => {
+                      setArmedTool((t) => (t === tool ? null : tool));
+                      setAddMenuOpen(false);
+                    }}
+                    entranceDisabled={!structure.walls.some((w) => w.kind === "wall")}
+                  />
+                  <div className="mx-0.5 h-5 w-px bg-border" />
+                </>
+              )}
+              <button
+                type="button"
+                title="מצב בחירה"
+                aria-pressed={isSelectMode && !armedTool}
+                onClick={() => {
+                  if (!isSelectMode) {
+                    setMode("select");
+                    setRunNodeId(null);
+                    setRegion(null);
+                    setDraftZone(null);
+                  }
+                  setArmedTool(null);
+                  setAddMenuOpen(false);
+                }}
+                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  isSelectMode && !armedTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
+                }`}
+              >
+                <MousePointer2 className="h-[18px] w-[18px]" strokeWidth={1.6} />
+                בחירה
+              </button>
+            </div>
+          </div>
+
+          {/* Docked on the canvas's own right edge, top to bottom — not a bar spanning the width,
+              which would sit directly over whatever it's editing. Selecting a product recentres the
+              view on it (see the soleFeatureId effect above), so the drawing stays visible beside
+              this panel rather than under it. Just the width and height ceiling live here; the
+              vertical stacking and its own scroll are VenueInspector's own shell (see its WRAP) —
+              stacking a second overflow-y-auto on top of that one would be the exact nested-
+              scrollbar bug the sidebar list already had once this session.
+              h-full, not max-h-full: a max-height alone never establishes a *definite* height, so
+              VenueInspector's own max-h-full (a percentage) had nothing real to resolve against and
+              was silently ignored — the panel just grew past the canvas with no cap and no scroll,
+              which is exactly the cut-off-content bug this was for. h-full gives this wrapper an
+              actual height children can size a percentage against; the wrapper itself stays
+              invisible either way (no border/background of its own), and VenueInspector's own panel
+              still sizes to its content — short selections don't get stretched, they just have real
+              room to scroll into once they don't. A lone zone is the one selection with nothing to
+              show here: its fields live in the list. */}
+          {(draftZone || (!soleZoneId && selection.length > 0)) && (
+            <div className="pointer-events-none absolute inset-y-4 right-4 z-10 flex items-start justify-end">
+              <div className="pointer-events-auto h-full w-72">
                 <VenueInspector
                   selection={selection}
                   structure={structure}
                   apply={editStructure}
                   onDelete={deleteSelection}
                   onClose={() => setSelection([])}
+                  draftZone={draftZone}
+                  onDraftZoneChange={(patch) => draftZone && setDraftZone({ ...draftZone, ...patch })}
+                  onSaveDraftZone={saveDraftZone}
+                  onCancelDraftZone={() => setDraftZone(null)}
                 />
               </div>
             </div>
           )}
+
         </section>
 
-        <aside className="scroll-slim flex max-h-[68vh] flex-col gap-2 overflow-y-auto">
-          {/* Tracing panel (F-3.5 + F-3.4). Above the zone list because it is what you use FIRST:
-              place the plan, calibrate it, then draw. */}
-          <div className="rounded-md border border-border bg-card p-3.5">
+        {/* The zone-definition list — a dedicated sidebar column next to the canvas, not a layer
+            floating on top of it (that was tried and explicitly walked back). bg-bg on the aside
+            itself is the same neutral plane colour every card elsewhere in the app sits on, giving
+            the white card inside it a visible border of separation from the canvas beside it —
+            "sidebar container (own background) → card → canvas next to it", not glued onto it.
+            Full height now (lg:h-full, matching the canvas's own lg:h-full next to it), not sized
+            to the card's own content — a short zone list just leaves the panel's own background
+            showing below the card rather than the panel itself shrinking to hug it, which is what
+            actually reads as "a sidebar", as opposed to "a card that happens to have a border". A
+            list too long for that fixed height scrolls inside the panel (overflow-y-auto) instead
+            of growing the page, now that the panel has a real height to scroll within. */}
+        <aside
+          className={
+            "group/panel relative flex flex-col overflow-y-auto rounded-lg bg-bg transition-[width] duration-200 ease-fluid lg:col-start-2 lg:h-full " +
+            (panelCollapsed ? "gap-0 p-0 lg:w-20" : "gap-3 p-4 lg:w-[300px]")
+          }
+        >
+          {/* Collapse toggle — the same "liquid glass" puck the main sidebar uses
+              (components/app-shell.tsx), straddling this panel's own edge so the affordance reads
+              as the identical control rather than a bespoke one-off. Sits at the panel's
+              inline-start (the edge bordering the canvas) instead of inline-end, since this panel
+              is the one being tucked away, not the thing everything else collapses toward. Hidden
+              below lg: the two-column layout it collapses doesn't exist at that width, so there is
+              nothing here to toggle. */}
+          {/* True 50% of this panel's own box does NOT line up with the main sidebar's puck
+              (components/app-shell.tsx) — that one sits in a box with equal chrome above and below
+              (p-3 both sides), while this panel sits below the shared header (p-3 + h-16 header +
+              gap-3 ≈ 104px of chrome above it) but only p-3 + this page's own p-4 (≈28px) below it.
+              50% would land 38px lower than the sidebar's puck; shifting up by that half-difference
+              puts both on the same screen line. */}
+          <button
+            type="button"
+            onClick={() => setPanelCollapsed((c) => !c)}
+            aria-label={panelCollapsed ? "הרחבת לוח האזורים" : "כיווץ לוח האזורים"}
+            style={{ insetInlineStart: "-14px" }}
+            className="absolute top-[calc(50%-38px)] z-30 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-white/60 bg-white/50 text-ink-soft opacity-40 shadow-floating backdrop-blur-md transition-all duration-150 hover:opacity-100 hover:bg-white/80 hover:text-accent focus-visible:opacity-100 group-hover/panel:opacity-100 lg:flex"
+          >
+            <ChevronsLeft
+              className={"h-4 w-4 transition-transform duration-200 " + (panelCollapsed ? "" : "rotate-180")}
+              strokeWidth={2}
+            />
+          </button>
+
+          {/* Collapsed rail — two icon chips standing in for the two cards below, so the panel
+              still reads as "background plan" + "zones (n)" even shrunk to a strip, the same way
+              the main sidebar keeps its nav icons rather than going blank when collapsed. Either
+              chip re-expands the panel; lg-only, matching the toggle above, so a narrow viewport
+              always gets the full stacked layout regardless of this state. */}
+          {panelCollapsed && (
+            <div className="hidden flex-1 flex-col items-center gap-2.5 rounded-md border border-border bg-inset p-2 lg:flex">
+              <button
+                type="button"
+                onClick={() => setPanelCollapsed(false)}
+                title="תוכנית רקע"
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-muted transition-colors hover:border-accent-line hover:text-accent"
+              >
+                <ImageIcon className="h-[18px] w-[18px]" strokeWidth={1.4} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPanelCollapsed(false)}
+                title="הגדרת אזורים"
+                className="relative flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-muted transition-colors hover:border-accent-line hover:text-accent"
+              >
+                <Shapes className="h-[18px] w-[18px]" strokeWidth={1.4} />
+                <span className="absolute -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-canvas" style={{ insetInlineEnd: "-6px" }}>
+                  {zones.length}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* The full panel content — always rendered so mobile (below lg, where the collapse
+              toggle is hidden and the columns stack) never loses it, and only actually hidden at lg
+              once panelCollapsed says so. Same rounded-md/border-border/bg-inset backing as the
+              collapsed rail above, so expanding the panel doesn't drop the gray card it was just
+              sitting on. */}
+          <div className={"flex flex-col gap-3 rounded-md border border-border bg-inset p-2 " + (panelCollapsed ? "lg:hidden" : "")}>
+          {/* Tracing panel (F-3.5 + F-3.4) — its own card, sibling to the zone-definition card
+              below: a background plan you place/calibrate isn't part of "defining zones", so it
+              keeps that card focused on just that instead of growing a second concern into it. */}
+          <div className="rounded-md border border-border bg-surface p-3.5">
             <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-ink">
               <ImageIcon className="h-[18px] w-[18px] text-muted" strokeWidth={1.4} />
               תוכנית רקע
@@ -929,138 +1290,286 @@ export function HallsScreen() {
             {underlayNote && <p className="mt-2 text-xs leading-relaxed text-accent-deep">{underlayNote}</p>}
           </div>
 
-          {/* Naming panel — appears the moment an area is picked */}
-          {draftZone && (
-            <div className="rounded-md border border-accent-line bg-accent-tint p-3.5">
-              <h3 className="mb-2 text-sm font-bold text-accent-deep">
-                {draftZone.source.type === "face" ? "מתן שם לשטח הסגור" : "מתן שם לשטח המסומן"}
-              </h3>
-              <input
-                autoFocus
-                value={draftZone.name}
-                onChange={(e) => setDraftZone({ ...draftZone, name: e.target.value })}
-                onKeyDown={(e) => e.key === "Enter" && saveDraftZone()}
-                placeholder="שם האזור"
-                className="w-full rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
-              />
-              <div className="mt-2 flex flex-wrap gap-1">
-                {(Object.keys(ZONE_KIND_LABEL) as ZoneKind[]).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setDraftZone({ ...draftZone, kind: k })}
-                    aria-pressed={draftZone.kind === k}
-                    className={`rounded-pill border px-2.5 py-1 text-[11px] transition-colors ${
-                      draftZone.kind === k ? "border-accent bg-accent text-white" : "border-badge-line bg-canvas text-muted"
-                    }`}
-                  >
-                    {ZONE_KIND_LABEL[k]}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={saveDraftZone}
-                  disabled={!draftZone.name.trim()}
-                  className="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
-                >
-                  שמירה
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDraftZone(null)}
-                  className="rounded-sm px-3 py-1.5 text-sm font-semibold text-muted hover:bg-canvas"
-                >
-                  ביטול
-                </button>
-              </div>
-            </div>
-          )}
-
-          {mode === "zones" && !draftZone && unnamed > 0 && (
-            <p className="rounded-md border border-dashed border-accent-line bg-accent-tint/50 p-3 text-xs leading-relaxed text-accent-deep">
-              זוהו {faces.length} שטחים סגורים במבנה, {unnamed} מהם עדיין ללא שם. לחצו בתוך שטח כדי להגדיר אותו כאזור.
-            </p>
-          )}
-
-          {resolved.map((r) => {
-            const active = selectedZoneIds.includes(r.zone.id);
-            return (
-              <div
-                key={r.zone.id}
-                className={`rounded-md border p-3.5 transition-colors ${
-                  active ? "border-accent-line bg-accent-tint" : "border-border bg-surface hover:border-accent-line"
-                }`}
-              >
-                <button
-                  type="button"
-                  // Selecting from the list also frames the zone: on a five-zone property the tint
-                  // you just picked is routinely off-screen, and highlighting something nobody can
-                  // see is not selection.
-                  onClick={(e) => {
-                    pick({ kind: "zone", id: r.zone.id }, e.shiftKey);
-                    if (!active && !e.shiftKey) focusZone(r.zone.id);
-                  }}
-                  className="w-full min-w-0 text-start"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className={`truncate text-sm font-bold ${active ? "text-accent-deep" : "text-ink"}`}>
-                      {r.zone.name || "ללא שם"}
-                    </span>
-                    <span
-                      className={`shrink-0 rounded-pill border px-2 py-0.5 text-[11px] ${
-                        active ? "border-badge-line text-accent" : "border-border text-muted"
-                      }`}
-                    >
-                      {ZONE_KIND_LABEL[r.zone.kind]}
+          {/* A looser, more tightly-inset version of the app's own shadow-floating recipe (same
+              purple-tinted, negative-spread idea — see --shadow-floating in globals.css — just
+              pulled further down and blurred wider) for this one card specifically, rather than
+              retuning the shared token every other floating panel in the app also uses. */}
+          <div
+            className="flex flex-col gap-2.5 rounded-lg border border-border bg-canvas p-3.5"
+            style={{ boxShadow: "0 10px 26px -20px rgba(70,40,130,.5)" }}
+          >
+                <div>
+                  {/* Title and badge share this one row (and nothing else), so items-center has
+                      only their own single-line heights to centre against — sharing a row with the
+                      two-line description too (as this used to) centres the badge against that
+                      *combined* block instead, landing it between the two lines rather than level
+                      with the title. */}
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-bold text-ink">הגדרת אזורים</h2>
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-inset text-xs font-semibold text-muted">
+                      {zones.length}
                     </span>
                   </div>
-                  {r.detached ? (
-                    <p className="mt-1.5 text-xs text-alert">השטח נפתח — הקירות סביבו אינם סוגרים אותו יותר.</p>
-                  ) : (
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-soft">
-                      <span className="inline-flex items-center gap-1">
-                        <Ruler className="h-3.5 w-3.5" strokeWidth={1.4} />
-                        <span className="nums">{Math.round(zoneAreaM2(r))}</span> מ״ר
-                      </span>
-                      {r.zone.capacity?.seated ? (
-                        <span className="inline-flex items-center gap-1">
-                          <Users className="h-3.5 w-3.5" strokeWidth={1.4} />
-                          <span className="nums">{r.zone.capacity.seated}</span> מושבים
-                        </span>
-                      ) : null}
-                      <span className="inline-flex items-center gap-1">
-                        <Layers className="h-3.5 w-3.5" strokeWidth={1.4} />
-                        {isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${(r.zone.ceilingHeightMm / 1000).toFixed(1)} מ׳`}
-                      </span>
+                  <p className="mt-1 text-xs leading-relaxed text-muted">
+                    חלקו את המתחם לאזורים תפקודיים — לכל אחד שם, צבע ושטח.
+                  </p>
+                </div>
+
+                {/* Naming now happens on the canvas's own right-side panel (VenueInspector, below)
+                    — the same place every other selection's fields already live — not here; a
+                    picked-but-unnamed area is still shown as "picked" via the unnamed-count line
+                    right below, not by a second copy of the form in two places at once. */}
+                {mode === "zones" && !draftZone && unnamed > 0 && (
+                  <p className="rounded-md border border-dashed border-accent-line bg-accent-tint/60 p-3 text-xs leading-relaxed text-accent-deep">
+                    זוהו {faces.length} שטחים סגורים במבנה, {unnamed} מהם עדיין ללא שם. לחצו בתוך שטח כדי להגדיר אותו כאזור.
+                  </p>
+                )}
+
+                {resolved.map((r) => {
+                  const active = selectedZoneIds.includes(r.zone.id);
+                  return (
+                    <div
+                      key={r.zone.id}
+                      className={`rounded-md border bg-canvas transition-colors ${
+                        active ? "border-accent" : "border-border hover:border-accent-line"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        // Selecting from the list also frames the zone: on a five-zone property the
+                        // tint you just picked is routinely off-screen, and highlighting something
+                        // nobody can see is not selection.
+                        onClick={(e) => {
+                          const additive = isAdditiveClick(e);
+                          pick({ kind: "zone", id: r.zone.id }, additive);
+                          if (!active && !additive) focusZone(r.zone.id);
+                        }}
+                        className="flex w-full min-w-0 flex-col gap-1.5 px-3 py-2.5 text-start"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="nums shrink-0 text-xs text-muted">{Math.round(zoneAreaM2(r))} מ״ר</span>
+                          <span className={`min-w-0 flex-1 truncate text-sm font-bold ${active ? "text-accent-deep" : "text-ink"}`}>
+                            {r.zone.name || "ללא שם"}
+                          </span>
+                          <span
+                            aria-hidden
+                            className="h-3 w-3 shrink-0 rounded-full"
+                            style={{ backgroundColor: ZONE_DOT_COLOR[r.zone.kind] }}
+                          />
+                        </div>
+                        {!r.detached && (
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-soft">
+                            {r.zone.capacity?.seated ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Users className="h-3.5 w-3.5" strokeWidth={1.4} />
+                                <span className="nums">{r.zone.capacity.seated}</span> מושבים
+                              </span>
+                            ) : null}
+                            <span className="inline-flex items-center gap-1">
+                              <Layers className="h-3.5 w-3.5" strokeWidth={1.4} />
+                              {isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${(r.zone.ceilingHeightMm / 1000).toFixed(1)} מ׳`}
+                            </span>
+                          </div>
+                        )}
+                      </button>
+                      {r.detached && (
+                        <p className="px-3 pb-2.5 text-xs text-alert">השטח נפתח — הקירות סביבו אינם סוגרים אותו יותר.</p>
+                      )}
+
+                      {/* Only when it's the *only* thing selected — a multi-selection is edited from
+                          the floating panel, and five expanded forms at once is not a selection,
+                          it's a wall of text. */}
+                      {soleZoneId === r.zone.id && (
+                        <div className="px-3 pb-3">
+                          <ZoneFields
+                            zone={r.zone}
+                            onChange={(patch) => patchZone(r.zone.id, patch)}
+                            onDelete={() => removeZone(r.zone.id)}
+                            // A feature belongs to a zone only by sitting inside its boundary (see
+                            // resolveZones) — there's no field to set, just a point to drop it at.
+                            // The boundary's own centroid is the one point guaranteed to read as
+                            // "inside this zone" for any shape, convex or not. A detached zone
+                            // (boundary undone, walls no longer close it) has no such point, so it
+                            // gets no add-element control at all rather than one that would place
+                            // something in the wrong room.
+                            onAddElement={
+                              r.boundary.length >= 3
+                                ? (kind) => addFeatureAt(kind, polygonCentroid(r.boundary))
+                                : undefined
+                            }
+                          />
+                        </div>
+                      )}
                     </div>
-                  )}
+                  );
+                })}
+
+                {/* The dashed "draw a new zone" shortcut the reference card carries at the bottom
+                    of its list — jumps straight to the region tool rather than just switching
+                    modes, since that's the tool a zone with no walls to detect actually needs. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("zones");
+                    setSelection([]);
+                    setDraftZone(null);
+                    setRegion([]);
+                  }}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-accent-line bg-accent-tint px-3 py-2.5 text-sm font-bold text-accent transition-colors hover:border-solid hover:bg-indigo-100"
+                >
+                  <Plus className="h-4 w-4 shrink-0" strokeWidth={2.25} />
+                  שרטוט אזור חדש
                 </button>
 
-                {/* Only when it's the *only* thing selected — a multi-selection is edited from the
-                    floating panel, and five expanded forms at once is not a selection, it's a wall
-                    of text. */}
-                {soleZoneId === r.zone.id && (
-                  <ZoneFields
-                    zone={r.zone}
-                    onChange={(patch) => patchZone(r.zone.id, patch)}
-                    onDelete={() => removeZone(r.zone.id)}
-                  />
+                {zones.length === 0 && !draftZone && (
+                  <p className="rounded-md border border-dashed border-accent-line bg-accent-tint p-4 text-sm text-accent-deep">
+                    {structure.walls.length === 0
+                      ? "המקום עדיין ריק. שרטטו את קירות המקום, ואז עברו ל״הגדרת אזורים״ כדי לתת שם לכל שטח."
+                      : "אין עדיין אזורים. עברו ל״הגדרת אזורים״ ולחצו בתוך שטח סגור."}
+                  </p>
                 )}
-              </div>
-            );
-          })}
-
-          {zones.length === 0 && !draftZone && (
-            <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
-              {structure.walls.length === 0
-                ? "המקום עדיין ריק. שרטטו את קירות המקום, ואז עברו ל״הגדרת אזורים״ כדי לתת שם לכל שטח."
-                : "אין עדיין אזורים. עברו ל״הגדרת אזורים״ ולחצו בתוך שטח סגור."}
-            </p>
-          )}
+          </div>
+          </div>
         </aside>
       </div>
+    </div>
+  );
+}
+
+// The add-element trigger and its flyout — a searchable gallery of cards (one per FEATURE_KINDS
+// member, plus entrance) instead of a flat text list, so picking an element reads more like
+// choosing a product than reading a menu. Opens upward, not down, since the dock it sits in is
+// pinned to the canvas's bottom edge — there is no room below it to pop into.
+const FLYOUT_WIDTH = 420;
+const FLYOUT_GAP = 8;
+const FLYOUT_MARGIN = 16; // never closer than this to the viewport edge
+
+function AddElementFlyout({
+  open,
+  onOpenChange,
+  armedTool,
+  onPick,
+  entranceDisabled,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  armedTool: AddTool | null;
+  onPick: (tool: AddTool) => void;
+  entranceDisabled: boolean;
+}) {
+  const [search, setSearch] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Screen-space (not `absolute` inside the canvas): the toolbar dock lives inside the canvas's own
+  // `overflow-hidden` section (it clips the SVG's corners), and an `absolute` popup wide enough to
+  // run past that section's edge got its own corner sheared off along with it — "cuts the card".
+  // `fixed` escapes that ancestor entirely; the position is plain viewport math instead of
+  // RTL-logical insets because `fixed` coordinates are physical regardless of `dir`. Measured at the
+  // moment of the click that opens it (a DOM read the trigger's own handler is already in a position
+  // to make), not in an effect reacting to `open` — there is nowhere else `open` ever turns true.
+  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
+  useEffect(() => {
+    if (!open) setSearch("");
+  }, [open]);
+  const filtered = ADD_TOOLS.filter((t) => ADD_TOOL_LABEL[t].includes(search.trim()));
+  const TriggerIcon = armedTool ? ADD_TOOL_ICON[armedTool] : Shapes;
+  const openFlyout = () => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (r) {
+      const left = Math.max(
+        FLYOUT_MARGIN,
+        Math.min(r.right - FLYOUT_WIDTH, window.innerWidth - FLYOUT_WIDTH - FLYOUT_MARGIN),
+      );
+      setPos({ left, bottom: window.innerHeight - r.top + FLYOUT_GAP });
+    }
+    onOpenChange(true);
+  };
+  return (
+    <div className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        title="הוספת אלמנט"
+        aria-pressed={!!armedTool}
+        aria-expanded={open}
+        onClick={() => (open ? onOpenChange(false) : openFlyout())}
+        className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+          armedTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
+        }`}
+      >
+        <span className="flex items-center gap-0.5">
+          <TriggerIcon className="h-[18px] w-[18px]" strokeWidth={1.6} />
+          <ChevronUp className="h-3 w-3" strokeWidth={2} />
+        </span>
+        אלמנט
+      </button>
+
+      {open && pos && (
+        <>
+          {/* A full-screen, invisible backdrop is what makes "click anywhere else" close the menu —
+              the same pattern the canvas's own (now-retired) right-click menu used. */}
+          <div className="fixed inset-0 z-40" onClick={() => onOpenChange(false)} />
+          <div
+            role="menu"
+            className="fixed z-50 rounded-md border border-border bg-surface p-3 shadow-floating"
+            style={{ left: pos.left, bottom: pos.bottom, width: FLYOUT_WIDTH }}
+          >
+            <div className="relative">
+              <SearchIcon className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted" style={{ insetInlineStart: 10 }} strokeWidth={1.75} />
+              <input
+                autoFocus
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="חיפוש אלמנט..."
+                aria-label="חיפוש אלמנט"
+                className="w-full rounded-md border border-border bg-canvas py-2 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
+                style={{ paddingInlineStart: 32, paddingInlineEnd: 10 }}
+              />
+            </div>
+
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              {filtered.map((tool) => {
+                const Icon = ADD_TOOL_ICON[tool];
+                const disabled = tool === "entrance" && entranceDisabled;
+                return (
+                  <button
+                    key={tool}
+                    type="button"
+                    role="menuitem"
+                    disabled={disabled}
+                    // Dragging straight onto the canvas — PlanCanvas's own onDropAt (see
+                    // halls-screen's use of it) reads this same "text/plain" payload back out, the
+                    // exact contract its doc comment already promised a host's catalog rail.
+                    draggable={!disabled}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("text/plain", tool);
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                    onClick={() => onPick(tool)}
+                    className={`flex flex-col items-center gap-1.5 rounded-md border p-2 text-xs font-semibold transition-colors ${
+                      armedTool === tool
+                        ? "border-accent bg-accent-tint text-accent"
+                        : "border-border text-ink hover:border-accent-line hover:bg-inset"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                  >
+                    <span
+                      className="flex h-11 w-11 items-center justify-center rounded-md"
+                      style={{ backgroundColor: ADD_TOOL_PREVIEW[tool] }}
+                    >
+                      <Icon className="h-4 w-4 text-ink/70" strokeWidth={1.75} />
+                    </span>
+                    {ADD_TOOL_LABEL[tool]}
+                  </button>
+                );
+              })}
+              {filtered.length === 0 && <p className="col-span-4 py-4 text-center text-xs text-muted">לא נמצאו אלמנטים</p>}
+            </div>
+
+            <p className="mt-3 text-center text-[11px] leading-relaxed text-muted">
+              גררו אלמנט אל הקנבס, או לחצו עליו ואז על מקום בקנבס
+            </p>
+          </div>
+        </>
+      )}
     </div>
   );
 }

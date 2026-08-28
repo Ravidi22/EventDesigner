@@ -28,7 +28,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Venue } from "./types";
-import { createVenue, renameVenue as renameVenueAction, fetchVenues } from "./actions";
+import { createVenue, renameVenue as renameVenueAction, deleteVenue as deleteVenueAction, fetchVenues } from "./actions";
 import { VENUE_CHANGED_EVENT, loadActiveVenueId, setActiveVenueId } from "./storage";
 
 export interface VenuesHandle {
@@ -43,6 +43,11 @@ export interface VenuesHandle {
   activeVenueId: string | null;
   add: () => Promise<string>;
   rename: (id: string, name: string) => Promise<void>;
+  /** Resolves to an error message if the venue could not be deleted (still has events on it), null
+   *  on success — the switcher shows the message rather than needing a thrown error. No local
+   *  fallback bookkeeping needed here: updating `venues` is enough, since activeVenueId below is
+   *  derived from it and re-resolves against `storedId` on its own once the deleted id drops out. */
+  remove: (id: string) => Promise<string | null>;
   reload: () => Promise<void>;
 }
 
@@ -55,6 +60,9 @@ const EMPTY: VenuesHandle = {
     throw new Error("VenuesProvider is missing");
   },
   rename: async () => {
+    throw new Error("VenuesProvider is missing");
+  },
+  remove: async () => {
     throw new Error("VenuesProvider is missing");
   },
   reload: async () => {},
@@ -133,9 +141,16 @@ export function VenuesProvider({
     setVenues(await renameVenueAction(id, name));
   }, []);
 
+  const remove = useCallback(async (id: string): Promise<string | null> => {
+    const result = await deleteVenueAction(id);
+    if (!Array.isArray(result)) return result.error;
+    setVenues(result);
+    return null;
+  }, []);
+
   const value = useMemo<VenuesHandle>(
-    () => ({ venues, ready: true, error, activeVenueId, add, rename, reload }),
-    [venues, error, activeVenueId, add, rename, reload],
+    () => ({ venues, ready: true, error, activeVenueId, add, rename, remove, reload }),
+    [venues, error, activeVenueId, add, rename, remove, reload],
   );
 
   return <VenuesContext.Provider value={value}>{children}</VenuesContext.Provider>;
