@@ -561,6 +561,39 @@ async function verifyEvents() {
   check("…and the walls saved anyway", afterRefusal.structure.nodes.length === 0, String(afterRefusal.structure.nodes.length));
   await saveVenuePlan(venueId, emptyStructure(), [zoneA, zoneB]); // as the checks below expect it
 
+  // ── the client's answer, and the load-in day ─────────────────────────────────────────────────
+  //
+  // Three columns added with the production runway. `confirmed_at` is the one that matters most to
+  // get right through the mapping layer: procurement decides what to BUY from it (lib/suppliers/
+  // actions.ts), so a value that silently failed to round-trip would produce a purchase order.
+  //
+  // `setup_date` is a `date` like `event_date`, which is exactly why it is checked here: the whole
+  // point of the note at the top of lib/events/db-mapping.ts is that a calendar day must never pass
+  // through a local Date. If this assertion ever comes back one day earlier than it went in, that
+  // is the timezone bug, caught.
+  const answered = await patchEvent(original.id, {
+    confirmedAt: 1_770_000_000_000,
+    setupDate: "2026-10-11",
+  });
+  const booked = answered.find((e) => e.id === original.id);
+  check("confirmedAt survives as epoch ms", booked?.confirmedAt === 1_770_000_000_000, String(booked?.confirmedAt));
+  check("setupDate survives the day it was given", booked?.setupDate === "2026-10-11", String(booked?.setupDate));
+  check("confirming does not invent a loss", booked?.lostAt === undefined, String(booked?.lostAt));
+
+  const lost = (await patchEvent(original.id, { lostAt: 1_780_000_000_000 })).find((e) => e.id === original.id);
+  check("lostAt survives as epoch ms", lost?.lostAt === 1_780_000_000_000, String(lost?.lostAt));
+
+  // Back to open: both stamps clear, and clearing them is how an event that fell through and came
+  // back returns to the runway rather than being re-created as a second record of one wedding.
+  const reopened = (await patchEvent(original.id, { confirmedAt: undefined, lostAt: undefined })).find(
+    (e) => e.id === original.id,
+  );
+  check(
+    "both stamps clear together",
+    reopened?.confirmedAt === undefined && reopened?.lostAt === undefined,
+    `${reopened?.confirmedAt} / ${reopened?.lostAt}`,
+  );
+
   const stamped = await patchEvent(original.id, { quoteSentAt: 1_760_000_000_000, archived: true });
   const sent = stamped.find((e) => e.id === original.id);
   check("quoteSentAt survives as epoch ms", sent?.quoteSentAt === 1_760_000_000_000, String(sent?.quoteSentAt));

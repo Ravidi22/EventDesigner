@@ -18,7 +18,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 
 | Area | State |
 | --- | --- |
-| **Product surfaces** | All twelve screens built: dashboard, meeting flow, catalog, halls, studio 2D, gallery, outputs, Gantt, present mode, client portal, settings, **suppliers & procurement** |
+| **Product surfaces** | All twelve screens built: dashboard, meeting flow, catalog, halls, studio 2D, gallery, outputs, **production runway**, present mode, client portal, settings, suppliers & procurement |
 | **Canvas** | One hand-written SVG canvas for every plan surface (ADR-8). No Konva anywhere |
 | **Backend migration** | **Finished.** Twelve domains through `lib/<domain>/actions.ts`. Nothing of the studio's is left in a browser |
 | **People and access** | Accounts, sessions, two role ladders, per-member venue grants enforced on every read and write, invitations by link |
@@ -55,7 +55,7 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 - [x] **Studio 2D** — placement on the plan, catalog rail, inspector, apply-to-all-tables, fit warnings, continuous autosave, undo/redo
 - [x] **Gallery & presentations** — curation, presentation mode, the event's liked-images folder
 - [x] **Outputs** — placement map, packing list with spares, quote with discount/VAT, print to PDF
-- [x] **Gantt** — events across zones over time
+- [x] **Production runway** (`/production`) — *replaced the Gantt.* Not "events across zones over time": every event backward-planned from its own date, with the six checkpoints that have to be true before it, and the collisions between two events close enough to want the same chuppah. See §11
 - [x] **Present mode** (`/present`) — the client-facing screen, no prices or internal data
 - [x] **Client portal** (`/client`) — a client account seeing their own event
 - [x] **Settings** — business letterhead, configurable meeting flow, account, team, venue sharing, data export
@@ -169,7 +169,8 @@ Small, real, and each one is a decision already made rather than an oversight:
 
 - [x] **"You have no access to this property" state.** `fetchVenueGeometry` now returns *why* it is empty (`VenueGeometry.access`: `none` / `granted` / `denied`) instead of the same blank plane for both, and the studio, the placement map, the packing list and the quote each say so. It still does not throw — that would take down the studio screen mid-meeting.
   - Worth recording what this turned up: the silence was not only rude, it was **mispriced**. A drape measures its metres off the wall it hangs on, and with no wall it falls back to the product's catalog width — so a 14-metre run quoted as 3 metres of fabric on a screen that looked merely empty. The notice on the quote and the packing list says exactly that
-- [ ] **Venue-guest availability has no surface.** `grantScope()` promises guests anonymous busy/free dates and the Gantt has nowhere to show them — but it is **blocked on a model decision, not on UI**: `venue_grants.grantee_org_id` is null until phase 3, and `assertPlacement` requires an event's venue to belong to the event's own studio, so two studios cannot book the same hall today. Decide how a cross-studio booking is represented first
+- [ ] **Venue-guest availability still has no surface, and deliberately did not get one on `/production`.** `grantScope()` promises guests anonymous busy/free dates, and the runway was the obvious place to hang them — it is the screen with the dates on it. It was the wrong place. Occupancy is a fact about a **property**: it is true of the hall no matter whose studio booked it, and it belongs beside the plan, on the venue/halls surface, where a guest is already allowed to stand. The runway is a fact about **one studio's own book of work** — clients, quotes, confirmations, money — of which a guest may see nothing. Drawing them on one screen would have meant a single page rendering two access levels, which is how the wrong one eventually leaks.
+  - Still **blocked on the same model decision, not on UI**: `venue_grants.grantee_org_id` is null until phase 3, and `assertPlacement` requires an event's venue to belong to the event's own studio, so two studios cannot book the same hall today. Decide how a cross-studio booking is represented first. Nothing about the runway moves that decision either way
 - [ ] **The outputs surface wants a redesign** — the quote stage renders the existing screen and was always marked provisional
 - [x] **`F-8.2` and `F-8.3` are cited in code but were missing from `docs/01`** — §5.8 now carries both: the studio's people, and venue sharing with the guest line written where the requirement can be read rather than only where it is enforced
 
@@ -196,6 +197,31 @@ Small, real, and each one is a decision already made rather than an oversight:
 
 **A new risk, R-7: the cost of keeping stock counts true.** `stock_qty` has the shape of R-1 (drawing the halls) and R-6 (curating the gallery) — a number that is only useful while someone maintains it, and a stale one produces confident wrong shortfall alerts. Mitigated by making it optional: an owned product with no count shows demand and claims no shortfall. Worth re-checking after two months of real use.
 
+### 11. The production runway · **built**, and it replaced the Gantt
+
+`/production`, one screen, one pure module: [`lib/production/runway.ts`](../lib/production/runway.ts). `/gantt` is deleted and 308-redirects here (`next.config.ts`), so a bookmark still lands.
+
+**What was wrong with the thing it replaced.** The Gantt tab had become a Kanban board with one column per meeting stage, and it asked the wrong question twice over. The meeting stages are the stages of **one sitting** — F-1.2 says so out loud ("לעיתים הכול קורה בישיבה אחת") — so an event crosses all five of them inside `/meeting` in ninety minutes, and the board's columns were a record of a conversation that had already ended. And a designer with eight events a month can name all eight from memory; they never needed a screen to tell them which stage each was on.
+
+The question that costs them money is **"what is about to go wrong, and how long do I have."** An event date is a deadline that has never once moved, so everything on the new screen is planned backward from it.
+
+**The rule that shapes the whole file: derived, never typed.** Every checkpoint is a fact the database already holds — zones chosen, a design document, an issued quote, an export. Nothing on the screen is a status anyone has to remember to set, because this codebase has now learned that lesson three times: the "mark meeting as held" switch nobody ever flipped, procurement's refusal to accept typed usage, and the stage board itself. A designer walking out of a meeting is holding a bag, not a laptop. A board they must drag is a board that is confidently wrong within a month, which is worse than an empty one.
+
+**The one fact that had to be added, because nothing could derive it:** `events.confirmed_at` — the client said yes. Until this column existed the data model held only `quote_sent_at`, which meant the app could not tell selling from producing, and **procurement was ordering stock against events nobody had booked**. `lost_at` is its pair, and is deliberately distinct from `archived`: one is an outcome, the other a filing decision.
+
+**What else is new, and small:**
+
+- **`events.setup_date`** — the load-in day, nullable, absent meaning "the day itself". An event is a **window**, not a day: the truck is at the hall the afternoon before, so two events two dates apart can still want the same chuppah and the same pair of hands. Collision detection reads the window, and it is only honest because this column exists. On the details form (F-1.3), under the event date
+- **A configurable schedule** — `studio_settings.checkpoint_offsets`, six numbers, days before the event. Settings → **לוח זמנים להפקה**. A studio that books six months out and one that books six weeks out do not share a plan, and a default that suits neither is a screen of alerts nobody believes. NULL means "never configured" and follows the app's defaults *as they change*, the same distinction the meeting flow's empty array draws
+- **`npm run check:runway`** — the date arithmetic, the lanes, the earliest-due alert, the collisions, all under plain node with the facts injected. Same shape as `check:procurement` and `check:quote`
+
+**Two decisions worth not relitigating:**
+
+- **Lanes are a filter, never columns.** `בהפקה / בהצעה / מוקדם / הסתיים` are places in the *business*, derived from the client's answer — not places in a conversation. One lane at full content width beats four at 288px, and nothing on the screen scrolls sideways
+- **A collision is named, not drawn.** This is the deliberate choice against a bar chart, and it is why the screen is not a Gantt after all: a chart makes you *spot* an overlap and then work out what it means. A band that says "שני אירועים באותו יום — ציוד וצוות משותפים" has already done the thinking
+
+**What it does NOT show, on purpose:** venue availability — see §6. And no cost, margin or forecast: the runway carries a quote total, which is the client's price, and `npm run check:costs` still owns that line.
+
 ---
 
 ## Not scheduled
@@ -219,6 +245,7 @@ npm run check:access       # the venue access policy
 npm run check:files        # key shape, path traversal, the upload allowlist
 npm run check:sigv4        # the R2 signing chain, against published crypto vectors
 npm run check:procurement  # the three procurement reductions (sum / peak / per-event)
+npm run check:runway       # the backward plan: lanes, due dates, alerts, collisions
 npm run check:costs        # no client-facing surface reads the studio's cost
 npm run db:verify          # full roundtrip against a real Postgres
 ```

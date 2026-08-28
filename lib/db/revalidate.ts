@@ -8,7 +8,8 @@
 // components (app/(app)/*/page.tsx), so what a screen shows is now decided when its RSC payload is
 // built rather than by a fetch on mount. And `staleTimes.dynamic` in next.config.ts lets the router
 // reuse a segment it already has for 30 seconds. Between them, a meeting booked on the dashboard and
-// then looked for on the Gantt could be answered out of a payload built before the booking.
+// then looked for on the production runway could be answered out of a payload built before the
+// booking.
 //
 // So every write says what it invalidated. The screen the write happened on was already correct —
 // the actions return the fresh list and the client adopts it — this is for the OTHER screens.
@@ -46,10 +47,16 @@ function revalidate(path: string, type?: "layout" | "page"): void {
   }
 }
 
-/** The two screens that list events: the dashboard's calendar and the Gantt's grid. */
+/** The two screens that list events: the dashboard's calendar and the production runway.
+ *
+ *  ⚠ /production is the more sensitive of the two, in a way the Gantt's stage board never was.
+ *  The runway's rows are DERIVED — a zone chosen, a quote issued, a client's confirmation — so a
+ *  write landing anywhere in the app can turn one of its checkpoints from late to done. A stale
+ *  payload there does not show an old label; it shows an alert about work that is already finished,
+ *  which is exactly how a screen of alerts stops being read. */
 export function revalidateEvents(): void {
   revalidate("/dashboard");
-  revalidate("/gantt");
+  revalidate("/production");
 }
 
 /** The diary lives on the dashboard alone. */
@@ -71,6 +78,19 @@ export function revalidateGallery(): void {
 /** The settings screen. */
 export function revalidateSettings(): void {
   revalidate("/settings");
+}
+
+/**
+ * The production runway alone — for a write that changes how it is COMPUTED rather than what is on
+ * it.
+ *
+ * The checkpoint schedule is the only such write today (lib/settings/actions.ts): every event keeps
+ * exactly the facts it had, and every due date underneath them moves. Nothing about the events
+ * changed, so revalidateEvents() would be the wrong verb and would drag the dashboard along for a
+ * screen it does not render.
+ */
+export function revalidateProduction(): void {
+  revalidate("/production");
 }
 
 /**

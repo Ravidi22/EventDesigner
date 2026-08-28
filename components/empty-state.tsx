@@ -11,9 +11,9 @@ import type { ReactNode } from "react";
 //   NoResults  — there IS something here, the filter is just hiding it. Nothing to teach; the
 //   person needs the way back out. Lighter: bare icon, smaller title, a "clear" affordance.
 //
-// Both were hand-copied into the catalog, the gallery folder and the gantt with slightly different
-// paddings and icon sizes each time. One file, so a fourth screen inherits the shape instead of
-// re-deriving it.
+// Both were hand-copied into the catalog, the gallery folder and the events screen with slightly
+// different paddings and icon sizes each time. One file, so a fourth screen inherits the shape
+// instead of re-deriving it.
 
 /** The same four elements at two scales. `page` owns a whole screen on the light plane; `card` is
  *  the compact, on-dark sibling that fits inside the dashboard's one brand-toned card, where

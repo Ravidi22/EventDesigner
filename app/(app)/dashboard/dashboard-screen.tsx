@@ -18,11 +18,13 @@ import { EventDetailDrawer } from "./event-detail-drawer";
 import { AppointmentDialog } from "./appointment-dialog";
 import { toISODate } from "./dashboard-view-utils";
 
-// F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved to the Gantt tab.
+// F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved off this screen — first
+// to the Gantt tab, and now to the production runway (/production), which plans backward from each
+// event's date instead of listing them.
 // This screen is "my week" at a glance — Today's Focus + Statistics up top (each half-width),
 // the week/month calendar below. There's no venue picker on this page anymore — every section
 // scopes to whichever venue is active in the sidebar (useActiveVenueScope), the one shared
-// source of truth also used by /gantt, so switching venues in the sidebar updates everything.
+// source of truth also used by /production, so switching venues in the sidebar updates everything.
 //
 // It is also the only screen in the app that WRITES a meeting. Everything else here navigates:
 // clicking an event opens its drawer or jumps into the meeting flow. Booking a meeting happens

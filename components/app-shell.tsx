@@ -5,12 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
-  CalendarHeart,
+  CalendarClock,
   Building2,
   LayoutGrid,
   Images,
   Truck,
-  ChevronsLeft,
   Bell,
   LogOut,
   type LucideIcon,
@@ -23,6 +22,7 @@ import { VenueSwitcher } from "@/components/venue-switcher";
 import { IconButton } from "@/components/icon-button";
 import { HeaderSearchProvider } from "@/components/header-search-context";
 import { EventDialog } from "@/components/event-dialog";
+import { SidePanel } from "@/components/side-panel";
 
 interface NavItem {
   href: string;
@@ -33,7 +33,10 @@ interface NavItem {
 
 const GENERAL: NavItem[] = [
   { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard },
-  { href: "/gantt", label: "אירועים", icon: CalendarHeart },
+  // הפקה, not אירועים: the screen behind it is a backward-planned deadline list, not a filing
+  // cabinet of events — and CalendarClock rather than CalendarHeart for the same reason. A heart on
+  // a wedding app reads as "the nice part"; what this tab actually says is "how long do I have".
+  { href: "/production", label: "הפקה", icon: CalendarClock },
   { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
   { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
@@ -42,7 +45,7 @@ const GENERAL: NavItem[] = [
 
 const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/dashboard"), title: "לוח בקרה" },
-  { test: (p) => p.startsWith("/gantt"), title: "אירועים" },
+  { test: (p) => p.startsWith("/production"), title: "הפקה" },
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
@@ -91,7 +94,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const isCatalog = pathname.startsWith("/catalog");
   // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
   // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
-  const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/gantt");
+  const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/production");
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
   // local part of their own email is the thing they will recognise.
@@ -112,28 +115,19 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
     <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3">
       {/* Sidebar — a floating card on the bg plane: subtle rounded corners, a soft lift, ink
           text, one muted accent. Internal panels (nav, profile, venue switcher) use a smaller
-          radius than this outer card so the nesting reads as proportional, not arbitrary. */}
-      <aside
-        className={
-          "group/sidebar relative flex shrink-0 flex-col rounded-md bg-surface py-6 shadow-floating transition-[width] duration-200 ease-fluid " +
-          (collapsed ? "w-[96px] px-2" : "w-[258px] px-4")
-        }
+          radius than this outer card so the nesting reads as proportional, not arbitrary.
+          The shell, its collapse puck and the width transition are SidePanel's
+          (components/side-panel.tsx) — the venue plan's zone panel is built from the same one, so
+          the two collapse identically instead of by two hand-rolled copies that drift apart. No
+          `rail` here: these rows collapse to their own icons rather than being stood in for. */}
+      <SidePanel
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((c) => !c)}
+        label="סרגל הצד"
+        className="shrink-0 rounded-md bg-surface py-6 shadow-floating"
+        expandedClassName="w-[258px] px-4"
+        collapsedClassName="w-[96px] px-2"
       >
-        {/* Collapse toggle — a "liquid glass" puck straddling the sidebar's trailing edge,
-            vertically centered so it never sits over the venue switcher or nav rows. Subtly
-            visible at rest (not opacity-0) so it's always there to find and click — a hover-only
-            reveal meant clicks could miss it whenever the hover state wasn't active at that exact
-            moment (no persistent hover on touch/trackpad), which read as "the button doesn't work". */}
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          aria-label={collapsed ? "הרחב סרגל צד" : "כווץ סרגל צד"}
-          style={{ insetInlineEnd: "-14px" }}
-          className="absolute top-1/2 z-30 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-white/60 bg-white/50 text-ink-soft opacity-40 shadow-floating backdrop-blur-md transition-all duration-150 hover:opacity-100 hover:bg-white/80 hover:text-accent focus-visible:opacity-100 group-hover/sidebar:opacity-100"
-        >
-          <ChevronsLeft className={"h-4 w-4 transition-transform duration-200 " + (collapsed ? "rotate-180" : "")} strokeWidth={2} />
-        </button>
-
         <Link
           href="/dashboard"
           aria-label="Eve — לוח בקרה"
@@ -225,7 +219,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
             <LogOut className="h-[18px] w-[18px]" strokeWidth={1.4} />
           </button>
         </div>
-      </aside>
+      </SidePanel>
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col gap-3">

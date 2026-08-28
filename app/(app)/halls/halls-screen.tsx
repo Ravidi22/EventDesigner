@@ -5,7 +5,6 @@ import {
   Box,
   Building2,
   Check,
-  ChevronsLeft,
   ChevronUp,
   DoorOpen,
   GlassWater,
@@ -95,6 +94,7 @@ import {
   type SelectionBox,
 } from "@/lib/venues/selection";
 import { PlanCanvas, type CanvasFocus } from "@/components/plan-canvas";
+import { SidePanel } from "@/components/side-panel";
 import { useHistory } from "@/lib/studio/use-history";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import type { Point } from "@/lib/studio/hall";
@@ -814,7 +814,7 @@ export function HallsScreen() {
   return (
     <div className="flex h-full flex-col p-4">
       {/* A real two-column layout: the zone-definition list is a dedicated sidebar next to the
-          canvas, not a layer floating on top of it (see the aside at the end). No header row above
+          canvas, not a layer floating on top of it (see the SidePanel at the end). No header row above
           either of them any more — "הגדרת אזורים" isn't a mode you switch into any more (see
           onSelectModeCanvasClick above: naming an enclosed room now works straight from select
           mode) and its "סימון שטח פתוח" companion is fully covered by the sidebar's own "+ שרטוט
@@ -1198,55 +1198,46 @@ export function HallsScreen() {
         </section>
 
         {/* The zone-definition list — a dedicated sidebar column next to the canvas, not a layer
-            floating on top of it (that was tried and explicitly walked back). bg-bg on the aside
+            floating on top of it (that was tried and explicitly walked back). bg-bg on the panel
             itself is the same neutral plane colour every card elsewhere in the app sits on, giving
             the white card inside it a visible border of separation from the canvas beside it —
             "sidebar container (own background) → card → canvas next to it", not glued onto it.
-            Full height now (lg:h-full, matching the canvas's own lg:h-full next to it), not sized
-            to the card's own content — a short zone list just leaves the panel's own background
+            Full height (lg:h-full, matching the canvas's own lg:h-full next to it), not sized to
+            the card's own content — a short zone list just leaves the panel's own background
             showing below the card rather than the panel itself shrinking to hug it, which is what
             actually reads as "a sidebar", as opposed to "a card that happens to have a border". A
-            list too long for that fixed height scrolls inside the panel (overflow-y-auto) instead
-            of growing the page, now that the panel has a real height to scroll within. */}
-        <aside
-          className={
-            "group/panel relative flex flex-col overflow-y-auto rounded-lg bg-bg transition-[width] duration-200 ease-fluid lg:col-start-2 lg:h-full " +
-            (panelCollapsed ? "gap-0 p-0 lg:w-20" : "gap-3 p-4 lg:w-[300px]")
-          }
-        >
-          {/* Collapse toggle — the same "liquid glass" puck the main sidebar uses
-              (components/app-shell.tsx), straddling this panel's own edge so the affordance reads
-              as the identical control rather than a bespoke one-off. Sits at the panel's
-              inline-start (the edge bordering the canvas) instead of inline-end, since this panel
-              is the one being tucked away, not the thing everything else collapses toward. Hidden
-              below lg: the two-column layout it collapses doesn't exist at that width, so there is
-              nothing here to toggle. */}
-          {/* True 50% of this panel's own box does NOT line up with the main sidebar's puck
-              (components/app-shell.tsx) — that one sits in a box with equal chrome above and below
-              (p-3 both sides), while this panel sits below the shared header (p-3 + h-16 header +
-              gap-3 ≈ 104px of chrome above it) but only p-3 + this page's own p-4 (≈28px) below it.
-              50% would land 38px lower than the sidebar's puck; shifting up by that half-difference
-              puts both on the same screen line. */}
-          <button
-            type="button"
-            onClick={() => setPanelCollapsed((c) => !c)}
-            aria-label={panelCollapsed ? "הרחבת לוח האזורים" : "כיווץ לוח האזורים"}
-            style={{ insetInlineStart: "-14px" }}
-            className="absolute top-[calc(50%-38px)] z-30 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-white/60 bg-white/50 text-ink-soft opacity-40 shadow-floating backdrop-blur-md transition-all duration-150 hover:opacity-100 hover:bg-white/80 hover:text-accent focus-visible:opacity-100 group-hover/panel:opacity-100 lg:flex"
-          >
-            <ChevronsLeft
-              className={"h-4 w-4 transition-transform duration-200 " + (panelCollapsed ? "" : "rotate-180")}
-              strokeWidth={2}
-            />
-          </button>
-
-          {/* Collapsed rail — two icon chips standing in for the two cards below, so the panel
-              still reads as "background plan" + "zones (n)" even shrunk to a strip, the same way
-              the main sidebar keeps its nav icons rather than going blank when collapsed. Either
-              chip re-expands the panel; lg-only, matching the toggle above, so a narrow viewport
-              always gets the full stacked layout regardless of this state. */}
-          {panelCollapsed && (
-            <div className="hidden flex-1 flex-col items-center gap-2.5 rounded-md border border-border bg-inset p-2 lg:flex">
+            list too long for that fixed height scrolls inside the panel (`scrolls`) instead of
+            growing the page.
+            The shell, the collapse puck and the width transition are SidePanel's — the same
+            component the app's own navigation is built from (components/side-panel.tsx). This
+            screen supplies only what goes inside it and what the collapsed strip says. */}
+        <SidePanel
+          collapsed={panelCollapsed}
+          onToggle={() => setPanelCollapsed((c) => !c)}
+          label="לוח האזורים"
+          // The puck straddles the panel's inline-start — the edge bordering the canvas — rather
+          // than its inline-end, since this panel is the one being tucked away, not the thing
+          // everything else collapses toward.
+          edge="start"
+          desktopOnly
+          scrolls
+          // True 50% of this panel's own box does NOT line up with the main sidebar's puck
+          // (components/app-shell.tsx) — that one sits in a box with equal chrome above and below
+          // (p-3 both sides), while this panel sits below the shared header (p-3 + h-16 header +
+          // gap-3 ≈ 104px of chrome above it) but only p-3 + this page's own p-4 (≈28px) below it.
+          // 50% would land 38px lower than the sidebar's puck; shifting up by that half-difference
+          // puts both on the same screen line.
+          toggleClassName="top-[calc(50%-38px)]"
+          // The padding is unconditional: below lg the toggle is gone, so a collapsed state entered
+          // on a wide viewport must not survive into a layout with no way to undo it.
+          className="rounded-md bg-bg p-4 lg:col-start-2 lg:h-full"
+          expandedClassName="lg:w-[300px]"
+          collapsedClassName="lg:w-20 lg:p-0"
+          // Two icon chips standing in for the two cards below, so the panel still reads as
+          // "תוכנית רקע" + "אזורים (n)" even shrunk to a strip, the same way the main
+          // sidebar keeps its nav icons rather than going blank. Either chip re-expands the panel.
+          rail={
+            <div className="flex flex-1 flex-col items-center gap-2.5 rounded-md border border-border bg-inset p-2">
               <button
                 type="button"
                 onClick={() => setPanelCollapsed(false)}
@@ -1267,14 +1258,9 @@ export function HallsScreen() {
                 </span>
               </button>
             </div>
-          )}
-
-          {/* The full panel content — always rendered so mobile (below lg, where the collapse
-              toggle is hidden and the columns stack) never loses it, and only actually hidden at lg
-              once panelCollapsed says so. Same rounded-md/border-border/bg-inset backing as the
-              collapsed rail above, so expanding the panel doesn't drop the gray card it was just
-              sitting on. */}
-          <div className={"flex flex-col gap-3 rounded-md border border-border bg-inset p-2 " + (panelCollapsed ? "lg:hidden" : "")}>
+          }
+        >
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-inset p-2">
           {/* Tracing panel (F-3.5 + F-3.4) — its own card, sibling to the zone-definition card
               below: a background plan you place/calibrate isn't part of "defining zones", so it
               keeps that card focused on just that instead of growing a second concern into it. */}
@@ -1582,7 +1568,7 @@ export function HallsScreen() {
                 )}
           </div>
           </div>
-        </aside>
+        </SidePanel>
       </div>
     </div>
   );

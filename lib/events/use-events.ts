@@ -1,6 +1,6 @@
 "use client";
 // The studio's events, for the two screens that show the whole list (the Dashboard's calendar and
-// the Gantt's grid).
+// the production runway).
 //
 // No client-side cache, same as venues and for the same reason: every read here lands in state
 // before anything renders. Only the catalog needs one, because the canvas resolves a placement's

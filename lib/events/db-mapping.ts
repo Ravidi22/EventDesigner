@@ -46,6 +46,11 @@ export function toEvent(row: EventRow, zoneIds: string[]): EventSummary {
     // app carries instants as epoch milliseconds, because it sorts and compares them and never
     // formats them in another timezone.
     quoteSentAt: row.quoteSentAt?.getTime(),
+    confirmedAt: row.confirmedAt?.getTime(),
+    lostAt: row.lostAt?.getTime(),
+    // `setup_date` is a `date` column like `event_date`, so the same rule holds: it arrives as a
+    // plain "yyyy-mm-dd" string and stays one. Absent means "loads in on the day".
+    setupDate: orUndefined(row.setupDate),
     // The column is NOT NULL DEFAULT false while the type says `archived?: boolean`. Same collapse
     // as the catalog's: absent and false are one value spelled twice, so folding it back keeps the
     // round-trip lossless.
@@ -72,6 +77,11 @@ export function toEventRow(e: EventSummary, organizationId: string): EventInsert
     guests: e.guests,
     step: e.step,
     quoteSentAt: e.quoteSentAt ? new Date(e.quoteSentAt) : null,
+    confirmedAt: e.confirmedAt ? new Date(e.confirmedAt) : null,
+    lostAt: e.lostAt ? new Date(e.lostAt) : null,
+    // `|| null` for the same reason eventDate uses it: "" is the app's "not set" and Postgres will
+    // not accept it as a date.
+    setupDate: e.setupDate || null,
     archived: e.archived ?? false,
     createdAt: new Date(e.createdAt),
   };

@@ -15,7 +15,7 @@
 // window, which would mean shipping a month of drawings to the client to add up numbers. The pure
 // reduction still lives in procurement.ts and still runs under node — this file only assembles its
 // inputs.
-import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, currentOrg } from "@/lib/db/org";
 import {
@@ -381,12 +381,16 @@ export async function fetchProcurement(from: string, to: string): Promise<Procur
       clientName: events.clientName,
       eventDate: events.eventDate,
       venueId: events.venueId,
+      confirmedAt: events.confirmedAt,
     })
     .from(events)
     .where(
       and(
         eq(events.organizationId, organizationId),
         eq(events.archived, false),
+        // An event the client turned down is not potential spend — it is a closed file, and
+        // totalling it as exposure would overstate the window it sits in forever.
+        isNull(events.lostAt),
         gte(events.eventDate, from),
         lte(events.eventDate, to),
       ),
@@ -422,11 +426,18 @@ export async function fetchProcurement(from: string, to: string): Promise<Procur
     )
     .orderBy(designDocuments.eventId, desc(designDocuments.version));
 
-  const [quoteRows, spareRows] = await Promise.all([
-    database
-      .select({ eventId: issuedQuotes.eventId })
-      .from(issuedQuotes)
-      .where(and(eq(issuedQuotes.organizationId, organizationId), inArray(issuedQuotes.eventId, eventIds))),
+  // ⚠ THIS USED TO READ issued_quotes, AND THAT WAS A REAL BUG, not a simplification.
+  //
+  // `committed` decides what the studio is told to BUY. It was set from "an issued_quotes row
+  // exists" — i.e. from a price having left the studio — which is not the same fact as the client
+  // agreeing to it, and never was. The comment at the top of procurement.ts argues the point
+  // exactly right ("a first meeting is not a reason to buy flowers") and then drew the line one
+  // step too early: a sent quote is not a reason to buy flowers either. Until events.confirmed_at
+  // existed there was nothing better to read, so this ordered stock against work nobody had booked.
+  //
+  // It reads the confirmation now. An event with a quote out but no answer stays in `potential`,
+  // where the screen renders it greyed and totals it as exposure — which is what it is.
+  const [spareRows] = await Promise.all([
     // packing_spares carries no organizationId — it is a leaf of one event, and the join is what
     // scopes it. Same reason as fetchSpares in lib/outputs/actions.ts.
     database
@@ -459,7 +470,7 @@ export async function fetchProcurement(from: string, to: string): Promise<Procur
 
   const structureByVenue = new Map(structureRows.map((r) => [r.venueId, r.structure]));
   const docByEvent = new Map(docRows.map((r) => [r.eventId, r.content as DesignDocumentContent]));
-  const committedEvents = new Set(quoteRows.map((r) => r.eventId));
+  const committedEvents = new Set(eventRows.filter((e) => e.confirmedAt).map((e) => e.id));
   const sparesByEvent = new Map<string, { variantId: string; quantity: number }[]>();
   for (const s of spareRows) {
     const list = sparesByEvent.get(s.eventId) ?? [];
