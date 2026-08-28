@@ -48,7 +48,27 @@ interface R2Config {
   secretAccessKey: string;
   bucket: string;
   publicBase: string;
+  /** The bucket's data-location jurisdiction, or null for the default one. See JURISDICTIONS. */
+  jurisdiction: Jurisdiction | null;
 }
+
+/**
+ * R2's jurisdictions — buckets pinned to a legal region, each on its OWN S3 hostname.
+ *
+ * ⚠ THE ONE THAT COST US A DAY. A bucket created under a jurisdiction is not reachable on the
+ * default `<account>.r2.cloudflarestorage.com` at all, and R2 does not say so: it answers a
+ * correctly-signed request to the wrong host with a bare `403 AccessDenied`, which is byte for byte
+ * what it returns for a revoked token, a mismatched secret and a bucket you have no rights to. So
+ * the symptom points at the credentials, and the credentials are fine — two fresh tokens were minted
+ * chasing this before anyone tried the other hostname, where the very first request answered
+ * `404 NoSuchKey`, i.e. "signed correctly, authorised, that object simply is not here".
+ *
+ * The tell, if it ever happens again: a token that is refused for EVERY operation including reads is
+ * not a permissions problem, because no Cloudflare permission preset denies reads to a token that
+ * has any access at all. It is the wrong endpoint.
+ */
+const JURISDICTIONS = ["eu", "fedramp"] as const;
+type Jurisdiction = (typeof JURISDICTIONS)[number];
 
 /**
  * R2's configuration, or null when it has not been set up.
@@ -57,6 +77,12 @@ interface R2Config {
  * signed and land somewhere, and reads would point at a domain that does not serve them, so the
  * gallery fills with broken images that each cost a storage bill. Missing one variable falls back
  * to local, where at least everything is consistently local.
+ *
+ * R2_JURISDICTION is the SIXTH and it is optional, because most buckets have none — but a misspelt
+ * one throws rather than falling back, and that asymmetry is deliberate: an absent variable means
+ * "default jurisdiction", which is a real answer, while `R2_JURISDICTION=europe` means somebody
+ * meant to reach a bucket and named a host that does not exist. Falling back to the disk driver
+ * there would hide the mistake behind uploads that quietly work.
  */
 function r2Config(): R2Config | null {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -65,13 +91,27 @@ function r2Config(): R2Config | null {
   const bucket = process.env.R2_BUCKET;
   const publicBase = process.env.NEXT_PUBLIC_R2_PUBLIC_URL;
   if (!accountId || !accessKeyId || !secretAccessKey || !bucket || !publicBase) return null;
-  return { accountId, accessKeyId, secretAccessKey, bucket, publicBase };
+
+  const raw = process.env.R2_JURISDICTION?.trim().toLowerCase();
+  if (raw && !(JURISDICTIONS as readonly string[]).includes(raw)) {
+    throw new Error(`R2_JURISDICTION must be one of ${JURISDICTIONS.join(", ")} (or unset) — got "${raw}"`);
+  }
+  const jurisdiction = (raw || null) as Jurisdiction | null;
+
+  return { accountId, accessKeyId, secretAccessKey, bucket, publicBase, jurisdiction };
+}
+
+/** The S3 host for one account, in one jurisdiction. The subdomain is the whole difference between
+ *  a bucket that answers and a bucket that returns AccessDenied to everything — see JURISDICTIONS. */
+function r2Host(config: R2Config): string {
+  const region = config.jurisdiction ? `${config.jurisdiction}.` : "";
+  return `${config.accountId}.${region}r2.cloudflarestorage.com`;
 }
 
 function r2Driver(config: R2Config): FileDriver {
   // Path-style against the account endpoint. R2 supports it, and it avoids the DNS and TLS
   // complications of virtual-host style for a bucket name this app never shows anyone.
-  const endpoint = `https://${config.accountId}.r2.cloudflarestorage.com/${config.bucket}`;
+  const endpoint = `https://${r2Host(config)}/${config.bucket}`;
   const base = config.publicBase.replace(/\/$/, "");
 
   return {

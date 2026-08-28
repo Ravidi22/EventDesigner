@@ -9,7 +9,6 @@ import type { Appointment } from "@/lib/appointments/types";
 import { useAppointments } from "@/lib/appointments/use-appointments";
 import type { BusyBlock } from "@/lib/google/types";
 import { useBusy } from "@/lib/google/use-busy";
-import { venueSwatchClass } from "@/lib/venues/storage";
 import { useVenues } from "@/lib/venues/use-venues";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { CalendarCard } from "./calendar-card";
@@ -91,17 +90,15 @@ export function DashboardScreen({
     [appointments, activeVenueId],
   );
 
-  // Calendar clicks open the drawer for a quick look; Today's Focus keeps jumping straight
-  // into the meeting flow (its own, separately-scoped interaction — unchanged here).
+  // The drawer's "מעבר לסקיצה", and now the only way into the meeting flow from this screen. Today's
+  // Focus used to call this on a plain click, which meant one card on the dashboard navigated the
+  // whole screen away while the card beside it opened a panel. EVERY event click here opens the
+  // drawer instead — the quick look a day-of glance actually wants (the plan, the phone, the event's
+  // own diary) — and the whole-screen jump is a deliberate second click rather than a stray first.
   const openInMeeting = (e: EventSummary) => {
     setActiveEventId(e.id);
     router.push("/meeting");
   };
-
-  // Color by zone, not venue — every visible event already belongs to the one active venue, so a
-  // venue-level color would be uniform and pointless; the zone it occupies is what still varies.
-  // Multi-zone events key off the first, the designer's own primary.
-  const getVenueColor = (e: EventSummary) => venueSwatchClass(e.zoneIds[0]);
 
   // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
   // to it), so there's one venue name to resolve, not one per event.
@@ -146,8 +143,7 @@ export function DashboardScreen({
           events={visibleEvents}
           appointments={visibleAppointments}
           busy={busy.byDate.get(toISODate(new Date())) ?? []}
-          venueColor={getVenueColor}
-          onOpenEvent={openInMeeting}
+          onOpenEvent={setSelectedEvent}
           onOpenAppointment={editAppointment}
           onCreateAppointment={bookToday}
         />

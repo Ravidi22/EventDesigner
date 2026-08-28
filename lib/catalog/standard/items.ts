@@ -23,7 +23,7 @@
 // The list is data. A new department is a new array below and one more run of the install.
 import { CATEGORY_BY_ID } from "../categories";
 import type { MapAppearance, Product } from "../types";
-import { resolveFootprint, footprintBounds } from "../../studio/footprint";
+import { resolveFootprint, resolveContent, footprintBounds } from "../../studio/footprint";
 import { isMain } from "../../self-check";
 
 export interface StandardItem {
@@ -67,7 +67,16 @@ function table(
       categoryFields: { seats },
       styleTags: [],
       visibility: "public",
-      ...(appearance ? { appearance } : {}),
+      // The tables draw EMPTY — the footprint, and nothing written inside it. `content: "none"` is
+      // what says so: left absent it would default to "name", and every table in the room would
+      // carry its own size as a label, which on a true-scale plan is one word repeated forty times
+      // to say what the shape is already saying. The designer who wants the label back sets it on
+      // their own copy, in the drawer.
+      //
+      // The SHAPE is still derived from the dimensions — the rule here is resolveFootprint's own
+      // (a diameter means a circle, anything else a rectangle), written out only because a
+      // MapAppearance cannot state a content without also stating a shape.
+      appearance: appearance ?? { shape: dimensions.diameterMm ? "circle" : "rect", content: "none" },
     },
   };
 }
@@ -85,7 +94,7 @@ const HALF_ROUND_R = 600;
 const K = Math.round(0.5523 * HALF_ROUND_R);
 const HALF_ROUND: MapAppearance = {
   shape: "custom",
-  content: "name",
+  content: "none",
   outline: [
     { x: -HALF_ROUND_R, y: 0 }, // left end of the flat edge
     { x: HALF_ROUND_R, y: 0 }, // right end of the flat edge
@@ -145,11 +154,16 @@ if (isMain(import.meta.url)) {
     check(typeof seats === "number" && seats > 0, `${item.key}: has a standard seat count`);
   }
 
+  check(
+    STANDARD_ITEMS.every((item) => resolveContent(standardProduct(item, "x")).mode === "none"),
+    "base items draw empty — the footprint, with nothing written inside it",
+  );
+
   // The shape the plan derives, and the one it would get wrong without an outline.
   const round = standardProduct(STANDARD_TABLES[0], "x");
   check(
     JSON.stringify(resolveFootprint(round)) === JSON.stringify({ kind: "circle", diameterMm: 1800 }),
-    "עגול 180 derives a circle from its diameter — no appearance needed",
+    "עגול 180 is a circle of its own diameter — the appearance states the shape, never the size",
   );
   const half = standardProduct(STANDARD_TABLES.find((t) => t.key === "table-half-round-120")!, "x");
   const halfFootprint = resolveFootprint(half);

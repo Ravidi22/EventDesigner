@@ -13,6 +13,7 @@
 // ⚠ SERVER ONLY. It reads secrets. None of these may ever become NEXT_PUBLIC_ — the client secret
 // and the token key are the two values that make the stored refresh tokens worth stealing.
 import { isMain } from "@/lib/self-check";
+import { redirectUriBlocks, type RedirectVerdict } from "./types";
 
 export interface GoogleConfig {
   clientId: string;
@@ -102,6 +103,72 @@ export function requireGoogleConfig(): GoogleConfig {
   return config;
 }
 
+// ── Does the configured redirect URI match the deployment it is running on? ─────────────────────
+
+/**
+ * Where this deployment actually answers, according to the PLATFORM — never according to the request.
+ *
+ * ⚠ THE DISTINCTION THAT MAKES THIS SAFE, and it is the same one `GoogleConfig.redirectUri` is
+ * documented against. Building a redirect URI out of the incoming `Host` header would be a real
+ * hole: Host is attacker-controlled, so a forged request would mint an authorization URL that
+ * returns the code somewhere else. These variables are different in kind — Vercel injects them into
+ * the runtime, so they describe where the deployment lives without asking the caller. That makes
+ * them safe to CHECK AGAINST, and checking is all they are used for: the `redirect_uri` sent to
+ * Google is still the configured one, verbatim, exactly as before.
+ */
+function deploymentHost(): { host: string; env: string } | null {
+  // Unset off-platform. Local `next dev` therefore returns null and every verdict below is "ok",
+  // which is right: on a developer's machine the configured URI is the only thing that knows where
+  // the app is answering.
+  if (!process.env.VERCEL) return null;
+  const env = process.env.VERCEL_ENV ?? "production";
+  // Prefers a custom domain when the project has one; falls back to the deployment URL.
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+  return host ? { host, env } : null;
+}
+
+/** True for the hostnames that only ever mean "this same machine". */
+function isLoopback(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
+/**
+ * The verdict on `GOOGLE_REDIRECT_URI` for the deployment currently running.
+ *
+ * WHY THIS EXISTS. The redirect URI is the one piece of Google's configuration that is correct in
+ * development and wrong in production by default, and it fails at the worst moment available: the
+ * designer clicks חבר, reads the consent screen, presses אישור — and Google then redirects their
+ * browser to `http://localhost:3000`, which on their machine is either nothing at all or their own
+ * dev server holding a session that did not start this flow. Consent has been granted, an
+ * authorization code has been handed to whatever is listening on their loopback, and the app has
+ * nothing to show for it. Every part of that is invisible from the server, so nothing here would
+ * ever record that it happened.
+ *
+ * So the check happens BEFORE the browser leaves for Google, and it is the reason `startGoogleConnect`
+ * can refuse.
+ */
+export function checkRedirectUri(config: GoogleConfig): RedirectVerdict {
+  const deployment = deploymentHost();
+  if (!deployment) return { state: "ok" };
+
+  let configured: URL;
+  try {
+    configured = new URL(config.redirectUri);
+  } catch {
+    // An unparseable URI cannot match anything and cannot be sent to Google either. Reported as the
+    // blocking kind, because that is what it is.
+    return { state: "local-in-production", configured: config.redirectUri, deployment: deployment.host };
+  }
+
+  const found = { configured: configured.origin, deployment: deployment.host };
+
+  if (isLoopback(configured.hostname)) return { state: "local-in-production", ...found };
+  if (deployment.env === "preview") return { state: "preview", ...found };
+  if (configured.host !== deployment.host) return { state: "host-differs", ...found };
+  return { state: "ok" };
+}
+
+
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
@@ -165,6 +232,60 @@ if (isMain(import.meta.url)) {
     !(GOOGLE_SCOPES as readonly string[]).includes("https://www.googleapis.com/auth/calendar"),
     "the full calendar scope is NOT requested",
   );
+
+
+  // ── checkRedirectUri ─────────────────────────────────────────────────────────────────────────
+  const at = (redirectUri: string): GoogleConfig => ({
+    clientId: "id",
+    clientSecret: "secret",
+    redirectUri,
+    tokenKey: Buffer.alloc(KEY_BYTES, 7),
+  });
+  const LOCAL = "http://localhost:3000/api/google/callback";
+  const LIVE = "https://eve.example/api/google/callback";
+
+  const onPlatform = (vars: Record<string, string | undefined>) =>
+    set({ VERCEL: "1", VERCEL_ENV: "production", VERCEL_PROJECT_PRODUCTION_URL: "eve.example", VERCEL_URL: undefined, ...vars });
+
+  set({ VERCEL: undefined, VERCEL_ENV: undefined, VERCEL_PROJECT_PRODUCTION_URL: undefined, VERCEL_URL: undefined });
+  assert(checkRedirectUri(at(LOCAL)).state === "ok", "off-platform, localhost is the correct answer and not a finding");
+
+  onPlatform({});
+  assert(checkRedirectUri(at(LIVE)).state === "ok", "the production domain matches itself");
+
+  // THE BUG THIS WAS BUILT FOR: the dev value shipped to production.
+  const shipped = checkRedirectUri(at(LOCAL));
+  assert(shipped.state === "local-in-production", "a loopback URI on a hosted deployment is caught");
+  assert(redirectUriBlocks(shipped), "and it blocks — consent must not be asked for at all");
+  assert(
+    shipped.state === "local-in-production" && shipped.deployment === "eve.example",
+    "the verdict names where the deployment actually is, so the message can be acted on",
+  );
+
+  assert(checkRedirectUri(at("127.0.0.1:3000/cb")).state === "local-in-production", "an unparseable URI blocks too");
+  assert(checkRedirectUri(at("http://127.0.0.1:3000/cb")).state === "local-in-production", "127.0.0.1 is loopback");
+
+  onPlatform({ VERCEL_ENV: "preview", VERCEL_PROJECT_PRODUCTION_URL: undefined, VERCEL_URL: "eve-git-x-y.vercel.app" });
+  const preview = checkRedirectUri(at(LIVE));
+  assert(preview.state === "preview", "a preview deployment is its own answer, not a mismatch");
+  assert(redirectUriBlocks(preview), "and it blocks: a per-deployment hostname can never be a registered URI");
+
+  // A second custom domain is not a misconfiguration — it is reported and NOT enforced.
+  onPlatform({ VERCEL_PROJECT_PRODUCTION_URL: "www.eve.example" });
+  const differs = checkRedirectUri(at(LIVE));
+  assert(differs.state === "host-differs", "a different host is noticed");
+  assert(!redirectUriBlocks(differs), "but never blocks — a project may serve several domains");
+
+  // The scheme is part of the match, but only the host decides: an https deployment configured with
+  // an http URI of the same host is a real problem Google itself will refuse, and it must not read
+  // as "ok" merely because the hostnames agree.
+  onPlatform({ VERCEL_PROJECT_PRODUCTION_URL: "eve.example" });
+  assert(
+    checkRedirectUri(at("https://eve.example:8443/api/google/callback")).state === "host-differs",
+    "a port that the deployment does not answer on is a difference, because host includes it",
+  );
+
+  set({ VERCEL: undefined, VERCEL_ENV: undefined, VERCEL_PROJECT_PRODUCTION_URL: undefined, VERCEL_URL: undefined });
 
   process.env = saved;
   console.log("google config self-check passed");

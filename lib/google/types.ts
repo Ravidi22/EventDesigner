@@ -34,6 +34,35 @@ export interface GoogleConnection {
   lastError?: string;
 }
 
+/**
+ * Whether `GOOGLE_REDIRECT_URI` can work from the deployment that is running.
+ *
+ * Lives here rather than beside the check itself (lib/google/config.ts, which reads the client
+ * secret and is server-only) because the settings screen is a client component and has to render
+ * this. The verdict carries no secret — two hostnames and a name for what is wrong with them.
+ */
+export type RedirectVerdict =
+  /** The configured URI can work from here. Also the answer during local development, where the
+   *  developer owns their own URL and no platform variable can second-guess it. */
+  | { state: "ok" }
+  /** A loopback URI on a hosted deployment. This one is a CERTAINTY, not a suspicion — no browser
+   *  redirected to localhost from a deployed app reaches that app — so it is the one that blocks. */
+  | { state: "local-in-production"; configured: string; deployment: string }
+  /** A preview deployment. Its hostname carries a per-deployment hash, so it can never be one of
+   *  the URIs registered on the Cloud project, and pointing it at production's URI would complete
+   *  the flow against a different origin than the one holding the session cookie. */
+  | { state: "preview"; configured: string; deployment: string }
+  /** The host differs from the platform's production domain. WARNS RATHER THAN BLOCKS: a project
+   *  may legitimately serve several custom domains and have OAuth registered on one of them, and
+   *  refusing that would break a working studio to prevent a guess. */
+  | { state: "host-differs"; configured: string; deployment: string };
+
+/** May the connect flow start at all? `host-differs` is deliberately absent — it is shown and not
+ *  enforced, for the multi-domain reason on the type above. */
+export function redirectUriBlocks(verdict: RedirectVerdict): boolean {
+  return verdict.state === "local-in-production" || verdict.state === "preview";
+}
+
 /** An entry from one of the designer's OWN Google calendars, flattened to the shape the dashboard
  *  grid already draws appointments in.
  *

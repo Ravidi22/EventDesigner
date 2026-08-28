@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Building2,
+  Check,
   ChevronsLeft,
   ChevronUp,
   DoorOpen,
@@ -11,6 +12,7 @@ import {
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
   Layers,
+  Loader2,
   Lock,
   MousePointer2,
   PenLine,
@@ -20,6 +22,7 @@ import {
   Search as SearchIcon,
   Shapes,
   Trash2,
+  TriangleAlert,
   Unlock,
   Upload,
   Users,
@@ -231,6 +234,66 @@ export function HallsScreen() {
   // all zoom levels instead of only at one fixed mm radius.
   const closeSnapMmRef = useRef(16);
 
+  // The autosave queue — the same three refs as the studio's, for the same reason (see flush()).
+  // `pending` is the newest plan not yet written, `inFlight` whether a write is in the air, and
+  // `persisted` the snapshot last known to be on the server.
+  const pending = useRef<PlanState | null>(null);
+  const inFlight = useRef(false);
+  const persisted = useRef<PlanState | null>(null);
+  const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
+  // Something the save did differently from what the screen shows — today, only a zone it refused
+  // to delete. Not an error: everything else was written.
+  const [planNote, setPlanNote] = useState<string | null>(null);
+
+  /**
+   * Write the queued plan, and only ever one at a time.
+   *
+   * ⚠ WRITES ARE SEQUENCED, not merely debounced. A save is a request now, requests overlap, and
+   * two overlapping writes to one wall graph land in whatever order the network decides — an older
+   * plan overwriting a newer one, silently, with nothing on screen to say so. So at most one is in
+   * the air and the newest snapshot waits its turn in `pending`.
+   *
+   * Every snapshot carries its own venueId, which is what makes it safe to flush across a venue
+   * switch: a write still in the air belongs to the property it was drawn on, not to the one now
+   * open.
+   */
+  const flush = useCallback(async () => {
+    if (inFlight.current) return; // the running save will pick up whatever is pending when it lands
+    const next = pending.current;
+    if (!next?.venueId) return;
+
+    inFlight.current = true;
+    setSaveState("saving");
+    let ok = true;
+    try {
+      const { blocked } = await saveVenuePlan(next.venueId, next.structure, next.zones);
+      // A zone events are booked into stays on the property whatever the editor's history says, so
+      // it will be back on the next load. Saying so is the difference between a plan that argued
+      // with you and one that looks broken.
+      setPlanNote(
+        blocked.length
+          ? `${blocked.join(" · ")} — לא נמחק, יש אירועים שמשובצים לשטח הזה`
+          : null,
+      );
+    } catch {
+      ok = false;
+    }
+    inFlight.current = false;
+
+    if (!ok) {
+      // `pending` deliberately keeps the snapshot: retrySave and the next edit both resend it.
+      setSaveState("error");
+      return;
+    }
+    persisted.current = next;
+    if (pending.current === next) {
+      pending.current = null;
+      setSaveState("saved");
+    } else {
+      void flush(); // an edit arrived while this write was in the air — send that one too
+    }
+  }, []);
+
   useEffect(() => {
     void fetchVenues().then((list) => {
       setVenues(list);
@@ -242,11 +305,22 @@ export function HallsScreen() {
 
   useEffect(() => {
     if (!venueId) return;
+    // Whatever the OUTGOING property still had queued goes out now. The debounce below is about to
+    // be cleared by its own cleanup, and that is how the last edit before a venue switch was lost.
+    if (pending.current) void flush();
     let live = true;
     setReady(false); // nothing is written back while another property's plan is in flight
     void fetchVenuePlan(venueId).then(({ structure: loaded, zones: loadedZones }) => {
       if (!live) return;
-      hist.reset({ venueId, structure: loaded, zones: loadedZones });
+      const snapshot: PlanState = { venueId, structure: loaded, zones: loadedZones };
+      // What is already on the server, so the render that follows a load doesn't write it straight
+      // back — a round trip that bought nothing and stamped an empty structure row onto every
+      // property merely opened in the editor.
+      persisted.current = snapshot;
+      pending.current = null;
+      setSaveState("saved");
+      setPlanNote(null);
+      hist.reset(snapshot);
       setSelection([]);
       setRunNodeId(null);
       setRegion(null);
@@ -268,16 +342,47 @@ export function HallsScreen() {
   //
   // DEBOUNCED, because this fires on every history entry: every wall dragged, every node nudged.
   // Against localStorage that was free; against the server it would be a request per mouse-up. The
-  // cleanup cancels the pending write, so a burst of edits sends one save at the end of it.
+  // cleanup cancels the TIMER, so a burst of edits sends one save at the end of it — but the
+  // snapshot itself is already in `pending` by then, which is what lets the two effects below get
+  // it out of the door when this screen is about to stop existing.
   useEffect(() => {
     if (!ready) return;
-    const { venueId: id, structure: s, zones: z } = hist.present;
-    if (!id) return;
-    const t = setTimeout(() => {
-      void saveVenuePlan(id, s, z);
-    }, 600);
+    const snapshot = hist.present;
+    if (!snapshot.venueId) return;
+    if (snapshot === persisted.current) return; // the plan this screen has just read
+    pending.current = snapshot;
+    setSaveState("saving");
+    const t = setTimeout(() => void flush(), 600);
     return () => clearTimeout(t);
-  }, [ready, hist.present]);
+  }, [ready, hist.present, flush]);
+
+  // ⚠ THE DEBOUNCE DOES NOT SURVIVE AN UNMOUNT. The effect above clears its own timer on the way
+  // out, so a wall drawn less than 600ms before leaving /halls was simply dropped — and leaving is
+  // a client-side route change, which `beforeunload` never sees. Flushing here rather than
+  // lengthening the window: a write already decided on should not depend on the screen staying
+  // mounted to finish.
+  useEffect(
+    () => () => {
+      if (pending.current) void flush();
+    },
+    [flush],
+  );
+
+  const retrySave = useCallback(() => {
+    pending.current ??= hist.present;
+    void flush();
+  }, [hist.present, flush]);
+
+  // Closing the tab with a write queued or failed is the one case the flush above cannot cover.
+  useEffect(() => {
+    if (saveState === "saved") return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [saveState]);
 
   // Regions are derived from the walls on every change, never stored — that is what makes a zone
   // follow its walls when they move instead of keeping a stale copy of its own outline.
@@ -734,10 +839,57 @@ export function HallsScreen() {
           onPointerLeave={() => setCursorPos(null)}
         >
           {/* The venue's name, floating on the canvas itself — white, so it reads as its own chip
-              sitting on the purple canvas rather than blending into it. */}
-          <div className="pointer-events-none absolute right-4 top-4 z-10 inline-flex w-fit shrink-0 items-center gap-2 rounded-md border border-border bg-canvas px-4 py-2 text-sm font-bold text-accent-deep shadow-floating">
-            <Building2 className="h-4 w-4 text-accent" strokeWidth={1.75} />
-            {venue?.name ?? "מקום"}
+              sitting on the purple canvas rather than blending into it — and beside it, whether the
+              plan is actually written down.
+              THE SAVE STATE LIVES HERE because there is no save button on this screen and never
+              was: a write that fails has to say so itself, or a designer traces a whole hall over an
+              error nobody reported. This corner is the one that already answers "which property am I
+              in", and "…and is it saved" is the same question's second half. It moved here from a
+              top toolbar that no longer exists.
+              The stack stays pointer-events-none so the canvas underneath still drags; only the
+              retry button takes clicks back. */}
+          <div className="pointer-events-none absolute right-4 top-4 z-10 flex w-fit max-w-md flex-col items-start gap-2">
+            <div className="flex items-center gap-2">
+              <div className="inline-flex w-fit shrink-0 items-center gap-2 rounded-md border border-border bg-canvas px-4 py-2 text-sm font-bold text-accent-deep shadow-floating">
+                <Building2 className="h-4 w-4 text-accent" strokeWidth={1.75} />
+                {venue?.name ?? "מקום"}
+              </div>
+
+              <div
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-canvas px-3 py-2 text-xs shadow-floating"
+                aria-live="polite"
+              >
+                {saveState === "saving" ? (
+                  <span className="inline-flex items-center gap-1.5 text-muted">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
+                    שומר…
+                  </span>
+                ) : saveState === "error" ? (
+                  <button
+                    type="button"
+                    onClick={retrySave}
+                    className="pointer-events-auto inline-flex items-center gap-1.5 rounded-sm font-medium text-warn-ink transition-colors hover:bg-warn-tint"
+                  >
+                    <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
+                    לא נשמר · נסו שוב
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-muted">
+                    <Check className="h-3.5 w-3.5 text-accent" strokeWidth={2.5} />
+                    נשמר
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* A zone the save refused to delete because events stand on it. Not an error — the rest
+                of the plan was written — so it reads as a note beneath the chip rather than turning
+                the indicator red. */}
+            {planNote && (
+              <p className="rounded-md border border-border bg-warn-tint px-3 py-2 text-xs font-medium leading-relaxed text-warn-ink shadow-floating">
+                {planNote}
+              </p>
+            )}
           </div>
 
             {/* The app's one canvas. It owns the viewport, grid, pan/zoom, snapping, undo buttons and

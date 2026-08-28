@@ -4,6 +4,7 @@
 // lib/google/sync.ts are: "give this organisation the standard tables" must not be a POST endpoint
 // that takes an organisation id from whoever calls it. It is reached from exactly two places — the
 // moment a studio is created (lib/auth/actions.ts) and the backfill script next door.
+import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { products } from "@/lib/db/schema";
 import { toProductRow } from "../db-mapping";
@@ -36,4 +37,34 @@ export async function installStandardCatalog(organizationId: string): Promise<nu
     .returning({ id: products.id });
 
   return inserted.length;
+}
+
+/**
+ * Overwrite the DRAWING of this studio's base items, and nothing else. Returns how many rows
+ * changed.
+ *
+ * The install above never overwrites, on purpose: a studio may have renamed or priced its copy, and
+ * a later release of the list must not undo that. But that same rule means a correction to how a
+ * base item is DRAWN can never reach the rows already sitting in a catalog, and the drawing is the
+ * one part of a base item that is the app's answer rather than the studio's — a 120x60 half round
+ * is a half round in every studio in the country.
+ *
+ * So it is its own function, reached only through `npm run catalog:standard -- --redraw`, and it
+ * touches exactly one column. ⚠ That column includes a custom outline: a studio that has reshaped
+ * its copy of a base item in the drawer loses that reshaping here.
+ */
+export async function redrawStandardCatalog(organizationId: string): Promise<number> {
+  let changed = 0;
+  for (const item of STANDARD_ITEMS) {
+    const id = standardProductId(organizationId, item.key);
+    const rows = await db()
+      .update(products)
+      .set({ appearance: item.product.appearance ?? null, updatedAt: new Date() })
+      // Scoped by organisation as well as id. The id is derived from the organisation, so the
+      // second clause cannot fail — and ownership in this codebase is a WHERE clause, always.
+      .where(and(eq(products.id, id), eq(products.organizationId, organizationId)))
+      .returning({ id: products.id });
+    changed += rows.length;
+  }
+  return changed;
 }
