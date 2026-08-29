@@ -66,7 +66,23 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
 
   // `production` by default: the lane the designer is being PAID for. An event the client has said
   // yes to is work with a delivery date; everything else is still a conversation.
-  const [filter, setFilter] = useState<FilterId>("production");
+  //
+  // ⚠ BUT NOT ONTO AN EMPTY LANE. `confirmedAt` is new, so on the first visit after it shipped
+  // NOTHING is confirmed — every live event sits under מוקדם or בהצעה — and opening on a lane
+  // reading "0" made a screen that was working perfectly look broken. It is not only a migration
+  // artefact either: a studio between seasons, or one that files everything the week after, lands
+  // in the same place honestly.
+  //
+  // So the opening lane is the first one that has anything in it, in the order the filter bar
+  // already puts them. This is a DEFAULT, not a redirect — `setFilter` still goes wherever it is
+  // told, an empty lane reached by clicking still renders its own empty state (that is an answer to
+  // a question the designer asked), and the fallback is computed once at mount rather than tracking
+  // `counts`, so confirming the last event in a lane cannot yank the view out from under the click
+  // that confirmed it.
+  const [filter, setFilter] = useState<FilterId>(() => {
+    const order: LaneId[] = ["production", "proposal", "early", "closed"];
+    return order.find((lane) => runway.counts[lane] > 0) ?? "production";
+  });
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   // Which row has a mutation in the air, so it can be dimmed and its menu left alone. One at a
