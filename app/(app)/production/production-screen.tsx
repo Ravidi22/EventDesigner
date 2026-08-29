@@ -25,6 +25,7 @@ import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EventDialog } from "@/components/event-dialog";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { LoadRibbon } from "./load-ribbon";
 import { LaneFilter, type FilterId } from "./lane-filter";
 import { CollisionBand, RunwayRowCard } from "./runway-row";
@@ -298,7 +299,7 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
     );
 
   return (
-    <div className="flex h-full flex-col px-8 pt-6 pb-8">
+    <div className={`flex h-full flex-col ${PAGE_GUTTER}`}>
       {error && (
         <p role="alert" className="mb-3 rounded-md border border-alert bg-alert-tint px-4 py-2.5 text-sm text-ink">
           {error}

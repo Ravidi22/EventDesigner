@@ -2,12 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Box,
   Building2,
   Check,
   ChevronUp,
-  DoorOpen,
-  GlassWater,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
   Layers,
@@ -16,7 +13,6 @@ import {
   MousePointer2,
   PenLine,
   Plus,
-  Presentation,
   Ruler,
   Search as SearchIcon,
   Shapes,
@@ -25,8 +21,6 @@ import {
   Unlock,
   Upload,
   Users,
-  Waves,
-  type LucideIcon,
 } from "lucide-react";
 import { polygonCentroid } from "@/lib/studio/geometry";
 import {
@@ -36,7 +30,7 @@ import {
   type VenueStructure,
   type Zone,
 } from "@/lib/venues/storage";
-import { fetchVenues, fetchVenuePlan, saveVenuePlan, saveVenue } from "@/lib/venues/actions";
+import { fetchVenues, fetchVenuePlan, saveVenuePlan, saveVenue, type BlockedZone } from "@/lib/venues/actions";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import {
   calibrateUnderlay,
@@ -46,7 +40,6 @@ import {
 } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import {
-  FEATURE_KIND_LABEL,
   addEntrance,
   addFeature,
   addNode,
@@ -57,6 +50,7 @@ import {
   moveWallControlPoint,
   nearestWall,
   newFeature,
+  newFeatureFromProduct,
   removeEntrance,
   removeFeature,
   removeNode,
@@ -84,7 +78,12 @@ import {
   PlanUnderlayLayer,
   CalibrationOverlay,
 } from "@/components/venue-plan";
-import { VenueInspector, ZoneFields, FEATURE_KINDS } from "@/components/venue-inspector";
+import { VenueInspector, ZoneFields, ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
+import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
+import { useCatalog } from "@/lib/catalog/use-catalog";
+import { formatDimensions } from "@/lib/catalog/format";
+import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
+import { FootprintShape } from "@/components/footprint-shape";
 import {
   hitsInBox,
   isSelected,
@@ -122,26 +121,43 @@ function imageSize(url: string): Promise<{ width: number; height: number }> {
   });
 }
 
+/**
+ * Why a zone the designer deleted is still on the plan.
+ *
+ * ⚠ IT NAMES THE EVENTS, and that is the entire reason this function exists rather than a template
+ * string at the call site. The old line said "there are events assigned to this area" and stopped
+ * there, which is the shape of an answer without being one: an ARCHIVED event is filtered off the
+ * dashboard (dashboard-screen.tsx), so a designer who had cleared every event they could find was
+ * told, truthfully, that one was still standing on the zone — with no way to learn which, and no
+ * screen that would admit the event existed. It reads as the app inventing a reason.
+ *
+ * So the name comes out, "(בארכיון)" is called out on the ones that are hiding, and when any of
+ * them is archived the note says where that event can actually be reached. Three names is the cap —
+ * past that it is a list nobody reads, and the count carries the rest.
+ */
+function blockedZoneNote(b: BlockedZone): string {
+  // Blocked, but by a row this studio cannot see (see the left join in saveVenuePlan) — which no
+  // designer should ever hit. The old wording is exactly right for it, and inventing a name would
+  // be worse than admitting there isn't one.
+  if (b.events.length === 0) return `${b.name} — לא נמחק, יש אירועים שמשובצים לשטח הזה`;
+  const shown = b.events.slice(0, 3).map((e) => (e.archived ? `״${e.name}״ (בארכיון)` : `״${e.name}״`));
+  const rest = b.events.length - shown.length;
+  const list = shown.join(", ") + (rest > 0 ? ` ועוד ${rest}` : "");
+  const verb = b.events.length === 1 ? "משובץ" : "משובצים";
+  const noun = b.events.length === 1 ? "האירוע" : "האירועים";
+  const hint = b.events.some((e) => e.archived)
+    ? " — אירוע בארכיון לא מופיע בלוח השנה; אפשר להגיע אליו במסך ״הפקה״, בלשונית ״הסתיים״"
+    : "";
+  return `${b.name} — לא נמחק: ${noun} ${list} ${verb} לשטח הזה${hint}`;
+}
+
 type Mode = "select" | "walls" | "zones";
 
-// What the floating add-toolbar offers: the same six things the old right-click menu did (an
-// entrance plus every FEATURE_KINDS member), each keyed to a distinct icon so the row reads at a
-// glance instead of six identical squares.
-type AddTool = "entrance" | (typeof FEATURE_KINDS)[number];
-const ADD_TOOL_ICON: Record<AddTool, LucideIcon> = {
-  entrance: DoorOpen,
-  pool: Waves,
-  stage: Presentation,
-  bar: GlassWater,
-  structure: Box,
-  other: Shapes,
-};
-const ADD_TOOL_LABEL: Record<AddTool, string> = { entrance: "כניסה", ...FEATURE_KIND_LABEL };
-const ADD_TOOLS: AddTool[] = ["entrance", ...FEATURE_KINDS];
-// A pastel swatch per kind, so the picker's cards read as a little gallery of colours rather than
-// six identical grey tiles — there's no product photo to preview, so the colour + icon combination
-// is standing in for one.
-const ADD_TOOL_PREVIEW: Record<AddTool, string> = {
+// A pastel swatch per element the designer DRAWS rather than picks off a shelf, so the picker's
+// cards read as a little gallery of colours instead of identical grey tiles. The ones that come out
+// of the catalog get something better than a colour — their own footprint, at their own proportions
+// (see ToolPreview) — so they aren't in here.
+const ADD_TOOL_PREVIEW: Record<string, string> = {
   entrance: "#f3c6d6",
   pool: "#bcdcf5",
   stage: "#f6df9b",
@@ -203,7 +219,14 @@ export function HallsScreen() {
   // Which add-toolbar button is armed, if any — the next click on empty canvas places one of it and
   // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
   // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
-  const [armedTool, setArmedTool] = useState<AddTool | null>(null);
+  const [armedToolId, setArmedToolId] = useState<string | null>(null);
+  // The catalog, for the two departments a venue has BUILT versions of (lib/venues/add-tools.ts).
+  // Read-only here, and its own hook rather than a prop: this screen has no server component above
+  // it to seed from, and nothing on this plan resolves a product id while rendering, so the list
+  // arriving a beat after the walls do costs nothing but a card that isn't offered yet.
+  const catalog = useCatalog();
+  const tools = useMemo(() => addTools(catalog.products), [catalog.products]);
+  const armedTool = findAddTool(tools, armedToolId) ?? null;
   // The add-element flyout — closed by picking a row (which arms it), by Escape, or by a click
   // anywhere else (see the backdrop next to it).
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -270,11 +293,7 @@ export function HallsScreen() {
       // A zone events are booked into stays on the property whatever the editor's history says, so
       // it will be back on the next load. Saying so is the difference between a plan that argued
       // with you and one that looks broken.
-      setPlanNote(
-        blocked.length
-          ? `${blocked.join(" · ")} — לא נמחק, יש אירועים שמשובצים לשטח הזה`
-          : null,
-      );
+      setPlanNote(blocked.length ? blocked.map(blockedZoneNote).join(" · ") : null);
     } catch {
       ok = false;
     }
@@ -503,6 +522,18 @@ export function HallsScreen() {
     [dragStructure],
   );
 
+  // Turning a feature by its knob. The angle arrives absolute and already locked to 15° (or free,
+  // if Alt was down) — the handle owns that — so this only has to fold it into the live gesture,
+  // exactly as the resize above does. The side panel's rotation field still writes the same
+  // property; a number is faster when the client says "square to the terrace", and a handle is
+  // faster for everything else.
+  const rotateFeature = useCallback(
+    (id: string, rotationDeg: number) => {
+      dragStructure((s) => updateFeature(s, id, { rotationDeg }));
+    },
+    [dragStructure],
+  );
+
   // End of one gesture: close the history entry and drop the frozen origins together, so the next
   // drag can't reuse a snapshot taken before this one moved everything.
   const endGesture = useCallback(() => {
@@ -530,7 +561,7 @@ export function HallsScreen() {
         setRegion(null);
         setDraftZone(null);
         setSelection([]);
-        setArmedTool(null);
+        setArmedToolId(null);
         setAddMenuOpen(false);
         return;
       }
@@ -742,24 +773,17 @@ export function HallsScreen() {
   const runNode = runNodeId ? structure.nodes.find((n) => n.id === runNodeId) : null;
   const selectedZoneIds = selection.filter((s) => s.kind === "zone").map((s) => s.id);
   const soleZoneId = selection.length === 1 && selection[0].kind === "zone" ? selection[0].id : null;
-  const soleFeatureId = selection.length === 1 && selection[0].kind === "feature" ? selection[0].id : null;
   const isSelectMode = mode === "select";
 
-  // Selecting a product on the plan — a stage, a bar, a pool — frames it the same way picking a
-  // zone from the list does (see focusZone): the object you just picked is the thing you're about
-  // to edit, so the view should already be centred on it rather than leaving that to a manual pan,
-  // and the inspector (docked at the canvas's top edge, see below) can never land on top of
-  // something that's sitting dead centre.
-  useEffect(() => {
-    if (!soleFeatureId) return;
-    const f = structure.features.find((x) => x.id === soleFeatureId);
-    if (!f) return;
-    const halfW = f.widthMm / 2;
-    const halfD = (f.shape === "circle" ? f.widthMm : f.depthMm) / 2;
-    focusNonce.current += 1;
-    setFocus({ minX: f.x - halfW, minY: f.y - halfD, maxX: f.x + halfW, maxY: f.y + halfD, nonce: focusNonce.current });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soleFeatureId]);
+  // ⚠ NOTHING FRAMES ITSELF ON SELECTION HERE, and that is deliberate. Picking a stage, a bar or a
+  // pool on the plan used to travel the view onto it, on the argument that you were about to edit
+  // it — but the object was already under the pointer that just clicked it, so the move started
+  // from "I can see this" and every one of them was the screen taking the view away from wherever
+  // the designer had put it. Ten placements in a row is ten unasked-for journeys.
+  //
+  // ZONES ARE THE EXCEPTION, and the only one: focusZone above is called from the SIDEBAR LIST,
+  // where the thing you picked is routinely off-screen and highlighting something nobody can see is
+  // not selection. That is the one click where framing answers a question the click actually asked.
   const graphSelection = useMemo(
     () =>
       selection
@@ -768,8 +792,19 @@ export function HallsScreen() {
     [selection],
   );
 
-  const addFeatureAt = (kind: (typeof FEATURE_KINDS)[number], p: Point) => {
-    const { structure: next, featureId } = addFeature(structure, newFeature(kind, p));
+  // One placement path for everything the flyout, a drag and a zone's quick-add can put on the plan.
+  // A tool that carries a catalog row places THAT — its name, its shape and its three measurements
+  // — rather than the rough box a kind alone can offer; a bar built in the shape of a ח arrives as a
+  // ח instead of as a rectangle the designer then has to reshape by hand in every venue they own.
+  const placeTool = (tool: AddTool, p: Point) => {
+    if (!tool.kind) {
+      addDoorNear(p);
+      return;
+    }
+    const { structure: next, featureId } = addFeature(
+      structure,
+      tool.product ? newFeatureFromProduct(tool.kind, tool.product, p) : newFeature(tool.kind, p),
+    );
     editStructure(() => next);
     setSelection([{ kind: "feature", id: featureId }]);
   };
@@ -791,14 +826,13 @@ export function HallsScreen() {
   };
 
   // What an armed add-toolbar button means once the next canvas click reports a point — the same
-  // two placement paths the old right-click menu items called, now behind one-shot arming instead
-  // of a menu that already had the point in hand. Always disarms after one placement, matching how
-  // the menu closed itself the moment you picked something.
+  // placement path the old right-click menu items called, now behind one-shot arming instead of a
+  // menu that already had the point in hand. Always disarms after one placement, matching how the
+  // menu closed itself the moment you picked something.
   const placeArmedTool = (p: Point) => {
     if (!armedTool) return;
-    if (armedTool === "entrance") addDoorNear(p);
-    else addFeatureAt(armedTool, p);
-    setArmedTool(null);
+    placeTool(armedTool, p);
+    setArmedToolId(null);
   };
 
   // A plain click on empty canvas, in select mode. With a tool armed it places it (unchanged); with
@@ -945,9 +979,8 @@ export function HallsScreen() {
             onDropAt={
               isSelectMode
                 ? (e, p) => {
-                    const kind = e.dataTransfer.getData("text/plain") as AddTool | "";
-                    if (kind === "entrance") addDoorNear(p);
-                    else if (kind && (FEATURE_KINDS as string[]).includes(kind)) addFeatureAt(kind as (typeof FEATURE_KINDS)[number], p);
+                    const tool = findAddTool(tools, e.dataTransfer.getData("text/plain"));
+                    if (tool) placeTool(tool, p);
                   }
                 : undefined
             }
@@ -981,6 +1014,7 @@ export function HallsScreen() {
                     onMove={isSelectMode ? (id, p) => moveWithGroup("feature", id, p) : undefined}
                     onMoveStairs={isSelectMode ? moveStairs : undefined}
                     onResize={isSelectMode ? resizeFeature : undefined}
+                    onRotate={isSelectMode ? rotateFeature : undefined}
                     onCommit={endGesture}
                     clientToMm={clientToMm}
                   />
@@ -1088,7 +1122,7 @@ export function HallsScreen() {
                   setRunNodeId(null);
                   setRegion(null);
                   setDraftZone(null);
-                  setArmedTool(null);
+                  setArmedToolId(null);
                   setAddMenuOpen(false);
                   setSelection([]);
                 }}
@@ -1127,9 +1161,10 @@ export function HallsScreen() {
                   <AddElementFlyout
                     open={addMenuOpen}
                     onOpenChange={setAddMenuOpen}
+                    tools={tools}
                     armedTool={armedTool}
                     onPick={(tool) => {
-                      setArmedTool((t) => (t === tool ? null : tool));
+                      setArmedToolId((id) => (id === tool.id ? null : tool.id));
                       setAddMenuOpen(false);
                     }}
                     entranceDisabled={!structure.walls.some((w) => w.kind === "wall")}
@@ -1148,7 +1183,7 @@ export function HallsScreen() {
                     setRegion(null);
                     setDraftZone(null);
                   }
-                  setArmedTool(null);
+                  setArmedToolId(null);
                   setAddMenuOpen(false);
                 }}
                 className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
@@ -1162,9 +1197,10 @@ export function HallsScreen() {
           </div>
 
           {/* Docked on the canvas's own right edge, top to bottom — not a bar spanning the width,
-              which would sit directly over whatever it's editing. Selecting a product recentres the
-              view on it (see the soleFeatureId effect above), so the drawing stays visible beside
-              this panel rather than under it. Just the width and height ceiling live here; the
+              which would sit directly over whatever it's editing. The edge is now the whole of what
+              keeps the selection visible: picking a product no longer recentres the view on it (see
+              the note where that effect used to be), so the panel has to stay out of the middle
+              rather than count on the drawing being moved out from under it. Just the width and height ceiling live here; the
               vertical stacking and its own scroll are VenueInspector's own shell (see its WRAP) —
               stacking a second overflow-y-auto on top of that one would be the exact nested-
               scrollbar bug the sidebar list already had once this session.
@@ -1202,12 +1238,12 @@ export function HallsScreen() {
             itself is the same neutral plane colour every card elsewhere in the app sits on, giving
             the white card inside it a visible border of separation from the canvas beside it —
             "sidebar container (own background) → card → canvas next to it", not glued onto it.
-            Full height (lg:h-full, matching the canvas's own lg:h-full next to it), not sized to
-            the card's own content — a short zone list just leaves the panel's own background
-            showing below the card rather than the panel itself shrinking to hug it, which is what
-            actually reads as "a sidebar", as opposed to "a card that happens to have a border". A
-            list too long for that fixed height scrolls inside the panel (`scrolls`) instead of
-            growing the page.
+            Full height (lg:h-full, matching the canvas's own lg:h-full next to it), and the card
+            inside runs the full height with it (lg:min-h-full on it) rather than either of them
+            being sized to the zone list — a card that stops halfway down reads as the sidebar
+            itself stopping short, not as "a sidebar", and the same is true of the collapsed rail,
+            which stretches too. A list too long for that height scrolls inside the panel
+            (`scrolls`) instead of growing the page.
             The shell, the collapse puck and the width transition are SidePanel's — the same
             component the app's own navigation is built from (components/side-panel.tsx). This
             screen supplies only what goes inside it and what the collapsed strip says. */}
@@ -1260,7 +1296,14 @@ export function HallsScreen() {
             </div>
           }
         >
-          <div className="flex flex-col gap-3 rounded-md border border-border bg-inset p-2">
+          {/* lg:min-h-full so the card fills the panel's full height rather than hugging its own
+              content — the collapsed rail already does (flex-1), and a short zone list otherwise
+              ended the card halfway down with the panel's bare plane below it, which read as the
+              sidebar itself stopping short. min-h, not h/flex-1: it is the floor, so a list longer
+              than the panel still grows past it and scrolls inside SidePanel's own scroller
+              instead of being squashed to fit. lg-only because below it the panel has no definite
+              height to take a percentage from, and the stacked layout wants it to hug anyway. */}
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-inset p-2 lg:min-h-full">
           {/* Tracing panel (F-3.5 + F-3.4) — its own card, sibling to the zone-definition card
               below: a background plan you place/calibrate isn't part of "defining zones", so it
               keeps that card focused on just that instead of growing a second concern into it. */}
@@ -1530,9 +1573,10 @@ export function HallsScreen() {
                             // (boundary undone, walls no longer close it) has no such point, so it
                             // gets no add-element control at all rather than one that would place
                             // something in the wrong room.
+                            addTools={tools}
                             onAddElement={
                               r.boundary.length >= 3
-                                ? (kind) => addFeatureAt(kind, polygonCentroid(r.boundary))
+                                ? (tool) => placeTool(tool, polygonCentroid(r.boundary))
                                 : undefined
                             }
                           />
@@ -1574,23 +1618,67 @@ export function HallsScreen() {
   );
 }
 
-// The add-element trigger and its flyout — a searchable gallery of cards (one per FEATURE_KINDS
-// member, plus entrance) instead of a flat text list, so picking an element reads more like
-// choosing a product than reading a menu. Opens upward, not down, since the dock it sits in is
-// pinned to the canvas's bottom edge — there is no room below it to pop into.
+// The add-element trigger and its flyout — a searchable gallery of cards instead of a flat text
+// list, so picking an element reads more like choosing a product than reading a menu. Which it now
+// literally is for two of the three sections: a bar and a stage come off the studio's own catalog
+// (lib/venues/add-tools.ts), carrying that row's shape and size, instead of arriving as a rectangle
+// that has to be reshaped into a ח by hand in every venue the studio owns.
+//
+// Opens upward, not down, since the dock it sits in is pinned to the canvas's bottom edge — there is
+// no room below it to pop into.
 const FLYOUT_WIDTH = 420;
 const FLYOUT_GAP = 8;
 const FLYOUT_MARGIN = 16; // never closer than this to the viewport edge
 
+/** The picture on a card. A catalog-backed tool draws its OWN footprint, at its own proportions —
+ *  the ח that makes a ח bar worth picking is visible before it is placed, and two bars that differ
+ *  only in size read as two sizes. The drawn elements have no such picture, so they keep the pastel
+ *  swatch and icon that were standing in for one. */
+function ToolPreview({ tool }: { tool: AddTool }) {
+  const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+  if (!tool.product) {
+    return (
+      <span
+        className="flex h-11 w-11 items-center justify-center rounded-md"
+        style={{ backgroundColor: ADD_TOOL_PREVIEW[tool.id] ?? "var(--color-inset)" }}
+      >
+        <Icon className="h-4 w-4 text-ink/70" strokeWidth={1.75} />
+      </span>
+    );
+  }
+  const footprint = resolveFootprint(tool.product);
+  const b = footprintBounds(footprint);
+  const pad = Math.max(b.w, b.h) * 0.08; // room for the stroke, which sits on the outline itself
+  return (
+    <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+      <svg
+        viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`}
+        className="h-9 w-9"
+        aria-hidden
+      >
+        <FootprintShape
+          footprint={footprint}
+          fill="var(--color-surface)"
+          stroke="var(--color-accent)"
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+    </span>
+  );
+}
+
 function AddElementFlyout({
   open,
   onOpenChange,
+  tools,
   armedTool,
   onPick,
   entranceDisabled,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  tools: AddTool[];
   armedTool: AddTool | null;
   onPick: (tool: AddTool) => void;
   entranceDisabled: boolean;
@@ -1608,8 +1696,9 @@ function AddElementFlyout({
   useEffect(() => {
     if (!open) setSearch("");
   }, [open]);
-  const filtered = ADD_TOOLS.filter((t) => ADD_TOOL_LABEL[t].includes(search.trim()));
-  const TriggerIcon = armedTool ? ADD_TOOL_ICON[armedTool] : Shapes;
+  const query = search.trim();
+  const filtered = query ? tools.filter((t) => t.label.includes(query)) : tools;
+  const TriggerIcon = armedTool ? ADD_TOOL_ICON[addToolIconKey(armedTool)] : Shapes;
   const openFlyout = () => {
     const r = triggerRef.current?.getBoundingClientRect();
     if (r) {
@@ -1664,42 +1753,56 @@ function AddElementFlyout({
               />
             </div>
 
-            <div className="mt-3 grid grid-cols-4 gap-2">
-              {filtered.map((tool) => {
-                const Icon = ADD_TOOL_ICON[tool];
-                const disabled = tool === "entrance" && entranceDisabled;
+            {/* Sectioned rather than one flat grid: "בריכה" and "בר בצורת ח 360×180" are not the same
+                kind of choice, and a heading is what says the second half of this list is the
+                studio's own catalog. Capped in height — a catalog with forty bars in it must not
+                push the flyout off the top of the screen. */}
+            <div className="mt-3 flex max-h-[46vh] flex-col gap-3 overflow-y-auto">
+              {ADD_TOOL_SECTIONS.map((section) => {
+                const inSection = filtered.filter((t) => t.section === section);
+                if (inSection.length === 0) return null;
                 return (
-                  <button
-                    key={tool}
-                    type="button"
-                    role="menuitem"
-                    disabled={disabled}
-                    // Dragging straight onto the canvas — PlanCanvas's own onDropAt (see
-                    // halls-screen's use of it) reads this same "text/plain" payload back out, the
-                    // exact contract its doc comment already promised a host's catalog rail.
-                    draggable={!disabled}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData("text/plain", tool);
-                      e.dataTransfer.effectAllowed = "copy";
-                    }}
-                    onClick={() => onPick(tool)}
-                    className={`flex flex-col items-center gap-1.5 rounded-md border p-2 text-xs font-semibold transition-colors ${
-                      armedTool === tool
-                        ? "border-accent bg-accent-tint text-accent"
-                        : "border-border text-ink hover:border-accent-line hover:bg-inset"
-                    } disabled:cursor-not-allowed disabled:opacity-40`}
-                  >
-                    <span
-                      className="flex h-11 w-11 items-center justify-center rounded-md"
-                      style={{ backgroundColor: ADD_TOOL_PREVIEW[tool] }}
-                    >
-                      <Icon className="h-4 w-4 text-ink/70" strokeWidth={1.75} />
-                    </span>
-                    {ADD_TOOL_LABEL[tool]}
-                  </button>
+                  <div key={section}>
+                    <p className="mb-1.5 font-label text-[10px] font-medium tracking-[2px] text-muted">
+                      {ADD_TOOL_SECTION_LABEL[section]}
+                    </p>
+                    <div className="grid grid-cols-4 gap-2">
+                      {inSection.map((tool) => {
+                        const disabled = tool.id === "entrance" && entranceDisabled;
+                        return (
+                          <button
+                            key={tool.id}
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            title={tool.product ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}` : tool.label}
+                            // Dragging straight onto the canvas — PlanCanvas's own onDropAt (see
+                            // halls-screen's use of it) reads this same "text/plain" payload back
+                            // out, the exact contract its doc comment already promised a host's
+                            // catalog rail. The payload is the tool's id and nothing else; the drop
+                            // handler looks it up in this same list (findAddTool).
+                            draggable={!disabled}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData("text/plain", tool.id);
+                              e.dataTransfer.effectAllowed = "copy";
+                            }}
+                            onClick={() => onPick(tool)}
+                            className={`flex flex-col items-center gap-1.5 rounded-md border p-2 text-center text-[11px] font-semibold leading-tight transition-colors ${
+                              armedTool?.id === tool.id
+                                ? "border-accent bg-accent-tint text-accent"
+                                : "border-border text-ink hover:border-accent-line hover:bg-inset"
+                            } disabled:cursor-not-allowed disabled:opacity-40`}
+                          >
+                            <ToolPreview tool={tool} />
+                            <span className="line-clamp-2 w-full">{tool.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 );
               })}
-              {filtered.length === 0 && <p className="col-span-4 py-4 text-center text-xs text-muted">לא נמצאו אלמנטים</p>}
+              {filtered.length === 0 && <p className="py-4 text-center text-xs text-muted">לא נמצאו אלמנטים</p>}
             </div>
 
             <p className="mt-3 text-center text-[11px] leading-relaxed text-muted">

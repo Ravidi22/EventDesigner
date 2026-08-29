@@ -13,6 +13,7 @@ import {
   Presentation,
   Redo2,
   Ruler,
+  RulerDimensionLine,
   SeparatorHorizontal,
   Trash2,
   Undo2,
@@ -39,7 +40,7 @@ import {
   polygonCentroid,
   endpointFromLengthAngle,
 } from "@/lib/studio/geometry";
-import { snapPoint, constrainAngleDeg, type SnapResult } from "@/lib/studio/snap";
+import { snapPoint, constrainAngleDeg, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
@@ -123,8 +124,31 @@ export interface CanvasLayerContext {
   clientToMm: (clientX: number, clientY: number) => Point;
   /** Screen px → world mm at the current zoom, for hit areas that must stay a constant finger-width. */
   mm: (px: number) => number;
+  /** The canvas's OWN alignment pull, offered to a layer that drags its own things (the studio's
+   *  tables and placements). It aligns to the walls and corners the canvas already knows about,
+   *  plus whatever the layer hands over, and it lights the same accent guide lines a dragged corner
+   *  does, because a table lined up with the wall opposite has to say so the same way. Without this
+   *  a host layer had no way to snap at all short of reimplementing lib/studio/snap.ts against a
+   *  transform it cannot see. */
+  snap: (p: Point, opts?: HostSnapOptions) => Point;
+  /** Put the guide lines out at the end of a host gesture. The canvas already clears them on its
+   *  own pointerup — a layer's pointer events bubble up to it — so this is for a gesture that ends
+   *  some other way (a cancel, a key). */
+  endSnap: () => void;
 }
 export type CanvasLayer = ReactNode | ((ctx: CanvasLayerContext) => ReactNode);
+
+/** What a host layer knows about its own content that the canvas does not.
+ *
+ *  `boxes` is the strong one: everything the layer drew, with its size. Their centres join the
+ *  alignment references for free, AND — paired with `self`, the extent of the thing being moved —
+ *  they turn on equal-gap snapping (lib/studio/snap.ts), the guide that says "the same air again".
+ *  A layer that only has points passes `refs` and gets alignment alone. */
+export interface HostSnapOptions {
+  refs?: Point[];
+  boxes?: SnapBox[];
+  self?: { widthMm: number; depthMm: number };
+}
 
 const PAD_MM = 1500;
 const DEFAULT_EXTENT = { w: 22000, h: 15000 };
@@ -334,6 +358,7 @@ export function PlanCanvas({
   onMarquee,
   onCanvasClick,
   onDropAt,
+  dropSnap,
   cursor = "default",
   ariaLabel = "תרשים האולם — עריכה",
   drawFrom,
@@ -419,6 +444,15 @@ export function PlanCanvas({
   // the world point it landed on. Supplying this is what turns on dragover/drop handling at all —
   // the canvas never claims a drop a host isn't listening for.
   onDropAt?: (e: React.DragEvent, p: Point) => void;
+  // What a DROP coming in from outside the canvas should align to. Supplying it turns the same
+  // alignment and equal-gap pull (and the same guide lines) on for that drag, which otherwise had
+  // none: an item dragged off the rail landed wherever the pointer happened to be, so the first
+  // thing the designer did after every single drop was nudge it into line with the row beside it.
+  //
+  // A FUNCTION, not a value: what is being carried is only known once the drag has started, and the
+  // canvas has not re-rendered since. It is called on each dragover. Omitted = a raw drop point,
+  // which is what a host placing a door on a wall it has already hit-tested wants.
+  dropSnap?: () => HostSnapOptions | null;
   // Edit-mode cursor. A host holding an armed tool says so here rather than reaching over the
   // canvas with a wrapper class, which the svg's own cursor would win against anyway.
   cursor?: "default" | "crosshair";
@@ -466,10 +500,22 @@ export function PlanCanvas({
   // A fixture's live rotation, for the angle pill — the fixture lives in SVG, the pill is an HTML
   // overlay, so the marker reports the angle up rather than drawing it itself.
   const [rotating, setRotating] = useState<{ deg: number; locked: boolean; at: Point } | null>(null);
-  const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
+  // The two alignment axes, plus any run of equal gaps the drag landed on. One state, because they
+  // are one answer to one question — where this thing is lining up — and they clear together.
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null; gaps?: GapGuide[] }>({ x: null, y: null });
   // Measurements default on while drawing (that's when they're the point) and off once the shape is
   // closed — until the ruler button is pressed, after which the choice is the user's and sticks.
   const [dimsOverride, setDimsOverride] = useState<boolean | null>(null);
+  // THE TAPE MEASURE. `tapeOn` is the armed tool; `tape` is the segment being measured — one point
+  // once the first click lands, two once the second does, and it stays on screen after that so the
+  // number can be read, quoted down a phone and checked against the plan without holding a drag.
+  //
+  // It answers the question the wall labels never could: how far is the stage from the first row of
+  // tables, is that aisle wide enough for a wheelchair, will the dance floor fit between those two
+  // columns. Every one of those is a distance between two points that are not the ends of a wall,
+  // and until now the only way to get it was to draw something and delete it again.
+  const [tapeOn, setTapeOn] = useState(false);
+  const [tape, setTape] = useState<{ a: Point; b: Point | null } | null>(null);
   // The SketchUp value-control-box: type a length (Tab switches to the angle) and Enter commits the
   // next corner at exactly that dimension instead of wherever the cursor happened to be.
   const [entry, setEntry] = useState<{ field: "length" | "angle"; length: string; angle: string } | null>(null);
@@ -796,11 +842,40 @@ export function PlanCanvas({
       constrainAngle: !releaseAngle,
     });
 
+  // The tape's own snap: the same corners, walls and fixtures every other point on this canvas is
+  // pulled onto, so measuring FROM a wall really does start at the wall rather than a pixel short of
+  // it — but with the angle lock OFF by default, which is the one place this canvas reverses its own
+  // convention. Everywhere else a locked angle is a kindness: a wall meant to be square should fall
+  // square. A tape is the opposite. It is not drawing anything, it is reporting what is already
+  // there, and a measurement that quietly rounds itself onto the nearest 15° is a measurement of
+  // something other than what was asked. Shift constrains it, for the times you want to know the
+  // distance straight across rather than corner to corner.
+  const snapTape = (p: Point, constrain: boolean): Point =>
+    snapPoint(p, {
+      toleranceMm: SNAP_TOL_PX * mmPerPx,
+      outline: [...outline, ...graphPoints],
+      fixtures: fixtureRefs(),
+      gridMm,
+      ...(constrain && tape?.a ? { anchor: tape.a, constrainAngle: true } : {}),
+    }).point;
+
+  // What the tape currently shows: the finished measurement, or the live one being dragged out from
+  // the first click to wherever the pointer is. Re-derived each render rather than stored, so the
+  // second point tracks the cursor without a second piece of state to keep honest.
+  const tapeSegment: { a: Point; b: Point; live: boolean } | null = tape
+    ? tape.b
+      ? { a: tape.a, b: tape.b, live: false }
+      : cursorRaw
+        ? { a: tape.a, b: snapTape(cursorRaw, false), live: true }
+        : null
+    : null;
+
   const pending = mode === "draw" && cursorRaw ? snapDraw(cursorRaw, altHeld) : null;
   const pendingLenMm = pending && drawAnchor ? wallLengthMm(drawAnchor, pending.point) : 0;
   const pendingAngleDeg = pending && drawAnchor ? wallAngleDeg(drawAnchor, pending.point) : 0;
   const closable = mode === "draw" && outline.length >= 3;
-  const shownGuides = mode === "draw" ? (pending?.guides ?? { x: null, y: null }) : guides;
+  const shownGuides: { x: number | null; y: number | null; gaps?: GapGuide[] } =
+    mode === "draw" ? (pending?.guides ?? { x: null, y: null }) : guides;
   // Which side of a wall reads as "inward", for a door's swing direction — the outline's own
   // centroid, same reference point the old (and now-restored) doorGeometry always used.
   const interiorHint = outline.length >= 3 ? polygonCentroid(outline) : { x: 0, y: 0 };
@@ -859,6 +934,15 @@ export function PlanCanvas({
     if (spaceHeld) return; // space is the pan modifier — never draw/select while it's down
     if (panMoved.current) return; // …nor on the click that closes a pan the user let go of space during
     if (marqueeMoved.current) { marqueeMoved.current = false; return; } // …nor on the click that ends a marquee drag
+    // An armed tape takes the click ahead of everything, in BOTH modes — "how wide is that gap"
+    // comes up mid-trace as often as it does over a finished plan, and a tool that had to be put
+    // down before the wall could be drawn is one nobody reaches for. Click one, click two, read it;
+    // a third click starts the next measurement rather than making the designer clear this one.
+    if (tapeOn) {
+      const p = snapTape(clientToMm(e.clientX, e.clientY), e.shiftKey);
+      setTape((t) => (t && !t.b ? { a: t.a, b: p } : { a: p, b: null }));
+      return;
+    }
     if (mode !== "draw") {
       onSelect(null);
       onSelectGraph?.(null, false); // empty canvas clears the graph selection too, not just the outline's
@@ -900,6 +984,25 @@ export function PlanCanvas({
       if (e.key === "Alt") { e.preventDefault(); setAltHeld(true); return; }
       if (e.key === "+" || e.key === "=") { zoomByCenter(1 / 1.2); return; }
       if (e.key === "-" || e.key === "_") { zoomByCenter(1.2); return; }
+      // Escape backs out of the tape one step at a time — first the measurement on screen, then the
+      // tool itself. Taken before the draw-mode handler below and before the host's own Escape, for
+      // the same reason a half-drawn outline claims it: while a tool is armed, Escape means "put
+      // this down", and nothing else.
+      if (tapeOn && e.key === "Escape") {
+        e.preventDefault();
+        if (tape) setTape(null);
+        else setTapeOn(false);
+        return;
+      }
+      if (e.key === "m" || e.key === "M" || e.key === "\u05e6") {
+        // צ is where M sits on a Hebrew layout — the same reason every shortcut in this app goes
+        // through isShortcut rather than reading e.key (see lib/keyboard.ts).
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        e.preventDefault();
+        setTapeOn((on) => !on);
+        setTape(null);
+        return;
+      }
       if (mode !== "draw") return;
       if (e.key === "Enter") {
         if (outline.length >= 3) { e.preventDefault(); onCloseOutline(); }
@@ -927,7 +1030,31 @@ export function PlanCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, outline.length, onCloseOutline, onCancelDraw]);
 
-  const layerCtx: CanvasLayerContext = { clientToMm, mm };
+  // Alignment for host-drawn content. Same references and the same tolerance a dragged corner gets
+  // — the graph's nodes and the outline — plus whatever the layer knows about that the canvas
+  // doesn't. No angle lock: these are objects being placed, not a wall being drawn from an anchor.
+  const snapCtx = (opts?: HostSnapOptions) => ({
+    toleranceMm: SNAP_TOL_PX * mmPerPx,
+    // A box's centre is an alignment reference like any other, so a host that hands over boxes does
+    // not also have to hand over their centres.
+    outline: [...outline, ...graphPoints, ...(opts?.refs ?? []), ...(opts?.boxes ?? []).map((b) => ({ x: b.x, y: b.y }))],
+    fixtures: fixtureRefs(),
+    gridMm,
+    // Equal gaps need both halves: what is being moved, and what it could be spaced against.
+    spacing: opts?.self && opts.boxes?.length ? { self: opts.self, boxes: opts.boxes } : undefined,
+  });
+  const snapHost = (p: Point, opts?: HostSnapOptions): Point => {
+    const r = snapPoint(p, snapCtx(opts));
+    setGuides({ ...r.guides, gaps: r.gaps });
+    return r.point;
+  };
+
+  const layerCtx: CanvasLayerContext = {
+    clientToMm,
+    mm,
+    snap: snapHost,
+    endSnap: () => setGuides({ x: null, y: null }),
+  };
 
   const entryOpen = entry !== null;
   useEffect(() => {
@@ -936,12 +1063,25 @@ export function PlanCanvas({
 
   // "Show me this" — the host bumps focus.nonce, the view travels there. Keyed on the nonce alone
   // so a re-render that happens to carry the same box doesn't yank the view back mid-pan.
+  //
+  // ⚠ SERVED ONCE PER NONCE, and `servedNonce` is the whole of what enforces it. `rect.w`/`rect.h`
+  // are in the dependency list for ONE reason — a focus that arrived before the container had been
+  // measured has to be retried once it has — and without the ref that same dependency made every
+  // later RESIZE replay the last focus box. That is what "it recentres on every click" was: the
+  // canvas is a `1fr` grid column, so anything that changes the layout around it (a document
+  // scrollbar appearing as a panel grows, the zone sidebar collapsing, the window itself) re-ran
+  // this effect and flew the view back to whichever zone was last picked from the list — minutes
+  // and many pans later, with nothing on screen connecting the jump to the click that caused it.
+  // A resize is not a request to travel; only a new nonce is.
   const focusNonce = focus?.nonce ?? 0;
+  const servedNonce = useRef(0);
   useEffect(() => {
     if (!focus || focusNonce === 0 || !hasRect) return;
+    if (servedNonce.current === focusNonce) return;
     const w = focus.maxX - focus.minX;
     const h = focus.maxY - focus.minY;
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0) return; // a degenerate box is not served, so a real one under the same nonce still can be
+    servedNonce.current = focusNonce;
     const box = { minX: focus.minX, minY: focus.minY, w, h };
     if (focus.immediate) jumpTo(box, rect.w, rect.h);
     else animateTo(box, rect.w, rect.h);
@@ -1000,16 +1140,17 @@ export function PlanCanvas({
           ? "cursor-grab"
           : hoverClose && closable
             ? "cursor-pointer"
-            : mode === "draw" || cursor === "crosshair"
+            : tapeOn || mode === "draw" || cursor === "crosshair"
               ? "cursor-crosshair"
-              // The only remaining case is edit mode's own resting cursor, which is a hand rather
-              // than an arrow: a plain drag on empty canvas here already pans (see onPointerDown
-              // below — marquee now needs the additive modifier), so the cursor should say so
-              // before the user ever presses, the way a drawing app's canvas-pan gesture always
-              // reads as a hand. Any handle the pointer is actually over still wins — each sets its
+              // Edit mode's resting cursor is an ARROW again. It was briefly a hand, back when a
+              // plain drag on empty canvas panned; it doesn't any more (see onPointerDown below —
+              // a plain drag rubber-bands, panning is Space or the middle button), and a hand over
+              // a surface that no longer pans under it is the cursor lying about the gesture. The
+              // hand is still shown while Space is held, at the top of this chain, which is exactly
+              // when it is true. Any handle the pointer is actually over still wins — each sets its
               // own cursor-* class directly on itself, which the DOM resolves ahead of this root
               // default regardless.
-              : "cursor-grab active:cursor-grabbing")
+              : "cursor-default")
       }
       role="img"
       aria-label={ariaLabel}
@@ -1021,12 +1162,21 @@ export function PlanCanvas({
           cancelFocus(); // the view is the user's again the instant they grab it
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           pan.current = { x: e.clientX, y: e.clientY, moved: false, ax: e.clientX, ay: e.clientY };
-        } else if (mode === "edit" && canMarquee && isAdditiveClick(e)) {
-          // Marquee now lives behind the same additive modifier (Shift/Ctrl/Cmd) as adding to a
-          // selection — a plain drag pans instead (see the next branch), matching every drawing
-          // app's own "the canvas always pans, rubber-band select is the modified gesture" split,
-          // and giving a plain drag on empty canvas the one behaviour its resting cursor (a hand,
-          // see above) now promises.
+        } else if (tapeOn) {
+          // An armed tape owns the empty canvas. Without this a two-pixel wobble between press and
+          // release turns the first click into a marquee drag, which swallows the click that was
+          // meant to drop a measuring point and clears the measurement already on screen. Space and
+          // the middle button (above) still pan, and the wheel still zooms.
+        } else if (mode === "edit" && canMarquee) {
+          // A PLAIN drag on empty canvas rubber-bands. It spent one release behind the additive
+          // modifier, with a plain drag panning instead, and that trade was the wrong way round for
+          // this app: panning has two dedicated gestures that cost nothing (Space above, the middle
+          // button beside it, and the wheel does the zooming), while rubber-band select has exactly
+          // one — so putting the modifier on the marquee left the only way to select several things
+          // at once behind a key nobody was told about, and multi-select read as removed.
+          //
+          // Shift/Ctrl/Cmd still mean what they mean everywhere else on this canvas: held through
+          // the release, the box ADDS to the selection rather than replacing it (see onPointerUp).
           //
           // A press that reached the svg missed every *draggable* handle (those stopPropagation),
           // but it may still be a plain click on something selectable in a host layer — a zone
@@ -1040,10 +1190,11 @@ export function PlanCanvas({
           const p = clientToMm(e.clientX, e.clientY);
           marquee.current = { anchorClientX: e.clientX, anchorClientY: e.clientY, x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
         } else if (mode === "edit") {
-          // Either there's no marquee host at all, or this press isn't holding the modifier marquee
-          // now needs — either way, a drag on empty canvas means the only other thing it could mean:
-          // move the view. Same deferred capture as the marquee, for the same reason — a press that
-          // never travels is still a click.
+          // No marquee to draw here — this host takes no multi-selection (the studio's event sketch
+          // is the one, see canMarquee) — so a drag on empty canvas means the only other thing it
+          // could mean: move the view. A surface with nothing to rubber-band would otherwise answer
+          // a drag with nothing at all. Same deferred capture as the marquee, for the same reason —
+          // a press that never travels is still a click.
           pan.current = { x: e.clientX, y: e.clientY, moved: false, deferred: true, ax: e.clientX, ay: e.clientY };
         }
       }}
@@ -1087,7 +1238,9 @@ export function PlanCanvas({
           return;
         }
         if (e.altKey !== altHeld) setAltHeld(e.altKey); // the modifier can be pressed while the window was unfocused
-        if (mode === "draw") {
+        // The rubber band needs the live pointer while a shape is being drawn, and so does the tape
+        // between its first click and its second — in edit mode, where nothing tracked it before.
+        if (mode === "draw" || (tapeOn && tape && !tape.b)) {
           lastClientPos.current = { x: e.clientX, y: e.clientY };
           setCursorRaw(clientToMm(e.clientX, e.clientY));
         }
@@ -1115,6 +1268,7 @@ export function PlanCanvas({
       }}
       onPointerLeave={() => {
         if (mode === "draw" && !entry) setCursorRaw(null); // keep the band alive while a length is being typed
+        else if (tapeOn) setCursorRaw(null);
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -1126,14 +1280,23 @@ export function PlanCanvas({
           ? (e) => {
               e.preventDefault(); // without this the browser refuses the drop outright
               e.dataTransfer.dropEffect = "copy";
+              // Live guide lines under an incoming drag, from the same snap the canvas's own drags
+              // use — so the row this item is about to join, and the gap it is about to match, are
+              // both drawn before it is let go.
+              const opts = dropSnap?.();
+              if (opts) snapHost(clientToMm(e.clientX, e.clientY), opts);
             }
           : undefined
       }
+      onDragLeave={onDropAt && dropSnap ? () => setGuides({ x: null, y: null }) : undefined}
       onDrop={
         onDropAt
           ? (e) => {
               e.preventDefault();
-              onDropAt(e, clientToMm(e.clientX, e.clientY));
+              const p = clientToMm(e.clientX, e.clientY);
+              const opts = dropSnap?.();
+              setGuides({ x: null, y: null });
+              onDropAt(e, opts ? snapPoint(p, snapCtx(opts)).point : p);
             }
           : undefined
       }
@@ -1723,6 +1886,40 @@ export function PlanCanvas({
         <line x1={vb.minX} y1={shownGuides.y} x2={vb.minX + vb.w} y2={shownGuides.y} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
       )}
 
+      {/* Equal-gap markers — a bar with an end tick drawn INSIDE each matching gap, so the two (or
+          three) pieces of air the eye is being told are the same are each measured out. Solid where
+          the alignment guides are dashed: they say different things and must not be read as one
+          long line. The ticks are sized in screen pixels, so a 200mm gap is still marked legibly
+          when the whole hall is on screen. */}
+      {shownGuides.gaps?.map((g) =>
+        g.segments.map((seg, i) => {
+          const tick = mm(4);
+          // The bar spanning the gap, then a tick across each of its ends. Built as coordinates
+          // rather than as JSX per axis so that vector-effect lands on every line: stroke and
+          // stroke-width inherit through a <g>, but vector-effect does NOT, and a 1.5-unit stroke
+          // in world millimetres is invisible at any zoom a hall is looked at.
+          const lines: [number, number, number, number][] =
+            g.axis === "x"
+              ? [
+                  [seg.from, seg.at, seg.to, seg.at],
+                  [seg.from, seg.at - tick, seg.from, seg.at + tick],
+                  [seg.to, seg.at - tick, seg.to, seg.at + tick],
+                ]
+              : [
+                  [seg.at, seg.from, seg.at, seg.to],
+                  [seg.at - tick, seg.from, seg.at + tick, seg.from],
+                  [seg.at - tick, seg.to, seg.at + tick, seg.to],
+                ];
+          return (
+            <g key={`${g.axis}-${i}-${seg.from}`} className="text-accent" stroke="currentColor" strokeWidth={1.5}>
+              {lines.map(([x1, y1, x2, y2], j) => (
+                <line key={j} x1={x1} y1={y1} x2={x2} y2={y2} vectorEffect="non-scaling-stroke" />
+              ))}
+            </g>
+          );
+        }),
+      )}
+
       {/* Measure overlay — each wall's length in metres at its midpoint. Live while drawing too;
           the not-yet-drawn closing edge is skipped, exactly as the wall render skips it. */}
       {showDims &&
@@ -1754,7 +1951,75 @@ export function PlanCanvas({
             </text>
           );
         })}
+      {/* While the tape is armed it owns every click on the canvas, and this pane is what makes that
+          true. Without it the tool works over empty floor and nowhere else: a table, a wall, a zone
+          tint and a door all take their own clicks (and stop them propagating), so "measure from the
+          edge of that table to the wall" — the measurement anyone actually wants — would select the
+          table instead. Covers the viewBox, so it moves and scales with the view for free.
+
+          Clicks still reach handleCanvasClick, because they bubble to the <svg> from here exactly as
+          they would from the background. */}
+      {tapeOn && (
+        <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="transparent" className="cursor-crosshair" />
+      )}
+
+      {/* THE TAPE. Drawn last, so it lies over the walls, the furniture and everything a host put in
+          its layers — a measurement half-hidden behind a table is not a measurement. The live half
+          (first click placed, second not yet) is dashed; a finished one is solid and stays until the
+          next measurement replaces it. */}
+      {tapeSegment && (
+        <g className="text-accent pointer-events-none">
+          <line
+            x1={tapeSegment.a.x}
+            y1={tapeSegment.a.y}
+            x2={tapeSegment.b.x}
+            y2={tapeSegment.b.y}
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeDasharray={tapeSegment.live ? "6 4" : undefined}
+            vectorEffect="non-scaling-stroke"
+          />
+          {/* End ticks, square to the tape — the pair of marks that say where the measurement
+              actually starts and stops, rather than leaving a line whose ends are guesses. */}
+          {([tapeSegment.a, tapeSegment.b] as Point[]).map((e, i) => {
+            const len = Math.hypot(tapeSegment.b.x - tapeSegment.a.x, tapeSegment.b.y - tapeSegment.a.y) || 1;
+            const nx = (-(tapeSegment.b.y - tapeSegment.a.y) / len) * mm(6);
+            const ny = ((tapeSegment.b.x - tapeSegment.a.x) / len) * mm(6);
+            return (
+              <line
+                key={i}
+                x1={e.x - nx}
+                y1={e.y - ny}
+                x2={e.x + nx}
+                y2={e.y + ny}
+                stroke="currentColor"
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            );
+          })}
+        </g>
+      )}
     </svg>
+
+    {/* The tape's readout — metres to the centimetre, plus the angle it was taken at, over the
+        middle of its own line. An HTML pill for the same reason every other readout on this canvas
+        is one: it holds a fixed screen size and carries a scrim, so a measurement taken across a
+        dark zone tint is still legible. */}
+    {hasRect && tapeSegment && (() => {
+      const c = worldToPx({ x: (tapeSegment.a.x + tapeSegment.b.x) / 2, y: (tapeSegment.a.y + tapeSegment.b.y) / 2 });
+      const lengthMm = wallLengthMm(tapeSegment.a, tapeSegment.b);
+      if (lengthMm < 1) return null;
+      return (
+        <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: c.x, top: c.y }}>
+          <div className="flex items-center gap-1.5 rounded-full border border-accent bg-surface/95 px-2.5 py-1 text-xs font-semibold text-accent shadow-floating nums">
+            <span>{(lengthMm / 1000).toFixed(2)} מ׳</span>
+            <span className="text-muted">·</span>
+            <span className="font-medium text-muted">{Math.round(norm360(wallAngleDeg(tapeSegment.a, tapeSegment.b)))}°</span>
+          </div>
+        </div>
+      );
+    })()}
 
     {/* HTML overlays rather than SVG text: they stay a fixed screen size for free and carry a real
         surface scrim, so nothing sits unbacked on the grid. Positioned with physical left/top —
@@ -1859,7 +2124,25 @@ export function PlanCanvas({
       <IconButton label={showDims ? "הסתרת מידות" : "הצגת מידות"} onClick={() => setDimsOverride(!showDims)} className={showDims ? "text-accent" : undefined}>
         <Ruler className="h-4 w-4" strokeWidth={2} />
       </IconButton>
+      {/* Two different questions, two buttons. The one above turns the WALLS' own labels on and off;
+          this one measures between any two points you like. */}
+      <IconButton
+        label={tapeOn ? "סגירת סרט המדידה · Esc" : "מדידת מרחק — לחיצה על שתי נקודות · M"}
+        onClick={() => { setTapeOn((on) => !on); setTape(null); }}
+        className={tapeOn ? "text-accent" : undefined}
+      >
+        <RulerDimensionLine className="h-4 w-4" strokeWidth={2} />
+      </IconButton>
     </div>
+    {/* What the armed tool is waiting for. It sits at the top-centre, out of the way of both the
+        inspector and the toolbar, and goes the moment the second point lands. */}
+    {tapeOn && (
+      <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
+        <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
+          {tape && !tape.b ? "לחצו על הנקודה השנייה · Shift לזווית ישרה" : "לחצו על נקודת ההתחלה"}
+        </span>
+      </div>
+    )}
     {menu && (
       <CanvasMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
     )}
@@ -1930,6 +2213,109 @@ function BezierHandles({
 // drag handle that slides it along its wall (world-space drag points get projected back onto the
 // wall's chord by the caller). `entrance` only needs the four fields the geometry actually reads —
 // not the outline system's own id/wallIndex — so a venue's StructureEntrance satisfies it too.
+/**
+ * THE rotate handle — a knob on a stalk above a thing, dragged to spin it.
+ *
+ * Exported, unlike every other handle in this file, because the things that need turning are not
+ * all drawn in here: the venue's own features are drawn by components/venue-plan.tsx and the
+ * event's tables and items by the studio's canvas-stage, both of them host layers on this canvas.
+ * Each grew a rotate handle of its own at one point and each lost it, which is how the app ended up
+ * with a `rotation` field on DesignTable that nothing could set and a `rotationDeg` on a venue
+ * feature reachable only by typing a number into a side panel.
+ *
+ * Drawn in WORLD space rather than inside the caller's own rotated group, and given the pivot and
+ * the current angle explicitly, so a host can hang it off a table, a carpet, a stage or the bounding
+ * box of a whole selection without any of them having to agree on how they draw themselves.
+ *
+ * Rotation lands on 15° steps unless Alt is held — the same lock, and the same release, that
+ * governs drawing a wall. A stage is almost never at 37.4°.
+ */
+export function RotateHandle({
+  pivot,
+  reachMm,
+  rotationDeg,
+  onRotate,
+  onCommit,
+  clientToMm,
+  mm,
+  label,
+}: {
+  /** What it turns about, in world mm. */
+  pivot: Point;
+  /** How far above the pivot the knob floats, in the thing's OWN frame — normally half its depth,
+   *  so the handle clears the shape it belongs to at every zoom. */
+  reachMm: number;
+  /** The current facing, so the handle rides round with what it turns rather than staying north. */
+  rotationDeg: number;
+  /** The new angle, live, once per pointermove. The caller decides what that means for the thing
+   *  (or things) being turned — a lone item takes `deg` as its facing, a group takes `raw`,
+   *  subtracts where the sweep began and turns its members about this same pivot by the difference.
+   *
+   *  BOTH angles, because the 15° lock has to be applied to different quantities in those two
+   *  cases: to a lone item's absolute bearing (a stage lands square to the room), but to a group's
+   *  SWEEP (a set of tables already sitting at 7° turns by exactly 90° and stays the shape it was).
+   *  Constraining a group's absolute bearing instead would shear the whole arrangement onto the
+   *  grid the moment it was touched. */
+  onRotate: (deg: number, mods: { alt: boolean; shift: boolean; raw: number }) => void;
+  onCommit?: () => void;
+  clientToMm: (clientX: number, clientY: number) => Point;
+  mm: (px: number) => number;
+  label: string;
+}) {
+  const [live, setLive] = useState<number | null>(null);
+  const gap = mm(22);
+  const at = fromLocalFrame({ x: 0, y: -(reachMm + gap) }, pivot, rotationDeg);
+  const stalkFrom = fromLocalFrame({ x: 0, y: -reachMm }, pivot, rotationDeg);
+
+  const drag = dragHandlers(
+    clientToMm,
+    (p, mods) => {
+      const raw = (Math.atan2(p.y - pivot.y, p.x - pivot.x) * 180) / Math.PI + 90;
+      const deg = mods.alt ? norm360(raw) : constrainAngleDeg(raw);
+      setLive(deg);
+      onRotate(deg, { ...mods, raw });
+    },
+    undefined,
+    (dragging) => { if (!dragging) setLive(null); },
+    onCommit,
+  );
+
+  return (
+    <g className="text-accent">
+      <line
+        x1={stalkFrom.x}
+        y1={stalkFrom.y}
+        x2={at.x}
+        y2={at.y}
+        stroke="currentColor"
+        strokeOpacity={0.5}
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+      />
+      <g {...drag} tabIndex={0} role="button" aria-label={label} className={`cursor-alias touch-none ${HANDLE_CLS}`}>
+        <circle {...HALO} cx={at.x} cy={at.y} r={mm(11)} />
+        <circle cx={at.x} cy={at.y} r={mm(6)} className="hover:text-accent-deep" fill="currentColor" />
+      </g>
+      {/* The angle, while it is being turned. In SVG rather than an HTML pill because a host layer
+          has no overlay of its own to put one in — and it is only on screen during the drag, when
+          there is nothing underneath it worth reading anyway. */}
+      {live !== null && (
+        <text
+          x={at.x}
+          y={at.y}
+          dy={-mm(14)}
+          textAnchor="middle"
+          fill="currentColor"
+          style={{ fontSize: mm(11), fontWeight: 700 }}
+          className="pointer-events-none nums"
+        >
+          {Math.round(live)}°
+        </text>
+      )}
+    </g>
+  );
+}
+
 export function EntranceDoor({
   entrance,
   a,

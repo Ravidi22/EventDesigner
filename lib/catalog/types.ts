@@ -6,12 +6,70 @@ import type { ElementStyle } from "../element-style";
 
 export type { Layer };
 
+/** What an item is drawn as on the plan.
+ *
+ *  Three of these are SVG primitives the renderer draws directly (rect, circle, ellipse) and one is
+ *  an outline the designer drew by hand (custom). Everything between them is DERIVED: the outline
+ *  is built from the item's own width and depth (lib/studio/footprint.ts), so a new shape costs no
+ *  new column, and a חצי עיגול 120×60 is exactly what its two measurements say it is.
+ *
+ *  EVERY DERIVED SHAPE'S BOUNDING BOX IS ITS width × depth. That is the invariant that keeps the
+ *  drawer's two number fields honest — a shape whose real extent lived somewhere other than its
+ *  measurements would put the designer back where "the numbers I type don't change the plan"
+ *  started. `npm run check:footprint` asserts it for every member of this union. */
+export type MapShape =
+  | "rect"
+  | "circle"
+  | "ellipse"
+  | "half-circle"
+  | "quarter-circle"
+  | "crescent"
+  | "triangle"
+  | "trapezoid"
+  | "hexagon"
+  | "octagon"
+  | "u-shape"
+  | "custom";
+
+/** The order the drawer offers them in: the three a catalog is mostly made of, then the curved
+ *  tables a hall actually owns, then the polygons, then the ח — the one shape here that is a run of
+ *  furniture rather than a single top — then "draw it yourself". */
+export const MAP_SHAPES: MapShape[] = [
+  "rect",
+  "circle",
+  "ellipse",
+  "half-circle",
+  "quarter-circle",
+  "crescent",
+  "triangle",
+  "trapezoid",
+  "hexagon",
+  "octagon",
+  "u-shape",
+  "custom",
+];
+
+export const SHAPE_LABEL: Record<MapShape, string> = {
+  rect: "מלבן",
+  circle: "עיגול",
+  ellipse: "אליפסה",
+  "half-circle": "חצי עיגול",
+  "quarter-circle": "רבע עיגול",
+  crescent: "סהר (סרפנטינה)",
+  triangle: "משולש",
+  trapezoid: "טרפז",
+  hexagon: "משושה",
+  octagon: "מתומן",
+  "u-shape": "צורת ח",
+  custom: "מותאם",
+};
+
 // Map appearance (studio 2D plan). Footprint is always drawn at true scale; `content`
-// is what appears inside it. rect/circle/ellipse read from `dimensions` (single source
+// is what appears inside it. Every shape but "custom" reads from `dimensions` (single source
 // of truth) — only "custom" stores its own outline. Outline coordinates are in mm and
 // are rendered centered on their bounding box (no pre-centering required).
 export interface MapAppearance {
-  shape: "rect" | "circle" | "ellipse" | "custom";
+  shape: MapShape;
   outline?: Point[]; // required iff shape === "custom"
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
   content: "icon" | "name" | "none";

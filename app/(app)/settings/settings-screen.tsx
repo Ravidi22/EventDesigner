@@ -6,6 +6,7 @@ import type { BusinessSettings } from "@/lib/settings/types";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { GoogleStatus } from "@/lib/google/actions";
 import type { StudioMember } from "@/lib/team/types";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { BusinessSection } from "./business-section";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
@@ -79,7 +80,7 @@ export function SettingsScreen({
   };
 
   return (
-    <div className="flex items-start gap-3 px-8 py-8">
+    <div className={`flex items-start gap-3 ${PAGE_GUTTER}`}>
       <nav aria-label="הגדרות" className="sticky top-0 flex w-[228px] shrink-0 flex-col gap-[3px] rounded-md border border-border bg-surface p-2">
         {SECTIONS.map(({ id, label, icon: Icon }) => {
           const active = id === section;

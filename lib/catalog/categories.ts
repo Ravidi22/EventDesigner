@@ -25,6 +25,14 @@ export interface CategoryField {
   suffix?: string; // what the multiplication yields ("נרות")
 }
 
+/** What a NEW product of this category starts out drawn as: "round" seeds a circle, the other two
+ *  a rectangle. It is a seed and nothing more.
+ *
+ *  It used to decide which size FIELDS the drawer showed, and that is how a product could carry a
+ *  diameter while being drawn as a rectangle that read neither of its numbers — the footprint fell
+ *  back to MIN_FOOTPRINT_MM and drew a 60×60 box no measurement in the form could change. The SHAPE
+ *  picks the fields now (app/(app)/catalog/product-drawer.tsx), so a product's dimensions are always
+ *  measurements of the thing it is drawn as. */
 export type DimsMode = "round" | "box" | "both";
 
 // The department a designer browses by (F-4.3 catalog UX) — coarser than CategoryDef, which

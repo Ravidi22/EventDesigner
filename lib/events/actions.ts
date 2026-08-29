@@ -11,10 +11,12 @@
 // WHAT IS *NOT* HERE: which event you currently have open. Like the active venue, that is a
 // per-device pointer — it belongs in this browser and stays in lib/events/storage.ts.
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { revalidateEvents } from "@/lib/db/revalidate";
-import { events, eventZones, venues, zones } from "@/lib/db/schema";
+import { appointments, events, eventZones, venues, zones } from "@/lib/db/schema";
+import { linksForAppointments, removeFromGoogle } from "@/lib/google/sync";
 import type { EventSummary } from "./types";
 import { toEvent, toEvents, toEventRow, toEventZoneRows } from "./db-mapping";
 
@@ -266,6 +268,70 @@ export async function patchEvent(id: string, patch: EventPatch): Promise<EventSu
   const next: EventSummary = { ...current, ...patch, id, createdAt: current.createdAt };
   if (patch.zoneIds !== undefined) assertIdList(patch.zoneIds, "patch.zoneIds");
   return saveEvent(next);
+}
+
+/**
+ * Delete an event, and everything that hangs off it.
+ *
+ * ── WHY A REAL DELETE, WHEN THE CATALOG ARCHIVES ──────────────────────────────────────────────
+ *
+ * A product is archived rather than deleted because a placement in last spring's plan still points
+ * at it: destroying the row would tear a hole in a drawing somebody already showed a client. An
+ * event points the other way. Nothing in the app references one that is not ITS OWN — the sketch,
+ * the quotes, the meetings, the liked images and the exports are all the event's children, and the
+ * database says so with `on delete cascade` on every one of them. So there is no dangling reference
+ * to protect and nothing left resolvable by archiving; `events.archived` already exists for the
+ * "keep it, hide it" answer, and this is the other one.
+ *
+ * WHAT GOES WITH IT, all by cascade: the zone list, the client-portal access, every meeting booked
+ * against it, every version of the design document, the liked gallery images, the packing spares,
+ * the exports and the issued quotes. `expenses.event_id` is `on delete set null` instead — money
+ * that left the studio's account is a fact about the studio, not about the event, and it stays on
+ * the books unattached rather than disappearing with the file it was spent on.
+ *
+ * ⚠ THE GOOGLE LINKS ARE READ FIRST, exactly as deleteAppointment reads them (lib/appointments/
+ * actions.ts). Deleting an event deletes its meetings, which deletes the rows naming which Google
+ * event each one became — and the remote copies would then sit in every connected designer's
+ * calendar forever with nothing in this app able to name them. This is the same hazard as a single
+ * cancelled meeting's, multiplied by the diary.
+ *
+ * ⚠ WHAT IT DOES NOT CLEAN UP: uploaded files. The design document's images, the exports and the
+ * gallery uploads stay in storage, orphaned. That is the same deal deleteVenue and the catalog's
+ * delete already make — this app has no reference counter over `lib/files/`, and inventing one for
+ * this path alone would be a half of a feature that quietly deletes a photo two events share.
+ *
+ * Scoped by organisation and nothing else, like every other write in this file: an event is the
+ * studio's, and the venue ladder gates properties, not the diary (see the note in
+ * lib/appointments/actions.ts).
+ */
+export async function deleteEvent(id: string): Promise<EventSummary[]> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  const database = db();
+
+  // Both reads BEFORE the delete — see above. The appointment ids are this studio's own by the
+  // same scope the delete uses, so a link cannot be read for a meeting belonging to anyone else.
+  const booked = await database
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(and(eq(appointments.eventId, id), eq(appointments.organizationId, organizationId)));
+  const links = await linksForAppointments(booked.map((a) => a.id), organizationId);
+
+  const [row] = await database
+    .delete(events)
+    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+    .returning({ id: events.id });
+  // Not found and not ours are the same answer, and it throws rather than returning `{ error }`:
+  // a screen showing an event it cannot delete is holding a row that no longer exists, which is not
+  // a correction the designer can make.
+  if (!row) throw new Error("event not found");
+
+  // The diary lives on /dashboard, which revalidateEvents already covers — the meetings that went
+  // with the event are on the same screen as the event was.
+  revalidateEvents();
+  afterResponse(() => removeFromGoogle(links, organizationId));
+
+  return fetchEvents();
 }
 
 /** F-1.2: the meeting flow only ever moves the furthest-reached stage FORWARD; revisiting an earlier

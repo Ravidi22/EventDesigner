@@ -1,6 +1,6 @@
 import { PageSkeleton } from "@/components/skeleton";
 
-// Two half-width cards over the calendar — see dashboard-screen.tsx.
+// Greeting + title, two half-width cards, then the calendar — see dashboard-screen.tsx.
 export default function Loading() {
-  return <PageSkeleton rows={2} />;
+  return <PageSkeleton shape="split" header="stack" />;
 }

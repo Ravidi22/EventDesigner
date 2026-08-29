@@ -556,7 +556,15 @@ async function verifyEvents() {
   // walls are written either way — one refused zone must never cost a designer their drawing.
   const refused = await saveVenuePlan(venueId, emptyStructure(), []);
   const afterRefusal = await fetchVenuePlan(venueId);
-  check("a booked zone is not deleted", refused.blocked.join() === zoneA.name, refused.blocked.join());
+  check("a booked zone is not deleted", refused.blocked.map((b) => b.name).join() === zoneA.name, JSON.stringify(refused.blocked));
+  // The refusal has to NAME the event, not just the zone. Without this the editor can only say
+  // "some event is using this", which is what an archived event — invisible on the dashboard —
+  // turned into an unanswerable dead end for a designer trying to delete a room.
+  check(
+    "…and says which event is standing on it",
+    refused.blocked[0]?.events.some((e) => e.name === original.clientName) === true,
+    JSON.stringify(refused.blocked[0]?.events),
+  );
   check("…the unbooked zone in the same save is", afterRefusal.zones.length === 1 && afterRefusal.zones[0]?.id === zoneA.id, String(afterRefusal.zones.length));
   check("…and the walls saved anyway", afterRefusal.structure.nodes.length === 0, String(afterRefusal.structure.nodes.length));
   await saveVenuePlan(venueId, emptyStructure(), [zoneA, zoneB]); // as the checks below expect it

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowLeft, Calendar, CheckCircle2, Clock, MapPin, Phone, Plus, User, Users, X } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Clock, MapPin, Phone, Plus, Trash2, User, Users, X } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -30,6 +30,7 @@ export function EventDetailDrawer({
   onContinue,
   onOpenAppointment,
   onCreateAppointment,
+  onDelete,
 }: {
   event: EventSummary | null;
   venueName?: string;
@@ -40,6 +41,11 @@ export function EventDetailDrawer({
   onContinue: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
   onCreateAppointment: (e: EventSummary) => void;
+  /** Asks the screen to delete this event. The QUESTION is not asked here — the drawer hands the
+   *  event over and closes, and the screen's own ConfirmDialog is what appears, exactly as the
+   *  catalog's edit drawer hands its מחיקה to the catalog screen. One dialog per surface, so the
+   *  same delete cannot be worded two ways. */
+  onDelete: (e: EventSummary) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   // Every hook stays above the `!event` bail-out below — this component renders with a null event
@@ -217,6 +223,24 @@ export function EventDetailDrawer({
           </Button>
           <Button variant="outline" className="flex-1" onClick={go}>
             פרטי האירוע
+          </Button>
+          {/* Destructive, so it sits at the far end of the footer at the quietest weight the button
+              scale has (`danger` is ghost-ink until hovered) — the same shape the catalog's edit
+              drawer already uses. Icon-only because the two things a designer actually opens this
+              drawer to do are the buttons beside it, and a third full-width label would read as a
+              third equal choice. The drawer closes on the way out: the confirmation belongs to the
+              screen, and two stacked dialogs asking about the same event is one too many. */}
+          <Button
+            variant="danger"
+            aria-label="מחיקת האירוע"
+            title="מחיקת האירוע"
+            className="shrink-0 px-3.5"
+            onClick={() => {
+              onDelete(event);
+              onClose();
+            }}
+          >
+            <Trash2 className="h-4 w-4" strokeWidth={2} />
           </Button>
         </div>
       </div>

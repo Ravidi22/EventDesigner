@@ -3,6 +3,7 @@
 // dependency on the catalog/alias graph — which keeps the self-check runnable under node.
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { numberedUnits } from "../design-document/groups";
 import { isMain } from "../self-check";
 
 export interface ItemInfo {
@@ -70,14 +71,19 @@ export interface LegendEntry {
 }
 
 // Group tables that carry the same set of table-layer items → the map's "שולחן ← ערכת עיצוב".
+//
+// Over NUMBERED UNITS, not over tables: four tables the designer pushed together are one table on
+// this list, carrying one number and the dressing of all four between them. Walking doc.tables
+// directly would print that number four times and send the crew looking for four table 4s.
 export function placementLegend(
   doc: DesignDocumentContent,
   productName: (variantId: string) => string | undefined,
 ): LegendEntry[] {
-  const itemsForTable = (tableId: string): string[] => {
+  const itemsOn = (tableIds: string[]): string[] => {
+    const ids = new Set(tableIds);
     const counts = new Map<string, number>();
     for (const p of doc.placements) {
-      if (p.layer !== "table" || p.tableId !== tableId) continue;
+      if (p.layer !== "table" || !p.tableId || !ids.has(p.tableId)) continue;
       const name = productName(p.variantId);
       if (name) counts.set(name, (counts.get(name) ?? 0) + p.quantity);
     }
@@ -87,11 +93,11 @@ export function placementLegend(
   };
 
   const bySignature = new Map<string, LegendEntry>();
-  for (const t of doc.tables) {
-    const items = itemsForTable(t.id);
+  for (const unit of numberedUnits(doc)) {
+    const items = itemsOn(unit.tableIds);
     const sig = items.join("|");
     const entry = bySignature.get(sig) ?? { tableNumbers: [], items };
-    entry.tableNumbers.push(t.number);
+    entry.tableNumbers.push(unit.number);
     bySignature.set(sig, entry);
   }
 
@@ -131,5 +137,25 @@ if (isMain(import.meta.url)) {
   const withCloth = legend.find((e) => e.items.length > 0)!;
   assert(withCloth.tableNumbers.join(",") === "1,2", "tables 1 & 2 grouped by same item");
   assert(legend.some((e) => e.items.length === 0 && e.tableNumbers.includes(3)), "empty table 3 in its own group");
+
+  // A block of pushed-together tables is ONE line on the crew's list, under the one number they
+  // share, carrying what the whole block wears.
+  const blocked = placementLegend(
+    {
+      calibration: { mmPerUnit: 1 },
+      tables: [
+        { id: "t1", type: "מלבן", number: 1, position: { x: 0, y: 0 }, rotation: 0, groupId: "g" },
+        { id: "t2", type: "מלבן", number: 2, position: { x: 0, y: 0 }, rotation: 0, groupId: "g" },
+      ],
+      placements: [
+        { id: "p1", variantId: "cloth", layer: "table", quantity: 1, tableId: "t1", position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+        { id: "p2", variantId: "cloth", layer: "table", quantity: 2, tableId: "t2", position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+      ],
+      groups: [{ id: "g", number: 1 }],
+    },
+    (v) => (v === "cloth" ? "מפה" : undefined),
+  );
+  assert(blocked.length === 1 && blocked[0].tableNumbers.join(",") === "1", "a group is one numbered unit on the legend");
+  assert(blocked[0].items.join("|") === "מפה ×3", "…carrying what the whole block wears");
   console.log("aggregate self-check passed");
 }

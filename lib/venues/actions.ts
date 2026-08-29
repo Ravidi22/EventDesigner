@@ -236,6 +236,18 @@ export async function fetchVenueGeometry(venueId: string | undefined): Promise<V
   };
 }
 
+/** A zone the save refused to delete, and who is standing on it. */
+export interface BlockedZone {
+  /** The zone's name, as it reads in the editor's list. */
+  name: string;
+  /** Every event booked into it. `archived` is called out because that is the case the designer
+   *  cannot see from the dashboard, and so the one that reads as the app being wrong.
+   *
+   *  CAN BE EMPTY while the zone is still blocked — see the left join below. The editor words that
+   *  case generically rather than pretending to a name it was not given. */
+  events: { name: string; archived: boolean }[];
+}
+
 /** Save the plan editor's current state. Structure and zones move together, in ONE transaction.
  *
  *  The zone list is a SNAPSHOT — stepping back over "I named that room" leaves it simply shorter
@@ -251,8 +263,15 @@ export async function fetchVenueGeometry(venueId: string | undefined): Promise<V
  *  edit after that looked accepted on screen and reached nothing.
  *
  *  A zone that HAS left the list but still has events standing on it is not deleted either, and
- *  does not take the save down: its name comes back in `blocked` so the editor can say why it is
- *  still there. Unbooking it is a change to those events, which is not this endpoint's to make.
+ *  does not take the save down: it comes back in `blocked` — WITH THE EVENTS THAT ARE STANDING ON
+ *  IT — so the editor can say why it is still there. Unbooking it is a change to those events,
+ *  which is not this endpoint's to make.
+ *
+ *  ⚠ NAMING THE EVENTS IS THE POINT, not decoration. `blocked` used to carry zone names alone, and
+ *  the refusal it produced ("there are events assigned to this area") was unanswerable: an event
+ *  that is ARCHIVED is filtered off the dashboard, so a designer who had cleared every event they
+ *  could see was told, correctly and uselessly, that one was still there. Naming it turns that into
+ *  a two-step job — restore it from /production's ״הסתיים״ lane, then unbook or delete it.
  *
  *  Needs `editor`: there is one wall graph per property and no private copy, so saving over it is a
  *  real permission — see VENUE_ROLE_SUMMARY.
@@ -263,7 +282,7 @@ export async function saveVenuePlan(
   venueId: string,
   structure: VenueStructure,
   zoneList: Zone[],
-): Promise<{ blocked: string[] }> {
+): Promise<{ blocked: BlockedZone[] }> {
   const { actor } = await requireVenueAccess(venueId, "editor");
   if (!structure || typeof structure !== "object") throw new Error("structure must be an object");
   if (!Array.isArray(zoneList)) throw new Error("zones must be an array");
@@ -293,18 +312,39 @@ export async function saveVenuePlan(
 
     const inList = new Set(zoneList.map((z) => z.id));
     const gone = stored.filter((z) => !inList.has(z.id));
-    const blocked: string[] = [];
+    const blocked: BlockedZone[] = [];
 
     if (gone.length) {
       // The reverse lookup the schema's note on event_zones asks for, done BEFORE the delete rather
       // than discovered as a constraint violation that would roll the walls back too.
+      //
+      // Joined to `events` for the client name the refusal is going to have to say out loud.
+      //
+      // ⚠ A **LEFT** JOIN, AND THE SCOPE SITS ON THE JOIN RATHER THAN IN THE WHERE. What decides
+      // whether a zone may be deleted has to stay exactly what it was — "is there ANY row in
+      // event_zones pointing at it" — because that is the question the FOREIGN KEY asks a few lines
+      // below, and it asks it without a tenant filter. Move the organisation test into the where
+      // clause with an inner join, and a row this studio cannot see would stop appearing here, the
+      // zone would go into `deletable`, and the delete would hit ON DELETE RESTRICT and abort the
+      // transaction — taking the WALL GRAPH down with it, which is precisely the catastrophe the
+      // note above this function exists to record. So the scope narrows the NAME and never the
+      // verdict: a row with no visible event still blocks, just anonymously.
       const booked = await tx
-        .select({ zoneId: eventZones.zoneId })
+        .select({ zoneId: eventZones.zoneId, name: events.clientName, archived: events.archived })
         .from(eventZones)
+        .leftJoin(events, and(eq(events.id, eventZones.eventId), eq(events.organizationId, organizationId)))
         .where(inArray(eventZones.zoneId, gone.map((z) => z.id)));
       const bookedIds = new Set(booked.map((b) => b.zoneId));
 
-      for (const z of gone) if (bookedIds.has(z.id)) blocked.push(z.name);
+      for (const z of gone) {
+        if (!bookedIds.has(z.id)) continue;
+        blocked.push({
+          name: z.name,
+          events: booked
+            .filter((b) => b.zoneId === z.id && b.name !== null)
+            .map((b) => ({ name: b.name as string, archived: b.archived ?? false })),
+        });
+      }
       const deletable = gone.filter((z) => !bookedIds.has(z.id)).map((z) => z.id);
       if (deletable.length) {
         await tx

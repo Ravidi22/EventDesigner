@@ -35,6 +35,20 @@ export function setActiveEventId(id: string): void {
   }
 }
 
+/** Forget which event this device had open.
+ *
+ *  Called when the open event is DELETED, and only then. fetchActiveEvent already survives a
+ *  pointer at a row that is gone — it falls back to the newest event — so this is not what keeps
+ *  the app working; it is what stops the browser carrying a dead id around forever and re-resolving
+ *  it on every screen that asks. */
+export function clearActiveEventId(): void {
+  try {
+    window.localStorage.removeItem(ACTIVE_KEY);
+  } catch {
+    // Same non-fatal story as setActiveEventId: the fallback above covers it.
+  }
+}
+
 /** The active event, resolved against the server.
  *
  *  ⚠ ASYNC NOW. It used to be a synchronous read of two localStorage keys, and every caller could

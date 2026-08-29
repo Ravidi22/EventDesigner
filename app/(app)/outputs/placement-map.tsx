@@ -1,12 +1,15 @@
 import Link from "next/link";
 import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
 import { placementLegend } from "@/lib/outputs/aggregate";
+import { numberedUnits } from "@/lib/design-document/groups";
 import { productName } from "@/lib/outputs/lookup";
 import { absoluteControlPoints, outlinePathD, pointAtDistance, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import type { EventPlan } from "@/lib/events/plan";
-import { nodeMap, wallPoints } from "@/lib/venues/structure";
+import { featureFootprint, nodeMap, wallPoints } from "@/lib/venues/structure";
 import { stairsGeometry } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
+import { FootprintShape, tableFootprint } from "@/components/footprint-shape";
+import { arrangedStructure } from "@/lib/design-document/features";
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
 
@@ -29,7 +32,12 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
   // structure, and the frame is what keeps the rest of the property off the crew's page — an
   // adjacent room's wall crops at the edge instead of being special-cased out.
   const box = plan.bounds;
-  const nodes = nodeMap(plan.structure);
+  // The property AS THIS EVENT ARRANGED IT. The crew is handed this page to set a room up from, so a
+  // bar the designer pushed across the floor has to be drawn where they pushed it — a map showing
+  // the bar where the venue keeps it is a map of a room nobody is building. Walls, doors and zones
+  // are the property's and are unchanged; only the features move (lib/design-document/features.ts).
+  const structure = arrangedStructure(plan.structure, doc);
+  const nodes = nodeMap(structure);
   const vb = `${box.minX - pad} ${box.minY - pad} ${box.widthMm + pad * 2} ${box.heightMm + pad + 1400}`;
 
   return (
@@ -43,8 +51,8 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
           ))}
         {/* Walls. An "edge" (a terrace lip, a rim) prints lighter and dashed — never as something
             the crew would read as a wall they cannot carry a table through. */}
-        {plan.structure.walls.map((w) => {
-          const pts = wallPoints(plan.structure, w, nodes);
+        {structure.walls.map((w) => {
+          const pts = wallPoints(structure, w, nodes);
           if (!pts) return null;
           const isEdge = w.kind === "edge";
           const common = {
@@ -61,9 +69,9 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
           return <line key={w.id} x1={pts.a.x} y1={pts.a.y} x2={pts.b.x} y2={pts.b.y} {...common} />;
         })}
         {/* Doors — a gap struck through the wall, labelled */}
-        {plan.structure.entrances.map((e) => {
-          const wall = plan.structure.walls.find((w) => w.id === e.wallId);
-          const pts = wall ? wallPoints(plan.structure, wall, nodes) : null;
+        {structure.entrances.map((e) => {
+          const wall = structure.walls.find((w) => w.id === e.wallId);
+          const pts = wall ? wallPoints(structure, wall, nodes) : null;
           if (!pts) return null;
           const len = wallLengthMm(pts.a, pts.b) || 1;
           const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
@@ -86,7 +94,7 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
           );
         })}
         {/* Fixed features (pool, built stage, bar) — outline + label, B&W-safe */}
-        {plan.structure.features.map((f) => {
+        {structure.features.map((f) => {
           const resolved = resolveStyle(f.style, "monochrome", { fill: "#f0eef5", stroke: "#4a4658", strokeWidth: 1.25 });
           const common = {
             fill: resolved.fill,
@@ -109,13 +117,11 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
                 </g>
               )}
               <g transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
-                {f.shape === "circle" ? (
-                  <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
-                ) : f.shape === "ellipse" ? (
-                  <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
-                ) : (
-                  <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
-                )}
+                {/* Same resolver the editor draws with (components/footprint-shape.tsx) — a ח bar
+                    printed as a solid block is the crew told to fill the floor the staff stand in. */}
+                <g transform={`translate(${f.x} ${f.y})`}>
+                  <FootprintShape footprint={featureFootprint(f)} {...common} />
+                </g>
                 <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill="#4a4658">
                   {f.label}
                 </text>
@@ -123,10 +129,40 @@ export function PlacementMap({ doc, plan }: { doc: DesignDocumentContent; plan: 
             </g>
           );
         })}
-        {/* Tables */}
-        {doc.tables.map((t) => (
-          <TableGlyph key={t.id} t={t} />
-        ))}
+        {/* Tables, in the order the designer stacked them. Only tables are drawn on this page, so
+            the whole floor stack is not needed — but two overlapping tables have to print the way
+            they were arranged, or the crew lays the room from a picture of a different one.
+            `order` is absent on everything nobody restacked, so this is document order as before. */}
+        {[...doc.tables]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((t) => (
+            <TableGlyph key={t.id} t={t} />
+          ))}
+
+        {/* Numbers are drawn per NUMBERED UNIT, not per table: a block of four pushed together
+            carries one number, in the middle of the block, exactly as it does on the studio plan.
+            A lone table is a unit of one, so its number lands where it always did. */}
+        {numberedUnits(doc).map((unit) => {
+          const members = doc.tables.filter((x) => unit.tableIds.includes(x.id));
+          if (members.length === 0) return null;
+          const cx = members.reduce((n, x) => n + x.position.x, 0) / members.length;
+          const cy = members.reduce((n, x) => n + x.position.y, 0) / members.length;
+          return (
+            <text
+              key={unit.id}
+              x={cx}
+              y={cy}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={620}
+              fontWeight={600}
+              fontFamily="Assistant, sans-serif"
+              fill="#1b1725"
+            >
+              {unit.number > 0 ? unit.number : "ראש"}
+            </text>
+          );
+        })}
       </svg>
 
       {/* Legend: שולחן ← ערכת עיצוב */}
@@ -163,34 +199,23 @@ function TableGlyph({ t }: { t: DesignTable }) {
   const dash = resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined;
   return (
     <g>
-      {t.diameterMm ? (
-        <circle cx={t.position.x} cy={t.position.y} r={t.diameterMm / 2} fill={resolved.fill} stroke={resolved.stroke} strokeWidth={resolved.strokeWidth} strokeDasharray={dash} vectorEffect="non-scaling-stroke" />
-      ) : (
-        <rect
-          x={t.position.x - (t.widthMm ?? 0) / 2}
-          y={t.position.y - (t.depthMm ?? 0) / 2}
-          width={t.widthMm ?? 0}
-          height={t.depthMm ?? 0}
-          rx={80}
+      {/* The same outline the studio drew, through the same component — a table that carries a
+          catalog row draws that row's real shape, so the חצי עיגול capping the head table is an arc
+          on the crew's page too and not the 120×60 box its dimensions describe. */}
+      {/* Through the table's own rotation as well as its position. Turning a table is new — nothing
+          could set DesignTable.rotation until there was a handle for it — and a printed map that
+          drew every table square while the studio showed them angled would send the crew to lay a
+          room that is not the room on screen. */}
+      <g transform={`translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}`}>
+        <FootprintShape
+          footprint={tableFootprint(t)}
           fill={resolved.fill}
           stroke={resolved.stroke}
           strokeWidth={resolved.strokeWidth}
           strokeDasharray={dash}
           vectorEffect="non-scaling-stroke"
         />
-      )}
-      <text
-        x={t.position.x}
-        y={t.position.y}
-        textAnchor="middle"
-        dominantBaseline="central"
-        fontSize={620}
-        fontWeight={600}
-        fontFamily="Assistant, sans-serif"
-        fill={ink}
-      >
-        {t.number > 0 ? t.number : "ראש"}
-      </text>
+      </g>
     </g>
   );
 }

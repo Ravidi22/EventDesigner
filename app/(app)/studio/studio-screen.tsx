@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { dispatch, undo, redo, initHistory, type History } from "@/lib/design-document/actions";
+import { amend, dispatch, undo, redo, initHistory, type Action, type History } from "@/lib/design-document/actions";
 import type { DesignDocumentContent, Layer as LayerId } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
@@ -15,25 +15,50 @@ import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
 import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
-import { isTypingTarget } from "@/lib/keyboard";
+import {
+  DEFAULT_NUMBERING,
+  expandToGroups,
+  groupSeated,
+  groupSeats,
+  membersOf,
+  orderedNumbering,
+  soleGroupId,
+  spreadSeated,
+  type NumberingOptions,
+} from "@/lib/design-document/groups";
+import { arrangedFeature, isFeatureMoved } from "@/lib/design-document/features";
+import { floorStack, isStackable, restackTo, type StackKind } from "@/lib/design-document/stacking";
+import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto } from "@/lib/studio/clipboard";
+import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { Inspector } from "./inspector";
 // A plain import now that the canvas is the app's shared SVG one: it renders on the server like any
 // other component, so there is nothing left to defer and no "loading the studio" flash to cover.
-import { CanvasStage, type Selection } from "./canvas-stage";
+import { CanvasStage, type SelectionKind, type SelectionRef } from "./canvas-stage";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
 
 const uid = () => crypto.randomUUID();
 
+/** How far a paste lands from what it was copied from, in SCREEN pixels — converted through the
+ *  canvas's current zoom, so the step reads the same whether the whole hall is on screen or one
+ *  table fills it. Far enough that the copy is grabbable, near enough that it is obviously a copy
+ *  of the thing beside it. */
+const PASTE_STEP_PX = 34;
+
 /** The meeting draws the same document in two passes, so the studio has two narrower faces:
  *
- *  - `hall`    — סקיצת אולם: the furniture. Table tools on, rail cut to seating / stages / bars.
- *  - `design`  — סקיצה עיצובית: the dressing. Table tools off, rail cut to the design departments.
- *  - `full`    — /studio, after the meeting: every tool, the whole catalog.
+ *  - `hall`    — סקיצת אולם: the furniture. Rail cut to seating / stages / bars.
+ *  - `design`  — סקיצה עיצובית: the dressing. Rail cut to the design departments.
+ *  - `full`    — /studio, after the meeting: the whole catalog.
  *
  *  One document, one canvas, one autosave underneath all three — a pass is a narrower set of tools
- *  over the same drawing, never a separate drawing. */
+ *  over the same drawing, never a separate drawing.
+ *
+ *  The passes are a RAIL filter now and nothing else. They used to also switch the toolbar's table
+ *  buttons off during the design pass, so that a table could not be dropped in while the tables were
+ *  being dressed; those buttons are gone (see toolbar.tsx) and the rail already enforces the same
+ *  thing better — seating is not in DESIGN_PASS_GROUPS, so there is no table on screen to drag. */
 export type StudioMode = "full" | "hall" | "design";
 
 const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = {
@@ -72,12 +97,19 @@ export function StudioScreen({
     () => (workspace ? eventPlan(workspace.event, workspace.geometry) : EMPTY_PLAN),
     [workspace],
   );
-  const [selection, setSelection] = useState<Selection>(null);
+  // A LIST, not one ref: several tables can be dragged across the room together, and a rubber-band
+  // across a corner of the hall is how you get hold of them. One selected thing is the ordinary
+  // case and still the only one the inspector has fields for.
+  const [selected, setSelected] = useState<SelectionRef[]>([]);
   const [layerVisible, setLayerVisible] = useState<Record<LayerId, boolean>>({ table: true, floor: true, ceiling: true });
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
-  const [addingTable, setAddingTable] = useState<string | null>(null);
+  const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The canvas's current zoom, in world mm per screen pixel, reported up during its render. The rail
+  // reads it once per drag start, to draw the item being dragged at the size it will land at — see
+  // catalog-rail.tsx. A ref, not state: nothing on this screen re-renders because of a zoom.
+  const mmPerPx = useRef(20);
   // Which event this drawing belongs to. A ref, not state: the autosave timeout below reads it when
   // it FIRES rather than when it was scheduled, so the id cannot go stale in a closure.
   const eventId = useRef<string | null>(null);
@@ -201,13 +233,47 @@ export function StudioScreen({
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [saveState]);
 
-  const act = useCallback((a: Parameters<typeof dispatch>[1]) => setHistory((h) => dispatch(h, a)), []);
+  // --- edits, and where one gesture ends ---------------------------------------------------------
+  //
+  // `act` is a discrete edit — one thing done once, one entry on the undo stack. `drag` is a frame
+  // of a gesture that is still happening: the FIRST frame opens an entry and every frame after it
+  // amends that same one, so a table dragged the length of the hall is one Ctrl+Z rather than the
+  // hundred it used to be (each of which held a whole copy of the document). `endDrag` closes it —
+  // the canvas calls it on pointerup, once per press that actually moved something.
+  //
+  // Whether the entry is already open is decided BEFORE setHistory is called, never inside the
+  // updater: an updater runs at render time, and a gesture that dispatches two actions in one frame
+  // (a carpet corner: resize, then re-centre) would otherwise see the flag already set by the time
+  // the first of them ran, and amend into the previous, unrelated edit.
+  const gestureOpen = useRef(false);
+  const act = useCallback((a: Action) => {
+    gestureOpen.current = false;
+    setHistory((h) => dispatch(h, a));
+  }, []);
+  const drag = useCallback((a: Action) => {
+    const open = gestureOpen.current;
+    gestureOpen.current = true;
+    setHistory((h) => (open ? amend(h, a) : dispatch(h, a)));
+  }, []);
+  const endDrag = useCallback(() => {
+    gestureOpen.current = false;
+  }, []);
+  /** Several actions that are ONE thing the designer did — a paste, a multi-delete. The first opens
+   *  a history entry and the rest fold into it, so one Ctrl+Z takes the whole thing back. */
+  const batch = useCallback((actions: Action[]) => {
+    if (actions.length === 0) return;
+    gestureOpen.current = false;
+    setHistory((h) => actions.reduce((acc, a, i) => (i === 0 ? dispatch(acc, a) : amend(acc, a)), h));
+  }, []);
 
   const showHint = (msg: string) => {
     setHint(msg);
     clearTimeout(hintTimer.current);
     hintTimer.current = setTimeout(() => setHint(null), 2600);
   };
+
+  // F-3.3: auto-running table numbering, editable per table.
+  const nextNumber = useCallback(() => doc.tables.reduce((m, t) => Math.max(m, t.number), 0) + 1, [doc.tables]);
 
   // Where a dropped item lands depends on what it is (CategoryDef.anchor), not on where the pointer
   // happened to be: a drape goes onto the nearest wall, a cloth onto the table under it, everything
@@ -219,6 +285,31 @@ export function StudioScreen({
     const id = uid();
     const variantId = defaultVariantId(product);
     const base = { id, variantId, layer: product.layer, quantity: 1, rotation: 0, scale: 1 };
+
+    // A TABLE IS NOT A PLACEMENT. Dropping one mints a DesignTable — the thing that carries a
+    // number, wears a cloth, groups a smart-apply and prints on the placement map — rather than
+    // another object standing on the floor. This is the path the three toolbar buttons used to be,
+    // with the difference that matters: the table now knows which catalog row it is, so it is
+    // priced, ordered and drawn as the item its own studio owns (see DesignTable.variantId).
+    if (product.category === "tables") {
+      const d = product.dimensions;
+      const seats = Number(product.categoryFields?.seats);
+      act({
+        type: "addTable",
+        table: {
+          id,
+          type: product.name,
+          number: nextNumber(),
+          position: { x, y },
+          rotation: 0,
+          ...(d.diameterMm ? { diameterMm: d.diameterMm } : { widthMm: d.widthMm ?? 0, depthMm: d.depthMm ?? 0 }),
+          ...(seats > 0 ? { seats } : {}),
+          variantId,
+        },
+      });
+      setSelected([{ kind: "table", id }]);
+      return;
+    }
 
     if (cat?.anchor === "wall") {
       const near = nearestWall(plan.structure, { x, y });
@@ -244,42 +335,425 @@ export function StudioScreen({
       const worn = cat?.anchor === "table" ? coverOn(doc, t.id) : undefined;
       if (worn) {
         act({ type: "setPlacementVariant", id: worn.id, variantId });
-        setSelection({ kind: "table", id: t.id });
+        setSelected([{ kind: "table", id: t.id }]);
         return;
       }
       act({ type: "addPlacement", placement: { ...base, tableId: t.id, position: { x: 0, y: 0 } } });
     } else {
       act({ type: "addPlacement", placement: { ...base, position: { x, y } } });
     }
-    setSelection({ kind: "placement", id });
+    setSelected([{ kind: "placement", id }]);
   };
+
+  // --- selection ---------------------------------------------------------------------------------
+  // Shift/Ctrl toggles one ref in or out; a plain click replaces the whole list. Same vocabulary as
+  // the hall editor's plan (lib/venues/selection.ts), and the same one the canvas assumes.
+  //
+  // EVERY PATH THROUGH HERE EXPANDS TO WHOLE GROUPS, which is the whole of what grouping costs:
+  // touching one member selects all of them, and from that one line the drag, the delete, the copy
+  // and the paste all treat a group as one thing without knowing groups exist. They were already
+  // written to work on a list.
+  /** The selection minus the venue's own features — everything that is actually IN this document.
+   *
+   *  A feature is the property's, borrowed for the evening. It can be picked up, dragged and turned
+   *  (the document records where this event stood it, and nothing more), but it cannot be grouped
+   *  with a table, copied onto the clipboard, or deleted: there is no row here to group, no row to
+   *  paste, and deleting the venue's bar from inside one event is not a thing an event may do. So
+   *  every operation that edits the DOCUMENT's own objects runs through this, and each one that
+   *  drops something says so on screen rather than quietly doing less than was asked.
+   *
+   *  Moving and turning deliberately do NOT go through it — those are the two things a feature is
+   *  here for. */
+  const docRefs = useCallback(
+    (refs: SelectionRef[]) =>
+      refs.filter((r): r is { kind: "table" | "placement"; id: string } => r.kind !== "feature"),
+    [],
+  );
+  const featureRefs = useCallback((refs: SelectionRef[]) => refs.filter((r) => r.kind === "feature"), []);
+
+  const pick = useCallback(
+    (ref: SelectionRef | null, additive: boolean) => {
+      setSelected((cur) => {
+        if (!ref) return cur.length ? [] : cur;
+        // A venue feature is in no group and can be in none, so it selects as itself.
+        const picked = ref;
+        const whole: SelectionRef[] =
+          picked.kind === "feature" ? [picked] : expandToGroups(doc, [{ kind: picked.kind, id: picked.id }]);
+        if (!additive) return whole;
+        // Toggling a member toggles its group: a shift-click that could take one table out of a
+        // group-shaped selection would leave a selection no drag could honour.
+        const inSelection = cur.some((r) => r.kind === ref.kind && r.id === ref.id);
+        if (inSelection) return cur.filter((c) => !whole.some((w) => w.kind === c.kind && w.id === c.id));
+        const merged = [...cur];
+        for (const w of whole) if (!merged.some((m) => m.kind === w.kind && m.id === w.id)) merged.push(w);
+        return merged;
+      });
+    },
+    [doc],
+  );
+
+  const pickMany = useCallback(
+    (refs: SelectionRef[], additive: boolean) => {
+      const whole: SelectionRef[] = [...featureRefs(refs), ...expandToGroups(doc, docRefs(refs))];
+      setSelected((cur) => {
+        if (!additive) return whole;
+        const merged = [...cur];
+        for (const r of whole) if (!merged.some((m) => m.kind === r.kind && m.id === r.id)) merged.push(r);
+        return merged;
+      });
+    },
+    [doc, docRefs, featureRefs],
+  );
+
+  const sole = selected.length === 1 ? selected[0] : null;
+
+
+  // One undo puts the whole selection back, however many things were in it.
+  //
+  // A venue feature in the selection is skipped, not deleted: the bar belongs to the property and an
+  // event may only say where it stood, never that it stopped existing. Saying so out loud matters —
+  // a Delete that silently took four of five selected things would read as a bug.
+  const deleteSelection = useCallback(() => {
+    if (selected.length === 0) return;
+    const refs = docRefs(selected);
+    const kept = featureRefs(selected);
+    if (refs.length === 0) {
+      showHint(kept.length === 1 ? "פריט של המתחם — אפשר להזיז, לא למחוק" : "פריטי המתחם נשארים — אפשר להזיז אותם, לא למחוק");
+      return;
+    }
+    setSelected(kept);
+    batch(
+      refs.map((r) => (r.kind === "table" ? { type: "removeTable", id: r.id } : { type: "removePlacement", id: r.id })),
+    );
+    if (kept.length > 0) showHint("פריטי המתחם נשארו — אפשר להזיז אותם, לא למחוק");
+  }, [selected, batch, docRefs, featureRefs]);
+
+  // --- clipboard ---------------------------------------------------------------------------------
+  // The rules for what a selection amounts to, and what a paste has to do to it, are in
+  // lib/studio/clipboard.ts and self-checked there. This is the wiring: the catalog question that
+  // file refuses to ask for itself, the zoom-relative offset, and what the designer is told.
+  const copy = useCallback(() => {
+    if (selected.length === 0) return null;
+    // The venue's own features are dropped here: a copy of the property's bar is not a second bar,
+    // and pasting one could only mean adding a row to a venue this screen does not edit.
+    const clip = copySelection(doc, docRefs(selected), (variantId) => resolve(variantId)?.anchor === "wall");
+    const n = clipCount(clip);
+    // Nothing copyable means the selection was drapes and only drapes — say so rather than leaving
+    // the old clip in place to be pasted later under the impression it was this one.
+    if (n === 0) {
+      showHint("וילון נמדד על הקיר שלו — אין לו עותק");
+      return null;
+    }
+    holdClip(clip);
+    showHint(n === 1 ? "הועתק פריט" : `הועתקו ${n} פריטים`);
+    return clip;
+  }, [doc, selected, docRefs]);
+
+  const paste = useCallback(() => {
+    const clip = heldClip();
+    if (clipCount(clip) === 0) return;
+    // A screen-relative step, so a paste lands a thumb's width away whether the whole hall is on
+    // screen or one table fills it — and each repeat steps one further out, fanning a run of pastes
+    // instead of stacking them.
+    const step = nextPasteStep() * PASTE_STEP_PX * mmPerPx.current;
+    const fresh = pasteInto(clip, { dx: step, dy: step, firstNumber: nextNumber(), newId: uid });
+    batch([
+      ...fresh.tables.map((table) => ({ type: "addTable" as const, table })),
+      ...fresh.placements.map((placement) => ({ type: "addPlacement" as const, placement })),
+      // The members already carry their new groupId, but the group ROW only exists once something
+      // creates it — and this is also what gives the pasted block its own number. A block copied
+      // whole pastes as another block; the reducer prunes any that arrived with only one member
+      // left (a group whose other half was a drape the copy refused).
+      ...fresh.groups.map((g) => ({
+        type: "group" as const,
+        groupId: g.id,
+        refs: [
+          ...fresh.tables.filter((t) => t.groupId === g.id).map((t) => ({ kind: "table" as const, id: t.id })),
+          ...fresh.placements.filter((x) => x.groupId === g.id).map((x) => ({ kind: "placement" as const, id: x.id })),
+        ],
+        ...(g.number === undefined ? {} : { number: g.number }),
+      })),
+    ]);
+    // Selected, and ready to be dragged where it is actually wanted. Table-layer items are left out:
+    // they follow their table, so a group drag would carry them twice.
+    setSelected([
+      ...fresh.tables.map((t) => ({ kind: "table" as const, id: t.id })),
+      ...fresh.placements.filter((x) => !x.tableId).map((x) => ({ kind: "placement" as const, id: x.id })),
+    ]);
+    const n = clipCount(fresh);
+    showHint(n === 1 ? "הודבק פריט" : `הודבקו ${n} פריטים`);
+  }, [batch, nextNumber]);
+
+  // A cut removes exactly what it TOOK, not what was selected. The two differ by a drape, which
+  // copySelection refuses to copy — deleting the selection wholesale would take a curtain off the
+  // wall and put nothing on the clipboard to put it back with, which is a cut that loses work.
+  //
+  // Removing a table already takes its placements with it (see the reducer), so a copied cloth is
+  // only removed on its own when its table stayed behind. Doing it twice would be harmless except
+  // that removePlacement records a smart-apply exception (F-5.3) against a table about to cease
+  // existing — garbage in the document that a later "on all tables" would have to step over.
+  const cut = useCallback(() => {
+    const clip = copy();
+    if (!clip) return;
+    const goneWithTable = new Set(clip.tables.map((t) => t.id));
+    setSelected([]);
+    batch([
+      ...clip.tables.map((t) => ({ type: "removeTable" as const, id: t.id })),
+      ...clip.placements
+        .filter((x) => x.tableId === undefined || !goneWithTable.has(x.tableId))
+        .map((x) => ({ type: "removePlacement" as const, id: x.id })),
+    ]);
+    const n = clipCount(clip);
+    // Replaces the "הועתקו" the copy above just set — both are synchronous, so only this one is
+    // ever painted, and what happened was a cut.
+    showHint(n === 1 ? "נגזר פריט" : `נגזרו ${n} פריטים`);
+  }, [copy, batch]);
+
+  // --- grouping ----------------------------------------------------------------------------------
+  // The one group this selection exactly is, if it is one — what the inspector needs in order to
+  // show a group's panel rather than a list of things that happen to be selected together.
+  const soleGroup = useMemo(
+    () => (selected.some((r) => r.kind === "feature") ? undefined : soleGroupId(doc, docRefs(selected))),
+    [doc, selected, docRefs],
+  );
+  /** What the inspector shows for that group — one walk of the members, not three. */
+  const groupPanel = useMemo(() => {
+    if (!soleGroup) return null;
+    const { tables, placements } = membersOf(doc, soleGroup);
+    return {
+      id: soleGroup,
+      number: doc.groups?.find((g) => g.id === soleGroup)?.number,
+      tables: tables.length,
+      items: placements.length,
+      seats: groupSeats(doc, soleGroup),
+      seated: groupSeated(doc, soleGroup),
+    };
+  }, [doc, soleGroup]);
+
+  const groupSelection = useCallback(() => {
+    const refs = docRefs(selected);
+    if (refs.length < 2) {
+      if (selected.some((r) => r.kind === "feature")) showHint("פריטי המתחם לא נכנסים לקבוצה");
+      return;
+    }
+    const groupId = uid();
+    // The number the block keeps is the LOWEST its members brought with them. A room numbered 1..12
+    // that loses 4 and 5 into one block still reads in order, which is what the number is for; a
+    // fresh number off the end would send the crew looking for table 13 in the middle of the room.
+    const numbers = refs
+      .filter((r) => r.kind === "table")
+      .map((r) => doc.tables.find((t) => t.id === r.id)?.number ?? 0)
+      .filter((n) => n > 0);
+    act({ type: "group", groupId, refs, ...(numbers.length ? { number: Math.min(...numbers) } : {}) });
+    showHint(numbers.length ? `קובצו לשולחן ${Math.min(...numbers)}` : "הפריטים קובצו");
+  }, [selected, doc.tables, act, docRefs]);
+
+  const ungroupSelection = useCallback(() => {
+    if (!soleGroup) return;
+    act({ type: "ungroup", groupId: soleGroup });
+    showHint("הקבוצה פורקה");
+  }, [soleGroup, act]);
+
+  // --- the venue's own features ------------------------------------------------------------------
+  // The canvas reports every position in absolute world millimetres, because that is what every
+  // other thing on it has. A feature's position is not stored that way — the document holds an
+  // OFFSET from wherever /halls puts it (see lib/design-document/features.ts) — and this is the one
+  // place that knows both, so this is where the conversion lives. The canvas stays uniform and the
+  // reducer stays offsets-only; nothing in between has to hold both ideas at once.
+  const featureOffset = useCallback(
+    (id: string, abs: { x: number; y: number }) => {
+      const f = plan.structure.features.find((x) => x.id === id);
+      return f ? { dx: Math.round(abs.x - f.x), dy: Math.round(abs.y - f.y) } : { dx: 0, dy: 0 };
+    },
+    [plan.structure],
+  );
+  /** The same for a facing: the document stores the turn ON TOP of the property's own. */
+  const featureTurn = useCallback(
+    (id: string, absDeg: number) => {
+      const f = plan.structure.features.find((x) => x.id === id);
+      return absDeg - (f?.rotationDeg ?? 0);
+    },
+    [plan.structure],
+  );
+
+  const moveFeature = useCallback(
+    (id: string, pos: { x: number; y: number }) => drag({ type: "arrangeFeature", featureId: id, ...featureOffset(id, pos) }),
+    [drag, featureOffset],
+  );
+
+  /** A whole selection turned as one. Tables and items take the angle straight; a feature's is
+   *  converted to the turn-on-top the document stores. One action, so one undo takes the sweep back
+   *  however many frames it took. */
+  const rotateMany = useCallback(
+    (turns: { kind: SelectionKind; id: string; position: { x: number; y: number }; rotation: number }[]) => {
+      drag({
+        type: "rotateMany",
+        turns: turns.map((t) =>
+          t.kind === "feature"
+            ? { ...t, position: (({ dx, dy }) => ({ x: dx, y: dy }))(featureOffset(t.id, t.position)), rotation: featureTurn(t.id, t.rotation) }
+            : t,
+        ),
+      });
+    },
+    [drag, featureOffset, featureTurn],
+  );
+
+  /** Put a feature back where the property has it. The inverse of every drag on it, and one row
+   *  deleted rather than a number remembered. */
+  const resetFeature = useCallback(
+    (featureId: string) => {
+      act({ type: "resetFeature", featureId });
+      showHint("הפריט חזר למקומו בתוכנית המתחם");
+    },
+    [act],
+  );
+
+  /** What the inspector shows for a selected feature: the property's own row, as this event has it,
+   *  plus whether this event has moved it at all (which is what the "put it back" button needs). */
+  const featurePanel = useMemo(() => {
+    if (sole?.kind !== "feature") return null;
+    const f = plan.structure.features.find((x) => x.id === sole.id);
+    if (!f) return null;
+    const here = arrangedFeature(doc, f);
+    return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id) };
+  }, [sole, plan.structure, doc]);
+
+  // --- stacking ----------------------------------------------------------------------------------
+  // Rugs, tables and free objects are ONE stack over the floor — what a designer overlaps is not
+  // sorted by category. The policy is in lib/design-document/stacking.ts (and self-checked there);
+  // this is the wiring, plus the catalog question that file refuses to ask for itself.
+  //
+  // A cloth and a drape are in no stack at all: one is its table's surface, the other is pinned to a
+  // wall by both ends. The buttons are simply not offered for them, rather than being offered and
+  // doing nothing.
+  const stack = useMemo(
+    () =>
+      floorStack(doc, (p): StackKind | undefined => {
+        const r = resolve(p.variantId);
+        if (r?.anchor === "wall") return undefined;
+        if (p.layer === "table" && p.tableId) return undefined;
+        return r?.sizing === "stretch" ? "carpet" : "item";
+      }),
+    [doc],
+  );
+
+  /** The part of a selection that is in the floor stack — tables included. */
+  const stackRefs = useCallback(
+    (refs: SelectionRef[]) => docRefs(refs).filter((r) => isStackable(stack, r)),
+    [stack, docRefs],
+  );
+
+  const restack = useCallback(
+    (to: "front" | "back") => {
+      const assign = restackTo(stack, stackRefs(selected), to);
+      // Empty means it is already there — say so, rather than opening a history entry that changes
+      // nothing and leaving the designer to wonder whether the button worked.
+      if (assign.length === 0) {
+        showHint(to === "front" ? "כבר בחזית" : "כבר מאחור");
+        return;
+      }
+      act({ type: "restack", assign });
+      showHint(to === "front" ? "הובא לחזית" : "נשלח לאחור");
+    },
+    [selected, act, stack, stackRefs],
+  );
+
+  // --- bulk edits --------------------------------------------------------------------------------
+  /** One number of chairs, laid over every selected table at once. Setting a room of forty tables
+   *  from ten places to twelve was forty trips through the inspector; it is one now, and one undo.
+   *
+   *  The OCCUPANCY is deliberately not offered in bulk. Seats are a property of the furniture and
+   *  are genuinely the same across a room; how many of them are spoken for is a different fact per
+   *  table, and a control that wrote one number over all of them would only ever be used by
+   *  accident. */
+  const setSeatsForSelection = useCallback(
+    (seats: number) => {
+      const ids = docRefs(selected).filter((r) => r.kind === "table").map((r) => r.id);
+      if (ids.length === 0) return;
+      batch(ids.map((id) => ({ type: "setTableSeats" as const, id, seats })));
+      showHint(`${ids.length} שולחנות — ${seats} כסאות`);
+    },
+    [selected, batch, docRefs],
+  );
+
+  /** Where a feature currently stands, absolute — so that turning it in place can restate the offset
+   *  it already had rather than dropping it. */
+  function arrangedFeatureAt(id: string): { x: number; y: number } {
+    const f = plan.structure.features.find((x) => x.id === id);
+    if (!f) return { x: 0, y: 0 };
+    const here = arrangedFeature(doc, f);
+    return { x: here.x, y: here.y };
+  }
+
+  /** Turn everything selected to one absolute angle, each about its OWN centre — which is what the
+   *  inspector's number field means, as against the canvas handle's sweep about a shared pivot.
+   *  Squaring a scattered handful of items to the room is the case: they do not move, they all just
+   *  end up facing the same way. */
+  const faceSelection = useCallback(
+    (deg: number) => {
+      const refs = selected;
+      if (refs.length === 0) return;
+      batch(
+        refs.map((r) =>
+          r.kind === "table"
+            ? { type: "rotateTable" as const, id: r.id, rotation: deg }
+            : r.kind === "placement"
+              ? { type: "rotatePlacement" as const, id: r.id, rotation: deg }
+              : { type: "arrangeFeature" as const, featureId: r.id, ...featureOffset(r.id, arrangedFeatureAt(r.id)), rotationDeg: featureTurn(r.id, deg) },
+        ),
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected, batch, featureOffset, featureTurn, doc, plan.structure],
+  );
+
+  /** The one facing a selection shares, or null when they disagree — what the inspector's rotation
+   *  field shows, and what stops it from claiming a room of differently-angled items is all at 0°. */
+  const sharedFacing = useMemo(() => {
+    if (selected.length === 0) return null;
+    const angles = selected.map((r) =>
+      r.kind === "table"
+        ? (doc.tables.find((t) => t.id === r.id)?.rotation ?? 0)
+        : r.kind === "placement"
+          ? (doc.placements.find((x) => x.id === r.id)?.rotation ?? 0)
+          : (() => {
+              const f = plan.structure.features.find((x) => x.id === r.id);
+              return f ? (arrangedFeature(doc, f).rotationDeg ?? 0) : 0;
+            })(),
+    );
+    return angles.every((a) => a === angles[0]) ? angles[0] : null;
+  }, [selected, doc, plan.structure]);
+
+  // --- numbering ---------------------------------------------------------------------------------
+  // What the plan's numbers WOULD be, put back in order. Held rather than recomputed on click, so
+  // the button can be disabled when there is nothing to fix — which is also how the designer learns
+  // the numbering is already clean without pressing anything.
+  //
+  // WHERE it starts and WHICH WAY it runs are the designer's, not ours. The default is still the
+  // top-right in rows — a Hebrew reader's eye, and where the head table usually is — but a room
+  // whose entrance is at the far corner gets numbered from that corner, and a hall of tables either
+  // side of an aisle gets numbered in columns. Held on this screen rather than in the document: it
+  // is how the designer wants to READ the room, not a fact about the event, and it is re-applied by
+  // pressing the button, never automatically.
+  const [numbering, setNumbering] = useState<NumberingOptions>(DEFAULT_NUMBERING);
+  const renumbering = useMemo(() => orderedNumbering(doc, numbering), [doc, numbering]);
+
+  const renumberAll = useCallback(() => {
+    if (renumbering.length === 0) return;
+    batch(
+      renumbering.map((r) =>
+        r.kind === "table"
+          ? { type: "renumberTable" as const, id: r.id, number: r.number }
+          : { type: "renumberGroup" as const, groupId: r.id, number: r.number },
+      ),
+    );
+    showHint(`${renumbering.length} שולחנות מוספרו מחדש`);
+  }, [renumbering, batch]);
 
   const changeQuantity = (id: string, delta: number) => {
     const p = doc.placements.find((x) => x.id === id);
     if (!p) return;
     act({ type: "setPlacementQuantity", id, quantity: Math.max(1, p.quantity + delta) });
-  };
-
-  const deleteSelection = useCallback(() => {
-    setSelection((sel) => {
-      if (sel?.kind === "placement") setHistory((h) => dispatch(h, { type: "removePlacement", id: sel.id }));
-      else if (sel?.kind === "table") setHistory((h) => dispatch(h, { type: "removeTable", id: sel.id }));
-      return null;
-    });
-  }, []);
-
-  // F-3.3: fast manual table placement. Auto-running numbering, editable per table.
-  const nextNumber = () => doc.tables.reduce((m, t) => Math.max(m, t.number), 0) + 1;
-
-  const placeTable = (x: number, y: number) => {
-    if (!addingTable) return;
-    const dims =
-      addingTable === "עגול"
-        ? { diameterMm: 1800, seats: 12 }
-        : addingTable === "מלבן"
-          ? { widthMm: 3000, depthMm: 1000, seats: 6 }
-          : { widthMm: 4800, depthMm: 1200, seats: 16 }; // אביר — long banquet table
-    act({ type: "addTable", table: { id: uid(), type: addingTable, number: nextNumber(), position: { x, y }, rotation: 0, ...dims } });
   };
 
   const duplicateTable = (id: string) => {
@@ -288,14 +762,16 @@ export function StudioScreen({
     const copyId = uid();
     act({
       type: "addTable",
-      table: { ...t, id: copyId, number: nextNumber(), position: { x: t.position.x + 2200, y: t.position.y + 2200 } },
+      // `seated: undefined` for the same reason a paste clears it: this is another table in the
+      // room, not the same people sitting twice.
+      table: { ...t, id: copyId, number: nextNumber(), seated: undefined, position: { x: t.position.x + 2200, y: t.position.y + 2200 } },
     });
-    setSelection({ kind: "table", id: copyId });
+    setSelected([{ kind: "table", id: copyId }]);
   };
 
   const smartApply = () => {
-    if (selection?.kind !== "placement") return;
-    const p = doc.placements.find((x) => x.id === selection.id);
+    if (sole?.kind !== "placement") return;
+    const p = doc.placements.find((x) => x.id === sole.id);
     const table = p?.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
     if (!p || !table) return;
     act({
@@ -324,23 +800,52 @@ export function StudioScreen({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = isTypingTarget();
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      const mod = e.ctrlKey || e.metaKey;
+      // isShortcut, not e.key: on a Hebrew layout Ctrl+C arrives as "ב" and every one of these
+      // stops working the moment the designer switches layout to type a client's name.
+      // Every one of these stands down while a field has focus. Undo especially: correcting a table
+      // number and pressing Ctrl+Z has to take back the digit, not the whole plan — the field owns
+      // its own undo stack and the browser is already about to use it.
+      if (mod && !typing && isShortcut(e, "z")) {
         e.preventDefault();
         setHistory((h) => (e.shiftKey ? redo(h) : undo(h)));
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+      } else if (mod && !typing && isShortcut(e, "y")) {
         e.preventDefault();
         setHistory((h) => redo(h));
+      } else if (mod && !typing && (isShortcut(e, "c") || isShortcut(e, "x"))) {
+        // Text the designer highlighted somewhere on the page is what Ctrl+C means there, and the
+        // browser is already about to do the right thing with it. The plan waits its turn.
+        if (hasTextSelection()) return;
+        e.preventDefault();
+        if (isShortcut(e, "c")) copy();
+        else cut();
+      } else if (mod && !typing && isShortcut(e, "v")) {
+        e.preventDefault();
+        paste();
+      } else if (mod && !typing && isShortcut(e, "g")) {
+        e.preventDefault();
+        if (e.shiftKey) ungroupSelection();
+        else groupSelection();
       } else if (!typing && (e.key === "Delete" || e.key === "Backspace")) {
         e.preventDefault();
         deleteSelection();
       } else if (!typing && e.key === "Escape") {
-        setAddingTable(null);
-        setSelection(null);
+        setSelected([]);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection]);
+  }, [deleteSelection, copy, cut, paste, groupSelection, ungroupSelection]);
+
+  // What the eye offers: the zones this event occupies, or — for an event still being booked into
+  // one — everything on the property, so the picker is never an empty list next to a drawn plan.
+  const zoneOptions = useMemo(() => {
+    const list = plan.zones.length ? plan.zones : plan.all;
+    return list.filter((r) => r.boundary.length >= 3).map((r) => ({ id: r.zone.id, name: r.zone.name }));
+  }, [plan]);
+  // A zone the event stopped occupying (or a plan that has not landed yet) is not somewhere to be
+  // held: fall back to the whole property rather than framing a box that no longer exists.
+  const focusZoneId = zoneOptions.some((z) => z.id === zoneFocus) ? zoneFocus : null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -351,39 +856,82 @@ export function StudioScreen({
         onRedo={() => setHistory(redo)}
         layerVisible={layerVisible}
         onToggleLayer={(l) => setLayerVisible((v) => ({ ...v, [l]: !v[l] }))}
-        addingTable={addingTable}
-        onSetAddingTable={setAddingTable}
-        showTableTools={mode !== "design"}
+        zones={zoneOptions}
+        focusZoneId={focusZoneId}
+        onFocusZone={setZoneFocus}
+        canRenumber={renumbering.length > 0}
+        onRenumber={renumberAll}
+        numbering={numbering}
+        onNumbering={setNumbering}
+        renumberCount={renumbering.length}
         saveState={saveState}
         onRetrySave={retrySave}
       />
       <div className="flex min-h-0 flex-1">
-        <CatalogRail products={catalog} groups={RAIL[mode].groups} hint={RAIL[mode].hint} />
+        <CatalogRail products={catalog} groups={RAIL[mode].groups} hint={RAIL[mode].hint} mmPerPx={mmPerPx} />
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={doc}
             plan={plan}
-            selection={selection}
+            selection={selected}
             layerVisible={layerVisible}
-            addingTable={addingTable}
-            onSelect={setSelection}
-            onMoveTable={(id, pos) => act({ type: "moveTable", id, position: pos })}
-            onMovePlacement={(id, pos) => act({ type: "movePlacement", id, position: pos })}
+            focusZoneId={focusZoneId}
+            onSelect={pick}
+            onSelectMany={pickMany}
+            onMoveTable={(id, pos) => drag({ type: "moveTable", id, position: pos })}
+            onMovePlacement={(id, pos) => drag({ type: "movePlacement", id, position: pos })}
+            onMoveFeature={moveFeature}
+            onMoveMany={(moves) =>
+              drag({
+                type: "moveMany",
+                // A feature among them arrives absolute like everything else and is converted here —
+                // see featureOffset. The other two kinds pass straight through.
+                moves: moves.map((m) =>
+                  m.kind === "feature"
+                    ? { ...m, position: (({ dx, dy }) => ({ x: dx, y: dy }))(featureOffset(m.id, m.position)) }
+                    : m,
+                ),
+              })
+            }
+            onRotateMany={rotateMany}
+            onEndDrag={endDrag}
             onResizePlacement={(id, sizeMm, position) => {
-              act({ type: "resizePlacement", id, sizeMm });
-              act({ type: "movePlacement", id, position });
+              drag({ type: "resizePlacement", id, sizeMm });
+              drag({ type: "movePlacement", id, position });
             }}
-            onSpanPlacement={(id, span) => act({ type: "setPlacementSpan", id, span })}
+            onSpanPlacement={(id, span) => drag({ type: "setPlacementSpan", id, span })}
             onDropProduct={dropProduct}
-            onPlaceTable={placeTable}
+            onScale={(v) => {
+              mmPerPx.current = v;
+            }}
           />
           <div className="pointer-events-none absolute inset-inline-end-4 bottom-4">
             <div className="pointer-events-auto">
               <Inspector
-                selection={selection}
+                selection={sole}
+                selectedCount={selected.length}
+                feature={featurePanel}
+                onResetFeature={resetFeature}
+                facing={sharedFacing}
+                onFace={faceSelection}
+                canRestack={stackRefs(selected).length > 0}
+                onRestack={restack}
+                selectedTables={selected.filter((r) => r.kind === "table").length}
+                onSeatsForSelection={setSeatsForSelection}
+                group={groupPanel}
+                onGroup={groupSelection}
+                onUngroup={ungroupSelection}
+                onRenumberGroup={(groupId, number) => act({ type: "renumberGroup", groupId, number })}
+                onSeats={(id, seats) => act({ type: "setTableSeats", id, seats })}
+                onSeated={(id, seated) => act({ type: "setTableSeated", id, seated })}
+                // One number for the block, laid back over the tables it is made of — one history
+                // entry, because from the designer's side it was one number typed once.
+                onGroupSeated={(groupId, seated) =>
+                  batch(spreadSeated(doc, groupId, seated).map((x) => ({ type: "setTableSeated" as const, id: x.id, seated: x.seated })))
+                }
                 doc={doc}
                 structure={plan.structure}
-                onClose={() => setSelection(null)}
+                onClose={() => setSelected([])}
                 onQuantity={changeQuantity}
                 onDelete={deleteSelection}
                 onSmartApply={smartApply}

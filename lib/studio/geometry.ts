@@ -553,9 +553,16 @@ export function tableBounds(t: DesignTable): { halfW: number; halfH: number } {
 export function pointInTable(t: DesignTable, x: number, y: number): boolean {
   const dx = x - t.position.x;
   const dy = y - t.position.y;
+  // A round table has no orientation, so its own frame is the world's and the cheap test is exact.
   if (t.diameterMm) return dx * dx + dy * dy <= (t.diameterMm / 2) ** 2;
   const { halfW, halfH } = tableBounds(t);
-  return Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
+  // A RECTANGULAR one is tested in its OWN frame. This used to compare against the world axes,
+  // which was exactly right for as long as nothing in the app could turn a table — DesignTable
+  // carried a `rotation` that no control ever set. Now that a table can be set across the room, an
+  // axis-aligned test on a turned one both misses the corners it does cover and claims corners it
+  // does not: the cloth dropped on the end of a 3m banqueting table at 45° would land on the floor.
+  const local = t.rotation ? toLocalFrame({ x, y }, t.position, t.rotation) : { x: dx, y: dy };
+  return Math.abs(local.x) <= halfW && Math.abs(local.y) <= halfH;
 }
 
 export function tableAt(doc: DesignDocumentContent, x: number, y: number): DesignTable | undefined {
@@ -574,6 +581,12 @@ if (isMain(import.meta.url)) {
   assert(!pointInTable(round, 100, 250), "outside");
   const rect: DesignTable = { id: "b", type: "מלבן", number: 2, position: { x: 0, y: 0 }, rotation: 0, widthMm: 200, depthMm: 100 };
   assert(pointInTable(rect, 90, 40) && !pointInTable(rect, 90, 60), "rect bounds");
+  // Turned a quarter turn, the same table covers the transposed box — and stops covering what it
+  // used to. A hit test that ignored the angle would get both of these backwards.
+  const turnedTable: DesignTable = { ...rect, rotation: 90 };
+  assert(pointInTable(turnedTable, 40, 90) && !pointInTable(turnedTable, 60, 90), "a turned table is tested in its own frame");
+  assert(!pointInTable(turnedTable, 90, 40), "…and no longer covers what it covered before it was turned");
+  assert(pointInTable({ ...round, rotation: 37 }, 199, 100), "a round table is the same whichever way it faces");
   assert(Math.round(tableAreaMm2(round)) === Math.round(Math.PI * 100 ** 2), "round area");
   const outline: Point[] = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }, { x: 0, y: 100 }];
   assert(polygonAreaMm2(outline) === 20000, "rectangle polygon area");

@@ -16,6 +16,8 @@ import { products, productVariants, designDocuments } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
 import { toProducts, toProductRow, toVariantRows } from "./db-mapping";
+import { STANDARD_ITEMS } from "./standard/items";
+import { standardProductId } from "./standard/id";
 
 // ── Input guards ───────────────────────────────────────────────────────────────────────────────
 //
@@ -229,6 +231,23 @@ export async function removeProduct(
 
   revalidateCatalog();
   return { products: await fetchProducts(), archived: placed };
+}
+
+/** Is this row one of the base library's (./standard/) — furniture the app installed, rather than
+ *  something this studio wrote?
+ *
+ *  No query: the id of a studio's copy of a base item is derived from (organisation, key), so the
+ *  answer is seven hashes and a comparison (./standard/id.ts). That is also why it has to be asked
+ *  on the server — minting one needs node:crypto, which is exactly what keeps ./standard/id.ts out
+ *  of the browser.
+ *
+ *  What it is FOR: the base items ship flagged `public`, and public is otherwise a decision the
+ *  designer makes about their own design. Nothing in the base library is anyone's design, so the
+ *  drawer has no honest question to ask about it. */
+export async function isStandardProduct(id: string): Promise<boolean> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  return STANDARD_ITEMS.some((item) => standardProductId(organizationId, item.key) === id);
 }
 
 /** Bulk create, for the CSV import (F-4.4). One transaction: a half-imported file is worse than a

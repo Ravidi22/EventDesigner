@@ -1,6 +1,6 @@
 "use client";
 
-import { FileUp, Grid3x3, List, Plus } from "lucide-react";
+import { FileDown, FileUp, Grid3x3, List, Plus } from "lucide-react";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
 import { STYLE_TAGS } from "@/lib/catalog/categories";
 import type { Layer, Product } from "@/lib/catalog/types";
@@ -43,8 +43,8 @@ export function matchesFilters(p: Product, f: FilterState): boolean {
 }
 
 // The bordered white bar holds count → category dropdown → product dropdown → layer dropdown →
-// search → the page actions (add/import) → view mode at the far end (`ms-auto`) — the top header's
-// own search box is hidden on this page (AppShell), so this is still the only search box, just
+// search → the page actions (export/import/add) → view mode at the far end (`ms-auto`) — the top
+// header's own search box is hidden on this page (AppShell), so this is still the only one, just
 // moved down here. Style pills sit outside that white frame, as their own plain row underneath.
 export function Filters({
   value,
@@ -54,6 +54,7 @@ export function Filters({
   onViewModeChange,
   onAddProduct,
   onImportCsv,
+  onExportCsv,
   searchValue,
   onSearchChange,
 }: {
@@ -64,6 +65,7 @@ export function Filters({
   onViewModeChange: (mode: "grid" | "list") => void;
   onAddProduct: () => void;
   onImportCsv: () => void;
+  onExportCsv: () => void;
   searchValue: string;
   onSearchChange: (v: string) => void;
 }) {
@@ -115,6 +117,15 @@ export function Filters({
         />
 
         <div className="flex shrink-0 items-center gap-1">
+          {/* Exports exactly the rows the count at the start of this bar reports — the filters
+              narrow the sheet the way they narrow the screen. Nothing to write when none matched. */}
+          <IconButton
+            label="ייצוא מלאי לקובץ CSV"
+            onClick={onExportCsv}
+            disabled={resultCount === 0}
+          >
+            <FileDown className="h-4 w-4" strokeWidth={2} />
+          </IconButton>
           <IconButton label="ייבוא מוצרים מקובץ CSV" onClick={onImportCsv}>
             <FileUp className="h-4 w-4" strokeWidth={2} />
           </IconButton>

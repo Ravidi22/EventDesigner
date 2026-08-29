@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import {
+  MAP_SHAPES,
   PRICE_UNIT_LABEL,
+  SHAPE_LABEL,
   STOCK_KIND_HINT,
   STOCK_KIND_LABEL,
   VISIBILITY_LABEL,
@@ -11,14 +13,15 @@ import {
   type Product,
   type Variant,
   type MapAppearance,
+  type MapShape,
   type PriceUnit,
   type StockKind,
 } from "@/lib/catalog/types";
 import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierList } from "@/lib/suppliers/use-suppliers";
-import { resolveFootprint } from "@/lib/studio/footprint";
-import { CATEGORIES, CATEGORY_BY_ID, LAYERS, STYLE_TAGS } from "@/lib/catalog/categories";
-import { isPlacedAnywhere } from "@/lib/catalog/actions";
+import { footprintBounds, resolveContent, resolveFootprint } from "@/lib/studio/footprint";
+import { CATEGORIES, CATEGORY_BY_ID, LAYERS, STYLE_TAGS, type CategoryDef } from "@/lib/catalog/categories";
+import { isPlacedAnywhere, isStandardProduct } from "@/lib/catalog/actions";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { TagToggle } from "@/components/tag-toggle";
@@ -36,6 +39,31 @@ import { IconPicker } from "./icon-picker";
 
 const uid = () => crypto.randomUUID();
 
+/** What a new product of this category is drawn as. `CategoryDef.dims` used to pick which size
+ *  fields the drawer showed; it seeds the SHAPE now, and the shape picks the fields — see the
+ *  "צורה ומידות" section, and the note on `asksFootprint`. */
+const defaultShape = (c: CategoryDef): MapShape => (c.dims === "round" ? "circle" : "rect");
+
+// What the plan draws for a draft right now — the value a toggle shows as chosen, and the one any
+// appearance patch has to preserve. A product from before `appearance` existed has no row to read
+// and the resolvers answer for it: a diameter makes it a circle, and it draws its name.
+const shapeOf = (p: Product): MapShape => p.appearance?.shape ?? resolveFootprint(p).kind;
+const contentOf = (p: Product): MapAppearance["content"] => p.appearance?.content ?? resolveContent(p).mode;
+
+const SHAPE_OPTIONS = MAP_SHAPES.map((s) => ({ value: s, label: SHAPE_LABEL[s] }));
+
+const CONTENT_OPTIONS = [
+  ["none", "ריק"],
+  ["icon", "אייקון"],
+  ["name", "שם"],
+] as const;
+
+const STOCK_OPTIONS: readonly (readonly [StockKind, string])[] = [
+  ["owned", STOCK_KIND_LABEL.owned],
+  ["consumable", STOCK_KIND_LABEL.consumable],
+  ["rented", STOCK_KIND_LABEL.rented],
+];
+
 export function blankProduct(): Product {
   const c = CATEGORIES[0];
   return {
@@ -49,7 +77,55 @@ export function blankProduct(): Product {
     variants: [],
     // Seeded from the category, then owned by the product — see CategoryDef.defaultStock.
     stockKind: c.defaultStock,
+    // Written out rather than left absent, because both halves of it are a decision:
+    //   shape   — it is what the measurements below it are measurements OF (see `asksFootprint`).
+    //   content — EMPTY. On a true-scale plan the outline already says what the item is; the name
+    //             written across it is something a designer turns on for the few items that need
+    //             it, not what every new product is born wearing. The base library has drawn this
+    //             way from the start (lib/catalog/standard/) — a hand-added item now matches it.
+    appearance: { shape: defaultShape(c), content: "none" },
   };
+}
+
+// One row of mutually exclusive choices, filling its container. Every option gets the SAME width:
+// with intrinsic widths the row spread itself unevenly at whatever length the Hebrew words happened
+// to be ("אליפסה" three times "שם"), which reads as a broken control rather than as one question
+// with four answers. flex-1 + no wrapping is the whole fix, and all three groups in this drawer
+// share it now instead of each re-declaring the same markup.
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  labelClassName = "mb-1 block text-xs text-muted",
+}: {
+  label: string;
+  value: T;
+  options: readonly (readonly [T, string])[];
+  onChange: (value: T) => void;
+  labelClassName?: string;
+}) {
+  return (
+    <div>
+      <span className={labelClassName}>{label}</span>
+      <div role="group" aria-label={label} className="flex gap-1 rounded-md border border-border p-0.5">
+        {options.map(([v, optionLabel]) => (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={value === v}
+            onClick={() => onChange(v)}
+            className={
+              "flex-1 rounded-sm px-2 py-1 text-xs transition-colors " +
+              (value === v ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")
+            }
+          >
+            {optionLabel}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const mmToCm = (mm?: number) => (mm ?? 0) / 10;
@@ -82,6 +158,11 @@ export function ProductDrawer({
   const [submitted, setSubmitted] = useState(false);
   const [pickingIcon, setPickingIcon] = useState(false);
   const [shapeModalOpen, setShapeModalOpen] = useState(false);
+  // Whether the app installed this row or the designer wrote it — see isStandardProduct. Asked of
+  // the server, because deriving the answer needs node:crypto. What is stored is the id the answer
+  // was about, not a bare boolean: a drawer that goes straight from a base table to a new product
+  // would otherwise carry the previous row's answer until the next one came back.
+  const [libraryId, setLibraryId] = useState<string | null>(null);
   // Loaded once, the first time the drawer opens — the catalog's first paint owes nothing to it.
   const suppliers = useSupplierList(product !== null);
 
@@ -94,6 +175,18 @@ export function ProductDrawer({
     }
   }, [product]);
 
+  const productId = product?.id;
+  useEffect(() => {
+    if (!productId) return;
+    let current = true;
+    isStandardProduct(productId).then((yes) => {
+      if (current && yes) setLibraryId(productId);
+    });
+    return () => {
+      current = false;
+    };
+  }, [productId]);
+
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
@@ -105,8 +198,49 @@ export function ProductDrawer({
 
   const category = CATEGORY_BY_ID[draft.category];
   const isEdit = draft.id !== "";
-  const nameError = submitted && draft.name.trim() === "";
-  const heightError = submitted && category.needsHeight !== false && !draft.dimensions.heightMm;
+  // Unknown until the server answers, and false the moment the drawer is showing a different row.
+  const fromLibrary = !!productId && libraryId === productId;
+
+  // Current shape/content, falling back to what the resolver would derive when appearance is unset.
+  const currentShape = shapeOf(draft);
+  const currentContent = contentOf(draft);
+
+  // A stretch category (a drape, a rug) is cut or laid to whatever it has to cover, so it has no
+  // width or depth here — those are drawn per placement in the studio.
+  const stretch = category.sizing === "stretch";
+
+  // ── Which measurements this item is made of — THE SHAPE PICKS THEM ─────────────────────────
+  //
+  // The category used to: `dims: "both"` asked for a diameter AND a width AND a depth, and then
+  // resolveFootprint read whichever pair the shape happened to want. Type a diameter, leave the
+  // shape on מלבן, and the plan drew MIN_FOOTPRINT_MM — a 60×60 box that ignored every number in
+  // the form. The measurements were never wrong; they were answers to a question nobody had asked.
+  //
+  // So the shape is asked first and the fields follow from it: a circle has a diameter, a rectangle
+  // and an ellipse have a width and a depth, and a custom outline IS its own measurement. What the
+  // shape asks for is then required (below) — a footprint with no numbers can only fall back to
+  // that same 60cm box. `CategoryDef.dims` still seeds the shape (defaultShape), which is the
+  // opinion it always really held.
+  const asksFootprint = !stretch && currentShape !== "custom";
+  const asksDiameter = asksFootprint && currentShape === "circle";
+  const asksBox = asksFootprint && currentShape !== "circle";
+  // Most categories keep asking for height regardless of `stretch` — a drape's height is its DROP,
+  // the one dimension that still tells two rolls of the same curtain apart. needsHeight is the
+  // explicit opt-out for the categories where height isn't a dimension of the item at all: see the
+  // comment on CategoryDef.
+  const showHeight = category.needsHeight !== false;
+
+  // Everything the form is still missing, checked once and read twice: `save` refuses on it, and
+  // each field marks itself only after a submit has been attempted.
+  const missing = {
+    name: draft.name.trim() === "",
+    height: showHeight && !draft.dimensions.heightMm,
+    diameter: asksDiameter && !draft.dimensions.diameterMm,
+    width: asksBox && !draft.dimensions.widthMm,
+    depth: asksBox && !draft.dimensions.depthMm,
+    outline: currentShape === "custom" && (draft.appearance?.outline?.length ?? 0) < 3,
+  };
+  const incomplete = Object.values(missing).some(Boolean);
 
   const patch = (p: Partial<Product>) => setDraft((d) => ({ ...d, ...p }));
   const setDim = (key: keyof Product["dimensions"], cm: number) =>
@@ -114,15 +248,26 @@ export function ProductDrawer({
   const setField = (key: string, v: number) => setDraft((d) => ({ ...d, categoryFields: { ...d.categoryFields, [key]: v } }));
 
   const changeCategory = (id: string) =>
-    setDraft((d) => ({
-      ...d,
-      category: id,
-      layer: CATEGORY_BY_ID[id].defaultLayer,
-      categoryFields: {},
-      // Re-seeded with the layer and the category fields, for the same reason: the new category's
-      // opinion is a better starting point than the old one's, and it stays editable.
-      stockKind: CATEGORY_BY_ID[id].defaultStock,
-    }));
+    setDraft((d) => {
+      const c = CATEGORY_BY_ID[id];
+      return {
+        ...d,
+        category: id,
+        layer: c.defaultLayer,
+        categoryFields: {},
+        // Re-seeded with the layer and the category fields, for the same reason: the new category's
+        // opinion is a better starting point than the old one's, and it stays editable.
+        stockKind: c.defaultStock,
+        // The shape re-seeds with them — a centrepiece is round, a stage is a box — except when the
+        // designer has drawn one by hand, which a category change must never throw away. Content is
+        // carried across as whatever the plan already draws, so changing category cannot silently
+        // blank the name off an older product.
+        appearance:
+          d.appearance?.shape === "custom"
+            ? d.appearance
+            : { ...d.appearance, shape: defaultShape(c), content: contentOf(d) },
+      };
+    });
 
   // An archived supplier stays selectable while it is the one this product already names —
   // otherwise opening an old product would silently unlink it and saving would make that real.
@@ -139,16 +284,41 @@ export function ProductDrawer({
       styleTags: d.styleTags.includes(t) ? d.styleTags.filter((x) => x !== t) : [...d.styleTags, t],
     }));
 
-  // Current shape/content, falling back to what the resolver would derive when appearance is unset.
-  const currentShape = draft.appearance?.shape ?? resolveFootprint(draft).kind;
-  const currentContent = draft.appearance?.content ?? "name";
-
-  // Patch appearance, always keeping the required fields present.
+  // Patch appearance, always keeping the required fields present — and seeding them from what the
+  // plan already draws, so changing only the style of a product that never had an appearance row
+  // cannot quietly change its shape or blank its name.
   const setAppearance = (patch: Partial<MapAppearance>) =>
     setDraft((d) => ({
       ...d,
-      appearance: { shape: "rect", content: "name", ...d.appearance, ...patch },
+      appearance: { shape: shapeOf(d), content: contentOf(d), ...d.appearance, ...patch },
     }));
+
+  // Changing the shape carries the size across instead of dropping it: a 180cm round table that
+  // becomes a rectangle is still 180cm wide, and the field says so rather than sitting empty while
+  // the footprint quietly falls back to 60cm. It only ever FILLS a blank — a measurement the
+  // designer typed is never overwritten by one derived from another shape.
+  const changeShape = (shape: MapShape) => {
+    if (shape === "custom") {
+      setAppearance({ shape: "custom", outline: draft.appearance?.outline ?? [] });
+      setShapeModalOpen(true);
+      return;
+    }
+    setDraft((d) => {
+      const dim = d.dimensions;
+      return {
+        ...d,
+        dimensions:
+          shape === "circle"
+            ? { ...dim, diameterMm: dim.diameterMm || dim.widthMm || dim.depthMm || undefined }
+            : {
+                ...dim,
+                widthMm: dim.widthMm || dim.diameterMm || undefined,
+                depthMm: dim.depthMm || dim.diameterMm || undefined,
+              },
+        appearance: { content: contentOf(d), ...d.appearance, shape },
+      };
+    });
+  };
 
   const setVariant = (id: string, p: Partial<Variant>) =>
     setDraft((d) => ({ ...d, variants: d.variants.map((v) => (v.id === id ? { ...v, ...p } : v)) }));
@@ -169,11 +339,7 @@ export function ProductDrawer({
 
   const save = () => {
     setSubmitted(true);
-    if (draft.name.trim() === "" || (category.needsHeight !== false && !draft.dimensions.heightMm)) return;
-    if (draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3) {
-      setSubmitted(true);
-      return;
-    }
+    if (incomplete) return;
     const variants = draft.variants
       .map((v) => ({ ...v, id: v.id || uid(), name: v.name.trim() }))
       .filter((v) => v.name !== "" || v.archived);
@@ -181,16 +347,15 @@ export function ProductDrawer({
     onClose();
   };
 
-  // A stretch category (a drape, a rug) is cut or laid to whatever it has to cover, so it has no
-  // width or depth here — those are drawn per placement in the studio.
-  const stretch = category.sizing === "stretch";
-  const showDiameter = !stretch && (category.dims === "round" || category.dims === "both");
-  const showBox = !stretch && (category.dims === "box" || category.dims === "both");
-  // Most categories keep asking for height regardless of `stretch` — a drape's height is its DROP,
-  // the one dimension that still tells two rolls of the same curtain apart. needsHeight is the
-  // explicit opt-out for the categories where height isn't a dimension of the item at all: see the
-  // comment on CategoryDef.
-  const showHeight = category.needsHeight !== false;
+  // What the drawn outline measures, in cm — the answer to "how big will this be?" for the one
+  // shape with no number fields of its own.
+  const customSize =
+    currentShape === "custom" && !missing.outline
+      ? (() => {
+          const b = footprintBounds(resolveFootprint(draft));
+          return `${Math.round(b.w / 10)}×${Math.round(b.h / 10)} ס״מ`;
+        })()
+      : null;
 
   return (
     <dialog
@@ -220,7 +385,7 @@ export function ProductDrawer({
             value={draft.name}
             onChange={(v) => patch({ name: v })}
             placeholder="לדוגמה: מפת שולחן קטיפה"
-            error={nameError}
+            error={submitted && missing.name}
             errorMessage="יש להזין שם מוצר."
             autoFocus
           />
@@ -254,38 +419,108 @@ export function ProductDrawer({
             </div>
           </div>
 
-          <SectionDivider label="מידות (ס״מ)" />
+          <SectionDivider label="צורה ומידות (ס״מ)" />
 
-          <fieldset>
+          <fieldset className="space-y-3">
+            {/* The shape first, then the measurements it is made of — see `asksFootprint`.
+                A Select and not a row of buttons: the vocabulary is a dozen shapes now (MAP_SHAPES),
+                and twelve segments in a drawer this wide is a row of unreadable slivers. */}
+            <div>
+              <label htmlFor="p-shape" className={fieldLabelClassName}>
+                צורה
+              </label>
+              <Select
+                id="p-shape"
+                value={currentShape}
+                onChange={(v) => changeShape(v as MapShape)}
+                options={SHAPE_OPTIONS}
+                className="w-full"
+              />
+            </div>
+
             {stretch && (
-              <p className="mb-3 rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+              <p className="rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
                 {category.label} נמדדים על התוכנית, לא כאן — הגודל נקבע כשמותחים אותם באירוע, והמחיר
                 מחושב לפי מה שנפרש בפועל.
               </p>
             )}
-            <div className="grid grid-cols-3 gap-3">
-              {showDiameter && (
-                <NumberField label="קוטר" hideZero value={mmToCm(draft.dimensions.diameterMm)} onChange={(v) => setDim("diameterMm", v)} min={0} />
-              )}
-              {showBox && (
-                <>
-                  <NumberField label="רוחב" hideZero value={mmToCm(draft.dimensions.widthMm)} onChange={(v) => setDim("widthMm", v)} min={0} />
-                  <NumberField label="עומק" hideZero value={mmToCm(draft.dimensions.depthMm)} onChange={(v) => setDim("depthMm", v)} min={0} />
-                </>
-              )}
-              {showHeight && (
-                <NumberField
-                  label="גובה"
-                  required
-                  hideZero
-                  min={0}
-                  error={heightError}
-                  errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
-                  value={mmToCm(draft.dimensions.heightMm)}
-                  onChange={(v) => setDim("heightMm", v)}
-                />
-              )}
-            </div>
+
+            {currentShape === "custom" && (
+              <div className="rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+                הצורה עצמה היא המידה{customSize ? ` — ${customSize}` : ""}. מה שתשרטטו הוא מה שיצויר על התוכנית.
+                <button
+                  type="button"
+                  onClick={() => setShapeModalOpen(true)}
+                  className="ms-1.5 font-medium text-accent transition-colors hover:text-accent-hover"
+                >
+                  {missing.outline ? "שרטוט הצורה…" : "עריכת הצורה"}
+                </button>
+              </div>
+            )}
+            {submitted && missing.outline && (
+              <p className="text-xs text-alert">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
+            )}
+
+            {(asksFootprint || showHeight) && (
+              <div className="grid grid-cols-3 gap-3">
+                {asksDiameter && (
+                  <NumberField
+                    label="קוטר"
+                    required
+                    hideZero
+                    min={0}
+                    error={submitted && missing.diameter}
+                    errorMessage="קוטר נדרש — לפיו מצויר הפריט."
+                    value={mmToCm(draft.dimensions.diameterMm)}
+                    onChange={(v) => setDim("diameterMm", v)}
+                  />
+                )}
+                {asksBox && (
+                  <>
+                    <NumberField
+                      label="רוחב"
+                      required
+                      hideZero
+                      min={0}
+                      error={submitted && missing.width}
+                      errorMessage="רוחב נדרש — לפיו מצויר הפריט."
+                      value={mmToCm(draft.dimensions.widthMm)}
+                      onChange={(v) => setDim("widthMm", v)}
+                    />
+                    <NumberField
+                      label="עומק"
+                      required
+                      hideZero
+                      min={0}
+                      error={submitted && missing.depth}
+                      errorMessage="עומק נדרש — לפיו מצויר הפריט."
+                      value={mmToCm(draft.dimensions.depthMm)}
+                      onChange={(v) => setDim("depthMm", v)}
+                    />
+                  </>
+                )}
+                {showHeight && (
+                  <NumberField
+                    label="גובה"
+                    required
+                    hideZero
+                    min={0}
+                    error={submitted && missing.height}
+                    errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
+                    value={mmToCm(draft.dimensions.heightMm)}
+                    onChange={(v) => setDim("heightMm", v)}
+                  />
+                )}
+              </div>
+            )}
+
+            <ShapeEditorModal
+              open={shapeModalOpen}
+              outline={draft.appearance?.outline ?? []}
+              edgeCurves={draft.appearance?.edgeCurves}
+              onSave={(outline, edgeCurves) => setAppearance({ shape: "custom", outline, edgeCurves })}
+              onClose={() => setShapeModalOpen(false)}
+            />
           </fieldset>
 
           {/* F-4.3: only count-multiplier fields are structured (arms, seats) */}
@@ -380,40 +615,14 @@ export function ProductDrawer({
               )}
 
               <div className="flex-1 space-y-2">
-                <div>
-                  <span className="mb-1 block text-xs text-muted">צורה</span>
-                  <div className="flex flex-wrap gap-1 rounded-md border border-border p-0.5">
-                    {([["rect", "מלבן"], ["circle", "עיגול"], ["ellipse", "אליפסה"], ["custom", "מותאם"]] as const).map(([s, label]) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => {
-                          if (s === "custom") { setAppearance({ shape: "custom", outline: draft.appearance?.outline ?? [] }); setShapeModalOpen(true); }
-                          else setAppearance({ shape: s });
-                        }}
-                        className={"rounded px-2 py-1 text-xs transition-colors " + (currentShape === s ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <span className="mb-1 block text-xs text-muted">תוכן</span>
-                  <div className="flex flex-wrap gap-1 rounded-md border border-border p-0.5">
-                    {([["icon", "אייקון"], ["name", "שם"], ["none", "ריק"]] as const).map(([c, label]) => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => { setAppearance({ content: c }); setPickingIcon(c === "icon"); }}
-                        className={"rounded px-2 py-1 text-xs transition-colors " + (currentContent === c ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                {/* The shape lives up in "צורה ומידות" now: it is the question the measurements
+                    under it are answers to, and asking it in two places let the two disagree. */}
+                <Segmented
+                  label="תוכן"
+                  value={currentContent}
+                  options={CONTENT_OPTIONS}
+                  onChange={(c) => { setAppearance({ content: c }); setPickingIcon(c === "icon"); }}
+                />
 
                 <div>
                   <span className="mb-1 block text-xs text-muted">עיצוב</span>
@@ -423,27 +632,6 @@ export function ProductDrawer({
                 </div>
               </div>
             </div>
-
-            {currentShape === "custom" && (
-              <button
-                type="button"
-                onClick={() => setShapeModalOpen(true)}
-                className="mt-1.5 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
-              >
-                {(draft.appearance?.outline?.length ?? 0) >= 3 ? "עריכת הצורה" : "עריכת הצורה…"}
-              </button>
-            )}
-            {submitted && draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3 && (
-              <p className="mt-1 text-xs text-alert">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
-            )}
-
-            <ShapeEditorModal
-              open={shapeModalOpen}
-              outline={draft.appearance?.outline ?? []}
-              edgeCurves={draft.appearance?.edgeCurves}
-              onSave={(outline, edgeCurves) => setAppearance({ shape: "custom", outline, edgeCurves })}
-              onClose={() => setShapeModalOpen(false)}
-            />
 
             {currentContent === "icon" && pickingIcon && (
               <div className="mt-2">
@@ -498,24 +686,13 @@ export function ProductDrawer({
           </div>
 
           <div>
-            <span className={fieldLabelClassName}>סוג המלאי</span>
-            <div className="flex flex-wrap gap-1 rounded-md border border-border p-0.5">
-              {(["owned", "consumable", "rented"] as StockKind[]).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => patch({ stockKind: k === "owned" ? undefined : k })}
-                  className={
-                    "flex-1 rounded px-2 py-1 text-xs transition-colors " +
-                    ((draft.stockKind ?? "owned") === k
-                      ? "bg-accent text-canvas"
-                      : "text-ink-soft hover:bg-bg")
-                  }
-                >
-                  {STOCK_KIND_LABEL[k]}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              label="סוג המלאי"
+              labelClassName={fieldLabelClassName}
+              value={draft.stockKind ?? "owned"}
+              options={STOCK_OPTIONS}
+              onChange={(k) => patch({ stockKind: k === "owned" ? undefined : k })}
+            />
             <p className="mt-1 text-xs leading-relaxed text-muted">
               {STOCK_KIND_HINT[draft.stockKind ?? "owned"]}
             </p>
@@ -563,16 +740,29 @@ export function ProductDrawer({
 
           <SectionDivider label="נראות" />
 
-          {/* The switch is worded as the thing being turned ON — "פריט ציבורי" — so that "off"
-              reads as the private default rather than as the absence of an unnamed state. Off
-              stores `undefined`, not the string "private": absent IS private (see Visibility), and
-              keeping one spelling is what makes the save/reload round-trip lossless. */}
-          <SwitchRow
-            checked={draft.visibility === "public"}
-            onChange={(on) => patch({ visibility: on ? "public" : undefined })}
-            label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
-            hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
-          />
+          {/* A base-library item is public because it is nobody's design — it is the 1.80m round
+              table every hall in the country owns, and the app installed it, flagged public, into
+              every studio (lib/catalog/standard/). "Should other designers see this?" is not a
+              question about that row, so the switch that asks it is not shown: publishing is a
+              decision about your OWN work. Everything else on this screen — the price, the stock
+              count, the shape, the name — is still this studio's and stays editable. */}
+          {fromLibrary ? (
+            <p className="rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+              פריט מהספרייה הבסיסית — הוא ציבורי אצל כולם, ולכן אין כאן מה להחליט. המחיר, הכמות
+              והמראה על התוכנית הם שלכם ונשארים לעריכה.
+            </p>
+          ) : (
+            /* The switch is worded as the thing being turned ON — "פריט ציבורי" — so that "off"
+               reads as the private default rather than as the absence of an unnamed state. Off
+               stores `undefined`, not the string "private": absent IS private (see Visibility), and
+               keeping one spelling is what makes the save/reload round-trip lossless. */
+            <SwitchRow
+              checked={draft.visibility === "public"}
+              onChange={(on) => patch({ visibility: on ? "public" : undefined })}
+              label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
+              hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
+            />
+          )}
 
           <div>
             <div className="mb-1.5 flex items-center justify-between">

@@ -5,13 +5,21 @@ import { PackagePlus, Plus } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORIES } from "@/lib/catalog/categories";
 import { useCatalog } from "@/lib/catalog/use-catalog";
-import { parseCsvProducts } from "@/lib/catalog/csv";
+import {
+  CSV_BOM,
+  inventoryFileName,
+  parseCsvProducts,
+  productsToCsv,
+  type CsvSupplier,
+} from "@/lib/catalog/csv";
+import { fetchSuppliers } from "@/lib/suppliers/actions";
 import { useHeaderSearch } from "@/components/header-search-context";
 import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { ProductCard } from "./product-card";
-import { Filters, EMPTY_FILTERS, matchesFilters, type FilterState } from "./filters";
+import { Filters, EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 
 export function CatalogScreen({ initialProducts }: { initialProducts: Product[] }) {
@@ -76,19 +84,45 @@ export function CatalogScreen({ initialProducts }: { initialProducts: Product[] 
     setNotice(`נוספו ${added.length} מוצרים מהקובץ. וריאנטים ושדות מיוחדים מוזנים ידנית.`);
   };
 
+  // The stock sheet: what the studio owns, how much of it, what it costs and who it comes from.
+  //
+  // It exports `filtered` — the rows on screen, in screen order — because the button sits in the
+  // same bar as the "N מוצרים" count, and a file that quietly held 300 rows next to a count saying
+  // 12 would make the count the lie. The notice says so when a filter was in fact narrowing it.
+  const exportInventory = async () => {
+    // A named supplier is a nicety on this sheet, not the point of it, so a supplier list that
+    // will not load leaves that one column empty instead of failing the whole export.
+    let suppliers: CsvSupplier[] = [];
+    try {
+      suppliers = await fetchSuppliers();
+    } catch {
+      // Empty ספק column; the stock counts are what the designer came for.
+    }
+    const url = URL.createObjectURL(
+      new Blob([CSV_BOM + productsToCsv(filtered, CATEGORIES, suppliers)], { type: "text/csv;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = inventoryFileName();
+    a.click();
+    URL.revokeObjectURL(url);
+    const scope = hasActiveFilters({ ...filters, search }) ? " (לפי הסינון הפעיל)" : "";
+    setNotice(`יוצאו ${filtered.length} מוצרים לקובץ${scope}. הקובץ כולל עלויות — פנימי בלבד.`);
+  };
+
   // "No products yet" and "not loaded yet" look identical in the data and mean opposite things —
   // showing the first-run screen to a designer with 300 products, for the length of one fetch, is
   // the kind of flicker that reads as data loss. `ready` is what separates them.
   if (!ready) {
     return (
-      <div className="px-8 pb-7 pt-3" aria-busy="true">
+      <div className={PAGE_GUTTER} aria-busy="true">
         <p className="py-20 text-center text-sm text-muted">טוען את הקטלוג…</p>
       </div>
     );
   }
 
   return (
-    <div className="px-8 pb-7 pt-3">
+    <div className={PAGE_GUTTER}>
       {error && (
         <p className="mb-4 rounded-md border border-alert bg-alert-tint px-4 py-2.5 text-sm text-ink" role="alert">
           {error}
@@ -135,6 +169,7 @@ export function CatalogScreen({ initialProducts }: { initialProducts: Product[] 
             onViewModeChange={setViewMode}
             onAddProduct={() => setEditing(blankProduct())}
             onImportCsv={() => fileRef.current?.click()}
+            onExportCsv={() => void exportInventory()}
             searchValue={search}
             onSearchChange={setSearch}
           />

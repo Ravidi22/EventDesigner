@@ -1,0 +1,53 @@
+import type { DesignTable } from "@/lib/design-document/types";
+import { resolve } from "@/lib/studio/catalog-resolver";
+import { customShapeBounds, resolveFootprint, type Footprint } from "@/lib/studio/footprint";
+import { outlinePathD } from "@/lib/studio/geometry";
+
+// The one place a catalog footprint turns into SVG. Three surfaces draw the same shapes — the
+// studio canvas, the drag image that leaves the rail, and the placement map the crew is handed on
+// paper — and a half-round table that is an arc on screen and a rounded box in print is the plan
+// disagreeing with itself in front of the people setting the room up.
+//
+// No "use client": it is a pure function of its props with no hooks and no handlers, so it renders
+// wherever it is used.
+
+type ShapeProps = Omit<React.SVGProps<SVGPathElement>, "d" | "ref">;
+
+/** A footprint centred on (0,0) in its own local frame — the caller's <g> carries the position,
+ *  rotation and scale. Custom outlines are translated so their bounding-box centre sits at (0,0),
+ *  so all four kinds share that frame. */
+export function FootprintShape({ footprint, ...common }: { footprint: Footprint } & ShapeProps) {
+  if (footprint.kind === "circle") {
+    return <circle r={footprint.diameterMm / 2} {...(common as React.SVGProps<SVGCircleElement>)} />;
+  }
+  if (footprint.kind === "ellipse") {
+    return <ellipse rx={footprint.widthMm / 2} ry={footprint.depthMm / 2} {...(common as React.SVGProps<SVGEllipseElement>)} />;
+  }
+  if (footprint.kind === "custom") {
+    const b = customShapeBounds(footprint.outline);
+    const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
+    return <path d={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
+  }
+  const { widthMm: w, depthMm: d } = footprint;
+  return (
+    <rect
+      x={-w / 2}
+      y={-d / 2}
+      width={w}
+      height={d}
+      rx={Math.min(w, d) * 0.06}
+      {...(common as React.SVGProps<SVGRectElement>)}
+    />
+  );
+}
+
+/** The shape a table is drawn as. A table dragged off the rail carries its catalog row, so it draws
+ *  the item's REAL outline — a חצי עיגול is an arc over a chord, not the 120×60 box its dimensions
+ *  describe. One placed before tables came out of the catalog has no row, and falls back to the
+ *  circle-or-rectangle its own dimensions describe, exactly as it always drew. */
+export function tableFootprint(table: DesignTable): Footprint {
+  const product = table.variantId ? resolve(table.variantId)?.product : undefined;
+  if (product) return resolveFootprint(product);
+  if (table.diameterMm) return { kind: "circle", diameterMm: table.diameterMm };
+  return { kind: "rect", widthMm: table.widthMm ?? 0, depthMm: table.depthMm ?? 0 };
+}

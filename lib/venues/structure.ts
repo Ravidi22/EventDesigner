@@ -11,6 +11,8 @@
 // rather than a re-trace of walls that are already on screen.
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
+import type { MapShape, Product } from "@/lib/catalog/types";
+import { footprintBounds, resolveFootprint, shapeFootprint, type Footprint } from "@/lib/studio/footprint";
 import {
   absoluteControlPoints,
   bulgeDepthMm,
@@ -70,7 +72,19 @@ export interface StructureFeature {
   widthMm: number;
   depthMm: number;
   heightMm: number;
-  shape: "rect" | "circle" | "ellipse";
+  /** How it is drawn — the catalog's own shape vocabulary (MapShape), not the three primitives this
+   *  used to be. A fixed feature is PLACED FROM THE CATALOG now (see newFeatureFromProduct), and a
+   *  bar built in the shape of a ח has to be a ח on the hall plan as well: the same row that draws
+   *  it correctly in the studio drew a solid 3.6×1.8m slab here, claiming six square metres of floor
+   *  the staff are actually standing in. Widening the union is backwards-compatible — every feature
+   *  already saved is one of the three, and still resolves to exactly what it always drew. */
+  shape: MapShape;
+  /** A hand-drawn outline, iff `shape === "custom"` — the one shape that is not derived from the two
+   *  measurements. Stored so a designer's own oddly-shaped bar survives being placed here, and
+   *  SCALED to width × depth when drawn (see featureFootprint), because on a feature those two
+   *  numbers are what the resize handles drag. */
+  outline?: Point[];
+  edgeCurves?: (EdgeCurve | null)[];
   rotationDeg: number;
   /** Per-element look (fill/stroke/dash). Absent = the renderer's own default, so features saved
    *  before styling existed draw exactly as they always did. See lib/element-style.ts. */
@@ -371,6 +385,89 @@ export function newFeature(kind: FeatureKind, at: Point): Omit<StructureFeature,
   };
 }
 
+/** The same feature, placed from a CATALOG ROW instead of from a rough default.
+ *
+ *  A built bar and a built stage are the two fixed features a studio already owns a real description
+ *  of — the base library ships both (lib/catalog/standard/items.ts) — so the hall plan asks "which
+ *  bar" rather than "which shape, and how big". The row's name, shape and three measurements come
+ *  across; nothing points BACK at it afterwards. That is deliberate: the venue's plan is the
+ *  property's own drawing and outlives any edit, archive or deletion in the catalog, and a feature
+ *  that resolved a product id every time it drew would go blank the day somebody tidied the catalog.
+ *
+ *  Width and depth are the footprint's BOUNDS, not the row's raw numbers, so the two agree for every
+ *  shape — a circle's `widthMm` is its diameter here, which is what the renderer and the resize
+ *  handle both already read. */
+export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: Point): Omit<StructureFeature, "id"> {
+  const shape = product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect");
+  const b = footprintBounds(resolveFootprint(product));
+  const outline = shape === "custom" ? product.appearance?.outline : undefined;
+  return {
+    kind,
+    label: product.name,
+    x: Math.round(at.x),
+    y: Math.round(at.y),
+    rotationDeg: 0,
+    widthMm: Math.round(b.w),
+    depthMm: Math.round(b.h),
+    heightMm: product.dimensions.heightMm,
+    shape,
+    ...(outline && outline.length >= 3
+      ? { outline, ...(product.appearance?.edgeCurves ? { edgeCurves: product.appearance.edgeCurves } : {}) }
+      : {}),
+  };
+}
+
+/** What a feature is drawn as — one footprint, shared by the editor, the printed placement map and
+ *  anything else that ever draws this plan.
+ *
+ *  A drawn outline is scaled here so its bounding box is exactly width × depth. Catalog products
+ *  keep the opposite rule (there, a drawn outline IS the measurement), and the difference is real:
+ *  a feature's two numbers are what its resize handles drag and what the inspector shows, so an
+ *  outline that ignored them would be a shape the plan claims is 4m wide and draws at 3. */
+export function featureFootprint(
+  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves">,
+): Footprint {
+  return shapeFootprint(f.shape, {
+    widthMm: f.widthMm,
+    depthMm: f.depthMm,
+    // A feature has no diameter field: a round one is as wide as it is across, which is what both
+    // the old renderer and the radius handle have always assumed.
+    diameterMm: f.widthMm,
+    ...(f.shape === "custom" && f.outline && f.outline.length >= 3
+      ? scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm)
+      : {}),
+  });
+}
+
+/** An outline recentred on its own bounding box and stretched to `widthMm` × `depthMm`. Edge curves
+ *  are offsets from their own endpoints (lib/studio/geometry), so they scale by the same two factors
+ *  and stay attached to the edge they bow. */
+function scaleOutline(
+  outline: Point[],
+  edgeCurves: (EdgeCurve | null)[] | undefined,
+  widthMm: number,
+  depthMm: number,
+): { outline: Point[]; edgeCurves?: (EdgeCurve | null)[] } {
+  const minX = Math.min(...outline.map((p) => p.x));
+  const maxX = Math.max(...outline.map((p) => p.x));
+  const minY = Math.min(...outline.map((p) => p.y));
+  const maxY = Math.max(...outline.map((p) => p.y));
+  const sx = maxX > minX ? widthMm / (maxX - minX) : 1;
+  const sy = maxY > minY ? depthMm / (maxY - minY) : 1;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  return {
+    outline: outline.map((p) => ({ x: (p.x - cx) * sx, y: (p.y - cy) * sy })),
+    ...(edgeCurves
+      ? {
+          edgeCurves: edgeCurves.map((c) =>
+            c ? { c1: { x: c.c1.x * sx, y: c.c1.y * sy }, c2: { x: c.c2.x * sx, y: c.c2.y * sy } } : c,
+          ),
+        }
+      : {}),
+  };
+}
+
 // ponytail: self-check. Run: node --experimental-strip-types lib/venues/structure.ts
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -492,6 +589,55 @@ if (isMain(import.meta.url)) {
   assert(withPool.features[0].shape === "ellipse" && withPool.features[0].heightMm === 0, "a pool starts as a flat ellipse");
   assert(updateFeature(withPool, featureId, { x: 3000 }).features[0].y === 2000, "moving a feature in x leaves y alone");
   assert(removeFeature(withPool, featureId).features.length === 0, "a feature can be removed");
+
+  // --- placed from the catalog -----------------------------------------------------------------
+  // The whole point of widening `shape`: a ח bar picked off the catalog has to REACH the plan as a
+  // ח. Placed as a rectangle it would be the same picture as a solid 3.6×1.8m block of bar, which
+  // is not where the staff stand.
+  const uBar: Product = {
+    id: "p-bar",
+    name: "בר בצורת ח 360×180",
+    category: "bars",
+    layer: "floor",
+    dimensions: { widthMm: 3600, depthMm: 1800, heightMm: 1100 },
+    categoryFields: {},
+    styleTags: [],
+    variants: [],
+    appearance: { shape: "u-shape", content: "none" },
+  };
+  const placed = newFeatureFromProduct("bar", uBar, { x: 1000.4, y: 2000.6 });
+  assert(placed.shape === "u-shape", "a ח bar lands on the plan as a ח");
+  assert(placed.label === "בר בצורת ח 360×180", "…under the catalog row's own name");
+  assert(placed.widthMm === 3600 && placed.depthMm === 1800 && placed.heightMm === 1100, "…at the row's own three measurements");
+  assert(placed.x === 1000 && placed.y === 2001, "…snapped to whole millimetres like everything else the plan stores");
+  const bounds = footprintBounds(featureFootprint(placed));
+  assert(bounds.w === 3600 && bounds.h === 1800, "the drawn ח measures what the inspector says it does");
+
+  // A round product's diameter becomes the feature's width, which is the one number the circle
+  // renderer and the radius handle both read.
+  const roundBar = newFeatureFromProduct("bar", { ...uBar, id: "p-round", dimensions: { diameterMm: 1500, heightMm: 1100 }, appearance: undefined }, { x: 0, y: 0 });
+  assert(roundBar.shape === "circle" && roundBar.widthMm === 1500 && roundBar.depthMm === 1500, "a round bar is as wide as it is across");
+  assert(featureFootprint(roundBar).kind === "circle", "…and draws as a circle of that width");
+
+  // A feature saved before any of this drew a plain box, and still does.
+  assert(
+    JSON.stringify(featureFootprint({ shape: "rect", widthMm: 4000, depthMm: 1200 })) ===
+      JSON.stringify({ kind: "rect", widthMm: 4000, depthMm: 1200 }),
+    "an existing rectangular feature draws exactly as it always did",
+  );
+
+  // A hand-drawn outline follows the feature's own two numbers rather than the size it was drawn at
+  // — those are what the resize handles drag, so a shape that ignored them would draw one size and
+  // measure another.
+  const drawn = featureFootprint({
+    shape: "custom",
+    widthMm: 2000,
+    depthMm: 1000,
+    outline: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+  });
+  assert(drawn.kind === "custom", "a drawn outline stays a drawn outline");
+  const drawnBounds = footprintBounds(drawn);
+  assert(drawnBounds.w === 2000 && drawnBounds.h === 1000, `a resized custom feature is redrawn to fit (${drawnBounds.w}×${drawnBounds.h})`);
 
   // --- curved walls -----------------------------------------------------------------------------
   // w-shared runs (5000,0)→(5000,4000). Bowing it 500mm to the left has to leave both corners put:

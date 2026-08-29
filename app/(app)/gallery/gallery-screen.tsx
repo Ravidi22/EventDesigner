@@ -14,6 +14,7 @@ import { TextField } from "@/components/text-field";
 import { fieldLabelClassName } from "@/components/control";
 import { Photo } from "@/components/photo";
 import { EmptyState } from "@/components/empty-state";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import { ALLOWED_TYPES } from "@/lib/files/keys";
 
@@ -85,7 +86,7 @@ export function GalleryScreen({
     setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() });
 
   return (
-    <div className="px-8 py-7">
+    <div className={PAGE_GUTTER}>
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <h1 className="font-display text-h2 text-ink">תצוגות</h1>
         {/* Hidden on first run: the empty state carries the one action, and two "new presentation"
@@ -222,7 +223,7 @@ function PresentationBuilder({
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-8 py-7">
+    <div className={`mx-auto max-w-3xl ${PAGE_GUTTER}`}>
       <div className="mb-6 flex items-center justify-between">
         <h2 className="font-display text-h2 text-ink">{isNew ? "תצוגה חדשה" : "עריכת תצוגה"}</h2>
         <IconButton label="סגירה ללא שמירה" onClick={onCancel}>

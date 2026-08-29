@@ -1,6 +1,6 @@
 import { PageSkeleton } from "@/components/skeleton";
 
-// The plan editor is one big canvas rather than a list of cards.
+// A plan editor, edge to edge, with no header row above it — see halls-screen.tsx.
 export default function Loading() {
-  return <PageSkeleton rows={1} title={false} />;
+  return <PageSkeleton shape="canvas" />;
 }
