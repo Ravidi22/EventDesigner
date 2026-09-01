@@ -785,8 +785,8 @@ export function StudioScreen({
     const table = p?.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
     if (!p || !table) return;
     act({
-      type: "applyToTableType",
-      tableType: table.type,
+      type: "applyToTables",
+      tableIds: doc.tables.filter((t) => t.type === table.type).map((t) => t.id),
       placement: { variantId: p.variantId, layer: "table", quantity: p.quantity, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     });
     showHint(`הוחל על כל שולחנות ${table.type}`);
@@ -799,7 +799,8 @@ export function StudioScreen({
     const p = doc.placements.find((x) => x.id === placementId);
     if (!p) return;
     act({
-      type: "applyToAllTables",
+      type: "applyToTables",
+      tableIds: doc.tables.map((t) => t.id),
       placement: { variantId: p.variantId, layer: "table", quantity: p.quantity, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
       replaces: shadesOf(p.variantId).map((s) => s.id),
     });

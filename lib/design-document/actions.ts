@@ -50,10 +50,12 @@ export type Action =
   // A stretch item resized on the plan (a carpet's corners).
   | { type: "resizePlacement"; id: string; sizeMm: { widthMm: number; depthMm: number } }
   | { type: "removePlacement"; id: string }
-  // F-3.3 smart-apply: copy a placement onto every table of a given type, or onto every table on
-  // the plan regardless of type ("על כל השולחנות" — a cloth the whole room shares).
-  | { type: "applyToTableType"; tableType: string; placement: Omit<Placement, "id" | "tableId">; replaces?: string[] }
-  | { type: "applyToAllTables"; placement: Omit<Placement, "id" | "tableId">; replaces?: string[] }
+  // F-3.3 smart-apply, generalised: put this item on exactly these tables. The caller decides which
+  // tables those are — every table of a type, every table on the plan, the ones the designer has
+  // selected, the ones inside a zone. Two narrower actions (applyToTableType / applyToAllTables)
+  // used to answer the first two of those and could not be made to answer the others; this is the
+  // same body with the list lifted out, so it is one branch here instead of two.
+  | { type: "applyToTables"; tableIds: string[]; placement: Omit<Placement, "id" | "tableId">; replaces?: string[] }
   // Several things become one: selecting any of them selects all, dragging any drags all, and a set
   // of tables carries a single number as though it were the one larger table it now is.
   | { type: "group"; groupId: string; refs: { kind: "table" | "placement"; id: string }[]; number?: number }
@@ -234,15 +236,10 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           : doc.exceptions;
       return pruneGroups({ ...doc, placements: doc.placements.filter((p) => p.id !== action.id), exceptions });
     }
-    case "applyToTableType":
-      return spreadOverTables(
-        doc,
-        doc.tables.filter((t) => t.type === action.tableType),
-        action.placement,
-        action.replaces,
-      );
-    case "applyToAllTables":
-      return spreadOverTables(doc, doc.tables, action.placement, action.replaces);
+    case "applyToTables": {
+      const wanted = new Set(action.tableIds);
+      return spreadOverTables(doc, doc.tables.filter((t) => wanted.has(t.id)), action.placement, action.replaces);
+    }
 
     case "group": {
       // Fewer than two things is not a group, it is a thing.
@@ -467,12 +464,12 @@ if (isMain(import.meta.url)) {
   h = dispatch(h, { type: "addTable", table: { id: "t1", type: "round", number: 1, position: { x: 0, y: 0 }, rotation: 0 } });
   h = dispatch(h, { type: "addTable", table: { id: "t2", type: "round", number: 2, position: { x: 5, y: 0 }, rotation: 0 } });
   const applyV1 = {
-    type: "applyToTableType" as const,
-    tableType: "round",
+    type: "applyToTables" as const,
+    tableIds: ["t1", "t2"],
     placement: { variantId: "v1", layer: "table" as const, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
   };
   h = dispatch(h, applyV1);
-  assert(h.present.placements.length === 2, "apply-to-type places on each round table");
+  assert(h.present.placements.length === 2, "apply-to-list places on each named table");
   h = dispatch(h, applyV1);
   assert(h.present.placements.length === 2, "re-apply is idempotent, no duplicates");
   h = undo(h);
@@ -559,16 +556,45 @@ if (isMain(import.meta.url)) {
   g = dispatch(g, { type: "addTable", table: { id: "r1", type: "עגול", number: 1, position: { x: 0, y: 0 }, rotation: 0 } });
   g = dispatch(g, { type: "addTable", table: { id: "k1", type: "אביר", number: 2, position: { x: 0, y: 0 }, rotation: 0 } });
   const cloth = { variantId: "gold", layer: "table" as const, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 };
-  g = dispatch(g, { type: "applyToTableType", tableType: "עגול", placement: cloth });
-  assert(g.present.placements.length === 1, "per-type apply reaches only the round table");
-  g = dispatch(g, { type: "applyToAllTables", placement: cloth });
-  assert(g.present.placements.length === 2, "apply-to-all reaches the knight table too, without duplicating the round one");
+  g = dispatch(g, { type: "applyToTables", tableIds: g.present.tables.filter((t) => t.type === "עגול").map((t) => t.id), placement: cloth });
+  assert(g.present.placements.length === 1, "applying to just the round tables' ids reaches only the round table");
+  g = dispatch(g, { type: "applyToTables", tableIds: g.present.tables.map((t) => t.id), placement: cloth });
+  assert(g.present.placements.length === 2, "applying to every table's id reaches the knight table too, without duplicating the round one");
 
   // A cover is one per table: spreading cream over a room wearing gold swaps, never stacks.
-  g = dispatch(g, { type: "applyToAllTables", placement: { ...cloth, variantId: "cream" }, replaces: ["gold", "cream"] });
+  g = dispatch(g, { type: "applyToTables", tableIds: g.present.tables.map((t) => t.id), placement: { ...cloth, variantId: "cream" }, replaces: ["gold", "cream"] });
   assert(g.present.placements.length === 2, "recolouring every table adds no second cloth");
   assert(g.present.placements.every((p) => p.variantId === "cream"), "…and every table now wears cream");
   assert((g.present.exceptions?.length ?? 0) === 0, "a swap is not a removal, so it records no exception");
+
+  // Applying to an explicit list of tables — the general case the two old actions were both
+  // special cases of.
+  {
+    let g = initHistory({
+      calibration: { mmPerUnit: 1 },
+      tables: [
+        { id: "t1", type: "עגול", number: 1, position: { x: 0, y: 0 }, rotation: 0 },
+        { id: "t2", type: "עגול", number: 2, position: { x: 0, y: 0 }, rotation: 0 },
+        { id: "t3", type: "אביר", number: 3, position: { x: 0, y: 0 }, rotation: 0 },
+      ],
+      placements: [],
+    });
+    const cloth = { variantId: "gold", layer: "table" as const, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 };
+
+    g = dispatch(g, { type: "applyToTables", tableIds: ["t1", "t3"], placement: cloth });
+    assert(g.present.placements.length === 2, "only the two tables named are dressed");
+    assert(!g.present.placements.some((p) => p.tableId === "t2"), "…and the one that was not is left bare");
+
+    const before = g.present;
+    g = dispatch(g, { type: "applyToTables", tableIds: ["t1"], placement: cloth });
+    assert(g.present === before, "re-applying to a table that already wears it is not an edit");
+
+    g = dispatch(g, { type: "applyToTables", tableIds: ["gone"], placement: cloth });
+    assert(g.present === before, "a table id that is not there is ignored, not a crash");
+
+    g = dispatch(g, { type: "applyToTables", tableIds: [], placement: cloth });
+    assert(g.present === before, "applying to nothing is not an edit");
+  }
 
   // ── grouping ──────────────────────────────────────────────────────────────────────────────────
   {
