@@ -7,7 +7,7 @@ import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@
 import { resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
 import { pointToT, resolveSpan, wallSegment, resolveHang, nearestRig, RIG_SNAP_MM } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame } from "@/lib/studio/geometry";
-import { rigLengthMm, type VenueStructure } from "@/lib/venues/structure";
+import { isHangingPoint, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
@@ -420,7 +420,7 @@ export function CanvasStage({
       // (a single hanging point, isHangingPoint) is dropped: there is no line for a table to land
       // ON, only a point, which this rule does not offer.
       ...(layerVisible.ceiling && plan.structure.rigs?.length
-        ? { lines: plan.structure.rigs.filter((r) => rigLengthMm(r) > 0).map((r) => ({ a: r.a, b: r.b })) }
+        ? { lines: plan.structure.rigs.filter((r) => !isHangingPoint(r)).map((r) => ({ a: r.a, b: r.b })) }
         : {}),
     });
     if (ref.kind === "table") onMoveTable(ref.id, snapped);

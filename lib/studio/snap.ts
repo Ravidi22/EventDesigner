@@ -211,6 +211,9 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
   const step = gridStepMm(ctx.gridMm, tol);
   const anchor = ctx.anchor;
 
+  // Drawing along a fixed angle answers early, so `ctx.lines` is not consulted here: no caller
+  // passes both, and a wall being drawn has no reason to land on a ceiling rod. If one ever
+  // does, the line snap has to move into this branch too rather than silently doing nothing.
   if (anchor && ctx.constrainAngle) {
     const dx = p.x - anchor.x;
     const dy = p.y - anchor.y;
