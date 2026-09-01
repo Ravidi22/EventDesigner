@@ -70,6 +70,23 @@ export interface WallSpan {
   to: number; // 0..1, always > from
 }
 
+/** Where a ceiling item hangs. When this is set, `position` is derived from the rod and ignored —
+ *  the same contract WallSpan has, and for the same reason: the rod belongs to the PROPERTY, so a
+ *  hall re-surveyed at /halls has to carry its chandeliers with it rather than leave them at old
+ *  millimetres in mid-air.
+ *
+ *  A point, not a span, because that is what the thing is: a drape is pinned along a wall by both
+ *  ends, a chandelier hangs off one fixing. Widening WallSpan to cover both would give every reader
+ *  two optional ids to disambiguate for no gain.
+ *
+ *  A `rigId` that no longer resolves is ignored on read — the item falls back to its last free
+ *  position — exactly like a dangling wallId. */
+export interface RigHang {
+  rigId: string;
+  t: number; // 0..1 along the rod; always 0 on a single hanging point
+  dropMm?: number; // how far below the rod it hangs; absent = flush to the rod
+}
+
 // One product-variant placed somewhere. Targets a table (table layer), a wall (a drape), or a free
 // point. Which of those it is comes from the product's category (CategoryDef.anchor), never from
 // guessing at which fields happen to be set.
@@ -84,6 +101,8 @@ export interface Placement {
   scale: number;
   /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. */
   span?: WallSpan;
+  /** Ceiling items hung on one of the venue's rods. When set, `position` is ignored — see RigHang. */
+  hang?: RigHang;
   /** Stretch items sized on the plan rather than in the catalog (a carpet). Overrides the product's
    *  footprint; absent means "the size the catalog gives it". */
   sizeMm?: { widthMm: number; depthMm: number };

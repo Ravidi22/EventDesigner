@@ -8,10 +8,10 @@
 // Pure geometry over `{nodes, walls}` — no React, no storage — so it runs under node like the rest
 // of lib/studio.
 import type { Point } from "@/lib/studio/hall";
-import type { VenueStructure } from "@/lib/venues/structure";
-import { nodeMap, wallPoints } from "@/lib/venues/structure";
+import type { VenueStructure, CeilingRig } from "@/lib/venues/structure";
+import { nodeMap, wallPoints, rigLengthMm } from "@/lib/venues/structure";
 import { pointAtDistance, projectOntoWall, wallLengthMm } from "./geometry";
-import type { WallSpan } from "@/lib/design-document/types";
+import type { WallSpan, RigHang } from "@/lib/design-document/types";
 import { isMain } from "../self-check";
 
 export interface WallSegment {
@@ -90,6 +90,55 @@ export function nearestWall(structure: VenueStructure, p: Point): NearestWall | 
 /** The span a freshly dropped drape gets: the whole wall. Shortening it is a drag away. */
 export const WHOLE_WALL = { from: 0, to: 1 } as const;
 
+/** How near a rod a ceiling item has to be dropped before it hangs on it rather than floating.
+ *  400mm — the same order as the room's other snaps, and about the radius of the chandelier that is
+ *  usually being placed. */
+export const RIG_SNAP_MM = 400;
+
+/** One rod's endpoints, or null if the id dangles. Same contract, and same shape, as wallSegment. */
+export function rigSegment(structure: VenueStructure, rigId: string): WallSegment | null {
+  const rig = structure.rigs?.find((r) => r.id === rigId);
+  if (!rig) return null;
+  return { a: rig.a, b: rig.b, lengthMm: rigLengthMm(rig) };
+}
+
+/** Where a hung item actually is. A zero-length rod (a single eyebolt) resolves to its own point at
+ *  any t rather than dividing by its length. */
+export function resolveHang(structure: VenueStructure, hang: RigHang): Point | null {
+  const seg = rigSegment(structure, hang.rigId);
+  if (!seg) return null;
+  if (seg.lengthMm === 0) return { ...seg.a };
+  return pointAtDistance(seg.a, seg.b, clamp01(hang.t) * seg.lengthMm);
+}
+
+export interface NearestRig {
+  rigId: string;
+  distanceMm: number;
+  t: number;
+}
+
+/** The rod closest to a dropped item, and where along it the drop landed. Null when the venue has
+ *  no rods at all, which is most venues until somebody measures them. */
+export function nearestRig(structure: VenueStructure, p: Point): NearestRig | null {
+  let best: NearestRig | null = null;
+  let bestDistSq = Infinity;
+  for (const rig of structure.rigs ?? []) {
+    const len = rigLengthMm(rig);
+    // A hanging point has no direction to project onto: it is simply near or it is not.
+    const foot = len === 0 ? rig.a : pointAtDistance(rig.a, rig.b, projectOntoWall(rig.a, rig.b, p));
+    const distSq = (p.x - foot.x) ** 2 + (p.y - foot.y) ** 2;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      best = {
+        rigId: rig.id,
+        distanceMm: Math.sqrt(distSq),
+        t: len === 0 ? 0 : clamp01(projectOntoWall(rig.a, rig.b, p) / len),
+      };
+    }
+  }
+  return best;
+}
+
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
@@ -141,6 +190,39 @@ if (isMain(import.meta.url)) {
   assert(nearestWall(structure, { x: 200, y: 4000 })!.wallId === "w-side", "…and a drop by the side wall picks that one");
   assert(nearestWall(structure, { x: 9000, y: 5500 })!.wallId !== "w-lip", "an edge is a boundary, not something to hang a drape on");
   assert(nearestWall({ nodes: [], walls: [], entrances: [], features: [] }, { x: 0, y: 0 }) === null, "no walls, no anchor");
+
+  // --- ceiling rods ---------------------------------------------------------
+  {
+    // An 8m rod running along x at y=3000, and a single eyebolt off to the side.
+    const rigged: VenueStructure = {
+      ...structure,
+      rigs: [
+        { id: "r-long", label: "מוט מרכזי", a: { x: 1000, y: 3000 }, b: { x: 9000, y: 3000 }, heightMm: 4200 },
+        { id: "r-point", label: "נקודה", a: { x: 3000, y: 5000 }, b: { x: 3000, y: 5000 }, heightMm: 4000 },
+      ],
+    };
+
+    assert(rigSegment(rigged, "gone") === null, "a deleted rod resolves to nothing");
+    assert(near(rigSegment(rigged, "r-long")!.lengthMm, 8000), "rod length");
+
+    const mid = resolveHang(rigged, { rigId: "r-long", t: 0.5 })!;
+    assert(near(mid.x, 5000) && near(mid.y, 3000), "half way along the rod");
+
+    const start = resolveHang(rigged, { rigId: "r-long", t: 0 })!;
+    assert(near(start.x, 1000), "t=0 is the rod's own start");
+    assert(near(resolveHang(rigged, { rigId: "r-long", t: 3 })!.x, 9000), "an out-of-range t clamps to the rod");
+    assert(resolveHang(rigged, { rigId: "gone", t: 0.5 }) === null, "a dangling rigId resolves to nothing");
+
+    // A zero-length rod must not divide by zero — it resolves to its own point, whatever t says.
+    const pt = resolveHang(rigged, { rigId: "r-point", t: 0.7 })!;
+    assert(near(pt.x, 3000) && near(pt.y, 5000), "a hanging point resolves to itself at any t");
+
+    const dropped = nearestRig(rigged, { x: 5000, y: 3200 })!;
+    assert(dropped.rigId === "r-long" && near(dropped.t, 0.5) && near(dropped.distanceMm, 200), "a drop near the rod picks it, with where along it");
+    assert(nearestRig(rigged, { x: 3100, y: 5000 })!.rigId === "r-point", "…and a drop by the eyebolt picks that");
+    assert(nearestRig(rigged, { x: 3000, y: 5000 })!.t === 0, "a hanging point is always at t=0");
+    assert(nearestRig(structure, { x: 0, y: 0 }) === null, "a venue with no rods offers nothing to hang from");
+  }
 
   console.log("anchor self-check passed");
 }
