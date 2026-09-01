@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import type { ElementStyle, DashPattern } from "@/lib/element-style";
+import { controlClassName, fieldLabelClassName, inlineLabelClassName } from "./control";
 import { NumberField } from "./number-field";
 import { Select, type SelectOption } from "./select";
 
@@ -48,14 +49,18 @@ function ColorField({
   const pct = Math.round((opacity ?? 1) * 100);
 
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-ink-soft">{label}</span>
-      <div className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-canvas px-1.5">
+    <div>
+      <span className={fieldLabelClassName}>{label}</span>
+      {/* The row is a control like any other, so it is built out of controlClassName's own
+          geometry — h-10 and rounded-sm — rather than the shorter, rounder box it used to be:
+          stacked under a NumberField and a Select in the same panel, three different heights and
+          two different radii read as three unrelated widgets. */}
+      <div className={`${controlClassName} flex items-center gap-1.5 px-1.5`}>
         {/* The swatch IS the native colour input, just cropped to a small square — clicking it
             opens the OS picker directly, no separate "edit" step. A checkerboard shows through
             when unset, so an untouched row doesn't quietly imply a colour that isn't there. */}
         <label
-          className="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded-sm border border-border"
+          className="relative h-6 w-6 shrink-0 cursor-pointer overflow-hidden rounded-sm border border-border"
           style={
             hasColor
               ? { backgroundColor: value }
@@ -96,7 +101,7 @@ function ColorField({
             setHexText(toHex(value)); // an incomplete hex (1–5 digits) snaps back to the last real value
           }}
           aria-label={`${label} — קוד צבע`}
-          className="w-16 min-w-0 bg-transparent text-xs nums text-ink placeholder:text-faint focus-visible:outline-none"
+          className="min-w-[4rem] flex-1 bg-transparent text-xs nums text-ink placeholder:text-faint focus-visible:outline-none"
         />
 
         <div className="h-4 w-px shrink-0 bg-border" />
@@ -194,7 +199,7 @@ export function StyleFields({
           onChange={(v) => patch({ strokeWidthPx: v })}
           className="w-14"
         />
-        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
+        <label className={`flex items-center gap-1.5 ${inlineLabelClassName}`}>
           סגנון קו
           <Select
             value={style?.dash ?? "solid"}

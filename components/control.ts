@@ -5,3 +5,10 @@ export const controlClassName =
 // Shared label style for a field with its input stacked below it (TextField, NumberField, and the
 // ad hoc labeled inputs across the app before them).
 export const fieldLabelClassName = "mb-1 block text-xs font-medium text-ink-soft";
+
+// The same label, beside its input instead of above it (a toolbar or inspector row). Identical
+// size, weight and ink — only the margin differs, since the gap comes from the flex row. Every
+// label in the component library goes through one of these two: they used to disagree about the
+// weight (`font-medium` or not) and the colour (`text-ink-soft` or `text-muted`), so two controls
+// standing side by side looked like two different systems.
+export const inlineLabelClassName = "text-xs font-medium text-ink-soft";

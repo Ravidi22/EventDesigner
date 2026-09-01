@@ -1,5 +1,7 @@
 "use client";
 
+import { fieldLabelClassName } from "./control";
+
 // One row of mutually exclusive choices, filling its container. Every option gets the SAME width:
 // with intrinsic widths the row spread itself unevenly at whatever length the Hebrew words happened
 // to be ("אליפסה" three times "שם"), which reads as a broken control rather than as one question
@@ -12,17 +14,18 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
-  labelClassName = "mb-1 block text-xs text-muted",
 }: {
   label: string;
   value: T;
   options: readonly (readonly [T, string])[];
   onChange: (value: T) => void;
-  labelClassName?: string;
 }) {
   return (
     <div>
-      <span className={labelClassName}>{label}</span>
+      {/* The one field label the app has (control.ts). This used to default to its own lighter
+          `text-muted` version and take a prop to override it back — which one caller did, so the
+          same control was labelled two ways on two screens. */}
+      <span className={fieldLabelClassName}>{label}</span>
       <div role="group" aria-label={label} className="flex gap-1 rounded-md border border-border p-0.5">
         {options.map(([v, optionLabel]) => (
           <button

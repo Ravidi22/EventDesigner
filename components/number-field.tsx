@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { controlClassName, fieldLabelClassName } from "./control";
+import { controlClassName, fieldLabelClassName, inlineLabelClassName } from "./control";
 
 const format = (n: number, decimals?: number) => (decimals != null ? n.toFixed(decimals) : String(n));
 
@@ -107,7 +107,10 @@ export function NumberField({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") e.currentTarget.blur();
+    // Commit, never submit: this field is often inside a <form> (and sometimes inside a nested
+    // <dialog> inside one — the catalog shape editor), where implicit submission would save and
+    // close the host behind it.
+    if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
     else if (e.key === "ArrowUp") {
       e.preventDefault();
       nudge(1);
@@ -150,7 +153,7 @@ export function NumberField({
 
   if (layout === "inline") {
     return (
-      <label className={`flex items-center gap-1.5 text-xs text-ink-soft ${wrapperClassName}`}>
+      <label className={`flex items-center gap-1.5 ${inlineLabelClassName} ${wrapperClassName}`}>
         {label}
         {input}
       </label>
