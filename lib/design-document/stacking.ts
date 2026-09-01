@@ -145,18 +145,25 @@ if (isMain(import.meta.url)) {
     ...extra,
   });
 
-  // rug + two tables + an object, plus a cloth and a drape that are in no stack at all.
+  // rug + two tables + an object, plus a cloth, a drape and a CHANDELIER that are in no stack.
   const kinds: Record<string, StackKind | undefined> = {
     rug: "carpet",
     lamp: "item",
     cloth: undefined,
     drape: undefined,
+    chandelier: undefined, // overhead — nothing on the floor for it to be in front of
   };
   const classify = (p: Placement) => kinds[p.id];
   const doc: DesignDocumentContent = {
     calibration: { mmPerUnit: 1 },
     tables: [table("t1"), table("t2")],
-    placements: [place("rug"), place("lamp"), place("cloth", { tableId: "t1", layer: "table" }), place("drape")],
+    placements: [
+      place("rug"),
+      place("lamp"),
+      place("cloth", { tableId: "t1", layer: "table" }),
+      place("drape"),
+      place("chandelier", { layer: "ceiling" }),
+    ],
   };
 
   const names = (s: StackEntry[]) => s.map((e) => e.ref.id).join(" ");
@@ -164,9 +171,12 @@ if (isMain(import.meta.url)) {
 
   // The default look IS the three passes this replaced.
   assert(names(stack) === "rug t1 t2 lamp", "with nothing restacked, a rug is under the tables and an object above them");
-  assert(stack.length === 4, "a cloth and a drape are in no stack");
+  assert(stack.length === 4, "a cloth, a drape and a chandelier are in no stack");
   assert(!isStackable(stack, { kind: "placement", id: "cloth" }), "…so the buttons are not offered for them");
   assert(isStackable(stack, { kind: "table", id: "t1" }), "…and are offered for a table");
+  assert(!isStackable(stack, { kind: "placement", id: "chandelier" }), "a ceiling item is in no floor stack");
+  assert(names(stack) === "rug t1 t2 lamp", "…and does not appear among the things on the floor");
+  assert(restackTo(stack, [{ kind: "placement", id: "chandelier" }], "front").length === 0, "…so it cannot be restacked");
 
   // A table brought to the front clears the object above it — the thing three fixed passes could not do.
   {

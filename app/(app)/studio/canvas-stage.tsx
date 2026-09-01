@@ -172,6 +172,7 @@ export function CanvasStage({
     const drapes: Placement[] = [];
     const carpets: Placement[] = [];
     const items: Placement[] = [];
+    const ceiling: Placement[] = [];
     const coverByTable = new Map<string, Placement>();
     const chipsByTable = new Map<string, Placement[]>();
 
@@ -182,6 +183,8 @@ export function CanvasStage({
       } else if (p.layer === "table" && p.tableId) {
         if (r?.anchor === "table") coverByTable.set(p.tableId, p);
         else chipsByTable.set(p.tableId, [...(chipsByTable.get(p.tableId) ?? []), p]);
+      } else if (p.layer === "ceiling") {
+        ceiling.push(p);
       } else if (r?.sizing === "stretch") {
         carpets.push(p);
       } else {
@@ -190,7 +193,7 @@ export function CanvasStage({
     }
     // These buckets say what a thing IS. They no longer say what order it is drawn in — that is one
     // stack over the whole floor now (see `stack` below and lib/design-document/stacking.ts).
-    return { drapes, carpets, items, coverByTable, chipsByTable };
+    return { drapes, carpets, items, ceiling, coverByTable, chipsByTable };
   }, [doc.placements]);
 
   /** Which kind of floor thing a placement is, for the stacker — undefined for the two that are not
@@ -199,6 +202,10 @@ export function CanvasStage({
   const classify = useCallback((p: Placement): StackKind | undefined => {
     const r = resolve(p.variantId);
     if (r?.anchor === "wall") return undefined; // a drape hangs on a wall
+    // Overhead. It is not standing on the floor, so it is in no floor stack and nothing on the
+    // floor can be in front of it — it draws in its own pass, last. Before this, a chandelier was
+    // sorted among the rugs and tables and could be occluded by one.
+    if (p.layer === "ceiling") return undefined;
     if (p.layer === "table" && p.tableId) return undefined; // a cloth or a chip belongs to a table
     return r?.sizing === "stretch" ? "carpet" : "item";
   }, []);
@@ -229,6 +236,7 @@ export function CanvasStage({
     const placed = [
       ...(layerVisible.floor ? sorted.carpets : []),
       ...sorted.items.filter((p) => layerVisible[p.layer]),
+      ...(layerVisible.ceiling ? sorted.ceiling : []),
     ];
     for (const p of placed) {
       out.push({ ref: { kind: "placement", id: p.id }, box: { ...p.position, ...placementExtent(p) } });
@@ -745,6 +753,22 @@ export function CanvasStage({
                 onSelect={(additive) => onSelect({ kind: "placement", id: p.id }, additive)}
                 onSpan={(span) => onSpanPlacement(p.id, span)}
                 onEndSpan={onEndDrag}
+              />
+            ))}
+
+          {/* OVERHEAD, and therefore last. A chandelier is not standing on the floor: nothing down
+              there can be in front of it, so it is drawn after everything, outside the floor stack.
+              See lib/design-document/stacking.ts. */}
+          {layerVisible.ceiling &&
+            sorted.ceiling.map((p) => (
+              <PlacementNode
+                key={p.id}
+                placement={p}
+                x={p.position.x}
+                y={p.position.y}
+                selected={isSel("placement", p.id)}
+                ctx={ctx}
+                drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
               />
             ))}
         </>
