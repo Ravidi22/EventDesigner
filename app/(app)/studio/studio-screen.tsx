@@ -16,7 +16,7 @@ import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
-import { nearestWall, WHOLE_WALL, nearestRig, RIG_SNAP_MM, resolveHang } from "@/lib/studio/anchor";
+import { nearestWall, WHOLE_WALL, hangNear, resolveHang } from "@/lib/studio/anchor";
 import {
   DEFAULT_NUMBERING,
   expandToGroups,
@@ -335,8 +335,7 @@ export function StudioScreen({
       // Near a rod, it hangs on it and will travel with it if the hall is ever re-surveyed. Far
       // from one — or in a venue nobody has measured the ceiling of — it is a free point, exactly
       // as every ceiling item was before rods existed.
-      const near = nearestRig(plan.structure, { x, y });
-      const hang = near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : undefined;
+      const hang = hangNear(plan.structure, { x, y });
       act({ type: "addPlacement", placement: { ...base, position: { x, y }, ...(hang ? { hang } : {}) } });
     } else if (product.layer === "table") {
       const t = tableAt(doc, x, y);
@@ -537,7 +536,12 @@ export function StudioScreen({
       moves: sorted.map((e, i) => ({
         kind: e.ref.kind,
         id: e.ref.id,
-        position: axis === "x" ? { x: first + step * i, y: e.box!.y } : { x: e.box!.x, y: first + step * i },
+        // Whole millimetres, like every other write on this surface — a fractional step would put
+        // a table at x=1833.333 and print a dimension nobody can measure to.
+        position:
+          axis === "x"
+            ? { x: Math.round(first + step * i), y: e.box!.y }
+            : { x: e.box!.x, y: Math.round(first + step * i) },
       })),
     });
   }, [selected, docRefs, movableBox, act]);

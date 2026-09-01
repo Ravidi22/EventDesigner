@@ -5,7 +5,7 @@ import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId, W
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
-import { pointToT, resolveSpan, wallSegment, resolveHang, nearestRig, RIG_SNAP_MM } from "@/lib/studio/anchor";
+import { pointToT, resolveSpan, wallSegment, resolveHang, hangNear } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame } from "@/lib/studio/geometry";
 import { isHangingPoint, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, type Footprint } from "@/lib/studio/footprint";
@@ -375,13 +375,25 @@ export function CanvasStage({
   const draggingIds = useRef<Set<string>>(new Set());
 
   /** The hang a ceiling placement gets from wherever its `position` is RIGHT NOW: near a rod, on it;
-   *  otherwise free. The exact rule dropProduct uses, reused here so a drag can never disagree with a
-   *  drop about what "near" means. Rods are the property's own geometry, resolved against
-   *  `plan.structure` and never the per-event arranged copy — same precedent the drape code below
-   *  already sets (arrangedStructure only ever touches `features`). */
-  const hangAfterMove = (p: Placement): RigHang | null => {
-    const near = nearestRig(plan.structure, p.position);
-    return near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : null;
+   *  otherwise free. Exactly the rule dropProduct uses, because it is literally the same function
+   *  (lib/studio/anchor.ts's hangNear) — a drag can never disagree with a drop about what "near"
+   *  means. Rods are the property's own geometry, resolved against `plan.structure` and never the
+   *  per-event arranged copy — same precedent the drape code below already sets (arrangedStructure
+   *  only ever touches `features`). */
+  const hangAfterMove = (p: Placement): RigHang | null => hangNear(plan.structure, p.position);
+
+  /** Every ceiling item THIS gesture just moved settles onto whatever rod (or none) it ended up
+   *  near. Both gestures that write a `position` call it: the end of a drag, and the commit of a
+   *  ROTATE — a group rotate orbits a hung item exactly as a group drag sweeps one along, and the
+   *  one that did not re-settle left a stored point that only surfaced the day the rod was deleted.
+   *
+   *  Gated on membership of the gesture, NOT on the item already being hung: hanging is a two-way
+   *  door. Dragging a chandelier off its rod clears `hang`, so gating on `p.hang` meant nothing
+   *  could ever put it back — the inspector said "אין מוט במיקום הזה" with no control to fix it. */
+  const settleHangs = (movedIds: Set<string>) => {
+    for (const p of sorted.ceiling) {
+      if (movedIds.has(p.id)) onHangPlacement(p.id, hangAfterMove(p));
+    }
   };
 
   /** The move handler for one item: the group's shared delta when it is part of a live
@@ -432,18 +444,14 @@ export function CanvasStage({
   };
 
   const endDrag = (ctx: CanvasLayerContext) => () => {
+    // Read BEFORE the reset: this is the set of ids the gesture was actually writing to, which is
+    // what settleHangs has to sweep. Selection is not the same thing — a hung item merely selected
+    // alongside a live drag was never moved by it.
+    const moved = draggingIds.current;
     groupDrag.current = null;
     draggingIds.current = new Set();
     ctx.endSnap();
-    // Every hung member THIS gesture just moved — its own drag, or a group drag that swept it along
-    // with the rest of the selection — settles back onto whatever rod (or none) it actually ended up
-    // near. The one place this runs: a solo ceiling drag reaches it through the same onEnd chain, so
-    // there is no second copy of the check to keep in sync with this one.
-    for (const p of sorted.ceiling) {
-      if (p.hang && selection.some((r) => r.kind === "placement" && r.id === p.id)) {
-        onHangPlacement(p.id, hangAfterMove(p));
-      }
-    }
+    settleHangs(moved);
     onEndDrag();
   };
 
@@ -807,6 +815,11 @@ export function CanvasStage({
               rotationDeg={rotatable.rotationDeg}
               onRotate={(deg, mods) => rotateSelection(deg, mods)}
               onCommit={() => {
+                // A rotate writes a new `position` for every member (rotateSelection above), so a
+                // hung ceiling item swept round the pivot has to re-settle exactly as it does at
+                // the end of a drag. This handle calls the host's onEndDrag directly rather than
+                // endDrag(ctx), which is why the sweep lives in settleHangs and not inside endDrag.
+                settleHangs(new Set(rotatableRefs.filter((r) => r.kind === "placement").map((r) => r.id)));
                 rotateGesture.current = null;
                 onEndDrag();
               }}

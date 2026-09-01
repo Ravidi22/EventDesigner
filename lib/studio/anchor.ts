@@ -8,7 +8,7 @@
 // Pure geometry over `{nodes, walls}` — no React, no storage — so it runs under node like the rest
 // of lib/studio.
 import type { Point } from "@/lib/studio/hall";
-import type { VenueStructure, CeilingRig } from "@/lib/venues/structure";
+import type { VenueStructure } from "@/lib/venues/structure";
 import { nodeMap, wallPoints, rigLengthMm } from "@/lib/venues/structure";
 import { pointAtDistance, projectOntoWall, wallLengthMm } from "./geometry";
 import type { WallSpan, RigHang } from "@/lib/design-document/types";
@@ -139,6 +139,15 @@ export function nearestRig(structure: VenueStructure, p: Point): NearestRig | nu
   return best;
 }
 
+/** The hang a ceiling item AT THIS POINT gets: the rod it is near enough to, or null for "nowhere
+ *  near one". Dropping a chandelier and dragging one are the same question, so both ask it here —
+ *  the rule used to be written out twice (studio-screen's dropProduct, canvas-stage's end-of-drag
+ *  sweep) and two copies of a snap radius is one copy too many. */
+export function hangNear(structure: VenueStructure, p: Point): RigHang | null {
+  const near = nearestRig(structure, p);
+  return near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : null;
+}
+
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
@@ -222,6 +231,12 @@ if (isMain(import.meta.url)) {
     assert(nearestRig(rigged, { x: 3100, y: 5000 })!.rigId === "r-point", "…and a drop by the eyebolt picks that");
     assert(nearestRig(rigged, { x: 3000, y: 5000 })!.t === 0, "a hanging point is always at t=0");
     assert(nearestRig(structure, { x: 0, y: 0 }) === null, "a venue with no rods offers nothing to hang from");
+
+    // The one rule a drop and a drag must agree on.
+    assert(hangNear(rigged, { x: 5000, y: 3200 })!.rigId === "r-long", "an item within the snap radius hangs on the rod");
+    assert(near(hangNear(rigged, { x: 5000, y: 3200 })!.t, 0.5), "…at the point along it that it landed");
+    assert(hangNear(rigged, { x: 5000, y: 3000 + RIG_SNAP_MM + 1 }) === null, "one millimetre past the radius it hangs from nothing");
+    assert(hangNear(structure, { x: 0, y: 0 }) === null, "a venue with no rods hangs nothing");
   }
 
   console.log("anchor self-check passed");
