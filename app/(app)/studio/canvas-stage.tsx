@@ -1396,9 +1396,10 @@ function PlacementNode({
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
-        // Overhead is unfilled on purpose — the item is above the cut plane, not on it, so whatever
-        // is drawn underneath (a table it hangs over) must still show through its outline.
-        fill={overhead ? "none" : selected ? "var(--color-accent-tint)" : "var(--color-surface)"}
+        // fill is passed unconditionally — FootprintShape itself overrides it to "none" when
+        // overhead is set, so the convention lives in one place instead of being re-decided at
+        // every call site.
+        fill={selected ? "var(--color-accent-tint)" : "var(--color-surface)"}
         stroke={selected ? "var(--color-accent)" : "var(--color-border)"}
         strokeWidth={selected ? 4 : 2}
         vectorEffect="non-scaling-stroke"

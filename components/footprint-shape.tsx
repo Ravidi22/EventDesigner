@@ -28,9 +28,17 @@ export function FootprintShape({
   ...common
 }: { footprint: Footprint; overhead?: boolean } & ShapeProps) {
   // Overhead items are drawn, never filled: the convention says the thing is above you, and a
-  // filled shape reads as something you would walk around.
-  const od = overhead ? { strokeDasharray: OVERHEAD_DASH, vectorEffect: "non-scaling-stroke" as const } : undefined;
-  const props = { ...od, ...common };
+  // filled shape reads as something you would walk around. This has to be enforced HERE, not left
+  // to each caller, and it has to win over whatever fill/dash the caller passes — this is the one
+  // seam all three surfaces (studio canvas, catalog drag image, printed placement map) share, and a
+  // convention that a caller can opt out of by simply passing its usual `fill` is not a convention,
+  // it is a suggestion. `od` therefore spreads AFTER `common` below, so it overrides rather than
+  // being overridden. When `overhead` is false `od` is `undefined` and spreading it is a no-op, so
+  // the ordinary path is unaffected — this only changes what happens when a caller opts in.
+  const od = overhead
+    ? { fill: "none", strokeDasharray: OVERHEAD_DASH, vectorEffect: "non-scaling-stroke" as const }
+    : undefined;
+  const props = { ...common, ...od };
   if (footprint.kind === "circle") {
     return <circle r={footprint.diameterMm / 2} {...(props as React.SVGProps<SVGCircleElement>)} />;
   }
