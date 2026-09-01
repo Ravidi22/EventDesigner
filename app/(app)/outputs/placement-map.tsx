@@ -26,7 +26,7 @@ import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@
 import { overallDimensions, type DimensionLine } from "@/lib/outputs/dimensions";
 import type { Extent } from "@/lib/outputs/scale";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
-import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps } from "./sheet-frame";
+import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps, type LegendRow } from "./sheet-frame";
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
 
@@ -116,10 +116,9 @@ export function PlacementMap({
   plan: EventPlan;
   sheet?: PlanSheet;
 } & Partial<Omit<SheetFrameProps, "world" | "children" | "sheet">>) {
-  // `sheet` and the rest of SheetFrame's own props are optional here, defaulting to the hall plan at
-  // page one of one: this component is reachable today from outputs-screen.tsx, which does not yet
-  // choose a sheet or a page number (that wiring is Task 17's). The defaults keep this component
-  // correct and self-contained in the meantime rather than breaking its one caller.
+  // `sheet` and the rest of SheetFrame's own props are optional here, defaulting to the hall plan
+  // at page one of one, so the component stays correct and self-contained for any caller that only
+  // wants "the plan" without choosing a sheet.
   const legend = placementLegend(doc, productName);
   const pad = 800;
   // Framed on the zones this event occupies. Walls, doors and features are all drawn from the venue
@@ -138,6 +137,16 @@ export function PlacementMap({
   // so the whole drawing is shifted once here rather than every coordinate being rebased by hand.
   const offsetX = pad - box.minX;
   const offsetY = pad - box.minY;
+
+  /** The symbol key, built from what THIS sheet actually draws rather than from a fixed list — a
+   *  key that names a pool on a sheet with no pool in it teaches the reader to stop trusting it.
+   *  Only used when the caller has not supplied its own rows. */
+  const symbolKey: LegendRow[] = [
+    ...(structure.features.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
+    ...(structure.features.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
+    ...(sheet.tables === "ghost" ? [{ label: "שולחן (להתמצאות בלבד)", swatch: "dot-ghost" as const }] : []),
+    ...(sheet.layers.includes("ceiling") || sheet.rigs ? [{ label: "מעל גובה החתך", swatch: "overhead" as const }] : []),
+  ];
   const world: Extent = { widthMm: box.widthMm + pad * 2, heightMm: box.heightMm + pad * 2 };
 
   // Placements filtered on the SHEET, never on a hard-coded category: `layers` picks which of the
@@ -192,7 +201,7 @@ export function PlacementMap({
         version={version}
         date={date}
         north={north}
-        legend={legendRows}
+        legend={legendRows ?? symbolKey}
         paper={paper}
         marginMm={marginMm}
       >
@@ -250,7 +259,13 @@ export function PlacementMap({
           })}
           {/* Fixed features (pool, built stage, bar) — outline + label, B&W-safe */}
           {structure.features.map((f) => {
-            const resolved = resolveStyle(f.style, "monochrome", { fill: "#f0eef5", stroke: INK_SOFT, strokeWidth: LINE_WEIGHTS.feature });
+            // HATCHED BY KIND, because on paper a tint is not a distinction. Every feature used to
+            // fill with the same #f0eef5, so a pool and a built stage printed as the same box with
+            // different words in it — and photocopied, the tint goes to flat grey and even that
+            // much is gone. Diagonal for a stage, cross for a pool; anything else keeps the plain
+            // outline it had. The pattern is the fill, so it survives black and white and a fax.
+            const hatch = f.kind === "stage" ? "url(#hatch-diagonal)" : f.kind === "pool" ? "url(#hatch-cross)" : "#ffffff";
+            const resolved = resolveStyle(f.style, "monochrome", { fill: hatch, stroke: INK_SOFT, strokeWidth: LINE_WEIGHTS.feature });
             const common = {
               fill: resolved.fill,
               stroke: resolved.stroke,
@@ -430,9 +445,13 @@ export function PlacementMap({
         </g>
       </SheetFrame>
 
-      {/* Legend: שולחן ← ערכת עיצוב — meaningless on a sheet that draws no tables at all. */}
+      {/* The table SCHEDULE (שולחן ← ערכת עיצוב) — a different document from the frame's symbol
+          key, and both belong on a drawing set. Meaningless on a sheet that draws no tables.
+          It carries its own 16mm inset because the map view prints at `@page { margin: 0 }`: the
+          drawing sheet owns its margin inside the SVG, and this section is the only thing on that
+          page that would otherwise run to the paper's edge. */}
       {sheet.tables !== "none" && (
-        <section>
+        <section className="break-before-page p-[16mm] print:p-[16mm]">
           <h3 className="mb-2 border-b border-ink pb-1 text-base font-semibold text-ink">מקרא</h3>
           <dl className="divide-y divide-border">
             {legend.map((e, i) => (

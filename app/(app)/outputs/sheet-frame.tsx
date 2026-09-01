@@ -180,23 +180,14 @@ export function SheetFrame({
       aria-label={`${sheet.label} — 1:${denominator}`}
     >
       <defs>
-        {/* A stage: 45° diagonal ink on white. */}
-        <pattern id="hatch-diagonal" patternUnits="userSpaceOnUse" width={300} height={300} patternTransform="rotate(45)">
-          <rect width={300} height={300} fill="#ffffff" />
-          <line x1={150} y1={-50} x2={150} y2={350} stroke={INK} strokeWidth={22} />
-        </pattern>
-        {/* A pool: ink cross-hatched on white. */}
-        <pattern id="hatch-cross" patternUnits="userSpaceOnUse" width={280} height={280}>
-          <rect width={280} height={280} fill="#ffffff" />
-          <line x1={0} y1={140} x2={280} y2={140} stroke={INK} strokeWidth={18} />
-          <line x1={140} y1={0} x2={140} y2={280} stroke={INK} strokeWidth={18} />
-        </pattern>
-        {/* A ghosted table: a sparse grey half-tone, not a hue, so a photocopy still shows it as
-            de-emphasised rather than as a different colour that turns flat grey anyway. */}
-        <pattern id="dot-ghost" patternUnits="userSpaceOnUse" width={260} height={260}>
-          <rect width={260} height={260} fill="#ffffff" />
-          <circle cx={130} cy={130} r={20} fill={HAIRLINE} />
-        </pattern>
+        {/* Each pattern is emitted TWICE, at two tile sizes. `userSpaceOnUse` tiles in whatever
+            space the filled shape lives in: the drawing is inside a `<g>` scaled to world
+            millimetres, where a 300mm tile is the right hatch spacing for a room — but a legend
+            swatch is 5 PAPER millimetres, and a 300mm tile inside it renders as one blank corner
+            of a tile, i.e. a plain white box. The `-sw` set is the same pattern at 1/60th, which
+            is what makes the key legible. */}
+        {hatchDefs("", 1)}
+        {hatchDefs("-sw", 1 / 60)}
       </defs>
 
       {/* The border — the drafting frame's printed edge, one line inside the paper margin. */}
@@ -312,13 +303,38 @@ export function SheetFrame({
   );
 }
 
+/** The three fill patterns, at a given tile scale. See the note at the `<defs>` that calls this. */
+function hatchDefs(suffix: string, k: number) {
+  return (
+    <>
+      {/* A stage: 45° diagonal ink on white. */}
+      <pattern id={`hatch-diagonal${suffix}`} patternUnits="userSpaceOnUse" width={300 * k} height={300 * k} patternTransform="rotate(45)">
+        <rect width={300 * k} height={300 * k} fill="#ffffff" />
+        <line x1={150 * k} y1={-50 * k} x2={150 * k} y2={350 * k} stroke={INK} strokeWidth={22 * k} />
+      </pattern>
+      {/* A pool: ink cross-hatched on white. */}
+      <pattern id={`hatch-cross${suffix}`} patternUnits="userSpaceOnUse" width={280 * k} height={280 * k}>
+        <rect width={280 * k} height={280 * k} fill="#ffffff" />
+        <line x1={0} y1={140 * k} x2={280 * k} y2={140 * k} stroke={INK} strokeWidth={18 * k} />
+        <line x1={140 * k} y1={0} x2={140 * k} y2={280 * k} stroke={INK} strokeWidth={18 * k} />
+      </pattern>
+      {/* A ghosted table: a sparse grey half-tone, not a hue, so a photocopy still shows it as
+          de-emphasised rather than as a different colour that turns flat grey anyway. */}
+      <pattern id={`dot-ghost${suffix}`} patternUnits="userSpaceOnUse" width={260 * k} height={260 * k}>
+        <rect width={260 * k} height={260 * k} fill="#ffffff" />
+        <circle cx={130 * k} cy={130 * k} r={20 * k} fill={HAIRLINE} />
+      </pattern>
+    </>
+  );
+}
+
 function LegendSwatchGlyph({ swatch, x, y }: { swatch: LegendSwatch; x: number; y: number }) {
   const size = 5;
   if (swatch === "overhead") {
     return <line x1={x} y1={y + size / 2} x2={x + size} y2={y + size / 2} stroke={INK} strokeWidth={LINE_WEIGHTS.overhead} strokeDasharray={OVERHEAD_SWATCH_DASH} vectorEffect="non-scaling-stroke" />;
   }
   const fill =
-    swatch === "solid" ? INK : swatch === "outline" ? "#ffffff" : `url(#${swatch})`;
+    swatch === "solid" ? INK : swatch === "outline" ? "#ffffff" : `url(#${swatch}-sw)`;
   return (
     <rect
       x={x}
