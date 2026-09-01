@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Minus,
   Plus,
@@ -18,6 +19,8 @@ import {
   SendToBack,
   Undo2,
   Building2,
+  ListChecks,
+  MapPin,
 } from "lucide-react";
 import type { DesignDocumentContent, WallSpan, RigHang } from "@/lib/design-document/types";
 import type { ElementStyle } from "@/lib/element-style";
@@ -28,6 +31,8 @@ import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
 import { StyleFields } from "@/components/style-fields";
 import { SwatchPicker } from "@/components/swatch-field";
+import { Segmented } from "@/components/segmented";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
@@ -66,6 +71,13 @@ export function Inspector({
   onStyleTable,
   onDuplicate,
   onRemovePlacement,
+  zoneFocused,
+  onSelectInZone,
+  layerActive,
+  onSelectLayer,
+  onSelectSimilar,
+  dressCandidateCount,
+  onCopyDressing,
 }: {
   /** The one thing being edited — null when nothing, or several things, are selected. */
   selection: Selection;
@@ -118,7 +130,31 @@ export function Inspector({
    *  is the same wish whatever is selected. */
   onDuplicate: () => void;
   onRemovePlacement: (id: string) => void;
+  // --- selection commands ---------------------------------------------------------------------
+  // Bulk is a selection problem: these three build the list, and every operation above already
+  // knows how to run over one — see the note beside selectSimilar/selectInZone/selectLayer in
+  // studio-screen.tsx.
+  /** Whether the toolbar's zone eye is currently focused on one — "בחר הכל באזור" has nothing to
+   *  select against otherwise. */
+  zoneFocused: boolean;
+  onSelectInZone: () => void;
+  /** Whether a layer is being worked IN, as opposed to merely visible — see `activeLayer` on the
+   *  screen. "בחר שכבה" only means something once one is named. */
+  layerActive: boolean;
+  onSelectLayer: () => void;
+  onSelectSimilar: () => void;
+  /** How many of the currently selected tables a copied table's dressing would actually land on
+   *  (the source table itself, if it happens to be among them, is excluded) — 0 hides the button
+   *  and is also the reducer's own no-op case, so this only ever offers a control that does
+   *  something. */
+  dressCandidateCount: number;
+  onCopyDressing: (mode: "add" | "replace") => void;
 }) {
+  // Local to the one panel that offers it — a copy of another table's dressing has exactly one
+  // entry point on this screen, so there is no second dialog to keep in sync (contrast the
+  // catalog's delete, which the card menu AND the edit drawer can both open).
+  const [dressMode, setDressMode] = useState<"add" | "replace">("add");
+  const [confirmingReplace, setConfirmingReplace] = useState(false);
   // A GROUP — the designer pushed these together and said they are one thing. For tables that means
   // one number for the lot, so the number field here edits the group and not any table inside it.
   if (group) {
@@ -234,6 +270,39 @@ export function Inspector({
 
         <StackButtons show={canRestack} onRestack={onRestack} />
 
+        <SelectionCommands
+          zoneFocused={zoneFocused}
+          onSelectInZone={onSelectInZone}
+          layerActive={layerActive}
+          onSelectLayer={onSelectLayer}
+          onSelectSimilar={onSelectSimilar}
+        />
+
+        {/* One table's whole dressing, worn onto the rest of this selection — the bulk form of
+            "החל על כל שולחנות X" below, for whatever tables happen to be selected rather than a
+            whole type. Offered only once there is somewhere for it to land. */}
+        {dressCandidateCount > 0 && (
+          <div className="mt-3 rounded-md border border-border-soft bg-inset p-3">
+            <Segmented
+              label="עיצוב השולחן שהועתק"
+              value={dressMode}
+              options={[
+                ["add", "הוספה"],
+                ["replace", "החלפה"],
+              ] as const}
+              onChange={setDressMode}
+            />
+            <Button
+              variant="ghost"
+              className="mt-2 w-full"
+              onClick={() => (dressMode === "replace" ? setConfirmingReplace(true) : onCopyDressing("add"))}
+            >
+              <Copy className="h-4 w-4" strokeWidth={2} />
+              החל את עיצוב השולחן הזה
+            </Button>
+          </div>
+        )}
+
         <div className="mt-3 flex flex-col gap-1.5">
         <Button variant="ghost" onClick={onDuplicate} title="שכפול · Ctrl+C · Ctrl+V">
           <Copy className="h-4 w-4" strokeWidth={2} />
@@ -248,7 +317,35 @@ export function Inspector({
             הסרת הנבחרים
           </Button>
         </div>
+
+        <ConfirmDialog
+          open={confirmingReplace}
+          title={`להחליף את העיצוב של ${dressCandidateCount} שולחנות?`}
+          body="המפה והפריטים הקיימים על השולחנות שנבחרו יוסרו ויוחלפו בעיצוב שהועתק."
+          confirmLabel="החלפה"
+          onConfirm={() => {
+            setConfirmingReplace(false);
+            onCopyDressing("replace");
+          }}
+          onClose={() => setConfirmingReplace(false)}
+        />
       </Panel>
+    );
+  }
+
+  // Nothing is selected, but there is still something to select FROM — the toolbar's zone eye or
+  // its active layer. Without this the two buttons would be reachable only after something was
+  // already picked, which defeats the one that is meant to start a selection from a bare canvas.
+  if (selectedCount === 0 && (zoneFocused || layerActive)) {
+    return (
+      <div className="w-64 rounded-lg border border-border bg-surface p-4 shadow-floating">
+        <SelectionCommands
+          zoneFocused={zoneFocused}
+          onSelectInZone={onSelectInZone}
+          layerActive={layerActive}
+          onSelectLayer={onSelectLayer}
+        />
+      </div>
     );
   }
 
@@ -400,6 +497,14 @@ export function Inspector({
 
         <StackButtons show={canRestack} onRestack={onRestack} />
 
+        <SelectionCommands
+          zoneFocused={zoneFocused}
+          onSelectInZone={onSelectInZone}
+          layerActive={layerActive}
+          onSelectLayer={onSelectLayer}
+          onSelectSimilar={onSelectSimilar}
+        />
+
         <div className="mt-4 flex flex-col gap-1.5">
           {table && (
             <Button variant="ghost" onClick={onSmartApply}>
@@ -543,6 +648,14 @@ export function Inspector({
           one (lib/design-document/stacking.ts). */}
       <StackButtons show={canRestack} onRestack={onRestack} />
 
+      <SelectionCommands
+        zoneFocused={zoneFocused}
+        onSelectInZone={onSelectInZone}
+        layerActive={layerActive}
+        onSelectLayer={onSelectLayer}
+        onSelectSimilar={onSelectSimilar}
+      />
+
       <div className="mt-3">
         <span className="mb-1.5 block text-xs text-ink-soft">מראה</span>
         <div className="flex flex-wrap items-center gap-2">
@@ -624,6 +737,49 @@ function StackButtons({ show, onRestack }: { show: boolean; onRestack: (to: "fro
           לאחור
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Ways to BUILD a selection, rather than a one-off "apply to…" per operation — every operation
+ *  this screen has already takes a list of refs, so growing the list is what makes each of them a
+ *  bulk edit for free. `onSelectSimilar` is left out entirely (not merely disabled) where there is
+ *  nothing yet to match against, e.g. the empty-selection panel below. */
+function SelectionCommands({
+  onSelectSimilar,
+  zoneFocused,
+  onSelectInZone,
+  layerActive,
+  onSelectLayer,
+}: {
+  onSelectSimilar?: () => void;
+  zoneFocused: boolean;
+  onSelectInZone: () => void;
+  layerActive: boolean;
+  onSelectLayer: () => void;
+}) {
+  if (!onSelectSimilar && !zoneFocused && !layerActive) return null;
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <span className="block text-xs text-ink-soft">בחירה</span>
+      {onSelectSimilar && (
+        <Button variant="ghost" onClick={onSelectSimilar}>
+          <ListChecks className="h-4 w-4" strokeWidth={2} />
+          בחר דומים
+        </Button>
+      )}
+      {zoneFocused && (
+        <Button variant="ghost" onClick={onSelectInZone}>
+          <MapPin className="h-4 w-4" strokeWidth={2} />
+          בחר הכל באזור
+        </Button>
+      )}
+      {layerActive && (
+        <Button variant="ghost" onClick={onSelectLayer}>
+          <Layers className="h-4 w-4" strokeWidth={2} />
+          בחר שכבה
+        </Button>
+      )}
     </div>
   );
 }

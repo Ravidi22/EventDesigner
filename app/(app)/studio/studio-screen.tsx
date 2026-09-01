@@ -9,6 +9,8 @@ import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
 import { loadScratch, saveScratch } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
+import type { Point } from "@/lib/studio/hall";
+import { pointInPolygon } from "@/lib/venues/faces";
 import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
@@ -418,6 +420,45 @@ export function StudioScreen({
     [doc, docRefs, featureRefs],
   );
 
+  // --- selection commands -------------------------------------------------------------------------
+  // BULK IS A SELECTION PROBLEM. Every operation this screen has -- drag, rotate, delete, style,
+  // restack, copy, paste -- already takes a list of refs. Make the list easy to build and each of
+  // them becomes a bulk operation without a line of new code apiece; the alternative was a menu of
+  // one-off "apply to..." commands, one per operation, each with its own idea of what it applied to.
+  const selectSimilar = useCallback(() => {
+    const one = selected[0];
+    if (!one) return;
+    if (one.kind === "table") {
+      const type = doc.tables.find((t) => t.id === one.id)?.type;
+      if (!type) return;
+      pickMany(doc.tables.filter((t) => t.type === type).map((t) => ({ kind: "table" as const, id: t.id })), false);
+    } else if (one.kind === "placement") {
+      const variantId = doc.placements.find((p) => p.id === one.id)?.variantId;
+      if (!variantId) return;
+      pickMany(doc.placements.filter((p) => p.variantId === variantId).map((p) => ({ kind: "placement" as const, id: p.id })), false);
+    }
+  }, [selected, doc, pickMany]);
+
+  const selectInZone = useCallback(() => {
+    const zone = plan.zones.find((r) => r.zone.id === zoneFocus);
+    if (!zone || zone.boundary.length < 3) return;
+    const inside = (p: Point) => pointInPolygon(p, zone.boundary);
+    pickMany(
+      [
+        ...doc.tables.filter((t) => inside(t.position)).map((t) => ({ kind: "table" as const, id: t.id })),
+        ...doc.placements.filter((p) => !p.tableId && !p.span && inside(p.position)).map((p) => ({ kind: "placement" as const, id: p.id })),
+      ],
+      false,
+    );
+  }, [plan.zones, zoneFocus, doc, pickMany]);
+
+  const selectLayer = useCallback(() => {
+    if (!activeLayer) return;
+    const refs = doc.placements.filter((p) => p.layer === activeLayer).map((p) => ({ kind: "placement" as const, id: p.id }));
+    // Tables are floor-plane, so "select the floor layer" means them too.
+    pickMany(activeLayer === "floor" ? [...doc.tables.map((t) => ({ kind: "table" as const, id: t.id })), ...refs] : refs, false);
+  }, [activeLayer, doc, pickMany]);
+
   const sole = selected.length === 1 ? selected[0] : null;
 
 
@@ -807,6 +848,21 @@ export function StudioScreen({
     showHint(`${resolve(p.variantId)?.product.name ?? "המפה"} הוחלה על כל השולחנות`);
   };
 
+  /** "החל את עיצוב השולחן הזה" — the clipboard's one copied table, worn onto every other table now
+   *  selected. `copyDressing` already no-ops on a stale source (a table copied in an event that is
+   *  no longer open) by finding no dressing to copy, so there is nothing to re-check here. */
+  const copyDressingToSelection = (mode: "add" | "replace") => {
+    const clip = heldClip();
+    if (clip.tables.length !== 1) return;
+    const fromTableId = clip.tables[0].id;
+    const toTableIds = docRefs(selected)
+      .filter((r) => r.kind === "table" && r.id !== fromTableId)
+      .map((r) => r.id);
+    if (toTableIds.length === 0) return;
+    act({ type: "copyDressing", fromTableId, toTableIds, mode });
+    showHint(mode === "replace" ? `${toTableIds.length} שולחנות עוצבו מחדש` : `העיצוב הוחל על ${toTableIds.length} שולחנות`);
+  };
+
   // Keyboard: undo/redo + delete (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -857,6 +913,17 @@ export function StudioScreen({
   // A zone the event stopped occupying (or a plan that has not landed yet) is not somewhere to be
   // held: fall back to the whole property rather than framing a box that no longer exists.
   const focusZoneId = zoneOptions.some((z) => z.id === zoneFocus) ? zoneFocus : null;
+
+  // Not memoised, on purpose: `heldClip()` is the same module variable `canPaste` below reads
+  // straight off at render, and the render that follows a copy (its only writer) already happens
+  // because copy() also sets the hint. What the inspector's dressing button needs beyond `canPaste`
+  // is whether the one held table actually brought dressing along, and how many of the currently
+  // selected tables that dressing would land on.
+  const dressClip = heldClip();
+  const dressedSourceTableId = dressClip.tables.length === 1 && dressClip.placements.length > 0 ? dressClip.tables[0].id : null;
+  const dressCandidateCount = dressedSourceTableId
+    ? docRefs(selected).filter((r) => r.kind === "table" && r.id !== dressedSourceTableId).length
+    : 0;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -971,6 +1038,13 @@ export function StudioScreen({
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicate={duplicate}
                 onRemovePlacement={(id) => act({ type: "removePlacement", id })}
+                zoneFocused={!!focusZoneId}
+                onSelectInZone={selectInZone}
+                layerActive={activeLayer !== null}
+                onSelectLayer={selectLayer}
+                onSelectSimilar={selectSimilar}
+                dressCandidateCount={dressCandidateCount}
+                onCopyDressing={copyDressingToSelection}
               />
             </div>
           </div>
