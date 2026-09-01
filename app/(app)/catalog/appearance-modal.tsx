@@ -21,7 +21,7 @@ import { Segmented } from "@/components/segmented";
 import { StyleFields } from "@/components/style-fields";
 import { PlanCanvas, SelectionInspector } from "@/components/plan-canvas";
 import { fieldLabelClassName } from "@/components/control";
-import { AppearancePreview } from "./appearance-preview";
+import { AppearancePreview, PlanContent } from "./appearance-preview";
 import { IconPicker } from "./icon-picker";
 
 type Curves = (EdgeCurve | null)[];
@@ -101,13 +101,11 @@ function presetOutline(shape: MapShape, w: number, d: number): BuiltOutline {
  *  length/angle inspector) minus everything hall-specific, and it appears only for `custom`; every
  *  derived shape is drawn from its own measurements, so what it shows instead is the result. */
 export function AppearanceModal({
-  open,
   product,
   onSave,
   onClose,
 }: {
-  open: boolean;
-  /** The drawer's draft, read once per opening. */
+  /** The drawer's draft, read once — this component is mounted by the act of opening it. */
   product: Product;
   onSave: (patch: { dimensions: Product["dimensions"]; appearance: MapAppearance }) => void;
   onClose: () => void;
@@ -115,29 +113,16 @@ export function AppearanceModal({
   const ref = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<Product>(product);
   const [pickingIcon, setPickingIcon] = useState(false);
-  // The modal stays mounted between openings, so the hook's global Ctrl+Z has to stand down while
-  // it's closed — and reopening on another product starts a fresh history (see reset below), or
-  // undo would walk back into a shape that belongs to someone else.
-  const ed = useOutlineEditor(
-    { outline: product.appearance?.outline ?? [], edgeCurves: product.appearance?.edgeCurves },
-    { enabled: open },
-  );
-  const { mode, outline, edgeCurves: curves, lockedEdges, selected, setSelected, reset } = ed;
+  // Mounted by the act of opening and unmounted on close (the drawer renders it conditionally), so
+  // every piece of state here — the draft, the outline, the undo history, the hook's global Ctrl+Z
+  // listener — is born and dies with one editing session. Nothing to seed in an effect, and no way
+  // for an undo to walk back into a shape that belongs to a product the designer has moved on from.
+  const ed = useOutlineEditor({ outline: product.appearance?.outline ?? [], edgeCurves: product.appearance?.edgeCurves });
+  const { mode, outline, edgeCurves: curves, lockedEdges, selected, setSelected } = ed;
 
   useEffect(() => {
-    if (!open) return;
-    setDraft(product);
-    setPickingIcon(false);
-    reset({ outline: product.appearance?.outline ?? [], edgeCurves: product.appearance?.edgeCurves });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
+    ref.current?.showModal();
+  }, []);
 
   const shape = shapeOf(draft);
   const content = contentOf(draft);
@@ -228,12 +213,11 @@ export function AppearanceModal({
     onClose();
   };
 
-  // What the panel previews: the local draft, with the outline the editor is holding right now, so
-  // a vertex dragged on the canvas is a fill and a stroke in the tile beside it.
+  // What the canvas draws: the local draft, with the outline the editor is holding right now, so a
+  // vertex dragged on the canvas is a fill and a stroke in the same breath.
   const preview: Product = custom
     ? { ...draft, appearance: { shape: "custom", content, ...draft.appearance, outline, edgeCurves: curves } }
     : draft;
-  const drawable = !custom || outline.length >= 3;
 
   // Which measurements this shape is made of — see the drawer's note: the shape is asked first and
   // the fields follow from it, so a diameter can never sit unread under a מלבן.
@@ -273,11 +257,11 @@ export function AppearanceModal({
                 </span>
               )}
               {mode === "draw" && outline.length >= 3 && (
-                <Button variant="ghost" onClick={ed.closeOutline}>
+                <Button type="button" variant="ghost" onClick={ed.closeOutline}>
                   סגירת הצורה
                 </Button>
               )}
-              <Button variant="ghost" className="ms-auto" disabled={outline.length === 0} onClick={clearShape}>
+              <Button type="button" variant="ghost" className="ms-auto" disabled={outline.length === 0} onClick={clearShape}>
                 <Trash2 className="h-4 w-4" strokeWidth={2} />
                 ניקוי
               </Button>
@@ -315,6 +299,15 @@ export function AppearanceModal({
                   padMm={PRODUCT_FRAME.padMm}
                   minExtentMm={PRODUCT_FRAME.minExtentMm}
                   gridMm={PRODUCT_FRAME.gridMm}
+                  // What the plan writes inside the outline, drawn on the outline itself. Without
+                  // it, picking an icon changed nothing on the surface the designer is looking at.
+                  overlay={
+                    bounds && (
+                      <g transform={`translate(${bounds.cx} ${bounds.cy})`} className="pointer-events-none text-ink-soft">
+                        <PlanContent content={resolveContent(preview)} w={bounds.w} h={bounds.h} />
+                      </g>
+                    )
+                  }
                 />
                 {selected.length > 0 && (
                   <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
@@ -353,15 +346,10 @@ export function AppearanceModal({
           {/* The inspector: everything that changes what the plan draws, top to bottom in the order
               the questions depend on each other — the shape, then the measurements it is made of,
               then what sits inside it, then how it is painted. */}
+          {/* No thumbnail at the top of this panel: the canvas beside it is already showing the
+              same drawing, larger. Two previews of one shape, one of them 96px tall, is the kind
+              of pair a designer checks twice to see whether they disagree. */}
           <aside className="w-[288px] shrink-0 space-y-4 overflow-y-auto border-s border-border bg-surface p-4">
-            <div className="flex h-24 items-center justify-center rounded-md border border-border bg-bg p-2">
-              {drawable ? (
-                <AppearancePreview product={preview} className="h-full w-full" />
-              ) : (
-                <span className="text-xs text-muted">אין עדיין צורה</span>
-              )}
-            </div>
-
             <div>
               <label htmlFor="a-shape" className={fieldLabelClassName}>
                 צורה
@@ -395,61 +383,64 @@ export function AppearanceModal({
               </div>
             )}
 
-            {!stretch && (
+            {/* A hand-drawn outline keeps its two fields even for a stretch category: they
+                rescale the DRAWING, which is not the same question as "how much of this do we lay
+                at the event" — that one is still answered per placement, in the studio. */}
+            {custom ? (
               <div className="grid grid-cols-2 gap-2">
-                {asksDiameter && (
-                  <NumberField
-                    label="קוטר (ס״מ)"
-                    hideZero
-                    min={0}
-                    placeholder="0"
-                    value={(draft.dimensions.diameterMm ?? 0) / 10}
-                    onChange={(v) => setDim("diameterMm", v)}
-                  />
-                )}
-                {custom && (
-                  <>
-                    <NumberField
-                      label="רוחב (ס״מ)"
-                      decimals={0}
-                      min={0}
-                      commitOnBlur
-                      disabled={!bounds}
-                      value={bounds ? mmToCm(bounds.w) : 0}
-                      onChange={(cm) => resize("w", cm)}
-                    />
-                    <NumberField
-                      label="עומק (ס״מ)"
-                      decimals={0}
-                      min={0}
-                      commitOnBlur
-                      disabled={!bounds}
-                      value={bounds ? mmToCm(bounds.h) : 0}
-                      onChange={(cm) => resize("h", cm)}
-                    />
-                  </>
-                )}
-                {asksBox && (
-                  <>
-                    <NumberField
-                      label="רוחב (ס״מ)"
-                      hideZero
-                      min={0}
-                      placeholder="0"
-                      value={(draft.dimensions.widthMm ?? 0) / 10}
-                      onChange={(v) => setDim("widthMm", v)}
-                    />
-                    <NumberField
-                      label="עומק (ס״מ)"
-                      hideZero
-                      min={0}
-                      placeholder="0"
-                      value={(draft.dimensions.depthMm ?? 0) / 10}
-                      onChange={(v) => setDim("depthMm", v)}
-                    />
-                  </>
-                )}
+                <NumberField
+                  label="רוחב (ס״מ)"
+                  decimals={0}
+                  min={0}
+                  commitOnBlur
+                  disabled={!bounds}
+                  value={bounds ? mmToCm(bounds.w) : 0}
+                  onChange={(cm) => resize("w", cm)}
+                />
+                <NumberField
+                  label="עומק (ס״מ)"
+                  decimals={0}
+                  min={0}
+                  commitOnBlur
+                  disabled={!bounds}
+                  value={bounds ? mmToCm(bounds.h) : 0}
+                  onChange={(cm) => resize("h", cm)}
+                />
               </div>
+            ) : (
+              !stretch && (
+                <div className="grid grid-cols-2 gap-2">
+                  {asksDiameter ? (
+                    <NumberField
+                      label="קוטר (ס״מ)"
+                      hideZero
+                      min={0}
+                      placeholder="0"
+                      value={(draft.dimensions.diameterMm ?? 0) / 10}
+                      onChange={(v) => setDim("diameterMm", v)}
+                    />
+                  ) : (
+                    <>
+                      <NumberField
+                        label="רוחב (ס״מ)"
+                        hideZero
+                        min={0}
+                        placeholder="0"
+                        value={(draft.dimensions.widthMm ?? 0) / 10}
+                        onChange={(v) => setDim("widthMm", v)}
+                      />
+                      <NumberField
+                        label="עומק (ס״מ)"
+                        hideZero
+                        min={0}
+                        placeholder="0"
+                        value={(draft.dimensions.depthMm ?? 0) / 10}
+                        onChange={(v) => setDim("depthMm", v)}
+                      />
+                    </>
+                  )}
+                </div>
+              )
             )}
 
             <div className="h-px bg-border-soft" />
@@ -503,10 +494,11 @@ export function AppearanceModal({
             </span>
           )}
           <div className="flex-1" />
-          <Button variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={onClose}>
             ביטול
           </Button>
           <Button
+            type="button"
             disabled={missing}
             onClick={() => {
               onSave({

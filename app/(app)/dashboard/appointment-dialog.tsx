@@ -164,7 +164,7 @@ export function AppointmentDialog({
       // Tailwind display class outranks it, so the dialog renders permanently, in normal flow,
       // wherever it happens to sit in the tree. The height cap lives here; the flex column that
       // makes the body scroll lives on the <form> below, which is the same split
-      // catalog/shape-editor-modal.tsx uses.
+      // catalog/appearance-modal.tsx uses.
       //
       // `max-h-none` clears the UA's `max-height: calc(100% - 6px - 2em)` so the form's own cap is
       // the only one — two caps two pixels apart would clip the footer against `overflow-hidden`.

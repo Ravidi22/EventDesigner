@@ -164,6 +164,7 @@ export function CatalogScreen({ initialProducts }: { initialProducts: Product[] 
           <Filters
             value={filters}
             onChange={setFilters}
+            products={visible}
             resultCount={filtered.length}
             viewMode={viewMode}
             onViewModeChange={setViewMode}

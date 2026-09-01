@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, STYLE_TAGS, type CategoryGroupId } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { fetchFolder, fetchImages } from "@/lib/gallery/actions";
 import { likedProductIds } from "@/lib/gallery/folder-logic";
@@ -137,7 +137,7 @@ export function CatalogRail({
               className="w-full"
             />
             <div className="flex flex-wrap gap-1">
-              {STYLE_TAGS.map((tag) => (
+              {styleTagsOf(products).map((tag) => (
                 <TagToggle key={tag} active={filters.tags.includes(tag)} onClick={() => toggleTag(tag)}>
                   {tag}
                 </TagToggle>

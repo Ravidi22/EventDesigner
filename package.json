@@ -35,6 +35,7 @@
     "check:csv": "tsx lib/catalog/csv.ts",
     "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",
     "catalog:standard": "tsx lib/catalog/standard/backfill.ts",
+    "catalog:design": "tsx lib/catalog/design-items.ts",
     "check:format": "tsx lib/catalog/format.ts",
     "check:style": "tsx lib/element-style.ts",
     "check:folder": "tsx lib/gallery/folder-logic.ts",

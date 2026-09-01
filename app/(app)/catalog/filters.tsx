@@ -2,7 +2,7 @@
 
 import { FileDown, FileUp, Grid3x3, List, Plus } from "lucide-react";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
-import { STYLE_TAGS } from "@/lib/catalog/categories";
+import { styleTagsOf } from "@/lib/catalog/categories";
 import type { Layer, Product } from "@/lib/catalog/types";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
@@ -49,6 +49,7 @@ export function matchesFilters(p: Product, f: FilterState): boolean {
 export function Filters({
   value,
   onChange,
+  products,
   resultCount,
   viewMode,
   onViewModeChange,
@@ -60,6 +61,9 @@ export function Filters({
 }: {
   value: FilterState;
   onChange: (next: FilterState) => void;
+  /** The whole catalog, unfiltered — read only for the style pills, which are the built-in
+   *  vocabulary plus whatever tags this studio has typed on its own products (styleTagsOf). */
+  products: Product[];
   resultCount: number;
   viewMode: "grid" | "list";
   onViewModeChange: (mode: "grid" | "list") => void;
@@ -161,7 +165,7 @@ export function Filters({
         <TagToggle active={value.tags.length === 0} onClick={() => set({ tags: [] })}>
           הכל
         </TagToggle>
-        {STYLE_TAGS.map((tag) => (
+        {styleTagsOf(products).map((tag) => (
           <TagToggle key={tag} active={value.tags.includes(tag)} onClick={() => toggleTag(tag)}>
             {tag}
           </TagToggle>
