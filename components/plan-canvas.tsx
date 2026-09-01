@@ -148,6 +148,9 @@ export interface HostSnapOptions {
   refs?: Point[];
   boxes?: SnapBox[];
   self?: { widthMm: number; depthMm: number };
+  /** Lines the point may land ON, as opposed to axes it may line up WITH — a venue's ceiling rods,
+   *  passed by the studio surface so a table can be centred under one (lib/studio/snap.ts). */
+  lines?: { a: Point; b: Point }[];
 }
 
 const PAD_MM = 1500;
@@ -502,7 +505,7 @@ export function PlanCanvas({
   const [rotating, setRotating] = useState<{ deg: number; locked: boolean; at: Point } | null>(null);
   // The two alignment axes, plus any run of equal gaps the drag landed on. One state, because they
   // are one answer to one question — where this thing is lining up — and they clear together.
-  const [guides, setGuides] = useState<{ x: number | null; y: number | null; gaps?: GapGuide[] }>({ x: null, y: null });
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null; gaps?: GapGuide[]; lineGuide?: { a: Point; b: Point } }>({ x: null, y: null });
   // Measurements default on while drawing (that's when they're the point) and off once the shape is
   // closed — until the ruler button is pressed, after which the choice is the user's and sticks.
   const [dimsOverride, setDimsOverride] = useState<boolean | null>(null);
@@ -541,7 +544,7 @@ export function PlanCanvas({
   // the moment the drag crosses the threshold — the angle lock snaps the *sweep* (how far the
   // pointer has turned since then) to a step, not each member's absolute final facing, so a locked
   // group rotation is a clean shared turn rather than each fixture landing on its own nearest step.
-  const groupRotate = useRef<{ pivot: Point; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
+  const groupRotate = useRef<{ pivot: Point; handleY: number; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
 
   const showDims = dimsOverride ?? mode === "draw";
   // Whether a rubber-band drag has anywhere to report to. A host that takes no multi-selection gets
@@ -874,7 +877,7 @@ export function PlanCanvas({
   const pendingLenMm = pending && drawAnchor ? wallLengthMm(drawAnchor, pending.point) : 0;
   const pendingAngleDeg = pending && drawAnchor ? wallAngleDeg(drawAnchor, pending.point) : 0;
   const closable = mode === "draw" && outline.length >= 3;
-  const shownGuides: { x: number | null; y: number | null; gaps?: GapGuide[] } =
+  const shownGuides: { x: number | null; y: number | null; gaps?: GapGuide[]; lineGuide?: { a: Point; b: Point } } =
     mode === "draw" ? (pending?.guides ?? { x: null, y: null }) : guides;
   // Which side of a wall reads as "inward", for a door's swing direction — the outline's own
   // centroid, same reference point the old (and now-restored) doorGeometry always used.
@@ -1042,10 +1045,11 @@ export function PlanCanvas({
     gridMm,
     // Equal gaps need both halves: what is being moved, and what it could be spaced against.
     spacing: opts?.self && opts.boxes?.length ? { self: opts.self, boxes: opts.boxes } : undefined,
+    lines: opts?.lines,
   });
   const snapHost = (p: Point, opts?: HostSnapOptions): Point => {
     const r = snapPoint(p, snapCtx(opts));
-    setGuides({ ...r.guides, gaps: r.gaps });
+    setGuides({ ...r.guides, gaps: r.gaps, lineGuide: r.lineGuide });
     return r.point;
   };
 
@@ -1798,9 +1802,13 @@ export function PlanCanvas({
           const padPx = 14;
           const pad = mm(padPx);
           const fixturesOnly = selected.every((r) => r.kind === "stage" || r.kind === "bar");
-          const pivot = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
           const handleGap = mm(20);
-          const handleY = minY - pad - handleGap;
+          // Frozen for the length of the sweep, for the reason RotateHandle freezes its own frame:
+          // this box is re-fitted around the fixtures every frame, so its centre and its top edge
+          // move while the block turns, and a knob drawn from them slides away from the pointer.
+          const held = groupRotate.current;
+          const pivot = held?.pivot ?? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+          const handleY = held?.handleY ?? minY - pad - handleGap;
           const rotateDrag = fixturesOnly
             ? dragHandlers(
                 clientToMm,
@@ -1813,7 +1821,7 @@ export function PlanCanvas({
                       })
                       .filter((s): s is { id: string; origin: Point; rotationDeg: number } => !!s);
                     const startDeg = (Math.atan2(p.y - pivot.y, p.x - pivot.x) * 180) / Math.PI + 90;
-                    groupRotate.current = { pivot, startDeg, snapshot };
+                    groupRotate.current = { pivot, handleY, startDeg, snapshot };
                   }
                   const { pivot: fixedPivot, startDeg, snapshot } = groupRotate.current;
                   const raw = (Math.atan2(p.y - fixedPivot.y, p.x - fixedPivot.x) * 180) / Math.PI + 90;
@@ -1884,6 +1892,23 @@ export function PlanCanvas({
       )}
       {shownGuides.y !== null && (
         <line x1={vb.minX} y1={shownGuides.y} x2={vb.minX + vb.w} y2={shownGuides.y} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+      )}
+
+      {/* Landing on a LINE — a table pulled onto a ceiling rod. Drawn along the rod's own segment
+          (not the whole viewport, like the axis guides above), in the same accent and dash so it
+          reads as one family of guide. */}
+      {shownGuides.lineGuide && (
+        <line
+          x1={shownGuides.lineGuide.a.x}
+          y1={shownGuides.lineGuide.a.y}
+          x2={shownGuides.lineGuide.b.x}
+          y2={shownGuides.lineGuide.b.y}
+          className="text-accent"
+          stroke="currentColor"
+          strokeWidth={1}
+          strokeDasharray="6 4"
+          vectorEffect="non-scaling-stroke"
+        />
       )}
 
       {/* Equal-gap markers — a bar with an end tick drawn INSIDE each matching gap, so the two (or
@@ -2263,20 +2288,36 @@ export function RotateHandle({
   label: string;
 }) {
   const [live, setLive] = useState<number | null>(null);
+  // WHERE THE KNOB HANGS IS FROZEN FOR THE LENGTH OF THE SWEEP. `pivot` and `reachMm` are re-derived
+  // by the host from the selection's bounding box every frame, and the axis-aligned box around a
+  // block of tables changes both its centre and its height as the block turns — so a knob drawn
+  // from the live box crawls out from under the pointer that is dragging it, and the angle read off
+  // it is measured from a pivot that is itself moving. The maths on the other side already freezes
+  // its own frame (see rotateSelection); this is the same freeze for the picture and for `raw`, and
+  // it is here rather than in either caller because both canvases draw their handle through this.
+  // `rotationDeg` stays live on purpose: for a lone item the handle is meant to ride round with it.
+  const frame = useRef<{ pivot: Point; reachMm: number } | null>(null);
+  const held = frame.current ?? { pivot, reachMm };
   const gap = mm(22);
-  const at = fromLocalFrame({ x: 0, y: -(reachMm + gap) }, pivot, rotationDeg);
-  const stalkFrom = fromLocalFrame({ x: 0, y: -reachMm }, pivot, rotationDeg);
+  const at = fromLocalFrame({ x: 0, y: -(held.reachMm + gap) }, held.pivot, rotationDeg);
+  const stalkFrom = fromLocalFrame({ x: 0, y: -held.reachMm }, held.pivot, rotationDeg);
 
   const drag = dragHandlers(
     clientToMm,
     (p, mods) => {
-      const raw = (Math.atan2(p.y - pivot.y, p.x - pivot.x) * 180) / Math.PI + 90;
+      const from = frame.current ?? { pivot, reachMm };
+      const raw = (Math.atan2(p.y - from.pivot.y, p.x - from.pivot.x) * 180) / Math.PI + 90;
       const deg = mods.alt ? norm360(raw) : constrainAngleDeg(raw);
       setLive(deg);
       onRotate(deg, { ...mods, raw });
     },
     undefined,
-    (dragging) => { if (!dragging) setLive(null); },
+    // Taken the moment the drag crosses the threshold — before the first onMove — and released on
+    // drop, so the handle goes back to answering the settled selection.
+    (dragging) => {
+      if (dragging) frame.current = { pivot, reachMm };
+      else { frame.current = null; setLive(null); }
+    },
     onCommit,
   );
 
