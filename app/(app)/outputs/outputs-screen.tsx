@@ -8,6 +8,7 @@ import { loadScratch } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { recordExport, type ExportType } from "@/lib/outputs/actions";
+import { PLAN_SHEETS } from "@/lib/outputs/sheets";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { PackingList } from "./packing-list";
@@ -42,6 +43,17 @@ export function OutputsScreen() {
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("landscape");
   const [version, setVersion] = useState(1);
+  // Which plan sheets print, in the "map" view — a crew does not read one drawing with everything
+  // on it (lib/outputs/sheets.ts). Defaults to the hall plan alone; ids rather than PlanSheet
+  // objects so the selection survives fine even if PLAN_SHEETS is ever reordered.
+  const [sheetIds, setSheetIds] = useState<string[]>(["hall"]);
+  const toggleSheet = (id: string) =>
+    setSheetIds((ids) =>
+      ids.includes(id) ? (ids.length > 1 ? ids.filter((x) => x !== id) : ids) : [...ids, id],
+    );
+  // PLAN_SHEETS' own order, not the order ticked — sheet numbering ("2 / 3") has to be stable
+  // regardless of the sequence a designer happened to click them in.
+  const selectedSheets = PLAN_SHEETS.filter((s) => sheetIds.includes(s.id));
   // EventSurface resolved all of this in one call for the whole surface.
   const { workspace, ready } = useEventWorkspace();
 
@@ -104,9 +116,10 @@ export function OutputsScreen() {
 
   const today = new Date().toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
   const [w, h] = orient === "portrait" ? TRIM[paper] : [TRIM[paper][1], TRIM[paper][0]];
-  // The quote prints its own letterhead — business, client, number, date (./quote-sheet.tsx). The
-  // crew's two sheets have no letterhead of their own, so the stamp above them is theirs.
-  const stamped = view !== "quote";
+  // The quote prints its own letterhead (./quote-sheet.tsx) and a plan sheet carries a proper
+  // drafting title block (sheet-frame.tsx) — only the packing list has neither, so it's the one
+  // view that needs this generic stamp above it.
+  const stamped = view === "packing";
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -124,6 +137,28 @@ export function OutputsScreen() {
             </SegItem>
           ))}
         </Seg>
+
+        {/* F-6.x: which plan sheets print — a crew wants the ceiling plan without the seating chart
+            drawn over it. Multi-select, not exclusive like the tabs above: several sheets print as
+            one page set. Reuses the same Seg/SegItem tray the view tabs use above rather than
+            inventing a second control, only every chip here can be lit at once. Its own leading
+            divider is conditional along with it — the trailing one below is the original, always
+            present, boundary before page setup. */}
+        {view === "map" && (
+          <>
+            <span aria-hidden className="h-6 w-px bg-border" />
+            <div className="flex items-center gap-2">
+              <span className="text-caption text-muted">גיליונות</span>
+              <Seg>
+                {PLAN_SHEETS.map((s) => (
+                  <SegItem key={s.id} active={sheetIds.includes(s.id)} onClick={() => toggleSheet(s.id)} small>
+                    {s.label}
+                  </SegItem>
+                ))}
+              </Seg>
+            </div>
+          </>
+        )}
 
         <span aria-hidden className="h-6 w-px bg-border" />
 
@@ -169,35 +204,53 @@ export function OutputsScreen() {
             <VenueAccessNotice tone="plan" className="no-print w-full max-w-3xl" />
           )}
 
-          <article
-            className="sheet w-full bg-canvas shadow-lifted"
-            style={{ maxWidth: `${w}mm`, minHeight: `${h}mm`, padding: `${MARGIN_MM}mm` }}
-          >
-            {stamped && (
-              <header className="mb-6 flex items-baseline justify-between gap-4 border-b border-ink pb-3">
-                <div className="min-w-0">
-                  <h2 className="font-display text-h2 text-ink">{TITLES[view]}</h2>
-                  {event && (
-                    <p className="mt-0.5 text-caption text-muted">
-                      {event.clientName} · {zonesLabelOf(event)}
-                    </p>
-                  )}
-                </div>
-                {/* F-6.4: date + version stamp — on screen and in print */}
-                <p className="nums shrink-0 text-caption text-muted">
-                  {today} · גרסה {version}
-                </p>
-              </header>
-            )}
+          {view === "map" ? (
+            // One <article className="sheet"> per ticked sheet — each is its own printed page
+            // (globals.css: .sheet breaks after itself), each carries its OWN drafting title block
+            // (sheet-frame.tsx: venue/client, sheet name, "n / total", scale, date, version) instead
+            // of the generic header above, so `stamped` is never used here.
+            selectedSheets.map((sheet, i) => (
+              <article key={sheet.id} className="sheet bg-canvas shadow-lifted">
+                <PlacementMap
+                  doc={doc}
+                  plan={plan}
+                  sheet={sheet}
+                  title={event ? zonesLabelOf(event) : ""}
+                  subtitle={event?.clientName}
+                  sheetNumber={i + 1}
+                  sheetCount={selectedSheets.length}
+                  version={version}
+                  date={today}
+                  paper={{ widthMm: w, heightMm: h }}
+                  marginMm={MARGIN_MM}
+                />
+              </article>
+            ))
+          ) : (
+            <article
+              className="sheet w-full bg-canvas shadow-lifted"
+              style={{ maxWidth: `${w}mm`, minHeight: `${h}mm`, padding: `${MARGIN_MM}mm` }}
+            >
+              {stamped && (
+                <header className="mb-6 flex items-baseline justify-between gap-4 border-b border-ink pb-3">
+                  <div className="min-w-0">
+                    <h2 className="font-display text-h2 text-ink">{TITLES[view]}</h2>
+                    {event && (
+                      <p className="mt-0.5 text-caption text-muted">
+                        {event.clientName} · {zonesLabelOf(event)}
+                      </p>
+                    )}
+                  </div>
+                  {/* F-6.4: date + version stamp — on screen and in print */}
+                  <p className="nums shrink-0 text-caption text-muted">
+                    {today} · גרסה {version}
+                  </p>
+                </header>
+              )}
 
-            {view === "packing" ? (
-              <PackingList doc={doc} eventId={event?.id ?? null} />
-            ) : view === "map" ? (
-              <PlacementMap doc={doc} plan={plan} />
-            ) : (
-              <Quote doc={doc} />
-            )}
-          </article>
+              {view === "packing" ? <PackingList doc={doc} eventId={event?.id ?? null} /> : <Quote doc={doc} />}
+            </article>
+          )}
         </div>
       </div>
     </div>
