@@ -112,7 +112,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   };
 
   return (
-    <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3">
+    <div dir="rtl" className="flex h-dvh w-full gap-3 overflow-hidden bg-bg p-3 print:block print:h-auto print:overflow-visible print:p-0">
       {/* Sidebar — a floating card on the bg plane: subtle rounded corners, a soft lift, ink
           text, one muted accent. Internal panels (nav, profile, venue switcher) use a smaller
           radius than this outer card so the nesting reads as proportional, not arbitrary.
@@ -124,7 +124,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         collapsed={collapsed}
         onToggle={() => setCollapsed((c) => !c)}
         label="סרגל הצד"
-        className="shrink-0 rounded-md bg-surface py-6 shadow-floating"
+        className="no-print shrink-0 rounded-md bg-surface py-6 shadow-floating"
         expandedClassName="w-[258px] px-4"
         collapsedClassName="w-[96px] px-2"
       >
@@ -221,9 +221,14 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         </div>
       </SidePanel>
 
-      {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <header className="flex h-16 shrink-0 items-center gap-4 rounded-md bg-surface px-8 shadow-floating">
+      {/* Main. `no-print` on the sidebar and this header, and `print:` on the boxes between them
+          and the screen: the shell is a viewport-fixed flex box (h-dvh + overflow-hidden, a
+          scrolling <main>), and a printed page has no viewport — an overflow ancestor clips the
+          document to whatever one page happened to show, so a three-sheet plan set printed one
+          sheet with a sidebar down its edge. Every output already marks its own chrome no-print
+          (outputs-screen, event-surface, quote-sheet); the shell around them never did. */}
+      <div className="flex min-w-0 flex-1 flex-col gap-3 print:block">
+        <header className="no-print flex h-16 shrink-0 items-center gap-4 rounded-md bg-surface px-8 shadow-floating">
           {meta ? (
             <h1 className="shrink-0 font-display text-h2 text-ink">{meta.title}</h1>
           ) : (
@@ -254,7 +259,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           )}
         </header>
 
-        <main className="min-h-0 flex-1 overflow-auto">
+        <main className="min-h-0 flex-1 overflow-auto print:block print:overflow-visible">
           <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
         </main>
 
