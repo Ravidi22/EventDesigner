@@ -850,7 +850,12 @@ export function HallsScreen() {
       label: "מוט",
       a: rigDraft.a,
       b: rigDraft.b,
-      heightMm: zone?.zone.ceilingHeightMm ?? 4000,
+      // `||`, not `??` — 0 is ceilingHeightMm's own deliberate value for "open to the sky" (a
+      // canopy/open/service zone, lib/venues/zone.ts), which is a legitimate ZONE height but never a
+      // legitimate ROD height: a חופה is exactly where rigging gets hung, and a rod is nothing
+      // hanging at floor level. `??` would only guard "no enclosing zone" and let a canopy's zero
+      // straight through.
+      heightMm: zone?.zone.ceilingHeightMm || 4000,
     });
     editStructure(() => next);
     setSelection([{ kind: "rig", id: rigId }]);
