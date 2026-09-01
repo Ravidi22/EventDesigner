@@ -16,7 +16,7 @@ import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
-import { nearestWall, WHOLE_WALL, nearestRig, RIG_SNAP_MM } from "@/lib/studio/anchor";
+import { nearestWall, WHOLE_WALL, nearestRig, RIG_SNAP_MM, resolveHang } from "@/lib/studio/anchor";
 import {
   DEFAULT_NUMBERING,
   expandToGroups,
@@ -407,9 +407,34 @@ export function StudioScreen({
     [doc],
   );
 
+  // A placement on a HIDDEN layer never enters a selection made here — every selection command
+  // (below) and the canvas's own marquee both route through this one function, so this is the one
+  // place that guarantee has to be written for all of them to inherit it. Without it, a designer
+  // could select-similar/select-in-zone/select-layer their way onto something the canvas has
+  // stopped drawing entirely (layerVisible off is a hard "not on screen", not a dim — see the
+  // render gates in canvas-stage.tsx) and then drag or delete it blind.
+  //
+  // A table's WORN COVER is the one exception: it draws as the table's own surface regardless of
+  // the "table" layer's visibility (see the `cloth` prop on TableNode in canvas-stage.tsx, which
+  // reads it off `coverByTable` rather than the gated chip list) — so it stays selectable exactly
+  // when it stays visible. Tables and venue features have no layer toggle of their own; only
+  // `activeLayer` dims them, which `movable` already excludes on the canvas side.
+  const layerHidden = useCallback(
+    (r: SelectionRef) => {
+      if (r.kind !== "placement") return false;
+      const p = doc.placements.find((x) => x.id === r.id);
+      if (!p) return false;
+      if (resolve(p.variantId)?.anchor === "table") return false;
+      return !layerVisible[p.layer];
+    },
+    [doc, layerVisible],
+  );
+
   const pickMany = useCallback(
     (refs: SelectionRef[], additive: boolean) => {
-      const whole: SelectionRef[] = [...featureRefs(refs), ...expandToGroups(doc, docRefs(refs))];
+      const whole: SelectionRef[] = [...featureRefs(refs), ...expandToGroups(doc, docRefs(refs))].filter(
+        (r) => !layerHidden(r),
+      );
       setSelected((cur) => {
         if (!additive) return whole;
         const merged = [...cur];
@@ -417,7 +442,7 @@ export function StudioScreen({
         return merged;
       });
     },
-    [doc, docRefs, featureRefs],
+    [doc, docRefs, featureRefs, layerHidden],
   );
 
   // --- selection commands -------------------------------------------------------------------------
@@ -446,11 +471,23 @@ export function StudioScreen({
     pickMany(
       [
         ...doc.tables.filter((t) => inside(t.position)).map((t) => ({ kind: "table" as const, id: t.id })),
-        ...doc.placements.filter((p) => !p.tableId && !p.span && inside(p.position)).map((p) => ({ kind: "placement" as const, id: p.id })),
+        ...doc.placements
+          .filter(
+            (p) =>
+              !p.tableId &&
+              !p.span &&
+              // A hung item draws where its ROD puts it, not at the `position` a drag keeps
+              // overwriting underneath it all gesture long — same resolveHang the canvas itself
+              // draws from (canvas-stage.tsx), off the property's own rigs, never the arranged
+              // copy. A dangling rigId (its rod was deleted at the venue) falls back to the stored
+              // point, same as the canvas does.
+              inside(p.hang ? (resolveHang(plan.structure, p.hang) ?? p.position) : p.position),
+          )
+          .map((p) => ({ kind: "placement" as const, id: p.id })),
       ],
       false,
     );
-  }, [plan.zones, zoneFocus, doc, pickMany]);
+  }, [plan.zones, plan.structure, zoneFocus, doc, pickMany]);
 
   const selectLayer = useCallback(() => {
     if (!activeLayer) return;
