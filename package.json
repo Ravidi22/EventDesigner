@@ -40,6 +40,7 @@
     "check:folder": "tsx lib/gallery/folder-logic.ts",
     "check:aggregate": "tsx lib/outputs/aggregate.ts",
     "check:quote": "tsx lib/outputs/quote.ts",
+    "check:scale": "tsx lib/outputs/scale.ts",
     "check:procurement": "tsx lib/suppliers/procurement.ts",
     "check:runway": "tsx lib/production/runway.ts",
     "check:costs": "tsx lib/suppliers/cost-boundary.ts",
