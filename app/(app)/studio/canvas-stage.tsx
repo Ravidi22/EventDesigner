@@ -365,14 +365,14 @@ export function CanvasStage({
   // snapping one member would shear the group apart.
   const groupDrag = useRef<{ start: Point; snapshot: { ref: SelectionRef; origin: Point }[] } | null>(null);
 
-  /** The one ceiling placement being actively dragged right now, if any — set synchronously inside
-   *  its own onMove below, before the resulting movePlacement dispatch re-renders this component, so
-   *  the very render that dispatch triggers already sees it. Read by the ceiling pass to decide
-   *  whether to draw from the live `position` a drag is writing or the rod-resolved point: a hung
-   *  item mid-gesture has to move like every other draggable node on this canvas, not sit frozen at
-   *  its old rod position until the pointer lifts. Cleared the same way, in onEnd, before the final
-   *  re-render that settles the item back onto (possibly a different) rod. */
-  const draggingCeilingId = useRef<string | null>(null);
+  /** Every placement id a drag in progress is actually writing to right now — the pressed item alone
+   *  on a solo drag, or the whole snapshot on a group one. Set in moveFor below, the one place that
+   *  calls onMovePlacement/onMoveMany and therefore the one place that knows which ids those calls
+   *  are about to move, and cleared in endDrag when the gesture closes. Read by the ceiling pass: an
+   *  item in this set has to draw from the live `position` a drag is writing, exactly like every
+   *  other movable node on this canvas; an item NOT in it — including a hung item merely SELECTED
+   *  alongside a live drag but not swept along by it — still draws at its rod-resolved point. */
+  const draggingIds = useRef<Set<string>>(new Set());
 
   /** The hang a ceiling placement gets from wherever its `position` is RIGHT NOW: near a rod, on it;
    *  otherwise free. The exact rule dropProduct uses, reused here so a drag can never disagree with a
@@ -393,6 +393,9 @@ export function CanvasStage({
         snapshot: movable.filter((m) => isSel(m.ref.kind, m.ref.id)).map((m) => ({ ref: m.ref, origin: { x: m.box.x, y: m.box.y } })),
       };
       const { start, snapshot } = groupDrag.current;
+      // Every placement this group drag is about to sweep along — a ceiling item among them draws
+      // live below rather than staying pinned to its rod for the whole gesture.
+      draggingIds.current = new Set(snapshot.filter((sn) => sn.ref.kind === "placement").map((sn) => sn.ref.id));
       const dx = p.x - start.x;
       const dy = p.y - start.y;
       onMoveMany(
@@ -414,11 +417,15 @@ export function CanvasStage({
     });
     if (ref.kind === "table") onMoveTable(ref.id, snapped);
     else if (ref.kind === "feature") onMoveFeature(ref.id, snapped);
-    else onMovePlacement(ref.id, snapped);
+    else {
+      draggingIds.current = new Set([ref.id]);
+      onMovePlacement(ref.id, snapped);
+    }
   };
 
   const endDrag = (ctx: CanvasLayerContext) => () => {
     groupDrag.current = null;
+    draggingIds.current = new Set();
     ctx.endSnap();
     // Every hung member THIS gesture just moved — its own drag, or a group drag that swept it along
     // with the rest of the selection — settles back onto whatever rod (or none) it actually ended up
@@ -861,14 +868,14 @@ export function CanvasStage({
             {layerVisible.ceiling &&
               sorted.ceiling.map((p) => {
                 // At rest, a hung item draws where its rod puts it. Mid-drag — its own, or a group
-                // drag sweeping it along — it has to draw from the live `position` the drag is
-                // actually writing, like every other movable node on this canvas, or it reads as
-                // frozen until the pointer lifts (see draggingCeilingId above).
-                const dragging = draggingCeilingId.current === p.id;
+                // drag sweeping it along (draggingIds is written by moveFor, the one place that
+                // knows which ids a drag is actually moving) — it has to draw from the live
+                // `position` a drag is writing, like every other movable node on this canvas, or it
+                // reads as frozen until the pointer lifts.
+                const dragging = draggingIds.current.has(p.id);
                 const at = p.hang && !dragging ? resolveHang(plan.structure, p.hang) : null;
                 const x = at?.x ?? p.position.x;
                 const y = at?.y ?? p.position.y;
-                const base = nodeProps({ kind: "placement", id: p.id }, ctx);
                 return (
                   <PlacementNode
                     key={p.id}
@@ -877,20 +884,10 @@ export function CanvasStage({
                     y={y}
                     selected={isSel("placement", p.id)}
                     ctx={ctx}
-                    drag={{
-                      ...base,
-                      onMove: (pt) => {
-                        draggingCeilingId.current = p.id;
-                        base.onMove?.(pt);
-                      },
-                      // The hang re-check itself lives in the shared endDrag above — reached here
-                      // through base.onEnd, the same path a group drag reaches it through — so there
-                      // is exactly one place that decides what a settled drag hangs on.
-                      onEnd: () => {
-                        draggingCeilingId.current = null;
-                        base.onEnd?.();
-                      },
-                    }}
+                    // Plain nodeProps — moveFor already records this id in draggingIds on every move
+                    // it dispatches, and endDrag already re-hangs it (see endDrag above), so nothing
+                    // ceiling-specific has to be wrapped in here.
+                    drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
                     overhead
                   />
                 );
