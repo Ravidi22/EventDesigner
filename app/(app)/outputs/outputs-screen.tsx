@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Printer } from "lucide-react";
+import { ClipboardList, Map, Printer, ReceiptText, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
@@ -18,6 +18,14 @@ import { Quote } from "./quote";
 
 type View = "packing" | "map" | "quote";
 const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר" };
+/** Rail order, and it is not TITLES' key order by accident: the quote is first because it is what
+ *  this screen opens on — this is the stage that CLOSES a meeting, and the two crew sheets are
+ *  prepared afterwards, with nobody else in the room. */
+const VIEWS: { id: View; icon: LucideIcon }[] = [
+  { id: "quote", icon: ReceiptText },
+  { id: "map", icon: Map },
+  { id: "packing", icon: ClipboardList },
+];
 /** Which kind of sheet each view produces, for the export log (F-6.4). */
 const EXPORT_OF: Record<View, ExportType> = {
   packing: "packing_list",
@@ -39,7 +47,7 @@ const MARGIN_MM = 16;
 export function OutputsScreen() {
   // Empty until the event's real document loads. A packing list is the one screen that must never
   // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
-  const [view, setView] = useState<View>("packing");
+  const [view, setView] = useState<View>("quote");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("landscape");
   const [version, setVersion] = useState(1);
@@ -122,7 +130,7 @@ export function OutputsScreen() {
   const stamped = view === "packing";
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex h-full min-h-0 print:block">
       {/* F-6.1: page setup applies when printing.
           A PLAN SHEET OWNS ITS OWN MARGIN. sheet-frame.tsx draws the border, the title block and
           the scale bar inside a full-trim page (210x297 for A4), so globals.css's
@@ -133,76 +141,122 @@ export function OutputsScreen() {
           margin, which is the only margin they have. */}
       <style>{`@media print { @page { size: ${paper} ${orient}; ${view === "map" ? "margin: 0;" : ""} } }`}</style>
 
-      {/* The toolbar is a floating card on the plane, matching the sidebar and the top bar above
-          it — same 14px corner, same violet-cast lift, same gutter. It used to be a flush bordered
-          strip, which is the one chrome idiom this shell doesn't use anywhere else. */}
-      <div className="no-print flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-md bg-surface px-5 py-2.5 shadow-floating">
-        <Seg>
-          {(Object.keys(TITLES) as View[]).map((v) => (
-            <SegItem key={v} active={view === v} onClick={() => setView(v)}>
-              {TITLES[v]}
-            </SegItem>
-          ))}
-        </Seg>
+      {/* THE SHAPE IS THE STUDIO'S, deliberately: a rail of things to work on down the start edge,
+          the work itself filling the rest. This used to be one horizontal strip doing four unrelated
+          jobs at once — which document, which plan sheets, what paper, and print — and at that
+          density the document you were choosing read as the same kind of control as the paper size.
+          The rail separates them by position instead of by punctuation: WHAT prints up top, HOW it
+          prints under the rule beneath.
 
-        {/* F-6.x: which plan sheets print — a crew wants the ceiling plan without the seating chart
-            drawn over it. Multi-select, not exclusive like the tabs above: several sheets print as
-            one page set. Reuses the same Seg/SegItem tray the view tabs use above rather than
-            inventing a second control, only every chip here can be lit at once. Its own leading
-            divider is conditional along with it — the trailing one below is the original, always
-            present, boundary before page setup. */}
-        {view === "map" && (
-          <>
-            <span aria-hidden className="h-6 w-px bg-border" />
-            <div className="flex items-center gap-2">
-              <span className="text-caption text-muted">גיליונות</span>
-              <Seg>
-                {PLAN_SHEETS.map((s) => (
-                  <SegItem key={s.id} active={sheetIds.includes(s.id)} onClick={() => toggleSheet(s.id)} small>
-                    {s.label}
-                  </SegItem>
-                ))}
-              </Seg>
+          It is narrower than the studio's catalog rail (212px against 256) and its two halves are
+          stacked tight rather than pushed apart with `mt-auto`. The rail holds three short rows and
+          two switches — given a full column's height to spread across, the page setup ended up
+          marooned at the bottom of the screen and each of its rows read as a label at one end of
+          the panel and a control at the other.
+
+          `no-print` on the whole rail. What is left when it goes is the sheet column, which is the
+          deliverable. */}
+      <aside className="no-print flex w-[212px] shrink-0 flex-col border-s border-border bg-surface">
+        <nav className="flex flex-col gap-[3px] p-2.5" aria-label="מסמכי האירוע">
+          {VIEWS.map(({ id, icon: Icon }) => (
+            <div key={id}>
+              {/* The app's own active-nav treatment, because that is what these are — the sidebar's
+                  geometry and inks (CLAUDE.md § Design System Guidelines), not a second vocabulary
+                  invented for this screen. */}
+              <button
+                type="button"
+                onClick={() => setView(id)}
+                aria-current={view === id ? "page" : undefined}
+                className={
+                  "flex w-full items-center gap-3 rounded-md px-3.5 py-[11px] text-sm transition-colors " +
+                  (view === id
+                    ? "bg-accent-tint font-bold text-accent"
+                    : "font-semibold text-muted hover:bg-accent-tint hover:text-accent-hover")
+                }
+              >
+                <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.4} />
+                {TITLES[id]}
+              </button>
+
+              {/* F-6.x: which plan sheets print — a crew wants the ceiling plan without the seating
+                  chart drawn over it. Nested UNDER the map rather than beside it in a strip: they
+                  are that document's pages, and several can be lit at once where the rows above are
+                  exclusive. Only shown while the map is the open document, so the rail never asks a
+                  question about a sheet nobody is looking at. */}
+              {id === "map" && view === "map" && (
+                <ul className="mt-[3px] flex flex-col gap-[3px] ps-4">
+                  {PLAN_SHEETS.map((sheet) => {
+                    const on = sheetIds.includes(sheet.id);
+                    return (
+                      <li key={sheet.id}>
+                        <button
+                          type="button"
+                          onClick={() => toggleSheet(sheet.id)}
+                          aria-pressed={on}
+                          className={
+                            "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-caption transition-colors " +
+                            (on ? "font-semibold text-accent" : "text-muted hover:text-ink-soft")
+                          }
+                        >
+                          <span
+                            aria-hidden
+                            className={
+                              "h-2 w-2 shrink-0 rounded-full border " +
+                              (on ? "border-accent bg-accent" : "border-border")
+                            }
+                          />
+                          {sheet.label}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
-          </>
-        )}
+          ))}
+        </nav>
 
-        <span aria-hidden className="h-6 w-px bg-border" />
+        {/* Page setup and the print itself, under the rule — you touch these once, after you have
+            decided what you are printing. F-6.1. */}
+        <div className="flex flex-col gap-2.5 border-t border-border p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-caption text-muted">גיליון</span>
+            <Seg>
+              {(["A4", "A3"] as Paper[]).map((pp) => (
+                <SegItem key={pp} active={paper === pp} onClick={() => setPaper(pp)} small>
+                  <span className="nums" dir="ltr">
+                    {pp}
+                  </span>
+                </SegItem>
+              ))}
+            </Seg>
+          </div>
 
-        {/* F-6.1: paper + orientation. Secondary to the view above — page setup is something you
-            touch once, so it reads as settings rather than as the screen's subject. */}
-        <div className="flex items-center gap-2">
-          <span className="text-caption text-muted">גיליון</span>
-          <Seg>
-            {(["A4", "A3"] as Paper[]).map((p) => (
-              <SegItem key={p} active={paper === p} onClick={() => setPaper(p)} small>
-                <span className="nums" dir="ltr">
-                  {p}
-                </span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-caption text-muted">כיוון</span>
+            <Seg>
+              <SegItem active={orient === "portrait"} onClick={() => setOrient("portrait")} small>
+                לאורך
               </SegItem>
-            ))}
-          </Seg>
-          <Seg>
-            <SegItem active={orient === "portrait"} onClick={() => setOrient("portrait")} small>
-              לאורך
-            </SegItem>
-            <SegItem active={orient === "landscape"} onClick={() => setOrient("landscape")} small>
-              לרוחב
-            </SegItem>
-          </Seg>
+              <SegItem active={orient === "landscape"} onClick={() => setOrient("landscape")} small>
+                לרוחב
+              </SegItem>
+            </Seg>
+          </div>
+
+          <Button onClick={print} className="w-full">
+            <Printer className="h-4 w-4" strokeWidth={2} />
+            הדפסה / PDF
+          </Button>
         </div>
+      </aside>
 
-        <Button onClick={print} className="ms-auto">
-          <Printer className="h-4 w-4" strokeWidth={2} />
-          הדפסה / PDF
-        </Button>
-      </div>
-
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg print:block">
       {/* The light table: the sheet floats on the app's own lavender plane at its true trim size,
           so this IS the preview. Scrolling lives here rather than on <main>, which keeps the
           toolbar pinned while a long document runs past it. */}
-      <div className="min-h-0 flex-1 overflow-auto print:overflow-visible">
-        <div className="flex flex-col items-center gap-4 pb-10 print:block print:pb-0">
+        <div className="min-h-0 flex-1 overflow-auto print:overflow-visible">
+          <div className="flex flex-col items-center gap-4 p-5 print:block print:p-0">
           {/* `no-print` on purpose — this explains the sheet to whoever is producing it; it is not
               part of what a client or a crew receives. The list and the quote carry their own
               notice, because both are rendered straight from the meeting flow too, where this
@@ -257,7 +311,8 @@ export function OutputsScreen() {
 
               {view === "packing" ? <PackingList doc={doc} eventId={event?.id ?? null} /> : <Quote doc={doc} />}
             </article>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

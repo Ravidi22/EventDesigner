@@ -3,21 +3,17 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Check, ChevronRight, LogOut, PenLine } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, LogOut } from "lucide-react";
 import { type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { activeEvent } from "@/lib/events/storage";
 import { reachStep } from "@/lib/events/actions";
 import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
 import { fetchMeetingFlow } from "@/lib/settings/actions";
-import { fetchDocument } from "@/lib/studio/actions";
-import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { Button } from "@/components/button";
 import { EventForm } from "@/components/event-form";
-import { EmptyState } from "@/components/empty-state";
-import { Skeleton } from "@/components/skeleton";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
-import { Quote } from "@/app/(app)/outputs/quote";
+import { OutputsScreen } from "@/app/(app)/outputs/outputs-screen";
 
 // The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every stage autosaves,
 // exiting mid-flow is always safe, and an existing event re-enters at its furthest stage.
@@ -89,9 +85,10 @@ export function MeetingScreen() {
   const step = STEP_BY_ID[flow[at]];
   const prevStep = at > 0 ? STEP_BY_ID[flow[at - 1]] : null;
   const nextStep = flow[at + 1] ? STEP_BY_ID[flow[at + 1]] : null;
-  // The two drawing stages fill their card edge to edge and scroll nothing; every other stage is a
-  // document on the plane and scrolls normally.
-  const isCanvas = step.id === "hall" || step.id === "design";
+  // The stages that fill their card edge to edge and scroll nothing — the two drawing passes, and
+  // now the closing stage too, which is the outputs screen and owns its own scrolling rail and
+  // sheet column. Every other stage is a document on the plane and scrolls normally.
+  const isCanvas = step.id === "hall" || step.id === "design" || step.id === "quote";
 
   return (
     <div dir="rtl" className="flex h-dvh flex-col gap-3 bg-bg p-3">
@@ -145,7 +142,19 @@ export function MeetingScreen() {
             <StudioScreen mode="design" />
           </CanvasCard>
         )}
-        {step.id === "quote" && event && <QuoteStep event={event} />}
+        {/* F-1.9 closes the meeting, and it closes it on the SAME screen /outputs is — one component
+            in two frames, exactly as the two sketch stages are StudioScreen in this frame and
+            /studio in the other. It opens on the quote, which is what this stage is for; the
+            placement map and the packing list are the same event's other documents, one rail row
+            away, for when the client has gone and the crew's sheets get prepared.
+            This used to be a quote rendered here PLUS a link out to a separate screen that rendered
+            the very same <Quote /> again — the one document in the app that existed in two frames
+            with two different shapes. */}
+        {step.id === "quote" && event && (
+          <CanvasCard>
+            <OutputsScreen />
+          </CanvasCard>
+        )}
       </main>
 
       {/* The details form advances from its own submit button; every other stage advances from here. */}
@@ -272,73 +281,6 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
           full height and the popovers keep their room. */}
       <div className="rounded-lg bg-surface shadow-floating">
         <EventForm event={event} onSaved={onSaved} />
-      </div>
-    </div>
-  );
-}
-
-// F-1.9: close the meeting with a quote — the one stage where prices are shown on purpose.
-// The Quote component itself carries issue / re-issue / share (F-7.1–F-7.4).
-function QuoteStep({ event }: { event: EventSummary }) {
-  // The drawing is a server read now, so "not loaded yet" and "no drawing" are two different
-  // states — and this stage runs with the client in the room, where "עדיין אין עיצוב" flashing
-  // before their own plan appears would be its own small disaster.
-  const [doc, setDoc] = useState<DesignDocumentContent | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let live = true;
-    void fetchDocument(event.id).then((stored) => {
-      if (!live) return;
-      setDoc(stored?.content ?? null);
-      setLoading(false);
-    });
-    return () => {
-      live = false;
-    };
-  }, [event.id]);
-
-  return (
-    <div className="mx-auto w-full max-w-3xl py-6">
-      {/* No `overflow-hidden` here either — the quote carries its own menus and popovers. */}
-      <div className="rounded-lg bg-surface shadow-floating">
-        <header className="border-b border-border px-5 py-3.5">
-          <h2 className="text-base font-semibold text-ink">סגירה — הצעת מחיר</h2>
-        </header>
-
-        <div className="px-5 py-5">
-          {loading ? (
-            // Bars roughly the shape of the quote — not a spinner, and above all not the empty-state
-            // copy. See components/skeleton.tsx for why this stage in particular must not flicker.
-            <div className="flex flex-col gap-3" role="status" aria-label="טוען את העיצוב">
-              <Skeleton className="h-7 w-52" />
-              <Skeleton className="h-40 w-full rounded-md" />
-              <Skeleton className="h-24 w-full rounded-md" />
-            </div>
-          ) : doc ? (
-            <Quote doc={doc} />
-          ) : (
-            <EmptyState
-              icon={PenLine}
-              title="עדיין אין עיצוב"
-              body={`לא נשמר עיצוב לאירוע ${event.clientName}. חזרו לשלב הסקיצה — ההצעה נספרת מתוך מה ששורטט.`}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* The operational half (F-6) is prepared later, in management mode — the client is still in
-          the room here, and a packing list is not theirs to read. This is the door to it, not the
-          thing itself. */}
-      <div className="no-print mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md bg-surface px-5 py-3.5 shadow-floating">
-        <span className="text-sm text-ink-soft">לקראת האירוע — מפת הצבה ורשימת ציוד לצוות</span>
-        <Link
-          href="/outputs"
-          className="inline-flex shrink-0 items-center gap-1.5 text-sm font-bold text-accent transition-colors hover:text-accent-hover"
-        >
-          לפלטים התפעוליים
-          <ArrowLeft className="h-4 w-4" strokeWidth={2.2} />
-        </Link>
       </div>
     </div>
   );
