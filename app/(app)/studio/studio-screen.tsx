@@ -102,6 +102,12 @@ export function StudioScreen({
   // case and still the only one the inspector has fields for.
   const [selected, setSelected] = useState<SelectionRef[]>([]);
   const [layerVisible, setLayerVisible] = useState<Record<LayerId, boolean>>({ table: true, floor: true, ceiling: true });
+  // WHICH layer is being worked in, as opposed to which are merely visible. null — the default, and
+  // exactly how this screen behaved before — means every visible layer is live. Naming one dims the
+  // others and takes them out of the pointer's reach, which is the whole of what "lock" would have
+  // been: dressing tables without dragging a rug by accident is one click, and there is no second
+  // flag to keep honest.
+  const [activeLayer, setActiveLayer] = useState<LayerId | null>(null);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -509,6 +515,15 @@ export function StudioScreen({
     showHint(n === 1 ? "נגזר פריט" : `נגזרו ${n} פריטים`);
   }, [copy, batch]);
 
+  /** "שכפול" — the button form of Ctrl+C, Ctrl+V, and nothing more. It replaced a bespoke
+   *  duplicate that rebuilt one table by hand and, in doing so, left its cloth and its centrepiece
+   *  behind: a copied table brings what it wears (see copySelection), so going through the
+   *  clipboard duplicates the dressed table rather than a bare disc. The guard is the drape case —
+   *  a copy that took nothing must not paste whatever was on the clipboard before it. */
+  const duplicate = useCallback(() => {
+    if (copy()) paste();
+  }, [copy, paste]);
+
   // --- grouping ----------------------------------------------------------------------------------
   // The one group this selection exactly is, if it is one — what the inspector needs in order to
   // show a group's panel rather than a list of things that happen to be selected together.
@@ -756,18 +771,6 @@ export function StudioScreen({
     act({ type: "setPlacementQuantity", id, quantity: Math.max(1, p.quantity + delta) });
   };
 
-  const duplicateTable = (id: string) => {
-    const t = doc.tables.find((x) => x.id === id);
-    if (!t) return;
-    const copyId = uid();
-    act({
-      type: "addTable",
-      // `seated: undefined` for the same reason a paste clears it: this is another table in the
-      // room, not the same people sitting twice.
-      table: { ...t, id: copyId, number: nextNumber(), seated: undefined, position: { x: t.position.x + 2200, y: t.position.y + 2200 } },
-    });
-    setSelected([{ kind: "table", id: copyId }]);
-  };
 
   const smartApply = () => {
     if (sole?.kind !== "placement") return;
@@ -854,8 +857,18 @@ export function StudioScreen({
         canRedo={history.future.length > 0}
         onUndo={() => setHistory(undo)}
         onRedo={() => setHistory(redo)}
+        canCopy={selected.length > 0}
+        onCopy={copy}
+        onCut={cut}
+        // ponytail: read at render rather than mirrored into state. The clip is a module variable,
+        // and its only writer is copy()/cut() — both of which set the hint, so the render that
+        // enables the button is already happening.
+        canPaste={clipCount(heldClip()) > 0}
+        onPaste={paste}
         layerVisible={layerVisible}
         onToggleLayer={(l) => setLayerVisible((v) => ({ ...v, [l]: !v[l] }))}
+        activeLayer={activeLayer}
+        onActivateLayer={(l) => setActiveLayer((cur) => (cur === l ? null : l))}
         zones={zoneOptions}
         focusZoneId={focusZoneId}
         onFocusZone={setZoneFocus}
@@ -875,6 +888,7 @@ export function StudioScreen({
             plan={plan}
             selection={selected}
             layerVisible={layerVisible}
+            activeLayer={activeLayer}
             focusZoneId={focusZoneId}
             onSelect={pick}
             onSelectMany={pickMany}
@@ -941,7 +955,7 @@ export function StudioScreen({
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
-                onDuplicateTable={duplicateTable}
+                onDuplicate={duplicate}
                 onRemovePlacement={(id) => act({ type: "removePlacement", id })}
               />
             </div>

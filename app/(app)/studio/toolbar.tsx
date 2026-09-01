@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Undo2, Redo2, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered } from "lucide-react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered } from "lucide-react";
 import type { Layer as LayerId } from "@/lib/design-document/types";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { LAYERS } from "@/lib/catalog/categories";
@@ -25,8 +25,15 @@ export function Toolbar({
   canRedo,
   onUndo,
   onRedo,
+  canCopy,
+  onCopy,
+  onCut,
+  canPaste,
+  onPaste,
   layerVisible,
   onToggleLayer,
+  activeLayer,
+  onActivateLayer,
   zones,
   focusZoneId,
   onFocusZone,
@@ -42,8 +49,18 @@ export function Toolbar({
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  /** Something is selected, so there is something to copy or cut. */
+  canCopy: boolean;
+  onCopy: () => void;
+  onCut: () => void;
+  /** The clip is not empty — a paste would put something down. */
+  canPaste: boolean;
+  onPaste: () => void;
   layerVisible: Record<LayerId, boolean>;
   onToggleLayer: (l: LayerId) => void;
+  /** The layer being worked in, or null for "all of them". */
+  activeLayer: LayerId | null;
+  onActivateLayer: (l: LayerId) => void;
   /** The zones worth being taken to — the event's own, or the whole property's when it has none. */
   zones: { id: string; name: string }[];
   focusZoneId: string | null;
@@ -64,11 +81,30 @@ export function Toolbar({
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
       <div className="flex items-center gap-0.5">
-        <IconButton label="בטל" size="md" onClick={onUndo} disabled={!canUndo}>
+        <IconButton label="בטל · Ctrl+Z" size="md" onClick={onUndo} disabled={!canUndo}>
           <Undo2 className="h-4 w-4" strokeWidth={2} />
         </IconButton>
-        <IconButton label="בצע שוב" size="md" onClick={onRedo} disabled={!canRedo}>
+        <IconButton label="בצע שוב · Ctrl+Shift+Z" size="md" onClick={onRedo} disabled={!canRedo}>
           <Redo2 className="h-4 w-4" strokeWidth={2} />
+        </IconButton>
+      </div>
+
+      <div className="mx-1 h-6 w-px bg-border" />
+
+      {/* The clipboard, with a face. Ctrl+C/X/V worked from the first day and nothing on screen said
+          so — and a paste in particular has NOWHERE else to live: it happens with nothing selected,
+          so it cannot be a button in the inspector next to קיבוץ and הסרה. All three sit here beside
+          undo/redo because they are the same kind of thing: what just happened to the document,
+          rather than what is true of the selection. Disabled says why: nothing selected, empty clip. */}
+      <div className="flex items-center gap-0.5">
+        <IconButton label="העתקה · Ctrl+C" size="md" onClick={onCopy} disabled={!canCopy}>
+          <Copy className="h-4 w-4" strokeWidth={2} />
+        </IconButton>
+        <IconButton label="גזירה · Ctrl+X" size="md" onClick={onCut} disabled={!canCopy}>
+          <Scissors className="h-4 w-4" strokeWidth={2} />
+        </IconButton>
+        <IconButton label="הדבקה · Ctrl+V" size="md" onClick={onPaste} disabled={!canPaste}>
+          <ClipboardPaste className="h-4 w-4" strokeWidth={2} />
         </IconButton>
       </div>
 
@@ -115,20 +151,42 @@ export function Toolbar({
       <div className="flex items-center gap-1">
         {LAYERS.map((l) => {
           const on = layerVisible[l.id];
+          const active = activeLayer === l.id;
           return (
-            <button
+            <div
               key={l.id}
-              type="button"
-              onClick={() => onToggleLayer(l.id)}
-              aria-pressed={on}
               className={
-                "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors " +
-                (on ? "border-border bg-canvas text-ink" : "border-transparent text-muted hover:bg-canvas")
+                "inline-flex items-center gap-1 rounded-md border ps-1 pe-2 py-1 text-xs transition-colors " +
+                (active
+                  ? "border-accent bg-accent-tint text-accent"
+                  : on
+                    ? "border-border bg-canvas text-ink"
+                    : "border-transparent text-muted")
               }
             >
-              {on ? <Eye className="h-3.5 w-3.5" strokeWidth={2} /> : <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />}
-              {l.label}
-            </button>
+              {/* The eye is visibility. It is deliberately NOT the same press as choosing a layer to
+                  work in: hiding the ceiling and working on the ceiling are different questions, and
+                  one control that did both would make each of them unreachable half the time. */}
+              <button
+                type="button"
+                onClick={() => onToggleLayer(l.id)}
+                aria-pressed={on}
+                aria-label={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
+                title={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
+                className="rounded-sm p-0.5 transition-colors hover:bg-bg"
+              >
+                {on ? <Eye className="h-3.5 w-3.5" strokeWidth={2} /> : <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => onActivateLayer(l.id)}
+                aria-pressed={active}
+                title={active ? "חזרה לכל השכבות" : `עבודה בשכבת ${l.label} בלבד`}
+                className="font-medium"
+              >
+                {l.label}
+              </button>
+            </div>
           );
         })}
       </div>

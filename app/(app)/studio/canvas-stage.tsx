@@ -69,6 +69,7 @@ export function CanvasStage({
   plan,
   selection,
   layerVisible,
+  activeLayer,
   focusZoneId,
   onSelect,
   onSelectMany,
@@ -88,6 +89,8 @@ export function CanvasStage({
   /** Everything selected right now — one item, or a whole group. */
   selection: SelectionRef[];
   layerVisible: Record<LayerId, boolean>;
+  /** The layer being worked in, or null for "all of them" — see the note on `isLive` below. */
+  activeLayer: LayerId | null;
   /** The zone the designer asked to be shown (the toolbar's eye). Frames it and holds everything
    *  else back; null = the whole event, which is what the surface opens on. */
   focusZoneId: string | null;
@@ -119,6 +122,13 @@ export function CanvasStage({
    *  thing being dragged at the size it will actually land — see catalog-rail.tsx. */
   onScale?: (mmPerPx: number) => void;
 }) {
+  /** Is this layer accepting the pointer? With no active layer every visible layer is, which is how
+   *  this canvas has always behaved. */
+  const isLive = (l: LayerId) => activeLayer === null || activeLayer === l;
+  /** What a whole layer's <g> wears when it is visible but not the one being worked in. */
+  const layerAttrs = (l: LayerId) =>
+    isLive(l) ? undefined : { opacity: 0.35, style: { pointerEvents: "none" as const } };
+
   // Frame the event's zones — or the one zone the eye picked — and only once there is something to
   // frame: the plan resolves from the server after mount, so framing on the first render would
   // spend the move on an empty box and leave the event off-screen.
@@ -229,14 +239,20 @@ export function CanvasStage({
   // measures the air BETWEEN items, and air is between edges — a 2.44m table and a candlestick
   // sitting on the same centre line are nowhere near the same distance apart.
   const movable = useMemo(() => {
-    const out: { ref: SelectionRef; box: SnapBox }[] = doc.tables.map((t) => {
-      const b = footprintBounds(tableFootprint(t));
-      return { ref: { kind: "table" as const, id: t.id }, box: { ...t.position, widthMm: b.w, depthMm: b.h } };
-    });
+    // A hidden layer was already excluded here; an ACTIVE layer that isn't this one excludes it too
+    // — the marquee, the group drag and alignment must never reach an item the designer just dimmed
+    // out and took the pointer away from. Tables are floor-plane, so they answer to isLive("floor")
+    // like the rest of what stands on the floor.
+    const out: { ref: SelectionRef; box: SnapBox }[] = isLive("floor")
+      ? doc.tables.map((t) => {
+          const b = footprintBounds(tableFootprint(t));
+          return { ref: { kind: "table" as const, id: t.id }, box: { ...t.position, widthMm: b.w, depthMm: b.h } };
+        })
+      : [];
     const placed = [
-      ...(layerVisible.floor ? sorted.carpets : []),
-      ...sorted.items.filter((p) => layerVisible[p.layer]),
-      ...(layerVisible.ceiling ? sorted.ceiling : []),
+      ...(layerVisible.floor && isLive("floor") ? sorted.carpets : []),
+      ...sorted.items.filter((p) => layerVisible[p.layer] && isLive(p.layer)),
+      ...(layerVisible.ceiling && isLive("ceiling") ? sorted.ceiling : []),
     ];
     for (const p of placed) {
       out.push({ ref: { kind: "placement", id: p.id }, box: { ...p.position, ...placementExtent(p) } });
@@ -244,12 +260,15 @@ export function CanvasStage({
     // The venue's own furniture is on this list too, which is what gives it everything the list is
     // for at once: a rubber-band catches it, a group drag carries it, and a table dragged past it
     // lines up on its edges. A bar you can move but cannot align to would be the worse half of the
-    // feature — the reason to move it at all is usually to line it up with something.
-    for (const f of structure.features) {
-      out.push({ ref: { kind: "feature", id: f.id }, box: { x: f.x, y: f.y, widthMm: f.widthMm, depthMm: f.depthMm } });
+    // feature — the reason to move it at all is usually to line it up with something. Floor-plane,
+    // so it answers to the same isLive("floor") as the tables above.
+    if (isLive("floor")) {
+      for (const f of structure.features) {
+        out.push({ ref: { kind: "feature", id: f.id }, box: { x: f.x, y: f.y, widthMm: f.widthMm, depthMm: f.depthMm } });
+      }
     }
     return out;
-  }, [doc.tables, sorted, layerVisible, structure]);
+  }, [doc.tables, sorted, layerVisible, structure, activeLayer]);
 
   const isSel = (kind: SelectionKind, id: string) => selection.some((r) => r.kind === kind && r.id === id);
 
@@ -544,16 +563,19 @@ export function CanvasStage({
             {/* The venue's furniture, as this event has arranged it — and selectable, so it can be
                 arranged. Deliberately WITHOUT onResize: an event may push the bar across the room,
                 it may not decide the bar is four metres long. That is the property's fact and it is
-                measured at /halls. */}
-            <StructureFeatures
-              structure={structure}
-              mm={mm}
-              selectedIds={selection.filter((r) => r.kind === "feature").map((r) => r.id)}
-              onSelect={(id, additive) => onSelect({ kind: "feature", id }, additive)}
-              onMove={(id, pos) => moveFor({ kind: "feature", id }, ctx)(pos)}
-              onCommit={onEndDrag}
-              clientToMm={ctx.clientToMm}
-            />
+                measured at /halls. Floor-plane, like the tables and everything else standing on the
+                floor: it dims and stops taking the pointer with the rest of that layer. */}
+            <g {...layerAttrs("floor")}>
+              <StructureFeatures
+                structure={structure}
+                mm={mm}
+                selectedIds={selection.filter((r) => r.kind === "feature").map((r) => r.id)}
+                onSelect={(id, additive) => onSelect({ kind: "feature", id }, additive)}
+                onMove={(id, pos) => moveFor({ kind: "feature", id }, ctx)(pos)}
+                onCommit={onEndDrag}
+                clientToMm={ctx.clientToMm}
+              />
+            </g>
           </>
         );
       }}
@@ -573,6 +595,7 @@ export function CanvasStage({
               A table's own chairs are drawn as part of ITS entry, immediately under it: wherever
               the table has been put in the stack, the chairs it tucks under go with it. They never
               take a click meant for the table (pointer-events-none on the ring). */}
+          <g {...layerAttrs("floor")}>
           {stack.map((entry) => {
             if (entry.ref.kind === "table") {
               const t = tableById.get(entry.ref.id);
@@ -632,6 +655,7 @@ export function CanvasStage({
               />
             );
           })}
+          </g>
 
           {/* A GROUP's ring of chairs belongs to no single member, so it cannot travel with one of
               them the way a lone table's does — it goes round the outside of the whole block. */}
@@ -692,21 +716,23 @@ export function CanvasStage({
 
           {/* Table-layer items — clustered on their table. Covers are excluded: they were drawn as
               the table itself just above. */}
-          {layerVisible.table &&
-            doc.tables.map((t) => {
-              const chips = sorted.chipsByTable.get(t.id) ?? [];
-              return chips.map((p, i) => (
-                <PlacementNode
-                  key={p.id}
-                  placement={p}
-                  x={t.position.x}
-                  y={t.position.y + (i - (chips.length - 1) / 2) * 840}
-                  selected={isSel("placement", p.id)}
-                  ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, ctx, false)}
-                />
-              ));
-            })}
+          <g {...layerAttrs("table")}>
+            {layerVisible.table &&
+              doc.tables.map((t) => {
+                const chips = sorted.chipsByTable.get(t.id) ?? [];
+                return chips.map((p, i) => (
+                  <PlacementNode
+                    key={p.id}
+                    placement={p}
+                    x={t.position.x}
+                    y={t.position.y + (i - (chips.length - 1) / 2) * 840}
+                    selected={isSel("placement", p.id)}
+                    ctx={ctx}
+                    drag={nodeProps({ kind: "placement", id: p.id }, ctx, false)}
+                  />
+                ));
+              })}
+          </g>
 
           {/* ONE rotate handle for whatever is selected, rather than a knob on every node. A table
               turned on its own and six turned together are the same gesture about a different
@@ -737,41 +763,47 @@ export function CanvasStage({
             />
           )}
 
-          {/* Drapes last, over the wall they hang on — they are overhead (the ceiling layer), and a
-              wall drawn on top of a curtain would read as the curtain being behind it. */}
-          {layerVisible.ceiling &&
-            sorted.drapes.map((p) => (
-              <DrapeNode
-                key={p.id}
-                placement={p}
-                // The property's own walls, NOT the arranged copy: a curtain hangs on a wall, and
-                // no arrangement on this surface can move a wall. Reading the arranged structure
-                // here would be true but misleading about what a drape is anchored to.
-                structure={plan.structure}
-                selected={isSel("placement", p.id)}
-                ctx={ctx}
-                onSelect={(additive) => onSelect({ kind: "placement", id: p.id }, additive)}
-                onSpan={(span) => onSpanPlacement(p.id, span)}
-                onEndSpan={onEndDrag}
-              />
-            ))}
+          {/* THE CEILING LAYER, one <g> for the whole of it — drapes and the overhead pass share it
+              rather than each wearing its own dim/lock wrapper, because a rod hung between two
+              uprights (a later task) belongs here too and has to be able to join this <g> as a
+              sibling block without the layer being restructured around it. */}
+          <g {...layerAttrs("ceiling")}>
+            {/* Drapes, over the wall they hang on — they are overhead (the ceiling layer), and a
+                wall drawn on top of a curtain would read as the curtain being behind it. */}
+            {layerVisible.ceiling &&
+              sorted.drapes.map((p) => (
+                <DrapeNode
+                  key={p.id}
+                  placement={p}
+                  // The property's own walls, NOT the arranged copy: a curtain hangs on a wall, and
+                  // no arrangement on this surface can move a wall. Reading the arranged structure
+                  // here would be true but misleading about what a drape is anchored to.
+                  structure={plan.structure}
+                  selected={isSel("placement", p.id)}
+                  ctx={ctx}
+                  onSelect={(additive) => onSelect({ kind: "placement", id: p.id }, additive)}
+                  onSpan={(span) => onSpanPlacement(p.id, span)}
+                  onEndSpan={onEndDrag}
+                />
+              ))}
 
-          {/* OVERHEAD, and therefore last. A chandelier is not standing on the floor: nothing down
-              there can be in front of it, so it is drawn after everything, outside the floor stack.
-              See lib/design-document/stacking.ts. */}
-          {layerVisible.ceiling &&
-            sorted.ceiling.map((p) => (
-              <PlacementNode
-                key={p.id}
-                placement={p}
-                x={p.position.x}
-                y={p.position.y}
-                selected={isSel("placement", p.id)}
-                ctx={ctx}
-                drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
-                overhead
-              />
-            ))}
+            {/* OVERHEAD, and therefore last. A chandelier is not standing on the floor: nothing down
+                there can be in front of it, so it is drawn after everything, outside the floor stack.
+                See lib/design-document/stacking.ts. */}
+            {layerVisible.ceiling &&
+              sorted.ceiling.map((p) => (
+                <PlacementNode
+                  key={p.id}
+                  placement={p}
+                  x={p.position.x}
+                  y={p.position.y}
+                  selected={isSel("placement", p.id)}
+                  ctx={ctx}
+                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
+                  overhead
+                />
+              ))}
+          </g>
         </>
       )}
     />
