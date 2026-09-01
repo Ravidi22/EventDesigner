@@ -53,7 +53,7 @@ export function DashboardScreen({
   // Seeded by page.tsx's server-side read, so both lists are here for the first paint. The hooks
   // still own the mutations — booking and deleting a meeting go back through the server and return
   // the whole list, which is what keeps a laptop and a tablet in the same meeting agreeing.
-  const { events, remove: removeEvent } = useEvents(initialEvents);
+  const { events, remove: removeEvent, reload: reloadEvents } = useEvents(initialEvents);
   const { appointments, save, remove } = useAppointments(initialAppointments);
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
@@ -105,9 +105,9 @@ export function DashboardScreen({
   // whole screen away while the card beside it opened a panel. EVERY event click here opens the
   // drawer instead — the quick look a day-of glance actually wants (the plan, the phone, the event's
   // own diary) — and the whole-screen jump is a deliberate second click rather than a stray first.
-  const openInMeeting = (e: EventSummary) => {
+  const openEvent = (e: EventSummary, to: "/meeting" | "/outputs" | "/studio" = "/meeting") => {
     setActiveEventId(e.id);
-    router.push("/meeting");
+    router.push(to);
   };
 
   // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
@@ -196,10 +196,11 @@ export function DashboardScreen({
         venueName={activeVenueName}
         appointments={selectedEventAppointments}
         onClose={() => setSelectedEvent(null)}
-        onContinue={openInMeeting}
+        onContinue={openEvent}
         onOpenAppointment={editAppointment}
         onCreateAppointment={bookForEvent}
         onDelete={setDeleting}
+        onEventChanged={() => void reloadEvents()}
       />
 
       <ConfirmDialog

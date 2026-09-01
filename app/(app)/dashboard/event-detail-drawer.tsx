@@ -1,27 +1,22 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { ArrowLeft, Calendar, CheckCircle2, Clock, MapPin, Phone, Plus, Trash2, User, Users, X } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Clock, MapPin, PenTool, Phone, Plus, Printer, Trash2, User, Users } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
+import { stepAt } from "@/lib/meeting/steps";
 import type { Appointment } from "@/lib/appointments/types";
 import { APPOINTMENT_KIND_LABEL, appointmentTimeLabel } from "@/lib/appointments/types";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { StatusChip } from "@/components/status-chip";
-import { IconButton } from "@/components/icon-button";
+import { Drawer } from "@/components/drawer";
 import { Button } from "@/components/button";
+import { Menu } from "@/components/menu";
 import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
-import { EventMarginCard } from "./event-margin-card";
+import { EventBookingCard } from "./event-booking-card";
 
-// Same `.drawer` <dialog> pattern as ProductDrawer (catalog/product-drawer.tsx), but deliberately
-// anchored to the LEFT and floated off the viewport edges (rounded-md, like the sidebar) rather
-// than the flush right-anchored panel that pattern normally uses elsewhere — an explicit request
-// for this one surface, not a new default. `inset-inline-end`/`start` are RTL-logical and would
-// resolve to the right here (this codebase's `.drawer` convention), so the left edge is pinned
-// with a plain physical `left` inline style to guarantee the side regardless of direction.
-// `top`/`bottom` are inline styles too, not Tailwind's `top-*`/`bottom-*` classes — a shown
-// <dialog> lives in the top layer, and empirically its height doesn't stretch to fill top+bottom
-// offsets the way a normal fixed element's would, so the height is computed explicitly instead.
+// The shell — the floating left-anchored <dialog>, its header and its one scrollbar — is
+// components/drawer.tsx now, shared with the catalog's product form. The geometry notes that used
+// to sit here live in that file; what stays here is what this drawer is ABOUT.
 export function EventDetailDrawer({
   event,
   venueName,
@@ -31,6 +26,7 @@ export function EventDetailDrawer({
   onOpenAppointment,
   onCreateAppointment,
   onDelete,
+  onEventChanged,
 }: {
   event: EventSummary | null;
   venueName?: string;
@@ -38,7 +34,10 @@ export function EventDetailDrawer({
    *  collects several (docs/01 §מצב פגישה), which is why `meetingDate` stopped being a column. */
   appointments: Appointment[];
   onClose: () => void;
-  onContinue: (e: EventSummary) => void;
+  /** Opens the event on one of its own surfaces — the meeting flow by default, the print
+   *  screen when the footer asks for it. Both need the same "this device has this event open"
+   *  pointer set first, so it is one prop with a destination, not two. */
+  onContinue: (e: EventSummary, to?: "/meeting" | "/outputs" | "/studio") => void;
   onOpenAppointment: (a: Appointment) => void;
   onCreateAppointment: (e: EventSummary) => void;
   /** Asks the screen to delete this event. The QUESTION is not asked here — the drawer hands the
@@ -46,56 +45,91 @@ export function EventDetailDrawer({
    *  catalog's edit drawer hands its מחיקה to the catalog screen. One dialog per surface, so the
    *  same delete cannot be worded two ways. */
   onDelete: (e: EventSummary) => void;
+  /** The client answered. The card writes `confirmedAt` itself and shows it immediately; this asks
+   *  the screen to re-read the list, so the calendar and the statistics agree with the drawer. */
+  onEventChanged: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   // Every hook stays above the `!event` bail-out below — this component renders with a null event
   // whenever the drawer is closed, so a hook called after the early return would appear and
   // disappear with the selection and trip React's "order of Hooks changed" error.
   const flow = useMeetingFlow();
 
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (event && !d.open) d.showModal();
-    if (!event && d.open) d.close();
-  }, [event]);
-
   if (!event) return null;
 
   const status = eventStatus(event, flow);
   const progress = eventProgress(event, flow);
+  // The stage the event is actually parked on, so the primary action can NAME where it resumes.
+  // "מעבר לסקיצה" was a promise the button could not keep — it went to /meeting, which lands on
+  // whatever stage this event left off at, and for a fresh one that is the details form.
+  const resumeAt = stepAt(flow, event.step);
   // The event's zones under the venue that owns them — "חוות רונית אמארה · אולם גדול · חופה".
   const venueZones = venueName ? `${venueName} · ${zonesLabelOf(event)}` : zonesLabelOf(event);
 
-  const go = () => {
-    onContinue(event);
+  const go = (to?: "/meeting" | "/outputs" | "/studio") => {
+    onContinue(event, to);
     onClose();
   };
 
   return (
-    <dialog
-      ref={ref}
+    <Drawer
+      title={event.clientName}
       onClose={onClose}
-      style={{ left: "8px", right: "auto", top: "4px", bottom: "4px", height: "calc(100dvh - 8px)" }}
-      className="drawer fixed m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
+      // The rest of what you can do to an event, folded behind the one trigger this codebase uses
+      // everywhere else for exactly that (components/menu.tsx). The studio is here rather than
+      // beside the two buttons below because it is the THIRD destination — redrawing a plan between
+      // meetings, which is not what this drawer gets opened for. מחיקה is `danger`, and the drawer
+      // closes on the way out: the question belongs to the screen, which owns the one dialog.
+      actions={
+        <Menu
+          label={`אפשרויות לאירוע של ${event.clientName}`}
+          items={[
+            { label: "פתיחה בסטודיו", icon: PenTool, onSelect: () => go("/studio") },
+            {
+              label: "מחיקת האירוע",
+              icon: Trash2,
+              danger: true,
+              onSelect: () => {
+                onDelete(event);
+                onClose();
+              },
+            },
+          ]}
+        />
+      }
     >
-      <div className="flex h-full flex-col">
-        <header className="flex items-center justify-between border-b border-border bg-surface px-5 py-3.5">
-          <h2 className="text-base font-semibold">{event.clientName}</h2>
-          <IconButton label="סגירה" onClick={onClose}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
-        </header>
-
+      <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          <div className="flex items-center justify-between">
-            <StatusChip tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</StatusChip>
-            <span className="nums text-sm font-semibold text-ink-soft">{progress}%</span>
-          </div>
+          {/* ⚠ THE ACTIONS ARE AT THE TOP, and inside the progress card rather than under the
+              panel. They were a footer of three buttons pinned below a scrolling body, which put the
+              two things a designer opens this drawer to DO underneath the client's phone number and
+              read as chrome. Here they finish the sentence the card starts: this event is 60%
+              through and parked on the design sketch — continue it, or print its sheets. */}
+          <div className="rounded-md border border-border bg-surface p-4">
+            <div className="flex items-center justify-between">
+              <StatusChip tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</StatusChip>
+              <span className="nums text-sm font-semibold text-ink-soft">{progress}%</span>
+            </div>
 
-          <div>
-            <div className="h-1.5 overflow-hidden rounded-full border border-border bg-canvas">
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full border border-border bg-canvas">
               <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
+            </div>
+
+            <div className="mt-4 flex items-center gap-2">
+              {/* Names where it lands. "מעבר לסקיצה" was a promise this button could not keep: it
+                  goes to /meeting, which resumes at whatever stage the event was left on — the
+                  details form, for one nobody has drawn yet. */}
+              <Button className="min-w-0 flex-1" onClick={() => go()}>
+                <span className="truncate">{event.step === 0 ? "התחלת פגישה" : `המשך · ${resumeAt.label}`}</span>
+                <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={2.5} />
+              </Button>
+              {/* Outputs in its OWN frame, not the meeting's closing stage. A designer preparing a
+                  crew's sheets the week before is not running a meeting, and routing them through
+                  the client-facing stepper to reach a packing list is the same mistake in the other
+                  direction. Same screen either way — see app/(app)/outputs/outputs-screen.tsx. */}
+              <Button variant="outline" className="shrink-0" onClick={() => go("/outputs")}>
+                <Printer className="h-4 w-4" strokeWidth={2} />
+                פלטים
+              </Button>
             </div>
           </div>
 
@@ -180,7 +214,7 @@ export function EventDetailDrawer({
             </div>
           </div>
 
-          <EventMarginCard eventId={event.id} />
+          <EventBookingCard key={event.id} event={event} onConfirmed={onEventChanged} />
 
           <div>
             <h3 className="mb-2 text-xs font-semibold text-muted">פרטים ליצירת קשר</h3>
@@ -216,34 +250,7 @@ export function EventDetailDrawer({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 border-t border-border bg-surface px-5 py-4">
-          <Button className="flex-1" onClick={go}>
-            מעבר לסקיצה
-            <ArrowLeft className="h-4 w-4" strokeWidth={2.5} />
-          </Button>
-          <Button variant="outline" className="flex-1" onClick={go}>
-            פרטי האירוע
-          </Button>
-          {/* Destructive, so it sits at the far end of the footer at the quietest weight the button
-              scale has (`danger` is ghost-ink until hovered) — the same shape the catalog's edit
-              drawer already uses. Icon-only because the two things a designer actually opens this
-              drawer to do are the buttons beside it, and a third full-width label would read as a
-              third equal choice. The drawer closes on the way out: the confirmation belongs to the
-              screen, and two stacked dialogs asking about the same event is one too many. */}
-          <Button
-            variant="danger"
-            aria-label="מחיקת האירוע"
-            title="מחיקת האירוע"
-            className="shrink-0 px-3.5"
-            onClick={() => {
-              onDelete(event);
-              onClose();
-            }}
-          >
-            <Trash2 className="h-4 w-4" strokeWidth={2} />
-          </Button>
-        </div>
       </div>
-    </dialog>
+    </Drawer>
   );
 }
