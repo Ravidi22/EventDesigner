@@ -75,7 +75,9 @@ if (isMain(import.meta.url)) {
   };
   const near = (a: number, b: number, tol = 1e-6) => Math.abs(a - b) < tol;
 
-  // A4 portrait with 16mm margins and ~16mm of title block: 178 x 249 of drawing.
+  // A plausible A4 drawing frame — what is left of the page once margins and a title block have
+  // taken their share. Not the real sheet's numbers (sheet-frame.tsx computes those from its own
+  // constants); this is a fixture, and every assertion below is arithmetic against THESE two.
   const a4 = { widthMm: 178, heightMm: 249 };
 
   // A 15 x 10 metre hall.

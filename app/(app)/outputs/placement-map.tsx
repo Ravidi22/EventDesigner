@@ -396,9 +396,10 @@ export function PlacementMap({
                   y={-DRAPE_MM / 2}
                   width={resolved.lengthMm}
                   height={DRAPE_MM}
-                  fill="#ffffff"
+                  fill="none"
                   stroke={INK}
-                  strokeWidth={LINE_WEIGHTS.furniture}
+                  strokeWidth={LINE_WEIGHTS.overhead}
+                  strokeDasharray={OVERHEAD_DASH}
                   vectorEffect="non-scaling-stroke"
                 />
               </g>
@@ -407,8 +408,9 @@ export function PlacementMap({
 
           {/* Rods — the property's own rigging, never a per-event arrangement (nothing here can
               move one). Dashed at the overhead weight, exactly like the ceiling items hanging off
-              them, and labelled with the one number a rigger cannot see on the plan otherwise: how
-              high it is. */}
+              them, and labelled with the two numbers a rigger cannot see on the plan otherwise:
+              how high it is, and what it is rated to carry. A rod with no stated load says nothing
+              rather than implying an unlimited one. */}
           {sheet.rigs &&
             (plan.structure.rigs ?? []).map((r) => (
               <g key={r.id}>
@@ -423,7 +425,7 @@ export function PlacementMap({
                   vectorEffect="non-scaling-stroke"
                 />
                 <text x={(r.a.x + r.b.x) / 2} y={(r.a.y + r.b.y) / 2 - 240} textAnchor="middle" fontSize={420} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
-                  {r.label} · {(r.heightMm / 1000).toFixed(2)}מ׳
+                  {r.label} · {(r.heightMm / 1000).toFixed(2)}מ׳{r.loadKg ? ` · עד ${r.loadKg} ק״ג` : ""}
                 </text>
               </g>
             ))}
@@ -433,7 +435,31 @@ export function PlacementMap({
               item draws where its rod puts it; a dangling rigId falls back to its last free point. */}
           {ceilingItems.map((p) => {
             const at = p.hang ? resolveHang(plan.structure, p.hang) : null;
-            return <PlacementGlyph key={p.id} placement={p} x={at?.x ?? p.position.x} y={at?.y ?? p.position.y} overhead />;
+            const x = at?.x ?? p.position.x;
+            const y = at?.y ?? p.position.y;
+            return (
+              <g key={p.id}>
+                <PlacementGlyph placement={p} x={x} y={y} overhead />
+                {/* THE DROP, figured on the drawing. It is the number the rigger is up a ladder
+                    holding: how far below the rod this thing hangs. It was recorded by the studio
+                    inspector and read by nothing — a plan that knows it and does not say it is
+                    worse than one that never asked. Only when it is set; flush to the rod is the
+                    default and needs no note. */}
+                {p.hang?.dropMm ? (
+                  <text
+                    x={x}
+                    y={y}
+                    dy={-260}
+                    textAnchor="middle"
+                    fontSize={190}
+                    fill={MUTED}
+                    style={{ direction: "ltr" }}
+                  >
+                    ↓{(p.hang.dropMm / 1000).toFixed(2)}
+                  </text>
+                ) : null}
+              </g>
+            );
           })}
 
           {/* Overall dimensions — one width and one depth per zone this event occupies, figured the
