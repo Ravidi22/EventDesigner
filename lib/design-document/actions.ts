@@ -56,6 +56,16 @@ export type Action =
   // used to answer the first two of those and could not be made to answer the others; this is the
   // same body with the list lifted out, so it is one branch here instead of two.
   | { type: "applyToTables"; tableIds: string[]; placement: Omit<Placement, "id" | "tableId">; replaces?: string[] }
+  // One table's WHOLE dressing onto others — the cloth, the centrepiece, the candlesticks, the
+  // runner, in one press. A designer dresses one table until it is right and then wants the room to
+  // match it; before this that was one smart-apply per item, and the fifth one was always the one
+  // that got forgotten.
+  //
+  // "add" leaves what a target already wears and gives it what it lacks, honouring any recorded
+  // divergence (F-5.3). "replace" makes the target identical to the source and CLEARS its
+  // exceptions: an explicit "make these match that one" outranks a divergence recorded weeks ago,
+  // and silently honouring the old one would read as the button being broken.
+  | { type: "copyDressing"; fromTableId: string; toTableIds: string[]; mode: "add" | "replace" }
   // Several things become one: selecting any of them selects all, dragging any drags all, and a set
   // of tables carries a single number as though it were the one larger table it now is.
   | { type: "group"; groupId: string; refs: { kind: "table" | "placement"; id: string }[]; number?: number }
@@ -239,6 +249,44 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
     case "applyToTables": {
       const wanted = new Set(action.tableIds);
       return spreadOverTables(doc, doc.tables.filter((t) => wanted.has(t.id)), action.placement, action.replaces);
+    }
+
+    case "copyDressing": {
+      const source = doc.placements.filter((p) => p.layer === "table" && p.tableId === action.fromTableId);
+      const targets = action.toTableIds.filter((id) => id !== action.fromTableId && doc.tables.some((t) => t.id === id));
+      if (source.length === 0 || targets.length === 0) return doc;
+      const targetSet = new Set(targets);
+
+      // In replace mode the targets are stripped first, so what they end up with is exactly the
+      // source's set rather than the union of the two.
+      const kept =
+        action.mode === "replace"
+          ? doc.placements.filter((p) => !(p.layer === "table" && p.tableId && targetSet.has(p.tableId)))
+          : doc.placements;
+
+      const added: Placement[] = [];
+      for (const tableId of targets) {
+        for (const s of source) {
+          const has = kept.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
+          const excepted =
+            action.mode === "add" &&
+            doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
+          if (has || excepted) continue;
+          // groupId goes too. A group means "select one and you have selected all of them, drag one
+          // and they all move" — copying the source's membership onto twenty-three copies would
+          // make every one of them move when the original is nudged, which is not what "make these
+          // match that one" asks for.
+          const { id: _old, tableId: _t, groupId: _g, ...rest } = s;
+          added.push({ ...rest, id: crypto.randomUUID(), tableId });
+        }
+      }
+      if (added.length === 0 && kept === doc.placements) return doc;
+
+      const exceptions =
+        action.mode === "replace"
+          ? doc.exceptions?.filter((e) => !targetSet.has(e.tableId))
+          : doc.exceptions;
+      return { ...doc, placements: [...kept, ...added], exceptions };
     }
 
     case "group": {
@@ -594,6 +642,59 @@ if (isMain(import.meta.url)) {
 
     g = dispatch(g, { type: "applyToTables", tableIds: [], placement: cloth });
     assert(g.present === before, "applying to nothing is not an edit");
+  }
+
+  // Copying one table's whole dressing onto others.
+  {
+    const dressed = (id: string, tableId: string, variantId: string) => ({
+      id, variantId, layer: "table" as const, tableId, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1,
+    });
+    const table = (id: string, type: string): DesignTable => ({ id, type, number: 1, position: { x: 0, y: 0 }, rotation: 0 });
+    let g = initHistory({
+      calibration: { mmPerUnit: 1 },
+      tables: [table("t1", "עגול"), table("t2", "עגול"), table("t3", "עגול")],
+      placements: [
+        dressed("a", "t1", "gold-cloth"),
+        dressed("b", "t1", "centrepiece"),
+        dressed("c", "t2", "cream-cloth"),
+      ],
+    });
+
+    // add: the target keeps what it wears and gains what it lacks.
+    let add = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "add" });
+    const onT2 = add.present.placements.filter((p) => p.tableId === "t2");
+    assert(onT2.length === 3, "the target keeps its own cloth and gains both of the source's items");
+    assert(onT2.some((p) => p.variantId === "cream-cloth"), "…including the one it already had");
+
+    // replace: the target ends up identical to the source.
+    let rep = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2", "t3"], mode: "replace" });
+    for (const t of ["t2", "t3"]) {
+      const on = rep.present.placements.filter((p) => p.tableId === t).map((p) => p.variantId).sort();
+      assert(on.join(",") === "centrepiece,gold-cloth", `${t} is now dressed exactly like the source`);
+    }
+    assert(rep.present.placements.filter((p) => p.tableId === "t1").length === 2, "the source is untouched");
+
+    // Every copy is its own row.
+    const ids = new Set(rep.present.placements.map((p) => p.id));
+    assert(ids.size === rep.present.placements.length, "each copy gets its own id");
+
+    // Nothing to copy, and copying onto itself, are both no-ops rather than edits.
+    assert(dispatch(g, { type: "copyDressing", fromTableId: "t3", toTableIds: ["t2"], mode: "add" }).present === g.present, "an undressed source copies nothing");
+    assert(dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t1"], mode: "add" }).present === g.present, "a table cannot be dressed from itself");
+    assert(dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: [], mode: "add" }).present === g.present, "copying onto nothing is not an edit");
+
+    // replace clears the target's exceptions: "make it identical" overrides an older divergence.
+    let ex = initHistory({
+      calibration: { mmPerUnit: 1 },
+      tables: [table("t1", "עגול"), table("t2", "עגול")],
+      placements: [dressed("a", "t1", "gold-cloth")],
+      exceptions: [{ tableId: "t2", variantId: "gold-cloth" }],
+    });
+    const kept = dispatch(ex, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "add" });
+    assert(kept.present.placements.filter((p) => p.tableId === "t2").length === 0, "add honours a recorded exception");
+    const forced = dispatch(ex, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(forced.present.placements.some((p) => p.tableId === "t2"), "replace overrides it");
+    assert((forced.present.exceptions ?? []).length === 0, "…and clears it, so it cannot come back");
   }
 
   // ── grouping ──────────────────────────────────────────────────────────────────────────────────
