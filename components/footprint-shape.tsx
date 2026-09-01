@@ -13,32 +13,41 @@ import { outlinePathD } from "@/lib/studio/geometry";
 
 type ShapeProps = Omit<React.SVGProps<SVGPathElement>, "d" | "ref">;
 
+/** The dash pattern for anything overhead, in world millimetres — 12cm on, 9cm off, which reads as
+ *  a dashed line from a whole-hall zoom down to one table. The architectural convention for
+ *  something above the cut plane, and the reason a ceiling plan is legible when it is photocopied
+ *  in black and white: an overhead item and a floor item cannot be told apart by fill alone. */
+export const OVERHEAD_DASH = "120 90";
+
 /** A footprint centred on (0,0) in its own local frame — the caller's <g> carries the position,
  *  rotation and scale. Custom outlines are translated so their bounding-box centre sits at (0,0),
  *  so all four kinds share that frame. */
-export function FootprintShape({ footprint, ...common }: { footprint: Footprint } & ShapeProps) {
+export function FootprintShape({
+  footprint,
+  overhead,
+  ...common
+}: { footprint: Footprint; overhead?: boolean } & ShapeProps) {
+  // Overhead items are drawn, never filled: the convention says the thing is above you, and a
+  // filled shape reads as something you would walk around.
+  const od = overhead ? { strokeDasharray: OVERHEAD_DASH, vectorEffect: "non-scaling-stroke" as const } : undefined;
+  const props = { ...od, ...common };
   if (footprint.kind === "circle") {
-    return <circle r={footprint.diameterMm / 2} {...(common as React.SVGProps<SVGCircleElement>)} />;
+    return <circle r={footprint.diameterMm / 2} {...(props as React.SVGProps<SVGCircleElement>)} />;
   }
   if (footprint.kind === "ellipse") {
-    return <ellipse rx={footprint.widthMm / 2} ry={footprint.depthMm / 2} {...(common as React.SVGProps<SVGEllipseElement>)} />;
+    return <ellipse rx={footprint.widthMm / 2} ry={footprint.depthMm / 2} {...(props as React.SVGProps<SVGEllipseElement>)} />;
   }
   if (footprint.kind === "custom") {
     const b = customShapeBounds(footprint.outline);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
-    return <path d={outlinePathD(centered, footprint.edgeCurves)} {...common} />;
+    return <path d={outlinePathD(centered, footprint.edgeCurves)} {...props} />;
   }
   const { widthMm: w, depthMm: d } = footprint;
-  return (
-    <rect
-      x={-w / 2}
-      y={-d / 2}
-      width={w}
-      height={d}
-      rx={Math.min(w, d) * 0.06}
-      {...(common as React.SVGProps<SVGRectElement>)}
-    />
-  );
+  // Square corners. A rect footprint is a MEASUREMENT — a stage is a run of 100×200 modules, a
+  // trestle table is a board — and the 6% radius this used to carry rounded 6cm off each corner of
+  // a 2×1m deck on a true-scale plan for no reason but softness. The plan is the thing the crew
+  // sets the room up from; the shapes on it are the shapes in the room.
+  return <rect x={-w / 2} y={-d / 2} width={w} height={d} {...(props as React.SVGProps<SVGRectElement>)} />;
 }
 
 /** The shape a table is drawn as. A table dragged off the rail carries its catalog row, so it draws

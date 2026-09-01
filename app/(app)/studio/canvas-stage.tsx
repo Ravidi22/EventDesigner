@@ -769,6 +769,7 @@ export function CanvasStage({
                 selected={isSel("placement", p.id)}
                 ctx={ctx}
                 drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
+                overhead
               />
             ))}
         </>
@@ -1357,6 +1358,7 @@ function PlacementNode({
   selected,
   ctx,
   drag,
+  overhead,
 }: {
   placement: Placement;
   x: number;
@@ -1364,6 +1366,7 @@ function PlacementNode({
   selected: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
+  overhead?: boolean;
 }) {
   const r = resolve(placement.variantId);
   const product = r?.product;
@@ -1392,7 +1395,10 @@ function PlacementNode({
     >
       <FootprintShape
         footprint={footprint}
-        fill={selected ? "var(--color-accent-tint)" : "var(--color-surface)"}
+        overhead={overhead}
+        // Overhead is unfilled on purpose — the item is above the cut plane, not on it, so whatever
+        // is drawn underneath (a table it hangs over) must still show through its outline.
+        fill={overhead ? "none" : selected ? "var(--color-accent-tint)" : "var(--color-surface)"}
         stroke={selected ? "var(--color-accent)" : "var(--color-border)"}
         strokeWidth={selected ? 4 : 2}
         vectorEffect="non-scaling-stroke"
