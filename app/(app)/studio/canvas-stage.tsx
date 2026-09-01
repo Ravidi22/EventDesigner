@@ -655,10 +655,12 @@ export function CanvasStage({
               />
             );
           })}
-          </g>
 
           {/* A GROUP's ring of chairs belongs to no single member, so it cannot travel with one of
-              them the way a lone table's does — it goes round the outside of the whole block. */}
+              them the way a lone table's does — it goes round the outside of the whole block. Still
+              floor-plane furniture, same <g> as the stack above: a chair ring floating at full
+              brightness over tables just dimmed to 35% would read as a second, undimmed layer that
+              doesn't exist. */}
           {seating
             .filter((ring) => !ring.forTable)
             .map((ring) => (
@@ -670,7 +672,9 @@ export function CanvasStage({
             ))}
 
           {/* The group, drawn once over its members: the outline that says where the one larger
-              table ends, and the single number it carries instead of each table carrying its own. */}
+              table ends, and the single number it carries instead of each table carrying its own.
+              Same reasoning as the chair ring just above — this outline traces tables, so it dims
+              with them rather than floating over them at full contrast. */}
           {tableGroups.map((g) => (
             <g key={`group-${g.id}`} className="pointer-events-none">
               <rect
@@ -713,6 +717,7 @@ export function CanvasStage({
               )}
             </g>
           ))}
+          </g>
 
           {/* Table-layer items — clustered on their table. Covers are excluded: they were drawn as
               the table itself just above. */}
