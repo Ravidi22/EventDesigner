@@ -103,11 +103,33 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   other: "אחר",
 };
 
+/** A rod or truss built into the hall's ceiling — the thing a chandelier or a ceiling installation
+ *  is physically hung from. The PROPERTY's, like a wall: measured once at /halls, and every event
+ *  held in the room plans around the same rods.
+ *
+ *  Two absolute points rather than a node graph like the walls. Rods cross the room and share
+ *  nothing with the walls, so there is no shared endpoint to keep in step and a graph would buy
+ *  nothing but a second editor. `a === b` is a single eyebolt, drawn as a cross rather than a line —
+ *  one geometry for both, so nothing downstream has to branch on which kind of fixing it is.
+ *
+ *  `loadKg` is RECORDED AND PRINTED, never validated against: summing what hangs off a rod needs a
+ *  weight per product, and the catalog has none. */
+export interface CeilingRig {
+  id: string;
+  label: string;
+  a: Point;
+  b: Point;
+  heightMm: number; // above the floor
+  loadKg?: number;
+}
+
 export interface VenueStructure {
   nodes: StructureNode[];
   walls: Wall[];
   entrances: StructureEntrance[];
   features: StructureFeature[];
+  /** Absent on every venue drawn before rods existed — every reader defaults it. */
+  rigs?: CeilingRig[];
 }
 
 export function emptyStructure(): VenueStructure {
@@ -362,6 +384,33 @@ export function updateStairs(s: VenueStructure, featureId: string, patch: Partia
 
 export function removeFeature(s: VenueStructure, id: string): VenueStructure {
   return { ...s, features: s.features.filter((f) => f.id !== id) };
+}
+
+// --- ceiling rods -------------------------------------------------------
+
+export function rigLengthMm(rig: CeilingRig): number {
+  return Math.hypot(rig.b.x - rig.a.x, rig.b.y - rig.a.y);
+}
+
+/** A single eyebolt rather than a run: both ends in the same place. Tested with a tolerance, not
+ *  with ===, because a rod drawn by a click that moved one millimetre is still one fixing. */
+export function isHangingPoint(rig: CeilingRig): boolean {
+  return rigLengthMm(rig) < 1;
+}
+
+export function addRig(s: VenueStructure, rig: Omit<CeilingRig, "id">): { structure: VenueStructure; rigId: string } {
+  const next: CeilingRig = { ...rig, id: crypto.randomUUID() };
+  return { structure: { ...s, rigs: [...(s.rigs ?? []), next] }, rigId: next.id };
+}
+
+export function updateRig(s: VenueStructure, id: string, patch: Partial<Omit<CeilingRig, "id">>): VenueStructure {
+  if (!s.rigs) return s;
+  return { ...s, rigs: s.rigs.map((r) => (r.id === id ? { ...r, ...patch } : r)) };
+}
+
+export function removeRig(s: VenueStructure, id: string): VenueStructure {
+  if (!s.rigs) return s;
+  return { ...s, rigs: s.rigs.filter((r) => r.id !== id) };
 }
 
 // Plausible starting dimensions per kind, so dropping one onto the plan gives something the right
@@ -675,6 +724,36 @@ if (isMain(import.meta.url)) {
   assert(stageOf(shrunkStage).stairs!.widthMm === 900, "narrowing a stage narrows the flight hanging off it");
   assert(!stageOf(removeStairs(stepped, stageId)).stairs, "stairs can be taken off again");
   assert(updateStairs(withStage, stageId, { steps: 2 }) === withStage, "a stage without stairs has no flight to patch");
+
+  // --- ceiling rods ---------------------------------------------------------
+  {
+    const empty = emptyStructure();
+    assert(empty.rigs === undefined, "a fresh structure has no rods, and no empty array either");
+
+    const { structure: s1, rigId } = addRig(empty, {
+      label: "מוט מרכזי",
+      a: { x: 0, y: 0 },
+      b: { x: 8000, y: 0 },
+      heightMm: 4200,
+    });
+    assert(s1.rigs?.length === 1, "a rod is added");
+    assert(Math.abs(rigLengthMm(s1.rigs![0]) - 8000) < 1e-9, "an 8m rod is 8m long");
+    assert(!isHangingPoint(s1.rigs![0]), "…and is not a hanging point");
+    assert(empty.rigs === undefined, "adding a rod does not mutate the structure it was added to");
+
+    const s2 = updateRig(s1, rigId, { heightMm: 3800, loadKg: 200 });
+    assert(s2.rigs![0].heightMm === 3800 && s2.rigs![0].loadKg === 200, "a rod can be re-measured and rated");
+    assert(s2.rigs![0].label === "מוט מרכזי", "…without losing what it is called");
+    assert(updateRig(s1, "gone", { heightMm: 1 }).rigs![0].heightMm === 4200, "updating a rod that is not there changes nothing");
+
+    // A single eyebolt: both ends in the same place. Zero length, and every consumer has to
+    // survive dividing by it — see resolveHang in lib/studio/anchor.ts.
+    const { structure: s3 } = addRig(s2, { label: "נקודת תלייה", a: { x: 2000, y: 2000 }, b: { x: 2000, y: 2000 }, heightMm: 4000 });
+    assert(rigLengthMm(s3.rigs![1]) === 0 && isHangingPoint(s3.rigs![1]), "a hanging point is a rod of zero length");
+
+    const s4 = removeRig(s3, rigId);
+    assert(s4.rigs!.length === 1 && s4.rigs![0].label === "נקודת תלייה", "a rod can be removed, and takes only itself");
+  }
 
   console.log("venue structure self-check passed");
 }
