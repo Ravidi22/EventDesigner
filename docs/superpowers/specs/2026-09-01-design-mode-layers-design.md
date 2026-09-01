@@ -282,7 +282,11 @@ rod owns its position, and distributing along a rod is `t`, a later idea).
 
 ---
 
-## §4 — Export by layer
+## §4 — Export by layer, at architectural drawing standard
+
+The sheets are not screenshots of the canvas. They are drawings a contractor, a rigger or a crew
+chief reads on site — which means a stated scale you can put a ruler on, a title block, a line-weight
+hierarchy, and dimensions. §4a says what goes on each sheet; §4b says how it is drawn.
 
 ### 4a. The sheet
 
@@ -312,16 +316,80 @@ Presets, in one array:
 
 Walls, doors and zone floors are on **every** sheet — a plan with no room on it is not a plan.
 
-### 4b. Wiring
+### 4b. Architectural presentation
+
+**A true, stated scale — this is the one that matters.** `PlacementMap` today is
+`className="w-full"` over a viewBox fitted to the plan's bounds, so it draws at whatever arbitrary
+ratio the paper happens to give it. Nobody can measure off that. The sheet is already rendered at
+real millimetres (`outputs-screen.tsx` sets `maxWidth: ${w}mm` and a `16mm` padding, and mm is a
+real CSS unit), so a true scale is exact rather than approximate:
+
+```ts
+// lib/outputs/scale.ts — pure, self-checked
+export const SCALES = [20, 25, 50, 75, 100, 150, 200, 250, 500, 1000];
+/** The largest drawing that still fits: the SMALLEST denominator whose world extent lands inside
+ *  the frame. Returns the denominator and the frame's leftover, for centring. */
+export function fitScale(worldMm: Extent, frameMm: Extent): { denominator: number; ... };
+```
+
+The SVG then gets `width={worldWidthMm / denominator}mm`, `height` likewise, and a `viewBox` in
+world mm. 1:100 means one millimetre on paper is one hundred in the room, and it is true on the
+printed page because `@page` already owns the paper size and margins.
+
+- **Graphic scale bar**, bottom-left of the frame — a divided bar in metres. It survives a
+  photocopy at 71%, which a printed `1:100` does not; both are drawn, because both are read.
+- **The scale is chosen per sheet, not per document**, and stated in the title block. A ceiling plan
+  of the same room may fit a coarser scale than the seating plan; each says which it is.
+
+**Title block**, along the bottom edge of every sheet, hairline-ruled in the drafting convention:
+venue · event and client · sheet name · sheet number (`3 / 5`) · scale · date · document version ·
+the studio's name. This replaces the current top-of-page header for plan sheets. Everything in it
+already exists — nothing new is computed.
+
+**Line weight hierarchy**, in printed millimetres (`vectorEffect: non-scaling-stroke`, which the
+walls already use, so weights stay constant as the scale changes):
+
+| weight | what |
+|---|---|
+| 0.60mm | walls, structural |
+| 0.35mm | features, stage and bar outlines |
+| 0.25mm | tables, chairs, floor items |
+| 0.18mm | dimension lines, witness lines, hatching, ghosted reference |
+| 0.25mm dashed | everything overhead — rods and the ceiling layer (§1b) |
+
+**Dimensions.** Each zone carries its overall width and depth as a proper dimension line: witness
+lines, ticks at both ends, the figure reading along the line, in metres to two decimals. `lib/
+outputs/dimensions.ts` computes them from the zone boundary's bounding box. Only overall dimensions
+are automatic — per-item setbacks are a later idea and are called out in §5.
+
+**Black and white.** PRODUCT.md requires B&W-legible outputs and these are the sheets it means.
+No accent violet, no tinted fills that collapse to the same grey. Fills are white, black, or a hatch
+pattern (`<pattern>` defs: diagonal for a stage, cross for a pool, dotted for a ghosted reference).
+Element styles the designer chose in the studio are read for *pattern* selection, never for hue.
+
+**North arrow**, top-right, when the venue plan has an orientation to state. Skipped silently
+otherwise rather than drawn pointing at nothing.
+
+**Legend**, boxed at the side: symbol, label, count — straight from the existing
+`placementLegend()`.
+
+All of this lives in ONE component, `app/(app)/outputs/sheet-frame.tsx`, which takes the world
+extent and the sheet and renders the frame, title block, scale bar, north arrow and legend around a
+`children` drawing. Every sheet is the same frame around different content, so the drafting standard
+is defined once and cannot drift between five sheets.
+
+### 4c. Wiring
 
 `app/(app)/outputs/placement-map.tsx` takes a `sheet: PlanSheet` prop and filters what it draws.
 Every filter decision is a lookup on the sheet, never a hard-coded category test in the renderer.
+It draws content only — the frame is `SheetFrame`'s.
 
 `app/(app)/outputs/outputs-screen.tsx`: the `map` view gains a multi-select of sheets; ticking three
-renders three pages, which the existing `window.print()` path prints as three pages. Each page
-carries its own sheet name beside the existing date and version stamp.
+renders three pages, which the existing `window.print()` path prints as three pages, numbered
+`n / total` in each title block. The existing top-of-page header stays for the packing list and the
+quote, which are documents rather than drawings.
 
-### 4c. The export log
+### 4d. The export log
 
 Every plan sheet records as `placement_map`. The `export_type` pgEnum is **not** extended: a ceiling
 plan is a placement map of the ceiling, the log's job is "a plan went out on this date at this
@@ -347,6 +415,12 @@ press is one seal at one version, because it is one export of one drawing.
 - **A 3D or elevation view.** Rod height is a number on a 2D plan. ADR-8 territory; not reopened.
 - **A free-form layer builder in outputs.** Five named sheets is what a crew is handed. A sixth is
   one line in the array.
+- **Per-item dimensions on the sheets.** Overall zone dimensions are automatic (§4b); aisle widths,
+  setbacks from a wall and a distance between two chosen tables are not. That needs a dimension the
+  designer PLACES, which is a drawing tool in the studio and its own field on the document. Add when
+  a crew asks for a figure the overall dimensions do not give them.
+- **Cross-references, section marks, revision clouds.** The full drafting vocabulary. These sheets
+  are plans, not a construction set; nothing here is issued for tender.
 
 ---
 
