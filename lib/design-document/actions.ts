@@ -65,7 +65,7 @@ export type Action =
   // divergence (F-5.3). "replace" makes the target identical to the source and CLEARS its
   // exceptions: an explicit "make these match that one" outranks a divergence recorded weeks ago,
   // and silently honouring the old one would read as the button being broken.
-  | { type: "copyDressing"; fromTableId: string; toTableIds: string[]; mode: "add" | "replace" }
+  | { type: "copyDressing"; fromTableId: string; toTableIds: string[]; mode: "add" | "replace"; replaces?: string[] }
   // Several things become one: selecting any of them selects all, dragging any drags all, and a set
   // of tables carries a single number as though it were the one larger table it now is.
   | { type: "group"; groupId: string; refs: { kind: "table" | "placement"; id: string }[]; number?: number }
@@ -264,10 +264,32 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           ? doc.placements.filter((p) => !(p.layer === "table" && p.tableId && targetSet.has(p.tableId)))
           : doc.placements;
 
+      // A TABLE WEARS ONE CLOTH. `replaces` names the shades of the source's own cover, so a
+      // target already wearing gold is RECOLOURED to cream rather than handed a second cloth — the
+      // same rule spreadOverTables applies, and it matters for the same reason. Only one cover is
+      // ever drawn (coverByTable is keyed on tableId, so the second is invisible), but the packing
+      // list and the quote sum EVERY placement: a second cloth tells the crew to bring one that
+      // does not exist and charges the client for it.
+      const swap = new Set(action.replaces ?? []);
+      const cover = source.find((x) => swap.has(x.variantId));
+      const covered = new Set<string>(); // targets whose own cover answered for the source's
+      let recoloured = 0;
+      const based = !cover
+        ? kept
+        : kept.map((p) => {
+            if (p.layer !== "table" || !p.tableId || !targetSet.has(p.tableId) || !swap.has(p.variantId)) return p;
+            covered.add(p.tableId);
+            if (p.variantId === cover.variantId) return p;
+            recoloured++;
+            return { ...p, variantId: cover.variantId };
+          });
+
       const added: Placement[] = [];
       for (const tableId of targets) {
         for (const s of source) {
-          const has = kept.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
+          // Its cover is already on that table, in the source's shade — recoloured just above.
+          if (s === cover && covered.has(tableId)) continue;
+          const has = based.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
           const excepted =
             action.mode === "add" &&
             doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
@@ -280,13 +302,13 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           added.push({ ...rest, id: crypto.randomUUID(), tableId });
         }
       }
-      if (added.length === 0 && kept === doc.placements) return doc;
+      if (added.length === 0 && recoloured === 0 && kept === doc.placements) return doc;
 
       const exceptions =
         action.mode === "replace"
           ? doc.exceptions?.filter((e) => !targetSet.has(e.tableId))
           : doc.exceptions;
-      return { ...doc, placements: [...kept, ...added], exceptions };
+      return { ...doc, placements: [...based, ...added], exceptions };
     }
 
     case "group": {
@@ -650,7 +672,7 @@ if (isMain(import.meta.url)) {
       id, variantId, layer: "table" as const, tableId, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1,
     });
     const table = (id: string, type: string): DesignTable => ({ id, type, number: 1, position: { x: 0, y: 0 }, rotation: 0 });
-    let g = initHistory({
+    const g = initHistory({
       calibration: { mmPerUnit: 1 },
       tables: [table("t1", "עגול"), table("t2", "עגול"), table("t3", "עגול")],
       placements: [
@@ -660,14 +682,30 @@ if (isMain(import.meta.url)) {
       ],
     });
 
-    // add: the target keeps what it wears and gains what it lacks.
-    let add = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "add" });
+    // add: the target gains what it lacks — but a table wears ONE cloth, so its cream one is
+    // RECOLOURED to the source's gold rather than joined by it. Without `replaces` the reducer has
+    // no way to know cream and gold are the same garment, which is why the caller passes the shade
+    // list; an earlier version of this assertion expected 3 items here, and that second invisible
+    // cloth was billed to the client by the quote.
+    const shades = ["gold-cloth", "cream-cloth"];
+    const add = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "add", replaces: shades });
     const onT2 = add.present.placements.filter((p) => p.tableId === "t2");
-    assert(onT2.length === 3, "the target keeps its own cloth and gains both of the source's items");
-    assert(onT2.some((p) => p.variantId === "cream-cloth"), "…including the one it already had");
+    assert(onT2.length === 2, "the target ends up with one cloth and the centrepiece, not two cloths");
+    assert(onT2.some((p) => p.variantId === "gold-cloth"), "…and the cloth it wears is the source's");
+    assert(!onT2.some((p) => p.variantId === "cream-cloth"), "…its own having been recoloured, not doubled");
+    assert(add.present.placements.filter((p) => p.tableId === "t1" && p.variantId === "gold-cloth").length === 1, "the source still wears exactly one");
+
+    // Told nothing about shades, it cannot know two cloths are one garment — the old behaviour,
+    // kept deliberately so a caller that omits `replaces` is never silently lossy.
+    const naive = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "add" });
+    assert(naive.present.placements.filter((p) => p.tableId === "t2").length === 3, "without a shade list it adds rather than recolours");
+
+    // Recolouring is itself the edit: nothing added, but the document moved.
+    const already = dispatch(add, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "add", replaces: shades });
+    assert(already.present === add.present, "…and re-running it once the shades already match is not an edit");
 
     // replace: the target ends up identical to the source.
-    let rep = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2", "t3"], mode: "replace" });
+    const rep = dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2", "t3"], mode: "replace" });
     for (const t of ["t2", "t3"]) {
       const on = rep.present.placements.filter((p) => p.tableId === t).map((p) => p.variantId).sort();
       assert(on.join(",") === "centrepiece,gold-cloth", `${t} is now dressed exactly like the source`);
@@ -684,7 +722,7 @@ if (isMain(import.meta.url)) {
     assert(dispatch(g, { type: "copyDressing", fromTableId: "t1", toTableIds: [], mode: "add" }).present === g.present, "copying onto nothing is not an edit");
 
     // replace clears the target's exceptions: "make it identical" overrides an older divergence.
-    let ex = initHistory({
+    const ex = initHistory({
       calibration: { mmPerUnit: 1 },
       tables: [table("t1", "עגול"), table("t2", "עגול")],
       placements: [dressed("a", "t1", "gold-cloth")],

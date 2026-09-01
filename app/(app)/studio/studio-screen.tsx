@@ -954,7 +954,13 @@ export function StudioScreen({
       .filter((r) => r.kind === "table" && r.id !== fromTableId)
       .map((r) => r.id);
     if (toTableIds.length === 0) return;
-    act({ type: "copyDressing", fromTableId, toTableIds, mode });
+    // The shades of whatever the source table is wearing, so a target already in cream is
+    // recoloured to the source's gold rather than handed a second cloth. A table wears one cloth;
+    // the quote sums every placement, so the second one would be billed.
+    const replaces = doc.placements
+      .filter((p) => p.layer === "table" && p.tableId === fromTableId)
+      .flatMap((p) => shadesOf(p.variantId).map((sh) => sh.id));
+    act({ type: "copyDressing", fromTableId, toTableIds, mode, replaces });
     showHint(mode === "replace" ? `${toTableIds.length} שולחנות עוצבו מחדש` : `העיצוב הוחל על ${toTableIds.length} שולחנות`);
   };
 
