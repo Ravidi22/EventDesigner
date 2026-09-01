@@ -10,6 +10,7 @@ import {
   Layers,
   Loader2,
   Lock,
+  Minus,
   MousePointer2,
   PenLine,
   Plus,
@@ -22,7 +23,8 @@ import {
   Upload,
   Users,
 } from "lucide-react";
-import { polygonCentroid } from "@/lib/studio/geometry";
+import { endpointFromLengthAngle, polygonCentroid, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import { constrainAngleDeg } from "@/lib/studio/snap";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
@@ -43,9 +45,11 @@ import {
   addEntrance,
   addFeature,
   addNode,
+  addRig,
   addWall,
   bulgeWall,
   emptyStructure,
+  isHangingPoint,
   moveNode,
   moveWallControlPoint,
   nearestWall,
@@ -54,6 +58,7 @@ import {
   removeEntrance,
   removeFeature,
   removeNode,
+  removeRig,
   removeWall,
   updateEntrance,
   updateFeature,
@@ -61,7 +66,7 @@ import {
   type WallKind,
 } from "@/lib/venues/structure";
 import { stairsPlacementAt } from "@/lib/venues/stairs";
-import { detectFaces, faceAt } from "@/lib/venues/faces";
+import { detectFaces, faceAt, pointInPolygon } from "@/lib/venues/faces";
 import {
   isOpenAir,
   newZone,
@@ -151,7 +156,22 @@ function blockedZoneNote(b: BlockedZone): string {
   return `${b.name} — לא נמחק: ${noun} ${list} ${verb} לשטח הזה${hint}`;
 }
 
-type Mode = "select" | "walls" | "zones";
+type Mode = "select" | "walls" | "zones" | "rigs";
+
+// A rod's own geometry, shared by every saved rig and by the one being dragged out — a hanging
+// point (`a` and `b` at, or within a millimetre of, the same spot) draws as a cross rather than a
+// zero-length line, which is otherwise invisible. mm() is the canvas's own px→world conversion, so
+// the cross reads as the same screen size at any zoom.
+function rigGeometry(a: Point, b: Point, mm: (px: number) => number, color: string, strokeWidth: number) {
+  return Math.hypot(b.x - a.x, b.y - a.y) < 1 ? (
+    <g stroke={color} strokeWidth={strokeWidth} vectorEffect="non-scaling-stroke">
+      <line x1={a.x - mm(7)} y1={a.y - mm(7)} x2={a.x + mm(7)} y2={a.y + mm(7)} />
+      <line x1={a.x - mm(7)} y1={a.y + mm(7)} x2={a.x + mm(7)} y2={a.y - mm(7)} />
+    </g>
+  ) : (
+    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeWidth={strokeWidth} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+  );
+}
 
 // A pastel swatch per element the designer DRAWS rather than picks off a shelf, so the picker's
 // cards read as a little gallery of colours instead of identical grey tiles. The ones that come out
@@ -196,6 +216,12 @@ const MODES: { id: Mode; label: string; icon: typeof MousePointer2; hint: string
     icon: Shapes,
     hint: "לחצו בשטח סגור לשם · לשטח פתוח: ״סימון שטח״",
   },
+  {
+    id: "rigs",
+    label: "מוטות תקרה",
+    icon: Minus,
+    hint: "גררו מקצה לקצה לשרטוט מוט · לחיצה קצרה ללא גרירה יוצרת נקודת תלייה",
+  },
 ];
 
 export function HallsScreen() {
@@ -216,6 +242,9 @@ export function HallsScreen() {
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
   const [region, setRegion] = useState<Point[] | null>(null); // freehand zone boundary in progress
   const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind } | null>(null);
+  // A rod is one standalone segment, so there is no chained run the way walls have: press for one
+  // end, release for the other. A press that does not travel is an eyebolt, not a mistake.
+  const [rigDraft, setRigDraft] = useState<{ a: Point; b: Point } | null>(null);
   // Which add-toolbar button is armed, if any — the next click on empty canvas places one of it and
   // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
   // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
@@ -446,6 +475,7 @@ export function HallsScreen() {
         for (const r of refs) if (r.kind === "wall") next = removeWall(next, r.id);
         for (const r of refs) if (r.kind === "door") next = removeEntrance(next, r.id);
         for (const r of refs) if (r.kind === "feature") next = removeFeature(next, r.id);
+        for (const r of refs) if (r.kind === "rig") next = removeRig(next, r.id);
         for (const r of refs) if (r.kind === "node") next = removeNode(next, r.id);
         return next;
       });
@@ -560,6 +590,7 @@ export function HallsScreen() {
         setRunNodeId(null);
         setRegion(null);
         setDraftZone(null);
+        setRigDraft(null);
         setSelection([]);
         setArmedToolId(null);
         setAddMenuOpen(false);
@@ -807,6 +838,23 @@ export function HallsScreen() {
     );
     editStructure(() => next);
     setSelection([{ kind: "feature", id: featureId }]);
+  };
+
+  // Ends the drag started by the rig-drawing capture rect (see the canvas's overlay, below). The
+  // rod's own height defaults from whichever zone its FIRST end lands in — the room the designer is
+  // standing in when they start drawing, not wherever the pointer happened to travel to.
+  const commitRigDraft = () => {
+    if (!rigDraft) return;
+    const zone = resolved.find((r) => r.boundary.length >= 3 && pointInPolygon(rigDraft.a, r.boundary));
+    const { structure: next, rigId } = addRig(structure, {
+      label: "מוט",
+      a: rigDraft.a,
+      b: rigDraft.b,
+      heightMm: zone?.zone.ceilingHeightMm ?? 4000,
+    });
+    editStructure(() => next);
+    setSelection([{ kind: "rig", id: rigId }]);
+    setRigDraft(null);
   };
 
   const addDoorNear = (p: Point) => {
@@ -1088,6 +1136,102 @@ export function HallsScreen() {
                 />
                 {/* Above the walls: the span being measured has to stay readable over a dark scan. */}
                 <CalibrationOverlay from={calib?.from ?? null} to={calib?.to ?? null} mm={mm} />
+
+                {/* Ceiling rods. Drawn in every mode — dashed and muted — so they can be checked
+                    against the room while it's still being built; they only take hit targets of
+                    their own in "rigs" mode, the same "supplying it turns the affordance on" rule
+                    every other layer here follows. A marquee in select mode still catches them
+                    (see lib/venues/selection.ts's hitsInBox), just not a direct click. */}
+                {mode === "rigs" && (
+                  <rect
+                    x={-2_000_000}
+                    y={-2_000_000}
+                    width={4_000_000}
+                    height={4_000_000}
+                    fill="transparent"
+                    className="cursor-crosshair"
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+                      const p = clientToMm(e.clientX, e.clientY);
+                      const a = { x: Math.round(p.x), y: Math.round(p.y) };
+                      setRigDraft({ a, b: a });
+                    }}
+                    onPointerMove={(e) => {
+                      if (!rigDraft) return;
+                      e.stopPropagation();
+                      const raw = clientToMm(e.clientX, e.clientY);
+                      const lenMm = wallLengthMm(rigDraft.a, raw);
+                      // Within the canvas's own close-snap tolerance of `a`, the rod collapses to a
+                      // hanging point rather than a segment a millimetre long — the same tolerance
+                      // the freehand region tool uses to close its own boundary (closeSnapMmRef).
+                      const b =
+                        lenMm < closeSnapMmRef.current
+                          ? rigDraft.a
+                          : endpointFromLengthAngle(rigDraft.a, lenMm, constrainAngleDeg(wallAngleDeg(rigDraft.a, raw)));
+                      setRigDraft({ a: rigDraft.a, b: { x: Math.round(b.x), y: Math.round(b.y) } });
+                    }}
+                    onPointerUp={(e) => {
+                      e.stopPropagation();
+                      (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+                      commitRigDraft();
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                )}
+                {(structure.rigs ?? []).map((r) => {
+                  const selected = selection.some((s) => s.kind === "rig" && s.id === r.id);
+                  const color = selected ? "var(--color-accent)" : "var(--color-muted)";
+                  const midX = (r.a.x + r.b.x) / 2;
+                  const midY = (r.a.y + r.b.y) / 2;
+                  return (
+                    <g key={r.id}>
+                      {rigGeometry(r.a, r.b, mm, color, selected ? 2.5 : 1.5)}
+                      <text
+                        x={midX}
+                        y={midY - mm(10)}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fill={selected ? "var(--color-accent-deep)" : "var(--color-muted)"}
+                        style={{ fontSize: mm(11), paintOrder: "stroke", stroke: "var(--color-canvas)", strokeWidth: mm(3) }}
+                        className="pointer-events-none"
+                      >
+                        {r.label}
+                      </text>
+                      {mode === "rigs" &&
+                        (isHangingPoint(r) ? (
+                          <circle
+                            cx={r.a.x}
+                            cy={r.a.y}
+                            r={mm(10)}
+                            fill="transparent"
+                            className="cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              pick({ kind: "rig", id: r.id }, isAdditiveClick(e));
+                            }}
+                          />
+                        ) : (
+                          <line
+                            x1={r.a.x}
+                            y1={r.a.y}
+                            x2={r.b.x}
+                            y2={r.b.y}
+                            stroke="transparent"
+                            strokeWidth={mm(14)}
+                            className="cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              pick({ kind: "rig", id: r.id }, isAdditiveClick(e));
+                            }}
+                          />
+                        ))}
+                    </g>
+                  );
+                })}
+                {mode === "rigs" && rigDraft && (
+                  <g className="pointer-events-none">{rigGeometry(rigDraft.a, rigDraft.b, mm, "var(--color-accent)", 2)}</g>
+                )}
               </>
             )}
           />
@@ -1153,6 +1297,29 @@ export function HallsScreen() {
                   ))}
                 </>
               )}
+
+              <div className="mx-0.5 h-5 w-px bg-border" />
+
+              <button
+                type="button"
+                title="מוטות תקרה"
+                onClick={() => {
+                  setMode("rigs");
+                  setRunNodeId(null);
+                  setRegion(null);
+                  setDraftZone(null);
+                  setArmedToolId(null);
+                  setAddMenuOpen(false);
+                  setSelection([]);
+                }}
+                aria-pressed={mode === "rigs"}
+                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  mode === "rigs" ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
+                }`}
+              >
+                <Minus className="h-[18px] w-[18px]" strokeWidth={1.4} />
+                מוטות תקרה
+              </button>
 
               <div className="mx-0.5 h-5 w-px bg-border" />
 
