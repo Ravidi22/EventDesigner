@@ -324,7 +324,7 @@ export function Inspector({
               <p className="mt-2 text-xs text-warn-ink">אין מוט במיקום הזה</p>
             )}
             {hung && p.hang && (
-              <div className="mt-2 flex items-center justify-between">
+              <div className="mt-3 flex items-center justify-between">
                 <label htmlFor="hang-drop" className="text-sm text-ink-soft">שלשול (ס״מ)</label>
                 <NumberField
                   id="hang-drop"

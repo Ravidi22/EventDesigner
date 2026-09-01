@@ -259,7 +259,12 @@ export function CanvasStage({
       ...(layerVisible.ceiling && isLive("ceiling") ? sorted.ceiling : []),
     ];
     for (const p of placed) {
-      out.push({ ref: { kind: "placement", id: p.id }, box: { ...p.position, ...placementExtent(p) } });
+      // A hung ceiling item's box is where it actually DRAWS — the rod-resolved point — not its raw
+      // stored `position`, which a drag keeps overwriting all gesture long while `hang` still wins
+      // the render (see the ceiling pass below). Boxing it from the wrong origin is what let a group
+      // drag's delta compute against a point the item was never actually at.
+      const at = p.layer === "ceiling" && p.hang ? resolveHang(plan.structure, p.hang) : null;
+      out.push({ ref: { kind: "placement", id: p.id }, box: { ...(at ?? p.position), ...placementExtent(p) } });
     }
     // The venue's own furniture is on this list too, which is what gives it everything the list is
     // for at once: a rubber-band catches it, a group drag carries it, and a table dragged past it
@@ -272,7 +277,7 @@ export function CanvasStage({
       }
     }
     return out;
-  }, [doc.tables, sorted, layerVisible, structure, activeLayer]);
+  }, [doc.tables, sorted, layerVisible, structure, plan.structure, activeLayer]);
 
   const isSel = (kind: SelectionKind, id: string) => selection.some((r) => r.kind === kind && r.id === id);
 
@@ -360,6 +365,25 @@ export function CanvasStage({
   // snapping one member would shear the group apart.
   const groupDrag = useRef<{ start: Point; snapshot: { ref: SelectionRef; origin: Point }[] } | null>(null);
 
+  /** The one ceiling placement being actively dragged right now, if any — set synchronously inside
+   *  its own onMove below, before the resulting movePlacement dispatch re-renders this component, so
+   *  the very render that dispatch triggers already sees it. Read by the ceiling pass to decide
+   *  whether to draw from the live `position` a drag is writing or the rod-resolved point: a hung
+   *  item mid-gesture has to move like every other draggable node on this canvas, not sit frozen at
+   *  its old rod position until the pointer lifts. Cleared the same way, in onEnd, before the final
+   *  re-render that settles the item back onto (possibly a different) rod. */
+  const draggingCeilingId = useRef<string | null>(null);
+
+  /** The hang a ceiling placement gets from wherever its `position` is RIGHT NOW: near a rod, on it;
+   *  otherwise free. The exact rule dropProduct uses, reused here so a drag can never disagree with a
+   *  drop about what "near" means. Rods are the property's own geometry, resolved against
+   *  `plan.structure` and never the per-event arranged copy — same precedent the drape code below
+   *  already sets (arrangedStructure only ever touches `features`). */
+  const hangAfterMove = (p: Placement): RigHang | null => {
+    const near = nearestRig(plan.structure, p.position);
+    return near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : null;
+  };
+
   /** The move handler for one item: the group's shared delta when it is part of a live
    *  multi-selection, otherwise its own snapped move. */
   const moveFor = (ref: SelectionRef, ctx: CanvasLayerContext) => (p: Point) => {
@@ -396,6 +420,15 @@ export function CanvasStage({
   const endDrag = (ctx: CanvasLayerContext) => () => {
     groupDrag.current = null;
     ctx.endSnap();
+    // Every hung member THIS gesture just moved — its own drag, or a group drag that swept it along
+    // with the rest of the selection — settles back onto whatever rod (or none) it actually ended up
+    // near. The one place this runs: a solo ceiling drag reaches it through the same onEnd chain, so
+    // there is no second copy of the check to keep in sync with this one.
+    for (const p of sorted.ceiling) {
+      if (p.hang && selection.some((r) => r.kind === "placement" && r.id === p.id)) {
+        onHangPlacement(p.id, hangAfterMove(p));
+      }
+    }
     onEndDrag();
   };
 
@@ -781,7 +814,10 @@ export function CanvasStage({
                 see the rods all evening; they want them the moment they are placing a chandelier, or
                 lining a table up under one. That is the same moment the ceiling layer is turned on. */}
             {layerVisible.ceiling &&
-              (structure.rigs ?? []).map((r) => (
+              // The property's own rigging, NOT the arranged copy — same reasoning as the drape a
+              // few lines below: a rod is measured once at /halls and no per-event arrangement on
+              // this surface can move it (arrangedStructure only ever touches `features`).
+              (plan.structure.rigs ?? []).map((r) => (
                 <g key={r.id} className="pointer-events-none">
                   <line
                     x1={r.a.x} y1={r.a.y} x2={r.b.x} y2={r.b.y}
@@ -824,7 +860,12 @@ export function CanvasStage({
                 rather than vanishing. */}
             {layerVisible.ceiling &&
               sorted.ceiling.map((p) => {
-                const at = p.hang ? resolveHang(structure, p.hang) : null;
+                // At rest, a hung item draws where its rod puts it. Mid-drag — its own, or a group
+                // drag sweeping it along — it has to draw from the live `position` the drag is
+                // actually writing, like every other movable node on this canvas, or it reads as
+                // frozen until the pointer lifts (see draggingCeilingId above).
+                const dragging = draggingCeilingId.current === p.id;
+                const at = p.hang && !dragging ? resolveHang(plan.structure, p.hang) : null;
                 const x = at?.x ?? p.position.x;
                 const y = at?.y ?? p.position.y;
                 const base = nodeProps({ kind: "placement", id: p.id }, ctx);
@@ -838,12 +879,15 @@ export function CanvasStage({
                     ctx={ctx}
                     drag={{
                       ...base,
-                      // The same near/far rule the drop used, re-run on the position the drag
-                      // actually ended at. Dispatched BEFORE the gesture closes, so it amends into
-                      // the same undo entry as the move rather than opening a second one.
+                      onMove: (pt) => {
+                        draggingCeilingId.current = p.id;
+                        base.onMove?.(pt);
+                      },
+                      // The hang re-check itself lives in the shared endDrag above — reached here
+                      // through base.onEnd, the same path a group drag reaches it through — so there
+                      // is exactly one place that decides what a settled drag hangs on.
                       onEnd: () => {
-                        const near = nearestRig(structure, p.position);
-                        onHangPlacement(p.id, near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : null);
+                        draggingCeilingId.current = null;
                         base.onEnd?.();
                       },
                     }}
