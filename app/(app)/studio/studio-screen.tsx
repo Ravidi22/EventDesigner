@@ -496,6 +496,60 @@ export function StudioScreen({
     pickMany(activeLayer === "floor" ? [...doc.tables.map((t) => ({ kind: "table" as const, id: t.id })), ...refs] : refs, false);
   }, [activeLayer, doc, pickMany]);
 
+  // A table's or a free placement's centre is `.position`, exactly like the box canvas-stage.tsx
+  // builds for its own marquee/align pass (`movable`, see the comment there) — but narrower on
+  // purpose. That list also carries HUNG ceiling items, resolved through the rod, because a group
+  // drag there is allowed to detach one from its rig. Distribute makes the opposite call: a hung
+  // item's `position` is a stale point the rod overrides at render (resolveHang), so writing a new
+  // one here would either do nothing or silently detach it off-screen — neither reads as "distribute".
+  // So it (and a cloth worn on a table, and a drape's wall span) resolves to null here and the
+  // selection is treated as not distributable at all, same as canDistribute below. Reusing the
+  // canvas's own list would need lifting it out of CanvasStage, which is not one of this task's two
+  // files and would also have to be re-filtered for this narrower rule anyway — cheaper to read the
+  // doc directly, which this screen already holds.
+  const movableBox = useCallback(
+    (ref: { kind: "table" | "placement"; id: string }): Point | null => {
+      if (ref.kind === "table") return doc.tables.find((t) => t.id === ref.id)?.position ?? null;
+      const p = doc.placements.find((x) => x.id === ref.id);
+      if (!p || p.tableId || p.span || p.hang) return null;
+      return p.position;
+    },
+    [doc.tables, doc.placements],
+  );
+
+  // Equal air between things, along whichever axis the selection is more spread out on. The two end
+  // items DO NOT MOVE: they are what the designer has already placed, and a distribute that slid
+  // them would be re-deciding the extent instead of dividing it. Rides on the existing moveMany, so
+  // it is one history entry and nothing new in the reducer.
+  const distributeEvenly = useCallback(() => {
+    const refs = docRefs(selected);
+    if (refs.length < 3) return;
+    const boxes = refs.map((r) => ({ ref: r, box: movableBox(r) })).filter((e) => e.box);
+    if (boxes.length < 3) return;
+    const spanX = Math.max(...boxes.map((e) => e.box!.x)) - Math.min(...boxes.map((e) => e.box!.x));
+    const spanY = Math.max(...boxes.map((e) => e.box!.y)) - Math.min(...boxes.map((e) => e.box!.y));
+    const axis: "x" | "y" = spanX >= spanY ? "x" : "y";
+    const sorted = [...boxes].sort((a, b) => a.box![axis] - b.box![axis]);
+    const first = sorted[0].box![axis];
+    const step = (sorted[sorted.length - 1].box![axis] - first) / (sorted.length - 1);
+    act({
+      type: "moveMany",
+      moves: sorted.map((e, i) => ({
+        kind: e.ref.kind,
+        id: e.ref.id,
+        position: axis === "x" ? { x: first + step * i, y: e.box!.y } : { x: e.box!.x, y: first + step * i },
+      })),
+    });
+  }, [selected, docRefs, movableBox, act]);
+
+  // "Not offered" (hidden), not merely disabled, when the selection holds a cloth, a drape or a hung
+  // ceiling item — same idiom as onSelectSimilar being left out of SelectionCommands rather than
+  // greyed out, and the same gate distributeEvenly itself checks before writing anything.
+  const canDistribute = useMemo(() => {
+    const refs = docRefs(selected);
+    return refs.length >= 3 && refs.every((r) => movableBox(r) !== null);
+  }, [selected, docRefs, movableBox]);
+
   const sole = selected.length === 1 ? selected[0] : null;
 
 
@@ -1080,6 +1134,8 @@ export function StudioScreen({
                 layerActive={activeLayer !== null}
                 onSelectLayer={selectLayer}
                 onSelectSimilar={selectSimilar}
+                canDistribute={canDistribute}
+                onDistribute={distributeEvenly}
                 dressCandidateCount={dressCandidateCount}
                 onCopyDressing={copyDressingToSelection}
               />

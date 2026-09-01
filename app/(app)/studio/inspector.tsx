@@ -21,6 +21,7 @@ import {
   Building2,
   ListChecks,
   MapPin,
+  AlignHorizontalDistributeCenter,
 } from "lucide-react";
 import type { DesignDocumentContent, WallSpan, RigHang } from "@/lib/design-document/types";
 import type { ElementStyle } from "@/lib/element-style";
@@ -76,6 +77,8 @@ export function Inspector({
   layerActive,
   onSelectLayer,
   onSelectSimilar,
+  canDistribute,
+  onDistribute,
   dressCandidateCount,
   onCopyDressing,
 }: {
@@ -143,6 +146,12 @@ export function Inspector({
   layerActive: boolean;
   onSelectLayer: () => void;
   onSelectSimilar: () => void;
+  /** Whether 3+ of the selected items each have a free position a shared delta could move — false
+   *  the moment the selection holds a cloth (worn on a table), a drape (a wall span) or a hung
+   *  ceiling item (its position is owned by the rod). Mirrors studio-screen.tsx's own gate on
+   *  distributeEvenly, so the button never offers to do less than it says. */
+  canDistribute: boolean;
+  onDistribute: () => void;
   /** How many of the currently selected tables a copied table's dressing would actually land on
    *  (the source table itself, if it happens to be among them, is excluded) — 0 hides the button
    *  and is also the reducer's own no-op case, so this only ever offers a control that does
@@ -308,6 +317,15 @@ export function Inspector({
           <Copy className="h-4 w-4" strokeWidth={2} />
           שכפול הנבחרים
         </Button>
+          {/* Equal air between things along whichever axis the selection spans more — the two ends
+              stay put. Hidden, not disabled, once the selection holds anything without a free
+              position to move (see canDistribute), same as onSelectSimilar above. */}
+          {canDistribute && (
+            <Button variant="ghost" onClick={onDistribute}>
+              <AlignHorizontalDistributeCenter className="h-4 w-4" strokeWidth={2} />
+              פיזור אחיד
+            </Button>
+          )}
           <Button variant="ghost" onClick={onGroup} title="קיבוץ · Ctrl+G">
             <Group className="h-4 w-4" strokeWidth={2} />
             קיבוץ
