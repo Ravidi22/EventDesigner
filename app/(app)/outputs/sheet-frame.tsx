@@ -18,15 +18,22 @@ import { OVERHEAD_DASH } from "@/components/footprint-shape";
 // defs this component owns (hatch-diagonal, hatch-cross, dot-ghost) are how a designer's element
 // style reads on a photocopy — a hue does not survive one, a hatch does.
 
+/** CSS px per printed millimetre. `vector-effect: non-scaling-stroke` computes the stroke in the
+ *  VIEWPORT coordinate system, deliberately ignoring the viewBox transform — so a strokeWidth is
+ *  px on paper whatever the viewBox says, and a number authored as millimetres has to be converted
+ *  or it silently comes out 3.78x too thin. It did: every line on this sheet was a quarter of its
+ *  stated weight, and the 0.18mm annotation landed under one dot at 600dpi. */
+const MM = 96 / 25.4;
+
 /** Line weights in PRINTED millimetres. Paired with vectorEffect="non-scaling-stroke", so they stay
  *  constant as the scale changes — a 0.6mm wall is 0.6mm at 1:20 and at 1:500, which is the whole
  *  point of a weight hierarchy. */
 export const LINE_WEIGHTS = {
-  wall: 0.6,
-  feature: 0.35,
-  furniture: 0.25,
-  annotation: 0.18,
-  overhead: 0.25,
+  wall: 0.6 * MM,
+  feature: 0.35 * MM,
+  furniture: 0.25 * MM,
+  annotation: 0.18 * MM,
+  overhead: 0.25 * MM,
 } as const;
 
 const INK = "#1b1725";

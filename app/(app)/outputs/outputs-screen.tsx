@@ -123,8 +123,15 @@ export function OutputsScreen() {
 
   return (
     <div className="flex h-full flex-col gap-3">
-      {/* F-6.1: page setup applies when printing */}
-      <style>{`@media print { @page { size: ${paper} ${orient}; } }`}</style>
+      {/* F-6.1: page setup applies when printing.
+          A PLAN SHEET OWNS ITS OWN MARGIN. sheet-frame.tsx draws the border, the title block and
+          the scale bar inside a full-trim page (210x297 for A4), so globals.css's
+          `@page { margin: 16mm }` would shrink the printable box to 178x265 and the sheet would be
+          clipped sideways — browsers do not paginate horizontally — and split down the page, putting
+          the title block alone on a second sheet. Three ticked sheets printed six pages. This block
+          cascades after globals.css and so wins. The packing list and the quote keep the 16mm page
+          margin, which is the only margin they have. */}
+      <style>{`@media print { @page { size: ${paper} ${orient}; ${view === "map" ? "margin: 0;" : ""} } }`}</style>
 
       {/* The toolbar is a floating card on the plane, matching the sidebar and the top bar above
           it — same 14px corner, same violet-cast lift, same gutter. It used to be a flush bordered
