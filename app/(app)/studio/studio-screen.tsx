@@ -14,7 +14,7 @@ import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, type CategoryGroupId } from "@/lib/catalog/categories";
-import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { nearestWall, WHOLE_WALL, nearestRig, RIG_SNAP_MM } from "@/lib/studio/anchor";
 import {
   DEFAULT_NUMBERING,
   expandToGroups,
@@ -329,6 +329,13 @@ export function StudioScreen({
         type: "addPlacement",
         placement: { ...base, position: { x, y }, span: { wallId: near.wallId, ...WHOLE_WALL } },
       });
+    } else if (product.layer === "ceiling") {
+      // Near a rod, it hangs on it and will travel with it if the hall is ever re-surveyed. Far
+      // from one — or in a venue nobody has measured the ceiling of — it is a free point, exactly
+      // as every ceiling item was before rods existed.
+      const near = nearestRig(plan.structure, { x, y });
+      const hang = near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : undefined;
+      act({ type: "addPlacement", placement: { ...base, position: { x, y }, ...(hang ? { hang } : {}) } });
     } else if (product.layer === "table") {
       const t = tableAt(doc, x, y);
       if (!t) {
@@ -914,6 +921,11 @@ export function StudioScreen({
               drag({ type: "movePlacement", id, position });
             }}
             onSpanPlacement={(id, span) => drag({ type: "setPlacementSpan", id, span })}
+            // The end of a ceiling item's drag: re-run the same near/far rule the drop used, so
+            // dragging it onto a rod hangs it and dragging it away frees it. Folded into the drag's
+            // own open gesture (drag(), not act()) so one undo takes the move and the hang change
+            // back together.
+            onHangPlacement={(id, hang) => drag({ type: "setPlacementHang", id, hang })}
             onDropProduct={dropProduct}
             onScale={(v) => {
               mmPerPx.current = v;
@@ -952,6 +964,7 @@ export function StudioScreen({
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
+                onHang={(id, hang) => act({ type: "setPlacementHang", id, hang })}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}

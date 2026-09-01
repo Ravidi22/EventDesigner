@@ -19,7 +19,7 @@ import {
   Undo2,
   Building2,
 } from "lucide-react";
-import type { DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
+import type { DesignDocumentContent, WallSpan, RigHang } from "@/lib/design-document/types";
 import type { ElementStyle } from "@/lib/element-style";
 import type { FeatureKind, VenueStructure } from "@/lib/venues/structure";
 import { FEATURE_KIND_LABEL } from "@/lib/venues/structure";
@@ -60,10 +60,11 @@ export function Inspector({
   onApplyToAllTables,
   onVariant,
   onSpan,
+  onHang,
   onResize,
   onRenumber,
   onStyleTable,
-  onDuplicateTable,
+  onDuplicate,
   onRemovePlacement,
 }: {
   /** The one thing being edited — null when nothing, or several things, are selected. */
@@ -108,10 +109,14 @@ export function Inspector({
   onApplyToAllTables: (placementId: string) => void;
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
+  /** Hang a ceiling item on a rod, move it along the one it is on, or take it off (`null`). */
+  onHang: (id: string, hang: RigHang | null) => void;
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }) => void;
   onRenumber: (id: string, number: number) => void;
   onStyleTable: (id: string, style: ElementStyle | undefined) => void;
-  onDuplicateTable: (id: string) => void;
+  /** Copy + paste in one press — offered by every panel, because "another one of these"
+   *  is the same wish whatever is selected. */
+  onDuplicate: () => void;
   onRemovePlacement: (id: string) => void;
 }) {
   // A GROUP — the designer pushed these together and said they are one thing. For tables that means
@@ -169,11 +174,15 @@ export function Inspector({
         <FacingField value={facing} onChange={onFace} />
 
         <div className="mt-4 flex flex-col gap-1.5">
+        <Button variant="ghost" onClick={onDuplicate} title="שכפול · Ctrl+C · Ctrl+V">
+          <Copy className="h-4 w-4" strokeWidth={2} />
+          שכפול הקבוצה
+        </Button>
           <Button variant="ghost" onClick={onUngroup} title="פירוק · Ctrl+Shift+G">
             <Ungroup className="h-4 w-4" strokeWidth={2} />
             פירוק הקבוצה
           </Button>
-          <Button variant="danger" onClick={onDelete}>
+          <Button variant="danger" onClick={onDelete} title="הסרה · Delete">
             <Trash2 className="h-4 w-4" strokeWidth={2} />
             הסרת הקבוצה
           </Button>
@@ -226,11 +235,15 @@ export function Inspector({
         <StackButtons show={canRestack} onRestack={onRestack} />
 
         <div className="mt-3 flex flex-col gap-1.5">
+        <Button variant="ghost" onClick={onDuplicate} title="שכפול · Ctrl+C · Ctrl+V">
+          <Copy className="h-4 w-4" strokeWidth={2} />
+          שכפול הנבחרים
+        </Button>
           <Button variant="ghost" onClick={onGroup} title="קיבוץ · Ctrl+G">
             <Group className="h-4 w-4" strokeWidth={2} />
             קיבוץ
           </Button>
-          <Button variant="danger" onClick={onDelete}>
+          <Button variant="danger" onClick={onDelete} title="הסרה · Delete">
             <Trash2 className="h-4 w-4" strokeWidth={2} />
             הסרת הנבחרים
           </Button>
@@ -284,6 +297,11 @@ export function Inspector({
     const run = drape ? resolveSpan(structure, drape) : null;
     const stretch = r?.sizing === "stretch" && !drape;
     const size = p.sizeMm;
+    // A rod deleted at the venue leaves `p.hang` pointing at nothing — same contract as a drape's
+    // dangling wallId — so this is undefined both when the item was never hung and when its rod is
+    // gone, and either way the panel asks the same question the designer is asking: is there
+    // anything up there right now.
+    const hung = p.layer === "ceiling" ? (structure.rigs ?? []).find((rig) => rig.id === p.hang?.rigId) : undefined;
 
     return (
       <Panel title={r?.product.name ?? "פריט"} onClose={onClose}>
@@ -293,6 +311,33 @@ export function Inspector({
           {table && <Row label="שולחן" value={String(table.number)} />}
           {drape && <Row label="אורך על הקיר" value={run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳` : "הקיר נמחק"} />}
         </dl>
+
+        {/* The one question asked while placing a chandelier: is there anything up there to hang it
+            from. Answered where the item is, rather than by hunting the rigging plan for it. */}
+        {p.layer === "ceiling" && (
+          <>
+            {hung ? (
+              <p className="mt-2 text-xs text-muted">
+                תלוי על: <span className="font-medium text-ink">{hung.label}</span> · {(hung.heightMm / 1000).toFixed(2)}מ׳
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-warn-ink">אין מוט במיקום הזה</p>
+            )}
+            {hung && p.hang && (
+              <div className="mt-2 flex items-center justify-between">
+                <label htmlFor="hang-drop" className="text-sm text-ink-soft">שלשול (ס״מ)</label>
+                <NumberField
+                  id="hang-drop"
+                  decimals={0}
+                  min={0}
+                  value={Math.round((p.hang.dropMm ?? 0) / 10)}
+                  onChange={(v) => onHang(p.id, { ...p.hang!, dropMm: v * 10 })}
+                  className="w-16"
+                />
+              </div>
+            )}
+          </>
+        )}
 
         {shades.length > 0 && (
           <ShadeSection value={p.variantId} shades={shades} onChange={(v) => onVariant(p.id, v)} />
@@ -362,7 +407,11 @@ export function Inspector({
               החל על כל שולחנות {table.type}
             </Button>
           )}
-          <Button variant="danger" onClick={onDelete}>
+          <Button variant="ghost" onClick={onDuplicate} title="שכפול · Ctrl+C · Ctrl+V">
+            <Copy className="h-4 w-4" strokeWidth={2} />
+            שכפול פריט
+          </Button>
+          <Button variant="danger" onClick={onDelete} title="הסרה · Delete">
             <Trash2 className="h-4 w-4" strokeWidth={2} />
             הסר פריט
           </Button>
@@ -502,11 +551,11 @@ export function Inspector({
       </div>
 
       <div className="mt-4 flex flex-col gap-1.5">
-        <Button variant="ghost" onClick={() => onDuplicateTable(t.id)}>
+        <Button variant="ghost" onClick={onDuplicate} title="שכפול · Ctrl+C · Ctrl+V">
           <Copy className="h-4 w-4" strokeWidth={2} />
           שכפול שולחן
         </Button>
-        <Button variant="danger" onClick={onDelete}>
+        <Button variant="danger" onClick={onDelete} title="הסרה · Delete">
           <Trash2 className="h-4 w-4" strokeWidth={2} />
           הסר שולחן
         </Button>

@@ -1,11 +1,11 @@
 "use client";
 
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId, WallSpan } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId, WallSpan, RigHang } from "@/lib/design-document/types";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
-import { pointToT, resolveSpan, wallSegment } from "@/lib/studio/anchor";
+import { pointToT, resolveSpan, wallSegment, resolveHang, nearestRig, RIG_SNAP_MM } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame } from "@/lib/studio/geometry";
 import type { VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, type Footprint } from "@/lib/studio/footprint";
@@ -15,7 +15,7 @@ import { zoneBounds } from "@/lib/venues/zone";
 import { resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
-import { FootprintShape, tableFootprint } from "@/components/footprint-shape";
+import { FootprintShape, tableFootprint, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { PlanCanvas, RotateHandle, type CanvasFocus, type CanvasLayerContext } from "@/components/plan-canvas";
 import { constrainAngleDeg, type SnapBox } from "@/lib/studio/snap";
 import { carriedItem } from "@/lib/studio/drag-payload";
@@ -81,6 +81,7 @@ export function CanvasStage({
   onEndDrag,
   onResizePlacement,
   onSpanPlacement,
+  onHangPlacement,
   onDropProduct,
   onScale,
 }: {
@@ -117,6 +118,9 @@ export function CanvasStage({
   onResizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
   /** A drape's run along its wall, after dragging one of its ends. */
   onSpanPlacement: (id: string, span: WallSpan) => void;
+  /** A ceiling item dropped back onto the plan after a drag: the rod it landed near, or null when
+   *  it landed nowhere close to one. Fired once, at the end of the drag, same as onEndDrag. */
+  onHangPlacement: (id: string, hang: RigHang | null) => void;
   onDropProduct: (productId: string, x: number, y: number) => void;
   /** The current zoom, in world mm per screen pixel. Reported up so the catalog rail can draw the
    *  thing being dragged at the size it will actually land — see catalog-rail.tsx. */
@@ -773,6 +777,27 @@ export function CanvasStage({
               uprights (a later task) belongs here too and has to be able to join this <g> as a
               sibling block without the layer being restructured around it. */}
           <g {...layerAttrs("ceiling")}>
+            {/* The rigging plan, shown only when the ceiling layer is. A designer does not want to
+                see the rods all evening; they want them the moment they are placing a chandelier, or
+                lining a table up under one. That is the same moment the ceiling layer is turned on. */}
+            {layerVisible.ceiling &&
+              (structure.rigs ?? []).map((r) => (
+                <g key={r.id} className="pointer-events-none">
+                  <line
+                    x1={r.a.x} y1={r.a.y} x2={r.b.x} y2={r.b.y}
+                    stroke="var(--color-muted)" strokeWidth={1.5}
+                    strokeDasharray={OVERHEAD_DASH} vectorEffect="non-scaling-stroke"
+                  />
+                  <text
+                    x={(r.a.x + r.b.x) / 2} y={(r.a.y + r.b.y) / 2 - 240}
+                    textAnchor="middle" fill="var(--color-muted)"
+                    style={{ fontSize: 320, ...HALO }}
+                  >
+                    {r.label} · {(r.heightMm / 1000).toFixed(2)}מ׳
+                  </text>
+                </g>
+              ))}
+
             {/* Drapes, over the wall they hang on — they are overhead (the ceiling layer), and a
                 wall drawn on top of a curtain would read as the curtain being behind it. */}
             {layerVisible.ceiling &&
@@ -794,20 +819,38 @@ export function CanvasStage({
 
             {/* OVERHEAD, and therefore last. A chandelier is not standing on the floor: nothing down
                 there can be in front of it, so it is drawn after everything, outside the floor stack.
-                See lib/design-document/stacking.ts. */}
+                See lib/design-document/stacking.ts. A hung item draws where its rod puts it; a
+                dangling rigId (its rod was deleted at the venue) falls back to its last free point
+                rather than vanishing. */}
             {layerVisible.ceiling &&
-              sorted.ceiling.map((p) => (
-                <PlacementNode
-                  key={p.id}
-                  placement={p}
-                  x={p.position.x}
-                  y={p.position.y}
-                  selected={isSel("placement", p.id)}
-                  ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
-                  overhead
-                />
-              ))}
+              sorted.ceiling.map((p) => {
+                const at = p.hang ? resolveHang(structure, p.hang) : null;
+                const x = at?.x ?? p.position.x;
+                const y = at?.y ?? p.position.y;
+                const base = nodeProps({ kind: "placement", id: p.id }, ctx);
+                return (
+                  <PlacementNode
+                    key={p.id}
+                    placement={p}
+                    x={x}
+                    y={y}
+                    selected={isSel("placement", p.id)}
+                    ctx={ctx}
+                    drag={{
+                      ...base,
+                      // The same near/far rule the drop used, re-run on the position the drag
+                      // actually ended at. Dispatched BEFORE the gesture closes, so it amends into
+                      // the same undo entry as the move rather than opening a second one.
+                      onEnd: () => {
+                        const near = nearestRig(structure, p.position);
+                        onHangPlacement(p.id, near && near.distanceMm <= RIG_SNAP_MM ? { rigId: near.rigId, t: near.t } : null);
+                        base.onEnd?.();
+                      },
+                    }}
+                    overhead
+                  />
+                );
+              })}
           </g>
         </>
       )}

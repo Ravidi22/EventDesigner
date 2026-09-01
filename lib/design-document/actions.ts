@@ -1,6 +1,6 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan } from "./types";
+import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, RigHang } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 
@@ -44,6 +44,9 @@ export type Action =
   | { type: "setPlacementVariant"; id: string; variantId: string }
   // A drape's run along its wall, or a moved/relaid one.
   | { type: "setPlacementSpan"; id: string; span: WallSpan }
+  // A ceiling item hung on one of the venue's rods, or taken off it. `null` removes the field
+  // entirely rather than storing an empty one, so "is this hung" stays one question.
+  | { type: "setPlacementHang"; id: string; hang: RigHang | null }
   // A stretch item resized on the plan (a carpet's corners).
   | { type: "resizePlacement"; id: string; sizeMm: { widthMm: number; depthMm: number } }
   | { type: "removePlacement"; id: string }
@@ -204,6 +207,16 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
       return {
         ...doc,
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, span: action.span } : p)),
+      };
+    case "setPlacementHang":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          if (action.hang) return { ...p, hang: action.hang };
+          const { hang: _dropped, ...rest } = p;
+          return rest;
+        }),
       };
     case "resizePlacement":
       return {
@@ -526,6 +539,20 @@ if (isMain(import.meta.url)) {
   assert(h.present.placements.find((p) => p.id === "drape")?.span?.from === 0.25, "setPlacementSpan shortens the run");
   h = dispatch(h, { type: "resizePlacement", id: "drape", sizeMm: { widthMm: 3000, depthMm: 2000 } });
   assert(h.present.placements.find((p) => p.id === "drape")?.sizeMm?.widthMm === 3000, "resizePlacement records the drawn size");
+
+  // A ceiling item hung on a rod, and taken off it again.
+  {
+    let h = initHistory({
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [{ id: "ch", variantId: "chandelier", layer: "ceiling", quantity: 1, position: { x: 100, y: 100 }, rotation: 0, scale: 1 }],
+    });
+    h = dispatch(h, { type: "setPlacementHang", id: "ch", hang: { rigId: "r1", t: 0.5 } });
+    assert(h.present.placements[0].hang?.rigId === "r1", "a ceiling item can be hung on a rod");
+    h = dispatch(h, { type: "setPlacementHang", id: "ch", hang: null });
+    assert(h.present.placements[0].hang === undefined, "…and taken off it, back to a free point");
+    assert(h.present.placements[0].position.x === 100, "…keeping the position it had");
+  }
 
   // "על כל השולחנות" — every table, whatever its type.
   let g = initHistory({ calibration: { mmPerUnit: 1 }, tables: [], placements: [] });
