@@ -7,9 +7,9 @@ import { EventWorkspaceProvider, useEventWorkspace } from "@/lib/events/use-work
 import { formatEventDate, zonesLabelOf } from "@/lib/events/types";
 
 // The studio and the operational outputs are surfaces OF an event, not pages of the app — which is
-// why neither sits in the sidebar. You arrive by opening an event (from the flow, or from the Gantt
-// afterwards), and this header is what says which event you are inside and lets you cross between
-// the two without going back out to a list first.
+// why neither sits in the sidebar. You arrive by opening an event (from the flow, or from the
+// production runway afterwards), and this header is what says which event you are inside and lets
+// you cross between the two without going back out to a list first.
 //
 // It is `no-print` throughout: the outputs underneath are the deliverable, and app chrome on a page
 // the crew carries around the hall is noise.
@@ -34,7 +34,7 @@ function SurfaceChrome({ active, children }: { active: "studio" | "outputs"; chi
     <div className="flex h-full flex-col">
       <div className="no-print flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-surface px-6 py-2.5">
         <Link
-          href="/gantt"
+          href="/production"
           className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover"
         >
           <ArrowRight className="h-4 w-4" strokeWidth={2} />

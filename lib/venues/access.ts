@@ -66,10 +66,16 @@ export interface VenueGrant {
 export interface GrantScope {
   /** The wall graph, zones, dimensions, entrances — the drawing itself. */
   plan: boolean;
-  /** Busy/free dates on the Gantt. For a guest this is dates ONLY: "האולם תפוס 14/3", never
+  /** The property's busy/free dates. For a guest this is dates ONLY: "האולם תפוס 14/3", never
    *  whose event it is, for whom, or what is in it. Double-booking a hall is the one thing two
    *  studios sharing a property genuinely need to coordinate, and it is the only thing that
-   *  crosses the line between them. */
+   *  crosses the line between them.
+   *
+   *  ⚠ STILL HAS NO SURFACE, and it deliberately did not get one when /production replaced the
+   *  Gantt. Occupancy is a fact about a PROPERTY and belongs beside its plan; the runway is a fact
+   *  about a STUDIO'S OWN book of work, which a guest may see none of — so drawing them together
+   *  would have made one screen render two access levels. It stays blocked on the model decision in
+   *  docs/roadmap.md §6, not on a place to put it. */
   availability: boolean;
   /** The events at this venue — clients, placements, design documents. */
   events: boolean;
@@ -87,7 +93,7 @@ export function grantScope(kind: GrantKind): GrantScope {
  *  are about to hand over instead of inferring it from a role name. */
 export const SCOPE_LABEL: Record<keyof GrantScope, string> = {
   plan: "תוכנית המתחם — קירות, אזורים ומידות",
-  availability: "תפוסה בגאנט — תאריכים בלבד, בלי פרטי האירוע",
+  availability: "תפוסת המתחם — תאריכים בלבד, בלי פרטי האירוע",
   events: "האירועים במתחם — לקוחות והצבות",
   money: "מחירים והצעות מחיר",
 };

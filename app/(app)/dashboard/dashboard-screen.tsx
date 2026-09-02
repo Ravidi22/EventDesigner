@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
-import { setActiveEventId } from "@/lib/events/storage";
+import { formatEventDate } from "@/lib/events/types";
+import { clearActiveEventId, loadActiveEventId, setActiveEventId } from "@/lib/events/storage";
 import { useEvents } from "@/lib/events/use-events";
 import type { Appointment } from "@/lib/appointments/types";
 import { useAppointments } from "@/lib/appointments/use-appointments";
@@ -15,14 +16,18 @@ import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
 import { EventStats } from "./event-stats";
 import { EventDetailDrawer } from "./event-detail-drawer";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { AppointmentDialog } from "./appointment-dialog";
 import { toISODate } from "./dashboard-view-utils";
 
-// F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved to the Gantt tab.
+// F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved off this screen — first
+// to the Gantt tab, and now to the production runway (/production), which plans backward from each
+// event's date instead of listing them.
 // This screen is "my week" at a glance — Today's Focus + Statistics up top (each half-width),
 // the week/month calendar below. There's no venue picker on this page anymore — every section
 // scopes to whichever venue is active in the sidebar (useActiveVenueScope), the one shared
-// source of truth also used by /gantt, so switching venues in the sidebar updates everything.
+// source of truth also used by /production, so switching venues in the sidebar updates everything.
 //
 // It is also the only screen in the app that WRITES a meeting. Everything else here navigates:
 // clicking an event opens its drawer or jumps into the meeting flow. Booking a meeting happens
@@ -48,10 +53,15 @@ export function DashboardScreen({
   // Seeded by page.tsx's server-side read, so both lists are here for the first paint. The hooks
   // still own the mutations — booking and deleting a meeting go back through the server and return
   // the whole list, which is what keeps a laptop and a tablet in the same meeting agreeing.
-  const { events } = useEvents(initialEvents);
+  const { events, remove: removeEvent, reload: reloadEvents } = useEvents(initialEvents);
   const { appointments, save, remove } = useAppointments(initialAppointments);
   const [greeting, setGreeting] = useState("שלום");
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
+  // The event the drawer has asked to delete. ONE dialog for the whole screen, and it is here
+  // rather than inside the drawer because this is where the delete itself lives — the same split
+  // the catalog makes between its card menu, its edit drawer and its one ConfirmDialog.
+  const [deleting, setDeleting] = useState<EventSummary | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const busy = useBusy(initialBusy, busyWindow, googleConnected);
   const { activeVenueId } = useActiveVenueScope();
   const { venues } = useVenues();
@@ -95,9 +105,9 @@ export function DashboardScreen({
   // whole screen away while the card beside it opened a panel. EVERY event click here opens the
   // drawer instead — the quick look a day-of glance actually wants (the plan, the phone, the event's
   // own diary) — and the whole-screen jump is a deliberate second click rather than a stray first.
-  const openInMeeting = (e: EventSummary) => {
+  const openEvent = (e: EventSummary, to: "/meeting" | "/outputs" | "/studio" = "/meeting") => {
     setActiveEventId(e.id);
-    router.push("/meeting");
+    router.push(to);
   };
 
   // Every event reaching the drawer already belongs to activeVenueId (visibleEvents is filtered
@@ -127,12 +137,34 @@ export function DashboardScreen({
   const bookForEvent = (e: EventSummary) =>
     setBooking({ editing: null, date: toISODate(new Date()), eventId: e.id });
 
+  const confirmDelete = () => {
+    const target = deleting;
+    // Closed first and not awaited, like the catalog's: the row leaves the calendar the moment the
+    // hook's list comes back, and a dialog still sitting over it reads as an unanswered question.
+    setDeleting(null);
+    setDeleteError(null);
+    if (!target) return;
+    // The pointer to "which event is open on this device" can outlive the event itself, and every
+    // screen that resolves it would keep asking the server about a row that is gone.
+    if (loadActiveEventId() === target.id) clearActiveEventId();
+    void removeEvent(target.id).catch(() => setDeleteError("מחיקת האירוע נכשלה — נסו שוב"));
+  };
+
   return (
-    <div className="px-8 py-8">
+    <div className={PAGE_GUTTER}>
       <div className="mb-6">
         <p className="text-sm text-muted">{greeting}, דניאל</p>
         <h2 className="mt-1 font-display text-h1 text-ink text-balance">האירועים שלך</h2>
       </div>
+
+      {/* The delete is fire-and-forget (see confirmDelete), so a failure has nowhere else to land.
+          A line at the top of the screen, the same shape the catalog's notice takes — not a dialog:
+          the event is still on the calendar below, which is already the correction. */}
+      {deleteError && (
+        <p role="status" className="mb-6 rounded-md border border-alert bg-alert-tint px-4 py-2.5 text-sm font-medium text-alert-ink">
+          {deleteError}
+        </p>
+      )}
 
       {/* `lg:`, not `sm:`. The two-up row is measured against the CONTENT width, and the sidebar
           takes a fixed 258px out of it before this grid sees anything — so at the sm breakpoint
@@ -164,9 +196,26 @@ export function DashboardScreen({
         venueName={activeVenueName}
         appointments={selectedEventAppointments}
         onClose={() => setSelectedEvent(null)}
-        onContinue={openInMeeting}
+        onContinue={openEvent}
         onOpenAppointment={editAppointment}
         onCreateAppointment={bookForEvent}
+        onDelete={setDeleting}
+        onEventChanged={() => void reloadEvents()}
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        title={`למחוק את האירוע של ${deleting?.clientName ?? ""}?`}
+        body={
+          <>
+            {deleting?.date ? `האירוע מתאריך ${formatEventDate(deleting.date)} יימחק לצמיתות. ` : "האירוע יימחק לצמיתות. "}
+            הסקיצה, הצעות המחיר, הפגישות והתמונות שסומנו נמחקים איתו, ולא ניתן לשחזר אותם. הוצאות
+            שנרשמו נשמרות, בלי שיוך לאירוע.
+          </>
+        }
+        confirmLabel="מחיקת האירוע"
+        onConfirm={confirmDelete}
+        onClose={() => setDeleting(null)}
       />
 
       <AppointmentDialog

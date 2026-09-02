@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarSync, Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
+import { CalendarClock, CalendarSync, Database, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
+import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { GoogleStatus } from "@/lib/google/actions";
 import type { StudioMember } from "@/lib/team/types";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { BusinessSection } from "./business-section";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
+import { CheckpointsSection } from "./checkpoints-section";
 import { TeamSection } from "./team-section";
 import { SharingSection } from "./sharing-section";
 import { CalendarSection } from "./calendar-section";
@@ -17,6 +20,7 @@ import { DataSection } from "./data-section";
 //
 //   העסק / החשבון שלי  — the studio and the person, one letterhead and one profile.
 //   מצב פגישה          — the shape of a client meeting (lib/meeting/steps.ts).
+//   לוח זמנים להפקה     — when each production checkpoint is due (lib/production/runway.ts).
 //   צוות והרשאות       — who works in this business (lib/team/types.ts).
 //   מתחמים ושיתוף      — who may open a property (lib/venues/access.ts).
 //   נתונים             — the backup, while the store is still this browser.
@@ -28,6 +32,10 @@ const SECTIONS = [
   { id: "business", label: "העסק", icon: Store },
   { id: "account", label: "החשבון שלי", icon: UserRound },
   { id: "meeting", label: "מצב פגישה", icon: ListChecks },
+  // Straight after the meeting, and sharing the nav tab's own icon so the row says which screen it
+  // configures: the meeting is what produces an event, and this is the clock that starts running on
+  // it the moment it has a date.
+  { id: "checkpoints", label: "לוח זמנים להפקה", icon: CalendarClock },
   { id: "team", label: "צוות והרשאות", icon: Users },
   { id: "sharing", label: "מתחמים ושיתוף", icon: Share2 },
   { id: "calendar", label: "יומן Google", icon: CalendarSync },
@@ -44,11 +52,13 @@ export function SettingsScreen({
   initialMe,
   initialMembers,
   initialGoogle,
+  initialOffsets,
 }: {
   initialSettings: BusinessSettings;
   initialMe: StudioMember | null;
   initialMembers: StudioMember[];
   initialGoogle: GoogleStatus;
+  initialOffsets: CheckpointOffsets;
 }) {
   const [section, setSection] = useState<SectionId>("business");
 
@@ -70,7 +80,7 @@ export function SettingsScreen({
   };
 
   return (
-    <div className="flex items-start gap-3 px-8 py-8">
+    <div className={`flex items-start gap-3 ${PAGE_GUTTER}`}>
       <nav aria-label="הגדרות" className="sticky top-0 flex w-[228px] shrink-0 flex-col gap-[3px] rounded-md border border-border bg-surface p-2">
         {SECTIONS.map(({ id, label, icon: Icon }) => {
           const active = id === section;
@@ -96,6 +106,7 @@ export function SettingsScreen({
         {section === "business" && <BusinessSection initialSettings={initialSettings} />}
         {section === "account" && <AccountSection initialMe={initialMe} />}
         {section === "meeting" && <MeetingSection />}
+        {section === "checkpoints" && <CheckpointsSection initialOffsets={initialOffsets} />}
         {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} />}
         {section === "sharing" && <SharingSection initialMembers={initialMembers} initialMe={initialMe} />}
         {section === "calendar" && <CalendarSection initialStatus={initialGoogle} />}

@@ -11,14 +11,17 @@
 // WHAT IS *NOT* HERE: which event you currently have open. Like the active venue, that is a
 // per-device pointer — it belongs in this browser and stays in lib/events/storage.ts.
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { revalidateEvents } from "@/lib/db/revalidate";
-import { events, eventZones, venues, zones } from "@/lib/db/schema";
+import { appointments, events, eventZones, venues, zones } from "@/lib/db/schema";
+import { linksForAppointments, removeFromGoogle } from "@/lib/google/sync";
 import type { EventSummary } from "./types";
 import { toEvent, toEvents, toEventRow, toEventZoneRows } from "./db-mapping";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function assertId(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || !UUID.test(value)) throw new Error(`${field} must be a uuid`);
@@ -27,6 +30,27 @@ function assertId(value: unknown, field: string): asserts value is string {
 function assertIdList(value: unknown, field: string): asserts value is string[] {
   if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
   for (const v of value) assertId(v, `${field}[]`);
+}
+
+/** A calendar day, the app's way: "yyyy-mm-dd", or the empty string / an absent key for "not set
+ *  yet" (both spellings reach here — the date field holds "" and a patch simply omits it).
+ *
+ *  SHAPE ONLY, deliberately. "2026-02-31" passes this and is then refused by Postgres, which is the
+ *  right division of labour: a regex that also validated month lengths and leap years would be a
+ *  second calendar implementation to keep in step with the first. What this stops is the class of
+ *  thing that would otherwise reach a `date` column and produce a five-frames-deep driver error —
+ *  "next tuesday", an epoch number, a Date that stringified to "Sun Aug 09 2026". */
+function assertDay(value: unknown, field: string): asserts value is string | undefined {
+  if (value === undefined || value === "") return;
+  if (typeof value !== "string" || !ISO_DATE.test(value)) throw new Error(`${field} must be yyyy-mm-dd`);
+}
+
+/** An instant, as the app carries them: epoch milliseconds. Negative is refused rather than clamped —
+ *  a quote sent before 1970 is a bug in the caller, not a date to reason about. */
+function assertStamp(value: unknown, field: string): asserts value is number | undefined {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    throw new Error(`${field} must be epoch ms`);
 }
 
 /** The event fields a caller may set. Everything else about a row — its id, its organisation, when
@@ -41,6 +65,16 @@ function assertEvent(value: unknown): asserts value is EventSummary {
     throw new Error("event.clientName is required");
   assertIdList(e.zoneIds ?? [], "event.zoneIds");
   if (e.venueId !== undefined) assertId(e.venueId, "event.venueId");
+  // The two calendar days and the three instants. They were unchecked until the production runway
+  // gave the studio three more of them, and unchecked is a worse deal than it looks: every one of
+  // these columns is now something a BACKWARD PLAN counts from (lib/production/runway.ts), so a
+  // malformed value does not fail loudly at the boundary, it produces a screen full of confidently
+  // wrong deadlines.
+  assertDay(e.date, "event.date");
+  assertDay(e.setupDate, "event.setupDate");
+  assertStamp(e.quoteSentAt, "event.quoteSentAt");
+  assertStamp(e.confirmedAt, "event.confirmedAt");
+  assertStamp(e.lostAt, "event.lostAt");
   if (typeof e.createdAt !== "number") throw new Error("event.createdAt must be epoch ms");
 }
 
@@ -81,8 +115,13 @@ async function assertPlacement(
   if (found.length !== unique.length) throw new Error("zone not found on this venue");
 }
 
-/** Every event this studio has, newest first — the order the dashboard and the Gantt both read in,
- *  and the order the list was in when it lived in this browser. */
+/** Every event this studio has, newest first — the order the dashboard reads in, and the order the
+ *  list was in when it lived in this browser.
+ *
+ *  ⚠ NOT what the production runway reads. That screen is chronological by EVENT DATE rather than by
+ *  when a file was opened, it needs facts from five other tables per row, and it is filtered by
+ *  venue grant — so it assembles its own set (lib/production/actions.ts) instead of taking this one
+ *  and decorating it. Two lists of the same events, answering two different questions. */
 export async function fetchEvents(): Promise<EventSummary[]> {
   const organizationId = await currentOrg();
   const database = db();
@@ -182,11 +221,27 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
           contact2Phone: row.contact2Phone,
           eventDate: row.eventDate,
           startTime: row.startTime,
+          // The load-in day is a details field like the event date, and it has to be listed here or
+          // a patch that sets it would be accepted, revalidated, and silently dropped — a column
+          // missing from this list is invisible on the way in and only shows up as "the truck day I
+          // typed did not stick".
+          setupDate: row.setupDate,
           venueId: row.venueId,
           zonesLabel: row.zonesLabel,
           guests: row.guests,
           step: row.step,
           quoteSentAt: row.quoteSentAt,
+          // ⚠ THE CLIENT'S ANSWER GOES THROUGH HERE TOO, and it is the one pair on this list that a
+          // form should never send. confirmEvent/markEventLost/reopenEvent below own these columns:
+          // they are idempotent, they resolve the two against each other, and they are single
+          // statements that two devices in one meeting cannot race. This path is a whole-row
+          // overwrite, so a screen holding an event it loaded BEFORE a confirmation would un-confirm
+          // it on the next unrelated save. They stay writable because clearing a stamp has to be
+          // expressible — `{ confirmedAt: undefined }` is how an event returns to open, and
+          // db:verify asserts exactly that round trip — but every caller in the app patches the one
+          // field it changed (lib/events/use-events.ts), which is what keeps the hazard theoretical.
+          confirmedAt: row.confirmedAt,
+          lostAt: row.lostAt,
           archived: row.archived,
         },
       });
@@ -215,6 +270,70 @@ export async function patchEvent(id: string, patch: EventPatch): Promise<EventSu
   return saveEvent(next);
 }
 
+/**
+ * Delete an event, and everything that hangs off it.
+ *
+ * ── WHY A REAL DELETE, WHEN THE CATALOG ARCHIVES ──────────────────────────────────────────────
+ *
+ * A product is archived rather than deleted because a placement in last spring's plan still points
+ * at it: destroying the row would tear a hole in a drawing somebody already showed a client. An
+ * event points the other way. Nothing in the app references one that is not ITS OWN — the sketch,
+ * the quotes, the meetings, the liked images and the exports are all the event's children, and the
+ * database says so with `on delete cascade` on every one of them. So there is no dangling reference
+ * to protect and nothing left resolvable by archiving; `events.archived` already exists for the
+ * "keep it, hide it" answer, and this is the other one.
+ *
+ * WHAT GOES WITH IT, all by cascade: the zone list, the client-portal access, every meeting booked
+ * against it, every version of the design document, the liked gallery images, the packing spares,
+ * the exports and the issued quotes. `expenses.event_id` is `on delete set null` instead — money
+ * that left the studio's account is a fact about the studio, not about the event, and it stays on
+ * the books unattached rather than disappearing with the file it was spent on.
+ *
+ * ⚠ THE GOOGLE LINKS ARE READ FIRST, exactly as deleteAppointment reads them (lib/appointments/
+ * actions.ts). Deleting an event deletes its meetings, which deletes the rows naming which Google
+ * event each one became — and the remote copies would then sit in every connected designer's
+ * calendar forever with nothing in this app able to name them. This is the same hazard as a single
+ * cancelled meeting's, multiplied by the diary.
+ *
+ * ⚠ WHAT IT DOES NOT CLEAN UP: uploaded files. The design document's images, the exports and the
+ * gallery uploads stay in storage, orphaned. That is the same deal deleteVenue and the catalog's
+ * delete already make — this app has no reference counter over `lib/files/`, and inventing one for
+ * this path alone would be a half of a feature that quietly deletes a photo two events share.
+ *
+ * Scoped by organisation and nothing else, like every other write in this file: an event is the
+ * studio's, and the venue ladder gates properties, not the diary (see the note in
+ * lib/appointments/actions.ts).
+ */
+export async function deleteEvent(id: string): Promise<EventSummary[]> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  const database = db();
+
+  // Both reads BEFORE the delete — see above. The appointment ids are this studio's own by the
+  // same scope the delete uses, so a link cannot be read for a meeting belonging to anyone else.
+  const booked = await database
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(and(eq(appointments.eventId, id), eq(appointments.organizationId, organizationId)));
+  const links = await linksForAppointments(booked.map((a) => a.id), organizationId);
+
+  const [row] = await database
+    .delete(events)
+    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+    .returning({ id: events.id });
+  // Not found and not ours are the same answer, and it throws rather than returning `{ error }`:
+  // a screen showing an event it cannot delete is holding a row that no longer exists, which is not
+  // a correction the designer can make.
+  if (!row) throw new Error("event not found");
+
+  // The diary lives on /dashboard, which revalidateEvents already covers — the meetings that went
+  // with the event are on the same screen as the event was.
+  revalidateEvents();
+  afterResponse(() => removeFromGoogle(links, organizationId));
+
+  return fetchEvents();
+}
+
 /** F-1.2: the meeting flow only ever moves the furthest-reached stage FORWARD; revisiting an earlier
  *  one never regresses it.
  *
@@ -230,4 +349,151 @@ export async function reachStep(id: string, step: number): Promise<EventSummary[
     .where(and(eq(events.id, id), eq(events.organizationId, organizationId)));
   revalidateEvents();
   return fetchEvents();
+}
+
+// ── The client's answer ────────────────────────────────────────────────────────────────────────
+//
+// Three actions for two columns, and they are the ONE thing on the production runway that a person
+// types. Everything else there is derived from a row the work produced (lib/production/runway.ts);
+// "the client said yes" is derivable from nothing, which is exactly why it earns a button.
+//
+// They return ONE event rather than the whole list, unlike everything above. The runway can hold a
+// season of events, and re-reading all of them — with their zones — to report that one of them was
+// confirmed is a payload out of all proportion to the change; the screen splices the row it got.
+
+/** What a confirm / lost / reopen did.
+ *
+ *  `event` is always present, INCLUDING when the change was refused, so the screen can re-render
+ *  the row either way without a second read — the same shape and the same reason as InviteResult
+ *  (lib/team/types.ts). `error` is a Hebrew line to show; authorization failures and ids that name
+ *  nothing still throw, because those are not corrections a designer can make. */
+export interface EventOutcome {
+  event: EventSummary;
+  error?: string;
+}
+
+/**
+ * The client said yes.
+ *
+ * ── WHY THIS REFUSES WITHOUT A QUOTE ───────────────────────────────────────────────────────────
+ *
+ * Said yes to WHAT? A confirmation is an answer, and with no quote out there was no question. The
+ * refusal is not pedantry about record-keeping — it is about what this column now drives:
+ *
+ *   • fetchProcurement reads `confirmed_at` as the commitment to BUY (lib/suppliers/actions.ts).
+ *     That read exists because reading `quote_sent_at` as commitment was ordering stock against
+ *     events nobody had agreed to; confirming with no price ever quoted would put the same class of
+ *     unpriced work back into the purchase order by a different door.
+ *   • The runway would show a row contradicting itself — a green "אישור" dot sitting after a red
+ *     "הצעה" one that can never turn green, on a screen whose whole premise is that the dots are
+ *     the truth about the event.
+ *
+ * And it is a correction the designer can actually make in one click: /outputs issues the quote and
+ * stamps `quoteSentAt` on the way out (app/(app)/outputs/quote.tsx), after which this succeeds. A
+ * refusal you cannot act on would be worth arguing about; this one is a two-minute detour through
+ * the screen that produces the thing being agreed to.
+ *
+ * The counter-argument, recorded because it is a real one: clients say yes on the phone before the
+ * paperwork, and a system that refuses to record what happened teaches people to lie to it. What
+ * makes the refusal safe here is that "send the quote" is not paperwork the designer was skipping —
+ * it is the artefact the yes refers to, and the studio wanted it in writing anyway.
+ *
+ * ⚠ It is a PRODUCT guard, not a security control. A caller can still write the column through
+ * patchEvent, exactly as they can stamp quoteSentAt and then confirm. What it protects is the
+ * studio's own data from its own fastest path, which is all a guard on your own tenant can be.
+ */
+export async function confirmEvent(id: string): Promise<EventOutcome> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  const current = await fetchEvent(id);
+  if (!current) throw new Error("event not found");
+  if (!current.quoteSentAt) {
+    return { event: current, error: "אי אפשר לאשר אירוע לפני שנשלחה הצעת מחיר." };
+  }
+
+  const [row] = await db()
+    .update(events)
+    .set({
+      // COALESCE, not now(): confirming twice must not move the date the client said yes.
+      //
+      // In SQL rather than read-modify-write, for the same reason reachStep uses GREATEST — the
+      // laptop and the tablet in one meeting are two requests, and the second one arriving must be
+      // a no-op rather than a quiet rewrite of the first. The stamp is also what the "ההצעה נשלחה
+      // לפני N ימים" line and every future report count from, so it has to mean the first yes.
+      confirmedAt: sql`coalesce(${events.confirmedAt}, now())`,
+      // Confirming CLEARS a loss. The two are mutually exclusive answers to one question, and lost
+      // wins in laneOf() — so leaving both set would file a booked event under "הסתיים" and nobody
+      // would ever produce it. A client who went quiet and came back is a normal week.
+      lostAt: null,
+    })
+    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+    .returning();
+  if (!row) throw new Error("event not found");
+
+  revalidateEvents();
+  // The zone list is untouched by this statement, so the copy read above is still current — one
+  // round trip saved over re-reading the join table to answer a question nothing asked.
+  return { event: toEvent(row, current.zoneIds) };
+}
+
+/**
+ * The client said no, or stopped answering.
+ *
+ * NO PRECONDITION, unlike confirming, and the asymmetry is the point: a lead can evaporate at any
+ * stage, including before a price was ever quoted — that is the most common way it happens. There
+ * is nothing to refuse and nobody to send anywhere.
+ *
+ * It deliberately does NOT clear `confirmedAt`. An event that was booked and then fell through is a
+ * different and more expensive story than one that never closed — the studio may have spent money
+ * on it — and erasing the confirmation would erase the only record of that. Nothing renders wrong
+ * as a result: laneOf() reads the loss first and procurement filters on `lost_at IS NULL`, so the
+ * event leaves the runway and leaves the purchase order either way. reopenEvent is what clears
+ * both, which is precisely why it clears both.
+ */
+export async function markEventLost(id: string): Promise<EventOutcome> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  const current = await fetchEvent(id);
+  if (!current) throw new Error("event not found");
+
+  const [row] = await db()
+    .update(events)
+    // Idempotent for the same reason as the confirmation: a second click must not move the day the
+    // client stopped answering.
+    .set({ lostAt: sql`coalesce(${events.lostAt}, now())` })
+    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+    .returning();
+  if (!row) throw new Error("event not found");
+
+  revalidateEvents();
+  return { event: toEvent(row, current.zoneIds) };
+}
+
+/**
+ * Back to open — a client who came back, or a button pressed by mistake.
+ *
+ * Clears BOTH stamps, which puts the event back wherever its own facts say it belongs: it falls to
+ * the proposal lane if a quote is out and to early if not, because laneOf() derives the lane and
+ * this is simply the absence of an answer. Landing in "awaiting an answer" rather than back in
+ * production is the correct destination even for an event that was previously confirmed — the whole
+ * reason it is being reopened is that the answer is in doubt again.
+ *
+ * Re-creating the event instead is the alternative this exists to prevent: one wedding, two rows,
+ * and the drawings and quotes stranded on the first of them.
+ */
+export async function reopenEvent(id: string): Promise<EventOutcome> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  const current = await fetchEvent(id);
+  if (!current) throw new Error("event not found");
+
+  const [row] = await db()
+    .update(events)
+    .set({ confirmedAt: null, lostAt: null })
+    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+    .returning();
+  if (!row) throw new Error("event not found");
+
+  revalidateEvents();
+  return { event: toEvent(row, current.zoneIds) };
 }

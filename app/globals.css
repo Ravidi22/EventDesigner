@@ -467,6 +467,15 @@ body {
     min-height: 0 !important;
     padding: 0 !important;
     box-shadow: none !important;
+    /* F-6.x: printing a set of plan sheets is one page per sheet — CSS pagination, not JS. Every
+       .sheet starts a fresh page except the last, which needs no break after it (a trailing
+       break-after: page prints a blank final page in most engines), and never splits its own
+       content across two. */
+    break-inside: avoid;
+    break-after: page;
+  }
+  .sheet:last-of-type {
+    break-after: auto;
   }
   @page {
     margin: 16mm;

@@ -4,7 +4,11 @@ import { createContext, useContext, type ReactNode } from "react";
 import { DEFAULT_FLOW, type MeetingStepId } from "./steps";
 
 // The configured meeting flow, for every surface that shows an event's stage or progress — the
-// dashboard's calendar, its focus card, its statistics, the drawer, the Gantt grid.
+// dashboard's calendar, its focus card, its statistics, the drawer.
+//
+// /production is deliberately NOT on that list. The runway that replaced the Gantt's stage board
+// asks a different question — what is late against the event date — and answers it from facts the
+// database already holds (lib/production/runway.ts), never from how far a sitting happened to get.
 //
 // CONTEXT, NOT A FETCH PER COMPONENT. Five components on the dashboard alone ask this question, and
 // when the flow lived in localStorage each one answering it for itself cost nothing. It is a server

@@ -299,7 +299,7 @@ export function SharingSection({
         <div className="mt-5 flex flex-col gap-2.5">
           <Note icon={<Eye className="h-4 w-4" strokeWidth={1.6} />}>
             <strong className="font-semibold text-ink">תפוסה אנונימית.</strong> מי שמשותף למתחם רואה
-            בגאנט אילו תאריכים תפוסים — ולא את שם האירוע, הלקוח או מה מוצב בו. זו הסיבה המעשית לשתף
+            אילו תאריכים תפוסים בו — ולא את שם האירוע, הלקוח או מה מוצב בו. זו הסיבה המעשית לשתף
             מתחם ולא רק להעביר קובץ: שני מעצבים באותו אולם לא יתחייבו על אותו תאריך.
           </Note>
           <Note icon={<Share2 className="h-4 w-4" strokeWidth={1.6} />}>

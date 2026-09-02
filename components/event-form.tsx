@@ -54,6 +54,9 @@ export function EventForm({
   const [contact2Name, setContact2Name] = useState(event?.contact2Name ?? "");
   const [contact2Phone, setContact2Phone] = useState(event?.contact2Phone ?? "");
   const [date, setDate] = useState(event?.date ?? "");
+  // Load-in day. "" means the truck comes on the day itself, which is the common case and therefore
+  // the one that costs nothing to say — see the field below.
+  const [setupDate, setSetupDate] = useState(event?.setupDate ?? "");
   // The event's own venue wins over the sidebar's: opening a חוות רונית event while the switcher
   // sits on אחוזת הדר must not repoint it at a property it was never booked at.
   const [venueId, setVenueId] = useState(event?.venueId ?? "");
@@ -100,6 +103,7 @@ export function EventForm({
       setContact2Name(event.contact2Name ?? "");
       setContact2Phone(event.contact2Phone ?? "");
       setDate(event.date);
+      setSetupDate(event.setupDate ?? "");
       setVenueId(event.venueId ?? loadActiveVenueId() ?? "");
       setZoneIds(event.zoneIds);
       setGuests(event.guests ?? 0);
@@ -127,6 +131,11 @@ export function EventForm({
       contact2Name: contact2Name.trim() || undefined,
       contact2Phone: contact2Phone.trim() || undefined,
       date,
+      // undefined, not "": a cleared field has to reach the row as NULL rather than as an empty
+      // string Postgres will not accept as a date. Spreading an explicit `undefined` over the
+      // current event is what CLEARS it in patchEvent, which is the behaviour wanted here — a
+      // designer who deletes the load-in date is saying the event loads in on the day.
+      setupDate: setupDate || undefined,
       guests,
       venueId: venueId || undefined,
       zoneIds: picked.map((z) => z.id),
@@ -170,7 +179,12 @@ export function EventForm({
           when it runs out of room below. So all three sit at the TOP, where the rest of the form's
           height is underneath them to open into — the same reason the booking dialog leads with its
           date/time row (app/(app)/dashboard/appointment-dialog.tsx). תאריך sitting fourth is what
-          cut the calendar off. It reads as a brief in that order anyway: when → where → who. */}
+          cut the calendar off. It reads as a brief in that order anyway: when → where → who.
+
+          The same rule decides where הקמה went. It is a second DateField, so it needs the START
+          column too (its 288px calendar is anchored at `start-0` and the end column is ~228px wide
+          in this dialog) — which is why it takes a row of its own underneath תאריך rather than
+          sitting beside it, with the sentence that explains it in the space left over. */}
       <div className={`flex flex-col gap-4 px-5 py-5 ${bodyClassName}`}>
         {/* One column until there is room for two — below `sm` a two-up row puts a date picker in
             ~120px and wraps a Hebrew label onto three lines. */}
@@ -179,6 +193,22 @@ export function EventForm({
               `start-0`, so from the end column it would hang off the frame's edge. */}
           <DateField label="תאריך האירוע" value={date} onChange={setDate} />
           <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
+        </div>
+
+        {/* An event is a WINDOW, not a day. The truck is at the hall the afternoon before, so two
+            events whose dates are two days apart can still want the same chuppah, the same carpet
+            and the same pair of hands at the same hour — and מסלול ההפקה can only say so if it
+            knows when the load-in starts (`windowOf`, lib/production/runway.ts). Empty is the
+            honest default rather than a copy of the event date: "loads in on the day" and "nobody
+            has decided yet" both mean "assume the day", and only one of them is a lie later.
+
+            `max={date}` because a load-in AFTER the event is not a thing that can happen. It is a
+            no-op while the date is still empty, which is the order this form is usually filled in. */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <DateField label="הקמה" value={setupDate} onChange={setSetupDate} max={date} placeholder="ביום האירוע" />
+          <p className="self-end pb-2.5 text-xs leading-relaxed text-muted">
+            יום ההקמה, אם הוא לא יום האירוע עצמו. ריק = מקימים ביום האירוע.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

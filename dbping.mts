@@ -17,7 +17,7 @@ async function main() {
   const tokenHash = createHash("sha256").update(token).digest("hex");
   await db().insert(sessions).values({ userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 3600_000) });
   try {
-    for (const path of ["/dashboard", "/gantt", "/settings"]) {
+    for (const path of ["/dashboard", "/production", "/settings"]) {
       const t0 = Date.now();
       const r = spawnSync("curl", ["-s", "--max-time", "60", "-o", `${OUT}/page.html`,
         "-b", `eve_session=${token}`, "-w", "%{http_code} %{size_download}", `http://localhost:3000${path}`],

@@ -1,6 +1,6 @@
 "use client";
 // The studio's events, for the two screens that show the whole list (the Dashboard's calendar and
-// the Gantt's grid).
+// the production runway).
 //
 // No client-side cache, same as venues and for the same reason: every read here lands in state
 // before anything renders. Only the catalog needs one, because the canvas resolves a placement's
@@ -12,7 +12,7 @@
 // normal path would put the list back behind a POST that cannot start until React has mounted.
 import { useCallback, useEffect, useState } from "react";
 import type { EventSummary } from "./types";
-import { fetchEvents, patchEvent, type EventPatch } from "./actions";
+import { deleteEvent, fetchEvents, patchEvent, type EventPatch } from "./actions";
 
 export interface EventsHandle {
   events: EventSummary[];
@@ -22,6 +22,9 @@ export interface EventsHandle {
   ready: boolean;
   error: string | null;
   patch: (id: string, patch: EventPatch) => Promise<void>;
+  /** Delete the event and everything hanging off it. Throws on a failure the caller can't fix —
+   *  the only ones this action has (see lib/events/actions.ts). */
+  remove: (id: string) => Promise<void>;
   reload: () => Promise<void>;
 }
 
@@ -69,5 +72,11 @@ export function useEvents(initial?: EventSummary[]): EventsHandle {
     setEvents(await patchEvent(id, fields));
   }, []);
 
-  return { events, ready, error, patch, reload: load };
+  // The whole list back, like patch — the action already re-read it, and splicing the row out here
+  // instead would leave this component's copy right and the next one to mount reading the server's.
+  const remove = useCallback(async (id: string) => {
+    setEvents(await deleteEvent(id));
+  }, []);
+
+  return { events, ready, error, patch, remove, reload: load };
 }

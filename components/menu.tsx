@@ -29,6 +29,8 @@ export interface MenuItem {
 export function Menu({
   label,
   items,
+  icon: Icon = Ellipsis,
+  side = "bottom",
   onOpenChange,
   className = "",
 }: {
@@ -36,6 +38,13 @@ export function Menu({
    *  "אפשרויות": in a grid of a hundred cards the bare word names all hundred of them. */
   label: string;
   items: MenuItem[];
+  /** The "…" by default. A named group of actions inside a toolbar — "סדר בערימה", "בחירה" — wears
+   *  its own glyph instead, so a bar of them reads as a row of subjects rather than a row of
+   *  identical dots. */
+  icon?: LucideIcon;
+  /** Which way the panel opens. "bottom" for a menu on a card; "top" for one in a bar that is
+   *  itself along the bottom of a canvas, where a downward panel would open off the screen. */
+  side?: "top" | "bottom";
   /** Told when the panel opens and closes. The caller needs it because a panel that overflows its
    *  card is painted UNDER the next card unless that card is lifted while it is open — see the
    *  z-index note in app/(app)/catalog/product-card.tsx. */
@@ -104,6 +113,10 @@ export function Menu({
       case "Escape":
         if (open) {
           e.preventDefault();
+          // …and stops here. A screen may bind its own Escape to the window — the studio clears the
+          // selection on it — and one press that both closed this menu and wiped the selection would
+          // take the menu's own trigger off the screen with it.
+          e.stopPropagation();
           setOpen(false);
         }
         break;
@@ -125,7 +138,7 @@ export function Menu({
         onKeyDown={onKeyDown}
         className={open ? "bg-accent-tint text-accent-hover" : ""}
       >
-        <Ellipsis className="h-4 w-4" strokeWidth={2} />
+        <Icon className="h-4 w-4" strokeWidth={2} />
       </IconButton>
 
       {open && (
@@ -135,7 +148,9 @@ export function Menu({
           id={menuId}
           role="menu"
           aria-label={label}
-          className="absolute end-0 top-[calc(100%+6px)] z-20 min-w-40 rounded-md border border-border bg-surface p-1 shadow-lifted"
+          className={`absolute end-0 z-40 min-w-40 rounded-md border border-border bg-surface p-1 shadow-lifted ${
+            side === "top" ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]"
+          }`}
         >
           {items.map((item, index) => {
             const Icon = item.icon;

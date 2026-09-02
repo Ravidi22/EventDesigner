@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { Product } from "@/lib/catalog/types";
-import { resolveFootprint, resolveContent, customShapeBounds } from "@/lib/studio/footprint";
+import { resolveFootprint, resolveContent, customShapeBounds, type ResolvedContent } from "@/lib/studio/footprint";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { resolveStyle } from "@/lib/element-style";
@@ -34,23 +34,39 @@ export function AppearancePreview({ product, className }: { product: Product; cl
 
   const pad = Math.max(w, h) * 0.15 + 100;
   const vb = `${-(w / 2 + pad)} ${-(h / 2 + pad)} ${w + pad * 2} ${h + pad * 2}`;
-  const Icon = content.mode === "icon" && content.icon ? ICON_BY_NAME[content.icon] : undefined;
-  const iconSize = Math.min(w, h) * 0.6;
-
   return (
     <svg viewBox={vb} className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
       {shape}
-      {content.mode === "name" && (
-        <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fill="currentColor"
-          style={{ fontSize: Math.max(120, Math.min(h * 0.4, w * 0.22)) }}>
-          {content.name}
-        </text>
-      )}
-      {Icon && (
-        <g transform={`translate(${-iconSize / 2} ${-iconSize / 2})`}>
-          <Icon width={iconSize} height={iconSize} color="currentColor" />
-        </g>
-      )}
+      <PlanContent content={content} w={w} h={h} />
     </svg>
+  );
+}
+
+/** The name-or-icon that sits inside a footprint, centred on (0,0) in a `w`×`h` box, in mm.
+ *
+ *  Its own component because the custom-shape editor draws it too: the shape canvas is a plan, and
+ *  a plan that shows the outline but not what is written inside it answers "what will this look
+ *  like?" with half the picture — which is exactly what an icon picked in that modal used to do,
+ *  visible only in the 96px tile beside a full-screen canvas that ignored it.
+ *
+ *  An icon whose name no longer exists in MAP_ICONS falls back to the NAME rather than to nothing:
+ *  drawing an empty shape is the one outcome that tells the designer neither what is wrong nor
+ *  that anything is. */
+export function PlanContent({ content, w, h }: { content: ResolvedContent; w: number; h: number }) {
+  const Icon = content.mode === "icon" && content.icon ? ICON_BY_NAME[content.icon] : undefined;
+  if (Icon) {
+    const size = Math.min(w, h) * 0.6;
+    return (
+      <g transform={`translate(${-size / 2} ${-size / 2})`}>
+        <Icon width={size} height={size} color="currentColor" />
+      </g>
+    );
+  }
+  if (content.mode === "none") return null;
+  return (
+    <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fill="currentColor"
+      style={{ fontSize: Math.max(120, Math.min(h * 0.4, w * 0.22)) }}>
+      {content.name}
+    </text>
   );
 }

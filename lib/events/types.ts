@@ -31,18 +31,36 @@ export interface EventSummary {
    *  shortened the flow since this event was opened. */
   step: number;
   quoteSentAt?: number; // stamped when a quote is issued (F-1.9)
+  /** The client said yes. Epoch ms.
+   *
+   *  ⚠ THIS IS NOT `quoteSentAt`. A quote leaving the studio and a client agreeing to it are two
+   *  different facts, and until this field existed the model only held the first — which meant
+   *  procurement was ordering stock against events nobody had booked. It is the line between
+   *  selling and producing, and the whole of /production is organised around it. */
+  confirmedAt?: number;
+  /** The client said no, or stopped answering. Epoch ms. Distinct from `archived`: that is a filing
+   *  decision about a finished event, this is an outcome. */
+  lostAt?: number;
+  /** Load-in day (ISO yyyy-mm-dd), when the truck arrives before the event day. Absent = same day.
+   *  An event is a window, not a day — see the column note in lib/db/schema.ts. */
+  setupDate?: string;
   archived?: boolean;
   createdAt: number;
 }
 
-/** The stage statuses, plus the two that are facts about the event rather than about its stage. */
-export type EventStatus = StepStatus | "sent" | "archived";
+/** The stage statuses, plus the facts about the event that outrank whatever stage it is parked on.
+ *
+ *  `confirmed` and `lost` sit ABOVE `sent` in eventStatus()'s ladder, because once a client has
+ *  answered, "a quote was sent" has stopped being the interesting thing about the event. */
+export type EventStatus = StepStatus | "sent" | "confirmed" | "lost" | "archived";
 
 export const STATUS_LABEL: Record<EventStatus, string> = {
   details: "פרטים",
   gallery: "גלריה",
   design: "בעיצוב",
   sent: "נשלחה הצעה",
+  confirmed: "מאושר",
+  lost: "לא נסגר",
   archived: "בארכיון",
 };
 
@@ -51,19 +69,24 @@ export const STATUS_LABEL: Record<EventStatus, string> = {
 // (Settings → מצב פגישה) must read its own list here, so callers hand it in (useMeetingFlow).
 export function eventStatus(e: EventSummary, flow: readonly MeetingStepId[] = DEFAULT_FLOW): EventStatus {
   if (e.archived) return "archived";
+  // The client's answer outranks the quote being sent, which outranks the stage the sitting reached.
+  if (e.lostAt) return "lost";
+  if (e.confirmedAt) return "confirmed";
   if (e.quoteSentAt) return "sent";
   return stepAt(flow, e.step).status;
 }
 
-// Chip tone per stage — shared by every surface that shows a status (the event grid on
-// /gantt, the calendar view on /dashboard). Colour never carries the meaning alone; it
-// always rides with the label (StatusChip / STATUS_LABEL).
+// Chip tone per stage — shared by every surface that shows a status (the runway on /production,
+// the calendar view on /dashboard). Colour never carries the meaning alone; it always rides with
+// the label (StatusChip / STATUS_LABEL).
 export type StatusTone = "neutral" | "accent" | "success" | "warn";
 export const STATUS_TONE: Record<EventStatus, StatusTone> = {
   details: "neutral",
   gallery: "neutral",
   design: "accent",
-  sent: "success",
+  sent: "warn", // sent and unanswered is a thing to chase, not a thing achieved
+  confirmed: "success",
+  lost: "neutral",
   archived: "neutral",
 };
 

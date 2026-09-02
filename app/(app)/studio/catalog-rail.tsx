@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
+import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { Heart, SlidersHorizontal, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, STYLE_TAGS, type CategoryGroupId } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { fetchFolder, fetchImages } from "@/lib/gallery/actions";
 import { likedProductIds } from "@/lib/gallery/folder-logic";
@@ -13,6 +15,8 @@ import { SearchInput } from "@/components/search-input";
 import { Select } from "@/components/select";
 import { TagToggle } from "@/components/tag-toggle";
 import { ProductImage } from "../catalog/product-image";
+import { PlanGlyph, glyphSize } from "./plan-glyph";
+import { carryProduct, dropCarried } from "@/lib/studio/drag-payload";
 
 // Drag source. Each row carries its product id via dataTransfer; the canvas resolves the drop.
 // The products the client liked in the gallery (F-2.3) are pinned to the top ("תיק האירוע") so the
@@ -30,7 +34,16 @@ export function CatalogRail({
   products: all = [],
   groups,
   hint,
-}: { products?: Product[]; groups?: CategoryGroupId[]; hint?: string } = {}) {
+  mmPerPx,
+}: {
+  products?: Product[];
+  groups?: CategoryGroupId[];
+  hint?: string;
+  /** The canvas's current zoom, in world mm per screen pixel — a ref the canvas writes and this rail
+   *  reads once, at the moment a drag starts, so the picture under the pointer is the item at the
+   *  size it will land. Absent = a sensible hall zoom, which is what the rail assumed before. */
+  mmPerPx?: RefObject<number>;
+} = {}) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
   const [likedIds, setLikedIds] = useState<string[]>([]);
@@ -124,7 +137,7 @@ export function CatalogRail({
               className="w-full"
             />
             <div className="flex flex-wrap gap-1">
-              {STYLE_TAGS.map((tag) => (
+              {styleTagsOf(products).map((tag) => (
                 <TagToggle key={tag} active={filters.tags.includes(tag)} onClick={() => toggleTag(tag)}>
                   {tag}
                 </TagToggle>
@@ -154,7 +167,7 @@ export function CatalogRail({
             </SectionLabel>
             <ul className="flex flex-col gap-1">
               {liked.map((p) => (
-                <ProductRow key={p.id} product={p} />
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} />
               ))}
             </ul>
             <SectionLabel className="mt-4">כל הקטלוג</SectionLabel>
@@ -162,7 +175,7 @@ export function CatalogRail({
         )}
         <ul className="flex flex-col gap-1">
           {rest.map((p) => (
-            <ProductRow key={p.id} product={p} />
+            <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} />
           ))}
         </ul>
         {empty && <p className="p-4 text-center text-sm text-muted">אין תוצאות</p>}
@@ -182,7 +195,40 @@ function SectionLabel({ children, className = "" }: { children: React.ReactNode;
   );
 }
 
-function ProductRow({ product: p }: { product: Product }) {
+// The picture that follows the pointer out of the rail: the item AS THE PLAN DRAWS IT, at the
+// canvas's current zoom, held by its centre — which is the point the drop lands on. The browser's
+// own default is a translucent snapshot of the list row, so a designer dragging "עגול 244" watched a
+// row of text cross the hall and only learned how much room the table takes once it was down.
+//
+// Rendered imperatively rather than kept mounted per row: setDragImage needs a real, painted element
+// at the instant dragstart fires, and a hidden copy of every glyph in a catalog of two hundred is
+// two hundred SVGs on a panel that has one job. createRoot + flushSync gives the same component the
+// canvas uses, synchronously, for the one item being dragged; the browser snapshots it and the node
+// is gone by the next task.
+function showPlanGlyph(e: React.DragEvent, product: Product, mmPerPx: number) {
+  if (typeof document === "undefined" || typeof e.dataTransfer.setDragImage !== "function") return;
+  const host = document.createElement("div");
+  // Off-screen but genuinely laid out: a display:none element has nothing to snapshot.
+  host.setAttribute("aria-hidden", "true");
+  host.style.cssText = "position:fixed;top:0;inset-inline-start:-10000px;pointer-events:none;";
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<PlanGlyph product={product} mmPerPx={mmPerPx} />));
+    const { w, h } = glyphSize(product, mmPerPx);
+    e.dataTransfer.setDragImage(host, w / 2, h / 2);
+  } catch {
+    // A drag that cannot be given a custom image is still a perfectly good drag — the browser falls
+    // back to its own snapshot rather than the drop being lost.
+  }
+  // After the browser has taken its picture, which it does synchronously as this handler returns.
+  setTimeout(() => {
+    root.unmount();
+    host.remove();
+  }, 0);
+}
+
+function ProductRow({ product: p, mmPerPx }: { product: Product; mmPerPx?: RefObject<number> }) {
   return (
     <li>
       <div
@@ -190,7 +236,12 @@ function ProductRow({ product: p }: { product: Product }) {
         onDragStart={(e) => {
           e.dataTransfer.setData("text/product", p.id);
           e.dataTransfer.effectAllowed = "copy";
+          // The canvas cannot read dataTransfer until the drop, so it is told separately how big
+          // the thing crossing it is — that is what its guide lines are measured against.
+          carryProduct(p);
+          showPlanGlyph(e, p, mmPerPx?.current ?? 20);
         }}
+        onDragEnd={dropCarried}
         className="group flex cursor-grab items-center gap-2.5 rounded-md border border-transparent p-1.5 transition-colors hover:border-border hover:bg-bg active:cursor-grabbing"
       >
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border">

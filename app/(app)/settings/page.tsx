@@ -1,5 +1,5 @@
 import { requireStudio } from "@/lib/auth/guard";
-import { fetchSettings } from "@/lib/settings/actions";
+import { fetchCheckpointOffsets, fetchSettings } from "@/lib/settings/actions";
 import { fetchCurrentMember, fetchMembers } from "@/lib/team/actions";
 import { fetchGoogleStatus } from "@/lib/google/actions";
 import { SettingsScreen } from "./settings-screen";
@@ -20,7 +20,7 @@ import { SettingsScreen } from "./settings-screen";
 export default async function SettingsPage() {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
   await requireStudio();
-  const [settings, me, members, google] = await Promise.all([
+  const [settings, me, members, google, offsets] = await Promise.all([
     fetchSettings(),
     fetchCurrentMember(),
     fetchMembers(),
@@ -28,6 +28,11 @@ export default async function SettingsPage() {
     // otherwise be the most expensive section to open, since it is the only one whose state lives
     // partly at Google.
     fetchGoogleStatus(),
+    // Reads the same studio_settings row fetchSettings already touched, which looks like one query
+    // too many — but it is one more column off a row Postgres has in memory, and the alternative is
+    // widening BusinessSettings with a field only one section wants. It joins the parallel read
+    // rather than the checkpoint section's mount, for the reason above.
+    fetchCheckpointOffsets(),
   ]);
   return (
     <SettingsScreen
@@ -35,6 +40,7 @@ export default async function SettingsPage() {
       initialMe={me}
       initialMembers={members}
       initialGoogle={google}
+      initialOffsets={offsets}
     />
   );
 }

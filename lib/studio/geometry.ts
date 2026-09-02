@@ -514,6 +514,23 @@ export function fromLocalFrame(p: Point, center: Point, rotationDeg: number): Po
   };
 }
 
+/** The axis-aligned box a w×d rectangle needs once it has been TURNED — what a snap, a marquee and
+ *  the no-overlap rule (lib/studio/collide.ts) all measure a placed item by.
+ *
+ *  A 4×2 deck turned 90° occupies 2×4 of floor, and boxing it as 4×2 anyway is not a rounding error:
+ *  it is the plan claiming two metres of room that the deck is not in, and two more that it is.
+ *  At a right angle this is exact, which covers nearly every stage anyone lays. At 45° it is the
+ *  enclosing box and therefore generous — the deck is somewhere inside it — so a snap is a little
+ *  shy and two decks stop a little apart. Generous is the safe direction for a rule about whether
+ *  two things fit in the same room. */
+export function rotatedExtent(widthMm: number, depthMm: number, rotationDeg: number): { widthMm: number; depthMm: number } {
+  if (!rotationDeg) return { widthMm, depthMm };
+  const rad = (rotationDeg * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rad));
+  const s = Math.abs(Math.sin(rad));
+  return { widthMm: widthMm * c + depthMm * s, depthMm: widthMm * s + depthMm * c };
+}
+
 // Dragging a fixture's edge handle anchors the *opposite* edge (Figma/SketchUp/any floor planner):
 // only the grabbed edge follows the pointer. A fixture is stored as centre+size, so holding the far
 // edge still means moving the centre by half the size delta — along the fixture's own axis, not the
@@ -553,9 +570,16 @@ export function tableBounds(t: DesignTable): { halfW: number; halfH: number } {
 export function pointInTable(t: DesignTable, x: number, y: number): boolean {
   const dx = x - t.position.x;
   const dy = y - t.position.y;
+  // A round table has no orientation, so its own frame is the world's and the cheap test is exact.
   if (t.diameterMm) return dx * dx + dy * dy <= (t.diameterMm / 2) ** 2;
   const { halfW, halfH } = tableBounds(t);
-  return Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
+  // A RECTANGULAR one is tested in its OWN frame. This used to compare against the world axes,
+  // which was exactly right for as long as nothing in the app could turn a table — DesignTable
+  // carried a `rotation` that no control ever set. Now that a table can be set across the room, an
+  // axis-aligned test on a turned one both misses the corners it does cover and claims corners it
+  // does not: the cloth dropped on the end of a 3m banqueting table at 45° would land on the floor.
+  const local = t.rotation ? toLocalFrame({ x, y }, t.position, t.rotation) : { x: dx, y: dy };
+  return Math.abs(local.x) <= halfW && Math.abs(local.y) <= halfH;
 }
 
 export function tableAt(doc: DesignDocumentContent, x: number, y: number): DesignTable | undefined {
@@ -574,6 +598,12 @@ if (isMain(import.meta.url)) {
   assert(!pointInTable(round, 100, 250), "outside");
   const rect: DesignTable = { id: "b", type: "מלבן", number: 2, position: { x: 0, y: 0 }, rotation: 0, widthMm: 200, depthMm: 100 };
   assert(pointInTable(rect, 90, 40) && !pointInTable(rect, 90, 60), "rect bounds");
+  // Turned a quarter turn, the same table covers the transposed box — and stops covering what it
+  // used to. A hit test that ignored the angle would get both of these backwards.
+  const turnedTable: DesignTable = { ...rect, rotation: 90 };
+  assert(pointInTable(turnedTable, 40, 90) && !pointInTable(turnedTable, 60, 90), "a turned table is tested in its own frame");
+  assert(!pointInTable(turnedTable, 90, 40), "…and no longer covers what it covered before it was turned");
+  assert(pointInTable({ ...round, rotation: 37 }, 199, 100), "a round table is the same whichever way it faces");
   assert(Math.round(tableAreaMm2(round)) === Math.round(Math.PI * 100 ** 2), "round area");
   const outline: Point[] = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }, { x: 0, y: 100 }];
   assert(polygonAreaMm2(outline) === 20000, "rectangle polygon area");
@@ -728,6 +758,19 @@ if (isMain(import.meta.url)) {
   assert(reshapeEdgeKeepingAngles([{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 0, y: 1000 }], 0, { x: 1200, y: 0 }) === null, "a triangle has no spare wall to absorb the change");
   const collinear: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 1000, y: 2000 }];
   assert(reshapeEdgeKeepingAngles(collinear, 0, { x: 1200, y: 0 }) === null, "parallel neighbouring walls never meet, so there is nothing to solve");
+
+  // A turned rectangle needs a different box: square on it is the box itself, a right angle swaps
+  // the two, and 45° is the enclosing square.
+  {
+    const same = rotatedExtent(4000, 2000, 0);
+    assert(same.widthMm === 4000 && same.depthMm === 2000, "unturned, a deck's box is its own size");
+    const quarter = rotatedExtent(4000, 2000, 90);
+    assert(Math.round(quarter.widthMm) === 2000 && Math.round(quarter.depthMm) === 4000, "turned square-on, the two swap");
+    assert(Math.round(rotatedExtent(4000, 2000, 180).widthMm) === 4000, "half a turn is the box it started with");
+    const diag = rotatedExtent(4000, 2000, 45);
+    assert(Math.round(diag.widthMm) === Math.round(diag.depthMm), "at 45° the box is square");
+    assert(diag.widthMm > 4000, "…and larger than the deck, which is the generous way to be wrong");
+  }
 
   console.log("geometry self-check passed");
 }

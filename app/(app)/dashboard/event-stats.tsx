@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { EventSummary } from "@/lib/events/types";
+import type { EventSummary, StatusTone } from "@/lib/events/types";
 import { eventStatus } from "@/lib/events/types";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { Select } from "@/components/select";
@@ -24,21 +24,32 @@ export function EventStats({ events }: { events: EventSummary[] }) {
   const counts = useMemo(() => {
     const todayIso = toISODate(new Date());
     const endIso = toISODate(addDays(new Date(), Number(rangeDays)));
-    const inRange = events.filter((e) => !e.archived && e.date && e.date >= todayIso && e.date <= endIso);
+    // `lostAt` as well as `archived`: an event the client turned down is not upcoming work, and
+    // leaving it in would keep it in the headline count until someone remembered to file it.
+    const inRange = events.filter(
+      (e) => !e.archived && !e.lostAt && e.date && e.date >= todayIso && e.date <= endIso,
+    );
 
-    // Three tiles for the three stages an event can be sitting in that are worth counting: still
-    // being shown the gallery, being drawn, or quoted. (There used to be a "ממתין לסקיצה" tile, back
-    // when the table layout was drawn outside the app and the event just waited for it.)
-    let gallery = 0;
+    // ⚠ THESE TILES USED TO BE gallery / design / sent, and "נשלחה הצעה" was the last one — the
+    // furthest an event could get, because a sent quote was the terminal state the data model had.
+    // It isn't any more: `confirmedAt` records the client actually saying yes (see the column note
+    // in lib/db/schema.ts), and a confirmed event returns its own status. Left as they were, these
+    // three tiles would have silently DROPPED every booked event — the one outcome the row most
+    // needs to show — and stopped summing to the headline above them.
+    //
+    // So the breakdown follows the money now rather than the meeting: being drawn, waiting on the
+    // client, booked. The gallery pass is a stage inside a sitting and was never worth a tile of
+    // its own here; the runway (/production) is where stage-level detail lives.
     let design = 0;
     let sent = 0;
+    let confirmed = 0;
     for (const e of inRange) {
       const status = eventStatus(e, flow);
-      if (status === "gallery") gallery++;
-      else if (status === "design") design++;
+      if (status === "design") design++;
       else if (status === "sent") sent++;
+      else if (status === "confirmed") confirmed++;
     }
-    return { active: inRange.length, gallery, design, sent };
+    return { active: inRange.length, design, sent, confirmed };
   }, [events, rangeDays, flow]);
 
   return (
@@ -60,15 +71,17 @@ export function EventStats({ events }: { events: EventSummary[] }) {
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <StatTile value={counts.gallery} label="בגלריה" tone="neutral" />
         <StatTile value={counts.design} label="בעיצוב" tone="accent" />
-        <StatTile value={counts.sent} label="נשלחה הצעה" tone="success" />
+        {/* `warn`, not `success`: a quote that has gone out and not been answered is a thing to
+            chase, not a thing achieved. Same reasoning as STATUS_TONE.sent in lib/events/types.ts. */}
+        <StatTile value={counts.sent} label="ממתין לתשובה" tone="warn" />
+        <StatTile value={counts.confirmed} label="מאושר" tone="success" />
       </div>
     </div>
   );
 }
 
-function StatTile({ value, label, tone }: { value: number; label: string; tone: "neutral" | "accent" | "success" }) {
+function StatTile({ value, label, tone }: { value: number; label: string; tone: StatusTone }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5 rounded-md bg-inset p-3">
       <p className="font-display text-h2 text-ink">{value}</p>

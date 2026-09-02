@@ -55,11 +55,22 @@ export function measure(p: Placement, ctx: MeasureContext): number {
 }
 
 /** Billable amounts per variant across the whole document — what both the quote and the packing
- *  list total over. */
+ *  list total over.
+ *
+ *  TABLES COUNT TOO, one each, whenever they carry a catalog row (DesignTable.variantId). They are
+ *  furniture the crew loads onto the same lorry as everything else, and they only stayed out of
+ *  these totals while the only way to get one was a toolbar button that referenced no product —
+ *  there was nothing to name on the list. A table dragged off the rail has a row, and an order that
+ *  silently omitted forty of them would be wrong in the one direction that costs a wedding. A table
+ *  is never a stretch item, so there is nothing to measure: it is one table. */
 export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): Map<string, number> {
   const totals = new Map<string, number>();
   for (const p of doc.placements) {
     totals.set(p.variantId, round2((totals.get(p.variantId) ?? 0) + measure(p, ctx)));
+  }
+  for (const t of doc.tables) {
+    if (!t.variantId) continue;
+    totals.set(t.variantId, round2((totals.get(t.variantId) ?? 0) + 1));
   }
   return totals;
 }
@@ -96,6 +107,24 @@ if (isMain(import.meta.url)) {
 
   const totals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [counted, wholeWall, carpet] }, ctx);
   assert(totals.get("candlestick") === 4 && totals.get("drape") === 14 && totals.get("carpet") === 7.5, "totals per variant");
+
+  // Tables off the rail are counted; a table placed before tables came out of the catalog carries
+  // no row and cannot be, which is what keeps every document drawn until now totalling as it did.
+  const tabled = measureTotals(
+    {
+      calibration: { mmPerUnit: 1 },
+      placements: [counted],
+      tables: [
+        { id: "t1", type: "עגול 180", number: 1, position: { x: 0, y: 0 }, rotation: 0, diameterMm: 1800, variantId: "round180" },
+        { id: "t2", type: "עגול 180", number: 2, position: { x: 0, y: 0 }, rotation: 0, diameterMm: 1800, variantId: "round180" },
+        { id: "t3", type: "אביר", number: 3, position: { x: 0, y: 0 }, rotation: 0, widthMm: 4800, depthMm: 1200 },
+      ],
+    },
+    ctx,
+  );
+  assert(tabled.get("round180") === 2, "two tables of the same row total two");
+  assert(tabled.get("candlestick") === 4, "…alongside the placements, untouched");
+  assert(tabled.size === 2, "a table with no catalog row adds nothing to total");
 
   console.log("measure self-check passed");
 }

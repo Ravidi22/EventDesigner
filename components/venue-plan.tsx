@@ -3,14 +3,15 @@
 import { outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
-import { nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { featureFootprint, nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { FootprintShape } from "@/components/footprint-shape";
 import { detectFaces, type Face } from "@/lib/venues/faces";
 import { stairsGeometry } from "@/lib/venues/stairs";
 import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 import type { Point } from "@/lib/studio/hall";
-import { EntranceDoor } from "@/components/plan-canvas";
+import { EntranceDoor, RotateHandle } from "@/components/plan-canvas";
 
 // World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
 //
@@ -224,12 +225,18 @@ export function ZoneRegions({
   selectedIds,
   onSelect,
   mm,
+  labels = true,
 }: {
   zones: ResolvedZone[];
   selectedIds?: string[];
   onSelect?: (id: string, additive: boolean) => void;
   /** Screen px → world mm at the current zoom (from PlanCanvas's layer context). */
   mm: (px: number) => number;
+  /** Whether each region writes its own name and kind across itself. True at /halls, where naming
+   *  the regions IS the job. False in the studio: there the tint is context for the drawing on top
+   *  of it, and a word the size of the room sitting under the tables reads as part of the design
+   *  rather than as the room it names. */
+  labels?: boolean;
 }) {
   return (
     <>
@@ -276,6 +283,7 @@ export function ZoneRegions({
                 strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
                 vectorEffect="non-scaling-stroke"
               />
+              {labels && (
               <text
                 x={centre.x}
                 y={showSub ? centre.y - mm(ZONE_NAME_PX * 0.35) : centre.y}
@@ -288,7 +296,8 @@ export function ZoneRegions({
                 <title>{r.zone.name}</title>
                 {displayName}
               </text>
-              {showSub && (
+              )}
+              {labels && showSub && (
                 <text
                   x={centre.x}
                   y={centre.y + mm(ZONE_NAME_PX * 0.8)}
@@ -317,6 +326,7 @@ export function StructureFeatures({
   onMove,
   onMoveStairs,
   onResize,
+  onRotate,
   onCommit,
   clientToMm,
 }: {
@@ -334,6 +344,11 @@ export function StructureFeatures({
    *  any mode that doesn't edit the built plan) — same "supplying it is what turns the affordance
    *  on" rule as onMove/onMoveStairs. */
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void;
+  /** Dragging the rotate knob. Same opt-in rule as the three above: a host that does not supply it
+   *  gets a selected feature with no knob on it, which is what /halls' draw mode and every
+   *  read-only surface want. A bar built across the corner of a room is at 30° and there was no way
+   *  to put it there but to type the number into the side panel. */
+  onRotate?: (id: string, rotationDeg: number) => void;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
 }) {
@@ -399,13 +414,14 @@ export function StructureFeatures({
               onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
               className={onMove ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
             >
-              {f.shape === "circle" ? (
-                <circle cx={f.x} cy={f.y} r={f.widthMm / 2} {...common} />
-              ) : f.shape === "ellipse" ? (
-                <ellipse cx={f.x} cy={f.y} rx={f.widthMm / 2} ry={f.depthMm / 2} {...common} />
-              ) : (
-                <rect x={f.x - f.widthMm / 2} y={f.y - f.depthMm / 2} width={f.widthMm} height={f.depthMm} {...common} />
-              )}
+              {/* One shape resolver for the whole app (components/footprint-shape.tsx): a bar the
+                  catalog draws as a ח has to be a ח here and on the printed placement map too, or
+                  the plan disagrees with itself in front of the crew setting the room up. The
+                  footprint is centred on its own origin, so the position is a translate — the
+                  label and the resize handles below keep their absolute coordinates. */}
+              <g transform={`translate(${f.x} ${f.y})`}>
+                <FootprintShape footprint={featureFootprint(f)} {...common} />
+              </g>
               <text
                 x={f.x}
                 y={f.y}
@@ -464,6 +480,22 @@ export function StructureFeatures({
                 )
               )}
             </g>
+            {/* OUTSIDE the rotated group, like the stairs above and for the same reason: the handle
+                works out its own place from the feature's facing (that is what makes it ride round
+                with the shape), so leaving it inside would turn it a second time and it would run
+                away from the thing it turns as the angle grew. */}
+            {selected && onRotate && clientToMm && (
+              <RotateHandle
+                pivot={{ x: f.x, y: f.y }}
+                reachMm={(f.shape === "circle" ? f.widthMm : f.depthMm) / 2}
+                rotationDeg={f.rotationDeg ?? 0}
+                onRotate={(deg) => onRotate(f.id, deg)}
+                onCommit={onCommit}
+                clientToMm={clientToMm}
+                mm={mm}
+                label={`סיבוב ${f.label} — גרירה · Alt לזווית חופשית`}
+              />
+            )}
           </g>
         );
       })}

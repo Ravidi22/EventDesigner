@@ -260,11 +260,30 @@ export async function linksForAppointment(
   appointmentId: string,
   organizationId: string,
 ): Promise<{ connectionId: string; googleEventId: string }[]> {
-  if (!googleConfig()) return [];
+  return linksForAppointments([appointmentId], organizationId);
+}
+
+/** The same read, for a delete that takes SEVERAL meetings with it.
+ *
+ *  Deleting an event is the one such delete (lib/events/actions.ts): `appointments.event_id`
+ *  cascades, so every meeting booked against it goes in one statement — and each of those would
+ *  otherwise strand its own remote copies exactly as a single deleted meeting would. One query
+ *  rather than one per meeting, because an event that has been through a season of sit-downs has
+ *  a diary, not a row. */
+export async function linksForAppointments(
+  appointmentIds: string[],
+  organizationId: string,
+): Promise<{ connectionId: string; googleEventId: string }[]> {
+  if (appointmentIds.length === 0 || !googleConfig()) return [];
   return db()
     .select({ connectionId: googleEventLinks.connectionId, googleEventId: googleEventLinks.googleEventId })
     .from(googleEventLinks)
-    .where(and(eq(googleEventLinks.appointmentId, appointmentId), eq(googleEventLinks.organizationId, organizationId)));
+    .where(
+      and(
+        inArray(googleEventLinks.appointmentId, appointmentIds),
+        eq(googleEventLinks.organizationId, organizationId),
+      ),
+    );
 }
 
 /** Remove the remote copies of a deleted appointment. Never throws — see the note at the top. */

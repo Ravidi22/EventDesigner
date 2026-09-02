@@ -9,6 +9,7 @@ import { useEvents } from "@/lib/events/use-events";
 import { useHeaderSearch } from "@/components/header-search-context";
 import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { SupplierCard } from "./supplier-card";
 import { SupplierDrawer, blankSupplier } from "./supplier-drawer";
 import { ExpensesTab } from "./expenses-tab";
@@ -72,14 +73,14 @@ export function SuppliersScreen({
   // "No suppliers" and "not loaded yet" look identical in the data and mean opposite things.
   if (!ready) {
     return (
-      <div className="px-8 pb-7 pt-3" aria-busy="true">
+      <div className={PAGE_GUTTER} aria-busy="true">
         <p className="py-20 text-center text-sm text-muted">טוען את הספקים…</p>
       </div>
     );
   }
 
   return (
-    <div className="px-8 pb-7 pt-3">
+    <div className={PAGE_GUTTER}>
       {error && (
         <p className="mb-4 rounded-md border border-alert bg-alert-tint px-4 py-2.5 text-sm text-ink" role="alert">
           {error}

@@ -23,6 +23,32 @@ export interface Resolved {
   sizing: Sizing;
   /** The shade's actual colour, when the designer gave it one (F-4.2). */
   swatch?: string;
+  /** WHAT KIND OF SOLID THING this is, for the studio's no-overlap rule (lib/studio/collide.ts) —
+   *  or undefined for anything that rule must not touch. Lifted off the category for the same
+   *  reason `anchor` and `sizing` are: the canvas asks one question of one object. */
+  solid?: string;
+}
+
+/** The two categories whose key has to match a venue FeatureKind, so that the house staging and a
+ *  hired deck are the same kind of thing as far as the floor is concerned. Every other category is
+ *  its own key, under its own name. */
+const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", bars: "bar" };
+
+/**
+ * Which things cannot share the same floor as this one.
+ *
+ * Three exemptions, and each is a real arrangement the plan has to keep being able to draw: a RUG
+ * is laid under things (sizing "stretch"), anything anchored to a table or hanging from the ceiling
+ * is not standing on the floor at all, and a drape belongs to a wall. Everything else that stands
+ * on the floor is solid against others OF ITS OWN KIND — deck against deck, bar against bar — and
+ * free to overlap anything else, which is what keeps a חופה on a stage and a plinth beside a table
+ * possible. See lib/studio/collide.ts for why the rule is same-kind-only.
+ */
+export function solidKind(product: Product): string | undefined {
+  const cat = CATEGORY_BY_ID[product.category];
+  if (product.layer !== "floor") return undefined;
+  if ((cat?.anchor ?? "free") !== "free" || cat?.sizing === "stretch") return undefined;
+  return SOLID_BY_CATEGORY[product.category] ?? product.category;
 }
 
 export function defaultVariantId(product: Product): string {
@@ -53,6 +79,7 @@ function ensureIndex(): Map<string, Resolved> {
       footprintMm2: footprint(product),
       anchor: cat?.anchor ?? ("free" as Anchor),
       sizing: cat?.sizing ?? ("fixed" as Sizing),
+      solid: solidKind(product),
     };
     index.set(product.id, { ...base, label: product.name, price: product.unitPrice });
     for (const variant of product.variants) {

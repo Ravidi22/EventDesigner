@@ -12,7 +12,7 @@ import { storageKey } from "@/lib/storage-keys";
 const ACTIVE_KEY = storageKey("activeVenueId");
 
 // Event name for cross-component sync: any mounted screen scoped to "the active venue" (the venue
-// plan, the Gantt, the meeting flow's picker) listens for this instead of polling — storage events
+// plan, the production runway, the meeting flow's picker) listens for this instead of polling — storage events
 // don't fire within the same tab, so switching venues in the sidebar needs its own signal to reach
 // screens already on screen.
 //

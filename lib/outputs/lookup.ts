@@ -16,8 +16,11 @@ export const itemLookup: ItemLookup = (variantId) => {
   const r = resolve(variantId);
   if (!r) return undefined;
   const cat = CATEGORY_BY_ID[r.product.category];
-  const armsField = cat?.fields.find((f) => f.key === "arms");
-  const arms = r.product.categoryFields?.arms;
+  // Any count-multiplier that states what it yields, not the "arms" key specifically — the same
+  // rule procurement reduces by (lib/suppliers/actions.ts). A category is allowed exactly one, so a
+  // chandelier prints its candles and a flower arrangement its stems through this one branch.
+  const armsField = cat?.fields.find((f) => f.suffix);
+  const arms = armsField ? r.product.categoryFields?.[armsField.key] : undefined;
   return {
     productName: r.product.name,
     variantLabel: r.label,
@@ -27,7 +30,7 @@ export const itemLookup: ItemLookup = (variantId) => {
     priceUnit: r.product.priceUnit ?? "unit",
     armsMultiplier:
       armsField && typeof arms === "number" && arms > 0
-        ? { label: armsField.suffix ?? "נרות", count: arms }
+        ? { label: armsField.suffix!, count: arms }
         : undefined,
   };
 };

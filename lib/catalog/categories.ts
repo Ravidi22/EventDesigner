@@ -15,6 +15,7 @@ import {
   Blinds,
   Rainbow,
   Milestone,
+  Sprout,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, StockKind } from "./types";
@@ -25,6 +26,14 @@ export interface CategoryField {
   suffix?: string; // what the multiplication yields ("נרות")
 }
 
+/** What a NEW product of this category starts out drawn as: "round" seeds a circle, the other two
+ *  a rectangle. It is a seed and nothing more.
+ *
+ *  It used to decide which size FIELDS the drawer showed, and that is how a product could carry a
+ *  diameter while being drawn as a rectangle that read neither of its numbers — the footprint fell
+ *  back to MIN_FOOTPRINT_MM and drew a 60×60 box no measurement in the form could change. The SHAPE
+ *  picks the fields now (app/(app)/catalog/product-drawer.tsx), so a product's dimensions are always
+ *  measurements of the thing it is drawn as. */
 export type DimsMode = "round" | "box" | "both";
 
 // The department a designer browses by (F-4.3 catalog UX) — coarser than CategoryDef, which
@@ -104,6 +113,11 @@ export const CATEGORIES: CategoryDef[] = [
   // The one category that defaults to consumable: a centrepiece is flowers far more often than it
   // is the vase they stand in, and a designer who stocks reusable pieces changes one field.
   { id: "centerpieces", label: "מרכזי שולחן", group: "grp-table-design", defaultLayer: "table", icon: Flower2, dims: "round", fields: [], defaultStock: "consumable" },
+  // Flowers, bought by the stem and arranged into one piece. The stem count is a count-multiplier
+  // like a chandelier's arms and behaves as one everywhere: the packing list prints "גבעולים ×
+  // arrangements" and procurement orders that many (lib/suppliers/actions.ts). How many stems the
+  // supplier sells in a bunch is a different question, and it stays where it lives — orderUnit.
+  { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable" },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
@@ -153,3 +167,11 @@ export const LAYER_LABEL: Record<Layer, string> = {
  *  catalog's move to Postgres untouched, and the products that carry these tags are real rows now.
  *  It sat in the seed file only because that is where it was first written. */
 export const STYLE_TAGS = ["קלאסי", "מודרני", "טרופי", "שחור-לבן", "כפרי", "זוהר", "רומנטי"];
+
+/** The list above is a STARTING vocabulary, not the whole of it: the product drawer lets a designer
+ *  type a tag of their own, so every surface that offers tags reads them off the catalog it is
+ *  showing rather than off the constant — otherwise a tag exists on a product that nothing can
+ *  filter by. Order is stable: the built-ins first, the studio's own after them. */
+export const styleTagsOf = (products: readonly { styleTags: string[] }[]): string[] => [
+  ...new Set([...STYLE_TAGS, ...products.flatMap((p) => p.styleTags)]),
+];

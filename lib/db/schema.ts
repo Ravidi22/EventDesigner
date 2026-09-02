@@ -57,6 +57,7 @@ import type { VenueStructure } from "@/lib/venues/structure";
 import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
 import type { ElementStyle } from "@/lib/element-style";
 import type { MeetingStepId } from "@/lib/meeting/steps";
+import type { CheckpointOffsets } from "@/lib/production/runway";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -244,6 +245,15 @@ export const studioSettings = pgTable("studio_settings", {
   /** The stages this studio's meeting has, in order (MeetingStepId[]). Ordered and rewritten
    *  whole by the settings screen, never queried into — an array column says exactly that. */
   meetingFlow: text("meeting_flow").array().$type<MeetingStepId[]>().notNull().default([]),
+  /** How many days BEFORE an event each production checkpoint is due (CheckpointOffsets,
+   *  lib/production/runway.ts). Per studio, because a designer who books six months out and one who
+   *  books six weeks out do not share a schedule.
+   *
+   *  jsonb rather than six integer columns: it is a small keyed record, rewritten whole by the
+   *  settings screen and never queried into — the same argument meetingFlow makes for its array,
+   *  and adding a seventh checkpoint should not be a migration. Nullable = "never configured",
+   *  which normalizeOffsets() reads as the defaults. */
+  checkpointOffsets: jsonb("checkpoint_offsets").$type<CheckpointOffsets>(),
   updatedAt: updated(),
 });
 
@@ -497,13 +507,37 @@ export const events = pgTable(
      *  (studio_settings.meetingFlow), not into a fixed list. Always clamped on read. */
     step: integer("step").notNull().default(0),
     quoteSentAt: timestamp("quote_sent_at", { withTimezone: true }),
+    /** THE CLIENT SAID YES.
+     *
+     *  The fact this data model was missing entirely, and its absence was not a gap — it was
+     *  producing wrong output. `quote_sent_at` records that a PRICE LEFT THE STUDIO, which is a
+     *  different fact and always was, and it was the only terminal state an event had. So
+     *  procurement, whose own file argues "a first meeting is not a reason to buy flowers", was
+     *  reading a sent quote as a commitment and telling the studio to buy stock for events no
+     *  client had agreed to. lib/suppliers/actions.ts reads THIS column now.
+     *
+     *  It is also the one thing on the production runway that a person types, and it earns that:
+     *  "the client said yes" is not derivable from anything in here. Everything else on that
+     *  screen is a row that already exists (lib/production/runway.ts). */
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    /** The client said no, or went quiet. Recorded rather than deleted, and separate from
+     *  `archived`: archiving is a filing decision the designer makes about a FINISHED event, while
+     *  this is an outcome. Keeping it is what lets an event leave the runway without leaving the
+     *  record — the quote that lost is the only evidence of what was offered and at what price. */
+    lostAt: timestamp("lost_at", { withTimezone: true }),
+    /** Load-in day, when the truck arrives before the event day. Absent = same day.
+     *
+     *  An event is a WINDOW, not a day, and this column is what makes collision detection honest:
+     *  two events whose dates differ by two days can still want the same chuppah and the same pair
+     *  of hands at the same hour, and comparing `event_date` alone would call that clear. */
+    setupDate: date("setup_date"),
     archived: boolean("archived").notNull().default(false),
     createdAt: created(),
   },
   (t) => [
     index("events_org_idx").on(t.organizationId),
     index("events_venue_idx").on(t.venueId),
-    // The dashboard and Gantt both read "this org's live events, soonest first".
+    // The dashboard and the production runway both read "this org's live events, soonest first".
     index("events_org_date_idx").on(t.organizationId, t.eventDate),
   ],
 );

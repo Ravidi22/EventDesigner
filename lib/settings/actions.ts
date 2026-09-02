@@ -14,10 +14,15 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
-import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
+import { revalidateProduction, revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
 import { studioSettings } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import { DEFAULT_FLOW, normalizeFlow, type MeetingStepId } from "@/lib/meeting/steps";
+import {
+  DEFAULT_OFFSETS,
+  normalizeOffsets,
+  type CheckpointOffsets,
+} from "@/lib/production/runway";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "./types";
 
 /** Postgres `numeric` arrives as a string — arbitrary precision, so the driver will not silently
@@ -180,4 +185,67 @@ export async function resetMeetingFlow(): Promise<MeetingStepId[]> {
     });
   revalidateShell();
   return [...DEFAULT_FLOW];
+}
+
+/**
+ * When each production checkpoint is due, in days before the event (lib/production/runway.ts).
+ *
+ * Same shape as the meeting flow above, and for the same reason: it is a studio SETTING that one
+ * screen rewrites whole. A NULL column means "never configured" and is answered with the defaults —
+ * so a studio that never opened this screen follows the app's schedule even after that schedule
+ * changes, rather than being frozen at whatever it was on the day they signed up.
+ */
+export async function fetchCheckpointOffsets(): Promise<CheckpointOffsets> {
+  const organizationId = await currentOrg();
+  const [row] = await db()
+    .select({ checkpointOffsets: studioSettings.checkpointOffsets })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+
+  // normalizeOffsets on READ as well as write: a record stored before a checkpoint was added would
+  // otherwise hand the runway an offset it has no key for.
+  return normalizeOffsets(row?.checkpointOffsets);
+}
+
+/** Normalises before writing, so an impossible schedule cannot be persisted: unknown ids dropped,
+ *  negatives and fractions refused. A checkpoint due AFTER the event is the one thing this cannot
+ *  catch and does not try to — a studio that wants the packing list due on the day itself is
+ *  entitled to say so with a 0. */
+export async function saveCheckpointOffsets(input: unknown): Promise<CheckpointOffsets> {
+  const organizationId = await currentOrg();
+  const next = normalizeOffsets(input);
+
+  await db()
+    .insert(studioSettings)
+    .values({ organizationId, checkpointOffsets: next, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: studioSettings.organizationId,
+      set: { checkpointOffsets: next, updatedAt: new Date() },
+    });
+
+  // Both screens, because this write changes one and is READ BY the other. A schedule saved here
+  // that /production keeps computing against for another thirty seconds (next.config.ts staleTimes)
+  // is the worst version of this feature: the designer sets a number precisely to make an alert go
+  // away, switches tab, and it is still there.
+  revalidateSettings();
+  revalidateProduction();
+  return next;
+}
+
+/** Back to the schedule the app ships with. Writes NULL rather than a copy of DEFAULT_OFFSETS, so
+ *  "never configured" stays distinguishable from "configured to match the current default" — the
+ *  same argument resetMeetingFlow makes for its empty array. */
+export async function resetCheckpointOffsets(): Promise<CheckpointOffsets> {
+  const organizationId = await currentOrg();
+  await db()
+    .insert(studioSettings)
+    .values({ organizationId, checkpointOffsets: null, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: studioSettings.organizationId,
+      set: { checkpointOffsets: null, updatedAt: new Date() },
+    });
+  revalidateSettings();
+  revalidateProduction();
+  return { ...DEFAULT_OFFSETS };
 }

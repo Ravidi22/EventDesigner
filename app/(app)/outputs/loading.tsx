@@ -1,5 +1,6 @@
 import { PageSkeleton } from "@/components/skeleton";
 
+// Page-setup controls over the sheet being printed.
 export default function Loading() {
-  return <PageSkeleton rows={1} title={false} />;
+  return <PageSkeleton shape="canvas" toolbar />;
 }

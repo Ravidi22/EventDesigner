@@ -17,6 +17,8 @@ export async function beginEvent(input: {
   contact2Name?: string;
   contact2Phone?: string;
   date: string;
+  /** Load-in day (ISO yyyy-mm-dd). Absent = the event day itself — see EventSummary.setupDate. */
+  setupDate?: string;
   guests: number;
   venueId?: string;
   zoneIds: string[];
@@ -33,6 +35,7 @@ export async function beginEvent(input: {
     contact2Name: input.contact2Name,
     contact2Phone: input.contact2Phone,
     date: input.date,
+    setupDate: input.setupDate,
     venueId: input.venueId,
     zoneIds: input.zoneIds,
     zonesLabel: input.zonesLabel,

@@ -43,6 +43,13 @@
       "when": 1787504521922,
       "tag": "0005_unusual_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787934275257,
+      "tag": "0006_strange_loa",
+      "breakpoints": true
     }
   ]
 }

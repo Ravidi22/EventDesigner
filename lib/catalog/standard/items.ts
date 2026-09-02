@@ -81,31 +81,17 @@ function table(
   };
 }
 
-// חצי עיגול — the one shape the dimensions cannot describe. Every other table here is a circle
-// derived from its diameter or a rectangle derived from its width and depth (resolveFootprint); a
-// half round derived that way is a 120×60 box, which is the wrong table on the plan and the wrong
-// thing entirely where two of them cap a head table. So it carries an explicit outline: the chord,
-// then two quarter-arc beziers back over the top.
+// חצי עיגול — the one table here that its two numbers alone would get wrong. Derived by the old
+// rule (a diameter is a circle, anything else a rectangle) a half round is a 120×60 box, which is
+// the wrong table on the plan and the wrong thing entirely where two of them cap a head table. So
+// it NAMES its shape, and lib/studio/footprint.ts builds the outline — the chord and the two
+// quarter-arcs back over the top — from the same 120×60 the row already carries.
 //
-// K is the standard cubic approximation of a quarter circle (0.5523 × r) — the constant every
-// circle-to-path conversion uses; the error is a fraction of a millimetre at this radius. Control
-// points are RELATIVE to their own edge's endpoints (absoluteControlPoints, lib/studio/geometry).
-const HALF_ROUND_R = 600;
-const K = Math.round(0.5523 * HALF_ROUND_R);
-const HALF_ROUND: MapAppearance = {
-  shape: "custom",
-  content: "none",
-  outline: [
-    { x: -HALF_ROUND_R, y: 0 }, // left end of the flat edge
-    { x: HALF_ROUND_R, y: 0 }, // right end of the flat edge
-    { x: 0, y: -HALF_ROUND_R }, // top of the arc
-  ],
-  edgeCurves: [
-    null, // the flat edge is the diameter — straight
-    { c1: { x: 0, y: -K }, c2: { x: K, y: 0 } }, // right end → apex
-    { c1: { x: -K, y: 0 }, c2: { x: 0, y: -K } }, // apex → left end
-  ],
-};
+// It used to spell that outline out here, by hand, at a fixed 600mm radius. The built one is the
+// same table to the millimetre (check:footprint asserts precisely that against these numbers), and
+// unlike the hand-written one it FOLLOWS the dimensions instead of ignoring them: a studio whose
+// half rounds are 140×70 changes two fields rather than needing a new outline drawn.
+const HALF_ROUND: MapAppearance = { shape: "half-circle", content: "none" };
 
 export const STANDARD_TABLES: StandardItem[] = [
   table("table-round-180", "עגול 180", { diameterMm: 1800 }, 12),
@@ -117,8 +103,85 @@ export const STANDARD_TABLES: StandardItem[] = [
   table("table-round-244", "עגול 244", { diameterMm: 2440 }, 16),
 ];
 
+// ── במות ────────────────────────────────────────────────────────────────────
+
+// Every one of these is a run of 100×200 modules on adjustable legs — the deck a hall stacks in its
+// store room, not a built platform. So the sizes below are all whole modules, and the height is the
+// one number a studio routinely changes: 60cm is where a band or a chuppah usually ends up, and the
+// same legs go down to 20 and up to 80.
+const STAGE_HEIGHT_MM = 600;
+const STAGE_SPEC = "מורכבת ממודולים 100×200 · רגליים מתכווננות 20–80 סמ";
+
+function stage(key: string, name: string, widthMm: number, depthMm: number): StandardItem {
+  return {
+    key,
+    product: {
+      name,
+      category: "stages",
+      layer: "floor",
+      dimensions: { widthMm, depthMm, heightMm: STAGE_HEIGHT_MM },
+      categoryFields: {},
+      spec: STAGE_SPEC,
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  };
+}
+
+export const STANDARD_STAGES: StandardItem[] = [
+  stage("stage-200x100", "במה 200×100", 2000, 1000),
+  stage("stage-300x200", "במה 300×200", 3000, 2000),
+  stage("stage-400x300", "במה 400×300", 4000, 3000),
+  stage("stage-600x400", "במה 600×400", 6000, 4000),
+  stage("stage-800x400", "במה 800×400", 8000, 4000),
+];
+
+// ── ברים ────────────────────────────────────────────────────────────────────
+
+const BAR_HEIGHT_MM = 1100; // counter height — what you stand at, not what you sit at
+
+// בצורת ח. The shape a bar is mostly built in, and the one its two measurements alone would get
+// most wrong: derived by the old rule a 360×180 ח is a solid 3.6×1.8m slab — 6.5 square metres of
+// floor the plan says are gone, when the truth is a counter around an opening the staff stand in.
+// So it NAMES its shape and lib/studio/footprint.ts builds the outline from those same two numbers,
+// counter included (a third of the shorter side, which is 60cm on the sizes below).
+const U_BAR: MapAppearance = { shape: "u-shape", content: "none" };
+
+function bar(
+  key: string,
+  name: string,
+  dimensions: { diameterMm?: number; widthMm?: number; depthMm?: number },
+  appearance?: MapAppearance,
+): StandardItem {
+  return {
+    key,
+    product: {
+      name,
+      category: "bars",
+      layer: "floor",
+      dimensions: { ...dimensions, heightMm: BAR_HEIGHT_MM },
+      categoryFields: {},
+      styleTags: [],
+      visibility: "public",
+      // Empty, for the same reason the tables are (see above): drawn at true scale a ח says ח and a
+      // 2m counter says counter, and on the hall plan the feature carries its own name beside it.
+      appearance: appearance ?? { shape: dimensions.diameterMm ? "circle" : "rect", content: "none" },
+    },
+  };
+}
+
+export const STANDARD_BARS: StandardItem[] = [
+  bar("bar-straight-200", "בר ישר 200×60", { widthMm: 2000, depthMm: 600 }),
+  bar("bar-straight-300", "בר ישר 300×60", { widthMm: 3000, depthMm: 600 }),
+  bar("bar-u-240", "בר בצורת ח 240×120", { widthMm: 2400, depthMm: 1200 }, U_BAR),
+  bar("bar-u-360", "בר בצורת ח 360×180", { widthMm: 3600, depthMm: 1800 }, U_BAR),
+  bar("bar-u-480", "בר בצורת ח 480×180", { widthMm: 4800, depthMm: 1800 }, U_BAR),
+  bar("bar-round-150", "בר עגול 150", { diameterMm: 1500 }),
+];
+
 /** Everything the install writes. Concatenate the next department here. */
-export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES];
+export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_STAGES, ...STANDARD_BARS];
 
 // ponytail: self-check. Run: npm run check:standard
 if (isMain(import.meta.url)) {
@@ -167,12 +230,41 @@ if (isMain(import.meta.url)) {
   );
   const half = standardProduct(STANDARD_TABLES.find((t) => t.key === "table-half-round-120")!, "x");
   const halfFootprint = resolveFootprint(half);
-  check(halfFootprint.kind === "custom", "חצי עיגול keeps its outline");
+  check(halfFootprint.kind === "custom", "חצי עיגול resolves to a real outline, not a box");
   const bounds = footprintBounds(halfFootprint);
   check(
     bounds.w === 1200 && bounds.h === 600,
     `חצי עיגול is 120×60 on the plan, not a 120×60 box (${bounds.w}×${bounds.h})`,
   );
+
+  // The ח bars: the shape the two numbers alone would get wrong, and the reason this department
+  // states an appearance at all. A ח that resolved to a rectangle would look like a bar and eat the
+  // floor of a slab — six square metres the plan says are taken and the staff are actually standing in.
+  const uBars = STANDARD_BARS.filter((b) => b.product.appearance?.shape === "u-shape");
+  check(uBars.length > 0, "the base library ships ח-shaped bars — that is how a bar is mostly built");
+  for (const item of uBars) {
+    const f = resolveFootprint(standardProduct(item, "x"));
+    const b = footprintBounds(f);
+    const d = item.product.dimensions;
+    check(f.kind === "custom", `${item.key}: is a real ח outline, not a box`);
+    check(
+      b.w === d.widthMm && b.h === d.depthMm,
+      `${item.key}: measures exactly the two numbers on the row (${b.w}×${b.h})`,
+    );
+    // The counter is a third of the shorter side; on every ח in the list that has to land on a
+    // width a person can actually work behind, or the shape is right and the bar is not.
+    const counter = Math.min(d.widthMm!, d.depthMm!) / 3;
+    check(counter >= 400 && counter <= 800, `${item.key}: the counter is ${counter}mm — a bar, not a shelf`);
+  }
+
+  // Every department's own floor: a stage without a deck height is a drawing, and a bar you can sit
+  // at is a table. Both numbers are what the 3D pass stands the item up with (R-3).
+  for (const item of STANDARD_STAGES) {
+    check(item.product.dimensions.heightMm >= 200, `${item.key}: stands off the floor`);
+  }
+  for (const item of STANDARD_BARS) {
+    check(item.product.dimensions.heightMm >= 1000, `${item.key}: is counter height, not table height`);
+  }
 
   if (failures.length) {
     console.error(`${failures.length} failed`);

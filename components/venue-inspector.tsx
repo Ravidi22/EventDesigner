@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Box,
   CircleDot,
@@ -8,6 +8,7 @@ import {
   Footprints,
   GlassWater,
   Layers,
+  Minus,
   Plus,
   Presentation,
   Shapes,
@@ -22,22 +23,27 @@ import {
   FEATURE_KIND_LABEL,
   addEntrance,
   addStairs,
+  isHangingPoint,
   moveNode,
   nodeMap,
   removeStairs,
+  rigLengthMm,
   setWallAngle,
   setWallBulge,
   setWallLength,
   updateEntrance,
   updateFeature,
+  updateRig,
   updateStairs,
   updateWall,
   wallPoints,
+  type CeilingRig,
   type FeatureKind,
   type StructureFeature,
   type VenueStructure,
   type WallKind,
 } from "@/lib/venues/structure";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   MAX_STEPS,
   STAIRS_SIDES,
@@ -47,6 +53,10 @@ import {
   type StairsSide,
 } from "@/lib/venues/stairs";
 import { ZONE_KIND_LABEL, type Zone, type ZoneKind, type ZoneSource } from "@/lib/venues/zone";
+import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, type AddTool } from "@/lib/venues/add-tools";
+import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
+import { formatDimensions } from "@/lib/catalog/format";
+import { Select } from "@/components/select";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
@@ -60,7 +70,7 @@ import {
 } from "@/components/plan-canvas";
 
 export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other"];
-const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
+export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   pool: Waves,
   stage: Presentation,
   bar: GlassWater,
@@ -68,13 +78,25 @@ const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   other: Shapes,
 };
 
-const SHAPE_LABEL = { rect: "מלבן", circle: "עיגול", ellipse: "אליפסה" } as const;
+/** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one
+ *  tool that is a door rather than a feature. Shared so the canvas's flyout and a zone's quick-add
+ *  can't drift apart.
+ *
+ *  A record and not a function returning one: a component that comes back from a CALL is a new
+ *  component on every render (react-hooks/static-components), and these are rendered in a grid. */
+export const ADD_TOOL_ICON: Record<string, LucideIcon> = { entrance: DoorOpen, ...FEATURE_ICON };
+
+/** The key into it. Kept beside the record so no caller has to remember the "entrance" fallback. */
+export function addToolIconKey(tool: AddTool): string {
+  return tool.kind ?? "entrance";
+}
 const KIND_NOUN: Record<PlanSelectionKind, string> = {
   zone: "אזורים",
   wall: "קירות",
   node: "פינות",
   door: "כניסות",
   feature: "אלמנטים",
+  rig: "מוטות",
 };
 
 // This inspector's own shell — a vertical stack, not INSPECTOR_WRAP's horizontal bar. The halls
@@ -454,6 +476,19 @@ export function VenueInspector({
     );
   }
 
+  if (one.kind === "rig") {
+    const rig = (structure.rigs ?? []).find((r) => r.id === one.id);
+    if (!rig) return null;
+    return (
+      <RigPanel
+        rig={rig}
+        onChange={(patch) => apply((s) => updateRig(s, rig.id, patch))}
+        onDelete={onDelete}
+        closeBtn={closeBtn}
+      />
+    );
+  }
+
   const feature = structure.features.find((f) => f.id === one.id);
   if (!feature) return null;
   const patch = (p: Parameters<typeof updateFeature>[2]) => apply((s) => updateFeature(s, feature.id, p));
@@ -471,11 +506,21 @@ export function VenueInspector({
           aria-label="שם האלמנט"
           className="h-10 w-28 rounded-md border border-border bg-canvas px-2 text-sm text-ink transition-colors hover:border-accent-line focus-visible:border-accent focus-visible:outline-none"
         />
-        <SegmentedToggle
+        {/* The catalog's own shape vocabulary, not the three primitives this used to offer — a
+            feature placed from a catalog row can be any of them, and a ח bar whose shape control
+            couldn't say "ח" would lose its shape the first time anything else here was edited. A
+            Select rather than a segmented toggle: eleven segments is not a toggle. "מותאם" is
+            listed only when the feature already is one — there is no outline editor here to draw a
+            new one with, and the shape came off a catalog row that has. */}
+        <Select
           value={feature.shape}
-          options={(Object.keys(SHAPE_LABEL) as (keyof typeof SHAPE_LABEL)[]).map((s) => ({ value: s, label: SHAPE_LABEL[s] }))}
-          onChange={(shape) => patch({ shape })}
-          ariaLabel="צורה"
+          options={MAP_SHAPES.filter((sh) => sh !== "custom" || feature.shape === "custom").map((sh) => ({
+            value: sh,
+            label: SHAPE_LABEL[sh],
+          }))}
+          onChange={(shape) => patch({ shape: shape as StructureFeature["shape"] })}
+          aria-label="צורה"
+          className="w-32"
         />
       </InspectorGroup>
       <InspectorDivider orientation="column" />
@@ -530,6 +575,92 @@ export function VenueInspector({
       <InspectorDivider orientation="column" />
       <StairsFields feature={feature} apply={apply} />
       <div className={FOOTER}>{deleteBtn}</div>
+    </div>
+  );
+}
+
+// A ceiling rod. Its own component, not another branch inlined into VenueInspector above, because
+// its delete asks first — a native <dialog>, like every other destructive confirmation in the app —
+// and that dialog's open/close is its own piece of state; VenueInspector already returns early for
+// several other selection kinds before reaching this one, and a hook can't live after a conditional
+// return that sometimes skips it.
+function RigPanel({
+  rig,
+  onChange,
+  onDelete,
+  closeBtn,
+}: {
+  rig: CeilingRig;
+  onChange: (patch: Partial<Omit<CeilingRig, "id">>) => void;
+  onDelete: () => void;
+  closeBtn: ReactNode;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const hanging = isHangingPoint(rig);
+  return (
+    <div className={WRAP}>
+      <div className="flex items-center justify-between gap-2">
+        <InspectorHeader icon={Minus} label="מוט תקרה" />
+        {closeBtn}
+      </div>
+      <InspectorDivider orientation="column" />
+      <InspectorGroup>
+        <input
+          value={rig.label}
+          onChange={(e) => onChange({ label: e.target.value })}
+          aria-label="שם המוט"
+          className="h-10 w-28 rounded-md border border-border bg-canvas px-2 text-sm text-ink transition-colors hover:border-accent-line focus-visible:border-accent focus-visible:outline-none"
+        />
+      </InspectorGroup>
+      <InspectorDivider orientation="column" />
+      <InspectorGroup>
+        <NumberField
+          layout="inline"
+          label="גובה (מ׳)"
+          decimals={2}
+          min={0}
+          step={0.1}
+          commitOnBlur
+          value={rig.heightMm / 1000}
+          onChange={(m) => onChange({ heightMm: Math.round(m * 1000) })}
+          className="w-20"
+        />
+        {/* loadKg is recorded and printed, never validated against (lib/venues/structure.ts) — 0
+            reads as "not rated" here exactly like a zone's blank capacity fields. */}
+        <NumberField
+          layout="inline"
+          label="עומס (ק״ג)"
+          decimals={0}
+          min={0}
+          step={5}
+          hideZero
+          commitOnBlur
+          value={rig.loadKg ?? 0}
+          onChange={(kg) => onChange({ loadKg: kg > 0 ? Math.round(kg) : undefined })}
+          className="w-20"
+        />
+      </InspectorGroup>
+      <InspectorDivider orientation="column" />
+      <span className="shrink-0 text-xs text-muted">
+        {hanging ? "נקודת תלייה" : <>אורך <span className="nums">{(rigLengthMm(rig) / 1000).toFixed(2)}</span> מ׳</>}
+      </span>
+      <InspectorDivider orientation="column" />
+      <div className={FOOTER}>
+        <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+          <Trash2 className="h-4 w-4" strokeWidth={2} />
+          מחיקה
+        </Button>
+      </div>
+      <ConfirmDialog
+        open={confirming}
+        title={`למחוק את ${rig.label}?`}
+        confirmLabel="מחיקה"
+        onConfirm={() => {
+          setConfirming(false);
+          onDelete();
+        }}
+        onClose={() => setConfirming(false)}
+      />
     </div>
   );
 }
@@ -642,17 +773,23 @@ export function ZoneFields({
   zone,
   onChange,
   onDelete,
+  addTools = [],
   onAddElement,
 }: {
   zone: Zone;
   onChange: (patch: Partial<Zone>) => void;
   onDelete: () => void;
-  /** Adds one of FEATURE_KINDS somewhere inside this zone. Absent = no add-element control here —
-   *  the same "supplying it is what turns the affordance on" rule the canvas's own handlers follow.
-   *  A zone has no feature list of its own to add *into* (a feature belongs to the plan, a zone
-   *  claims it only by sitting inside its boundary — see resolveZones), so the host decides *where*
-   *  "inside this zone" means; this just says which kind was picked. */
-  onAddElement?: (kind: FeatureKind) => void;
+  /** What may be added — the same list the canvas's own flyout offers (lib/venues/add-tools.ts),
+   *  built from the studio's catalog. Passed in rather than derived here so both pickers are looking
+   *  at one list: a bar the flyout offers and this menu doesn't is a bar the designer has to go and
+   *  find the other way round. */
+  addTools?: AddTool[];
+  /** Places one of `addTools` somewhere inside this zone. Absent (or an empty list) = no
+   *  add-element control here — the same "supplying it is what turns the affordance on" rule the
+   *  canvas's own handlers follow. A zone has no feature list of its own to add *into* (a feature
+   *  belongs to the plan, a zone claims it only by sitting inside its boundary — see resolveZones),
+   *  so the host decides *where* "inside this zone" means; this just says what was picked. */
+  onAddElement?: (tool: AddTool) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   return (
@@ -681,7 +818,7 @@ export function ZoneFields({
           ))}
         </div>
 
-        {onAddElement && (
+        {onAddElement && addTools.length > 0 && (
           <div className="relative shrink-0">
             <button
               type="button"
@@ -697,24 +834,43 @@ export function ZoneFields({
                 <div className="fixed inset-0 z-40" onClick={() => setAddOpen(false)} />
                 <div
                   role="menu"
-                  className="absolute end-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-md border border-border bg-surface py-1 shadow-floating"
+                  className="absolute end-0 top-full z-50 mt-1 max-h-80 w-60 overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-floating"
                 >
-                  {FEATURE_KINDS.map((k) => {
-                    const Icon = FEATURE_ICON[k];
+                  {/* Sectioned, because the bars and the stages are catalog ROWS now and a flat list
+                      of "בריכה / מבנה / בר בצורת ח 360×180" reads as one vocabulary when it is
+                      two. A section with nothing in it prints nothing, not an empty heading. */}
+                  {ADD_TOOL_SECTIONS.map((section) => {
+                    const inSection = addTools.filter((t) => t.section === section);
+                    if (inSection.length === 0) return null;
                     return (
-                      <button
-                        key={k}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          onAddElement(k);
-                          setAddOpen(false);
-                        }}
-                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink transition-colors hover:bg-bg"
-                      >
-                        <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-                        {FEATURE_KIND_LABEL[k]}
-                      </button>
+                      <div key={section}>
+                        <p className="px-3 pb-1 pt-2 font-label text-[10px] font-medium tracking-[1.5px] text-muted">
+                          {ADD_TOOL_SECTION_LABEL[section]}
+                        </p>
+                        {inSection.map((tool) => {
+                          const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+                          return (
+                            <button
+                              key={tool.id}
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                onAddElement(tool);
+                                setAddOpen(false);
+                              }}
+                              className="flex w-full items-center gap-2.5 px-3 py-2 text-start text-sm text-ink transition-colors hover:bg-bg"
+                            >
+                              <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+                              <span className="min-w-0 flex-1 truncate">{tool.label}</span>
+                              {tool.product && (
+                                <span className="shrink-0 text-[10px] text-muted" dir="ltr">
+                                  {formatDimensions(tool.product.dimensions)}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                     );
                   })}
                 </div>

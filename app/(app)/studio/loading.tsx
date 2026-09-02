@@ -1,6 +1,6 @@
 import { PageSkeleton } from "@/components/skeleton";
 
-// No title block: the studio opens straight into EventSurface chrome plus a canvas.
+// The studio opens straight into its toolbar strip plus a canvas.
 export default function Loading() {
-  return <PageSkeleton rows={1} title={false} />;
+  return <PageSkeleton shape="canvas" toolbar />;
 }
