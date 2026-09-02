@@ -1,13 +1,15 @@
 "use client";
 
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DesignDocumentContent, DesignTable, Placement, Layer as LayerId, WallSpan, RigHang } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable, Placement, WallSpan, RigHang } from "@/lib/design-document/types";
+import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
 import { pointToT, resolveSpan, wallSegment, resolveHang, hangNear } from "@/lib/studio/anchor";
-import { toLocalFrame, fromLocalFrame } from "@/lib/studio/geometry";
-import { isHangingPoint, type VenueStructure } from "@/lib/venues/structure";
+import { toLocalFrame, fromLocalFrame, rotatedExtent } from "@/lib/studio/geometry";
+import { overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
+import { featureFootprint, isHangingPoint, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
@@ -62,6 +64,19 @@ export interface SelectionRef {
  *  show — see the studio screen, which narrows the list down to this before handing it over. */
 export type Selection = SelectionRef | null;
 
+/** What the rotate handle does with a selection of SEVERAL — the one question a single item never
+ *  has to answer.
+ *
+ *   together — the lot swings about the one centre they share. Right for a block: four decks pushed
+ *              into one platform are one object and turn like one, corner sweeping round.
+ *   each     — every item turns where it stands, about its own centre, by the same angle. Right for
+ *              a room of tables: "turn them all a quarter turn" means each of them, not all of them
+ *              orbiting the middle of the hall and landing somewhere else entirely.
+ *
+ *  Both are real gestures and neither is a default the other can be reached from, which is why this
+ *  is a choice on screen (the inspector's מה הידית מסובבת) rather than a modifier key nobody finds. */
+export type SpinMode = "together" | "each";
+
 const sameRef = (a: SelectionRef, b: SelectionRef) => a.kind === b.kind && a.id === b.id;
 
 export function CanvasStage({
@@ -69,6 +84,7 @@ export function CanvasStage({
   plan,
   selection,
   layerVisible,
+  spin,
   activeLayer,
   focusZoneId,
   onSelect,
@@ -89,9 +105,11 @@ export function CanvasStage({
   plan: EventPlan;
   /** Everything selected right now — one item, or a whole group. */
   selection: SelectionRef[];
-  layerVisible: Record<LayerId, boolean>;
+  layerVisible: Record<Plane, boolean>;
+  /** What the rotate handle does with several things at once — see SpinMode. */
+  spin: SpinMode;
   /** The layer being worked in, or null for "all of them" — see the note on `isLive` below. */
-  activeLayer: LayerId | null;
+  activeLayer: Plane | null;
   /** The zone the designer asked to be shown (the toolbar's eye). Frames it and holds everything
    *  else back; null = the whole event, which is what the surface opens on. */
   focusZoneId: string | null;
@@ -126,11 +144,11 @@ export function CanvasStage({
    *  thing being dragged at the size it will actually land — see catalog-rail.tsx. */
   onScale?: (mmPerPx: number) => void;
 }) {
-  /** Is this layer accepting the pointer? With no active layer every visible layer is, which is how
+  /** Is this plane accepting the pointer? With no active plane every visible one is, which is how
    *  this canvas has always behaved. */
-  const isLive = (l: LayerId) => activeLayer === null || activeLayer === l;
-  /** What a whole layer's <g> wears when it is visible but not the one being worked in. */
-  const layerAttrs = (l: LayerId) =>
+  const isLive = (l: Plane) => activeLayer === null || activeLayer === l;
+  /** What a plane's <g> wears when it is visible but not the one being worked in. */
+  const layerAttrs = (l: Plane) =>
     isLive(l) ? undefined : { opacity: 0.35, style: { pointerEvents: "none" as const } };
 
   // Frame the event's zones — or the one zone the eye picked — and only once there is something to
@@ -233,51 +251,87 @@ export function CanvasStage({
   const tableById = useMemo(() => new Map(doc.tables.map((t) => [t.id, t])), [doc.tables]);
   const placementById = useMemo(() => new Map(doc.placements.map((p) => [p.id, p])), [doc.placements]);
 
-  // Everything with a free position of its own, which is the same list three times over: what a
-  // rubber-band can catch, what a group drag carries, and what a single drag aligns itself against.
-  // A hidden layer is not on it — a marquee must not sweep up what the designer cannot see.
-  // Neither are the two anchored kinds: a cloth is its table's surface and a drape belongs to a
-  // wall, so neither has a centre a shared delta could move.
+  // Everything with a free position of its own, boxed — the list a rubber-band catches from, the one
+  // a group drag carries, and the one a drag aligns itself against. The two ANCHORED kinds are on
+  // none of them: a cloth is its table's surface and a drape belongs to a wall, so neither has a
+  // centre a shared delta could move.
   //
   // Each one is a BOX, not a point. Alignment only ever needed the centre, but equal-gap snapping
-  // measures the air BETWEEN items, and air is between edges — a 2.44m table and a candlestick
-  // sitting on the same centre line are nowhere near the same distance apart.
-  const movable = useMemo(() => {
-    // A hidden layer was already excluded here; an ACTIVE layer that isn't this one excludes it too
-    // — the marquee, the group drag and alignment must never reach an item the designer just dimmed
-    // out and took the pointer away from. Tables are floor-plane, so they answer to isLive("floor")
-    // like the rest of what stands on the floor.
-    const out: { ref: SelectionRef; box: SnapBox }[] = isLive("floor")
-      ? doc.tables.map((t) => {
-          const b = footprintBounds(tableFootprint(t));
-          return { ref: { kind: "table" as const, id: t.id }, box: { ...t.position, widthMm: b.w, depthMm: b.h } };
-        })
-      : [];
-    const placed = [
-      ...(layerVisible.floor && isLive("floor") ? sorted.carpets : []),
-      ...sorted.items.filter((p) => layerVisible[p.layer] && isLive(p.layer)),
-      ...(layerVisible.ceiling && isLive("ceiling") ? sorted.ceiling : []),
-    ];
-    for (const p of placed) {
-      // A hung ceiling item's box is where it actually DRAWS — the rod-resolved point — not its raw
-      // stored `position`, which a drag keeps overwriting all gesture long while `hang` still wins
-      // the render (see the ceiling pass below). Boxing it from the wrong origin is what let a group
-      // drag's delta compute against a point the item was never actually at.
-      const at = p.layer === "ceiling" && p.hang ? resolveHang(plan.structure, p.hang) : null;
-      out.push({ ref: { kind: "placement", id: p.id }, box: { ...(at ?? p.position), ...placementExtent(p) } });
-    }
-    // The venue's own furniture is on this list too, which is what gives it everything the list is
-    // for at once: a rubber-band catches it, a group drag carries it, and a table dragged past it
-    // lines up on its edges. A bar you can move but cannot align to would be the worse half of the
-    // feature — the reason to move it at all is usually to line it up with something. Floor-plane,
-    // so it answers to the same isLive("floor") as the tables above.
-    if (isLive("floor")) {
-      for (const f of structure.features) {
-        out.push({ ref: { kind: "feature", id: f.id }, box: { x: f.x, y: f.y, widthMm: f.widthMm, depthMm: f.depthMm } });
+  // measures the air BETWEEN items, and edge snapping puts one item's edge against another's — and
+  // air, like an edge, is a thing a centre cannot describe: a 2.44m table and a candlestick sitting
+  // on the same centre line are nowhere near the same distance apart.
+  //
+  // `reach` is the one question that differs between the two lists below, asked once per plane.
+  const boxesOn = useCallback(
+    (reach: (p: Plane) => boolean) => {
+      // Every box is the box the item TURNED occupies (rotatedExtent) — a 4×2 deck stood on end is
+      // 2×4 of floor, and a rule about whether two things fit in one room cannot be measured off
+      // the size the deck would have had if nobody had turned it.
+      const out: { ref: SelectionRef; box: SnapBox; solid?: string }[] = reach("tables")
+        ? doc.tables.map((t) => ({
+            ref: { kind: "table" as const, id: t.id },
+            box: { ...t.position, ...turnedExtent(tableFootprint(t), t.rotation ?? 0) },
+            solid: "table",
+          }))
+        : [];
+      const placed = [
+        ...(reach("floor") ? sorted.carpets : []),
+        ...sorted.items.filter((p) => reach(p.layer)),
+        ...(reach("ceiling") ? sorted.ceiling : []),
+      ];
+      for (const p of placed) {
+        // A hung ceiling item's box is where it actually DRAWS — the rod-resolved point — not its
+        // raw stored `position`, which a drag keeps overwriting all gesture long while `hang` still
+        // wins the render (see the ceiling pass below). Boxing it from the wrong origin is what let
+        // a group drag's delta compute against a point the item was never actually at.
+        const at = p.layer === "ceiling" && p.hang ? resolveHang(plan.structure, p.hang) : null;
+        out.push({
+          ref: { kind: "placement", id: p.id },
+          box: { ...(at ?? p.position), ...placementExtent(p) },
+          solid: solidKindOf(p),
+        });
       }
-    }
-    return out;
-  }, [doc.tables, sorted, layerVisible, structure, plan.structure, activeLayer]);
+      // The venue's own furniture is on the list too, which is what gives it everything the list is
+      // for at once: a rubber-band catches it, a group drag carries it, and a table dragged past it
+      // lines up on its edges. A bar you can move but cannot align to would be the worse half of the
+      // feature — the reason to move it at all is usually to line it up with something. It stands on
+      // the floor, so it answers to the floor plane.
+      if (reach("floor")) {
+        for (const f of structure.features) {
+          out.push({
+            ref: { kind: "feature", id: f.id },
+            // Through its real shape, like everything else here: the venue's round bar is a
+            // circle and a circle turned is the same circle.
+            box: { x: f.x, y: f.y, ...turnedExtent(featureFootprint(f), f.rotationDeg ?? 0) },
+            // The venue's own stage is a stage: a deck dropped on top of the house staging is the
+            // same mistake as one dropped on another deck, and the crew cannot build either.
+            solid: f.kind === "stage" || f.kind === "bar" || f.kind === "pool" ? f.kind : undefined,
+          });
+        }
+      }
+      return out;
+    },
+    [doc.tables, sorted, structure, plan.structure],
+  );
+
+  /** What the pointer may TAKE: a rubber-band's catch and a group drag's cargo. A hidden plane is
+   *  not on it — a marquee must not sweep up what the designer cannot see — and neither is a plane
+   *  that is visible but not the one being worked in, which is the whole of what activating one
+   *  buys: lay the tables, switch to רצפה, and a band round three stages standing on top of them
+   *  takes the three stages. */
+  const movable = useMemo(
+    () => boxesOn((p) => layerVisible[p] && isLive(p)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boxesOn, layerVisible, activeLayer],
+  );
+
+  /** What a drag LINES UP WITH — everything on screen, whether or not its plane is the live one.
+   *  The two lists part company here on purpose: reaching a dimmed item and referring to one are
+   *  different acts. A stage being pushed into place while the tables are held back still has to
+   *  land square with the row of tables it is going in front of — you can see them, so lining up
+   *  with them is the whole point. A HIDDEN plane is on neither list: an item nobody can see is not
+   *  an alignment the designer could have meant. */
+  const alignTo = useMemo(() => boxesOn((p) => layerVisible[p]), [boxesOn, layerVisible]);
 
   const isSel = (kind: SelectionKind, id: string) => selection.some((r) => r.kind === kind && r.id === id);
 
@@ -360,10 +414,84 @@ export function CanvasStage({
 
   // One live group drag: every selected item's position, frozen the moment the gesture crosses the
   // threshold, so the whole group is re-derived each frame from one shared delta off fixed origins
-  // rather than drifting from repeated relative nudges. Mirrors PlanCanvas's own group drag,
-  // including its one deliberate omission: no alignment pull while several things move together —
-  // snapping one member would shear the group apart.
-  const groupDrag = useRef<{ start: Point; snapshot: { ref: SelectionRef; origin: Point }[] } | null>(null);
+  // rather than drifting from repeated relative nudges. Mirrors PlanCanvas's own group drag.
+  //
+  // `box` is the whole selection's own bounding box, frozen with the origins — and it is what makes
+  // a group drag SNAP. The omission this used to carry ("no alignment pull while several things
+  // move together") had the right reason and drew the wrong conclusion: snapping each MEMBER would
+  // indeed shear the group apart, so nothing was snapped and a block of four stages could not be
+  // put against a wall or in line with anything. Snapping the BOX cannot shear anything — it yields
+  // one delta, every member takes it, and the arrangement inside the box is untouched.
+  const groupDrag = useRef<{ start: Point; box: SnapBox; snapshot: { ref: SelectionRef; origin: Point }[] } | null>(null);
+
+  /** THE NO-OVERLAP RULE, frozen for one gesture: the movers as they stood when it began, the
+   *  obstacles they must stay out of, and the pairs that were already overlapping and are therefore
+   *  none of this rule's business (lib/studio/collide.ts). Frozen because all three answers have to
+   *  be the ones from the start of the drag: the movers are moving, and re-asking "what was already
+   *  wrong here" against a position the drag itself just wrote would answer "everything".
+   *
+   *  Rebuilt per gesture, cleared in endDrag alongside groupDrag. Null when the thing being dragged
+   *  is not solid at all — a rug, a centrepiece, a chandelier — which is most of a plan's decor and
+   *  costs nothing at all to drag. */
+  const solids = useRef<{
+    /** Where the gesture began — the dragged item's centre, or the whole selection's. Every delta
+     *  below is measured from HERE and not from the live position, which the drag itself is
+     *  rewriting frame by frame. */
+    origin: Point;
+    movers: SolidBox[];
+    obstacles: SolidBox[];
+    ignore: ReturnType<typeof overlappingAtStart>;
+  } | null>(null);
+
+  /** Freeze the collision sets for whatever this gesture is about to move. `refs` is the mover set —
+   *  one item, or a whole selection — and `origin` is what its position is measured against. */
+  const asSolid = (e: { ref: SelectionRef; box: SnapBox; solid?: string }): SolidBox | null =>
+    e.solid ? { ...e.box, solid: e.solid } : null;
+
+  /** Everything solid on the plan except `exclude` — what a gesture must keep its cargo out of.
+   *  Drawn from `alignTo`, not `movable`: a plane held back from the pointer is still furniture
+   *  standing in the room, and dropping a deck into the house bar because the bar's plane happened
+   *  to be dimmed would be the plan lying about the room. Only a HIDDEN plane is absent, and an item
+   *  nobody can see is one nobody is arranging around. */
+  const solidObstacles = (exclude: SelectionRef[]): SolidBox[] =>
+    alignTo
+      .filter((m) => !exclude.some((x) => sameRef(x, m.ref)))
+      .map(asSolid)
+      .filter((b): b is SolidBox => !!b);
+
+  /** Where a freshly dropped item actually lands: where it was let go, moved off anything solid it
+   *  would have been inside. The size and kind come from the rail's drag payload — `dataTransfer`
+   *  cannot be read until the drop, which is the whole reason that payload exists. A fresh item has
+   *  no history, so nothing is exempt: it may not land overlapping at all. */
+  const clearedDrop = (p: Point): Point => {
+    const carried = carriedItem();
+    if (!carried?.solid) return p;
+    const box: SolidBox = { x: p.x, y: p.y, widthMm: carried.widthMm, depthMm: carried.depthMm, solid: carried.solid };
+    const clear = pushApart([box], solidObstacles([]));
+    return { x: p.x + clear.x, y: p.y + clear.y };
+  };
+
+  const beginSolids = (refs: SelectionRef[], origin: Point) => {
+    const inSet = (r: SelectionRef) => refs.some((x) => sameRef(x, r));
+    const movers = movable.filter((m) => inSet(m.ref)).map(asSolid).filter((b): b is SolidBox => !!b);
+    const obstacles = movers.length ? solidObstacles(refs) : [];
+    return { origin, movers, obstacles, ignore: overlappingAtStart(movers, obstacles) };
+  };
+
+  /** The delta that keeps this gesture's movers out of everything solid, given where the drag has
+   *  taken them. Zero when nothing being dragged is solid, or nothing is in the way — which is the
+   *  usual frame, and costs one empty loop. */
+  const clearOf = (target: Point): Point => {
+    const s = solids.current;
+    if (!s || s.movers.length === 0) return { x: 0, y: 0 };
+    const dx = target.x - s.origin.x;
+    const dy = target.y - s.origin.y;
+    return pushApart(
+      s.movers.map((m) => ({ ...m, x: m.x + dx, y: m.y + dy })),
+      s.obstacles,
+      s.ignore,
+    );
+  };
 
   /** Every placement id a drag in progress is actually writing to right now — the pressed item alone
    *  on a solo drag, or the whole snapshot on a group one. Set in moveFor below, the one place that
@@ -400,16 +528,34 @@ export function CanvasStage({
    *  multi-selection, otherwise its own snapped move. */
   const moveFor = (ref: SelectionRef, ctx: CanvasLayerContext) => (p: Point) => {
     if (selection.length > 1 && isSel(ref.kind, ref.id)) {
+      // The pressed item is selected and draggable, so it is on `movable` and this is never empty —
+      // which is what lets the box below be taken without a guard.
+      const picked = movable.filter((m) => isSel(m.ref.kind, m.ref.id));
       groupDrag.current ??= {
         start: p,
-        snapshot: movable.filter((m) => isSel(m.ref.kind, m.ref.id)).map((m) => ({ ref: m.ref, origin: { x: m.box.x, y: m.box.y } })),
+        box: unionBox(picked.map((m) => m.box)),
+        snapshot: picked.map((m) => ({ ref: m.ref, origin: { x: m.box.x, y: m.box.y } })),
       };
-      const { start, snapshot } = groupDrag.current;
+      const { start, box, snapshot } = groupDrag.current;
+      solids.current ??= beginSolids(snapshot.map((sn) => sn.ref), { x: box.x, y: box.y });
       // Every placement this group drag is about to sweep along — a ceiling item among them draws
       // live below rather than staying pinned to its rod for the whole gesture.
       draggingIds.current = new Set(snapshot.filter((sn) => sn.ref.kind === "placement").map((sn) => sn.ref.id));
-      const dx = p.x - start.x;
-      const dy = p.y - start.y;
+      // ONE BOX, SNAPPED ONCE, and the delta it comes back with is handed to every member. That is
+      // what keeps the arrangement rigid: the guides light up for the block's own edges and centre —
+      // four stages pushed together go against the wall as one deck — and no member is ever pulled
+      // off the others. The rest of the selection is dropped from the references, or the block would
+      // align to itself and never move at all.
+      const moved = { x: box.x + (p.x - start.x), y: box.y + (p.y - start.y) };
+      const snapped = ctx.snap(moved, {
+        boxes: alignTo.filter((m) => !isSel(m.ref.kind, m.ref.id)).map((m) => m.box),
+        self: { widthMm: box.widthMm, depthMm: box.depthMm },
+      });
+      // …and then out of anything solid it has been pushed into. The snap already offers flush; this
+      // is what stops the drag going through it.
+      const clear = clearOf(snapped);
+      const dx = snapped.x - box.x + clear.x;
+      const dy = snapped.y - box.y + clear.y;
       onMoveMany(
         snapshot.map((sn) => ({
           kind: sn.ref.kind,
@@ -422,9 +568,9 @@ export function CanvasStage({
     // Aligned against the walls (PlanCanvas's own references) and every OTHER item on the plan —
     // itself excluded, or it would align to where it already is and could never be pulled off. Its
     // own extent goes along too: that is what lets the gap either side of it be measured.
-    const self = movable.find((m) => sameRef(m.ref, ref))?.box;
+    const self = alignTo.find((m) => sameRef(m.ref, ref))?.box;
     const snapped = ctx.snap(p, {
-      boxes: movable.filter((m) => !sameRef(m.ref, ref)).map((m) => m.box),
+      boxes: alignTo.filter((m) => !sameRef(m.ref, ref)).map((m) => m.box),
       self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
       // Only while the ceiling layer is on. Hidden, no lines are passed and this is exactly the
       // drag it always was. Rods are the property's own geometry (plan.structure, never the
@@ -435,11 +581,21 @@ export function CanvasStage({
         ? { lines: plan.structure.rigs.filter((r) => !isHangingPoint(r)).map((r) => ({ a: r.a, b: r.b })) }
         : {}),
     });
-    if (ref.kind === "table") onMoveTable(ref.id, snapped);
-    else if (ref.kind === "feature") onMoveFeature(ref.id, snapped);
+    // Two things cannot stand in the same place. The snap above has already offered the edge of
+    // whatever is nearby; this is what stops the drag from carrying on THROUGH it and leaving one
+    // deck on top of another — a plan the crew cannot build. Same-kind only, and an overlap that
+    // was already there when the drag began is left alone (lib/studio/collide.ts).
+    // `self` is this item's box as it stood when the gesture began: beginSolids runs on the first
+    // move frame only (??=), before any of this drag's writes have landed.
+    solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : snapped);
+    const clear = clearOf(snapped);
+    const at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
+
+    if (ref.kind === "table") onMoveTable(ref.id, at);
+    else if (ref.kind === "feature") onMoveFeature(ref.id, at);
     else {
       draggingIds.current = new Set([ref.id]);
-      onMovePlacement(ref.id, snapped);
+      onMovePlacement(ref.id, at);
     }
   };
 
@@ -449,6 +605,7 @@ export function CanvasStage({
     // alongside a live drag was never moved by it.
     const moved = draggingIds.current;
     groupDrag.current = null;
+    solids.current = null;
     draggingIds.current = new Set();
     ctx.endSnap();
     settleHangs(moved);
@@ -480,18 +637,15 @@ export function CanvasStage({
       .map((r) => movable.find((m) => sameRef(m.ref, r))?.box)
       .filter((b): b is SnapBox => !!b);
     if (boxes.length !== rotatableRefs.length) return null;
-    const minX = Math.min(...boxes.map((b) => b.x - b.widthMm / 2));
-    const maxX = Math.max(...boxes.map((b) => b.x + b.widthMm / 2));
-    const minY = Math.min(...boxes.map((b) => b.y - b.depthMm / 2));
-    const maxY = Math.max(...boxes.map((b) => b.y + b.depthMm / 2));
+    const b = unionBox(boxes);
     // A lone item's handle rides round with the item, so it stays over the same corner of the thing
     // as it turns — which is what makes the knob feel attached to it. A group's stays north: the box
     // is axis-aligned and has no facing to ride, and a handle that jumped as the box re-fitted
     // itself each frame would be chasing the pointer rather than answering it.
     const only = rotatableRefs.length === 1 ? facingOf(rotatableRefs[0]) : 0;
     return {
-      pivot: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-      reachMm: (maxY - minY) / 2,
+      pivot: { x: b.x, y: b.y },
+      reachMm: b.depthMm / 2,
       rotationDeg: only,
       count: rotatableRefs.length,
     };
@@ -532,7 +686,11 @@ export function CanvasStage({
     const delta = mods.alt ? mods.raw - startDeg : constrainAngleDeg(mods.raw - startDeg);
     onRotateMany(
       snapshot.map((sn) => {
-        const moved = fromLocalFrame(toLocalFrame(sn.origin, pivot, 0), pivot, delta);
+        // EACH ABOUT ITSELF: the position is the one it started at, untouched. A room of tables
+        // turned a quarter turn is a room of tables each facing a new way — not a room whose
+        // tables have all been swept round the middle of the hall onto somebody else's spot.
+        // Same delta, same one undo, and the only difference is whether anything moves.
+        const moved = spin === "each" ? sn.origin : fromLocalFrame(toLocalFrame(sn.origin, pivot, 0), pivot, delta);
         return {
           kind: sn.ref.kind,
           id: sn.ref.id,
@@ -581,7 +739,18 @@ export function CanvasStage({
       onMarquee={(b, additive) =>
         onSelectMany(
           movable
-            .filter((m) => m.box.x >= b.minX && m.box.x <= b.maxX && m.box.y >= b.minY && m.box.y <= b.maxY)
+            // ENCLOSED, not merely centred in the band. A centre-in-the-box test takes anything the
+            // band happens to reach across the middle of — the row of tables a band drawn round the
+            // stages standing over them clips on its way past — and a selection that quietly holds
+            // things the designer did not draw round is one they then move without noticing. What
+            // you drew round is what you get; anything else is still one click away.
+            .filter(
+              (m) =>
+                m.box.x - m.box.widthMm / 2 >= b.minX &&
+                m.box.x + m.box.widthMm / 2 <= b.maxX &&
+                m.box.y - m.box.depthMm / 2 >= b.minY &&
+                m.box.y + m.box.depthMm / 2 <= b.maxY,
+            )
             .map((m) => m.ref),
           additive,
         )
@@ -593,12 +762,17 @@ export function CanvasStage({
       // a drop cannot ask dataTransfer what it is carrying until it has landed.
       onDropAt={(e, p) => {
         const productId = e.dataTransfer.getData("text/product");
-        if (productId) onDropProduct(productId, p.x, p.y);
+        if (!productId) return;
+        // A deck must not LAND on another deck either. The point arrives already snapped (the guides
+        // were drawn under the incoming drag), so this only bites when the designer let go somewhere
+        // that would have put one solid thing inside another — and it puts it against it instead.
+        const at = clearedDrop(p);
+        onDropProduct(productId, at.x, at.y);
       }}
       dropSnap={() => {
         const carried = carriedItem();
         return {
-          boxes: movable.map((m) => m.box),
+          boxes: alignTo.map((m) => m.box),
           self: carried ? { widthMm: carried.widthMm, depthMm: carried.depthMm } : undefined,
         };
       }}
@@ -623,8 +797,13 @@ export function CanvasStage({
             {/* The venue's furniture, as this event has arranged it — and selectable, so it can be
                 arranged. Deliberately WITHOUT onResize: an event may push the bar across the room,
                 it may not decide the bar is four metres long. That is the property's fact and it is
-                measured at /halls. Floor-plane, like the tables and everything else standing on the
-                floor: it dims and stops taking the pointer with the rest of that layer. */}
+                measured at /halls.
+                It stands on the FLOOR, so it answers to the floor plane in both ways the plane can
+                be asked: it dims and stops taking the pointer when another plane is being worked in,
+                and the eye hides it along with everything else standing down there. Drawn but
+                unselectable was the one state worth ruling out — `movable` gates it on both, and a
+                thing on screen that nothing can pick up is a bug report waiting to be written. */}
+            {layerVisible.floor && (
             <g {...layerAttrs("floor")}>
               <StructureFeatures
                 structure={structure}
@@ -636,6 +815,7 @@ export function CanvasStage({
                 clientToMm={ctx.clientToMm}
               />
             </g>
+            )}
           </>
         );
       }}
@@ -654,15 +834,23 @@ export function CanvasStage({
 
               A table's own chairs are drawn as part of ITS entry, immediately under it: wherever
               the table has been put in the stack, the chairs it tucks under go with it. They never
-              take a click meant for the table (pointer-events-none on the ring). */}
-          <g {...layerAttrs("floor")}>
+              take a click meant for the table (pointer-events-none on the ring).
+
+              THE PLANE ATTRS GO ON EACH ENTRY, not round the pass. A table and a stage are on two
+              different planes now and in ONE stack — that is the whole point of the stack, that a
+              designer can put a plinth under a table — so a <g> per plane would have to break the
+              order to gather them, which is the one thing this pass exists not to do. Dimming a
+              plane is an opacity per node instead of one over the group; overlapping items held
+              back at 35% each read a shade darker where they cross, which is a fair price for
+              keeping the z-order the designer set. */}
           {stack.map((entry) => {
             if (entry.ref.kind === "table") {
+              if (!layerVisible.tables) return null;
               const t = tableById.get(entry.ref.id);
               if (!t) return null;
               const ring = seatRingByTable.get(t.id);
               return (
-                <g key={`t-${t.id}`}>
+                <g key={`t-${t.id}`} {...layerAttrs("tables")}>
                   {ring && (
                     <g transform={ring.transform} className="pointer-events-none">
                       {ring.seats.map((seat, i) => (
@@ -692,39 +880,43 @@ export function CanvasStage({
               );
             }
             const p = placementById.get(entry.ref.id);
-            if (!p || !layerVisible[entry.kind === "carpet" ? "floor" : p.layer]) return null;
+            const plane = entry.kind === "carpet" ? "floor" : p?.layer;
+            if (!p || !plane || !layerVisible[plane]) return null;
             return entry.kind === "carpet" ? (
-              <CarpetNode
-                key={`c-${p.id}`}
-                placement={p}
-                selected={isSel("placement", p.id)}
-                ctx={ctx}
-                drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
-                onResize={(sizeMm, position) => onResizePlacement(p.id, sizeMm, position)}
-                onEndResize={onEndDrag}
-              />
+              <g key={`c-${p.id}`} {...layerAttrs(plane)}>
+                <CarpetNode
+                  placement={p}
+                  selected={isSel("placement", p.id)}
+                  ctx={ctx}
+                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
+                  onResize={(sizeMm, position) => onResizePlacement(p.id, sizeMm, position)}
+                  onEndResize={onEndDrag}
+                />
+              </g>
             ) : (
-              <PlacementNode
-                key={`p-${p.id}`}
-                placement={p}
-                x={p.position.x}
-                y={p.position.y}
-                selected={isSel("placement", p.id)}
-                ctx={ctx}
-                drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
-              />
+              <g key={`p-${p.id}`} {...layerAttrs(plane)}>
+                <PlacementNode
+                  placement={p}
+                  x={p.position.x}
+                  y={p.position.y}
+                  selected={isSel("placement", p.id)}
+                  ctx={ctx}
+                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
+                />
+              </g>
             );
           })}
 
           {/* A GROUP's ring of chairs belongs to no single member, so it cannot travel with one of
-              them the way a lone table's does — it goes round the outside of the whole block. Still
-              floor-plane furniture, same <g> as the stack above: a chair ring floating at full
-              brightness over tables just dimmed to 35% would read as a second, undimmed layer that
-              doesn't exist. */}
-          {seating
+              them the way a lone table's does — it goes round the outside of the whole block. On the
+              TABLES plane with the tables it belongs to: a chair ring floating at full brightness
+              over tables just dimmed to 35% would read as a second, undimmed plane that doesn't
+              exist, and one left drawn over a hidden table is a ring of chairs round nothing. */}
+          {layerVisible.tables &&
+            seating
             .filter((ring) => !ring.forTable)
             .map((ring) => (
-              <g key={`chairs-${ring.key}`} transform={ring.transform} className="pointer-events-none">
+              <g key={`chairs-${ring.key}`} transform={ring.transform} className="pointer-events-none" {...layerAttrs("tables")}>
                 {ring.seats.map((seat, i) => (
                   <Chair key={i} seat={seat} />
                 ))}
@@ -734,9 +926,9 @@ export function CanvasStage({
           {/* The group, drawn once over its members: the outline that says where the one larger
               table ends, and the single number it carries instead of each table carrying its own.
               Same reasoning as the chair ring just above — this outline traces tables, so it dims
-              with them rather than floating over them at full contrast. */}
-          {tableGroups.map((g) => (
-            <g key={`group-${g.id}`} className="pointer-events-none">
+              and hides with them rather than floating over them at full contrast. */}
+          {layerVisible.tables && tableGroups.map((g) => (
+            <g key={`group-${g.id}`} className="pointer-events-none" {...layerAttrs("tables")}>
               <rect
                 x={g.centre.x - g.widthMm / 2 - GROUP_PAD_MM}
                 y={g.centre.y - g.depthMm / 2 - GROUP_PAD_MM}
@@ -777,12 +969,14 @@ export function CanvasStage({
               )}
             </g>
           ))}
-          </g>
 
-          {/* Table-layer items — clustered on their table. Covers are excluded: they were drawn as
-              the table itself just above. */}
+          {/* Items ON a table — clustered on the table they belong to. Covers are excluded: they
+              were drawn as the table itself just above. Gated on the TABLES plane as well as their
+              own: a centrepiece hanging in the air where the table it stands on has been hidden is
+              a thing to drag by accident, and says nothing true about the room. */}
           <g {...layerAttrs("table")}>
             {layerVisible.table &&
+              layerVisible.tables &&
               doc.tables.map((t) => {
                 const chips = sorted.chipsByTable.get(t.id) ?? [];
                 return chips.map((p, i) => (
@@ -825,10 +1019,15 @@ export function CanvasStage({
               }}
               clientToMm={ctx.clientToMm}
               mm={ctx.mm}
+              // The label says which of the two gestures this handle is about to be, because they
+              // look identical until the pointer moves and only one of them keeps everything where
+              // it is.
               label={
                 rotatable.count === 1
                   ? "סיבוב הפריט — גרירה · Alt לזווית חופשית"
-                  : `סיבוב ${rotatable.count} הפריטים יחד — גרירה · Alt לזווית חופשית`
+                  : spin === "each"
+                    ? `סיבוב ${rotatable.count} הפריטים, כל אחד סביב עצמו — גרירה · Alt לזווית חופשית`
+                    : `סיבוב ${rotatable.count} הפריטים יחד סביב מרכז משותף — גרירה · Alt לזווית חופשית`
               }
             />
           )}
@@ -1244,15 +1443,62 @@ const CORNERS = [
 ] as const;
 const MIN_CARPET_MM = 300; // a rug you can still grab a corner of
 
-/** How much room a placed item takes on the plan — its drawn footprint, at whatever scale it was
- *  given. A carpet answers with the size it was stretched to rather than the catalog's, because
- *  that is the rectangle actually lying on the floor. */
+/** What KIND of solid thing a placement is, for the no-overlap rule — or undefined for anything the
+ *  rule must not touch (lib/studio/collide.ts explains why it is same-kind-only).
+ *
+ *  Three exemptions, each of them a real arrangement: a RUG is laid under things, so it overlaps
+ *  everything by definition; anything on a table or hanging from the ceiling is not standing on the
+ *  floor at all; and a drape belongs to a wall. Everything else that stands on the floor is solid
+ *  against others OF ITS OWN CATEGORY — deck against deck, bar against bar — and free to overlap
+ *  anything else, which is what keeps a חופה on a stage and a plinth beside a table possible.
+ *
+ *  The catalog answers the KIND (solidKind, lib/studio/catalog-resolver.ts, which is also what the
+ *  rail's drag payload asks); this adds the two things only a PLACEMENT knows — that it has been
+ *  put on a table or hung on a wall, and is therefore not standing on the floor whatever its
+ *  category says. */
+function solidKindOf(p: Placement): string | undefined {
+  if (p.tableId || p.span) return undefined;
+  return resolve(p.variantId)?.solid;
+}
+
+/** The one box a set of boxes sits inside. What a group drag snaps as, and what a group rotate
+ *  turns about — the selection's own extent, axis-aligned, which is the only shape a multi-selection
+ *  of a round table and a 4×2 stage has in common. */
+function unionBox(boxes: SnapBox[]): SnapBox {
+  const minX = Math.min(...boxes.map((b) => b.x - b.widthMm / 2));
+  const maxX = Math.max(...boxes.map((b) => b.x + b.widthMm / 2));
+  const minY = Math.min(...boxes.map((b) => b.y - b.depthMm / 2));
+  const maxY = Math.max(...boxes.map((b) => b.y + b.depthMm / 2));
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, widthMm: maxX - minX, depthMm: maxY - minY };
+}
+
+/** The axis-aligned room a shape takes up once it has been TURNED — what every box on this canvas
+ *  is measured with.
+ *
+ *  A ROUND SHAPE IS THE EXCEPTION AND IT MATTERS: a circle turned is the same circle, so its box
+ *  must not grow. It would have, by 41% at 45°, and round tables carry an angle all the time — a
+ *  group rotate writes one onto every member — so a hall of 1.80m rounds would each have started
+ *  claiming 2.55m of floor for snapping and for the no-overlap rule. Everything else is measured as
+ *  the rectangle enclosing it, which is exact at a right angle and generous in between. */
+function turnedExtent(footprint: Footprint, rotationDeg: number, scale = 1): { widthMm: number; depthMm: number } {
+  const b = footprintBounds(footprint);
+  const w = b.w * scale;
+  const d = b.h * scale;
+  return footprint.kind === "circle" ? { widthMm: w, depthMm: d } : rotatedExtent(w, d, rotationDeg);
+}
+
+/** How much room a placed item takes on the plan — its drawn footprint at whatever scale and angle
+ *  it was given. A carpet answers with the size it was stretched to rather than the catalog's,
+ *  because that is the rectangle actually lying on the floor. */
 function placementExtent(p: Placement): { widthMm: number; depthMm: number } {
   const r = resolve(p.variantId);
-  if (r?.sizing === "stretch") return p.sizeMm ?? fallbackSize(r);
-  const b = r ? footprintBounds(resolveFootprint(r.product)) : { w: 600, h: 600 };
-  const scale = p.scale || 1;
-  return { widthMm: b.w * scale, depthMm: b.h * scale };
+  const turn = p.rotation ?? 0;
+  if (r?.sizing === "stretch") {
+    const s = p.sizeMm ?? fallbackSize(r);
+    return rotatedExtent(s.widthMm, s.depthMm, turn);
+  }
+  const f: Footprint = r ? resolveFootprint(r.product) : { kind: "rect", widthMm: 600, depthMm: 600 };
+  return turnedExtent(f, turn, p.scale || 1);
 }
 
 /** The size a stretch item gets before anyone has stretched it: whatever the catalog footprint
@@ -1403,42 +1649,52 @@ function TableNode({
       }}
     >
       <FootprintShape footprint={footprint} {...shape} />
-      {showNumber && table.number > 0 && (
-        <text
-          x={0}
-          // Centred on every shape. A round table used to carry its number up near the top edge, out
-          // of the way of whatever stands in the middle of it — but the number is how the crew finds
-          // the table, and having it in one place on a round and another on a rectangle means
-          // reading the plan twice. A centrepiece drawn over it is the lesser problem.
-          //
-          // It lifts by half a line when a capacity hangs under it, so that the PAIR is what sits in
-          // the middle. Alone, it is still dead centre.
-          y={seats > 0 ? TABLE_LABEL.number : 0}
-          textAnchor="middle"
-          dominantBaseline="central"
-          fill={numberInk}
-          style={{ fontSize: TABLE_NUMBER_MM, fontWeight: 600 }}
-          className="pointer-events-none"
-        >
-          {table.number}
-        </text>
-      )}
-      {/* Under the number, and dead centre in its place on a head table, which has seats but no
-          number. A table inside a group draws neither — the group draws the one of each they
-          share (showNumber). */}
-      {showNumber && seats > 0 && (
-        <CapacityLabel
-          x={0}
-          y={table.number > 0 ? TABLE_LABEL.capacity : 0}
-          seated={table.seated ?? 0}
-          seats={seats}
-          size={TABLE_CAPACITY_MM}
-          baseInk={numberInk}
-          // On a dark cloth the alert and success inks are both unreadable, and a capacity nobody
-          // can read reports nothing at all. Legibility wins; the inspector still says which it is.
-          semantic={!(clothColour && isDark(clothColour))}
-        />
-      )}
+      {/* The label rides the table's POSITION and not its angle. Turning a table turns the table:
+          the number is not printed on the cloth, it is how a crew and a client find one table in a
+          room of forty, and a 6 that comes out as a 9 at 180° is worse than one that is merely hard
+          to read. The counter-turn is about (0,0) — the table's own centre, which the parent <g> has
+          already put in the right place — so the pair stays exactly where it was drawn and only
+          stops leaning. The chairs are NOT counter-turned: a chair is a thing in the room and it
+          faces the edge it is pulled up to. Same split the printed map already makes, where the
+          numbers are drawn outside the rotated group (app/(app)/outputs/placement-map.tsx). */}
+      <g transform={table.rotation ? `rotate(${-table.rotation})` : undefined}>
+        {showNumber && table.number > 0 && (
+          <text
+            x={0}
+            // Centred on every shape. A round table used to carry its number up near the top edge, out
+            // of the way of whatever stands in the middle of it — but the number is how the crew finds
+            // the table, and having it in one place on a round and another on a rectangle means
+            // reading the plan twice. A centrepiece drawn over it is the lesser problem.
+            //
+            // It lifts by half a line when a capacity hangs under it, so that the PAIR is what sits in
+            // the middle. Alone, it is still dead centre.
+            y={seats > 0 ? TABLE_LABEL.number : 0}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fill={numberInk}
+            style={{ fontSize: TABLE_NUMBER_MM, fontWeight: 600 }}
+            className="pointer-events-none"
+          >
+            {table.number}
+          </text>
+        )}
+        {/* Under the number, and dead centre in its place on a head table, which has seats but no
+            number. A table inside a group draws neither — the group draws the one of each they
+            share (showNumber). */}
+        {showNumber && seats > 0 && (
+          <CapacityLabel
+            x={0}
+            y={table.number > 0 ? TABLE_LABEL.capacity : 0}
+            seated={table.seated ?? 0}
+            seats={seats}
+            size={TABLE_CAPACITY_MM}
+            baseInk={numberInk}
+            // On a dark cloth the alert and success inks are both unreadable, and a capacity nobody
+            // can read reports nothing at all. Legibility wins; the inspector still says which it is.
+            semantic={!(clothColour && isDark(clothColour))}
+          />
+        )}
+      </g>
     </g>
   );
 }
@@ -1547,8 +1803,13 @@ function PlacementNode({
         vectorEffect="non-scaling-stroke"
       />
 
+      {/* Upright at every angle, for the reason a table's number is (TableNode above): the caption
+          NAMES the thing, it is not painted on it, and a turned stage whose במה reads upside down is
+          a caption the plan has stopped delivering. Counter-turned about (0,0), where the text
+          already sits, so only its lean changes — a uniform scale commutes with the turn. */}
       {content.mode === "name" && (
         <text
+          transform={placement.rotation ? `rotate(${-placement.rotation})` : undefined}
           textAnchor="middle"
           dominantBaseline="central"
           fill="var(--color-ink)"
@@ -1586,9 +1847,17 @@ function PlacementNode({
             rx={70}
             fill="var(--color-accent)"
           />
+          {/* The pill is pinned to the item's own corner and turns with it — it is part of the
+              drawing. The count inside it is READ, so it is counter-turned about the pill's own
+              centre and stays inside it. */}
           <text
             x={-bounds.w / 2 + 40 + badge / 2}
             y={bounds.h / 2 - badge / 2 - 40}
+            transform={
+              placement.rotation
+                ? `rotate(${-placement.rotation} ${-bounds.w / 2 + 40 + badge / 2} ${bounds.h / 2 - badge / 2 - 40})`
+                : undefined
+            }
             textAnchor="middle"
             dominantBaseline="central"
             fill="var(--color-canvas)"

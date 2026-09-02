@@ -1038,13 +1038,15 @@ export function PlanCanvas({
   // doesn't. No angle lock: these are objects being placed, not a wall being drawn from an anchor.
   const snapCtx = (opts?: HostSnapOptions) => ({
     toleranceMm: SNAP_TOL_PX * mmPerPx,
-    // A box's centre is an alignment reference like any other, so a host that hands over boxes does
-    // not also have to hand over their centres.
-    outline: [...outline, ...graphPoints, ...(opts?.refs ?? []), ...(opts?.boxes ?? []).map((b) => ({ x: b.x, y: b.y }))],
+    outline: [...outline, ...graphPoints, ...(opts?.refs ?? [])],
     fixtures: fixtureRefs(),
     gridMm,
-    // Equal gaps need both halves: what is being moved, and what it could be spaced against.
-    spacing: opts?.self && opts.boxes?.length ? { self: opts.self, boxes: opts.boxes } : undefined,
+    // The boxes go over WHOLE — centre and both edges alike — rather than being flattened to their
+    // centres on the way in. Handing over the extent is what buys the two rules a point cannot
+    // express: an edge to line up with or butt against, and the air between two things
+    // (lib/studio/snap.ts). `self` is the moving item's own extent, the other half of both.
+    boxes: opts?.boxes,
+    self: opts?.self,
     lines: opts?.lines,
   });
   const snapHost = (p: Point, opts?: HostSnapOptions): Point => {

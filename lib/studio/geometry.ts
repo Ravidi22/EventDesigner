@@ -514,6 +514,23 @@ export function fromLocalFrame(p: Point, center: Point, rotationDeg: number): Po
   };
 }
 
+/** The axis-aligned box a w×d rectangle needs once it has been TURNED — what a snap, a marquee and
+ *  the no-overlap rule (lib/studio/collide.ts) all measure a placed item by.
+ *
+ *  A 4×2 deck turned 90° occupies 2×4 of floor, and boxing it as 4×2 anyway is not a rounding error:
+ *  it is the plan claiming two metres of room that the deck is not in, and two more that it is.
+ *  At a right angle this is exact, which covers nearly every stage anyone lays. At 45° it is the
+ *  enclosing box and therefore generous — the deck is somewhere inside it — so a snap is a little
+ *  shy and two decks stop a little apart. Generous is the safe direction for a rule about whether
+ *  two things fit in the same room. */
+export function rotatedExtent(widthMm: number, depthMm: number, rotationDeg: number): { widthMm: number; depthMm: number } {
+  if (!rotationDeg) return { widthMm, depthMm };
+  const rad = (rotationDeg * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rad));
+  const s = Math.abs(Math.sin(rad));
+  return { widthMm: widthMm * c + depthMm * s, depthMm: widthMm * s + depthMm * c };
+}
+
 // Dragging a fixture's edge handle anchors the *opposite* edge (Figma/SketchUp/any floor planner):
 // only the grabbed edge follows the pointer. A fixture is stored as centre+size, so holding the far
 // edge still means moving the centre by half the size delta — along the fixture's own axis, not the
@@ -741,6 +758,19 @@ if (isMain(import.meta.url)) {
   assert(reshapeEdgeKeepingAngles([{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 0, y: 1000 }], 0, { x: 1200, y: 0 }) === null, "a triangle has no spare wall to absorb the change");
   const collinear: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }, { x: 1000, y: 2000 }];
   assert(reshapeEdgeKeepingAngles(collinear, 0, { x: 1200, y: 0 }) === null, "parallel neighbouring walls never meet, so there is nothing to solve");
+
+  // A turned rectangle needs a different box: square on it is the box itself, a right angle swaps
+  // the two, and 45° is the enclosing square.
+  {
+    const same = rotatedExtent(4000, 2000, 0);
+    assert(same.widthMm === 4000 && same.depthMm === 2000, "unturned, a deck's box is its own size");
+    const quarter = rotatedExtent(4000, 2000, 90);
+    assert(Math.round(quarter.widthMm) === 2000 && Math.round(quarter.depthMm) === 4000, "turned square-on, the two swap");
+    assert(Math.round(rotatedExtent(4000, 2000, 180).widthMm) === 4000, "half a turn is the box it started with");
+    const diag = rotatedExtent(4000, 2000, 45);
+    assert(Math.round(diag.widthMm) === Math.round(diag.depthMm), "at 45° the box is square");
+    assert(diag.widthMm > 4000, "…and larger than the deck, which is the generous way to be wrong");
+  }
 
   console.log("geometry self-check passed");
 }

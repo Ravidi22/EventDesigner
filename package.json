@@ -14,6 +14,7 @@
     "check:actions": "tsx lib/design-document/actions.ts",
     "check:footprint": "tsx lib/studio/footprint.ts",
     "check:geometry": "tsx lib/studio/geometry.ts",
+    "check:collide": "tsx lib/studio/collide.ts",
     "check:snap": "tsx lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",

@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, dispatch, undo, redo, initHistory, type Action, type History } from "@/lib/design-document/actions";
-import type { DesignDocumentContent, Layer as LayerId } from "@/lib/design-document/types";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
 import { loadScratch, saveScratch } from "@/lib/studio/storage";
 import { tableAt } from "@/lib/studio/geometry";
+import { ALL_PLANES_VISIBLE, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { coverOn, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
@@ -37,7 +38,7 @@ import { CatalogRail } from "./catalog-rail";
 import { Inspector } from "./inspector";
 // A plain import now that the canvas is the app's shared SVG one: it renders on the server like any
 // other component, so there is nothing left to defer and no "loading the studio" flash to cover.
-import { CanvasStage, type SelectionKind, type SelectionRef } from "./canvas-stage";
+import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } from "./canvas-stage";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
 
 const uid = () => crypto.randomUUID();
@@ -103,13 +104,21 @@ export function StudioScreen({
   // across a corner of the hall is how you get hold of them. One selected thing is the ordinary
   // case and still the only one the inspector has fields for.
   const [selected, setSelected] = useState<SelectionRef[]>([]);
-  const [layerVisible, setLayerVisible] = useState<Record<LayerId, boolean>>({ table: true, floor: true, ceiling: true });
-  // WHICH layer is being worked in, as opposed to which are merely visible. null — the default, and
-  // exactly how this screen behaved before — means every visible layer is live. Naming one dims the
+  // FOUR PLANES, not three: the tables are one of their own (lib/studio/planes.ts). A table and a
+  // stage both stand on the floor, so "work in the floor layer" used to name them both at once —
+  // and the designer who has finished laying the tables and is now placing stages over them had no
+  // way to say so. A rubber-band round the stages took the tables underneath with it.
+  const [layerVisible, setLayerVisible] = useState<Record<Plane, boolean>>(ALL_PLANES_VISIBLE);
+  // WHICH plane is being worked in, as opposed to which are merely visible. null — the default, and
+  // exactly how this screen behaved before — means every visible plane is live. Naming one dims the
   // others and takes them out of the pointer's reach, which is the whole of what "lock" would have
   // been: dressing tables without dragging a rug by accident is one click, and there is no second
   // flag to keep honest.
-  const [activeLayer, setActiveLayer] = useState<LayerId | null>(null);
+  const [activeLayer, setActiveLayer] = useState<Plane | null>(null);
+  // What the rotate handle does with several things at once. A screen-level preference rather than
+  // a property of the selection: it is how the designer is working right now, and it has to survive
+  // selecting a different six tables. "together" is the behaviour this canvas has always had.
+  const [spin, setSpin] = useState<SpinMode>("together");
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -414,16 +423,27 @@ export function StudioScreen({
   // render gates in canvas-stage.tsx) and then drag or delete it blind.
   //
   // A table's WORN COVER is the one exception: it draws as the table's own surface regardless of
-  // the "table" layer's visibility (see the `cloth` prop on TableNode in canvas-stage.tsx, which
-  // reads it off `coverByTable` rather than the gated chip list) — so it stays selectable exactly
-  // when it stays visible. Tables and venue features have no layer toggle of their own; only
-  // `activeLayer` dims them, which `movable` already excludes on the canvas side.
+  // the "on the table" layer's visibility (see the `cloth` prop on TableNode in canvas-stage.tsx,
+  // which reads it off `coverByTable` rather than the gated chip list) — so it stays selectable
+  // exactly when it stays visible, which now means: when the TABLES plane is on. A venue feature
+  // has no chip of its own; only `activeLayer` dims it, which `movable` already excludes on the
+  // canvas side.
   const layerHidden = useCallback(
     (r: SelectionRef) => {
+      // The tables have a chip of their own now, and it hides the things that belong to a table
+      // along with it — a centrepiece left selectable over a table nobody can see is a thing to
+      // drag by accident.
+      if (r.kind === "table") return !layerVisible.tables;
+      // The venue's own furniture stands on the floor and is drawn with it (canvas-stage.tsx), so
+      // the floor's eye hides it too — and what is not on screen is not selectable.
+      if (r.kind === "feature") return !layerVisible.floor;
       if (r.kind !== "placement") return false;
       const p = doc.placements.find((x) => x.id === r.id);
       if (!p) return false;
-      if (resolve(p.variantId)?.anchor === "table") return false;
+      // Keyed the same way canvas-stage.tsx sorts them, so the two cannot disagree about what
+      // "belongs to a table" is.
+      if (p.layer === "table" && p.tableId)
+        return !layerVisible.tables || (resolve(p.variantId)?.anchor !== "table" && !layerVisible.table);
       return !layerVisible[p.layer];
     },
     [doc, layerVisible],
@@ -490,9 +510,14 @@ export function StudioScreen({
 
   const selectLayer = useCallback(() => {
     if (!activeLayer) return;
-    const refs = doc.placements.filter((p) => p.layer === activeLayer).map((p) => ({ kind: "placement" as const, id: p.id }));
-    // Tables are floor-plane, so "select the floor layer" means them too.
-    pickMany(activeLayer === "floor" ? [...doc.tables.map((t) => ({ kind: "table" as const, id: t.id })), ...refs] : refs, false);
+    // The tables are their own plane, so "select this plane" means the tables and nothing else —
+    // and the floor means what STANDS on the floor, which is the distinction the chip row exists to
+    // make. Selecting the floor used to hand back the tables too.
+    if (activeLayer === "tables") {
+      pickMany(doc.tables.map((t) => ({ kind: "table" as const, id: t.id })), false);
+      return;
+    }
+    pickMany(doc.placements.filter((p) => p.layer === activeLayer).map((p) => ({ kind: "placement" as const, id: p.id })), false);
   }, [activeLayer, doc, pickMany]);
 
   // A table's or a free placement's centre is `.position`, exactly like the box canvas-stage.tsx
@@ -1065,6 +1090,7 @@ export function StudioScreen({
             selection={selected}
             layerVisible={layerVisible}
             activeLayer={activeLayer}
+            spin={spin}
             focusZoneId={focusZoneId}
             onSelect={pick}
             onSelectMany={pickMany}
@@ -1100,8 +1126,13 @@ export function StudioScreen({
               mmPerPx.current = v;
             }}
           />
-          <div className="pointer-events-none absolute inset-inline-end-4 bottom-4">
-            <div className="pointer-events-auto">
+          {/* The inspector is a BAR along the bottom of the canvas now, centred — the shape the
+              venue plan's inspector already has, and the shape that keeps a selection's controls
+              from eating a column of the plan. It is centred rather than tucked into a corner
+              because its own popovers open upwards and centred on their chip: from a corner, half
+              of them would open past the edge of the plane. */}
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
+            <div className="pointer-events-auto flex min-w-0 justify-center">
               <Inspector
                 selection={sole}
                 selectedCount={selected.length}
@@ -1109,6 +1140,8 @@ export function StudioScreen({
                 onResetFeature={resetFeature}
                 facing={sharedFacing}
                 onFace={faceSelection}
+                spin={spin}
+                onSpin={setSpin}
                 canRestack={stackRefs(selected).length > 0}
                 onRestack={restack}
                 selectedTables={selected.filter((r) => r.kind === "table").length}
@@ -1162,8 +1195,9 @@ export function StudioScreen({
             </div>
           )}
           {/* Stable live region so the drop hint / smart-apply confirmation is announced, not just shown. */}
+          {/* Above the inspector bar, not under it: both are centred along the bottom edge. */}
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center"
+            className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center"
             aria-live="polite"
           >
             {hint && (

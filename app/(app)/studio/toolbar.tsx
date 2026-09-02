@@ -2,9 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered } from "lucide-react";
-import type { Layer as LayerId } from "@/lib/design-document/types";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
-import { LAYERS } from "@/lib/catalog/categories";
+import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
@@ -56,11 +55,11 @@ export function Toolbar({
   /** The clip is not empty — a paste would put something down. */
   canPaste: boolean;
   onPaste: () => void;
-  layerVisible: Record<LayerId, boolean>;
-  onToggleLayer: (l: LayerId) => void;
-  /** The layer being worked in, or null for "all of them". */
-  activeLayer: LayerId | null;
-  onActivateLayer: (l: LayerId) => void;
+  layerVisible: Record<Plane, boolean>;
+  onToggleLayer: (l: Plane) => void;
+  /** The plane being worked in, or null for "all of them". */
+  activeLayer: Plane | null;
+  onActivateLayer: (l: Plane) => void;
   /** The zones worth being taken to — the event's own, or the whole property's when it has none. */
   zones: { id: string; name: string }[];
   focusZoneId: string | null;
@@ -149,7 +148,7 @@ export function Toolbar({
       <div className="mx-1 h-6 w-px bg-border" />
 
       <div className="flex items-center gap-1">
-        {LAYERS.map((l) => {
+        {PLANES.map((l) => {
           const on = layerVisible[l.id];
           const active = activeLayer === l.id;
           return (

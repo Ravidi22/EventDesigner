@@ -1,5 +1,6 @@
 import type { Product } from "@/lib/catalog/types";
 import { footprintBounds, resolveFootprint } from "./footprint";
+import { solidKind } from "./catalog-resolver";
 
 // What the pointer is carrying between the catalog rail and the canvas, for the length of one HTML5
 // drag.
@@ -14,11 +15,14 @@ import { footprintBounds, resolveFootprint } from "./footprint";
 // id still travels through dataTransfer — that is the real payload and the only thing the DROP
 // reads. This is a hint about a gesture that is happening right now, nothing more: it is not state,
 // it is never persisted, and a stale value can do no harm beyond one wrong guide line.
-let carried: { productId: string; widthMm: number; depthMm: number } | null = null;
+let carried: { productId: string; widthMm: number; depthMm: number; solid?: string } | null = null;
 
 export function carryProduct(product: Product): void {
   const b = footprintBounds(resolveFootprint(product));
-  carried = { productId: product.id, widthMm: b.w, depthMm: b.h };
+  // `solid` rides along for the same reason the size does: the DROP is the first moment the canvas
+  // could otherwise know what it is being handed, and by then the deck has already landed on top of
+  // another one (lib/studio/collide.ts).
+  carried = { productId: product.id, widthMm: b.w, depthMm: b.h, solid: solidKind(product) };
 }
 
 export function dropCarried(): void {
@@ -26,6 +30,6 @@ export function dropCarried(): void {
 }
 
 /** What is being dragged over the canvas right now, if anything. */
-export function carriedItem(): { productId: string; widthMm: number; depthMm: number } | null {
+export function carriedItem(): { productId: string; widthMm: number; depthMm: number; solid?: string } | null {
   return carried;
 }
