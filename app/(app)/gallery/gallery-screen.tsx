@@ -1,22 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, GalleryVerticalEnd, ImagePlus, Pencil, Play, Plus, Trash2, X } from "lucide-react";
+import { GalleryVerticalEnd, Pencil, Play, Plus } from "lucide-react";
 import type { GalleryImage, Presentation } from "@/lib/gallery/types";
-import { useCatalog } from "@/lib/catalog/use-catalog";
-// Reads live in page.tsx now; what is left here are the three writes, which return the fresh list.
-import { saveImage, savePresentation, deletePresentation } from "@/lib/gallery/actions";
+import type { PresentationTemplate } from "@/lib/gallery/templates";
+// Reads live in page.tsx now; what is left here are the writes, which return the fresh list.
+import { saveImagesBatch, savePresentation, deletePresentation } from "@/lib/gallery/actions";
 import { Button } from "@/components/button";
-import { IconButton } from "@/components/icon-button";
-import { Select } from "@/components/select";
-import { TextField } from "@/components/text-field";
-import { fieldLabelClassName } from "@/components/control";
 import { Photo } from "@/components/photo";
 import { EmptyState } from "@/components/empty-state";
+<<<<<<< Updated upstream
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import { ALLOWED_TYPES } from "@/lib/files/keys";
+=======
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PresentationBuilder, type DraftSlide } from "./presentation-builder";
+import { TemplatePicker } from "./template-picker";
+>>>>>>> Stashed changes
 
 // v0.3 studio gallery (F-2.1–F-2.2): create, order, and edit designer-curated presentations.
 // This is management only — client-facing browsing, liking a photo, and the per-event "תיק
@@ -32,6 +34,13 @@ export function GalleryScreen({
   const [images, setImages] = useState<GalleryImage[]>(initialImages);
   const [presentations, setPresentations] = useState<Presentation[]>(initialPresentations);
   const [editing, setEditing] = useState<Presentation | null>(null);
+  // The named, photo-less slots a template seeded the builder with — merged into the gallery on
+  // save (saveImagesBatch), discarded on cancel.
+  const [editingDrafts, setEditingDrafts] = useState<Record<string, DraftSlide>>({});
+  // "מצגת חדשה" opens the template chooser first; picking one (or "ריקה") opens the builder.
+  const [choosing, setChoosing] = useState(false);
+  // The builder asks to delete; the screen owns the confirm (design system: one dialog per surface).
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   // Which presentations exist on the server, so the builder can tell a new one from an edit without
   // asking again mid-render (it used to call loadPresentations() during its own render — free
   // against localStorage, a round trip now).
@@ -58,60 +67,122 @@ export function GalleryScreen({
 
   const imageById = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
 
+  const closeBuilder = () => {
+    setEditing(null);
+    setEditingDrafts({});
+  };
+
+  const startFromTemplate = (t: PresentationTemplate) => {
+    const slots = t.slides.map((slideName) => ({ id: crypto.randomUUID(), name: slideName }));
+    setEditingDrafts(
+      Object.fromEntries(slots.map((s) => [s.id, { name: s.name, description: "", productId: "" }])),
+    );
+    setEditing({
+      id: crypto.randomUUID(),
+      name: t.name,
+      imageIds: slots.map((s) => s.id),
+      createdAt: Date.now(),
+    });
+    setChoosing(false);
+  };
+
+  const startBlank = () => {
+    setEditingDrafts({});
+    setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() });
+    setChoosing(false);
+  };
+
+  const confirmDelete = async () => {
+    const id = pendingDelete;
+    setPendingDelete(null);
+    if (!id) return;
+    const next = await deletePresentation(id);
+    setPresentations(next);
+    setKnownIds(new Set(next.map((x) => x.id)));
+    closeBuilder();
+  };
+
   if (editing) {
     return (
-      <PresentationBuilder
-        draft={editing}
-        images={images}
-        isNew={!knownIds.has(editing.id)}
-        onImageCreated={async (img) => setImages(await saveImage(img))}
-        onSave={async (p) => {
-          const next = await savePresentation(p);
-          setPresentations(next);
-          setKnownIds(new Set(next.map((x) => x.id)));
-          setEditing(null);
-        }}
-        onDelete={async (id) => {
-          const next = await deletePresentation(id);
-          setPresentations(next);
-          setKnownIds(new Set(next.map((x) => x.id)));
-          setEditing(null);
-        }}
-        onCancel={() => setEditing(null)}
+      <>
+        <PresentationBuilder
+          key={editing.id}
+          draft={editing}
+          images={images}
+          initialDrafts={editingDrafts}
+          isNew={!knownIds.has(editing.id)}
+          onSave={async (p, drafts) => {
+            // Persist every draft slot as a (possibly photo-less) library row FIRST —
+            // savePresentation rejects an image id it cannot find, so the batch lands before it.
+            const draftItems: GalleryImage[] = p.imageIds
+              .filter((id) => drafts[id])
+              .map((id) => ({
+                id,
+                name: drafts[id].name.trim(),
+                description: drafts[id].description.trim() || undefined,
+                productId: drafts[id].productId || "",
+                productName: "",
+                imageUrl: drafts[id].imageUrl,
+              }));
+            if (draftItems.length) setImages(await saveImagesBatch(draftItems));
+
+            const next = await savePresentation(p);
+            setPresentations(next);
+            setKnownIds(new Set(next.map((x) => x.id)));
+            closeBuilder();
+          }}
+          onDelete={(id) => setPendingDelete(id)}
+          onCancel={closeBuilder}
+        />
+        <ConfirmDialog
+          open={!!pendingDelete}
+          title={`למחוק את המצגת "${editing.name || "ללא שם"}"?`}
+          body="הסדר של השקופיות יימחק. התמונות עצמן נשארות בספרייה."
+          confirmLabel="מחיקת המצגת"
+          onConfirm={confirmDelete}
+          onClose={() => setPendingDelete(null)}
+        />
+      </>
+    );
+  }
+
+  if (choosing) {
+    return (
+      <TemplatePicker
+        onPick={startFromTemplate}
+        onBlank={startBlank}
+        onCancel={() => setChoosing(false)}
       />
     );
   }
 
-  const startNew = () =>
-    setEditing({ id: crypto.randomUUID(), name: "", imageIds: [], createdAt: Date.now() });
-
   return (
     <div className={PAGE_GUTTER}>
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-display text-h2 text-ink">תצוגות</h1>
+        <h1 className="font-display text-h2 text-ink">מצגות</h1>
         {/* Hidden on first run: the empty state carries the one action, and two "new presentation"
             buttons on an otherwise blank screen is one too many. */}
         {(!ready || presentations.length > 0) && (
-          <Button onClick={startNew}>
+          <Button onClick={() => setChoosing(true)}>
             <Plus className="h-4 w-4" strokeWidth={2} />
-            תצוגה חדשה
+            הוספת מצגת חדשה
           </Button>
         )}
       </div>
 
       {!ready ? (
         <p className="py-20 text-center text-sm text-muted" aria-busy="true">
-          טוען את התצוגות…
+          טוען את המצגות…
         </p>
       ) : presentations.length === 0 ? (
         <EmptyState
           icon={GalleryVerticalEnd}
-          title="אין עדיין תצוגות"
-          body="תצוגה היא רצף תמונות שעוברים עליו מול הלקוח בפגישה — חופה, שולחן אירוח, מרכזי שולחן. כל תמונה נושאת מוצר מהקטלוג, כך שמה שהלקוח מסמן ♥ נאסף לתיק האירוע ומחכה לכם בסטודיו."
+          title="אין עדיין מצגות"
+          body="מצגת היא רצף שקופיות שעוברים עליו מול הלקוח בפגישה — חופה, שולחן אירוח, מרכזי שולחן. כל שקופית נושאת מוצר מהקטלוג, כך שמה שהלקוח מסמן ♥ נאסף לתיק האירוע ומחכה לכם בסטודיו."
           action={
-            <Button onClick={startNew}>
+            <Button onClick={() => setChoosing(true)}>
               <Plus className="h-4 w-4" strokeWidth={2.5} />
-              צור תצוגה ראשונה
+              צור מצגת ראשונה
             </Button>
           }
         />
@@ -149,41 +220,58 @@ export function PresentationCard({
   const tiles = p.imageIds.map((id) => imageById.get(id)).filter((i): i is GalleryImage => !!i);
   const cover = tiles.slice(0, 3);
   return (
-    <article className="group relative flex flex-col">
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={`פתיחת התצוגה "${p.name}" במצב הצגה`}
-        className="flex aspect-[4/3] w-full gap-1 overflow-hidden rounded-lg border border-border p-1 transition duration-150 ease-fluid group-hover:shadow-floating focus-visible:shadow-floating"
-      >
-        {cover.length === 0 ? (
-          <span className="flex flex-1 items-center justify-center text-sm text-muted">ריקה</span>
-        ) : (
-          cover.map((img, i) => (
-            <Photo key={img.id + i} image={img} className="h-full flex-1 rounded-[6px] object-cover" />
-          ))
-        )}
-      </button>
-
-      <div className="mt-2.5 flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-medium text-ink">{p.name || "ללא שם"}</h3>
-          <p className="nums mt-0.5 text-xs text-muted">{p.imageIds.length} תמונות</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <IconButton label={`הצגת "${p.name}"`} onClick={onOpen}>
-            <Play className="h-4 w-4" strokeWidth={2} />
-          </IconButton>
-          {manage && (
-            <IconButton label={`עריכת "${p.name}"`} onClick={onEdit}>
-              <Pencil className="h-4 w-4" strokeWidth={2} />
-            </IconButton>
+    <article className="group flex flex-col overflow-hidden rounded-xl border border-border bg-surface transition-all duration-150 ease-fluid hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-floating">
+      {/* Cover — a background for the card, at slide proportions. Play + edit ride on top of it. */}
+      <div className="relative aspect-video w-full overflow-hidden bg-inset">
+        <div className="flex h-full w-full">
+          {cover.length === 0 ? (
+            <span className="flex flex-1 items-center justify-center text-xs text-muted">ריקה</span>
+          ) : (
+            cover.map((img, i) => (
+              <Photo key={img.id + i} image={img} className="h-full flex-1 object-cover" />
+            ))
           )}
         </div>
+
+        {/* A full-cover target so clicking the image opens the show; the buttons above win. */}
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`פתיחת המצגת "${p.name}" במצב הצגה`}
+          className="absolute inset-0"
+        />
+
+        {/* The controls — over a scrim, revealed on hover / keyboard focus. */}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2.5 bg-ink/0 opacity-0 transition-all duration-150 group-hover:bg-ink/30 group-hover:opacity-100 group-focus-within:bg-ink/30 group-focus-within:opacity-100">
+          <button
+            type="button"
+            onClick={onOpen}
+            aria-label={`הצגת המצגת "${p.name}"`}
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full bg-canvas text-accent shadow-floating transition-transform hover:scale-105 focus-visible:scale-105"
+          >
+            <Play className="h-5 w-5" strokeWidth={2} fill="currentColor" />
+          </button>
+          {manage && (
+            <button
+              type="button"
+              onClick={onEdit}
+              aria-label={`עריכת המצגת "${p.name}"`}
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full bg-canvas/90 text-ink-soft shadow-floating transition-transform hover:scale-105 focus-visible:scale-105"
+            >
+              <Pencil className="h-4 w-4" strokeWidth={2} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="min-w-0 p-3">
+        <h3 className="truncate text-sm font-semibold text-ink">{p.name || "ללא שם"}</h3>
+        <p className="nums mt-0.5 text-xs text-muted">{p.imageIds.length} שקופיות</p>
       </div>
     </article>
   );
 }
+<<<<<<< Updated upstream
 
 // F-2.1–F-2.2 builder: name + ordered photos; each photo carries name, description, ONE product
 // link and — since file storage landed (lib/files/) — an actual photograph. A photo-less row is
@@ -494,3 +582,5 @@ function NewImageForm({
     </div>
   );
 }
+=======
+>>>>>>> Stashed changes

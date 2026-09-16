@@ -2,16 +2,16 @@
 
 import type { GalleryImage } from "@/lib/gallery/types";
 
-// A gallery photograph — or the coloured tile that stands where one is not yet.
+// A gallery photograph — the photo's own upload, or the LINKED PRODUCT's photo when the photo has
+// none of its own, or a calm neutral tile where neither exists yet.
 //
-// Five places rendered this: three sizes of thumbnail, a row in the presentation builder, and the
-// full-bleed slide in /present. While every one of them was `background: img.tone` they agreed by
-// accident; the moment real photographs arrived they would have diverged, and the one that mattered
-// most is the one a client is looking at.
+// The tile used to be a per-photo random `tone` (an OKLCH colour minted at creation). That is gone:
+// a presentation of a dozen slides wants ONE quiet background, not twelve, and DESIGN.md's "the
+// tool recedes" says the same. `tone` still exists on the row and the type — dropping a DB column
+// is not worth it — but nothing renders it any more.
 //
 // `alt` is the photo's own name. These are photographs OF SOMETHING — "שנדליר מעל החופה" — and that
-// name is exactly what a screen reader should read out. The decorative case is the tile with no
-// photograph, which is why it carries no alt text of its own.
+// name is exactly what a screen reader should read out. The empty case carries no alt of its own.
 //
 // ⚠ A plain <img>, not next/image. These files are served either from this app's own route or from
 // a bucket on a custom domain, both of which already send immutable cache headers, and next/image
@@ -22,25 +22,28 @@ import type { GalleryImage } from "@/lib/gallery/types";
 export function Photo({
   image,
   className = "",
-  /** `cover` fills its box and crops (thumbnails); `contain` shows the whole photograph (/present,
-   *  where cropping a client's chosen image is not ours to do). */
+  /** `cover` fills its box and crops; `contain` letterboxes the whole photograph. Presentation
+   *  surfaces pass `cover` — the designer asked for the image to fill the slide, not sit small. */
   fit = "cover",
 }: {
-  image: Pick<GalleryImage, "imageUrl" | "tone" | "name">;
+  image: Pick<GalleryImage, "imageUrl" | "productImageUrl" | "name">;
   className?: string;
   fit?: "cover" | "contain";
 }) {
-  if (!image.imageUrl) {
-    return <span className={className} style={{ background: image.tone }} aria-hidden="true" />;
+  // The photo's own upload wins; the linked product's photo is the fallback; the neutral tile is last.
+  const src = image.imageUrl || image.productImageUrl;
+  if (!src) {
+    return <span className={`${className} bg-inset`} aria-hidden="true" />;
   }
   return (
+    // eslint-disable-next-line @next/next/no-img-element -- deliberate; see the note at the top of this file
     <img
-      src={image.imageUrl}
+      src={src}
       alt={image.name}
       loading="lazy"
       decoding="async"
-      className={className}
-      style={{ objectFit: fit, background: image.tone }}
+      className={`${className} bg-inset`}
+      style={{ objectFit: fit }}
     />
   );
 }

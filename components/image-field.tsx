@@ -98,8 +98,10 @@ export function ImageField({
             onClick={() => picker.current?.click()}
             disabled={uploading}
             aria-label={shown ? "החלפת התמונה" : "בחירת תמונה"}
-            className={`flex items-center justify-center overflow-hidden rounded-md border bg-inset text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-wait ${
-              shown ? "border-border" : "border-dashed border-border"
+            className={`flex items-center justify-center overflow-hidden rounded-md border transition-colors hover:border-accent disabled:cursor-wait ${
+              shown
+                ? "border-[#eeebf6] bg-canvas text-muted hover:text-accent"
+                : "border-[1.5px] border-dashed border-[#ddd6f0] bg-[#fcfbff] text-[#8f78d8] hover:bg-[#f3effc]"
             } ${className}`}
           >
             {shown ? (

@@ -52,6 +52,7 @@ export async function fetchImages(): Promise<GalleryImage[]> {
       description: galleryImages.description,
       productId: galleryImages.productId,
       productName: products.name,
+      productImageUrl: products.imageUrl,
       imageUrl: galleryImages.imageUrl,
       tone: galleryImages.tone,
     })
@@ -70,8 +71,9 @@ export async function fetchImages(): Promise<GalleryImage[]> {
     // deleted product simply pins nothing to the rail — which is the truthful answer.
     productId: row.productId ?? "",
     productName: row.productName ?? "",
+    productImageUrl: row.productImageUrl ?? undefined,
     imageUrl: row.imageUrl ?? undefined,
-    tone: row.tone ?? "",
+    tone: row.tone ?? undefined,
   }));
 }
 
@@ -126,6 +128,66 @@ export async function saveImage(image: GalleryImage): Promise<GalleryImage[]> {
 
   // Replacing a photograph deletes the one it replaced — see lib/files/owned.ts.
   await removeReplacedFile(existing?.imageUrl, imageUrl, organizationId);
+
+  revalidateGallery();
+  return fetchImages();
+}
+
+/**
+ * Create several photos in one round trip — the ordered slots a template skeleton (or, later, a
+ * multi-file drop) turns into rows on save.
+ *
+ * CREATE-oriented, and that is the whole reason it is separate from saveImage: every id here is
+ * newly minted in the builder, so there is no prior row and no replaced file to chase. A caller
+ * REPLACING a photograph still goes through saveImage. Sending twenty slots through that one at a
+ * time would be twenty inserts each followed by a full library re-read; this is one transaction and
+ * one re-read.
+ */
+export async function saveImagesBatch(items: GalleryImage[]): Promise<GalleryImage[]> {
+  if (!Array.isArray(items)) throw new Error("items must be an array");
+  if (items.length === 0) return fetchImages();
+  if (items.length > 100) throw new Error("too many images in one batch");
+  const organizationId = await currentOrg();
+
+  const rows = items.map((image) => {
+    if (!image || typeof image !== "object") throw new Error("image must be an object");
+    assertId(image.id, "image.id");
+    const name = clean(image.name);
+    if (!name) throw new Error("image.name is required");
+    if (image.productId) assertId(image.productId, "image.productId");
+    return {
+      id: image.id,
+      name,
+      description: clean(image.description, 1000) || null,
+      productId: image.productId || null,
+      // Same tenant + shape check saveImage runs; an unrecognised URL is dropped, not rejected.
+      imageUrl: ownedFileUrl(image.imageUrl, organizationId),
+      tone: clean(image.tone, MAX_TONE) || null,
+    };
+  });
+
+  // Every referenced product must be ONE OF OURS — a foreign key would take another studio's id.
+  const productIds = [...new Set(rows.map((r) => r.productId).filter((x): x is string => !!x))];
+  if (productIds.length) {
+    const owned = await db()
+      .select({ id: products.id })
+      .from(products)
+      .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
+    if (owned.length !== productIds.length) throw new Error("product not found");
+  }
+
+  await db().transaction(async (tx) => {
+    for (const { id, ...values } of rows) {
+      await tx
+        .insert(galleryImages)
+        .values({ id, organizationId, ...values })
+        .onConflictDoUpdate({
+          target: galleryImages.id,
+          setWhere: eq(galleryImages.organizationId, organizationId),
+          set: values,
+        });
+    }
+  });
 
   revalidateGallery();
   return fetchImages();

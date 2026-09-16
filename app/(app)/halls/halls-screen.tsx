@@ -7,6 +7,7 @@ import {
   ChevronUp,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
+  Images,
   Layers,
   Loader2,
   Lock,
@@ -22,6 +23,12 @@ import {
   Unlock,
   Upload,
   Users,
+<<<<<<< Updated upstream
+=======
+  Waves,
+  X,
+  type LucideIcon,
+>>>>>>> Stashed changes
 } from "lucide-react";
 import { endpointFromLengthAngle, polygonCentroid, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import { constrainAngleDeg } from "@/lib/studio/snap";
@@ -83,12 +90,17 @@ import {
   PlanUnderlayLayer,
   CalibrationOverlay,
 } from "@/components/venue-plan";
+<<<<<<< Updated upstream
 import { VenueInspector, ZoneFields, ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { formatDimensions } from "@/lib/catalog/format";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { FootprintShape } from "@/components/footprint-shape";
+=======
+import { VenueInspector, ZoneFields, FEATURE_KINDS } from "@/components/venue-inspector";
+import { UnderlayCropModal } from "@/components/underlay-crop-modal";
+>>>>>>> Stashed changes
 import {
   hitsInBox,
   isSelected,
@@ -721,13 +733,25 @@ export function HallsScreen() {
   const [calibAnswer, setCalibAnswer] = useState("");
   const [underlayBusy, setUnderlayBusy] = useState(false);
   const [underlayNote, setUnderlayNote] = useState<string | null>(null);
+  // A freshly-picked file waiting on the crop modal — null closes it. Set from the file input's
+  // onChange instead of uploading straight away, so nothing reaches storage until "לסיום".
+  const [cropFile, setCropFile] = useState<File | null>(null);
+  // The "pick an existing plan instead" list, collapsed by default — only the empty state offers it.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     setUnderlay(venue?.plan.underlay);
     setUnderlayUnlocked(false);
     setCalib(null);
     setUnderlayNote(null);
+    setCropFile(null);
+    setPickerOpen(false);
   }, [venueId, venue?.plan.underlay]);
+
+  // Other venues in the studio that already have a plan photo — reusing one skips a re-upload (and
+  // a re-photograph) when two properties share the same source drawing. `venues` already comes from
+  // fetchVenues(), already scoped to what this member can see, so no extra fetch or access check.
+  const reusableUnderlays = venues.filter((v) => v.id !== venueId && v.plan.underlay?.url);
 
   /** Write the plan back to the venue. Separate from saveVenuePlan (walls and zones): this is the
    *  venue RECORD, and it needs `manager` where the graph needs `editor`. */
@@ -768,6 +792,28 @@ export function HallsScreen() {
       setUnderlayNote("כעת כיילו: סמנו קטע שאורכו ידוע לכם");
     } catch {
       setUnderlayNote("ההעלאה נכשלה — נסו שוב");
+    } finally {
+      setUnderlayBusy(false);
+    }
+  };
+
+  // Reuse another venue's plan photo instead of uploading again. No upload call at all — the bytes
+  // already exist at that URL; only the placement is fresh, since a source venue's x/y/scale/rotation
+  // was calibrated for THAT property's plane and means nothing on this one (this venue still needs
+  // its own calibration afterward, same as any new underlay).
+  const reuseUnderlay = async (source: Venue) => {
+    const u = source.plan.underlay;
+    if (!u?.url) return;
+    setPickerOpen(false);
+    setUnderlayBusy(true);
+    setUnderlayNote(null);
+    try {
+      const { width, height } = await imageSize(u.url);
+      const placed = placeUnderlay(u.url, u.fileName, width, height);
+      setUnderlay(placed);
+      setUnderlayUnlocked(true);
+      await persistUnderlay(placed);
+      setUnderlayNote("כעת כיילו: סמנו קטע שאורכו ידוע לכם");
     } finally {
       setUnderlayBusy(false);
     }
@@ -1491,23 +1537,76 @@ export function HallsScreen() {
                   העלו תצלום או סריקה של תוכנית המקום, כיילו אותה לפי מידה ידועה, וציירו את הקירות
                   מעליה.
                 </p>
-                <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset">
-                  <Upload className="h-4 w-4" strokeWidth={1.4} />
-                  {underlayBusy ? "מעלה…" : "העלאת תוכנית"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    disabled={underlayBusy}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      // Cleared so choosing the SAME file again still fires a change event — the
-                      // obvious thing to do after a failed upload.
-                      e.target.value = "";
-                      if (f) void onUploadUnderlay(f);
-                    }}
-                  />
-                </label>
+
+                {pickerOpen ? (
+                  <div className="rounded-sm border border-border bg-canvas p-2">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-ink">בחירה מתוכנית קיימת</span>
+                      <button
+                        type="button"
+                        onClick={() => setPickerOpen(false)}
+                        aria-label="סגירת הרשימה"
+                        className="rounded-full p-0.5 text-muted hover:bg-inset hover:text-ink"
+                      >
+                        <X className="h-3.5 w-3.5" strokeWidth={2} />
+                      </button>
+                    </div>
+                    <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto">
+                      {reusableUnderlays.map((v) => (
+                        <li key={v.id}>
+                          <button
+                            type="button"
+                            disabled={underlayBusy}
+                            onClick={() => void reuseUnderlay(v)}
+                            className="flex w-full items-center gap-2 rounded-sm px-1.5 py-1.5 text-start hover:bg-inset disabled:opacity-50"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx */}
+                            <img
+                              src={v.plan.underlay!.url}
+                              alt=""
+                              className="h-10 w-10 shrink-0 rounded-sm object-cover"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
+                              <span className="block truncate text-xs text-muted">{v.plan.underlay!.fileName}</span>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset">
+                      <Upload className="h-4 w-4" strokeWidth={1.4} />
+                      {underlayBusy ? "מעלה…" : "העלאת תוכנית"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={underlayBusy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          // Cleared so choosing the SAME file again still fires a change event — the
+                          // obvious thing to do after a failed upload (or a cancelled crop).
+                          e.target.value = "";
+                          if (f) setCropFile(f);
+                        }}
+                      />
+                    </label>
+                    {reusableUnderlays.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={underlayBusy}
+                        onClick={() => setPickerOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset disabled:opacity-50"
+                      >
+                        <Images className="h-4 w-4" strokeWidth={1.4} />
+                        בחירה מתוכנית קיימת
+                      </button>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <div className="flex flex-col gap-2.5">
@@ -1786,6 +1885,15 @@ export function HallsScreen() {
           </div>
         </SidePanel>
       </div>
+
+      <UnderlayCropModal
+        file={cropFile}
+        onCancel={() => setCropFile(null)}
+        onConfirm={(cropped) => {
+          setCropFile(null);
+          void onUploadUnderlay(cropped);
+        }}
+      />
     </div>
   );
 }

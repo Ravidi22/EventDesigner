@@ -49,13 +49,27 @@ export async function uploadFile(file: File, kind: FileKind): Promise<UploadedFi
   // on every local upload) and leaks in the other.
   const sameOrigin = ticket.url.startsWith("/");
 
-  const response = await fetch(ticket.url, {
-    method: "PUT",
-    headers: ticket.headers,
-    body: file,
-    credentials: sameOrigin ? "same-origin" : "omit",
-  });
-  if (!response.ok) throw new Error("ההעלאה נכשלה — נסו שוב");
+  let response: Response;
+  try {
+    response = await fetch(ticket.url, {
+      method: "PUT",
+      headers: ticket.headers,
+      body: file,
+      credentials: sameOrigin ? "same-origin" : "omit",
+    });
+  } catch {
+    // A THROWN fetch (a TypeError, not an HTTP error) means the request never completed: the
+    // storage host was unreachable, or it answered a cross-origin PUT without the CORS headers the
+    // browser needs to hand us the response — the usual sign of an R2 bucket whose token or CORS
+    // rules are not set. "Failed to fetch" told the designer nothing; this at least points a
+    // developer at the bucket.
+    throw new Error(
+      sameOrigin
+        ? "ההעלאה נכשלה — לא ניתן להגיע לשרת"
+        : "ההעלאה נכשלה — שירות האחסון (R2) לא זמין או חוסם את הבקשה. יש לבדוק את הרשאות ה־API ואת כללי ה־CORS של הדלי.",
+    );
+  }
+  if (!response.ok) throw new Error(`ההעלאה נכשלה (${response.status}) — נסו שוב`);
 
   return { url: ticket.publicUrl, key: ticket.key };
 }

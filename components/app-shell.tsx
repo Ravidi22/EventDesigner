@@ -40,7 +40,7 @@ const GENERAL: NavItem[] = [
   { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
   { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
-  { href: "/gallery", label: "גלריה ותצוגות", icon: Images },
+  { href: "/gallery", label: "גלריה ומצגות", icon: Images },
 ];
 
 const TITLES: { test: (p: string) => boolean; title: string }[] = [
@@ -49,7 +49,7 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
-  { test: (p) => p.startsWith("/gallery"), title: "גלריה ותצוגות" },
+  { test: (p) => p.startsWith("/gallery"), title: "גלריה ומצגות" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
   { test: (p) => p.startsWith("/outputs"), title: "פלטים" },

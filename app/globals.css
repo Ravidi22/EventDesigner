@@ -8,7 +8,7 @@
   --color-bg: #eeedf3; /* the app plane behind cards */
   --color-surface: #ffffff; /* cards and panels */
   --color-inset: #faf9fd; /* a well recessed inside a card */
-  --color-tray: #dcdae2; /* a grouping lane (e.g. Kanban columns) one step darker than --color-bg — reads as its own zone instead of blending into the page plane */
+  --color-tray: #f7f6fc; /* a grouping lane (e.g. Kanban columns) one step darker than --color-bg — reads as its own zone instead of blending into the page plane */
   --color-border: #e9e7f0; /* Line */
   --color-border-soft: #f0eef5; /* hairline between rows inside a card */
   --color-inset-border: #eae8f0; /* the stroke around an inset well */
@@ -280,15 +280,16 @@ body {
   }
 }
 
-/* Presentation mode (F-5.5): each work fades in calmly as the designer steps through with the
-   client. Collapsed to instant by the reduced-motion block below. */
+/* Presentation mode (F-5.5): each slide fades in and settles from a hair larger, so a `cover`
+   image reads as "arriving" rather than snapping. Calm, ~450ms. Collapsed to instant by the
+   reduced-motion block below. */
 .present-in {
-  animation: present-in 260ms var(--ease-fluid) both;
+  animation: present-in 450ms var(--ease-fluid) both;
 }
 @keyframes present-in {
   from {
     opacity: 0;
-    transform: scale(0.99);
+    transform: scale(1.035);
   }
 }
 
