@@ -1401,11 +1401,26 @@ export function PlanCanvas({
           const b = graphNodeAt(w.b);
           if (!a || !b) return null;
           const curve = w.curve ?? null;
+          // Zoomed out, a short wall is barely longer than its own diamond — surfacing the handle
+          // would leave the wall nothing to click but the diamond and its two corners. Bowing a
+          // wall that small on screen isn't a real gesture anyway; zooming in brings it back.
+          if (!isSelected && dragGraphWall !== w.id && Math.hypot(b.x - a.x, b.y - a.y) < mm(40)) return null;
           const mid = edgeMidpoint(a, b, curve);
           const bulgeDrag = dragHandlers(
             clientToMm,
             (p) => onCurveGraphWall(w.id, "bulge", p),
-            () => onSelectGraph?.({ kind: "wall", id: w.id }, false),
+            // Select on the PRESS only (so a drag bows the wall it is holding), never again on the
+            // click that follows: onSelectGraph goes through pick's toggle, so selecting on both
+            // phases selected the wall and cleared it again in one click — the "clicking a wall
+            // opens nothing" bug, worst zoomed out where the diamond covers most of a short wall.
+            // A modifier click skips the press (see dragHandlers) and toggles on the click instead.
+            (mods) => {
+              if (mods.phase === "press") {
+                if (!isSelected) onSelectGraph?.({ kind: "wall", id: w.id }, false);
+              } else if (mods.shift) {
+                onSelectGraph?.({ kind: "wall", id: w.id }, true);
+              }
+            },
             (dragging) => setDragGraphWall(dragging ? w.id : null),
             onCommit,
           );
