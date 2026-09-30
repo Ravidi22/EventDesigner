@@ -23,12 +23,7 @@ import {
   Unlock,
   Upload,
   Users,
-<<<<<<< Updated upstream
-=======
-  Waves,
   X,
-  type LucideIcon,
->>>>>>> Stashed changes
 } from "lucide-react";
 import { endpointFromLengthAngle, polygonCentroid, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import { constrainAngleDeg } from "@/lib/studio/snap";
@@ -90,17 +85,13 @@ import {
   PlanUnderlayLayer,
   CalibrationOverlay,
 } from "@/components/venue-plan";
-<<<<<<< Updated upstream
+import { UnderlayCropModal } from "@/components/underlay-crop-modal";
 import { VenueInspector, ZoneFields, ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { formatDimensions } from "@/lib/catalog/format";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { FootprintShape } from "@/components/footprint-shape";
-=======
-import { VenueInspector, ZoneFields, FEATURE_KINDS } from "@/components/venue-inspector";
-import { UnderlayCropModal } from "@/components/underlay-crop-modal";
->>>>>>> Stashed changes
 import {
   hitsInBox,
   isSelected,

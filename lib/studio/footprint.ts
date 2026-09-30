@@ -194,15 +194,6 @@ export function shapeFootprint(
     // malformed custom → fall through to a safe rectangle
   }
   if (shape === "circle") return { kind: "circle", diameterMm: d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM };
-<<<<<<< Updated upstream
-  const widthMm = d.widthMm || MIN_FOOTPRINT_MM;
-  const depthMm = d.depthMm || MIN_FOOTPRINT_MM;
-  // A derived shape resolves to a custom footprint the app draws FOR the designer: the canvas, the
-  // printed placement map, the drag image and the seating that walks a table's edges all already
-  // know how to render an outline with bowed edges, so a new shape needs nothing new anywhere else.
-  const built = buildShapeOutline(shape, widthMm, depthMm);
-  if (built) return { kind: "custom", outline: built.outline, ...(built.edgeCurves ? { edgeCurves: built.edgeCurves } : {}) };
-=======
   // Same single-measurement idea as circle above, just squared off instead of round — a "square"
   // Footprint kind of its own would only ever draw identically to "rect" with widthMm===depthMm,
   // so it resolves straight to that instead of adding a fourth shape every renderer has to know.
@@ -215,7 +206,11 @@ export function shapeFootprint(
   // instead of silently collapsing to the generic MIN_FOOTPRINT_MM box.
   const widthMm = d.widthMm || d.diameterMm || MIN_FOOTPRINT_MM;
   const depthMm = d.depthMm || d.diameterMm || MIN_FOOTPRINT_MM;
->>>>>>> Stashed changes
+  // A derived shape resolves to a custom footprint the app draws FOR the designer: the canvas, the
+  // printed placement map, the drag image and the seating that walks a table's edges all already
+  // know how to render an outline with bowed edges, so a new shape needs nothing new anywhere else.
+  const built = buildShapeOutline(shape, widthMm, depthMm);
+  if (built) return { kind: "custom", outline: built.outline, ...(built.edgeCurves ? { edgeCurves: built.edgeCurves } : {}) };
   return { kind: shape === "ellipse" ? "ellipse" : "rect", widthMm, depthMm };
 }
 

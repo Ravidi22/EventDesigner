@@ -21,6 +21,7 @@ export type MapShape =
   | "rect"
   | "circle"
   | "ellipse"
+  | "square"
   | "half-circle"
   | "quarter-circle"
   | "crescent"
@@ -38,6 +39,7 @@ export const MAP_SHAPES: MapShape[] = [
   "rect",
   "circle",
   "ellipse",
+  "square",
   "half-circle",
   "quarter-circle",
   "crescent",
@@ -53,6 +55,7 @@ export const SHAPE_LABEL: Record<MapShape, string> = {
   rect: "מלבן",
   circle: "עיגול",
   ellipse: "אליפסה",
+  square: "ריבוע",
   "half-circle": "חצי עיגול",
   "quarter-circle": "רבע עיגול",
   crescent: "סהר (סרפנטינה)",
@@ -65,21 +68,13 @@ export const SHAPE_LABEL: Record<MapShape, string> = {
 };
 
 // Map appearance (studio 2D plan). Footprint is always drawn at true scale; `content`
-<<<<<<< Updated upstream
 // is what appears inside it. Every shape but "custom" reads from `dimensions` (single source
 // of truth) — only "custom" stores its own outline. Outline coordinates are in mm and
-// are rendered centered on their bounding box (no pre-centering required).
+// are rendered centered on their bounding box (no pre-centering required). "square" has no
+// Footprint kind of its own — it resolves to a "rect" with equal width and depth (see
+// resolveFootprint), since every renderer already draws that correctly.
 export interface MapAppearance {
   shape: MapShape;
-=======
-// is what appears inside it. rect/circle/ellipse/square read from `dimensions` (single
-// source of truth) — only "custom" stores its own outline. Outline coordinates are in mm
-// and are rendered centered on their bounding box (no pre-centering required). "square"
-// has no Footprint kind of its own — it resolves to a "rect" with equal width and depth
-// (see resolveFootprint), since every renderer already draws that correctly.
-export interface MapAppearance {
-  shape: "rect" | "circle" | "ellipse" | "square" | "custom";
->>>>>>> Stashed changes
   outline?: Point[]; // required iff shape === "custom"
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
   content: "icon" | "name" | "none";

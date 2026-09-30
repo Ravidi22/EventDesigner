@@ -281,26 +281,10 @@ export function ProductDrawer({
   })();
 
   return (
-<<<<<<< Updated upstream
     // The shell — geometry, header, close button and the single scrollbar — is the app's shared
     // drawer (components/drawer.tsx), the same one the dashboard's event detail opens. This screen
     // owns only the form inside it.
     <Drawer title={isEdit ? "עריכת מוצר" : "מוצר חדש"} onClose={onClose}>
-=======
-    // Same floating-card shell as EventDetailDrawer (dashboard/event-detail-drawer.tsx): inset off
-    // the viewport edges rather than flush, rounded-md, shadow-floating. top/bottom/height are
-    // inline styles rather than Tailwind's inset-y-0/h-dvh, per that component's own note — a shown
-    // <dialog> lives in the top layer, and its height empirically doesn't stretch to fill top+bottom
-    // offsets the way a normal fixed element's would, so the height is computed explicitly instead.
-    // insetInlineEnd (not EventDetailDrawer's hardcoded `left`) because THIS drawer keeps the app's
-    // normal RTL-driven side — EventDetailDrawer's left pin was an explicit one-off for that surface.
-    <dialog
-      ref={ref}
-      onClose={onClose}
-      style={{ insetInlineEnd: "8px", insetInlineStart: "auto", top: "4px", bottom: "4px", height: "calc(100dvh - 8px)" }}
-      className="drawer fixed m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
-    >
->>>>>>> Stashed changes
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -309,22 +293,7 @@ export function ProductDrawer({
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
-<<<<<<< Updated upstream
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-=======
-        <header className="flex items-center justify-between border-b border-[#ebe8f5] bg-surface px-5 py-3.5">
-          <h2 className="font-display text-base">{isEdit ? "עריכת מוצר" : "מוצר חדש"}</h2>
-          <IconButton label="סגור" onClick={onClose}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
-        </header>
-
-        {/* min-h-0 is load-bearing: a flex-1 child defaults to min-height:auto, which refuses to
-            shrink below its own content and grows the FORM (and so the dialog, whose native
-            overflow:auto UA style then kicks in) past the drawer's fixed height instead of
-            scrolling internally — the outer/inner double-scrollbar bug. This is the one scroll. */}
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-tray px-5 py-5">
->>>>>>> Stashed changes
           <TextField
             id="p-name"
             label="שם המוצר"
@@ -367,7 +336,6 @@ export function ProductDrawer({
 
           <SectionDivider label="מראה על התוכנית" />
 
-<<<<<<< Updated upstream
           {/* Everything that decides what the plan draws — the shape, the measurements it is made
               of, the outline, the content and the style — is one modal away (./appearance-modal).
               What stays here is the answer, not the controls: a tile showing exactly what will be
@@ -399,13 +367,6 @@ export function ProductDrawer({
                   ? `${category.label} נמדדים על התוכנית — הגודל נקבע כשמותחים אותם באירוע.`
                   : (sizeSummary ?? "ללא מידות")}
                 {!stretch && sizeSummary && <> · {CONTENT_LABEL[currentContent]}</>}
-=======
-          <fieldset>
-            {stretch && (
-              <p className="mb-3 rounded-md border border-[#eeebf6] bg-canvas px-3 py-2 text-xs leading-relaxed text-ink-soft shadow-[0_10px_22px_-18px_rgba(70,40,130,.55)]">
-                {category.label} נמדדים על התוכנית, לא כאן — הגודל נקבע כשמותחים אותם באירוע, והמחיר
-                מחושב לפי מה שנפרש בפועל.
->>>>>>> Stashed changes
               </p>
               {/* An outline button, not a ghost one: at this size, on a white card, a ghost label
                   beside a tile that is itself clickable read as a caption — nobody could see it
@@ -505,111 +466,6 @@ export function ProductDrawer({
           />
 
           <div>
-<<<<<<< Updated upstream
-=======
-            <span className={fieldLabelClassName}>מראה על התוכנית</span>
-            <div className="flex gap-3">
-              {currentShape === "custom" ? (
-                <button
-                  type="button"
-                  onClick={() => setShapeModalOpen(true)}
-                  aria-label="עריכת צורת הפריט"
-                  className="group flex h-28 w-28 shrink-0 items-center justify-center rounded-md border border-[#eeebf6] bg-canvas p-2 shadow-[0_10px_22px_-18px_rgba(70,40,130,.55)] transition-colors hover:border-accent"
-                >
-                  {(draft.appearance?.outline?.length ?? 0) >= 3 ? (
-                    <AppearancePreview product={draft} className="h-full w-full" />
-                  ) : (
-                    <span className="text-center text-xs leading-snug text-muted group-hover:text-accent">
-                      לחצו
-                      <br />
-                      לעריכת הצורה
-                    </span>
-                  )}
-                </button>
-              ) : (
-                <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-md border border-[#eeebf6] bg-canvas p-2 shadow-[0_10px_22px_-18px_rgba(70,40,130,.55)]">
-                  <AppearancePreview product={draft} className="h-full w-full" />
-                </div>
-              )}
-
-              <div className="flex-1 space-y-2">
-                <div>
-                  <span className="mb-1 block text-xs text-muted">צורה</span>
-                  <div className="flex flex-wrap gap-1 rounded-pill border border-[#eeebf6] bg-canvas p-0.5">
-                    {([["rect", "מלבן"], ["square", "ריבוע"], ["circle", "עיגול"], ["ellipse", "אליפסה"], ["custom", "מותאם"]] as const).map(([s, label]) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => {
-                          if (s === "custom") { setAppearance({ shape: "custom", outline: draft.appearance?.outline ?? [] }); setShapeModalOpen(true); }
-                          else setAppearance({ shape: s });
-                        }}
-                        className={"rounded-pill px-2 py-1 text-xs transition-colors " + (currentShape === s ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <span className="mb-1 block text-xs text-muted">תוכן</span>
-                  <div className="flex flex-wrap gap-1 rounded-pill border border-[#eeebf6] bg-canvas p-0.5">
-                    {([["icon", "אייקון"], ["name", "שם"], ["none", "ריק"]] as const).map(([c, label]) => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => { setAppearance({ content: c }); setPickingIcon(c === "icon"); }}
-                        className={"rounded-pill px-2 py-1 text-xs transition-colors " + (currentContent === c ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <span className="mb-1 block text-xs text-muted">עיצוב</span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StyleFields style={draft.appearance?.style} onChange={(style) => setAppearance({ style })} strokeWidthDefault={2} />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {currentShape === "custom" && (
-              <button
-                type="button"
-                onClick={() => setShapeModalOpen(true)}
-                className="mt-1.5 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
-              >
-                {(draft.appearance?.outline?.length ?? 0) >= 3 ? "עריכת הצורה" : "עריכת הצורה…"}
-              </button>
-            )}
-            {submitted && draft.appearance?.shape === "custom" && (draft.appearance.outline?.length ?? 0) < 3 && (
-              <p className="mt-1 text-xs text-alert">יש לסמן צורה סגורה (לפחות 3 נקודות).</p>
-            )}
-
-            <ShapeEditorModal
-              open={shapeModalOpen}
-              outline={draft.appearance?.outline ?? []}
-              edgeCurves={draft.appearance?.edgeCurves}
-              onSave={(outline, edgeCurves) => setAppearance({ shape: "custom", outline, edgeCurves })}
-              onClose={() => setShapeModalOpen(false)}
-            />
-
-            {currentContent === "icon" && pickingIcon && (
-              <div className="mt-2">
-                <IconPicker
-                  value={draft.appearance?.icon}
-                  onPick={(icon) => { setAppearance({ content: "icon", icon }); setPickingIcon(false); }}
-                />
-              </div>
-            )}
-          </div>
-
-          <div>
->>>>>>> Stashed changes
             <span className={fieldLabelClassName}>תגיות סטייל</span>
             <div className="flex flex-wrap items-center gap-1.5">
               {styleTagsOf([draft]).map((t) => (
@@ -676,33 +532,12 @@ export function ProductDrawer({
           </div>
 
           <div>
-<<<<<<< Updated upstream
             <Segmented
               label="סוג המלאי"
               value={draft.stockKind ?? "owned"}
               options={STOCK_OPTIONS}
               onChange={(k) => patch({ stockKind: k === "owned" ? undefined : k })}
             />
-=======
-            <span className={fieldLabelClassName}>סוג המלאי</span>
-            <div className="flex flex-wrap gap-1 rounded-pill border border-[#eeebf6] bg-canvas p-0.5">
-              {(["owned", "consumable", "rented"] as StockKind[]).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => patch({ stockKind: k === "owned" ? undefined : k })}
-                  className={
-                    "rounded-pill px-2 py-1 text-xs transition-colors " +
-                    ((draft.stockKind ?? "owned") === k
-                      ? "bg-accent text-canvas"
-                      : "text-ink-soft hover:bg-bg")
-                  }
-                >
-                  {STOCK_KIND_LABEL[k]}
-                </button>
-              ))}
-            </div>
->>>>>>> Stashed changes
             <p className="mt-1 text-xs leading-relaxed text-muted">
               {STOCK_KIND_HINT[draft.stockKind ?? "owned"]}
             </p>
