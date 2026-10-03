@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CircleDot,
+  Crosshair,
   DoorOpen,
   GlassWater,
   Layers,
@@ -41,6 +42,7 @@ import {
   endpointFromLengthAngle,
 } from "@/lib/studio/geometry";
 import { snapPoint, constrainAngleDeg, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
+import { insidePolys, pointToPolys, polysGap } from "@/lib/studio/proximity";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
@@ -114,6 +116,26 @@ export interface CanvasFocus {
   immediate?: boolean;
 }
 
+/** Something the tape can measure TO — a host-drawn item, as its outline in world mm. The tape
+ *  measures between two of these edge to edge, which is the distance anyone actually means by "how
+ *  far is the stage from the first table": the air between them, not the gap between two centres.
+ *  Structural, like CanvasGraph: the canvas knows outlines, never what a table is. */
+export interface MeasureTarget {
+  id: string;
+  polys: Point[][];
+}
+
+/** What a finished rubber-band does to the selection — see onMarquee. */
+export type MarqueeMode = "replace" | "add" | "toggle";
+
+/** A world-space box the centre-line guides are drawn through. */
+export interface CanvasGuideBox {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
 const FOCUS_MS = 300; // long enough to read as travel between two places, short enough not to wait on
 const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
 
@@ -148,9 +170,6 @@ export interface HostSnapOptions {
   refs?: Point[];
   boxes?: SnapBox[];
   self?: { widthMm: number; depthMm: number };
-  /** Lines the point may land ON, as opposed to axes it may line up WITH — a venue's ceiling rods,
-   *  passed by the studio surface so a table can be centred under one (lib/studio/snap.ts). */
-  lines?: { a: Point; b: Point }[];
 }
 
 const PAD_MM = 1500;
@@ -361,6 +380,7 @@ export function PlanCanvas({
   onMarquee,
   onCanvasClick,
   onDropAt,
+  framePoints,
   dropSnap,
   cursor = "default",
   ariaLabel = "תרשים האולם — עריכה",
@@ -370,6 +390,9 @@ export function PlanCanvas({
   minExtentMm = DEFAULT_EXTENT,
   gridMm = 1000,
   gridColorClassName = "text-border",
+  measureTargets,
+  centerGuides,
+  toolbarExtras,
 }: {
   mode: "draw" | "edit";
   outline: Point[];
@@ -437,7 +460,10 @@ export function PlanCanvas({
   // A marquee drag finished. The canvas reports the box rather than the hits, because everything
   // selectable here belongs to the host — the graph is its data, and so is whatever it drew into
   // backdrop/overlay. Hit-testing it here would mean teaching the canvas what a zone is.
-  onMarquee?: (box: { minX: number; minY: number; maxX: number; maxY: number }, additive: boolean) => void;
+  // `additive` is any modifier (Shift/Ctrl/Cmd held through the release); `mode` says which: Shift
+  // ADDS the box's catch to the selection, Ctrl/Cmd TOGGLES it — the one gesture that can take
+  // things OUT of a selection in bulk, which a band that only ever added could not.
+  onMarquee?: (box: { minX: number; minY: number; maxX: number; maxY: number }, additive: boolean, mode: MarqueeMode) => void;
   // A click on empty canvas in edit mode, in world mm — for a host whose current tool means "put one
   // here" (the studio's click-to-place tables). It fires alongside the selection-clearing onSelect
   // (null), not instead of it: what the click MEANS is the host's business, and a host with no tool
@@ -447,6 +473,9 @@ export function PlanCanvas({
   // the world point it landed on. Supplying this is what turns on dragover/drop handling at all —
   // the canvas never claims a drop a host isn't listening for.
   onDropAt?: (e: React.DragEvent, p: Point) => void;
+  /** More points the fitted view must include, beyond the outline — things a host draws in its own
+   *  layer (the added shapes of a catalog item) that would otherwise open off-screen. */
+  framePoints?: Point[];
   // What a DROP coming in from outside the canvas should align to. Supplying it turns the same
   // alignment and equal-gap pull (and the same guide lines) on for that drag, which otherwise had
   // none: an item dragged off the rail landed wherever the pointer happened to be, so the first
@@ -477,6 +506,16 @@ export function PlanCanvas({
    *  bg-canvas a colour close to text-border in value (the halls screen's light-purple canvas,
    *  say) needs a line with more contrast against it, or the grid just disappears. */
   gridColorClassName?: string;
+  /** What the tape can pick up as a whole — click inside one and the measurement runs from its
+   *  EDGE. Topmost last, like the drawing order. Omitted = the tape measures between points only. */
+  measureTargets?: MeasureTarget[];
+  /** The centre-line guides (the crosshair button): `plan` is the area whose middle matters — the
+   *  event's zones, the hall — and `items` the selection's own boxes. Supplying this is what puts the
+   *  button on the canvas at all. */
+  centerGuides?: { plan?: CanvasGuideBox | null; items?: CanvasGuideBox[] };
+  /** A host's own view toggles, sitting in the canvas's tool strip beside the ruler and the tape —
+   *  one strip of view controls, rather than a second one floating somewhere else. */
+  toolbarExtras?: ReactNode;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   // Last known pointer position in CLIENT px, kept alongside cursorRaw (which is in world mm and
@@ -505,7 +544,7 @@ export function PlanCanvas({
   const [rotating, setRotating] = useState<{ deg: number; locked: boolean; at: Point } | null>(null);
   // The two alignment axes, plus any run of equal gaps the drag landed on. One state, because they
   // are one answer to one question — where this thing is lining up — and they clear together.
-  const [guides, setGuides] = useState<{ x: number | null; y: number | null; gaps?: GapGuide[]; lineGuide?: { a: Point; b: Point } }>({ x: null, y: null });
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null; gaps?: GapGuide[] }>({ x: null, y: null });
   // Measurements default on while drawing (that's when they're the point) and off once the shape is
   // closed — until the ruler button is pressed, after which the choice is the user's and sticks.
   const [dimsOverride, setDimsOverride] = useState<boolean | null>(null);
@@ -518,7 +557,11 @@ export function PlanCanvas({
   // columns. Every one of those is a distance between two points that are not the ends of a wall,
   // and until now the only way to get it was to draw something and delete it again.
   const [tapeOn, setTapeOn] = useState(false);
-  const [tape, setTape] = useState<{ a: Point; b: Point | null } | null>(null);
+  // `aId`/`bId` are the measure targets an end was dropped INSIDE, when it was — see MeasureTarget.
+  const [tape, setTape] = useState<{ a: Point; b: Point | null; aId?: string; bId?: string } | null>(null);
+  // The centre-line guides. Off by default: a hall with a crosshair through it all evening is noise,
+  // and the question "is this centred" is asked in moments, not continuously.
+  const [guidesOn, setGuidesOn] = useState(false);
   // The SketchUp value-control-box: type a length (Tab switches to the angle) and Enter commits the
   // next corner at exactly that dimension instead of wherever the cursor happened to be.
   const [entry, setEntry] = useState<{ field: "length" | "angle"; length: string; angle: string } | null>(null);
@@ -559,7 +602,7 @@ export function PlanCanvas({
   const contentBox =
     mode === "draw" && outline.length < 3 && graphFramePoints.length === 0
       ? { minX: -padMm, minY: -padMm, w: minExtentMm.w, h: minExtentMm.h }
-      : computeViewBox(outline, stage, bars, padMm, minExtentMm, graphFramePoints);
+      : computeViewBox(outline, stage, bars, padMm, minExtentMm, framePoints ? [...graphFramePoints, ...framePoints] : graphFramePoints);
 
   // The viewBox is derived from center+zoom with the container's own aspect ratio, so there's no
   // letterbox and 1 screen px == mmPerPx world units everywhere. Pan moves center; zoom changes
@@ -865,19 +908,40 @@ export function PlanCanvas({
   // What the tape currently shows: the finished measurement, or the live one being dragged out from
   // the first click to wherever the pointer is. Re-derived each render rather than stored, so the
   // second point tracks the cursor without a second piece of state to keep honest.
-  const tapeSegment: { a: Point; b: Point; live: boolean } | null = tape
-    ? tape.b
-      ? { a: tape.a, b: tape.b, live: false }
-      : cursorRaw
-        ? { a: tape.a, b: snapTape(cursorRaw, false), live: true }
-        : null
-    : null;
+  //
+  // An end dropped inside a measure target is that WHOLE THING, not the point clicked: the tape then
+  // runs from the nearest point of its outline — to the other end's point, or to the nearest point
+  // of the other thing's outline. So "click the stage, click the table" reads the clear air between
+  // them, which is the measurement the tape was always being used to approximate by eye.
+  const targetAt = (p: Point): MeasureTarget | undefined => {
+    const list = measureTargets ?? [];
+    for (let i = list.length - 1; i >= 0; i--) if (insidePolys(p, list[i].polys)) return list[i];
+    return undefined;
+  };
+  const targetById = (id?: string) => (id ? measureTargets?.find((t) => t.id === id) : undefined);
+  const hoverTarget = tapeOn && cursorRaw && !tape?.b ? targetAt(cursorRaw) : undefined;
+  const tapeSegment: { a: Point; b: Point; live: boolean; between: boolean } | null = (() => {
+    if (!tape) return null;
+    const live = !tape.b;
+    const bPoint = tape.b ?? (cursorRaw ? snapTape(cursorRaw, false) : null);
+    if (!bPoint) return null;
+    const A = targetById(tape.aId);
+    const B0 = live ? hoverTarget : targetById(tape.bId);
+    const B = B0 && B0.id !== A?.id ? B0 : undefined;
+    if (A && B) {
+      const g = polysGap(A.polys, B.polys);
+      return { a: g.from, b: g.to, live, between: true };
+    }
+    if (A) return { a: pointToPolys(bPoint, A.polys).to, b: bPoint, live, between: true };
+    if (B) return { a: tape.a, b: pointToPolys(tape.a, B.polys).to, live, between: true };
+    return { a: tape.a, b: bPoint, live, between: false };
+  })();
 
   const pending = mode === "draw" && cursorRaw ? snapDraw(cursorRaw, altHeld) : null;
   const pendingLenMm = pending && drawAnchor ? wallLengthMm(drawAnchor, pending.point) : 0;
   const pendingAngleDeg = pending && drawAnchor ? wallAngleDeg(drawAnchor, pending.point) : 0;
   const closable = mode === "draw" && outline.length >= 3;
-  const shownGuides: { x: number | null; y: number | null; gaps?: GapGuide[]; lineGuide?: { a: Point; b: Point } } =
+  const shownGuides: { x: number | null; y: number | null; gaps?: GapGuide[] } =
     mode === "draw" ? (pending?.guides ?? { x: null, y: null }) : guides;
   // Which side of a wall reads as "inward", for a door's swing direction — the outline's own
   // centroid, same reference point the old (and now-restored) doorGeometry always used.
@@ -942,8 +1006,12 @@ export function PlanCanvas({
     // down before the wall could be drawn is one nobody reaches for. Click one, click two, read it;
     // a third click starts the next measurement rather than making the designer clear this one.
     if (tapeOn) {
-      const p = snapTape(clientToMm(e.clientX, e.clientY), e.shiftKey);
-      setTape((t) => (t && !t.b ? { a: t.a, b: p } : { a: p, b: null }));
+      const raw = clientToMm(e.clientX, e.clientY);
+      // Inside a thing, the end IS the thing (see tapeSegment) and the raw point is kept only as a
+      // fallback; on open floor it snaps to corners and walls like every other point here.
+      const hit = targetAt(raw);
+      const p = hit ? raw : snapTape(raw, e.shiftKey);
+      setTape((t) => (t && !t.b ? { ...t, b: p, bId: hit?.id } : { a: p, b: null, aId: hit?.id }));
       return;
     }
     if (mode !== "draw") {
@@ -1047,11 +1115,10 @@ export function PlanCanvas({
     // (lib/studio/snap.ts). `self` is the moving item's own extent, the other half of both.
     boxes: opts?.boxes,
     self: opts?.self,
-    lines: opts?.lines,
   });
   const snapHost = (p: Point, opts?: HostSnapOptions): Point => {
     const r = snapPoint(p, snapCtx(opts));
-    setGuides({ ...r.guides, gaps: r.gaps, lineGuide: r.lineGuide });
+    setGuides({ ...r.guides, gaps: r.gaps });
     return r.point;
   };
 
@@ -1264,7 +1331,7 @@ export function PlanCanvas({
             const { x0, y0, x1, y1 } = marquee.current;
             const box = { minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) };
             onSelectMany?.(collectMarqueeHits(box), isAdditiveClick(e));
-            onMarquee?.(box, isAdditiveClick(e));
+            onMarquee?.(box, isAdditiveClick(e), e.ctrlKey || e.metaKey ? "toggle" : e.shiftKey ? "add" : "replace");
           }
           marquee.current = null;
           setMarqueeBox(null);
@@ -1896,23 +1963,6 @@ export function PlanCanvas({
         <line x1={vb.minX} y1={shownGuides.y} x2={vb.minX + vb.w} y2={shownGuides.y} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
       )}
 
-      {/* Landing on a LINE — a table pulled onto a ceiling rod. Drawn along the rod's own segment
-          (not the whole viewport, like the axis guides above), in the same accent and dash so it
-          reads as one family of guide. */}
-      {shownGuides.lineGuide && (
-        <line
-          x1={shownGuides.lineGuide.a.x}
-          y1={shownGuides.lineGuide.a.y}
-          x2={shownGuides.lineGuide.b.x}
-          y2={shownGuides.lineGuide.b.y}
-          className="text-accent"
-          stroke="currentColor"
-          strokeWidth={1}
-          strokeDasharray="6 4"
-          vectorEffect="non-scaling-stroke"
-        />
-      )}
-
       {/* Equal-gap markers — a bar with an end tick drawn INSIDE each matching gap, so the two (or
           three) pieces of air the eye is being told are the same are each measured out. Solid where
           the alignment guides are dashed: they say different things and must not be read as one
@@ -2027,6 +2077,63 @@ export function PlanCanvas({
           })}
         </g>
       )}
+
+      {/* What the tape has picked up, or is about to: the outline of each thing an end belongs to,
+          so it is plain that the measurement runs from that thing's edge and not from where the
+          click happened to land. */}
+      {tapeOn &&
+        [targetById(tape?.aId), targetById(tape?.bId), hoverTarget]
+          .filter((t, i, all): t is MeasureTarget => !!t && all.findIndex((x) => x?.id === t.id) === i)
+          .map((t) =>
+            t.polys.map((poly, j) => (
+              <polygon
+                key={`${t.id}-${j}`}
+                points={poly.map((p) => `${p.x},${p.y}`).join(" ")}
+                fill="none"
+                className="text-accent pointer-events-none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeDasharray="5 3"
+                vectorEffect="non-scaling-stroke"
+              />
+            )),
+          )}
+
+      {/* CENTRE-LINE GUIDES. The plan's two centre lines, solid-dashed, and its quarter lines
+          fainter — the grid a designer draws in their head to decide whether the stage is in the
+          middle of the room and the head table on its axis. Then each selected thing's own centre
+          lines, in a second dash, so the eye can run one down to the other. Drawn across the whole
+          view: a centre line that stopped at the plan's edge would say nothing about the thing
+          standing just outside it. */}
+      {guidesOn && centerGuides?.plan && (() => {
+        const b = centerGuides.plan;
+        const xs = [0.25, 0.5, 0.75].map((f) => b.minX + (b.maxX - b.minX) * f);
+        const ys = [0.25, 0.5, 0.75].map((f) => b.minY + (b.maxY - b.minY) * f);
+        return (
+          <g className="text-accent pointer-events-none">
+            {xs.map((x, i) => (
+              <line key={`gx${i}`} x1={x} y1={vb.minY} x2={x} y2={vb.minY + vb.h} stroke="currentColor" strokeOpacity={i === 1 ? 0.7 : 0.25} strokeWidth={1} strokeDasharray={i === 1 ? "12 4 2 4" : "3 5"} vectorEffect="non-scaling-stroke" />
+            ))}
+            {ys.map((y, i) => (
+              <line key={`gy${i}`} x1={vb.minX} y1={y} x2={vb.minX + vb.w} y2={y} stroke="currentColor" strokeOpacity={i === 1 ? 0.7 : 0.25} strokeWidth={1} strokeDasharray={i === 1 ? "12 4 2 4" : "3 5"} vectorEffect="non-scaling-stroke" />
+            ))}
+            <rect x={b.minX} y={b.minY} width={b.maxX - b.minX} height={b.maxY - b.minY} fill="none" stroke="currentColor" strokeOpacity={0.35} strokeWidth={1} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />
+            <circle cx={xs[1]} cy={ys[1]} r={mm(5)} fill="none" stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          </g>
+        );
+      })()}
+      {guidesOn &&
+        centerGuides?.items?.map((b, i) => {
+          const cx = (b.minX + b.maxX) / 2;
+          const cy = (b.minY + b.maxY) / 2;
+          return (
+            <g key={`gi${i}`} className="text-ink-soft pointer-events-none">
+              <line x1={cx} y1={vb.minY} x2={cx} y2={vb.minY + vb.h} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+              <line x1={vb.minX} y1={cy} x2={vb.minX + vb.w} y2={cy} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+              <path d={`M ${cx - mm(5)} ${cy} L ${cx + mm(5)} ${cy} M ${cx} ${cy - mm(5)} L ${cx} ${cy + mm(5)}`} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+            </g>
+          );
+        })}
     </svg>
 
     {/* The tape's readout — metres to the centimetre, plus the angle it was taken at, over the
@@ -2036,13 +2143,18 @@ export function PlanCanvas({
     {hasRect && tapeSegment && (() => {
       const c = worldToPx({ x: (tapeSegment.a.x + tapeSegment.b.x) / 2, y: (tapeSegment.a.y + tapeSegment.b.y) / 2 });
       const lengthMm = wallLengthMm(tapeSegment.a, tapeSegment.b);
-      if (lengthMm < 1) return null;
+      // Two things touching is an answer worth reading ("צמודים"); two points on top of each other is not.
+      if (lengthMm < 1 && !tapeSegment.between) return null;
       return (
         <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: c.x, top: c.y }}>
           <div className="flex items-center gap-1.5 rounded-full border border-accent bg-surface/95 px-2.5 py-1 text-xs font-semibold text-accent shadow-floating nums">
-            <span>{(lengthMm / 1000).toFixed(2)} מ׳</span>
+            <span>{lengthMm < 1 ? "צמודים" : `${(lengthMm / 1000).toFixed(2)} מ׳`}</span>
             <span className="text-muted">·</span>
-            <span className="font-medium text-muted">{Math.round(norm360(wallAngleDeg(tapeSegment.a, tapeSegment.b)))}°</span>
+            {tapeSegment.between ? (
+              <span className="font-medium text-muted">מקצה לקצה</span>
+            ) : (
+              <span className="font-medium text-muted">{Math.round(norm360(wallAngleDeg(tapeSegment.a, tapeSegment.b)))}°</span>
+            )}
           </div>
         </div>
       );
@@ -2148,7 +2260,7 @@ export function PlanCanvas({
         <Maximize className="h-4 w-4" strokeWidth={2} />
       </IconButton>
       <div className="mx-0.5 h-5 w-px bg-border" />
-      <IconButton label={showDims ? "הסתרת מידות" : "הצגת מידות"} onClick={() => setDimsOverride(!showDims)} className={showDims ? "text-accent" : undefined}>
+      <IconButton label={showDims ? "הסתרת מידות" : "הצגת מידות"} onClick={() => setDimsOverride(!showDims)} pressed={showDims}>
         <Ruler className="h-4 w-4" strokeWidth={2} />
       </IconButton>
       {/* Two different questions, two buttons. The one above turns the WALLS' own labels on and off;
@@ -2156,17 +2268,49 @@ export function PlanCanvas({
       <IconButton
         label={tapeOn ? "סגירת סרט המדידה · Esc" : "מדידת מרחק — לחיצה על שתי נקודות · M"}
         onClick={() => { setTapeOn((on) => !on); setTape(null); }}
-        className={tapeOn ? "text-accent" : undefined}
+        pressed={tapeOn}
       >
         <RulerDimensionLine className="h-4 w-4" strokeWidth={2} />
       </IconButton>
+      {centerGuides && (
+        <IconButton
+          label={guidesOn ? "הסתרת קווי מרכז" : "קווי מרכז — אמצע התוכנית והפריט הנבחר"}
+          onClick={() => setGuidesOn((on) => !on)}
+          pressed={guidesOn}
+        >
+          <Crosshair className="h-4 w-4" strokeWidth={2} />
+        </IconButton>
+      )}
+      {toolbarExtras}
     </div>
+    {/* How far the one selected thing's centre sits off the plan's — the number the guides are
+        asked for. "במרכז" once it is within a centimetre, which is as centred as a crew can set it. */}
+    {hasRect && guidesOn && centerGuides?.plan && centerGuides.items?.length === 1 && (() => {
+      const p = centerGuides.plan;
+      const it = centerGuides.items[0];
+      const ic = { x: (it.minX + it.maxX) / 2, y: (it.minY + it.maxY) / 2 };
+      const dx = ic.x - (p.minX + p.maxX) / 2;
+      const dy = ic.y - (p.minY + p.maxY) / 2;
+      const at = worldToPx({ x: ic.x, y: it.minY });
+      const fmt = (v: number) => (Math.abs(v) < 10 ? "במרכז" : `${(Math.abs(v) / 1000).toFixed(2)} מ׳`);
+      return (
+        <div className="pointer-events-none absolute" style={{ left: at.x, top: at.y, transform: "translate(-50%, calc(-100% - 10px))" }}>
+          <div className="flex items-center gap-1.5 rounded-full border border-border bg-surface/95 px-2.5 py-1 text-xs font-medium text-ink shadow-floating nums">
+            <span title="מרחק אופקי ממרכז התוכנית">↔ {fmt(dx)}</span>
+            <span className="text-muted">·</span>
+            <span title="מרחק אנכי ממרכז התוכנית">↕ {fmt(dy)}</span>
+          </div>
+        </div>
+      );
+    })()}
     {/* What the armed tool is waiting for. It sits at the top-centre, out of the way of both the
         inspector and the toolbar, and goes the moment the second point lands. */}
     {tapeOn && (
       <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
         <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-          {tape && !tape.b ? "לחצו על הנקודה השנייה · Shift לזווית ישרה" : "לחצו על נקודת ההתחלה"}
+          {tape && !tape.b
+            ? "לחצו על הנקודה או הפריט השני · Shift לזווית ישרה"
+            : "לחצו על נקודה או על פריט — בין פריטים נמדד מקצה לקצה"}
         </span>
       </div>
     )}

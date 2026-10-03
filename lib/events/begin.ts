@@ -6,6 +6,7 @@
 // event, in the meeting's hall-sketch stage.
 import { emptyDocument } from "@/lib/design-document/types";
 import { saveDocument } from "@/lib/studio/actions";
+import { seedDocumentFromTemplate } from "@/lib/studio/sketch-actions";
 import { saveEvent } from "./actions";
 import { setActiveEventId } from "./storage";
 import type { EventSummary } from "./types";
@@ -24,6 +25,8 @@ export async function beginEvent(input: {
   zoneIds: string[];
   zonesLabel: string;
   mmPerUnit?: number;
+  /** A saved sketch to open the event on (lib/studio/sketch-actions.ts); absent = a blank plan. */
+  sketchTemplateId?: string;
 }): Promise<EventSummary> {
   const ev: EventSummary = {
     id: crypto.randomUUID(),
@@ -50,6 +53,9 @@ export async function beginEvent(input: {
   // Seeded under this event's own id, explicitly — not dependent on setActiveEventId having run
   // first, which was an ordering rule enforced only by a comment. Awaited now that it is a round
   // trip: the hall-sketch stage opens straight after this returns, and it reads what this wrote.
-  await saveDocument(ev.id, emptyDocument(input.mmPerUnit ?? 1));
+  // …or on a saved sketch, when one was picked: the server reads the sketch, drops what belonged
+  // to another venue's walls, and writes it as this event's v1 — one round trip, not two.
+  if (input.sketchTemplateId) await seedDocumentFromTemplate(ev.id, input.sketchTemplateId, input.mmPerUnit ?? 1);
+  else await saveDocument(ev.id, emptyDocument(input.mmPerUnit ?? 1));
   return ev;
 }

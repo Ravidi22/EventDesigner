@@ -4,18 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2,
   Check,
-  ChevronUp,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
   Layers,
   Loader2,
   Lock,
-  Minus,
   MousePointer2,
   PenLine,
   Plus,
   Ruler,
-  Search as SearchIcon,
   Shapes,
   Trash2,
   TriangleAlert,
@@ -23,8 +20,7 @@ import {
   Upload,
   Users,
 } from "lucide-react";
-import { endpointFromLengthAngle, polygonCentroid, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
-import { constrainAngleDeg } from "@/lib/studio/snap";
+import { polygonCentroid } from "@/lib/studio/geometry";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
@@ -45,11 +41,9 @@ import {
   addEntrance,
   addFeature,
   addNode,
-  addRig,
   addWall,
   bulgeWall,
   emptyStructure,
-  isHangingPoint,
   moveNode,
   moveWallControlPoint,
   nearestWall,
@@ -58,7 +52,6 @@ import {
   removeEntrance,
   removeFeature,
   removeNode,
-  removeRig,
   removeWall,
   updateEntrance,
   updateFeature,
@@ -66,7 +59,7 @@ import {
   type WallKind,
 } from "@/lib/venues/structure";
 import { stairsPlacementAt } from "@/lib/venues/stairs";
-import { detectFaces, faceAt, pointInPolygon } from "@/lib/venues/faces";
+import { detectFaces, faceAt } from "@/lib/venues/faces";
 import {
   isOpenAir,
   newZone,
@@ -83,6 +76,7 @@ import {
   PlanUnderlayLayer,
   CalibrationOverlay,
 } from "@/components/venue-plan";
+import { AddElementFlyout } from "@/components/add-element-flyout";
 import { VenueInspector, ZoneFields, ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -156,22 +150,7 @@ function blockedZoneNote(b: BlockedZone): string {
   return `${b.name} — לא נמחק: ${noun} ${list} ${verb} לשטח הזה${hint}`;
 }
 
-type Mode = "select" | "walls" | "zones" | "rigs";
-
-// A rod's own geometry, shared by every saved rig and by the one being dragged out — a hanging
-// point (`a` and `b` at, or within a millimetre of, the same spot) draws as a cross rather than a
-// zero-length line, which is otherwise invisible. mm() is the canvas's own px→world conversion, so
-// the cross reads as the same screen size at any zoom.
-function rigGeometry(a: Point, b: Point, mm: (px: number) => number, color: string, strokeWidth: number) {
-  return Math.hypot(b.x - a.x, b.y - a.y) < 1 ? (
-    <g stroke={color} strokeWidth={strokeWidth} vectorEffect="non-scaling-stroke">
-      <line x1={a.x - mm(7)} y1={a.y - mm(7)} x2={a.x + mm(7)} y2={a.y + mm(7)} />
-      <line x1={a.x - mm(7)} y1={a.y + mm(7)} x2={a.x + mm(7)} y2={a.y - mm(7)} />
-    </g>
-  ) : (
-    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeWidth={strokeWidth} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
-  );
-}
+type Mode = "select" | "walls" | "zones";
 
 // A pastel swatch per element the designer DRAWS rather than picks off a shelf, so the picker's
 // cards read as a little gallery of colours instead of identical grey tiles. The ones that come out
@@ -216,12 +195,6 @@ const MODES: { id: Mode; label: string; icon: typeof MousePointer2; hint: string
     icon: Shapes,
     hint: "לחצו בשטח סגור לשם · לשטח פתוח: ״סימון שטח״",
   },
-  {
-    id: "rigs",
-    label: "מוטות תקרה",
-    icon: Minus,
-    hint: "גררו מקצה לקצה לשרטוט מוט · לחיצה קצרה ללא גרירה יוצרת נקודת תלייה",
-  },
 ];
 
 export function HallsScreen() {
@@ -242,9 +215,6 @@ export function HallsScreen() {
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
   const [region, setRegion] = useState<Point[] | null>(null); // freehand zone boundary in progress
   const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind } | null>(null);
-  // A rod is one standalone segment, so there is no chained run the way walls have: press for one
-  // end, release for the other. A press that does not travel is an eyebolt, not a mistake.
-  const [rigDraft, setRigDraft] = useState<{ a: Point; b: Point } | null>(null);
   // Which add-toolbar button is armed, if any — the next click on empty canvas places one of it and
   // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
   // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
@@ -475,7 +445,6 @@ export function HallsScreen() {
         for (const r of refs) if (r.kind === "wall") next = removeWall(next, r.id);
         for (const r of refs) if (r.kind === "door") next = removeEntrance(next, r.id);
         for (const r of refs) if (r.kind === "feature") next = removeFeature(next, r.id);
-        for (const r of refs) if (r.kind === "rig") next = removeRig(next, r.id);
         for (const r of refs) if (r.kind === "node") next = removeNode(next, r.id);
         return next;
       });
@@ -590,7 +559,6 @@ export function HallsScreen() {
         setRunNodeId(null);
         setRegion(null);
         setDraftZone(null);
-        setRigDraft(null);
         setSelection([]);
         setArmedToolId(null);
         setAddMenuOpen(false);
@@ -838,28 +806,6 @@ export function HallsScreen() {
     );
     editStructure(() => next);
     setSelection([{ kind: "feature", id: featureId }]);
-  };
-
-  // Ends the drag started by the rig-drawing capture rect (see the canvas's overlay, below). The
-  // rod's own height defaults from whichever zone its FIRST end lands in — the room the designer is
-  // standing in when they start drawing, not wherever the pointer happened to travel to.
-  const commitRigDraft = () => {
-    if (!rigDraft) return;
-    const zone = resolved.find((r) => r.boundary.length >= 3 && pointInPolygon(rigDraft.a, r.boundary));
-    const { structure: next, rigId } = addRig(structure, {
-      label: "מוט",
-      a: rigDraft.a,
-      b: rigDraft.b,
-      // `||`, not `??` — 0 is ceilingHeightMm's own deliberate value for "open to the sky" (a
-      // canopy/open/service zone, lib/venues/zone.ts), which is a legitimate ZONE height but never a
-      // legitimate ROD height: a חופה is exactly where rigging gets hung, and a rod is nothing
-      // hanging at floor level. `??` would only guard "no enclosing zone" and let a canopy's zero
-      // straight through.
-      heightMm: zone?.zone.ceilingHeightMm || 4000,
-    });
-    editStructure(() => next);
-    setSelection([{ kind: "rig", id: rigId }]);
-    setRigDraft(null);
   };
 
   const addDoorNear = (p: Point) => {
@@ -1142,101 +1088,6 @@ export function HallsScreen() {
                 {/* Above the walls: the span being measured has to stay readable over a dark scan. */}
                 <CalibrationOverlay from={calib?.from ?? null} to={calib?.to ?? null} mm={mm} />
 
-                {/* Ceiling rods. Drawn in every mode — dashed and muted — so they can be checked
-                    against the room while it's still being built; they only take hit targets of
-                    their own in "rigs" mode, the same "supplying it turns the affordance on" rule
-                    every other layer here follows. A marquee in select mode still catches them
-                    (see lib/venues/selection.ts's hitsInBox), just not a direct click. */}
-                {mode === "rigs" && (
-                  <rect
-                    x={-2_000_000}
-                    y={-2_000_000}
-                    width={4_000_000}
-                    height={4_000_000}
-                    fill="transparent"
-                    className="cursor-crosshair"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      (e.currentTarget as Element).setPointerCapture(e.pointerId);
-                      const p = clientToMm(e.clientX, e.clientY);
-                      const a = { x: Math.round(p.x), y: Math.round(p.y) };
-                      setRigDraft({ a, b: a });
-                    }}
-                    onPointerMove={(e) => {
-                      if (!rigDraft) return;
-                      e.stopPropagation();
-                      const raw = clientToMm(e.clientX, e.clientY);
-                      const lenMm = wallLengthMm(rigDraft.a, raw);
-                      // Within the canvas's own close-snap tolerance of `a`, the rod collapses to a
-                      // hanging point rather than a segment a millimetre long — the same tolerance
-                      // the freehand region tool uses to close its own boundary (closeSnapMmRef).
-                      const b =
-                        lenMm < closeSnapMmRef.current
-                          ? rigDraft.a
-                          : endpointFromLengthAngle(rigDraft.a, lenMm, constrainAngleDeg(wallAngleDeg(rigDraft.a, raw)));
-                      setRigDraft({ a: rigDraft.a, b: { x: Math.round(b.x), y: Math.round(b.y) } });
-                    }}
-                    onPointerUp={(e) => {
-                      e.stopPropagation();
-                      (e.currentTarget as Element).releasePointerCapture(e.pointerId);
-                      commitRigDraft();
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                )}
-                {(structure.rigs ?? []).map((r) => {
-                  const selected = selection.some((s) => s.kind === "rig" && s.id === r.id);
-                  const color = selected ? "var(--color-accent)" : "var(--color-muted)";
-                  const midX = (r.a.x + r.b.x) / 2;
-                  const midY = (r.a.y + r.b.y) / 2;
-                  return (
-                    <g key={r.id}>
-                      {rigGeometry(r.a, r.b, mm, color, selected ? 2.5 : 1.5)}
-                      <text
-                        x={midX}
-                        y={midY - mm(10)}
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        fill={selected ? "var(--color-accent-deep)" : "var(--color-muted)"}
-                        style={{ fontSize: mm(11), paintOrder: "stroke", stroke: "var(--color-canvas)", strokeWidth: mm(3) }}
-                        className="pointer-events-none"
-                      >
-                        {r.label}
-                      </text>
-                      {mode === "rigs" &&
-                        (isHangingPoint(r) ? (
-                          <circle
-                            cx={r.a.x}
-                            cy={r.a.y}
-                            r={mm(10)}
-                            fill="transparent"
-                            className="cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              pick({ kind: "rig", id: r.id }, isAdditiveClick(e));
-                            }}
-                          />
-                        ) : (
-                          <line
-                            x1={r.a.x}
-                            y1={r.a.y}
-                            x2={r.b.x}
-                            y2={r.b.y}
-                            stroke="transparent"
-                            strokeWidth={mm(14)}
-                            className="cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              pick({ kind: "rig", id: r.id }, isAdditiveClick(e));
-                            }}
-                          />
-                        ))}
-                    </g>
-                  );
-                })}
-                {mode === "rigs" && rigDraft && (
-                  <g className="pointer-events-none">{rigGeometry(rigDraft.a, rigDraft.b, mm, "var(--color-accent)", 2)}</g>
-                )}
               </>
             )}
           />
@@ -1305,41 +1156,29 @@ export function HallsScreen() {
 
               <div className="mx-0.5 h-5 w-px bg-border" />
 
-              <button
-                type="button"
-                title="מוטות תקרה"
-                onClick={() => {
-                  setMode("rigs");
-                  setRunNodeId(null);
-                  setRegion(null);
-                  setDraftZone(null);
-                  setArmedToolId(null);
-                  setAddMenuOpen(false);
-                  setSelection([]);
-                }}
-                aria-pressed={mode === "rigs"}
-                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                  mode === "rigs" ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
-                }`}
-              >
-                <Minus className="h-[18px] w-[18px]" strokeWidth={1.4} />
-                מוטות תקרה
-              </button>
-
-              <div className="mx-0.5 h-5 w-px bg-border" />
-
               {isSelectMode && (
                 <>
+                  {/* A bar and a stage come off the studio's own catalog (lib/venues/add-tools.ts),
+                      carrying that row's shape and size, instead of arriving as a rectangle that has
+                      to be reshaped into a ח by hand in every venue the studio owns. */}
                   <AddElementFlyout
                     open={addMenuOpen}
                     onOpenChange={setAddMenuOpen}
-                    tools={tools}
-                    armedTool={armedTool}
-                    onPick={(tool) => {
-                      setArmedToolId((id) => (id === tool.id ? null : tool.id));
+                    items={tools.map((tool) => ({
+                      id: tool.id,
+                      label: tool.label,
+                      section: tool.section,
+                      title: tool.product ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}` : tool.label,
+                      disabled: tool.id === "entrance" && !structure.walls.some((w) => w.kind === "wall"),
+                      preview: <ToolPreview tool={tool} />,
+                    }))}
+                    sections={ADD_TOOL_SECTIONS.map((id) => ({ id, label: ADD_TOOL_SECTION_LABEL[id] }))}
+                    armedId={armedTool?.id ?? null}
+                    triggerIcon={armedTool ? ADD_TOOL_ICON[addToolIconKey(armedTool)] : undefined}
+                    onPick={(toolId) => {
+                      setArmedToolId((id) => (id === toolId ? null : toolId));
                       setAddMenuOpen(false);
                     }}
-                    entranceDisabled={!structure.walls.some((w) => w.kind === "wall")}
                   />
                   <div className="mx-0.5 h-5 w-px bg-border" />
                 </>
@@ -1790,18 +1629,6 @@ export function HallsScreen() {
   );
 }
 
-// The add-element trigger and its flyout — a searchable gallery of cards instead of a flat text
-// list, so picking an element reads more like choosing a product than reading a menu. Which it now
-// literally is for two of the three sections: a bar and a stage come off the studio's own catalog
-// (lib/venues/add-tools.ts), carrying that row's shape and size, instead of arriving as a rectangle
-// that has to be reshaped into a ח by hand in every venue the studio owns.
-//
-// Opens upward, not down, since the dock it sits in is pinned to the canvas's bottom edge — there is
-// no room below it to pop into.
-const FLYOUT_WIDTH = 420;
-const FLYOUT_GAP = 8;
-const FLYOUT_MARGIN = 16; // never closer than this to the viewport edge
-
 /** The picture on a card. A catalog-backed tool draws its OWN footprint, at its own proportions —
  *  the ח that makes a ח bar worth picking is visible before it is placed, and two bars that differ
  *  only in size read as two sizes. The drawn elements have no such picture, so they keep the pastel
@@ -1837,152 +1664,5 @@ function ToolPreview({ tool }: { tool: AddTool }) {
         />
       </svg>
     </span>
-  );
-}
-
-function AddElementFlyout({
-  open,
-  onOpenChange,
-  tools,
-  armedTool,
-  onPick,
-  entranceDisabled,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  tools: AddTool[];
-  armedTool: AddTool | null;
-  onPick: (tool: AddTool) => void;
-  entranceDisabled: boolean;
-}) {
-  const [search, setSearch] = useState("");
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  // Screen-space (not `absolute` inside the canvas): the toolbar dock lives inside the canvas's own
-  // `overflow-hidden` section (it clips the SVG's corners), and an `absolute` popup wide enough to
-  // run past that section's edge got its own corner sheared off along with it — "cuts the card".
-  // `fixed` escapes that ancestor entirely; the position is plain viewport math instead of
-  // RTL-logical insets because `fixed` coordinates are physical regardless of `dir`. Measured at the
-  // moment of the click that opens it (a DOM read the trigger's own handler is already in a position
-  // to make), not in an effect reacting to `open` — there is nowhere else `open` ever turns true.
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
-  useEffect(() => {
-    if (!open) setSearch("");
-  }, [open]);
-  const query = search.trim();
-  const filtered = query ? tools.filter((t) => t.label.includes(query)) : tools;
-  const TriggerIcon = armedTool ? ADD_TOOL_ICON[addToolIconKey(armedTool)] : Shapes;
-  const openFlyout = () => {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (r) {
-      const left = Math.max(
-        FLYOUT_MARGIN,
-        Math.min(r.right - FLYOUT_WIDTH, window.innerWidth - FLYOUT_WIDTH - FLYOUT_MARGIN),
-      );
-      setPos({ left, bottom: window.innerHeight - r.top + FLYOUT_GAP });
-    }
-    onOpenChange(true);
-  };
-  return (
-    <div className="relative">
-      <button
-        ref={triggerRef}
-        type="button"
-        title="הוספת אלמנט"
-        aria-pressed={!!armedTool}
-        aria-expanded={open}
-        onClick={() => (open ? onOpenChange(false) : openFlyout())}
-        className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-          armedTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
-        }`}
-      >
-        <span className="flex items-center gap-0.5">
-          <TriggerIcon className="h-[18px] w-[18px]" strokeWidth={1.6} />
-          <ChevronUp className="h-3 w-3" strokeWidth={2} />
-        </span>
-        אלמנט
-      </button>
-
-      {open && pos && (
-        <>
-          {/* A full-screen, invisible backdrop is what makes "click anywhere else" close the menu —
-              the same pattern the canvas's own (now-retired) right-click menu used. */}
-          <div className="fixed inset-0 z-40" onClick={() => onOpenChange(false)} />
-          <div
-            role="menu"
-            className="fixed z-50 rounded-md border border-border bg-surface p-3 shadow-floating"
-            style={{ left: pos.left, bottom: pos.bottom, width: FLYOUT_WIDTH }}
-          >
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted" style={{ insetInlineStart: 10 }} strokeWidth={1.75} />
-              <input
-                autoFocus
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="חיפוש אלמנט..."
-                aria-label="חיפוש אלמנט"
-                className="w-full rounded-md border border-border bg-canvas py-2 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
-                style={{ paddingInlineStart: 32, paddingInlineEnd: 10 }}
-              />
-            </div>
-
-            {/* Sectioned rather than one flat grid: "בריכה" and "בר בצורת ח 360×180" are not the same
-                kind of choice, and a heading is what says the second half of this list is the
-                studio's own catalog. Capped in height — a catalog with forty bars in it must not
-                push the flyout off the top of the screen. */}
-            <div className="mt-3 flex max-h-[46vh] flex-col gap-3 overflow-y-auto">
-              {ADD_TOOL_SECTIONS.map((section) => {
-                const inSection = filtered.filter((t) => t.section === section);
-                if (inSection.length === 0) return null;
-                return (
-                  <div key={section}>
-                    <p className="mb-1.5 font-label text-[10px] font-medium tracking-[2px] text-muted">
-                      {ADD_TOOL_SECTION_LABEL[section]}
-                    </p>
-                    <div className="grid grid-cols-4 gap-2">
-                      {inSection.map((tool) => {
-                        const disabled = tool.id === "entrance" && entranceDisabled;
-                        return (
-                          <button
-                            key={tool.id}
-                            type="button"
-                            role="menuitem"
-                            disabled={disabled}
-                            title={tool.product ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}` : tool.label}
-                            // Dragging straight onto the canvas — PlanCanvas's own onDropAt (see
-                            // halls-screen's use of it) reads this same "text/plain" payload back
-                            // out, the exact contract its doc comment already promised a host's
-                            // catalog rail. The payload is the tool's id and nothing else; the drop
-                            // handler looks it up in this same list (findAddTool).
-                            draggable={!disabled}
-                            onDragStart={(e) => {
-                              e.dataTransfer.setData("text/plain", tool.id);
-                              e.dataTransfer.effectAllowed = "copy";
-                            }}
-                            onClick={() => onPick(tool)}
-                            className={`flex flex-col items-center gap-1.5 rounded-md border p-2 text-center text-[11px] font-semibold leading-tight transition-colors ${
-                              armedTool?.id === tool.id
-                                ? "border-accent bg-accent-tint text-accent"
-                                : "border-border text-ink hover:border-accent-line hover:bg-inset"
-                            } disabled:cursor-not-allowed disabled:opacity-40`}
-                          >
-                            <ToolPreview tool={tool} />
-                            <span className="line-clamp-2 w-full">{tool.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-              {filtered.length === 0 && <p className="py-4 text-center text-xs text-muted">לא נמצאו אלמנטים</p>}
-            </div>
-
-            <p className="mt-3 text-center text-[11px] leading-relaxed text-muted">
-              גררו אלמנט אל הקנבס, או לחצו עליו ואז על מקום בקנבס
-            </p>
-          </div>
-        </>
-      )}
-    </div>
   );
 }

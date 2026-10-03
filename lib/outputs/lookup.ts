@@ -1,11 +1,14 @@
 // Wiring: adapt the catalog resolver + category registry into the injected lookups that
 // the pure aggregations (aggregate.ts, quote.ts) consume. This is the only outputs file that
 // touches the catalog graph.
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
+import { loadProducts } from "@/lib/catalog/storage";
 import { CATEGORIES, CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { stemsOf } from "@/lib/catalog/flowers";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
 import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
+import { nearestWall } from "@/lib/studio/anchor";
 import type { MeasureContext } from "@/lib/design-document/measure";
 import type { ItemLookup } from "./aggregate";
 import type { QuoteLookup } from "./quote";
@@ -18,9 +21,12 @@ export const itemLookup: ItemLookup = (variantId) => {
   const cat = CATEGORY_BY_ID[r.product.category];
   // Any count-multiplier that states what it yields, not the "arms" key specifically — the same
   // rule procurement reduces by (lib/suppliers/actions.ts). A category is allowed exactly one, so a
-  // chandelier prints its candles and a flower arrangement its stems through this one branch.
+  // chandelier prints its candles and a flower arrangement its stems through this one branch. For
+  // the flower categories the count is the spec's sum (stemsOf), and the spec's rows ride along as
+  // the breakdown the florist is actually phoned with.
   const armsField = cat?.fields.find((f) => f.suffix);
-  const arms = armsField ? r.product.categoryFields?.[armsField.key] : undefined;
+  const flowers = cat?.flowers ? r.product.flowers : undefined;
+  const arms = armsField ? (cat?.flowers ? stemsOf(r.product) : r.product.categoryFields?.[armsField.key]) : undefined;
   return {
     productName: r.product.name,
     variantLabel: r.label,
@@ -32,6 +38,7 @@ export const itemLookup: ItemLookup = (variantId) => {
       armsField && typeof arms === "number" && arms > 0
         ? { label: armsField.suffix!, count: arms }
         : undefined,
+    components: flowers?.length ? flowers.map((f) => ({ label: f.name, count: f.qty })) : undefined,
   };
 };
 
@@ -73,5 +80,14 @@ export function measureContext(structure?: VenueStructure): MeasureContext {
       const b = footprintBounds(resolveFootprint(product));
       return { widthMm: b.w, depthMm: b.h };
     },
+    // A stage counts as its decks (lib/design-document/stage.ts) — laid by the same lookup the
+    // studio draws them with, so the quote bills the build the designer saw.
+    deckOf,
+    stagePart: (kind) => {
+      const category = ({ stairs: "stage-stairs", bench: "stage-benches", barrier: "stage-barriers", backdrop: "stage-backdrops", ramp: "stage-ramps", skirt: "stage-skirts", chair: "chairs" })[kind];
+      const p = loadProducts().find((x) => x.category === category && !x.archived);
+      return p ? (p.variants[0]?.id ?? p.id) : undefined;
+    },
+    wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
   };
 }

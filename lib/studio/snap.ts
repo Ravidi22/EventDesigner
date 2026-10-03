@@ -40,11 +40,6 @@ export interface SnapContext {
    *  drops the item itself from this list. Each box contributes THREE reference values per axis:
    *  its two edges and its centre. */
   boxes?: SnapBox[];
-  /** Lines the point may land ON, as opposed to axes it may line up WITH — the venue's ceiling rods,
-   *  so a table can be centred under one. Alignment snapping can only ever offer a horizontal or a
-   *  vertical, and a rod running at 30° across the room is neither. Absent (the usual case) leaves
-   *  every other rule in this file untouched. */
-  lines?: { a: Point; b: Point }[];
 }
 
 /** A thing on the plan with a size: its centre and its extent, in world millimetres. */
@@ -70,8 +65,6 @@ export interface SnapResult {
   /** The equal gaps this point landed on — at most one guide per axis. */
   gaps?: GapGuide[];
   angleLocked?: boolean;
-  /** The line this point was pulled onto, for drawing the guide. */
-  lineGuide?: { a: Point; b: Point };
 }
 
 const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
@@ -238,7 +231,7 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
   const step = gridStepMm(ctx.gridMm, tol);
   const anchor = ctx.anchor;
 
-  // Drawing along a fixed angle answers early, so `ctx.lines` is not consulted here: no caller
+  // Drawing along a fixed angle answers early: no caller
   // passes both, and a wall being drawn has no reason to land on a ceiling rod. If one ever
   // does, the line snap has to move into this branch too rather than silently doing nothing.
   if (anchor && ctx.constrainAngle) {
@@ -337,30 +330,11 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
   if (gx === null && !spaced("x")) sx = roundTo(sx, step);
   if (gy === null && !spaced("y")) sy = roundTo(sy, step);
 
-  // Landing ON a line is a STRONGER claim than lining up with an axis — a rod is a physical thing
-  // in the room, not an inferred alignment — so it is applied last and wins the coordinate.
-  // Projected onto the SEGMENT, never its infinite extension: a rod stops at the wall.
-  let lineGuide: { a: Point; b: Point } | undefined;
-  for (const ln of ctx.lines ?? []) {
-    const len = Math.hypot(ln.b.x - ln.a.x, ln.b.y - ln.a.y);
-    if (len === 0) continue;
-    const t = Math.max(0, Math.min(1, ((sx - ln.a.x) * (ln.b.x - ln.a.x) + (sy - ln.a.y) * (ln.b.y - ln.a.y)) / (len * len)));
-    const fx = ln.a.x + (ln.b.x - ln.a.x) * t;
-    const fy = ln.a.y + (ln.b.y - ln.a.y) * t;
-    if (Math.hypot(sx - fx, sy - fy) <= tol) {
-      sx = fx;
-      sy = fy;
-      lineGuide = ln;
-      break;
-    }
-  }
-
   return {
     point: roundPt({ x: sx, y: sy }),
     guides: { x: gx, y: gy },
     ...(gaps.length ? { gaps } : {}),
     angleLocked: false,
-    ...(lineGuide ? { lineGuide } : {}),
   };
 }
 
@@ -369,7 +343,6 @@ if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };
-  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
   const origin: Point = { x: 0, y: 0 };
   const base = { outline: [] as Point[], fixtures: [] as Point[], gridMm: 1000, toleranceMm: 120 }; // ~6px at the default hall zoom
 
@@ -513,30 +486,6 @@ if (isMain(import.meta.url)) {
     const below = snapPoint({ x: 6040, y: 4000 }, { ...ctx, boxes: [above] });
     assert(below.point.x === 6000, "a deck under another lines up with it");
     assert(below.guides.x === 6000, "…on the centre line, not on whichever edge was reached first");
-  }
-
-  // ── landing on a line ─────────────────────────────────────────────────────────────────────────
-  // Snapping onto a LINE, which is how a table lands under a ceiling rod. Alignment snapping can
-  // only offer axes; a rod at 30° across the room is neither.
-  {
-    const base: SnapContext = { toleranceMm: 300, outline: [], fixtures: [], gridMm: 0 };
-    const diagonal = { a: { x: 0, y: 0 }, b: { x: 10000, y: 10000 } };
-
-    const on = snapPoint({ x: 5100, y: 4900 }, { ...base, lines: [diagonal] });
-    assert(near(on.point.x, 5000) && near(on.point.y, 5000), "a point near a line is pulled onto it");
-    assert(on.lineGuide !== undefined, "…and says which line it landed on");
-
-    const off = snapPoint({ x: 5000, y: 9000 }, { ...base, lines: [diagonal] });
-    assert(near(off.point.x, 5000) && near(off.point.y, 9000), "a point far from the line is left alone");
-    assert(off.lineGuide === undefined, "…and reports no line");
-
-    const none = snapPoint({ x: 5100, y: 4900 }, { ...base, lines: [] });
-    assert(near(none.point.x, 5100) && near(none.point.y, 4900), "no lines, no line snapping");
-
-    // Beyond the rod's ends there is no rod. A table three rooms away must not be dragged onto the
-    // infinite extension of a line that stops at the wall.
-    const past = snapPoint({ x: 12000, y: 12000 }, { ...base, lines: [diagonal] });
-    assert(near(past.point.x, 12000), "the snap is to the segment, not to the infinite line");
   }
 
   console.log("snap self-check passed");

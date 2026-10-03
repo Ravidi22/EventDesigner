@@ -1,6 +1,6 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, RigHang } from "./types";
+import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 
@@ -17,6 +17,8 @@ export type Action =
   // seating thirteen at twelve places is a thing that happens on the night, and the plan showing
   // 13/12 in alert ink is more use than a field that refuses the number.
   | { type: "setTableSeated"; id: string; seated: number }
+  /** null = back to the catalog row's sides (see DesignTable.blockedSides). */
+  | { type: "setTableBlockedSides"; id: string; sides: number[] | null }
   | { type: "addPlacement"; placement: Placement }
   | { type: "movePlacement"; id: string; position: Placement["position"] }
   // A whole selection dragged at once. ONE action rather than N, because N of them is N history
@@ -37,6 +39,19 @@ export type Action =
   // accumulated from per-frame deltas drifts, and drift in a rotation is a group that comes back
   // from a 360° sweep no longer square to the room it started square to.
   | { type: "rotateMany"; turns: { kind: MovableKind; id: string; position: Point; rotation: number }[] }
+  // A selection turned into its own mirror image — each member's new centre, facing and flip,
+  // computed by ./mirror.ts and written here as given. Absolute for the same reason rotateMany is.
+  // A venue feature takes the position and facing and ignores the flip: an event may say where the
+  // property's bar stands and which way it faces, never that it is now a different shape.
+  | { type: "mirrorMany"; flips: { kind: MovableKind; id: string; position: Point; rotation: number; mirrored: boolean }[] }
+  // A table stretched on the plan (Product.resize). null = back to the catalog's size.
+  | { type: "resizeTable"; id: string; sizeMm: { widthMm: number; depthMm: number } | null }
+  // A table swapped for another of the studio's tables — the client wants rounds of 12 instead of
+  // the 180×90s. Not a remove+add, for the reason setPlacementVariant is not one: the table keeps its
+  // id, number, group, place on the plan, facing, look, occupancy and everything dressed on it. What
+  // goes is what described the OLD row — its size, seats, a stretch and the sides blocked by index
+  // into its outline — replaced by the new row's. `position` when a block is re-closed around it.
+  | { type: "retypeTable"; id: string; table: RetypedTable; position?: Point }
   | { type: "setPlacementQuantity"; id: string; quantity: number }
   // Switching a placed item to another shade of the same product (F-4.2). Not a remove+add: the
   // item keeps its id, its place on the plan and the size it was stretched to — only its colour
@@ -44,12 +59,21 @@ export type Action =
   | { type: "setPlacementVariant"; id: string; variantId: string }
   // A drape's run along its wall, or a moved/relaid one.
   | { type: "setPlacementSpan"; id: string; span: WallSpan }
-  // A ceiling item hung on one of the venue's rods, or taken off it. `null` removes the field
-  // entirely rather than storing an empty one, so "is this hung" stays one question.
-  | { type: "setPlacementHang"; id: string; hang: RigHang | null }
-  // A stretch item resized on the plan (a carpet's corners).
-  | { type: "resizePlacement"; id: string; sizeMm: { widthMm: number; depthMm: number } }
+  // A whole drawing put in place of this one — a saved sketch loaded (lib/studio/sketches.ts). The
+  // calibration stays: it is the venue's, not the sketch's. One entry, so one Ctrl+Z brings back the
+  // drawing it replaced.
+  | { type: "loadDocument"; content: DesignDocumentContent }
+  // A stretch item resized on the plan (a carpet's corners), or a resizable one stretched to size.
+  // null = back to the catalog's size — the field goes, rather than a copy of the catalog's number
+  // staying behind to go stale the day the catalog row is edited.
+  | { type: "resizePlacement"; id: string; sizeMm: { widthMm: number; depthMm: number } | null }
   | { type: "removePlacement"; id: string }
+  // A stage re-drawn, re-fronted, or stretched by its handles — its build, and where it now stands.
+  // `mirrored: false` when the outline was re-drawn in the room: a new outline is already the way
+  // round it was drawn, and flipping it again would build the stage backwards.
+  | { type: "setPlacementStage"; id: string; stage: StageBuild; position?: Point; rotation?: number; mirrored?: boolean; scale?: number }
+  // A design item put on (or taken off) a stage's banquette.
+  | { type: "setPlacementPerch"; id: string; perch: { stageId: string; itemId: string } | null }
   // F-3.3 smart-apply, generalised: put this item on exactly these tables. The caller decides which
   // tables those are — every table of a type, every table on the plan, the ones the designer has
   // selected, the ones inside a zone. Two narrower actions (applyToTableType / applyToAllTables)
@@ -88,6 +112,10 @@ export type Action =
  *  dragged and turned as a set. A cloth and a drape are not among them: one is its table's surface
  *  and the other belongs to a wall, so neither has a centre a shared delta could move. */
 export type MovableKind = "table" | "placement" | "feature";
+
+/** What a table takes from the catalog row it is a copy of — written on drop, and again on a swap. */
+export type RetypedTable = Pick<DesignTable, "type" | "variantId"> &
+  Pick<Partial<DesignTable>, "diameterMm" | "widthMm" | "depthMm" | "seats">;
 
 export function apply(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
   switch (action.type) {
@@ -159,6 +187,49 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
             features.map((m) => ({ featureId: m.id, dx: m.position.x, dy: m.position.y, rotationDeg: norm360(m.rotation) })),
           );
     }
+    case "mirrorMany": {
+      if (action.flips.length === 0) return doc;
+      const tables = new Map(action.flips.filter((m) => m.kind === "table").map((m) => [m.id, m]));
+      const placements = new Map(action.flips.filter((m) => m.kind === "placement").map((m) => [m.id, m]));
+      const features = action.flips.filter((m) => m.kind === "feature");
+      const flip = <T extends { position: Point; rotation: number; mirrored?: boolean }>(x: T, u: (typeof action.flips)[number]): T => {
+        const { mirrored: _was, ...rest } = x;
+        // Unflipped is ABSENT, not false — the spelling every document drawn before this has, so
+        // mirroring twice leaves no trace that anything happened.
+        return { ...(rest as T), position: u.position, rotation: norm360(u.rotation), ...(u.mirrored ? { mirrored: true } : {}) };
+      };
+      const next = {
+        ...doc,
+        tables: tables.size === 0 ? doc.tables : doc.tables.map((t) => (tables.has(t.id) ? flip(t, tables.get(t.id)!) : t)),
+        placements:
+          placements.size === 0 ? doc.placements : doc.placements.map((p) => (placements.has(p.id) ? flip(p, placements.get(p.id)!) : p)),
+      };
+      return features.length === 0
+        ? next
+        : withArrangements(
+            next,
+            features.map((m) => ({ featureId: m.id, dx: m.position.x, dy: m.position.y, rotationDeg: norm360(m.rotation) })),
+          );
+    }
+    case "resizeTable":
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (t.id !== action.id) return t;
+          if (action.sizeMm) return { ...t, sizeMm: action.sizeMm };
+          const { sizeMm: _catalog, ...rest } = t;
+          return rest;
+        }),
+      };
+    case "retypeTable":
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (t.id !== action.id) return t;
+          const { diameterMm: _d, widthMm: _w, depthMm: _dp, seats: _s, sizeMm: _z, blockedSides: _b, ...kept } = t;
+          return { ...kept, ...action.table, ...(action.position ? { position: action.position } : {}) };
+        }),
+      };
     case "setTableSeats":
       return {
         ...doc,
@@ -168,6 +239,18 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
       return {
         ...doc,
         tables: doc.tables.map((t) => (t.id === action.id ? { ...t, seated: Math.max(0, Math.round(action.seated)) } : t)),
+      };
+    case "setTableBlockedSides":
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (t.id !== action.id) return t;
+          if (action.sides === null) {
+            const { blockedSides: _inherit, ...rest } = t;
+            return rest;
+          }
+          return { ...t, blockedSides: [...new Set(action.sides)].filter((i) => Number.isInteger(i) && i >= 0).sort((a, b) => a - b) };
+        }),
       };
     case "renumberTable":
       return {
@@ -220,20 +303,42 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         ...doc,
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, span: action.span } : p)),
       };
-    case "setPlacementHang":
+    case "loadDocument": {
+      const c = action.content;
+      return {
+        calibration: doc.calibration,
+        tables: c.tables,
+        placements: c.placements,
+        ...(c.groups?.length ? { groups: c.groups } : {}),
+        ...(c.features?.length ? { features: c.features } : {}),
+        ...(c.exceptions?.length ? { exceptions: c.exceptions } : {}),
+      };
+    }
+    case "setPlacementStage":
       return {
         ...doc,
-        placements: doc.placements.map((p) => {
-          if (p.id !== action.id) return p;
-          if (action.hang) return { ...p, hang: action.hang };
-          const { hang: _dropped, ...rest } = p;
-          return rest;
-        }),
+        placements: doc.placements.map((p) =>
+          p.id !== action.id
+            ? p
+            : {
+                ...p,
+                stage: action.stage,
+                ...(action.position ? { position: action.position } : {}),
+                ...(action.rotation !== undefined ? { rotation: norm360(action.rotation) } : {}),
+                ...(action.mirrored !== undefined ? { mirrored: action.mirrored } : {}),
+                ...(action.scale !== undefined ? { scale: action.scale } : {}),
+              },
+        ),
       };
     case "resizePlacement":
       return {
         ...doc,
-        placements: doc.placements.map((p) => (p.id === action.id ? { ...p, sizeMm: action.sizeMm } : p)),
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          if (action.sizeMm) return { ...p, sizeMm: action.sizeMm };
+          const { sizeMm: _catalog, ...rest } = p;
+          return rest;
+        }),
       };
     case "removePlacement": {
       // Removing a table-layer placement records an exception, so a later bulk re-apply
@@ -244,8 +349,24 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         !doc.exceptions?.some((e) => e.tableId === removed.tableId && e.variantId === removed.variantId)
           ? [...(doc.exceptions ?? []), { tableId: removed.tableId, variantId: removed.variantId }]
           : doc.exceptions;
-      return pruneGroups({ ...doc, placements: doc.placements.filter((p) => p.id !== action.id), exceptions });
+      // What stood on a stage's banquettes goes with the stage, as a table's dressing goes with the
+      // table — an item perched on nothing would draw nowhere and still be counted.
+      return pruneGroups({
+        ...doc,
+        placements: doc.placements.filter((p) => p.id !== action.id && p.perch?.stageId !== action.id),
+        exceptions,
+      });
     }
+    case "setPlacementPerch":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          if (action.perch) return { ...p, perch: action.perch };
+          const { perch: _gone, ...rest } = p;
+          return rest;
+        }),
+      };
     case "applyToTables": {
       const wanted = new Set(action.tableIds);
       return spreadOverTables(doc, doc.tables.filter((t) => wanted.has(t.id)), action.placement, action.replaces);
@@ -379,7 +500,14 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
   }
 }
 
-const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
+// Into [0, 360) AND to the hundredth of a degree. A turn computed with trigonometry — the rotate
+// handle's sweep, a mirror, a stage laid along an angled wall — comes back as 179.99999999999454,
+// and a stored angle is also a DISPLAYED one: the inspector printed every one of those digits. A
+// hundredth of a degree is under a tenth of a millimetre across a 6m stage.
+const norm360 = (deg: number) => {
+  const r = Math.round((((deg % 360) + 360) % 360) * 100) / 100;
+  return r >= 360 ? r - 360 : r;
+};
 
 /** Write these arrangements over whatever the document already had, keeping the rest.
  *
@@ -607,18 +735,15 @@ if (isMain(import.meta.url)) {
   h = dispatch(h, { type: "resizePlacement", id: "drape", sizeMm: { widthMm: 3000, depthMm: 2000 } });
   assert(h.present.placements.find((p) => p.id === "drape")?.sizeMm?.widthMm === 3000, "resizePlacement records the drawn size");
 
-  // A ceiling item hung on a rod, and taken off it again.
+  // A saved sketch loaded whole: it replaces the drawing, keeps the calibration, and is one undo.
   {
-    let h = initHistory({
-      calibration: { mmPerUnit: 1 },
-      tables: [],
-      placements: [{ id: "ch", variantId: "chandelier", layer: "ceiling", quantity: 1, position: { x: 100, y: 100 }, rotation: 0, scale: 1 }],
-    });
-    h = dispatch(h, { type: "setPlacementHang", id: "ch", hang: { rigId: "r1", t: 0.5 } });
-    assert(h.present.placements[0].hang?.rigId === "r1", "a ceiling item can be hung on a rod");
-    h = dispatch(h, { type: "setPlacementHang", id: "ch", hang: null });
-    assert(h.present.placements[0].hang === undefined, "…and taken off it, back to a free point");
-    assert(h.present.placements[0].position.x === 100, "…keeping the position it had");
+    const tb = (id: string, number: number): DesignTable => ({ id, type: "עגול", number, position: { x: 0, y: 0 }, rotation: 0 });
+    let h = initHistory({ calibration: { mmPerUnit: 2 }, tables: [tb("old", 1)], placements: [] });
+    h = dispatch(h, { type: "loadDocument", content: { calibration: { mmPerUnit: 9 }, tables: [tb("a", 4), tb("b", 5)], placements: [], groups: [{ id: "g", number: 4 }] } });
+    assert(h.present.tables.length === 2 && h.present.tables[0].id === "a", "loadDocument puts the sketch's tables in place of the old ones");
+    assert(h.present.calibration.mmPerUnit === 2, "…and keeps the venue's own calibration");
+    assert(h.present.groups?.length === 1, "…with the sketch's groups");
+    assert(undo(h).present.tables[0].id === "old", "…and one undo brings the old drawing back");
   }
 
   // "על כל השולחנות" — every table, whatever its type.
@@ -784,6 +909,9 @@ if (isMain(import.meta.url)) {
     assert(filled.tables[0].seated === 9, "a table remembers how many of its chairs are taken");
     assert(apply(before, { type: "setTableSeated", id: "a", seated: -2 }).tables[0].seated === 0, "…never a negative number of people");
     const crowded = apply(apply(before, { type: "setTableSeats", id: "a", seats: 8 }), { type: "setTableSeated", id: "a", seated: 9 });
+    const walled = apply(before, { type: "setTableBlockedSides", id: "a", sides: [2, 0, 2, -1] });
+    assert(JSON.stringify(walled.tables[0].blockedSides) === "[0,2]", "a table's blocked sides are stored once each, in order");
+    assert(!("blockedSides" in apply(walled, { type: "setTableBlockedSides", id: "a", sides: null }).tables[0]), "…and null hands them back to the catalog");
     assert(crowded.tables[0].seated === 9, "…and over-seating is recorded, not refused — the plan says 9/8 rather than losing the number");
 
     const reseated = apply(before, { type: "setTableSeats", id: "a", seats: 8 });
@@ -893,6 +1021,51 @@ if (isMain(import.meta.url)) {
       ],
     });
     assert(moved.tables[0].position.x === 100 && moved.features?.[0].dx === 100, "one delta carries a table and a venue feature together");
+  }
+
+  // ── mirroring and resizing ──────────────────────────────────────────────────────────────────────
+  {
+    const base: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [{ id: "t", type: "round", number: 1, position: { x: 0, y: 0 }, rotation: 30 }],
+      placements: [{ id: "p", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 1000, y: 0 }, rotation: 0, scale: 1 }],
+    };
+    const once = apply(base, {
+      type: "mirrorMany",
+      flips: [
+        { kind: "table", id: "t", position: { x: 1000, y: 0 }, rotation: -30, mirrored: true },
+        { kind: "placement", id: "p", position: { x: 0, y: 0 }, rotation: 0, mirrored: true },
+      ],
+    });
+    assert(once.tables[0].mirrored === true && once.tables[0].rotation === 330, "a mirror writes the flip and the reflected facing");
+    assert(once.placements[0].position.x === 0 && once.placements[0].mirrored === true, "…and moves a member across the axis");
+    const back = apply(once, { type: "mirrorMany", flips: [{ kind: "placement", id: "p", position: { x: 1000, y: 0 }, rotation: 0, mirrored: false }] });
+    assert(!("mirrored" in back.placements[0]), "unflipping removes the field rather than storing false");
+    assert(apply(base, { type: "mirrorMany", flips: [] }) === base, "mirroring nothing is not an edit");
+
+    const wide = apply(base, { type: "resizeTable", id: "t", sizeMm: { widthMm: 4800, depthMm: 1200 } });
+    assert(wide.tables[0].sizeMm?.widthMm === 4800, "a table can be stretched");
+    assert(!("sizeMm" in apply(wide, { type: "resizeTable", id: "t", sizeMm: null }).tables[0]), "…and null hands it back to the catalog's size");
+    const sized = apply(base, { type: "resizePlacement", id: "p", sizeMm: { widthMm: 2400, depthMm: 900 } });
+    assert(!("sizeMm" in apply(sized, { type: "resizePlacement", id: "p", sizeMm: null }).placements[0]), "a placement's size resets the same way");
+
+    // A swap keeps the table and replaces only what described its old catalog row.
+    const dressed: DesignDocumentContent = {
+      ...wide,
+      tables: [{ ...wide.tables[0], number: 7, seats: 10, seated: 8, blockedSides: [0], groupId: "g", style: { fill: "#fff" } }],
+    };
+    const round = apply(dressed, {
+      type: "retypeTable",
+      id: "t",
+      table: { type: "עגול 150", variantId: "round-150", diameterMm: 1500, seats: 12 },
+    }).tables[0];
+    assert(round.type === "עגול 150" && round.variantId === "round-150" && round.diameterMm === 1500, "a swap takes the new row's type and size");
+    assert(round.seats === 12 && !("widthMm" in round) && !("sizeMm" in round) && !("blockedSides" in round), "…drops the old row's size, stretch and blocked sides");
+    assert(round.number === 7 && round.seated === 8 && round.groupId === "g" && round.style?.fill === "#fff", "…and keeps its number, occupancy, group and look");
+    const seatless = apply(dressed, { type: "retypeTable", id: "t", table: { type: "בר", variantId: "bar", widthMm: 600, depthMm: 600 } });
+    assert(!("seats" in seatless.tables[0]), "a row with no seats leaves no stale chair count behind");
+    const replaced = apply(dressed, { type: "retypeTable", id: "t", table: { type: "x", variantId: "x" }, position: { x: 5, y: 6 } });
+    assert(replaced.tables[0].position.x === 5 && replaced.placements === dressed.placements, "a swap may re-place the table, and leaves its dressing alone");
   }
 
   console.log("actions self-check passed");

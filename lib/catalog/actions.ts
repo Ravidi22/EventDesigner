@@ -16,7 +16,8 @@ import { products, productVariants, designDocuments } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
 import { toProducts, toProductRow, toVariantRows } from "./db-mapping";
-import { STANDARD_ITEMS } from "./standard/items";
+import { STANDARD_ITEMS, STANDARD_STAGE_KEYS, STANDARD_STAGE_PART_KEYS } from "./standard/items";
+import { installStandardCatalog } from "./standard/install";
 import { standardProductId } from "./standard/id";
 
 // ── Input guards ───────────────────────────────────────────────────────────────────────────────
@@ -248,6 +249,31 @@ export async function isStandardProduct(id: string): Promise<boolean> {
   assertId(id, "id");
   const organizationId = await currentOrg();
   return STANDARD_ITEMS.some((item) => standardProductId(organizationId, item.key) === id);
+}
+
+/** The stage tool's decks, stairs and skirt, for a studio that has none — a studio that predates the
+ *  "פלטות במה" category opens the tool and would otherwise be told to go and type in a deck.
+ *
+ *  ONLY those items, never the whole base library: a studio that deleted a standard table on purpose
+ *  must not get it back because it drew a stage. Add-only and idempotent (installStandardCatalog):
+ *  a row the studio already has — renamed, priced, archived — is left exactly as it is. Scoped by
+ *  currentOrg() and takes no arguments, so a POST to it can only ever fill in the caller's own
+ *  studio. Returns the fresh catalog, like every other write here. */
+export async function installStageBasics(): Promise<Product[]> {
+  const organizationId = await currentOrg();
+  await installStandardCatalog(organizationId, STANDARD_STAGE_KEYS);
+  revalidateCatalog();
+  return fetchProducts();
+}
+
+/** The parts a stage is finished with — stairs, skirt, banquette, barrier — and nothing else: no
+ *  decks, so a studio that builds from its own stages does not suddenly own two more deck sizes.
+ *  Add-only and scoped like installStageBasics. */
+export async function installStageParts(): Promise<Product[]> {
+  const organizationId = await currentOrg();
+  await installStandardCatalog(organizationId, STANDARD_STAGE_PART_KEYS);
+  revalidateCatalog();
+  return fetchProducts();
 }
 
 /** Bulk create, for the CSV import (F-4.4). One transaction: a half-imported file is worse than a

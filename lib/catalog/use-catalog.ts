@@ -12,17 +12,22 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Product } from "./types";
 import { primeCatalog } from "./storage";
-import { fetchProducts, saveProduct, removeProduct, importProducts } from "./actions";
+import { fetchProducts, saveProduct, removeProduct, importProducts, installStageBasics, installStageParts } from "./actions";
 
 export interface CatalogHandle {
   products: Product[];
   /** False until the first fetch resolves — the difference between "no products" and "not yet". */
   ready: boolean;
   error: string | null;
-  save: (product: Product) => Promise<void>;
+  /** True once the server has it. False means `error` says why. */
+  save: (product: Product) => Promise<boolean>;
   remove: (id: string) => Promise<{ archived: boolean }>;
   importMany: (list: Product[]) => Promise<void>;
   reload: () => Promise<void>;
+  /** Give the studio the stage tool's decks, stairs and skirt, if it has none (installStageBasics). */
+  installStageBasics: () => Promise<Product[] | null>;
+  /** …and only the stairs, skirt, banquette and barrier rows (installStageParts). */
+  installStageParts: () => Promise<Product[] | null>;
 }
 
 export function useCatalog(initial?: Product[]): CatalogHandle {
@@ -92,8 +97,10 @@ export function useCatalog(initial?: Product[]): CatalogHandle {
     async (product: Product) => {
       try {
         adopt(await saveProduct(product));
+        return true;
       } catch {
         setError("השמירה נכשלה");
+        return false;
       }
     },
     [adopt],
@@ -124,5 +131,26 @@ export function useCatalog(initial?: Product[]): CatalogHandle {
     [adopt],
   );
 
-  return { products, ready, error, save, remove, importMany, reload };
+  const installBasics = useCallback(async () => {
+    try {
+      const list = await installStageBasics();
+      adopt(list);
+      return list;
+    } catch {
+      setError("לא ניתן להוסיף את פלטות הבסיס");
+      return null;
+    }
+  }, [adopt]);
+
+  const installParts = useCallback(async () => {
+    try {
+      const list = await installStageParts();
+      adopt(list);
+      return list;
+    } catch {
+      return null;
+    }
+  }, [adopt]);
+
+  return { products, ready, error, save, remove, importMany, reload, installStageBasics: installBasics, installStageParts: installParts };
 }

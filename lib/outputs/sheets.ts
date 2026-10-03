@@ -21,7 +21,6 @@ export interface PlanSheet {
   groups?: CategoryGroupId[];
   tables: TablePresence;
   chairs: boolean;
-  rigs: boolean;
   numbers: boolean;
 }
 
@@ -32,15 +31,15 @@ export const PLAN_SHEETS: PlanSheet[] = [
   // a crew loading the room needs to see. "layers" filters PLACEMENTS by layer; the stage and the
   // bar are not a separate layer, they are floor placements like the tables, so the floor layer
   // carries them without a groups filter.
-  { id: "hall", label: "שרטוט אולם", layers: ["floor"], tables: "full", chairs: true, rigs: false, numbers: true },
-  { id: "design", label: "שרטוט עיצוב", layers: ["floor", "table"], tables: "full", chairs: true, rigs: false, numbers: true },
-  { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, rigs: true, numbers: true },
+  { id: "hall", label: "שרטוט אולם", layers: ["floor"], tables: "full", chairs: true, numbers: true },
+  { id: "design", label: "שרטוט עיצוב", layers: ["floor", "table"], tables: "full", chairs: true, numbers: true },
+  { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, numbers: true },
   // "groups" filters by catalog category group, not by layer -- the stage sheet wants ONLY the stage
   // group off the floor layer, not every floor placement.
-  { id: "stage", label: "במה", layers: ["floor"], groups: ["grp-stages"], tables: "none", chairs: false, rigs: false, numbers: false },
+  { id: "stage", label: "תוכנית במה", layers: ["floor"], groups: ["grp-stages"], tables: "none", chairs: false, numbers: false },
   // Chairs keep layers: [] on purpose: this sheet's chairs come from table seating, not from a floor
   // placement, so filtering in the floor layer here would draw every chair twice.
-  { id: "chairs", label: "פריסת כיסאות", layers: [], tables: "ghost", chairs: true, rigs: false, numbers: true },
+  { id: "chairs", label: "פריסת כיסאות", layers: [], tables: "ghost", chairs: true, numbers: true },
 ];
 
 export function sheetById(id: string): PlanSheet | undefined {
@@ -54,9 +53,7 @@ if (isMain(import.meta.url)) {
   };
   assert(new Set(PLAN_SHEETS.map((s) => s.id)).size === PLAN_SHEETS.length, "sheet ids are unique");
   assert(PLAN_SHEETS.every((s) => s.label.trim().length > 0), "every sheet is named on screen");
-  assert(sheetById("ceiling")!.rigs, "the ceiling plan carries the rods");
-  assert(sheetById("ceiling")!.tables === "ghost", "…and ghosts the tables, so a rigger knows what is underneath");
-  assert(!sheetById("hall")!.rigs, "the hall plan does not");
+  assert(sheetById("ceiling")!.tables === "ghost", "the ceiling plan ghosts the tables, so a rigger knows what is underneath");
   assert(sheetById("hall")!.layers.includes("floor"), "the hall plan carries the furniture standing on the floor");
   assert(sheetById("design")!.layers.includes("table"), "the design sheet carries what is ON the tables");
   assert(sheetById("gone") === undefined, "an unknown id is undefined, not a throw");

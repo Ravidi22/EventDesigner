@@ -15,6 +15,10 @@ export interface ItemInfo {
   priceUnit?: MeasureUnit; // what this item is counted in; absent = "unit"
   // Per-category multiplier (F-2.5): a chandelier with N arms yields N×qty candles/bulbs.
   armsMultiplier?: { label: string; count: number };
+  /** What the multiplier is made of, per placed unit — a flower arrangement's "ורד ×12, פיאוני ×5"
+   *  (Product.flowers). The counts sum to armsMultiplier.count; the list is what the florist is
+   *  phoned with, so it is carried beside the total rather than folded into it. */
+  components?: { label: string; count: number }[];
 }
 
 export type ItemLookup = (variantId: string) => ItemInfo | undefined;
@@ -26,6 +30,8 @@ export interface PackRow {
   quantity: number;
   unit: MeasureUnit;
   derived?: { label: string; quantity: number };
+  /** The derived quantity broken down by component — each already × quantity, like `derived`. */
+  breakdown?: { label: string; quantity: number }[];
 }
 
 export interface PackGroup {
@@ -45,6 +51,9 @@ export function packingList(doc: DesignDocumentContent, lookup: ItemLookup, ctx?
     const row: PackRow = { variantId, label: info.variantLabel, quantity, unit: info.priceUnit ?? "unit" };
     if (info.armsMultiplier) {
       row.derived = { label: info.armsMultiplier.label, quantity: info.armsMultiplier.count * quantity };
+      if (info.components?.length) {
+        row.breakdown = info.components.map((c) => ({ label: c.label, quantity: c.count * quantity }));
+      }
     }
     const g = groups.get(info.categoryId) ?? {
       categoryId: info.categoryId,
@@ -121,17 +130,32 @@ if (isMain(import.meta.url)) {
       { id: "p1", variantId: "cloth", layer: "table", quantity: 1, tableId: "t1", position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
       { id: "p2", variantId: "cloth", layer: "table", quantity: 1, tableId: "t2", position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
       { id: "p3", variantId: "chand", layer: "ceiling", quantity: 2, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+      { id: "p4", variantId: "flora", layer: "table", quantity: 20, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     ],
   };
   const lookup: ItemLookup = (id) =>
     id === "cloth"
       ? { productName: "מפה", variantLabel: "מפה · זהב", categoryId: "cloths", categoryLabel: "מפות", categoryOrder: 0 }
-      : { productName: "שנדליר", variantLabel: "שנדליר", categoryId: "chand", categoryLabel: "שנדליירים", categoryOrder: 1, armsMultiplier: { label: "נרות", count: 5 } };
+      : id === "flora"
+        ? {
+            productName: "סידור נמוך",
+            variantLabel: "סידור נמוך",
+            categoryId: "flora",
+            categoryLabel: "סידורי פרחים",
+            categoryOrder: 2,
+            armsMultiplier: { label: "גבעולים", count: 17 },
+            components: [{ label: "ורד", count: 12 }, { label: "פיאוני", count: 5 }],
+          }
+        : { productName: "שנדליר", variantLabel: "שנדליר", categoryId: "chand", categoryLabel: "שנדליירים", categoryOrder: 1, armsMultiplier: { label: "נרות", count: 5 } };
 
   const pl = packingList(doc, lookup);
-  assert(pl.length === 2, "two category groups");
+  assert(pl.length === 3, "three category groups");
   assert(pl[0].rows[0].quantity === 2, "cloth counted across two tables");
   assert(pl[1].rows[0].derived?.quantity === 10, "candles = 5 arms × 2 fixtures");
+  assert(pl[1].rows[0].breakdown === undefined, "a multiplier with no components has no breakdown");
+  const flora = pl[2].rows[0];
+  assert(flora.derived?.quantity === 340, "stems = 17 × 20 arrangements");
+  assert(flora.breakdown?.length === 2 && flora.breakdown[0].quantity === 240 && flora.breakdown[1].quantity === 100, "…and per flower: 12×20 roses, 5×20 peonies");
 
   const legend = placementLegend(doc, (id) => lookup(id)?.productName);
   const withCloth = legend.find((e) => e.items.length > 0)!;

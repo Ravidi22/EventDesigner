@@ -4,7 +4,9 @@ import { createElement } from "react";
 import type { Product } from "@/lib/catalog/types";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { resolveContent, resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
-import { FootprintShape } from "@/components/footprint-shape";
+import { labelAnchor } from "@/lib/studio/label-anchor";
+import { isDark, resolveStyle } from "@/lib/element-style";
+import { FootprintShape, productStyle } from "@/components/footprint-shape";
 
 // The thing under the pointer while an item is being dragged off the rail — the same picture that
 // lands when it is let go.
@@ -44,6 +46,13 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
   const shown = label.length > maxChars ? label.slice(0, maxChars - 1) + "…" : label;
   const Icon = content.mode === "icon" && content.icon ? ICON_BY_NAME[content.icon] : undefined;
   const iconSize = Math.min(b.w, b.h) * 0.6;
+  // The name or icon sits where the canvas will put it — the shape's visual centre, not its box's.
+  const at = content.mode === "none" ? { x: 0, y: 0 } : labelAnchor(footprint);
+  // The row's own look, as the canvas will draw it once it lands: a drag that shows a white box and
+  // drops a navy one is the drag image lying about what it carries. The stroke stays the accent when
+  // the row sets none of its own — that is what says "being carried" rather than "already down".
+  const style = resolveStyle(productStyle(product), "screen", { fill: "var(--color-surface)", stroke: "var(--color-accent)", strokeWidth: 2 });
+  const dark = !!product.appearance?.style?.fill && style.fillOpacity > 0.5 && isDark(style.fill);
 
   return (
     <svg
@@ -58,19 +67,22 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
     >
       <FootprintShape
         footprint={footprint}
-        fill="var(--color-surface)"
-        stroke="var(--color-accent)"
-        strokeWidth={2}
+        fill={style.fill}
+        fillOpacity={style.fillOpacity}
+        stroke={style.stroke}
+        strokeOpacity={style.strokeOpacity}
+        strokeWidth={style.strokeWidth}
+        strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
       {content.mode === "name" && (
-        <text textAnchor="middle" dominantBaseline="central" fill="var(--color-ink)" style={{ fontSize }}>
+        <text x={at.x} y={at.y} textAnchor="middle" dominantBaseline="central" fill={dark ? "var(--color-canvas)" : "var(--color-ink)"} style={{ fontSize }}>
           {shown}
         </text>
       )}
       {Icon && (
-        <g transform={`translate(${-iconSize / 2} ${-iconSize / 2}) scale(${iconSize / 24})`}>
-          {createElement(Icon, { width: 24, height: 24, color: "var(--color-accent)", strokeWidth: 1.5 })}
+        <g transform={`translate(${at.x - iconSize / 2} ${at.y - iconSize / 2}) scale(${iconSize / 24})`}>
+          {createElement(Icon, { width: 24, height: 24, color: dark ? "var(--color-canvas)" : "var(--color-accent)", strokeWidth: 1.5 })}
         </g>
       )}
     </svg>

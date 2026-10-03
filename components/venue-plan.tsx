@@ -1,7 +1,8 @@
 "use client";
 
-import { outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
+import { doorGeometry, outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
+import { usesDiameter } from "@/lib/catalog/types";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { featureFootprint, nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { FootprintShape } from "@/components/footprint-shape";
@@ -10,7 +11,7 @@ import { stairsGeometry } from "@/lib/venues/stairs";
 import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
-import type { Point } from "@/lib/studio/hall";
+import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import { EntranceDoor, RotateHandle } from "@/components/plan-canvas";
 
 // World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
@@ -443,7 +444,7 @@ export function StructureFeatures({
                   resizes the perpendicular dimension by the same ratio, matching the Shift-to-
                   constrain convention every design tool gives its resize handles. */}
               {selected && onResize && (
-                f.shape === "circle" ? (
+                usesDiameter(f.shape) ? (
                   <ResizeHandle
                     {...resizableRadius(f, onResize, onCommit, clientToMm)}
                     cursor="cursor-nesw-resize"
@@ -487,7 +488,7 @@ export function StructureFeatures({
             {selected && onRotate && clientToMm && (
               <RotateHandle
                 pivot={{ x: f.x, y: f.y }}
-                reachMm={(f.shape === "circle" ? f.widthMm : f.depthMm) / 2}
+                reachMm={(usesDiameter(f.shape) ? f.widthMm : f.depthMm) / 2}
                 rotationDeg={f.rotationDeg ?? 0}
                 onRotate={(deg) => onRotate(f.id, deg)}
                 onCommit={onCommit}
@@ -725,10 +726,14 @@ function wallInteriorHint(faces: Face[], a: Point, b: Point, aId: string, bId: s
 }
 
 /** Door openings: the gap is painted over the wall the canvas already stroked so it reads as a
- *  hole (unconditional, purely visual), and — when a wall lookup is available — the actual door
- *  leaf(es) + swing arc on top of it (EntranceDoor, shared with the outline system's own doors;
- *  see plan-canvas.tsx), draggable along the wall when `onMove` is supplied. Drawn as part of the
- *  overlay layer that sits *above* the walls. */
+ *  hole (unconditional, purely visual), and the door leaf(es) + swing arc on top of it — on EVERY
+ *  surface that draws the property, not only the hall editor. A designer laying tables reads the
+ *  swing to keep the arc clear, and a gap alone says nothing about which way the door opens or how
+ *  far into the room it comes. With `clientToMm`/`mm` the symbol is the hall editor's interactive
+ *  EntranceDoor (shared with the outline system's own doors; see plan-canvas.tsx), draggable along
+ *  the wall when `onMove` is supplied; without them it is the same geometry drawn still, taking no
+ *  pointer at all — the studio's case. Drawn as part of the overlay layer that sits *above* the
+ *  walls. */
 export function StructureDoors({
   structure,
   selectedIds,
@@ -777,7 +782,7 @@ export function StructureDoors({
               vectorEffect="non-scaling-stroke"
               className="pointer-events-none"
             />
-            {clientToMm && mm && (
+            {clientToMm && mm ? (
               <EntranceDoor
                 entrance={e}
                 a={pts.a}
@@ -796,10 +801,49 @@ export function StructureDoors({
                 clientToMm={clientToMm}
                 mm={mm}
               />
+            ) : (
+              <DoorLeaves entrance={e} a={pts.a} b={pts.b} curve={w.curve ?? null} interiorHint={wallInteriorHint(faces, pts.a, pts.b, w.a, w.b)} />
             )}
           </g>
         );
       })}
     </>
+  );
+}
+
+/** The door symbol with no handle on it: leaf from hinge to tip, and the quarter-circle it sweeps —
+ *  the exact geometry EntranceDoor draws (doorGeometry), so the sketch shows the door the hall
+ *  editor drew and not a second opinion of it. Takes no pointer: on the sketch a door is the
+ *  property's, something to design around rather than to move. */
+function DoorLeaves({
+  entrance,
+  a,
+  b,
+  curve,
+  interiorHint,
+}: {
+  entrance: { distanceMm: number; widthMm: number; swingInward: boolean; doubleDoor: boolean };
+  a: Point;
+  b: Point;
+  curve: EdgeCurve | null;
+  interiorHint: Point;
+}) {
+  const door = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, entrance.swingInward, interiorHint, entrance.doubleDoor, curve);
+  return (
+    <g className="pointer-events-none text-ink-soft">
+      {door.leaves.map((leaf, i) => (
+        <g key={i}>
+          <line x1={leaf.hinge.x} y1={leaf.hinge.y} x2={leaf.tip.x} y2={leaf.tip.y} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          <path
+            d={`M ${leaf.tip.x} ${leaf.tip.y} A ${leaf.lenMm} ${leaf.lenMm} 0 0 ${leaf.sweepFlag} ${leaf.arcTo.x} ${leaf.arcTo.y}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1}
+            strokeDasharray={3}
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      ))}
+    </g>
   );
 }

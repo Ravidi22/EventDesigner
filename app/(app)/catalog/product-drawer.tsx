@@ -4,11 +4,14 @@ import { useEffect, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import {
   PRICE_UNIT_LABEL,
+  ROUND_FIELD,
   SHAPE_LABEL,
+  usesDiameter,
   STOCK_KIND_HINT,
   STOCK_KIND_LABEL,
   VISIBILITY_LABEL,
   VISIBILITY_HINT,
+  type FlowerLine,
   type Product,
   type Variant,
   type MapAppearance,
@@ -16,9 +19,11 @@ import {
   type PriceUnit,
   type StockKind,
 } from "@/lib/catalog/types";
+import { FLOWER_NAMES, cleanFlowers, stemCount } from "@/lib/catalog/flowers";
 import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierList } from "@/lib/suppliers/use-suppliers";
-import { footprintBounds, resolveContent, resolveFootprint } from "@/lib/studio/footprint";
+import { catalogBox, footprintBounds, resolveContent, resolveFootprint, roundSizeMm } from "@/lib/studio/footprint";
+import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
 import { isPlacedAnywhere, isStandardProduct } from "@/lib/catalog/actions";
 import { Button } from "@/components/button";
@@ -45,7 +50,7 @@ const defaultShape = (c: CategoryDef): MapShape => (c.dims === "round" ? "circle
 // What the plan draws for a draft right now — the value a toggle shows as chosen, and the one any
 // appearance patch has to preserve. A product from before `appearance` existed has no row to read
 // and the resolvers answer for it: a diameter makes it a circle, and it draws its name.
-const shapeOf = (p: Product): MapShape => p.appearance?.shape ?? resolveFootprint(p).kind;
+const shapeOf = (p: Product): MapShape => p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect");
 const contentOf = (p: Product): MapAppearance["content"] => p.appearance?.content ?? resolveContent(p).mode;
 
 // What the tile says sits inside the footprint, so the drawer states the whole answer the modal
@@ -62,8 +67,9 @@ const STOCK_OPTIONS: readonly (readonly [StockKind, string])[] = [
   ["rented", STOCK_KIND_LABEL.rented],
 ];
 
-export function blankProduct(): Product {
-  const c = CATEGORIES[0];
+/** A new, empty product seeded from `c` — the catalog's first category unless the caller is
+ *  narrowed to a few (the meeting's drawing passes, which only show part of the catalog). */
+export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
   return {
     id: "",
     name: "",
@@ -86,6 +92,222 @@ export function blankProduct(): Product {
 }
 
 const mmToCm = (mm?: number) => (mm ?? 0) / 10;
+const cmOf = (mm?: number) => Math.round((mm ?? 0) / 10);
+
+type ResizeSide = "width" | "depth" | "both";
+
+/** "גודל גמיש" — one row that the plan stretches to the size each event needs, instead of one row
+ *  per size (see ResizeSpec). Everything is in centimetres here, like the rest of the drawer; the
+ *  range starts from the size the item is drawn at, so switching it on never changes what is drawn. */
+function ResizeFields({
+  draft,
+  round,
+  ready,
+  internal,
+  onChange,
+}: {
+  draft: Product;
+  /** Whether the price note below the ranges may be shown — see ProductDrawer's `internal`. */
+  internal: boolean;
+  /** A round shape has one measurement — its diameter — and no side to choose. */
+  round: boolean;
+  /** Whether the shape and its measurements are filled in; there is nothing to stretch before. */
+  ready: boolean;
+  onChange: (resize: ResizeSpec | undefined) => void;
+}) {
+  const spec = draft.resize;
+  const box = ready ? catalogBox(draft) : { widthMm: 0, depthMm: 0 };
+  const side: ResizeSide = round ? "width" : spec?.width && spec?.depth ? "both" : spec?.depth ? "depth" : "width";
+  const defaultRange = (mm: number) => ({ minMm: Math.max(RESIZE_DEFAULT_STEP_MM, Math.round(mm / 2 / 100) * 100), maxMm: Math.round((mm * 3) / 100) * 100 || 1000 });
+
+  const setSide = (s: ResizeSide) => {
+    if (!spec) return;
+    onChange({
+      stepMm: spec.stepMm,
+      ...(s !== "depth" ? { width: spec.width ?? defaultRange(box.widthMm) } : {}),
+      ...(s !== "width" ? { depth: spec.depth ?? defaultRange(box.depthMm) } : {}),
+    });
+  };
+  const setRange = (axis: "width" | "depth", end: "minMm" | "maxMm", v: number) => {
+    if (!spec) return;
+    const cur = spec[axis] ?? defaultRange(axis === "width" ? box.widthMm : box.depthMm);
+    onChange({ ...spec, [axis]: { ...cur, [end]: Math.round(v * 10) } });
+  };
+
+  const rangeRow = (axis: "width" | "depth", label: string) => {
+    const r = spec?.[axis];
+    if (!r) return null;
+    return (
+      <div className="grid grid-cols-2 gap-3">
+        <NumberField id={`p-rz-${axis}-min`} label={`${label} — מינימום (ס״מ)`} min={1} value={cmOf(r.minMm)} commitOnBlur onChange={(v) => setRange(axis, "minMm", v)} />
+        <NumberField id={`p-rz-${axis}-max`} label={`${label} — מקסימום (ס״מ)`} min={1} value={cmOf(r.maxMm)} commitOnBlur onChange={(v) => setRange(axis, "maxMm", v)} />
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-3">
+      <SwitchRow
+        checked={!!spec}
+        disabled={!ready}
+        onChange={(on) =>
+          onChange(on ? { stepMm: RESIZE_DEFAULT_STEP_MM, width: defaultRange(box.widthMm) } : undefined)
+        }
+        label="גודל גמיש על התוכנית"
+        hint={
+          ready
+            ? "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
+            : "יש להשלים קודם את הצורה והמידות."
+        }
+      />
+      {spec && (
+        <div className="space-y-3 rounded-md border border-inset-border bg-inset p-3">
+          {!round && (
+            <Segmented
+              label="מה נמתח"
+              value={side}
+              options={[
+                ["width", "רוחב"],
+                ["depth", "עומק"],
+                ["both", "שניהם"],
+              ] as const}
+              onChange={setSide}
+            />
+          )}
+          {rangeRow("width", round ? "קוטר" : "רוחב")}
+          {!round && rangeRow("depth", "עומק")}
+          <NumberField
+            id="p-rz-step"
+            label="קפיצות — גודל המודול (ס״מ)"
+            className="w-44"
+            min={1}
+            value={cmOf(spec.stepMm)}
+            commitOnBlur
+            onChange={(v) => onChange({ ...spec, stepMm: Math.max(10, Math.round(v * 10)) })}
+          />
+          {internal && (
+          <p className="text-xs leading-relaxed text-muted">
+            {(draft.priceUnit ?? "unit") === "unit"
+              ? "המחיר ליחידה לא משתנה עם הגודל. כדי שהצעת המחיר תגדל עם הפריט, בחרו מחיר למ״ר (במה, רחבה) או למטר (בר, ספה)."
+              : `הצעת המחיר תחושב לפי הגודל שנמתח בסקיצה (${draft.priceUnit === "m2" ? "מ״ר" : "מטר רוחב"}).`}
+          </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "מפרט פרחים" — what an arrangement is made of, as rows that multiply (Product.flowers): a flower
+ *  and how many stems of it, per arrangement. The stem total every other surface reads is their sum,
+ *  shown here and never typed while there are rows; an arrangement with no rows may still type a bare
+ *  total, which is the designer saying "180 stems, don't ask me which". Names are offered from a
+ *  datalist — the built-in vocabulary plus whatever this catalog already calls its flowers — and
+ *  anything typed is taken. */
+function FlowerSpecFields({
+  lines,
+  names,
+  typedStems,
+  onChange,
+  onTypedStems,
+}: {
+  lines: FlowerLine[];
+  names: string[];
+  /** The bare total, used only while there are no rows. */
+  typedStems: number;
+  onChange: (lines: FlowerLine[]) => void;
+  onTypedStems: (stems: number) => void;
+}) {
+  const listId = "p-flower-names";
+  const setLine = (id: string, p: Partial<FlowerLine>) => onChange(lines.map((l) => (l.id === id ? { ...l, ...p } : l)));
+  const add = () => onChange([...lines, { id: uid(), name: "", qty: 0 }]);
+  const remove = (id: string) => onChange(lines.filter((l) => l.id !== id));
+  const total = stemCount(lines);
+  const columns = "grid grid-cols-[1fr_5.5rem_2rem] items-center gap-2";
+
+  return (
+    <div className="space-y-2">
+      <datalist id={listId}>
+        {names.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+
+      {lines.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted">
+          אין מפרט. הוסיפו את הפרחים שמרכיבים את הסידור — סוג וכמות גבעולים לכל אחד. סך הגבעולים יחושב
+          מהם, ורשימת הציוד והרכש יפרטו אותם פרח־פרח.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <div className={`${columns} px-0.5 text-[11px] font-semibold text-faint`}>
+            <span>פרח</span>
+            <span>גבעולים</span>
+            <span />
+          </div>
+          {lines.map((l, i) => (
+            <div key={l.id} className={columns}>
+              <TextField
+                value={l.name}
+                onChange={(name) => setLine(l.id, { name })}
+                placeholder="ורד, פיאוני, אקליפטוס…"
+                list={listId}
+                aria-label={`פרח ${i + 1}`}
+                // A row that mounts empty was just added — put the cursor where the designer is
+                // about to type. Saved rows never mount empty (cleanFlowers drops them).
+                autoFocus={l.name === ""}
+              />
+              <NumberField
+                hideZero
+                min={0}
+                value={l.qty}
+                onChange={(qty) => setLine(l.id, { qty })}
+                placeholder="כמות"
+                aria-label={`כמות גבעולים — ${l.name || `פרח ${i + 1}`}`}
+              />
+              <button
+                type="button"
+                onClick={() => remove(l.id)}
+                aria-label={`הסר ${l.name || "פרח"}`}
+                className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert"
+              >
+                <Trash2 className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={add}
+          className="inline-flex items-center gap-1 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
+        >
+          <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
+          הוספת פרח
+        </button>
+        {lines.length > 0 && (
+          <p className="nums text-xs text-ink-soft">
+            סה״כ <span className="font-semibold text-ink">{total}</span> גבעולים בסידור
+          </p>
+        )}
+      </div>
+
+      {lines.length === 0 && (
+        <NumberField
+          id="f-stems"
+          label="…או רק סך הגבעולים בסידור (מכפיל גבעולים)"
+          className="w-44"
+          min={0}
+          hideZero
+          value={typedStems}
+          onChange={onTypedStems}
+        />
+      )}
+    </div>
+  );
+}
 
 // A quiet group header for the drawer's longer form — Assistant, no letter-spacing (Space
 // Grotesk / tracked overlines are reserved for Latin kickers elsewhere in the system, never for
@@ -104,11 +326,26 @@ export function ProductDrawer({
   onSave,
   onDelete,
   onClose,
+  internal = true,
+  categories = CATEGORIES,
+  flowerNames = FLOWER_NAMES,
 }: {
   product: Product | null;
   onSave: (p: Product) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
+  /** Flower names to suggest in the spec rows — the catalog passes flowerNamesOf(its products) so
+   *  one studio spells "ורד" one way; the default is the built-in vocabulary alone. */
+  flowerNames?: string[];
+  /** False when the drawer opens in a room with a client in it — the meeting's drawing passes add
+   *  to the catalog from the studio's rail. Everything the client must not see goes: the price and
+   *  its unit, the shades' prices, the whole procurement half (supplier, cost, stock, order unit)
+   *  and the publish switch. The item is saved without them and the designer completes it later on
+   *  /catalog, where this same drawer shows them again. */
+  internal?: boolean;
+  /** The categories offered. The meeting passes only what its rail shows, so an item added mid-pass
+   *  lands somewhere it can be dragged from instead of vanishing into a department that is hidden. */
+  categories?: CategoryDef[];
 }) {
   const [draft, setDraft] = useState<Product>(blankProduct);
   const [submitted, setSubmitted] = useState(false);
@@ -122,7 +359,8 @@ export function ProductDrawer({
   // would otherwise carry the previous row's answer until the next one came back.
   const [libraryId, setLibraryId] = useState<string | null>(null);
   // Loaded once, the first time the drawer opens — the catalog's first paint owes nothing to it.
-  const suppliers = useSupplierList(product !== null);
+  // Never in the meeting: the supplier list is cost-side data and nothing there would show it.
+  const suppliers = useSupplierList(product !== null && internal);
 
   useEffect(() => {
     if (product) {
@@ -169,8 +407,8 @@ export function ProductDrawer({
   // least three points. Without them the footprint can only fall back to MIN_FOOTPRINT_MM — a 60×60
   // box that ignores every number in the form.
   const asksFootprint = !stretch && currentShape !== "custom";
-  const asksDiameter = asksFootprint && currentShape === "circle";
-  const asksBox = asksFootprint && currentShape !== "circle";
+  const asksDiameter = asksFootprint && usesDiameter(currentShape);
+  const asksBox = asksFootprint && !usesDiameter(currentShape);
   // Most categories keep asking for height regardless of `stretch` — a drape's height is its DROP,
   // the one dimension that still tells two rolls of the same curtain apart. needsHeight is the
   // explicit opt-out for the categories where height isn't a dimension of the item at all: see the
@@ -183,7 +421,7 @@ export function ProductDrawer({
     name: draft.name.trim() === "",
     height: showHeight && !draft.dimensions.heightMm,
     appearance:
-      (asksDiameter && !draft.dimensions.diameterMm) ||
+      (asksDiameter && !roundSizeMm(currentShape, draft.dimensions)) ||
       (asksBox && (!draft.dimensions.widthMm || !draft.dimensions.depthMm)) ||
       (currentShape === "custom" && (draft.appearance?.outline?.length ?? 0) < 3),
   };
@@ -202,6 +440,8 @@ export function ProductDrawer({
         category: id,
         layer: c.defaultLayer,
         categoryFields: {},
+        // The spec follows the category: a product that stops being an arrangement has no flowers.
+        flowers: c.flowers ? d.flowers : undefined,
         // Re-seeded with the layer and the category fields, for the same reason: the new category's
         // opinion is a better starting point than the old one's, and it stays editable.
         stockKind: c.defaultStock,
@@ -264,7 +504,12 @@ export function ProductDrawer({
     const variants = draft.variants
       .map((v) => ({ ...v, id: v.id || uid(), name: v.name.trim() }))
       .filter((v) => v.name !== "" || v.archived);
-    onSave({ ...draft, id: draft.id || uid(), name: draft.name.trim(), variants });
+    // The flower spec is saved clean, and when it has rows their sum is written INTO the stems
+    // field — so the one number every other surface multiplies by can never disagree with the rows
+    // beside it (lib/catalog/flowers.ts).
+    const flowers = category.flowers ? cleanFlowers(draft.flowers) : undefined;
+    const categoryFields = flowers ? { ...draft.categoryFields, stems: stemCount(flowers) } : draft.categoryFields;
+    onSave({ ...draft, id: draft.id || uid(), name: draft.name.trim(), variants, flowers, categoryFields });
     onClose();
   };
 
@@ -316,7 +561,7 @@ export function ProductDrawer({
                 id="p-cat"
                 value={draft.category}
                 onChange={changeCategory}
-                options={CATEGORIES.map((c) => ({ value: c.id, label: c.label }))}
+                options={categories.map((c) => ({ value: c.id, label: c.label }))}
                 className="w-full"
               />
             </div>
@@ -361,7 +606,10 @@ export function ProductDrawer({
             </button>
 
             <div className="flex flex-1 flex-col items-start gap-1.5">
-              <p className="text-sm font-medium text-ink">{SHAPE_LABEL[currentShape]}</p>
+              <p className="text-sm font-medium text-ink">
+                {SHAPE_LABEL[currentShape]}
+                {!!draft.appearance?.parts?.length && ` + ${draft.appearance.parts.length === 1 ? "צורה נוספת" : `${draft.appearance.parts.length} צורות נוספות`}`}
+              </p>
               <p className="text-xs text-muted">
                 {stretch
                   ? `${category.label} נמדדים על התוכנית — הגודל נקבע כשמותחים אותם באירוע.`
@@ -375,24 +623,52 @@ export function ProductDrawer({
                 <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
                 עריכת המראה
               </Button>
-              {submitted && missing.appearance && (
+              {/* A round shape's one measurement is asked below, beside the height, and carries its
+                  own error there; this line is for the shapes whose measurements live in the modal. */}
+              {submitted && missing.appearance && !asksDiameter && (
                 <p className="text-xs text-alert">יש להשלים את הצורה והמידות — לפיהן מצויר הפריט.</p>
               )}
             </div>
           </div>
 
-          {showHeight && (
+          {(asksDiameter || showHeight) && (
             <div className="grid grid-cols-3 gap-3">
-              <NumberField
-                label="גובה (ס״מ)"
-                required
-                hideZero
-                min={0}
-                error={submitted && missing.height}
-                errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
-                value={mmToCm(draft.dimensions.heightMm)}
-                onChange={(v) => setDim("heightMm", v)}
-              />
+              {/* The ONE measurement a round item has, asked here as well as in the modal — the two
+                  edit the same number. A centrepiece or an arrangement is "⌀40, 70 high" and nothing
+                  else, and sending the designer into the shape editor for the first of those made the
+                  commonest item in the catalog the one with the longest form. Only for the diameter
+                  shapes: a box's width and depth stay with the shape they are measurements of, where
+                  the modal's note about "a diameter typed under a מלבן" still holds. */}
+              {asksDiameter &&
+                (() => {
+                  const field = ROUND_FIELD[currentShape] ?? { label: "קוטר", factor: 1 };
+                  const D = roundSizeMm(currentShape, draft.dimensions) ?? 0;
+                  return (
+                    <NumberField
+                      id="p-diameter"
+                      label={`${field.label} (ס״מ)`}
+                      required
+                      hideZero
+                      min={0}
+                      error={submitted && missing.appearance}
+                      errorMessage={`${field.label} נדרש — לפיו מצויר הפריט.`}
+                      value={D / field.factor / 10}
+                      onChange={(v) => setDim("diameterMm", v * field.factor)}
+                    />
+                  );
+                })()}
+              {showHeight && (
+                <NumberField
+                  label="גובה (ס״מ)"
+                  required
+                  hideZero
+                  min={0}
+                  error={submitted && missing.height}
+                  errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
+                  value={mmToCm(draft.dimensions.heightMm)}
+                  onChange={(v) => setDim("heightMm", v)}
+                />
+              )}
             </div>
           )}
 
@@ -400,21 +676,70 @@ export function ProductDrawer({
             <AppearanceModal product={draft} onSave={(p) => patch(p)} onClose={() => setAppearanceOpen(false)} />
           )}
 
-          {/* F-4.3: only count-multiplier fields are structured (arms, seats) */}
-          {category.fields.length > 0 && (
+          {/* F-4.3: only count-multiplier fields are structured (arms, seats). A flower category's
+              `stems` is the exception that proves it — it is still the one multiplier, but it is
+              filled by the spec's rows (FlowerSpecFields owns it), so it is not asked here. */}
+          {category.fields.some((f) => !(category.flowers && f.key === "stems")) && (
             <div className="grid grid-cols-2 gap-3">
-              {category.fields.map((f) => (
-                <NumberField
-                  key={f.key}
-                  id={`f-${f.key}`}
-                  label={f.suffix ? `${f.label} (מכפיל ${f.suffix})` : f.label}
-                  min={0}
-                  value={Number(draft.categoryFields[f.key] ?? 0)}
-                  onChange={(v) => setField(f.key, v)}
-                />
-              ))}
+              {category.fields
+                .filter((f) => !(category.flowers && f.key === "stems"))
+                .map((f) => (
+                  <NumberField
+                    key={f.key}
+                    id={`f-${f.key}`}
+                    label={f.suffix ? `${f.label} (מכפיל ${f.suffix})` : f.label}
+                    min={0}
+                    value={Number(draft.categoryFields[f.key] ?? 0)}
+                    onChange={(v) => setField(f.key, v)}
+                  />
+                ))}
             </div>
           )}
+
+          {category.flowers && (
+            <>
+              <SectionDivider label="מפרט פרחים" />
+              <FlowerSpecFields
+                lines={draft.flowers ?? []}
+                names={flowerNames}
+                typedStems={Number(draft.categoryFields.stems ?? 0)}
+                onChange={(flowers) => patch({ flowers })}
+                onTypedStems={(v) => setField("stems", v)}
+              />
+            </>
+          )}
+
+          {/* What the plan may do with it beyond drawing it: stretch it, and keep room round it.
+              Both are questions about the item, so they are answered once, here, rather than every
+              time it is placed. */}
+          <SectionDivider label="על התוכנית" />
+
+          {!stretch && (
+            <ResizeFields
+              draft={draft}
+              round={usesDiameter(currentShape)}
+              ready={!missing.appearance}
+              internal={internal}
+              onChange={(resize) => patch({ resize })}
+            />
+          )}
+
+          <div>
+            <NumberField
+              id="p-clearance"
+              label="מרחק ביטחון מסביב (ס״מ)"
+              className="w-44"
+              min={0}
+              hideZero
+              placeholder="—"
+              value={cmOf(draft.clearanceMm)}
+              onChange={(v) => patch({ clearanceMm: v > 0 ? Math.round(v * 10) : undefined })}
+            />
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              כמה מקום פנוי הפריט צריך סביבו — מעבר מאחורי הכסאות, מרחק של וילון מנרות. בסקיצה הפריט
+              יקבל הילה, ואזהרה כשמשהו מתקרב אליו יותר מזה. ריק = בלי כלל.
+            </p>
+          </div>
 
           <SectionDivider label="מפרט" />
 
@@ -428,31 +753,34 @@ export function ProductDrawer({
             placeholder="כל מאפיין אחר: חומר, צבע, מודולים…"
           />
 
-          <div className="grid grid-cols-2 gap-3">
-            <NumberField
-              id="p-price"
-              label={`מחיר ${PRICE_UNIT_LABEL[draft.priceUnit ?? "unit"]} (₪)`}
-              min={0}
-              hideZero
-              placeholder="0"
-              value={draft.unitPrice ?? 0}
-              onChange={(v) => patch({ unitPrice: v || undefined })}
-            />
-            <div>
-              <span className={fieldLabelClassName}>המחיר הוא</span>
-              <Select
-                value={draft.priceUnit ?? "unit"}
-                onChange={(v) => patch({ priceUnit: v === "unit" ? undefined : (v as PriceUnit) })}
-                aria-label="יחידת המחיר"
-                options={[
-                  { value: "unit", label: PRICE_UNIT_LABEL.unit },
-                  { value: "m", label: PRICE_UNIT_LABEL.m },
-                  { value: "m2", label: PRICE_UNIT_LABEL.m2 },
-                ]}
-                className="w-full"
+          {/* The client's price — never in front of the client (see `internal`). */}
+          {internal && (
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField
+                id="p-price"
+                label={`מחיר ${PRICE_UNIT_LABEL[draft.priceUnit ?? "unit"]} (₪)`}
+                min={0}
+                hideZero
+                placeholder="0"
+                value={draft.unitPrice ?? 0}
+                onChange={(v) => patch({ unitPrice: v || undefined })}
               />
+              <div>
+                <span className={fieldLabelClassName}>המחיר הוא</span>
+                <Select
+                  value={draft.priceUnit ?? "unit"}
+                  onChange={(v) => patch({ priceUnit: v === "unit" ? undefined : (v as PriceUnit) })}
+                  aria-label="יחידת המחיר"
+                  options={[
+                    { value: "unit", label: PRICE_UNIT_LABEL.unit },
+                    { value: "m", label: PRICE_UNIT_LABEL.m },
+                    { value: "m2", label: PRICE_UNIT_LABEL.m2 },
+                  ]}
+                  className="w-full"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Was a "קישור תמונה" text field — a stopgap from before lib/files/ was wired, which
               asked a designer to go and host the photograph somewhere else first. An existing URL
@@ -493,133 +821,139 @@ export function ProductDrawer({
             </div>
           </div>
 
-          {/* ── Procurement (lib/suppliers/) ─────────────────────────────────────────────────
-              Kept AFTER the price and clearly apart from it, because the two numbers on this
-              screen are opposites: `unitPrice` above is what the client pays and appears on a
-              quote; `costPrice` here is what the studio pays and appears nowhere a client can
-              see. Same field styling, different half of the form, so they are never confused. */}
-          <SectionDivider label="רכש ועלות" />
+          {internal && (
+            <>
+              {/* ── Procurement (lib/suppliers/) ─────────────────────────────────────────────────
+                  Kept AFTER the price and clearly apart from it, because the two numbers on this
+                  screen are opposites: `unitPrice` above is what the client pays and appears on a
+                  quote; `costPrice` here is what the studio pays and appears nowhere a client can
+                  see. Same field styling, different half of the form, so they are never confused. */}
+              <SectionDivider label="רכש ועלות" />
 
-          {/* Said once, at the top of the section, instead of left for the designer to infer from
-              two fields called "מחיר" and "עלות" sitting a few rows apart. */}
-          <p className="text-xs leading-relaxed text-muted">
-            מה שאתם משלמים על הפריט וכמה מהם צריך להזמין. פנימי — לא מופיע בהצעת המחיר ולא במסכי
-            הלקוח.
-          </p>
+              {/* Said once, at the top of the section, instead of left for the designer to infer from
+                  two fields called "מחיר" and "עלות" sitting a few rows apart. */}
+              <p className="text-xs leading-relaxed text-muted">
+                מה שאתם משלמים על הפריט וכמה מהם צריך להזמין. פנימי — לא מופיע בהצעת המחיר ולא במסכי
+                הלקוח.
+              </p>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="p-supplier" className={fieldLabelClassName}>
-                ספק
-              </label>
-              <Select
-                id="p-supplier"
-                value={draft.supplierId ?? ""}
-                onChange={(v) => patch({ supplierId: v || undefined })}
-                options={supplierOptions}
-                className="w-full"
-              />
-            </div>
-            <NumberField
-              id="p-cost"
-              label={`עלות ${costUnitLabel(draft.priceUnit ?? "unit", draft.orderUnit)} (₪)`}
-              min={0}
-              hideZero
-              placeholder="0"
-              value={draft.costPrice ?? 0}
-              onChange={(v) => patch({ costPrice: v || undefined })}
-            />
-          </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="p-supplier" className={fieldLabelClassName}>
+                    ספק
+                  </label>
+                  <Select
+                    id="p-supplier"
+                    value={draft.supplierId ?? ""}
+                    onChange={(v) => patch({ supplierId: v || undefined })}
+                    options={supplierOptions}
+                    className="w-full"
+                  />
+                </div>
+                <NumberField
+                  id="p-cost"
+                  label={`עלות ${costUnitLabel(draft.priceUnit ?? "unit", draft.orderUnit)} (₪)`}
+                  min={0}
+                  hideZero
+                  placeholder="0"
+                  value={draft.costPrice ?? 0}
+                  onChange={(v) => patch({ costPrice: v || undefined })}
+                />
+              </div>
 
-          <div>
-            <Segmented
-              label="סוג המלאי"
-              value={draft.stockKind ?? "owned"}
-              options={STOCK_OPTIONS}
-              onChange={(k) => patch({ stockKind: k === "owned" ? undefined : k })}
-            />
-            <p className="mt-1 text-xs leading-relaxed text-muted">
-              {STOCK_KIND_HINT[draft.stockKind ?? "owned"]}
-            </p>
-          </div>
+              <div>
+                <Segmented
+                  label="סוג המלאי"
+                  value={draft.stockKind ?? "owned"}
+                  options={STOCK_OPTIONS}
+                  onChange={(k) => patch({ stockKind: k === "owned" ? undefined : k })}
+                />
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  {STOCK_KIND_HINT[draft.stockKind ?? "owned"]}
+                </p>
+              </div>
 
-          {/* Only the owned kind has a count worth keeping: a consumable's stock is gone after
-              the event, and a rental is never yours. Showing the field for those would be
-              inviting a number that means nothing.
+              {/* Only the owned kind has a count worth keeping: a consumable's stock is gone after
+                  the event, and a rental is never yours. Showing the field for those would be
+                  inviting a number that means nothing.
 
-              It stands on its own line rather than in a three-column row with the two order
-              fields below: those two are one sentence about the SUPPLIER, this is a count of what
-              is in your storeroom, and a grid that drops its first cell for two of the three
-              stock kinds made the remaining pair jump sideways every time the toggle moved. */}
-          {(draft.stockKind ?? "owned") === "owned" && (
-            <NumberField
-              id="p-stock"
-              label="כמה יש לכם במחסן"
-              className="w-44"
-              min={0}
-              hideZero
-              placeholder="—"
-              value={draft.stockQty ?? 0}
-              onChange={(v) => patch({ stockQty: v || undefined })}
-            />
-          )}
+                  It stands on its own line rather than in a three-column row with the two order
+                  fields below: those two are one sentence about the SUPPLIER, this is a count of what
+                  is in your storeroom, and a grid that drops its first cell for two of the three
+                  stock kinds made the remaining pair jump sideways every time the toggle moved. */}
+              {(draft.stockKind ?? "owned") === "owned" && (
+                <NumberField
+                  id="p-stock"
+                  label="כמה יש לכם במחסן"
+                  className="w-44"
+                  min={0}
+                  hideZero
+                  placeholder="—"
+                  value={draft.stockQty ?? 0}
+                  onChange={(v) => patch({ stockQty: v || undefined })}
+                />
+              )}
 
-          {/* The two order fields, boxed and titled with the question they answer together. Their
-              labels used to be "יחידת הזמנה" and "כמה ליחידה" — two nouns that only make sense
-              once you already know the answer. The second one reads back the first now. */}
-          <div className="rounded-md border border-inset-border bg-inset p-3">
-            <p className="mb-2.5 text-xs font-semibold text-ink-soft">איך הספק מוכר את זה?</p>
-            <div className="grid grid-cols-2 gap-3">
-              <TextField
-                id="p-order-unit"
-                label="יחידת ההזמנה אצל הספק"
-                value={draft.orderUnit ?? ""}
-                onChange={(v) => patch({ orderUnit: v.trim() || undefined })}
-                placeholder="גבעולים"
-              />
-              <NumberField
-                id="p-order-factor"
-                label={`כמה ${draft.orderUnit?.trim() || "יחידות"} בפריט אחד`}
-                min={0}
-                hideZero
-                placeholder="1"
-                value={draft.orderFactor ?? 0}
-                onChange={(v) => patch({ orderFactor: v || undefined })}
-              />
-            </div>
-            <p className="mt-2 text-xs leading-relaxed text-muted">
-              {draft.orderUnit
-                ? `מסך הרכש יזמין ${draft.orderFactor || 1} ${draft.orderUnit} לכל ${
-                    draft.name.trim() || "פריט"
-                  } שמוצב על התוכנית.`
-                : "מלאו רק אם הספק מוכר ביחידה אחרת ממה שמוצב על התוכנית — פרחים נמכרים בגבעולים ולא במרכזי שולחן. אחרת השאירו ריק."}
-            </p>
-          </div>
+              {/* The two order fields, boxed and titled with the question they answer together. Their
+                  labels used to be "יחידת הזמנה" and "כמה ליחידה" — two nouns that only make sense
+                  once you already know the answer. The second one reads back the first now. */}
+              <div className="rounded-md border border-inset-border bg-inset p-3">
+                <p className="mb-2.5 text-xs font-semibold text-ink-soft">איך הספק מוכר את זה?</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <TextField
+                    id="p-order-unit"
+                    label="יחידת ההזמנה אצל הספק"
+                    value={draft.orderUnit ?? ""}
+                    onChange={(v) => patch({ orderUnit: v.trim() || undefined })}
+                    placeholder="גבעולים"
+                  />
+                  <NumberField
+                    id="p-order-factor"
+                    label={`כמה ${draft.orderUnit?.trim() || "יחידות"} בפריט אחד`}
+                    min={0}
+                    hideZero
+                    placeholder="1"
+                    value={draft.orderFactor ?? 0}
+                    onChange={(v) => patch({ orderFactor: v || undefined })}
+                  />
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-muted">
+                  {draft.orderUnit
+                    ? `מסך הרכש יזמין ${draft.orderFactor || 1} ${draft.orderUnit} לכל ${
+                        draft.name.trim() || "פריט"
+                      } שמוצב על התוכנית.`
+                    : category.flowers
+                      ? "הגבעולים כבר נגזרים ממפרט הפרחים ומופיעים ברכש פרח־פרח. מלאו רק אם הספק מוכר את הסידור עצמו ביחידה אחרת. אחרת השאירו ריק."
+                      : "מלאו רק אם הספק מוכר ביחידה אחרת ממה שמוצב על התוכנית — פרחים נמכרים בגבעולים ולא במרכזי שולחן. אחרת השאירו ריק."}
+                </p>
+              </div>
 
-          <SectionDivider label="נראות" />
+              <SectionDivider label="נראות" />
 
-          {/* A base-library item is public because it is nobody's design — it is the 1.80m round
-              table every hall in the country owns, and the app installed it, flagged public, into
-              every studio (lib/catalog/standard/). "Should other designers see this?" is not a
-              question about that row, so the switch that asks it is not shown: publishing is a
-              decision about your OWN work. Everything else on this screen — the price, the stock
-              count, the shape, the name — is still this studio's and stays editable. */}
-          {fromLibrary ? (
-            <p className="rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
-              פריט מהספרייה הבסיסית — הוא ציבורי אצל כולם, ולכן אין כאן מה להחליט. המחיר, הכמות
-              והמראה על התוכנית הם שלכם ונשארים לעריכה.
-            </p>
-          ) : (
-            /* The switch is worded as the thing being turned ON — "פריט ציבורי" — so that "off"
-               reads as the private default rather than as the absence of an unnamed state. Off
-               stores `undefined`, not the string "private": absent IS private (see Visibility), and
-               keeping one spelling is what makes the save/reload round-trip lossless. */
-            <SwitchRow
-              checked={draft.visibility === "public"}
-              onChange={(on) => patch({ visibility: on ? "public" : undefined })}
-              label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
-              hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
-            />
+              {/* A base-library item is public because it is nobody's design — it is the 1.80m round
+                  table every hall in the country owns, and the app installed it, flagged public, into
+                  every studio (lib/catalog/standard/). "Should other designers see this?" is not a
+                  question about that row, so the switch that asks it is not shown: publishing is a
+                  decision about your OWN work. Everything else on this screen — the price, the stock
+                  count, the shape, the name — is still this studio's and stays editable. */}
+              {fromLibrary ? (
+                <p className="rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+                  פריט מהספרייה הבסיסית — הוא ציבורי אצל כולם, ולכן אין כאן מה להחליט. המחיר, הכמות
+                  והמראה על התוכנית הם שלכם ונשארים לעריכה.
+                </p>
+              ) : (
+                /* The switch is worded as the thing being turned ON — "פריט ציבורי" — so that "off"
+                   reads as the private default rather than as the absence of an unnamed state. Off
+                   stores `undefined`, not the string "private": absent IS private (see Visibility), and
+                   keeping one spelling is what makes the save/reload round-trip lossless. */
+                <SwitchRow
+                  checked={draft.visibility === "public"}
+                  onChange={(on) => patch({ visibility: on ? "public" : undefined })}
+                  label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
+                  hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
+                />
+              )}
+            </>
           )}
 
           <div>
@@ -656,14 +990,16 @@ export function ProductDrawer({
                       placeholder="שם הגוון (זהב…)"
                       className="flex-1"
                     />
-                    <NumberField
-                      hideZero
-                      min={0}
-                      value={v.unitPrice ?? 0}
-                      onChange={(p) => setVariant(v.id, { unitPrice: p || undefined })}
-                      placeholder="מחיר"
-                      className="w-24"
-                    />
+                    {internal && (
+                      <NumberField
+                        hideZero
+                        min={0}
+                        value={v.unitPrice ?? 0}
+                        onChange={(p) => setVariant(v.id, { unitPrice: p || undefined })}
+                        placeholder="מחיר"
+                        className="w-24"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => removeVariant(v.id)}
@@ -677,6 +1013,13 @@ export function ProductDrawer({
               </div>
             )}
           </div>
+          {/* Says where the hidden half went, so the designer knows the item is not finished — and
+              says it in words a client reading over their shoulder learns nothing from. */}
+          {!internal && (
+            <p className="rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+              מחיר, ספק ומלאי משלימים אחר כך במסך הקטלוג.
+            </p>
+          )}
         </div>
 
         <footer className="flex items-center gap-2 border-t border-border bg-surface px-5 py-3.5">

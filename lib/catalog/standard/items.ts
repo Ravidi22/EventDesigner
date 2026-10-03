@@ -103,25 +103,26 @@ export const STANDARD_TABLES: StandardItem[] = [
   table("table-round-244", "עגול 244", { diameterMm: 2440 }, 16),
 ];
 
-// ── במות ────────────────────────────────────────────────────────────────────
+// ── פלטות במה ───────────────────────────────────────────────────────────────
 
-// Every one of these is a run of 100×200 modules on adjustable legs — the deck a hall stacks in its
-// store room, not a built platform. So the sizes below are all whole modules, and the height is the
-// one number a studio routinely changes: 60cm is where a band or a chuppah usually ends up, and the
-// same legs go down to 20 and up to 80.
-const STAGE_HEIGHT_MM = 600;
-const STAGE_SPEC = "מורכבת ממודולים 100×200 · רגליים מתכווננות 20–80 סמ";
+// The deck a hall stacks in its store room — a 200×100 module on adjustable legs — and the square
+// half of one that finishes an odd row. Sized stages are not in this list any more: a stage is drawn
+// as an area and built from these, or from any platform the studio adds under "במות"
+// (lib/studio/stage-fill.ts), so it can be any size the event needs rather than one of five. The height is the one number a studio routinely changes: 60cm is where a band or a
+// chuppah usually ends up, and the same legs go down to 20 and up to 80.
+const DECK_HEIGHT_MM = 600;
+const DECK_SPEC = "רגליים מתכווננות 20–80 סמ";
 
-function stage(key: string, name: string, widthMm: number, depthMm: number): StandardItem {
+function deck(key: string, name: string, widthMm: number, depthMm: number): StandardItem {
   return {
     key,
     product: {
       name,
-      category: "stages",
+      category: "stage-decks",
       layer: "floor",
-      dimensions: { widthMm, depthMm, heightMm: STAGE_HEIGHT_MM },
+      dimensions: { widthMm, depthMm, heightMm: DECK_HEIGHT_MM },
       categoryFields: {},
-      spec: STAGE_SPEC,
+      spec: DECK_SPEC,
       styleTags: [],
       visibility: "public",
       appearance: { shape: "rect", content: "none" },
@@ -129,12 +130,132 @@ function stage(key: string, name: string, widthMm: number, depthMm: number): Sta
   };
 }
 
-export const STANDARD_STAGES: StandardItem[] = [
-  stage("stage-200x100", "במה 200×100", 2000, 1000),
-  stage("stage-300x200", "במה 300×200", 3000, 2000),
-  stage("stage-400x300", "במה 400×300", 4000, 3000),
-  stage("stage-600x400", "במה 600×400", 6000, 4000),
-  stage("stage-800x400", "במה 800×400", 8000, 4000),
+export const STANDARD_DECKS: StandardItem[] = [
+  deck("deck-200x100", "פלטת במה 200×100", 2000, 1000),
+  deck("deck-100x100", "פלטת במה 100×100", 1000, 1000),
+];
+
+/** What a stage is finished with — one flight of stairs, and the skirt round its open sides. The
+ *  stage counts both off itself (lib/design-document/stage.ts): how many flights the designer put on
+ *  the plan, and how many metres of side are not against a wall. The skirt is priced by the metre
+ *  because that is how it is hung; the stairs by the flight. */
+export const STANDARD_STAGE_PARTS: StandardItem[] = [
+  {
+    key: "stage-stairs-100",
+    product: {
+      name: "מדרגות במה 100",
+      category: "stage-stairs",
+      layer: "floor",
+      // Three treads of 28cm: the flight a 60cm stage needs (four risers of 15cm, the last one the
+      // stage itself).
+      dimensions: { widthMm: 1000, depthMm: 840, heightMm: DECK_HEIGHT_MM },
+      categoryFields: {},
+      spec: "3 שלבים · מתאים לבמה בגובה 40–80 סמ",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+  {
+    key: "stage-bench",
+    product: {
+      name: "בנקט לבמה",
+      category: "stage-benches",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 450, heightMm: 450 },
+      categoryFields: {},
+      spec: "ספסל נמוך לאורך שפת הבמה · מקום ישיבה ומשטח לעיצוב",
+      priceUnit: "m",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+  {
+    key: "stage-barrier",
+    product: {
+      name: "מחסום במה",
+      category: "stage-barriers",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 60, heightMm: 1000 },
+      categoryFields: {},
+      spec: "מעקה בטיחות לשפת הבמה",
+      priceUnit: "m",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+  {
+    key: "stage-backdrop",
+    product: {
+      name: "קיר רקע לבמה",
+      category: "stage-backdrops",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 120, heightMm: 2400 },
+      categoryFields: {},
+      spec: "מסגרת לבד או לקיר פרחים, על שפת הבמה",
+      priceUnit: "m",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+  {
+    key: "stage-ramp",
+    product: {
+      name: "רמפת נגישות",
+      category: "stage-ramps",
+      layer: "floor",
+      dimensions: { widthMm: 1200, depthMm: 7200, heightMm: DECK_HEIGHT_MM },
+      categoryFields: {},
+      spec: "שיפוע 1:12 · רוחב 120 סמ",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+  {
+    key: "stage-carpet",
+    product: {
+      name: "שטיח במה",
+      category: "stage-surfaces",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 1000, heightMm: 10 },
+      categoryFields: {},
+      spec: "כיסוי לפלטות הבמה",
+      priceUnit: "m2",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+  {
+    key: "stage-skirt",
+    product: {
+      name: "חצאית במה",
+      category: "stage-skirts",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 20, heightMm: DECK_HEIGHT_MM },
+      categoryFields: {},
+      spec: "בד קפלים שחור · נתלה על שפת הבמה",
+      priceUnit: "m",
+      styleTags: [],
+      visibility: "public",
+      appearance: { shape: "rect", content: "none" },
+    },
+  },
+];
+
+/** Base items the app no longer ships. New studios never get them; `npm run catalog:standard --
+ *  --retire` ARCHIVES the copies older studios already have — archived, not deleted, because a
+ *  design drawn with a במה 600×400 still has to resolve it (Product.archived). The keys stay here
+ *  for exactly that reason: they are how the retire finds the rows. Never reuse one. */
+export const RETIRED_STANDARD_KEYS: string[] = [
+  // Empty. The five sized stages (stage-200x100 … stage-800x400) stopped shipping to NEW studios
+  // when the decks above did, but the studios that have them keep them: the stage tool builds from
+  // them (a studio's own 400×300 is a platform it owns), so archiving them would take away the very
+  // pieces a designer asked the tool to use. Their keys must still never be reused.
 ];
 
 // ── ברים ────────────────────────────────────────────────────────────────────
@@ -180,8 +301,15 @@ export const STANDARD_BARS: StandardItem[] = [
   bar("bar-round-150", "בר עגול 150", { diameterMm: 1500 }),
 ];
 
+/** The base items a stage is built and finished with — what the studio installs on its own the
+ *  first time the stage tool finds none of them (installStageBasics, lib/catalog/actions.ts). */
+export const STANDARD_STAGE_KEYS: string[] = [...STANDARD_DECKS, ...STANDARD_STAGE_PARTS].map((i) => i.key);
+/** …and just the parts a stage is FINISHED with — stairs, skirt, banquette, barrier — for a studio
+ *  that builds from its own stages and has never had them (installStageParts). */
+export const STANDARD_STAGE_PART_KEYS: string[] = STANDARD_STAGE_PARTS.map((i) => i.key);
+
 /** Everything the install writes. Concatenate the next department here. */
-export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_STAGES, ...STANDARD_BARS];
+export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_DECKS, ...STANDARD_STAGE_PARTS, ...STANDARD_BARS];
 
 // ponytail: self-check. Run: npm run check:standard
 if (isMain(import.meta.url)) {
@@ -198,6 +326,7 @@ if (isMain(import.meta.url)) {
   const keys = STANDARD_ITEMS.map((i) => i.key);
   check(new Set(keys).size === keys.length, "keys are unique — a duplicate key is a duplicate row");
   check(keys.every((k) => /^[a-z0-9-]+$/.test(k)), "keys are stable slugs");
+  check(!RETIRED_STANDARD_KEYS.some((k) => keys.includes(k)), "a retired key is never shipped again");
 
   for (const item of STANDARD_ITEMS) {
     const p = item.product;
@@ -257,9 +386,9 @@ if (isMain(import.meta.url)) {
     check(counter >= 400 && counter <= 800, `${item.key}: the counter is ${counter}mm — a bar, not a shelf`);
   }
 
-  // Every department's own floor: a stage without a deck height is a drawing, and a bar you can sit
+  // Every department's own floor: a deck without a height is a drawing, and a bar you can sit
   // at is a table. Both numbers are what the 3D pass stands the item up with (R-3).
-  for (const item of STANDARD_STAGES) {
+  for (const item of STANDARD_DECKS) {
     check(item.product.dimensions.heightMm >= 200, `${item.key}: stands off the floor`);
   }
   for (const item of STANDARD_BARS) {

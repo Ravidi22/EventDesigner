@@ -16,12 +16,28 @@ import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, nodeMap, wallPoints } from "@/lib/venues/structure";
 import { stairsGeometry } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
-import { FootprintShape, tableFootprint, OVERHEAD_DASH } from "@/components/footprint-shape";
+import { FootprintShape, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { arrangedStructure } from "@/lib/design-document/features";
-import { resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import {
+  benchInRoom,
+  edgeGaps,
+  edgeItemShape,
+  layStage,
+  stageAreaMm2,
+  stageCorners,
+  railingRuns,
+  skirtMm,
+  stageHeight,
+  stageRect,
+  type EdgeRun,
+  type StagePlacement,
+  type WallDistance,
+} from "@/lib/design-document/stage";
+import { uprightTransform } from "@/lib/design-document/mirror";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
-import { resolveHang, resolveSpan } from "@/lib/studio/anchor";
+import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { overallDimensions, type DimensionLine } from "@/lib/outputs/dimensions";
 import type { Extent } from "@/lib/outputs/scale";
@@ -88,6 +104,12 @@ function tableGroupBoxes(doc: DesignDocumentContent) {
 
 const DRAPE_MM = 220; // a curtain's drawn thickness, matching canvas-stage's own band
 
+/** Where a table or item stands, which way it faces, and whether it is drawn flipped
+ *  (Placement.mirrored) — the same translate · rotate · flip the studio canvas draws with, so a
+ *  corner sofa turned over on screen is turned over on the crew's page too. */
+const placed = (at: { x: number; y: number }, rotation: number, mirrored?: boolean) =>
+  `translate(${at.x} ${at.y})${rotation ? ` rotate(${rotation})` : ""}${mirrored ? " scale(-1 1)" : ""}`;
+
 /** A carpet or drape with no catalog size of its own falls back to a plausible box — the same
  *  fallback the studio canvas uses (canvas-stage.tsx's fallbackSize), so a stretch item with nothing
  *  typed yet still draws something rather than a zero-size shape nobody can see. */
@@ -111,10 +133,13 @@ export function PlacementMap({
   legend: legendRows,
   paper,
   marginMm,
+  railingAboveMm = null,
 }: {
   doc: DesignDocumentContent;
   plan: EventPlan;
   sheet?: PlanSheet;
+  /** The studio's railing rule (settings → במות) — null when it is off. */
+  railingAboveMm?: number | null;
 } & Partial<Omit<SheetFrameProps, "world" | "children" | "sheet">>) {
   // `sheet` and the rest of SheetFrame's own props are optional here, defaulting to the hall plan
   // at page one of one, so the component stays correct and self-contained for any caller that only
@@ -145,7 +170,7 @@ export function PlacementMap({
     ...(structure.features.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
     ...(structure.features.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
     ...(sheet.tables === "ghost" ? [{ label: "שולחן (להתמצאות בלבד)", swatch: "dot-ghost" as const }] : []),
-    ...(sheet.layers.includes("ceiling") || sheet.rigs ? [{ label: "מעל גובה החתך", swatch: "overhead" as const }] : []),
+    ...(sheet.layers.includes("ceiling") ? [{ label: "מעל גובה החתך", swatch: "overhead" as const }] : []),
   ];
   const world: Extent = { widthMm: box.widthMm + pad * 2, heightMm: box.heightMm + pad * 2 };
 
@@ -165,15 +190,20 @@ export function PlacementMap({
 
   // Sorted by what they ARE, same split the studio canvas makes (canvas-stage.tsx): a cover is the
   // table's own surface and draws nothing separate, a drape hangs on a wall, a table-layer item
-  // clusters on its table, a ceiling item hangs from a rod when it has one, and everything else is a
-  // free object on the floor.
+  // clusters on its table, a ceiling item is drawn overhead, and everything else is a free object on
+  // the floor.
   const drapes: Placement[] = [];
   const ceilingItems: Placement[] = [];
   const floorItems: Placement[] = [];
   const chipsByTable = new Map<string, Placement[]>();
   const tableById = new Map(doc.tables.map((t) => [t.id, t]));
+  const perched: Placement[] = [];
   for (const p of shown) {
     const r = resolve(p.variantId);
+    if (p.perch) {
+      perched.push(p); // on a stage's banquette — drawn there, below
+      continue;
+    }
     if (r?.anchor === "table") continue; // the table's own cloth — drawn as the table's surface
     if (r?.anchor === "wall") {
       drapes.push(p);
@@ -187,6 +217,32 @@ export function PlacementMap({
   }
 
   const tableGroups = sheet.chairs ? tableGroupBoxes(doc) : [];
+
+  // STAGES. On every sheet they stand on, a stage is its outline, its raised levels (hatched, the
+  // same ink the venue's own staging wears) and its flights of stairs. On the STAGE sheet it is also
+  // the build: every deck, numbered front to back, and where a railing is needed — the drawing a
+  // crew lays the decks from.
+  const wallDistance: WallDistance = (pt) => nearestWall(plan.structure, pt)?.distanceMm ?? Infinity;
+  const stages = floorItems.filter((p): p is StagePlacement => !!p.stage);
+  // Design items on a banquette, spread along it as the studio draws them.
+  const perchedSpots = (() => {
+    const out: { p: Placement; at: { x: number; y: number } }[] = [];
+    const groups = new Map<string, Placement[]>();
+    for (const p of perched) groups.set(`${p.perch!.stageId}|${p.perch!.itemId}`, [...(groups.get(`${p.perch!.stageId}|${p.perch!.itemId}`) ?? []), p]);
+    for (const [k, list] of groups) {
+      const [stageId, itemId] = k.split("|");
+      const st = doc.placements.find((x) => x.id === stageId);
+      const bench = st?.stage ? benchInRoom(st as StagePlacement, itemId, deckOf) : null;
+      if (!bench) continue;
+      const u = { x: Math.cos((bench.angle * Math.PI) / 180), y: Math.sin((bench.angle * Math.PI) / 180) };
+      list.forEach((p, i) => {
+        const f = (i + 0.5) / list.length - 0.5;
+        out.push({ p, at: { x: bench.centre.x + u.x * f * bench.lengthMm, y: bench.centre.y + u.y * f * bench.lengthMm } });
+      });
+    }
+    return out;
+  })();
+  const buildSheet = sheet.id === "stage";
 
   return (
     <div className="space-y-8">
@@ -317,13 +373,21 @@ export function PlacementMap({
             numberedUnits(doc).map((unit) => {
               const members = doc.tables.filter((x) => unit.tableIds.includes(x.id));
               if (members.length === 0) return null;
-              const cx = members.reduce((n, x) => n + x.position.x, 0) / members.length;
-              const cy = members.reduce((n, x) => n + x.position.y, 0) / members.length;
+              // A lone table is numbered where the studio numbers it — the shape's own label point
+              // (tableLabelPoint): the middle of the band on an arc, not the box centre out in the
+              // air the ring curves round. A block keeps the middle of the block.
+              const at =
+                members.length === 1
+                  ? tableLabelPoint(members[0])
+                  : {
+                      x: members.reduce((n, x) => n + x.position.x, 0) / members.length,
+                      y: members.reduce((n, x) => n + x.position.y, 0) / members.length,
+                    };
               return (
                 <text
                   key={unit.id}
-                  x={cx}
-                  y={cy}
+                  x={at.x}
+                  y={at.y}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fontSize={620}
@@ -347,9 +411,9 @@ export function PlacementMap({
                 .map((t) => (
                   <g
                     key={`seat-${t.id}`}
-                    transform={`translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}`}
+                    transform={placed(t.position, t.rotation, t.mirrored)}
                   >
-                    {seatsAround(tableFootprint(t), t.seats!).map((s, i) => (
+                    {seatsAround(tableFootprint(t), t.seats!, undefined, tableBlockedSides(t)).map((s, i) => (
                       <ChairGlyph key={i} seat={s} />
                     ))}
                   </g>
@@ -376,8 +440,22 @@ export function PlacementMap({
           })}
 
           {/* Free objects standing on the floor — a stage, a bar, a loose chair, a rug. */}
-          {floorItems.map((p) => (
-            <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} />
+          {floorItems.map((p) =>
+            p.stage ? (
+              <StageGlyph
+                key={p.id}
+                p={p as StagePlacement}
+                build={buildSheet}
+                railing={buildSheet ? railingRuns(p as StagePlacement, deckOf, railingAboveMm, wallDistance) : []}
+                label={stages.length > 1 ? `במה ${stages.indexOf(p as StagePlacement) + 1}` : undefined}
+              />
+            ) : (
+              <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} />
+            ),
+          )}
+
+          {perchedSpots.map(({ p, at }) => (
+            <PlacementGlyph key={p.id} placement={p} x={at.x} y={at.y} />
           ))}
 
           {/* Drapes — a band along the wall they hang on. */}
@@ -406,61 +484,11 @@ export function PlacementMap({
             );
           })}
 
-          {/* Rods — the property's own rigging, never a per-event arrangement (nothing here can
-              move one). Dashed at the overhead weight, exactly like the ceiling items hanging off
-              them, and labelled with the two numbers a rigger cannot see on the plan otherwise:
-              how high it is, and what it is rated to carry. A rod with no stated load says nothing
-              rather than implying an unlimited one. */}
-          {sheet.rigs &&
-            (plan.structure.rigs ?? []).map((r) => (
-              <g key={r.id}>
-                <line
-                  x1={r.a.x}
-                  y1={r.a.y}
-                  x2={r.b.x}
-                  y2={r.b.y}
-                  stroke={INK}
-                  strokeWidth={LINE_WEIGHTS.overhead}
-                  strokeDasharray={OVERHEAD_DASH}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <text x={(r.a.x + r.b.x) / 2} y={(r.a.y + r.b.y) / 2 - 240} textAnchor="middle" fontSize={420} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
-                  {r.label} · {(r.heightMm / 1000).toFixed(2)}מ׳{r.loadKg ? ` · עד ${r.loadKg} ק״ג` : ""}
-                </text>
-              </g>
-            ))}
-
           {/* Ceiling items — overhead, so drawn (never filled) and dashed by FootprintShape's own
-              `overhead` prop, the one convention every surface that draws this plan shares. A hung
-              item draws where its rod puts it; a dangling rigId falls back to its last free point. */}
-          {ceilingItems.map((p) => {
-            const at = p.hang ? resolveHang(plan.structure, p.hang) : null;
-            const x = at?.x ?? p.position.x;
-            const y = at?.y ?? p.position.y;
-            return (
-              <g key={p.id}>
-                <PlacementGlyph placement={p} x={x} y={y} overhead />
-                {/* THE DROP, figured on the drawing. It is the number the rigger is up a ladder
-                    holding: how far below the rod this thing hangs. It was recorded by the studio
-                    inspector and read by nothing — a plan that knows it and does not say it is
-                    worse than one that never asked. Only when it is set; flush to the rod is the
-                    default and needs no note. */}
-                {p.hang?.dropMm ? (
-                  <text
-                    x={x}
-                    y={y}
-                    dy={-260}
-                    textAnchor="middle"
-                    fontSize={190}
-                    fill={MUTED}
-                    style={{ direction: "ltr" }}
-                  >
-                    ↓{(p.hang.dropMm / 1000).toFixed(2)}
-                  </text>
-                ) : null}
-              </g>
-            );
-          })}
+              `overhead` prop, the one convention every surface that draws this plan shares. */}
+          {ceilingItems.map((p) => (
+            <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} overhead />
+          ))}
 
           {/* Overall dimensions — one width and one depth per zone this event occupies, figured the
               way a plan states them: a line with witness lines at both ends and the metres reading
@@ -470,6 +498,10 @@ export function PlacementMap({
             .flatMap((r) => overallDimensions(r.boundary).map((d, i) => <DimensionGlyph key={`${r.zone.id}-${i}`} d={d} />))}
         </g>
       </SheetFrame>
+
+      {buildSheet && stages.length > 0 && (
+        <StageSchedule stages={stages} railingAboveMm={railingAboveMm} wallDistance={wallDistance} doc={doc} />
+      )}
 
       {/* The table SCHEDULE (שולחן ← ערכת עיצוב) — a different document from the frame's symbol
           key, and both belong on a drawing set. Meaningless on a sheet that draws no tables.
@@ -505,8 +537,260 @@ export function PlacementMap({
   );
 }
 
+/** Adjustable legs under one deck — the ordinary staging deck stands on four. */
+const LEGS_PER_DECK = 4;
+
+/** A stage on the drawing, in its own frame (the same one the studio lays its decks in). */
+function StageGlyph({ p, build, railing, label }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string }) {
+  const stage = p.stage;
+  const laid = build ? layStage(stage, deckOf) : null;
+  const upright = uprightTransform(p.rotation, p.mirrored);
+  const a = stage.outline[stage.front];
+  const b = stage.outline[(stage.front + 1) % stage.outline.length];
+  // "קהל" just outside the middle of the front, so the page says which way the stage faces.
+  const mid = a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
+  const len = a && b ? Math.hypot(b.x - a.x, b.y - a.y) || 1 : 1;
+  const out = a && b ? { x: (b.y - a.y) / len, y: -(b.x - a.x) / len } : { x: 0, y: -1 };
+  // The outward side of the front: away from the stage's middle (its frame's origin).
+  const flip = mid && mid.x * out.x + mid.y * out.y < 0 ? -1 : 1;
+  const audience = mid ? { x: mid.x + out.x * flip * 700, y: mid.y + out.y * flip * 700 } : null;
+  const text = (x: number, y: number, body: string, size: number, weight = 400, fill = INK) => (
+    <g transform={`translate(${x} ${y})`}>
+      <text transform={upright} textAnchor="middle" dominantBaseline="central" fontFamily="Assistant, sans-serif" fontSize={size} fontWeight={weight} fill={fill}>
+        {body}
+      </text>
+    </g>
+  );
+  return (
+    <g transform={placed(p.position, p.rotation, p.mirrored)}>
+      <polygon
+        points={stage.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+        fill="#ffffff"
+        stroke={INK}
+        strokeWidth={LINE_WEIGHTS.furniture}
+        vectorEffect="non-scaling-stroke"
+      />
+      {(stage.levels ?? []).map((l) => (
+        <polygon
+          key={l.id}
+          points={l.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="url(#hatch-diagonal)"
+          fillOpacity={0.35}
+          stroke={INK}
+          strokeWidth={LINE_WEIGHTS.furniture}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+      {laid?.decks.map((d, i) => (
+        <g key={i}>
+          <rect
+            x={-d.widthMm / 2}
+            y={-d.depthMm / 2}
+            width={d.widthMm}
+            height={d.depthMm}
+            transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+            fill="none"
+            stroke={INK_SOFT}
+            strokeWidth={LINE_WEIGHTS.annotation}
+            vectorEffect="non-scaling-stroke"
+          />
+          {text(d.centre.x, d.centre.y, String(i + 1), Math.min(320, Math.min(d.widthMm, d.depthMm) * 0.4), 600)}
+        </g>
+      ))}
+      {(stage.stairs ?? []).map((st) => {
+        const shape = edgeItemShape(stage, st, deckOf);
+        if (!shape) return null;
+        // A barrier is solid ink along the inside of its edge; a banquette a plain strip with a
+        // centre line (a seat, in plan); a flight with a line across each tread.
+        if (shape.kind === "barrier" || shape.kind === "backdrop") {
+          // On the edge, in solid ink — a backdrop twice a barrier's weight, and hatched.
+          return (
+            <polygon
+              key={st.id}
+              points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")}
+              fill={shape.kind === "backdrop" ? "url(#hatch-diagonal)" : INK}
+              stroke={INK}
+              strokeWidth={LINE_WEIGHTS.furniture * (shape.kind === "backdrop" ? 2 : 1)}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        }
+        const [a0, b0, c0, d0] = shape.polygon;
+        return (
+          <g key={st.id}>
+            {shape.chairs.map((seat, k) => (
+              <ChairGlyph key={`chair-${k}`} seat={seat} />
+            ))}
+            <polygon
+              points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")}
+              fill="#ffffff"
+              stroke={INK}
+              strokeWidth={LINE_WEIGHTS.furniture}
+              vectorEffect="non-scaling-stroke"
+            />
+            {shape.treads.map(([u, v], k) => (
+              <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+            ))}
+            {shape.kind === "bench" && (
+              <line
+                x1={(a0.x + d0.x) / 2}
+                y1={(a0.y + d0.y) / 2}
+                x2={(b0.x + c0.x) / 2}
+                y2={(b0.y + c0.y) / 2}
+                stroke={INK_SOFT}
+                strokeWidth={LINE_WEIGHTS.annotation}
+                strokeDasharray="2 3"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+          </g>
+        );
+      })}
+      {/* Corner pieces where two runs meet outside a corner. */}
+      {stageCorners(stage, deckOf).map((c, i) => (
+        <g key={`corner-${i}`}>
+          <polygon points={c.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+          {c.treads.map(([u, v], k) => (
+            <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+          ))}
+        </g>
+      ))}
+      {railing.map((r, i) => (
+        <line
+          key={`rail-${i}`}
+          x1={r.a.x}
+          y1={r.a.y}
+          x2={r.b.x}
+          y2={r.b.y}
+          stroke={INK}
+          strokeWidth={LINE_WEIGHTS.furniture * 2.5}
+          strokeDasharray="1 3"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+      {build && audience && text(audience.x, audience.y, "קהל", 300, 600, INK_SOFT)}
+      {label && !build && text(0, 0, label, 360, 600, INK_SOFT)}
+    </g>
+  );
+}
+
+/** The build of every stage on the sheet, as a table a crew can tick off: the size, the height of
+ *  the base and of each level, the decks per level, the flights (with their steps), the skirt, and
+ *  the railing when the studio's rule asks for one. Counts only — this is a printing surface, and a
+ *  price never goes near it (npm run check:costs). */
+function StageSchedule({
+  stages,
+  railingAboveMm,
+  wallDistance,
+  doc,
+}: {
+  stages: StagePlacement[];
+  railingAboveMm: number | null;
+  wallDistance: WallDistance;
+  doc: DesignDocumentContent;
+}) {
+  const m = (mm: number) => (Math.round(mm / 10) / 100).toString();
+  const cm = (mm: number) => Math.round(mm / 10);
+  return (
+    <section className="break-before-page p-[16mm] print:p-[16mm]">
+      <h3 className="mb-2 border-b border-ink pb-1 text-base font-semibold text-ink">פירוט במות</h3>
+      {stages.map((p, i) => {
+        const stage = p.stage;
+        const laid = layStage(stage, deckOf);
+        const size = stageRect(stage);
+        const baseH = stageHeight(stage, deckOf);
+        const parts = [
+          { id: undefined as string | undefined, label: "בסיס", heightMm: baseH },
+          ...(stage.levels ?? []).map((l, k) => ({ id: l.id as string | undefined, label: `מפלס ${k + 1}`, heightMm: l.heightMm })),
+        ];
+        const rows = parts.map((part) => {
+          const decks = laid.decks.filter((d) => d.level === part.id);
+          const byType = new Map<string, number>();
+          for (const d of decks) byType.set(d.typeId, (byType.get(d.typeId) ?? 0) + 1);
+          const first = laid.decks.indexOf(decks[0]) + 1;
+          return { ...part, byType, from: first, to: first + decks.length - 1, count: decks.length };
+        });
+        const shapes = (stage.stairs ?? []).map((st) => edgeItemShape(stage, st, deckOf)).filter((x) => !!x);
+        const flights = shapes.filter((x) => x.kind === "stairs");
+        const benchMm = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.widthMm, 0);
+        const seats = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.seats, 0);
+        const barrierMm = shapes.filter((x) => x.kind === "barrier").reduce((t, x) => t + x.widthMm, 0);
+        const backdropMm = shapes.filter((x) => x.kind === "backdrop").reduce((t, x) => t + x.widthMm, 0);
+        const ramps = shapes.filter((x) => x.kind === "ramp");
+        const corners = stageCorners(stage, deckOf);
+        const surface = stage.surfaceVariant ? productName(stage.surfaceVariant) : null;
+        const bare = edgeGaps(p, deckOf, wallDistance).reduce((t, g) => t + g.lengthMm, 0);
+        const dressing = doc.placements.filter((x) => x.perch?.stageId === p.id);
+        const skirt = skirtMm(p, deckOf, wallDistance);
+        const rail = railingRuns(p, deckOf, railingAboveMm, wallDistance).reduce((s, r) => s + r.lengthMm, 0);
+        return (
+          <div key={p.id} className="break-inside-avoid py-3">
+            <p className="text-sm font-semibold text-ink">
+              {stages.length > 1 ? `במה ${i + 1}` : "במה"}
+              {size && <span className="nums ms-2 font-normal text-ink-soft">{`${m(size.widthMm)}×${m(size.depthMm)} מ׳`}</span>}
+              <span className="nums ms-2 font-normal text-ink-soft">{laid.decks.length} פלטות</span>
+            </p>
+            <table className="mt-1.5 w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-start text-xs text-muted">
+                  <th className="py-1 text-start font-medium">חלק</th>
+                  <th className="py-1 text-start font-medium">גובה</th>
+                  <th className="py-1 text-start font-medium">פלטות</th>
+                  <th className="py-1 text-start font-medium">מספרים בשרטוט</th>
+                  <th className="py-1 text-start font-medium">רגליים</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {rows.map((r) => (
+                  <tr key={r.label}>
+                    <td className="py-1.5 text-ink">{r.label}</td>
+                    <td className="nums py-1.5 text-ink">{cm(r.heightMm)} ס״מ</td>
+                    <td className="py-1.5 text-ink">
+                      {[...r.byType.entries()].map(([id, n]) => `${productName(id) ?? "פלטה"} ×${n}`).join(" · ") || "—"}
+                    </td>
+                    <td className="nums py-1.5 text-ink-soft">{r.count > 0 ? (r.count === 1 ? r.from : `${r.from}–${r.to}`) : "—"}</td>
+                    {/* Four adjustable legs to a deck, set to the part's height — what the crew
+                        counts out and dials in before a deck goes down. */}
+                    <td className="nums py-1.5 text-ink-soft">{r.count > 0 ? `${r.count * LEGS_PER_DECK} × ${cm(r.heightMm)} ס״מ` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-1.5 text-sm text-ink-soft">
+              {flights.length > 0
+                ? `מדרגות: ${flights.length} ${flights.length === 1 ? "גרם" : "גרמים"} — ${flights.map((f) => `${m(f.widthMm)} מ׳, ${f.risers} רומים של ${cm(f.riserMm)} ס״מ`).join("; ")}`
+                : "מדרגות: אין"}
+              {benchMm > 0 ? ` · בנקט: ${m(benchMm)} מ׳ (${seats} כיסאות)` : ""}
+              {barrierMm > 0 ? ` · מחסום: ${m(barrierMm)} מ׳` : ""}
+              {backdropMm > 0 ? ` · קיר רקע: ${m(backdropMm)} מ׳` : ""}
+              {ramps.length > 0 ? ` · רמפה: ${ramps.map((r) => `${m(r.depthMm)} מ׳ אורך`).join(", ")}` : ""}
+              {corners.length > 0 ? ` · פינות: ${corners.length}` : ""}
+              {surface ? ` · משטח: ${surface} (${m(stageAreaMm2(stage) / 1000)} מ״ר)` : ""}
+              {bare > 0 ? ` · ⚠ ${m(bare)} מ׳ שפה פתוחה` : ""}
+              {" · "}
+              {`חצאית: ${m(skirt)} מ׳`}
+              {railingAboveMm ? ` · מעקה: ${rail > 0 ? `${m(rail)} מ׳ חסרים (קו מנוקד בשרטוט)` : "תקין"}` : ""}
+            </p>
+            {dressing.length > 0 && (
+              <p className="mt-1 text-sm text-ink-soft">
+                {`על הבנקט: ${dressing.map((x) => `${productName(x.variantId) ?? "פריט"}${x.quantity > 1 ? ` ×${x.quantity}` : ""}`).join(" · ")}`}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <p className="mt-2 text-xs text-muted">הפלטות ממוספרות מהחזית לאחור, בשורות. חזית הבמה היא הצד שמסומן ״קהל״.</p>
+    </section>
+  );
+}
+
 function TableGlyph({ t }: { t: DesignTable }) {
-  const resolved = resolveStyle(t.style, "monochrome", { fill: "#ffffff", stroke: INK, strokeWidth: LINE_WEIGHTS.furniture });
+  // The catalog row's look under the table's own — the studio's merge (productStyle). Colour never
+  // survives to print, but a dash or a weight chosen for the row has to: on paper they are what
+  // carries the meaning the colour did on screen.
+  const product = t.variantId ? resolve(t.variantId)?.product : undefined;
+  const resolved = resolveStyle(productStyle(product, t.style), "monochrome", { fill: "#ffffff", stroke: INK, strokeWidth: LINE_WEIGHTS.furniture });
   const dash = resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined;
   return (
     <g>
@@ -517,7 +801,7 @@ function TableGlyph({ t }: { t: DesignTable }) {
           could set DesignTable.rotation until there was a handle for it — and a printed map that
           drew every table square while the studio showed them angled would send the crew to lay a
           room that is not the room on screen. */}
-      <g transform={`translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}`}>
+      <g transform={placed(t.position, t.rotation, t.mirrored)}>
         <FootprintShape
           footprint={tableFootprint(t)}
           fill={resolved.fill}
@@ -535,7 +819,7 @@ function TableGlyph({ t }: { t: DesignTable }) {
  *  rigger or a stage crew which one is under them. */
 function GhostTable({ t }: { t: DesignTable }) {
   return (
-    <g transform={`translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}`}>
+    <g transform={placed(t.position, t.rotation, t.mirrored)}>
       <FootprintShape
         footprint={tableFootprint(t)}
         fill="url(#dot-ghost)"
@@ -578,18 +862,20 @@ function PlacementGlyph({ placement, x, y, overhead }: { placement: Placement; x
   const footprint: Footprint =
     r?.sizing === "stretch"
       ? { kind: "rect", ...(placement.sizeMm ?? fallbackSize(r)) }
-      : r
-        ? resolveFootprint(r.product)
-        : { kind: "rect", widthMm: 600, depthMm: 600 };
+      : placementFootprint(placement); // at the size it was stretched to, when its row allows that
   const scale = placement.scale || 1;
+  // The row's own weight and dash, collapsed to ink-on-paper (TableGlyph's reason). A stage keeps the
+  // sheet's furniture weight whatever deck it was built from, as it does on screen.
+  const style = resolveStyle(placement.stage ? undefined : productStyle(r?.product), "monochrome", { fill: "#ffffff", stroke: INK, strokeWidth: LINE_WEIGHTS.furniture });
   return (
-    <g transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}>
+    <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
-        fill="#ffffff"
-        stroke={INK}
-        strokeWidth={LINE_WEIGHTS.furniture}
+        fill={style.fill}
+        stroke={style.stroke}
+        strokeWidth={style.strokeWidth}
+        strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
     </g>

@@ -50,6 +50,7 @@ export function toProduct(row: ProductRow, variantRows: VariantRow[]): Product {
     },
     categoryFields: row.categoryFields,
     spec: orUndefined(row.spec),
+    flowers: orUndefined(row.flowers),
     unitPrice: toNumber(row.unitPrice),
     // The column is NOT NULL DEFAULT 'unit', but the type says "absent = unit, which is every
     // ordinary countable product" — so they are the same value spelled two ways. Collapsing the
@@ -58,6 +59,8 @@ export function toProduct(row: ProductRow, variantRows: VariantRow[]): Product {
     priceUnit: row.priceUnit === "unit" ? undefined : (row.priceUnit as PriceUnit),
     styleTags: row.styleTags,
     appearance: orUndefined(row.appearance),
+    resize: orUndefined(row.resize),
+    clearanceMm: orUndefined(row.clearanceMm),
     // Same collapse as priceUnit: the column defaults to 'private', the type says absent = private,
     // so they are one value spelled twice and the round-trip stays lossless.
     visibility: row.visibility === "private" ? undefined : (row.visibility as Visibility),
@@ -108,10 +111,14 @@ export function toProductRow(p: Product, organizationId: string): ProductInsert 
     heightMm: p.dimensions.heightMm,
     categoryFields: p.categoryFields,
     spec: p.spec ?? null,
+    // Absent and empty are one answer — "no spec" — and the column holds it as NULL, not as [].
+    flowers: p.flowers?.length ? p.flowers : null,
     unitPrice: toNumeric(p.unitPrice),
     priceUnit: p.priceUnit ?? "unit",
     styleTags: p.styleTags,
     appearance: p.appearance ?? null,
+    resize: p.resize ?? null,
+    clearanceMm: p.clearanceMm ?? null,
     visibility: p.visibility ?? "private",
     archived: p.archived ?? false,
     supplierId: p.supplierId ?? null,

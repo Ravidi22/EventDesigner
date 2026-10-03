@@ -308,6 +308,21 @@ body {
   outline-offset: 2px;
 }
 
+/* A control made of several inputs — StyleFields' colour row (swatch, hex, opacity) — is focused as
+   ONE box: the ring the input inside would have drawn moves to the wrapper, with the accent border a
+   single TextField takes, and the input itself draws none. These live here, unlayered, beside the
+   rule they carve out of, because it is the only place they can work: that rule is unlayered too,
+   and Tailwind's `focus-visible:outline-none` sits in @layer utilities, which an unlayered
+   declaration beats whatever its specificity — so that utility is a no-op everywhere in this app. */
+.control-group:has(:focus-visible) {
+  border-color: var(--color-accent);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.control-group :focus-visible {
+  outline: none;
+}
+
 /* --- Scrollbars ------------------------------------------------------------
    The one piece of chrome the browser draws for us, and left alone it is a flat grey
    Windows bar sitting on a lavender plane — the "generic SaaS" tell PRODUCT.md names as an

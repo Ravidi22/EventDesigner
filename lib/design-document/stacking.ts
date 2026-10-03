@@ -120,6 +120,64 @@ export function isStackable(stack: StackEntry[], ref: StackRef): boolean {
   return stack.some((e) => e.ref.kind === ref.kind && e.ref.id === ref.id);
 }
 
+/** A thing's box on the floor — centred, axis-aligned, the extent the canvas measures everything with. */
+export interface StackBox {
+  x: number;
+  y: number;
+  widthMm: number;
+  depthMm: number;
+}
+
+/** How much smaller a thing has to be, by area, to count as STANDING ON the other rather than merely
+ *  overlapping it. Two tables of a size pushed into each other are neither on the other. */
+const SMALLER_BY = 0.8;
+
+/**
+ * What to write after things were MOVED, so that the smaller thing stands on the bigger one.
+ *
+ * Two facts a designer never wants to set by hand: a table carried onto a stage is ON the stage, and
+ * a stage dragged over a row of tables has the tables on it. Yet by the default bands above an item
+ * draws over a table, so the table vanished under the stage either way, and the fix was a trip to
+ * the stack menu per table. So: for every pair of floor things with a just-moved thing in it, where
+ * one's CENTRE lies inside the other's box and it is clearly the smaller of the two, the smaller is
+ * put just above the bigger. Equal sizes are left alone, and so is anything already in front.
+ *
+ * Only pairs with a moved thing in them: the rest of the plan is as the designer left it, and a
+ * rule that re-sorted the whole room on every drop is one they would fight. A rug is bigger than
+ * what stands on it and already underneath by its band, so this never touches one.
+ *
+ * Returns [] when nothing needs to change, like restackTo — so a drop that landed on open floor
+ * costs no history entry.
+ */
+export function autoStack(stack: StackEntry[], boxes: Map<string, StackBox>, moved: StackRef[]): StackAssignment[] {
+  const key = (r: StackRef) => `${r.kind}:${r.id}`;
+  const movedKeys = new Set(moved.map(key));
+  const index = new Map(stack.map((e, i) => [key(e.ref), i]));
+  const area = (b: StackBox) => b.widthMm * b.depthMm;
+  const centreIn = (s: StackBox, b: StackBox) => Math.abs(s.x - b.x) <= b.widthMm / 2 && Math.abs(s.y - b.y) <= b.depthMm / 2;
+  // The smaller thing → the order it must rise to: just above the biggest thing it stands on.
+  const rise = new Map<string, number>();
+  const consider = (small: StackEntry, big: StackEntry) => {
+    const sb = boxes.get(key(small.ref));
+    const bb = boxes.get(key(big.ref));
+    if (!sb || !bb) return;
+    if (area(sb) > area(bb) * SMALLER_BY) return;
+    if (!centreIn(sb, bb)) return;
+    if (index.get(key(small.ref))! > index.get(key(big.ref))!) return; // already in front of it
+    const k = key(small.ref);
+    rise.set(k, Math.max(rise.get(k) ?? -Infinity, big.order + 1));
+  };
+  for (const m of stack) {
+    if (!movedKeys.has(key(m.ref))) continue;
+    for (const o of stack) {
+      if (o === m) continue;
+      consider(m, o);
+      consider(o, m);
+    }
+  }
+  return stack.filter((e) => rise.has(key(e.ref))).map((e) => ({ ...e.ref, order: rise.get(key(e.ref))! }));
+}
+
 // ponytail: self-check. Run: npm run check:stacking
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -242,6 +300,32 @@ if (isMain(import.meta.url)) {
     const s = floorStack(d, classify);
     assert(s[0].ref.id === "rug", "after fifty restacks an untouched rug is still on the floor");
     assert(s[s.length - 1].ref.id === "t2" || s[s.length - 1].ref.id === "t1", "…and the last table pressed is in front");
+  }
+
+  // Moving things settles what stands on what: a table carried onto a stage is drawn ON it, and a
+  // stage dragged over tables leaves the tables on top — without a trip to the menu per table.
+  {
+    const d: DesignDocumentContent = { ...doc, placements: [...doc.placements, place("stage")] };
+    const k2: Record<string, StackKind | undefined> = { ...kinds, stage: "item" };
+    const s = floorStack(d, (p) => k2[p.id]);
+    const boxes = new Map<string, StackBox>([
+      ["table:t1", { x: 0, y: 0, widthMm: 1800, depthMm: 1800 }],
+      ["table:t2", { x: 9000, y: 0, widthMm: 1800, depthMm: 1800 }],
+      ["placement:rug", { x: 0, y: 0, widthMm: 8000, depthMm: 8000 }],
+      ["placement:lamp", { x: 500, y: 500, widthMm: 400, depthMm: 400 }],
+      ["placement:stage", { x: 0, y: 0, widthMm: 6000, depthMm: 4000 }],
+    ]);
+    const onto = autoStack(s, boxes, [{ kind: "table", id: "t1" }]);
+    assert(onto.length === 1 && onto[0].id === "t1" && onto[0].order > DEFAULT_ORDER.item, "a table moved onto a stage is put above it");
+    const under = autoStack(s, boxes, [{ kind: "placement", id: "stage" }]);
+    assert(under.some((x) => x.id === "t1"), "…and a stage moved over a table lifts the table");
+    assert(!under.some((x) => x.id === "t2"), "…but not a table it does not cover");
+    assert(autoStack(s, boxes, [{ kind: "placement", id: "rug" }]).length === 0, "a rug moved under a table changes nothing — the table is already on it");
+    const lamp = autoStack(s, boxes, [{ kind: "placement", id: "lamp" }]);
+    assert(lamp.length === 1 && lamp[0].id === "lamp", "a lamp placed before the stage was, moved onto it, comes up above it");
+    const lifted = floorStack({ ...d, placements: d.placements.map((p) => (p.id === "lamp" ? { ...p, order: lamp[0].order } : p)) }, (p) => k2[p.id]);
+    assert(autoStack(lifted, boxes, [{ kind: "placement", id: "lamp" }]).length === 0, "…and moved again, it is already where it should be");
+    assert(autoStack(s, boxes, [{ kind: "table", id: "t2" }]).length === 0, "a table moved onto open floor changes nothing");
   }
 
   console.log("stacking self-check passed");

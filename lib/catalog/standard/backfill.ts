@@ -3,6 +3,7 @@
 //   npm run catalog:standard                 → every organisation in the database
 //   npm run catalog:standard -- <org-uuid>   → just that one
 //   npm run catalog:standard -- --redraw     → also re-apply how the base items are DRAWN
+//   npm run catalog:standard -- --retire     → also ARCHIVE the base items the app stopped shipping
 //
 // New studios get it at sign-up (lib/auth/actions.ts); this is for the ones already here, and for
 // the day a department is added to the list — re-running it adds the new items to everybody and
@@ -13,6 +14,10 @@
 // item is drawn reaches a catalog that already has it. It writes no other column, and a studio that
 // has reshaped its own copy in the drawer loses that reshaping (see redrawStandardCatalog).
 //
+// --retire is the other: it sets `archived` on the studio's copies of RETIRED_STANDARD_KEYS (the five
+// finished stage sizes, replaced by decks). Archived, not deleted — designs drawn with them still
+// resolve — and nothing but that one column is written (see retireStandardCatalog).
+//
 // It writes through the install module rather than the catalog's server actions, for the same
 // reason the seed does: those carry an authorization check for a request that, out here, does not
 // exist.
@@ -22,12 +27,13 @@ config();
 
 import { db } from "@/lib/db";
 import { organizations } from "@/lib/db/schema";
-import { installStandardCatalog, redrawStandardCatalog } from "./install";
+import { installStandardCatalog, redrawStandardCatalog, retireStandardCatalog } from "./install";
 import { STANDARD_ITEMS } from "./items";
 
 async function main() {
   const args = process.argv.slice(2);
   const redraw = args.includes("--redraw");
+  const retire = args.includes("--retire");
   const only = args.find((a) => !a.startsWith("--"));
 
   const all = await db().select({ id: organizations.id, name: organizations.name }).from(organizations);
@@ -45,9 +51,11 @@ async function main() {
   for (const org of targets) {
     const added = await installStandardCatalog(org.id);
     const redrawn = redraw ? await redrawStandardCatalog(org.id) : 0;
+    const retired = retire ? await retireStandardCatalog(org.id) : 0;
     const drawing = redraw ? `, redrew ${redrawn}` : "";
+    const retiring = retire ? `, archived ${retired} retired` : "";
     console.log(
-      `${org.name} — added ${added} of ${STANDARD_ITEMS.length} (the rest were already there)${drawing}`,
+      `${org.name} — added ${added} of ${STANDARD_ITEMS.length} (the rest were already there)${drawing}${retiring}`,
     );
   }
   process.exit(0);

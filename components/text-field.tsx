@@ -21,6 +21,7 @@ export function TextField({
   multiline = false,
   rows = 3,
   "aria-label": ariaLabel,
+  list,
 }: {
   label?: string;
   value: string;
@@ -52,6 +53,9 @@ export function TextField({
   multiline?: boolean;
   rows?: number;
   "aria-label"?: string;
+  /** The id of a <datalist> the caller renders — suggestions the field offers without closing the
+   *  answer to them (a flower name, a tag). Single-line only; a textarea has no list. */
+  list?: string;
 }) {
   const inputClass = `${controlClassName} w-full px-2.5 placeholder:text-faint ${
     error ? "border-alert hover:border-alert" : ""
@@ -92,6 +96,7 @@ export function TextField({
           readOnly={readOnly}
           aria-readonly={readOnly}
           aria-label={ariaLabel}
+          list={list}
           className={inputClass}
         />
       )}

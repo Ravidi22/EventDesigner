@@ -11,7 +11,7 @@
 // rather than a re-trace of walls that are already on screen.
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
-import type { MapShape, Product } from "@/lib/catalog/types";
+import type { ArcSpec, MapShape, Product, RingSpec } from "@/lib/catalog/types";
 import { footprintBounds, resolveFootprint, shapeFootprint, type Footprint } from "@/lib/studio/footprint";
 import {
   absoluteControlPoints,
@@ -85,6 +85,10 @@ export interface StructureFeature {
    *  numbers are what the resize handles drag. */
   outline?: Point[];
   edgeCurves?: (EdgeCurve | null)[];
+  /** iff `shape === "arc"`: how much of its circle, and how wide the band (widthMm is the circle). */
+  arc?: ArcSpec;
+  /** iff `shape === "oval-ring"`: the band and the opening, which the two measurements do not say. */
+  ring?: RingSpec;
   rotationDeg: number;
   /** Per-element look (fill/stroke/dash). Absent = the renderer's own default, so features saved
    *  before styling existed draw exactly as they always did. See lib/element-style.ts. */
@@ -103,33 +107,11 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   other: "אחר",
 };
 
-/** A rod or truss built into the hall's ceiling — the thing a chandelier or a ceiling installation
- *  is physically hung from. The PROPERTY's, like a wall: measured once at /halls, and every event
- *  held in the room plans around the same rods.
- *
- *  Two absolute points rather than a node graph like the walls. Rods cross the room and share
- *  nothing with the walls, so there is no shared endpoint to keep in step and a graph would buy
- *  nothing but a second editor. `a === b` is a single eyebolt, drawn as a cross rather than a line —
- *  one geometry for both, so nothing downstream has to branch on which kind of fixing it is.
- *
- *  `loadKg` is RECORDED AND PRINTED, never validated against: summing what hangs off a rod needs a
- *  weight per product, and the catalog has none. */
-export interface CeilingRig {
-  id: string;
-  label: string;
-  a: Point;
-  b: Point;
-  heightMm: number; // above the floor
-  loadKg?: number;
-}
-
 export interface VenueStructure {
   nodes: StructureNode[];
   walls: Wall[];
   entrances: StructureEntrance[];
   features: StructureFeature[];
-  /** Absent on every venue drawn before rods existed — every reader defaults it. */
-  rigs?: CeilingRig[];
 }
 
 export function emptyStructure(): VenueStructure {
@@ -386,33 +368,6 @@ export function removeFeature(s: VenueStructure, id: string): VenueStructure {
   return { ...s, features: s.features.filter((f) => f.id !== id) };
 }
 
-// --- ceiling rods -------------------------------------------------------
-
-export function rigLengthMm(rig: CeilingRig): number {
-  return Math.hypot(rig.b.x - rig.a.x, rig.b.y - rig.a.y);
-}
-
-/** A single eyebolt rather than a run: both ends in the same place. Tested with a tolerance, not
- *  with ===, because a rod drawn by a click that moved one millimetre is still one fixing. */
-export function isHangingPoint(rig: CeilingRig): boolean {
-  return rigLengthMm(rig) < 1;
-}
-
-export function addRig(s: VenueStructure, rig: Omit<CeilingRig, "id">): { structure: VenueStructure; rigId: string } {
-  const next: CeilingRig = { ...rig, id: crypto.randomUUID() };
-  return { structure: { ...s, rigs: [...(s.rigs ?? []), next] }, rigId: next.id };
-}
-
-export function updateRig(s: VenueStructure, id: string, patch: Partial<Omit<CeilingRig, "id">>): VenueStructure {
-  if (!s.rigs) return s;
-  return { ...s, rigs: s.rigs.map((r) => (r.id === id ? { ...r, ...patch } : r)) };
-}
-
-export function removeRig(s: VenueStructure, id: string): VenueStructure {
-  if (!s.rigs) return s;
-  return { ...s, rigs: s.rigs.filter((r) => r.id !== id) };
-}
-
 // Plausible starting dimensions per kind, so dropping one onto the plan gives something the right
 // rough size to nudge rather than a nondescript square to type over.
 const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "depthMm" | "heightMm" | "shape">> = {
@@ -447,9 +402,17 @@ export function newFeature(kind: FeatureKind, at: Point): Omit<StructureFeature,
  *  shape — a circle's `widthMm` is its diameter here, which is what the renderer and the resize
  *  handle both already read. */
 export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: Point): Omit<StructureFeature, "id"> {
-  const shape = product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect");
-  const b = footprintBounds(resolveFootprint(product));
-  const outline = shape === "custom" ? product.appearance?.outline : undefined;
+  const stated = product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect");
+  // A feature holds ONE outline, so an item made of several shapes comes across as its base shape
+  // alone — the parts (MapAppearance.parts) are the catalog's, not the property's.
+  const base = resolveFootprint({ ...product, appearance: product.appearance && { ...product.appearance, parts: undefined } });
+  // An arc is sized by its circle and a feature by its box, so it comes across as the outline it
+  // resolves to: a drawn shape, which the feature then scales to its two numbers like any other.
+  const baked = stated === "arc" && base.kind === "custom";
+  const shape = baked ? "custom" : stated;
+  const b = footprintBounds(base);
+  const outline = baked ? base.outline : shape === "custom" ? product.appearance?.outline : undefined;
+  const edgeCurves = baked ? base.edgeCurves : product.appearance?.edgeCurves;
   return {
     kind,
     label: product.name,
@@ -460,9 +423,10 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
     depthMm: Math.round(b.h),
     heightMm: product.dimensions.heightMm,
     shape,
-    ...(outline && outline.length >= 3
-      ? { outline, ...(product.appearance?.edgeCurves ? { edgeCurves: product.appearance.edgeCurves } : {}) }
-      : {}),
+    ...(outline && outline.length >= 3 ? { outline, ...(edgeCurves ? { edgeCurves } : {}) } : {}),
+    // An oval ring or a horseshoe is sized by its box like any derived shape, so unlike the arc it
+    // comes across as itself — with the band and opening its two numbers cannot say.
+    ...((shape === "oval-ring" || shape === "horseshoe" || shape === "rounded-u") && product.appearance?.ring ? { ring: product.appearance.ring } : {}),
   };
 }
 
@@ -474,14 +438,17 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
  *  a feature's two numbers are what its resize handles drag and what the inspector shows, so an
  *  outline that ignored them would be a shape the plan claims is 4m wide and draws at 3. */
 export function featureFootprint(
-  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves">,
+  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "arc" | "ring">,
 ): Footprint {
   return shapeFootprint(f.shape, {
     widthMm: f.widthMm,
     depthMm: f.depthMm,
+    arc: f.arc,
+    ring: f.ring,
     // A feature has no diameter field: a round one is as wide as it is across, which is what both
     // the old renderer and the radius handle have always assumed.
-    diameterMm: f.widthMm,
+    // A quarter's box is one radius across, so its circle is twice the width.
+    diameterMm: f.shape === "quarter-circle" ? f.widthMm * 2 : f.widthMm,
     ...(f.shape === "custom" && f.outline && f.outline.length >= 3
       ? scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm)
       : {}),
@@ -724,36 +691,6 @@ if (isMain(import.meta.url)) {
   assert(stageOf(shrunkStage).stairs!.widthMm === 900, "narrowing a stage narrows the flight hanging off it");
   assert(!stageOf(removeStairs(stepped, stageId)).stairs, "stairs can be taken off again");
   assert(updateStairs(withStage, stageId, { steps: 2 }) === withStage, "a stage without stairs has no flight to patch");
-
-  // --- ceiling rods ---------------------------------------------------------
-  {
-    const empty = emptyStructure();
-    assert(empty.rigs === undefined, "a fresh structure has no rods, and no empty array either");
-
-    const { structure: s1, rigId } = addRig(empty, {
-      label: "מוט מרכזי",
-      a: { x: 0, y: 0 },
-      b: { x: 8000, y: 0 },
-      heightMm: 4200,
-    });
-    assert(s1.rigs?.length === 1, "a rod is added");
-    assert(Math.abs(rigLengthMm(s1.rigs![0]) - 8000) < 1e-9, "an 8m rod is 8m long");
-    assert(!isHangingPoint(s1.rigs![0]), "…and is not a hanging point");
-    assert(empty.rigs === undefined, "adding a rod does not mutate the structure it was added to");
-
-    const s2 = updateRig(s1, rigId, { heightMm: 3800, loadKg: 200 });
-    assert(s2.rigs![0].heightMm === 3800 && s2.rigs![0].loadKg === 200, "a rod can be re-measured and rated");
-    assert(s2.rigs![0].label === "מוט מרכזי", "…without losing what it is called");
-    assert(updateRig(s1, "gone", { heightMm: 1 }).rigs![0].heightMm === 4200, "updating a rod that is not there changes nothing");
-
-    // A single eyebolt: both ends in the same place. Zero length, and every consumer has to
-    // survive dividing by it — see resolveHang in lib/studio/anchor.ts.
-    const { structure: s3 } = addRig(s2, { label: "נקודת תלייה", a: { x: 2000, y: 2000 }, b: { x: 2000, y: 2000 }, heightMm: 4000 });
-    assert(rigLengthMm(s3.rigs![1]) === 0 && isHangingPoint(s3.rigs![1]), "a hanging point is a rod of zero length");
-
-    const s4 = removeRig(s3, rigId);
-    assert(s4.rigs!.length === 1 && s4.rigs![0].label === "נקודת תלייה", "a rod can be removed, and takes only itself");
-  }
 
   console.log("venue structure self-check passed");
 }

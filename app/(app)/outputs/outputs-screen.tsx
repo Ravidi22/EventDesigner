@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ClipboardList, Map, Printer, ReceiptText, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
@@ -9,6 +9,7 @@ import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { recordExport, type ExportType } from "@/lib/outputs/actions";
 import { PLAN_SHEETS } from "@/lib/outputs/sheets";
+import { fetchStageRules } from "@/lib/settings/actions";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { PackingList } from "./packing-list";
@@ -51,6 +52,18 @@ export function OutputsScreen() {
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("landscape");
   const [version, setVersion] = useState(1);
+  // The studio's railing rule, for the stage sheet (settings → במות). Off until read, and off if
+  // the read fails — the sheet then simply marks no railing, which is what an unset rule means.
+  const [railingAboveMm, setRailingAboveMm] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchStageRules()
+      .then((r) => live && setRailingAboveMm(r.railingAboveMm))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   // Which plan sheets print, in the "map" view — a crew does not read one drawing with everything
   // on it (lib/outputs/sheets.ts). Defaults to the hall plan alone; ids rather than PlanSheet
   // objects so the selection survives fine even if PLAN_SHEETS is ever reordered.
@@ -284,6 +297,7 @@ export function OutputsScreen() {
                   date={today}
                   paper={{ widthMm: w, heightMm: h }}
                   marginMm={MARGIN_MM}
+                  railingAboveMm={railingAboveMm}
                 />
               </article>
             ))

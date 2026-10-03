@@ -1,4 +1,4 @@
-import type { DesignDocumentContent, DesignTable, Placement } from "./types";
+import type { DesignDocumentContent, DesignTable, Placement, Point } from "./types";
 import { isMain } from "../self-check";
 
 // Reading a document that has groups in it.
@@ -91,6 +91,26 @@ export function spreadSeated(
     left -= take;
     return { id: t.id, seated: take };
   });
+}
+
+/** Spread a block's CHAIR count back across its tables: as evenly as it divides, the remainder going
+ *  to the first ones.
+ *
+ *  The chairs round a block are drawn from `groupSeats` — the sum — so the designer types one number
+ *  for the lot and it has to land on the members. Even rather than "fill in order" (contrast
+ *  spreadSeated): chairs are furniture, and a block of two that seats 20 comes apart as two tens,
+ *  not as a twelve and an eight nobody asked for. */
+export function spreadSeats(
+  doc: DesignDocumentContent,
+  groupId: string,
+  seats: number,
+): { id: string; seats: number }[] {
+  const tables = membersOf(doc, groupId).tables;
+  if (tables.length === 0) return [];
+  const total = Math.max(0, Math.round(seats));
+  const each = Math.floor(total / tables.length);
+  const extra = total % tables.length;
+  return tables.map((t, i) => ({ id: t.id, seats: each + (i < extra ? 1 : 0) }));
 }
 
 /** One entry per NUMBERED thing on the plan: a lone table, or a whole group as the single larger
@@ -248,6 +268,57 @@ export function tableNumber(doc: DesignDocumentContent, table: DesignTable): num
   return Math.min(...siblings.map((t) => t.number));
 }
 
+/** One table of a block that is being swapped for another size: where it stands, which way it faces,
+ *  and the box it is now and the box it will be. */
+export interface RefitMember {
+  id: string;
+  position: Point;
+  rotation: number;
+  from: { w: number; h: number };
+  to: { w: number; h: number };
+}
+
+/** Where the tables of a block go when every one of them is swapped for a table of another size.
+ *
+ *  Four 180×90s pushed end to end and changed to 240×90s are still meant to be one long table — left
+ *  on their old centres they would overlap by 60cm each, and changed to 120×90s they would stand
+ *  apart with gaps nobody asked for. So each table's offset from the middle of the block is scaled,
+ *  along the block's own axes, by how much the table grew along each — which keeps every seam closed
+ *  and the block's middle where it was.
+ *
+ *  That only means something when the block is made of one size facing one way (or turned a half
+ *  turn — the same box), which is how a run of tables is built. A block of mixed sizes or facings has
+ *  no single scale; null, and the tables keep their centres. */
+export function refitBlock(members: readonly RefitMember[]): Map<string, Point> | null {
+  if (members.length < 2) return null;
+  const [first] = members;
+  const same = (a: { w: number; h: number }, b: { w: number; h: number }) => Math.abs(a.w - b.w) <= 1 && Math.abs(a.h - b.h) <= 1;
+  if (!members.every((m) => same(m.from, first.from) && same(m.to, first.to))) return null;
+  if (!first.from.w || !first.from.h) return null;
+  const sx = first.to.w / first.from.w;
+  const sy = first.to.h / first.from.h;
+  // Grown the same along both axes (a round for a round), the facing does not matter.
+  const uniform = Math.abs(sx - sy) < 1e-9;
+  const halfTurn = (deg: number) => (((deg - first.rotation) % 180) + 180) % 180;
+  if (!uniform && !members.every((m) => Math.min(halfTurn(m.rotation), 180 - halfTurn(m.rotation)) < 0.5)) return null;
+
+  const c = {
+    x: members.reduce((s, m) => s + m.position.x, 0) / members.length,
+    y: members.reduce((s, m) => s + m.position.y, 0) / members.length,
+  };
+  const a = (first.rotation * Math.PI) / 180;
+  const u = { x: Math.cos(a), y: Math.sin(a) }; // the block's width axis, as its tables are turned
+  const v = { x: -Math.sin(a), y: Math.cos(a) }; // …and its depth axis
+  const out = new Map<string, Point>();
+  for (const m of members) {
+    const d = { x: m.position.x - c.x, y: m.position.y - c.y };
+    const du = (d.x * u.x + d.y * u.y) * sx;
+    const dv = (d.x * v.x + d.y * v.y) * sy;
+    out.set(m.id, { x: Math.round(c.x + u.x * du + v.x * dv), y: Math.round(c.y + u.y * du + v.y * dv) });
+  }
+  return out;
+}
+
 // ponytail: self-check. Run: node --experimental-strip-types lib/design-document/groups.ts
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -308,6 +379,17 @@ if (isMain(import.meta.url)) {
     assert(
       groupSeated({ ...doc, tables: doc.tables.map((t) => ({ ...t, seated: spreadSeated(doc, "g1", 15).find((x) => x.id === t.id)?.seated })) }, "g1") === 15,
       "what was spread across the block reads back as the number that was typed",
+    );
+  }
+  {
+    const seats = (n: number) => spreadSeats(doc, "g1", n).map((x) => x.seats);
+    assert(seats(20).join(",") === "10,10", "a block's chairs divide evenly between its tables");
+    assert(seats(21).join(",") === "11,10", "…the odd one going to the first");
+    assert(seats(-4).join(",") === "0,0", "…and a negative count seats nobody");
+    assert(spreadSeats(doc, "g2", 10).length === 0, "a group of stages has no tables to seat");
+    assert(
+      groupSeats({ ...doc, tables: doc.tables.map((t) => ({ ...t, seats: spreadSeats(doc, "g1", 21).find((x) => x.id === t.id)?.seats ?? t.seats })) }, "g1") === 21,
+      "what was spread reads back as the number that was typed",
     );
   }
   assert(
@@ -472,6 +554,30 @@ if (isMain(import.meta.url)) {
   // A document drawn before grouping existed reads exactly as it always did.
   const old: DesignDocumentContent = { calibration: { mmPerUnit: 1 }, tables: [t("x", 1), t("y", 2)], placements: [] };
   assert(numberedUnits(old).length === 2 && expandToGroups(old, [{ kind: "table", id: "x" }]).length === 1, "no groups, no change");
+
+  // A swapped block stays flush.
+  {
+    const run = (rotation: number, from = { w: 1800, h: 900 }, to = { w: 2400, h: 900 }) =>
+      [-2700, -900, 900, 2700].map((x, i) => {
+        const a = (rotation * Math.PI) / 180;
+        return { id: `r${i}`, position: { x: x * Math.cos(a), y: x * Math.sin(a) }, rotation, from, to };
+      });
+    const long = refitBlock(run(0))!;
+    assert(long.get("r0")!.x === -3600 && long.get("r1")!.x === -1200 && long.get("r3")!.x === 3600, "a run of 180s swapped for 240s stays end to end");
+    assert(long.get("r2")!.y === 0, "…along its own line, about its own middle");
+    const turned = refitBlock(run(90))!;
+    assert(Math.abs(turned.get("r3")!.y - 3600) <= 1 && Math.abs(turned.get("r3")!.x) <= 1, "a run turned to the room stretches along the way it is turned");
+    assert(refitBlock(run(180)) !== null, "a table turned a half turn is the same box");
+    const rounds = refitBlock(run(0, { w: 1800, h: 1800 }, { w: 1500, h: 1500 }))!;
+    assert(rounds.get("r3")!.x === 2250, "rounds swapped for smaller rounds close up");
+    const mixed = run(0);
+    mixed[1] = { ...mixed[1], from: { w: 1200, h: 900 } };
+    assert(refitBlock(mixed) === null, "a block of mixed sizes keeps its centres");
+    const askew = run(0);
+    askew[1] = { ...askew[1], rotation: 45 };
+    assert(refitBlock(askew) === null, "…and so does one of mixed facings");
+    assert(refitBlock(run(0).slice(0, 1)) === null, "one table is not a block");
+  }
 
   console.log("groups self-check passed");
 }
