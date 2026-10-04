@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { X } from "lucide-react";
-import { IconButton } from "./icon-button";
+import { CloseButton } from "./close-button";
 
 /** The app's side drawer: a floating `.drawer` <dialog> with a titled header and a body that
  *  scrolls inside it.
@@ -65,9 +64,7 @@ export function Drawer({
         <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-5 py-3.5">
           <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
           {actions}
-          <IconButton label={closeLabel} onClick={onClose}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
+          <CloseButton label={closeLabel} onClick={onClose} />
         </header>
         {children}
       </div>

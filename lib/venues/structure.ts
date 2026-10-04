@@ -59,9 +59,48 @@ export interface StructureEntrance {
 }
 
 // Fixed things a designer has to plan around and cannot move: the pool, a built stage, a permanent
-// bar. Real geometry, unlike the trees and parked cars in a traced floor plan, which stay pixels in
-// the underlay because nobody ever needs to place a table relative to a tree.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other";
+// bar — and the property's planting. The palms and hedges started out as pixels in the underlay, on
+// the argument that nobody places a table relative to a tree; but a plan drawn without its underlay
+// is a grey diagram of the property, and the planting is most of what makes a courtyard read as the
+// place the client walked through. A plant is a feature like the others: real size, draggable, and
+// in the way of a table exactly as much as a bar is.
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "plant" | "surface";
+
+/** What a `surface` feature is laid in — the ground under everything else: a lawn, a paved court, a
+ *  timber deck. Drawn as a real-scale texture (components/surface-fill.tsx), always beneath the
+ *  other features, and never in the way of a table: you set a table ON a floor. */
+export type SurfaceMaterial = "grass" | "paving" | "deck" | "gravel" | "sand" | "soil" | "tile" | "plain";
+
+// The two indoor ones. `tile` is a hall's own floor — large polished tiles, whose joints and sheen
+// are LIGHTER than the tile, so it still reads as a floor when painted black (every outdoor
+// material darkens its joints, and on black that is nothing at all). `plain` has no texture
+// whatsoever: a flat colour, for the floor that really is one.
+export const SURFACE_MATERIALS: SurfaceMaterial[] = ["grass", "paving", "deck", "gravel", "sand", "soil", "tile", "plain"];
+
+export const SURFACE_MATERIAL_LABEL: Record<SurfaceMaterial, string> = {
+  tile: "אריחים",
+  plain: "חלק",
+  grass: "דשא",
+  paving: "ריצוף",
+  deck: "דק עץ",
+  gravel: "חצץ",
+  sand: "חול",
+  soil: "אדמה",
+};
+
+/** Which plant a `plant` feature is — what its top-down drawing looks like (components/plant-glyph.tsx). */
+export type PlantSpecies = "palm" | "tree" | "shrub" | "pot" | "hedge" | "flowers";
+
+export const PLANT_SPECIES: PlantSpecies[] = ["palm", "tree", "shrub", "pot", "hedge", "flowers"];
+
+export const PLANT_SPECIES_LABEL: Record<PlantSpecies, string> = {
+  palm: "דקל",
+  tree: "עץ",
+  shrub: "שיח",
+  pot: "עציץ",
+  hedge: "גדר חיה",
+  flowers: "ערוגת פרחים",
+};
 
 export interface StructureFeature {
   id: string;
@@ -93,6 +132,20 @@ export interface StructureFeature {
    *  feature of its own: the flight turns and travels with the deck, and its risers are derived
    *  from that deck's height. See ./stairs.ts. */
   stairs?: FeatureStairs;
+  /** iff `kind === "plant"`. Absent on a plant reads as a shrub — see plantSpecies. */
+  plant?: PlantSpecies;
+  /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
+  surface?: SurfaceMaterial;
+}
+
+/** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
+/** A surface's material, with the same fallback rule as plantSpecies. */
+export function surfaceMaterial(f: Pick<StructureFeature, "surface">): SurfaceMaterial {
+  return f.surface && SURFACE_MATERIALS.includes(f.surface) ? f.surface : "paving";
+}
+
+export function plantSpecies(f: Pick<StructureFeature, "plant">): PlantSpecies {
+  return f.plant && PLANT_SPECIES.includes(f.plant) ? f.plant : "shrub";
 }
 
 export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
@@ -101,6 +154,8 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   bar: "בר",
   structure: "מבנה",
   other: "אחר",
+  plant: "צמחייה",
+  surface: "משטח",
 };
 
 /** A rod or truss built into the hall's ceiling — the thing a chandelier or a ceiling installation
@@ -347,6 +402,75 @@ export function addFeature(s: VenueStructure, f: Omit<StructureFeature, "id">): 
   return { structure: { ...s, features: [...s.features, feature] }, featureId: feature.id };
 }
 
+/** How far a copy lands from its original — enough to see there are two, not so far that the copy
+ *  leaves the room it was made in. Diagonal, so a copy of a hedge never lands exactly end-on. */
+export const DUPLICATE_OFFSET_MM = 600;
+
+/** Copies of the given features — stairs, style, species and all — offset together, so a group
+ *  copied keeps its own arrangement. The new ids come back in the same order, for the selection. */
+export function duplicateFeatures(s: VenueStructure, ids: string[]): { structure: VenueStructure; featureIds: string[] } {
+  const copies = s.features
+    .filter((f) => ids.includes(f.id))
+    .map((f) => ({ ...f, id: crypto.randomUUID(), x: f.x + DUPLICATE_OFFSET_MM, y: f.y + DUPLICATE_OFFSET_MM }));
+  return { structure: { ...s, features: [...s.features, ...copies] }, featureIds: copies.map((f) => f.id) };
+}
+
+/** Which way a restack moves the selection in the drawing order. */
+export type Restack = "forward" | "backward" | "front" | "back";
+
+/** Whether two features' footprints could touch — their bounding circles, which is exact for the
+ *  plants and generous for a turned rectangle, and generous is the right side to err on here. */
+function mayOverlap(a: StructureFeature, b: StructureFeature): boolean {
+  // Surfaces are always drawn beneath everything else (see groundFirst in components/venue-plan.tsx),
+  // so a plant stepping past a lawn in the order would change nothing on screen. Only features on
+  // the same level can cover each other.
+  if ((a.kind === "surface") !== (b.kind === "surface")) return false;
+  return Math.hypot(a.x - b.x, a.y - b.y) < (Math.hypot(a.widthMm, a.depthMm) + Math.hypot(b.widthMm, b.depthMm)) / 2;
+}
+
+/** The drawing order is the order of `features`: later draws on top. This moves the given features
+ *  within it — "front"/"back" all the way, "forward"/"backward" one step past the next feature they
+ *  actually OVERLAP. A step past a palm on the far side of the courtyard changes nothing anyone can
+ *  see, and a menu item that visibly does nothing reads as broken. Picked features keep their own
+ *  order among themselves. */
+export function restackFeatures(s: VenueStructure, ids: string[], how: Restack): VenueStructure {
+  const picked = new Set(ids);
+  const rest = s.features.filter((f) => !picked.has(f.id));
+  const mine = s.features.filter((f) => picked.has(f.id));
+  if (mine.length === 0) return s;
+  if (how === "front") return { ...s, features: [...rest, ...mine] };
+  if (how === "back") return { ...s, features: [...mine, ...rest] };
+
+  const list = [...s.features];
+  // Forward walks the picked features from the topmost down, backward from the bottom up, so two
+  // picked neighbours never leapfrog each other.
+  const order = list.map((f, i) => i).filter((i) => picked.has(list[i].id));
+  if (how === "forward") order.reverse();
+  for (const start of order) {
+    const i = list.findIndex((f) => f.id === s.features[start].id);
+    const f = list[i];
+    if (how === "forward") {
+      const j = list.findIndex((g, k) => k > i && !picked.has(g.id) && mayOverlap(f, g));
+      if (j < 0) continue;
+      list.splice(i, 1);
+      list.splice(j, 0, f); // j shifted down by one with the removal: this lands just above it
+    } else {
+      let j = -1;
+      for (let k = i - 1; k >= 0; k--) if (!picked.has(list[k].id) && mayOverlap(f, list[k])) { j = k; break; }
+      if (j < 0) continue;
+      list.splice(i, 1);
+      list.splice(j, 0, f);
+    }
+  }
+  return { ...s, features: list };
+}
+
+/** Whether a restack would change anything — what greys a menu item out. */
+export function canRestack(s: VenueStructure, ids: string[], how: Restack): boolean {
+  const next = restackFeatures(s, ids, how);
+  return next.features.some((f, i) => f.id !== s.features[i].id);
+}
+
 export function updateFeature(s: VenueStructure, id: string, patch: Partial<Omit<StructureFeature, "id">>): VenueStructure {
   return {
     ...s,
@@ -421,17 +545,33 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   bar: { widthMm: 4000, depthMm: 1200, heightMm: 1100, shape: "rect" },
   structure: { widthMm: 4000, depthMm: 4000, heightMm: 3000, shape: "rect" },
   other: { widthMm: 2000, depthMm: 2000, heightMm: 1000, shape: "rect" },
+  plant: { widthMm: 1200, depthMm: 1200, heightMm: 1000, shape: "circle" },
+  surface: { widthMm: 4000, depthMm: 3000, heightMm: 0, shape: "rect" },
 };
 
-export function newFeature(kind: FeatureKind, at: Point): Omit<StructureFeature, "id"> {
-  return {
-    kind,
-    label: FEATURE_KIND_LABEL[kind],
-    x: Math.round(at.x),
-    y: Math.round(at.y),
-    rotationDeg: 0,
-    ...FEATURE_DEFAULTS[kind],
-  };
+// A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
+// is under one, and a hedge is a strip rather than a disc.
+export const PLANT_DEFAULTS: Record<PlantSpecies, Pick<StructureFeature, "widthMm" | "depthMm" | "heightMm" | "shape">> = {
+  palm: { widthMm: 4500, depthMm: 4500, heightMm: 6000, shape: "circle" },
+  tree: { widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle" },
+  shrub: { widthMm: 1200, depthMm: 1200, heightMm: 1000, shape: "circle" },
+  pot: { widthMm: 700, depthMm: 700, heightMm: 900, shape: "circle" },
+  hedge: { widthMm: 4000, depthMm: 800, heightMm: 1200, shape: "rect" },
+  flowers: { widthMm: 3000, depthMm: 1200, heightMm: 400, shape: "rect" },
+};
+
+/** `variant` is the plant's species or the surface's material — which one is read off `kind`. */
+export function newFeature(kind: FeatureKind, at: Point, variant?: PlantSpecies | SurfaceMaterial): Omit<StructureFeature, "id"> {
+  const base = { kind, x: Math.round(at.x), y: Math.round(at.y), rotationDeg: 0 };
+  if (kind === "plant") {
+    const species = PLANT_SPECIES.includes(variant as PlantSpecies) ? (variant as PlantSpecies) : "shrub";
+    return { ...base, label: PLANT_SPECIES_LABEL[species], ...PLANT_DEFAULTS[species], plant: species };
+  }
+  if (kind === "surface") {
+    const material = SURFACE_MATERIALS.includes(variant as SurfaceMaterial) ? (variant as SurfaceMaterial) : "paving";
+    return { ...base, label: SURFACE_MATERIAL_LABEL[material], ...FEATURE_DEFAULTS.surface, surface: material };
+  }
+  return { ...base, label: FEATURE_KIND_LABEL[kind], ...FEATURE_DEFAULTS[kind] };
 }
 
 /** The same feature, placed from a CATALOG ROW instead of from a rough default.
@@ -753,6 +893,34 @@ if (isMain(import.meta.url)) {
 
     const s4 = removeRig(s3, rigId);
     assert(s4.rigs!.length === 1 && s4.rigs![0].label === "נקודת תלייה", "a rod can be removed, and takes only itself");
+  }
+
+  // A duplicate is a new feature, offset, carrying everything the original did.
+  {
+    const { structure: one, featureId } = addFeature(base, newFeature("plant", { x: 1000, y: 1000 }, "palm"));
+    const { structure: two, featureIds } = duplicateFeatures(one, [featureId]);
+    const copy = two.features.find((f) => f.id === featureIds[0])!;
+    assert(two.features.length === one.features.length + 1 && copy.id !== featureId, "a duplicate is a second feature with its own id");
+    assert(copy.plant === "palm" && copy.x === 1000 + DUPLICATE_OFFSET_MM, "…of the same species, offset from the original");
+  }
+
+  // Restacking: later in `features` draws on top.
+  {
+    let st = base;
+    const ids: string[] = [];
+    for (const [x, sp] of [[0, "palm"], [1000, "tree"], [2000, "shrub"], [90000, "pot"]] as const) {
+      const r = addFeature(st, newFeature("plant", { x, y: 0 }, sp));
+      st = r.structure;
+      ids.push(r.featureId);
+    }
+    const order = (x: VenueStructure) => x.features.map((f) => ids.indexOf(f.id)).join("");
+    assert(order(restackFeatures(st, [ids[0]], "front")) === "1230", "front: to the top of the order");
+    assert(order(restackFeatures(st, [ids[3]], "back")) === "3012", "back: to the bottom");
+    assert(order(restackFeatures(st, [ids[0]], "forward")) === "1023", "forward: one step past the next overlapping feature");
+    assert(order(restackFeatures(st, [ids[2]], "backward")) === "0213", "backward: one step under the one below it");
+    assert(!canRestack(st, [ids[3]], "forward"), "the topmost feature has nowhere further forward to go");
+    assert(!canRestack(st, [ids[3]], "backward"), "…and a feature overlapping nothing has no visible step back either");
+    assert(order(restackFeatures(st, [ids[0], ids[1]], "front")) === "2301", "a group keeps its own order when moved");
   }
 
   console.log("venue structure self-check passed");

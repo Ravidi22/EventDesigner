@@ -14,7 +14,7 @@ import {
 } from "@/lib/studio/geometry";
 import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, nodeMap, wallPoints } from "@/lib/venues/structure";
-import { stairsGeometry } from "@/lib/venues/stairs";
+import { stairsFlights } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
 import { FootprintShape, tableFootprint, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { arrangedStructure } from "@/lib/design-document/features";
@@ -275,17 +275,17 @@ export function PlacementMap({
             };
             // Stairs are floor the crew cannot put a table on, so they print with the stage rather
             // than being screen-only chrome. World coordinates already, hence outside the rotation.
-            const stairs = stairsGeometry(f);
+            const flights = stairsFlights(f);
             return (
               <g key={f.id}>
-                {stairs && (
-                  <g>
+                {flights.map((stairs, n) => (
+                  <g key={n}>
                     <path d={outlinePathD(stairs.outline)} fill="#f7f6fa" stroke={INK_SOFT} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
                     {stairs.nosings.map(([p, q], i) => (
                       <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={INK_SOFT} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
                     ))}
                   </g>
-                )}
+                ))}
                 <g transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
                   {/* Same resolver the editor draws with (components/footprint-shape.tsx) — a ח bar
                       printed as a solid block is the crew told to fill the floor the staff stand in. */}

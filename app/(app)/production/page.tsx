@@ -22,9 +22,20 @@ export const metadata: Metadata = { title: "הפקה · Eve" };
 // Kanban filtered to whichever venue the sidebar had active, which meant "how many open deals do I
 // have" was unanswerable on the one screen whose job it was. A designer's book of business spans
 // properties; venue GRANTS are still honoured inside fetchRunway, which is a different question.
-export default async function ProductionPage() {
+//
+// `?venue=<id>` is the ONE exception, and it is not a scope but a question: "what is still on this
+// property" — asked from the venue switcher when a delete was refused because events sit on it.
+// It is a filter over the same runway (grants still apply), keyed so arriving at it from the
+// unscoped screen starts fresh rather than keeping the lane the other view had open.
+export default async function ProductionPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   // Before the read, not alongside it: the layout's guard races this file rather than gating it.
   // See lib/auth/guard.ts.
   await requireStudio();
-  return <ProductionScreen runway={await fetchRunway()} />;
+  const params = await searchParams;
+  const venueId = (Array.isArray(params.venue) ? params.venue[0] : params.venue) || undefined;
+  return <ProductionScreen key={venueId ?? "all"} runway={await fetchRunway()} venueId={venueId} />;
 }

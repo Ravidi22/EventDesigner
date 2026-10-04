@@ -298,6 +298,9 @@ export function CanvasStage({
       // the floor, so it answers to the floor plane.
       if (reach("floor")) {
         for (const f of structure.features) {
+          // The ground is not furniture: a band drawn round three tables on a lawn must not take
+          // the whole lawn along with them, and a table dragged across it is not "near" its edge.
+          if (f.kind === "surface") continue;
           out.push({
             ref: { kind: "feature", id: f.id },
             // Through its real shape, like everything else here: the venue's round bar is a

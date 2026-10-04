@@ -80,7 +80,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // the provider re-resolves, so the switcher stays live without holding state of its own. `remove`
   // needs no such override either — deleting a venue updates the provider's own list, and its
   // activeVenueId falls back on its own once the deleted id is no longer in it.
-  const { venues, activeVenueId, add, rename, remove } = useVenues();
+  const { venues, activeVenueId, add, rename, setLogo, remove } = useVenues();
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -158,7 +158,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               router.push("/halls");
             });
           }}
-          onRename={(id, name) => void rename(id, name)}
+          onRename={(id, name) => rename(id, name)}
+          onSetLogo={(id, url) => setLogo(id, url)}
           onDelete={(id) => remove(id)}
         />
 

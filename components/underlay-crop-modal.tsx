@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./button";
+import { CloseButton } from "./close-button";
 
 // Crop a photo/scan before it ever reaches lib/files/ — free-form (no fixed ratio), so a designer
 // can trim a phone photo's margins or a scanned sheet's borders however the shot actually needs it.
-// Runs entirely on the local file: nothing is uploaded until "לסיום" hands back the cropped bytes,
+// Runs entirely on the local file: nothing is uploaded until "סיום" hands back the cropped bytes,
 // so a cancelled crop never touched storage at all.
 //
 // The rect lives in DISPLAY pixels (the fitted, on-screen size); confirm() divides by `scale` to
@@ -16,15 +17,21 @@ type HandleId = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
 const MIN_PX = 24; // smallest a crop rect may shrink to, in display px — below this it's not a crop, it's a slip
 
+// PHYSICAL sides on purpose, not start/end: the ids are compass points and onPointerMove reads
+// them as geometry ("w" moves rect.x, the left edge). With logical classes the RTL page mirrored
+// every handle, so the corner on the right was "nw" — dragging it outward shrank the crop from the
+// left instead of growing it. A picture has no reading direction; the stage is dir="ltr" too.
+// Each handle is a 28px hit target (the visible dot is its ::after) — a 14px dot sat mostly
+// outside the image and was hard to grab at all.
 const HANDLES: { id: HandleId; cls: string }[] = [
-  { id: "nw", cls: "-top-1.5 -start-1.5 cursor-nwse-resize" },
-  { id: "n", cls: "-top-1.5 start-1/2 -translate-x-1/2 cursor-ns-resize" },
-  { id: "ne", cls: "-top-1.5 -end-1.5 cursor-nesw-resize" },
-  { id: "e", cls: "top-1/2 -end-1.5 -translate-y-1/2 cursor-ew-resize" },
-  { id: "se", cls: "-bottom-1.5 -end-1.5 cursor-nwse-resize" },
-  { id: "s", cls: "-bottom-1.5 start-1/2 -translate-x-1/2 cursor-ns-resize" },
-  { id: "sw", cls: "-bottom-1.5 -start-1.5 cursor-nesw-resize" },
-  { id: "w", cls: "top-1/2 -start-1.5 -translate-y-1/2 cursor-ew-resize" },
+  { id: "nw", cls: "-top-3.5 -left-3.5 cursor-nwse-resize" },
+  { id: "n", cls: "-top-3.5 left-1/2 -translate-x-1/2 cursor-ns-resize" },
+  { id: "ne", cls: "-top-3.5 -right-3.5 cursor-nesw-resize" },
+  { id: "e", cls: "top-1/2 -right-3.5 -translate-y-1/2 cursor-ew-resize" },
+  { id: "se", cls: "-bottom-3.5 -right-3.5 cursor-nwse-resize" },
+  { id: "s", cls: "-bottom-3.5 left-1/2 -translate-x-1/2 cursor-ns-resize" },
+  { id: "sw", cls: "-bottom-3.5 -left-3.5 cursor-nesw-resize" },
+  { id: "w", cls: "top-1/2 -left-3.5 -translate-y-1/2 cursor-ew-resize" },
 ];
 
 export function UnderlayCropModal({
@@ -164,11 +171,13 @@ export function UnderlayCropModal({
           <span className="hidden text-xs text-muted md:inline">
             גררו את הפינות או הצלעות לחיתוך חופשי · גררו בתוך המסגרת להזזה · Enter לסיום
           </span>
+          <CloseButton className="ms-auto" onClick={onCancel} />
         </header>
 
         <div className="flex items-center justify-center bg-canvas p-5">
           {objectUrl && (
             <div
+              dir="ltr"
               className="relative touch-none select-none"
               style={display ? { width: display.w, height: display.h } : undefined}
               onPointerMove={onPointerMove}
@@ -184,6 +193,24 @@ export function UnderlayCropModal({
                 style={display ? { width: display.w, height: display.h } : { visibility: "hidden" }}
               />
               {rect && display && (
+                // The shade is its own layer, clipped to the image: a bare 9999px box-shadow on
+                // the frame darkened the whole dialog, header and footer included, and swallowed
+                // the X and the ביטול/סיום buttons. The frame and its handles sit outside the
+                // clip, so the handles can still overhang the image edge.
+                <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                  <div
+                    className="absolute"
+                    style={{
+                      left: rect.x,
+                      top: rect.y,
+                      width: rect.w,
+                      height: rect.h,
+                      boxShadow: "0 0 0 9999px rgba(40,26,74,.55)",
+                    }}
+                  />
+                </div>
+              )}
+              {rect && display && (
                 <div
                   role="presentation"
                   onPointerDown={onHandleDown("move")}
@@ -193,14 +220,13 @@ export function UnderlayCropModal({
                     top: rect.y,
                     width: rect.w,
                     height: rect.h,
-                    boxShadow: "0 0 0 9999px rgba(40,26,74,.55)",
                   }}
                 >
                   {HANDLES.map((h) => (
                     <div
                       key={h.id}
                       onPointerDown={onHandleDown(h.id)}
-                      className={`absolute h-3.5 w-3.5 rounded-full border-2 border-accent bg-canvas ${h.cls}`}
+                      className={`absolute flex h-7 w-7 items-center justify-center after:block after:h-3.5 after:w-3.5 after:rounded-full after:border-2 after:border-accent after:bg-canvas ${h.cls}`}
                     />
                   ))}
                 </div>
@@ -214,7 +240,7 @@ export function UnderlayCropModal({
             ביטול
           </Button>
           <Button size="sm" variant="primary" className="ms-auto" disabled={!rect} onClick={confirm}>
-            לסיום
+            סיום
           </Button>
         </div>
       </div>

@@ -59,13 +59,22 @@ export function MeetingGalleryScreen() {
 
   return (
     <div className="mx-auto max-w-6xl px-8 py-7">
-      <div className="mb-7 inline-flex rounded-md border border-border p-0.5 text-sm">
+      {/* The one choice this screen has, made in front of a client — so it is a white card of its
+          own with the chosen side filled, not a hairline pill that reads as a caption. */}
+      <div role="group" aria-label="מה מוצג" className="mb-7 inline-flex gap-1 rounded-md border border-border bg-canvas p-1 text-sm">
         <SegBtn active={view === "presentations"} onClick={() => setView("presentations")}>
           מצגות
         </SegBtn>
         <SegBtn active={view === "folder"} onClick={() => setView("folder")}>
           תיק האירוע
-          <span className="nums ms-1.5 text-xs text-muted">{folder.length}</span>
+          <span
+            className={
+              "nums ms-1.5 rounded-sm px-1.5 text-xs font-semibold " +
+              (view === "folder" ? "bg-canvas/20 text-canvas" : "bg-accent-tint text-accent")
+            }
+          >
+            {folder.length}
+          </span>
         </SegBtn>
       </div>
 
@@ -122,8 +131,8 @@ function SegBtn({ active, onClick, children }: { active: boolean; onClick: () =>
       onClick={onClick}
       aria-pressed={active}
       className={
-        "inline-flex items-center rounded-[6px] px-3 py-1.5 font-medium transition-colors " +
-        (active ? "bg-accent-tint text-ink" : "text-ink-soft hover:text-ink")
+        "inline-flex items-center rounded-sm px-3.5 py-1.5 transition-colors " +
+        (active ? "bg-accent font-semibold text-canvas" : "font-semibold text-ink-soft hover:bg-accent-tint hover:text-accent")
       }
     >
       {children}

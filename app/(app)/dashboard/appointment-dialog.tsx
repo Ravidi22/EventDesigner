@@ -1,19 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Trash2, X } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { Appointment, AppointmentKind } from "@/lib/appointments/types";
 import { APPOINTMENT_KINDS, APPOINTMENT_KIND_LABEL, isClientKind } from "@/lib/appointments/types";
 import type { EventSummary } from "@/lib/events/types";
 import { formatEventDate } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { DateField } from "@/components/date-field";
-import { IconButton } from "@/components/icon-button";
 import { Select } from "@/components/select";
 import { Switch } from "@/components/toggle";
 import { TextField } from "@/components/text-field";
 import { TimeField } from "@/components/time-field";
 import { fieldLabelClassName } from "@/components/control";
+import { CloseButton } from "@/components/close-button";
 
 // How long a meeting runs. A short list rather than a number field: these are the five answers a
 // designer actually gives, and a free number invites 47 minutes.
@@ -177,9 +177,7 @@ export function AppointmentDialog({
       <form onSubmit={submit} className="flex max-h-[calc(100dvh-2rem)] flex-col">
         <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
           <h2 className="text-base font-semibold text-ink">{appointment ? "עריכת רשומה" : "רשומה חדשה"}</h2>
-          <IconButton label="סגירה" onClick={onClose}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
+          <CloseButton label="סגירה" onClick={onClose} />
         </header>
 
         {/* The scrolling region. The date/time row is deliberately FIRST: both fields open a popover

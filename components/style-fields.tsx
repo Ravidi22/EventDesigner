@@ -49,7 +49,7 @@ function ColorField({
   const pct = Math.round((opacity ?? 1) * 100);
 
   return (
-    <div>
+    <div className="min-w-0">
       <span className={fieldLabelClassName}>{label}</span>
       {/* The row is a control like any other, so it is built out of controlClassName's own
           geometry — h-10 and rounded-sm — rather than the shorter, rounder box it used to be:
@@ -101,7 +101,7 @@ function ColorField({
             setHexText(toHex(value)); // an incomplete hex (1–5 digits) snaps back to the last real value
           }}
           aria-label={`${label} — קוד צבע`}
-          className="min-w-[4rem] flex-1 bg-transparent text-xs nums text-ink placeholder:text-faint focus-visible:outline-none"
+          className="w-0 min-w-0 flex-1 bg-transparent text-xs nums text-ink placeholder:text-faint focus-visible:outline-none"
         />
 
         <div className="h-4 w-px shrink-0 bg-border" />
@@ -173,7 +173,7 @@ export function StyleFields({
   };
 
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex w-full min-w-0 flex-col gap-2.5">
       <ColorField
         label={fillLabel}
         value={style?.fill}
