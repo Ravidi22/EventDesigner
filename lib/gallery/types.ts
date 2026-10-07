@@ -15,12 +15,18 @@ export interface GalleryImage {
    *  Callers may still SEND it; the server ignores what it is handed and answers with the real one. */
   productName: string;
   /** The photograph, once one has been uploaded (lib/files/). Absent is a real state and always
-   *  will be: a photo can be added later, and everything that renders one falls back to `tone`. */
+   *  will be: a photo can be added later, and a slide without one shows a calm neutral tile. */
   imageUrl?: string;
-  /** An OKLCH tile shown where there is no photograph yet. It was a stand-in for the whole feature
-   *  before file storage existed; it stays as the empty state, which a gallery of a hundred photos
-   *  still needs on the day someone adds the hundred-and-first. */
-  tone: string;
+  /** The LINKED PRODUCT's own photo, JOINED from the catalog on every read (lib/gallery/actions.ts) —
+   *  never stored, like `productName`. When a photo has a product but no `imageUrl` of its own, this
+   *  is what renders: a designer who already photographed the product in the catalog does not upload
+   *  it again. `imageUrl` still wins when both are present (a slide-specific override). */
+  productImageUrl?: string;
+  /** LEGACY. A per-photo OKLCH tile colour, minted at creation, once used as the empty-state
+   *  background. Nothing renders it any more — a presentation wants ONE quiet background, not one
+   *  per slide (DESIGN.md: the tool recedes). Still a column on the row, still round-tripped, so
+   *  the value is not lost; just no longer read. */
+  tone?: string;
 }
 
 export interface Presentation {

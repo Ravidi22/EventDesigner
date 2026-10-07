@@ -1,17 +1,38 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { CalendarSearch, Camera, Check, ChevronDown, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { Venue } from "@/lib/venues/storage";
+import type { VenueDeleteRefusal } from "@/lib/venues/use-venues";
+import { uploadFile } from "@/lib/files/upload";
+import { ConfirmDialog } from "./confirm-dialog";
 
 // Circular venue mark: the designer's uploaded logo when set, else the venue name's initial —
-// same fallback pattern as ProductImage (app/(app)/catalog/product-image.tsx).
-function VenueAvatar({ venue, tone = "tint" }: { venue: Venue; tone?: "tint" | "solid" }) {
+// same fallback pattern as ProductImage (app/(app)/catalog/product-image.tsx). The tone
+// only colours the initial: an uploaded logo always sits on white, so a transparent PNG
+// shows exactly as the designer uploaded it instead of picking up the accent behind it.
+// A logo also wears a hairline ring, so a white-backed mark still reads as a bounded circle on
+// the white trigger. `lg` is the trigger's size: the logo is the venue's identity there.
+function VenueAvatar({
+  venue,
+  tone = "tint",
+  size = "md",
+}: {
+  venue: Venue;
+  tone?: "tint" | "solid";
+  size?: "md" | "lg";
+}) {
   return (
     <span
       className={
-        "flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs font-bold " +
-        (tone === "solid" ? "bg-accent text-canvas" : "bg-accent-tint text-accent")
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold " +
+        (size === "lg" ? "h-10 w-10 text-sm " : "h-8 w-8 text-xs ") +
+        (venue.logoUrl
+          ? "border border-border bg-canvas"
+          : tone === "solid"
+            ? "bg-accent text-canvas"
+            : "bg-accent-tint text-accent")
       }
     >
       {venue.logoUrl ? (
@@ -33,6 +54,7 @@ export function VenueSwitcher({
   onSelect,
   onAdd,
   onRename,
+  onSetLogo,
   onDelete,
 }: {
   venues: Venue[];
@@ -41,29 +63,68 @@ export function VenueSwitcher({
   collapsed?: boolean;
   onSelect: (id: string) => void;
   onAdd: () => void;
-  onRename: (id: string, name: string) => void;
-  /** Resolves to an error message (e.g. "still has events on it") if the delete was refused. */
-  onDelete: (id: string) => Promise<string | null>;
+  onRename: (id: string, name: string) => Promise<void>;
+  /** An uploaded picture's URL, or null to go back to the initial. */
+  onSetLogo: (id: string, logoUrl: string | null) => Promise<void>;
+  /** Resolves to the refusal (e.g. "still has events on it", and how many) if the delete was refused. */
+  onDelete: (id: string) => Promise<VenueDeleteRefusal | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  // Armed by a first click on the trash icon; a second click on the SAME row actually deletes.
-  // Losing a venue also loses its whole wall graph and zone list, which a mis-click on a row this
-  // quick to reach is not a cost worth risking for the one extra click.
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const draftRef = useRef<{ id: string; name: string; original: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [logoBusyId, setLogoBusyId] = useState<string | null>(null);
+  const [editError, setEditError] = useState<{ venueId: string; message: string } | null>(null);
+  // The venue the trash icon asked about. Losing a venue also loses its whole wall graph and zone
+  // list, so the delete goes through the shared ConfirmDialog — the same question every delete in
+  // the app asks, with ביטול as the prominent answer.
+  const [pendingDelete, setPendingDelete] = useState<Venue | null>(null);
+  // Which venue the refusal is about, so its link can point at that venue's events.
+  const [deleteError, setDeleteError] = useState<(VenueDeleteRefusal & { venueId: string }) | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const active = venues.find((v) => v.id === activeId) ?? venues[0];
 
-  // Closing the dropdown always drops the armed confirm and any error from a previous attempt —
-  // reopening it later should not still be one click away from deleting something. Done at every
+  const startRename = (v: Venue) => {
+    draftRef.current = { id: v.id, name: v.name, original: v.name };
+    setRenamingId(v.id);
+    setRenameValue(v.name);
+    setEditError(null);
+  };
+  const editName = (name: string) => {
+    if (draftRef.current) draftRef.current.name = name;
+    setRenameValue(name);
+  };
+  const cancelRename = () => {
+    draftRef.current = null;
+    setRenamingId(null);
+    setEditError(null);
+  };
+  // Saves only a real change — an empty name is refused by the server (and would throw), and an
+  // unchanged one is a round trip for nothing.
+  const commitRename = () => {
+    const draft = draftRef.current;
+    draftRef.current = null;
+    setRenamingId(null);
+    if (!draft) return;
+    const name = draft.name.trim();
+    if (!name || name === draft.original) return;
+    onRename(draft.id, name).catch(() => setEditError({ venueId: draft.id, message: "לא ניתן לשמור את השם" }));
+  };
+
+  // Closing the dropdown always drops any error from a previous attempt. Done at every
   // call site that closes the menu, not in an effect keyed on `open`: an effect that turns around
   // and calls setState the moment it sees the closed value is just this same reset one render late.
   const closeMenu = () => {
+    // A name still being typed is SAVED by closing, not thrown away. This used to be left to the
+    // input's blur, but an outside click closes the menu on pointerdown — before the browser moves
+    // focus — so the input was already gone when blur would have fired, and the new name with it.
+    // Read through a ref because the document listener below holds the closeMenu of the render
+    // that opened the menu, whose `renameValue` is whatever it was then.
+    commitRename();
     setOpen(false);
-    setConfirmDeleteId(null);
     setDeleteError(null);
+    setEditError(null);
   };
 
   useEffect(() => {
@@ -82,24 +143,32 @@ export function VenueSwitcher({
     };
   }, [open]);
 
-  const startRename = (v: Venue) => {
-    setRenamingId(v.id);
-    setRenameValue(v.name);
+  // Clicking the avatar while editing picks the venue's picture. Uploaded straight to storage
+  // (lib/files), and only the returned URL goes to the server.
+  const pickLogo = async (venueId: string, file: File | undefined) => {
+    if (!file) return;
+    setEditError(null);
+    setLogoBusyId(venueId);
+    try {
+      const { url } = await uploadFile(file, "logo");
+      await onSetLogo(venueId, url);
+    } catch (e) {
+      setEditError({ venueId, message: e instanceof Error ? e.message : "העלאת התמונה נכשלה" });
+    } finally {
+      setLogoBusyId(null);
+    }
   };
-  const commitRename = () => {
-    if (renamingId) onRename(renamingId, renameValue);
-    setRenamingId(null);
+  const clearLogo = (venueId: string) => {
+    setEditError(null);
+    onSetLogo(venueId, null).catch(() => setEditError({ venueId, message: "לא ניתן להסיר את התמונה" }));
   };
 
-  const handleDeleteClick = (v: Venue) => {
-    if (confirmDeleteId !== v.id) {
-      setConfirmDeleteId(v.id);
-      setDeleteError(null);
-      return;
-    }
-    setConfirmDeleteId(null);
+  const confirmDelete = () => {
+    const v = pendingDelete;
+    setPendingDelete(null);
+    if (!v) return;
     void onDelete(v.id).then((error) => {
-      if (error) setDeleteError(error);
+      if (error) setDeleteError({ ...error, venueId: v.id });
     });
   };
 
@@ -114,13 +183,13 @@ export function VenueSwitcher({
         onClick={() => (open ? closeMenu() : setOpen(true))}
         className={
           "flex w-full items-center gap-2.5 rounded-md border border-border bg-canvas text-start transition-colors hover:border-accent-line " +
-          (collapsed ? "justify-center px-0 py-2" : "px-3 py-2")
+          (collapsed ? "justify-center px-0 py-1.5" : "px-2.5 py-1.5")
         }
       >
         {active ? (
-          <VenueAvatar venue={active} tone="solid" />
+          <VenueAvatar venue={active} tone="solid" size="lg" />
         ) : (
-          <span className="h-7 w-7 shrink-0 rounded-full bg-accent-tint" />
+          <span className="h-10 w-10 shrink-0 rounded-full bg-accent-tint" />
         )}
         {!collapsed && (
           <>
@@ -149,20 +218,77 @@ export function VenueSwitcher({
             const renaming = renamingId === v.id;
             if (renaming) {
               return (
-                <div key={v.id} className="group flex items-center gap-2.5 rounded-sm px-3 py-2 text-sm">
-                  <VenueAvatar venue={v} />
+                <div key={v.id} className="flex items-center gap-2 rounded-sm px-3 py-2 text-sm">
+                  {/* No commit on blur any more: picking a picture moves focus off the input, and
+                      saving-and-closing the row there would unmount the very button being clicked.
+                      Enter, the check, or closing the menu saves; Escape cancels. */}
+                  <button
+                    type="button"
+                    aria-label={v.logoUrl ? `החלפת התמונה של ${v.name}` : `הוספת תמונה ל${v.name}`}
+                    title={v.logoUrl ? "החלפת תמונה" : "הוספת תמונה"}
+                    disabled={logoBusyId === v.id}
+                    onClick={() => fileRef.current?.click()}
+                    className="group/logo relative shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <VenueAvatar venue={v} />
+                    <span
+                      className={
+                        "absolute inset-0 flex items-center justify-center rounded-full bg-ink/45 text-canvas transition-opacity " +
+                        (logoBusyId === v.id || !v.logoUrl ? "opacity-100" : "opacity-0 group-hover/logo:opacity-100")
+                      }
+                    >
+                      {logoBusyId === v.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
+                      ) : (
+                        <Camera className="h-3.5 w-3.5" strokeWidth={2} />
+                      )}
+                    </span>
+                  </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/avif"
+                    className="hidden"
+                    onChange={(e) => {
+                      void pickLogo(v.id, e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
+                  />
                   <input
                     autoFocus
                     value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
+                    aria-label="שם המתחם"
+                    onChange={(e) => editName(e.target.value)}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") commitRename();
-                      else if (e.key === "Escape") setRenamingId(null);
+                      else if (e.key === "Escape") {
+                        // Cancels the edit only — the menu stays open.
+                        e.stopPropagation();
+                        cancelRename();
+                      }
                     }}
-                    onBlur={commitRename}
                     className="min-w-0 flex-1 rounded-sm border border-accent-line bg-canvas px-2 py-1 text-ink outline-none"
                   />
+                  {v.logoUrl && (
+                    <button
+                      type="button"
+                      aria-label={`הסרת התמונה של ${v.name}`}
+                      title="הסרת תמונה"
+                      onClick={() => clearLogo(v.id)}
+                      className="shrink-0 rounded-sm p-1 text-ink-soft hover:bg-canvas hover:text-alert"
+                    >
+                      <X className="h-3.5 w-3.5" strokeWidth={2} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-label="שמירה"
+                    onClick={commitRename}
+                    className="shrink-0 rounded-sm p-1 text-accent hover:bg-accent-tint"
+                  >
+                    <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  </button>
                 </div>
               );
             }
@@ -198,18 +324,13 @@ export function VenueSwitcher({
                 </button>
                 <button
                   type="button"
-                  aria-label={confirmDeleteId === v.id ? `לאשר מחיקת ${v.name}` : `מחיקת ${v.name}`}
-                  title={confirmDeleteId === v.id ? "לחצו שוב לאישור מחיקה" : undefined}
+                  aria-label={`מחיקת ${v.name}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDeleteClick(v);
+                    setDeleteError(null);
+                    setPendingDelete(v);
                   }}
-                  className={
-                    "shrink-0 rounded-sm p-1 transition-colors " +
-                    (confirmDeleteId === v.id
-                      ? "bg-alert-tint text-alert opacity-100"
-                      : "text-ink-soft opacity-0 hover:bg-canvas hover:text-alert group-hover:opacity-100")
-                  }
+                  className="shrink-0 rounded-sm p-1 text-ink-soft opacity-0 transition-colors hover:bg-canvas hover:text-alert group-hover:opacity-100"
                 >
                   <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
@@ -218,8 +339,26 @@ export function VenueSwitcher({
           })}
 
           {deleteError && (
+            <div className="w-full rounded-sm bg-alert-tint px-4 py-3 text-xs leading-relaxed">
+              <p className="break-words text-alert">{deleteError.error}</p>
+              {/* The way out of the refusal. /production scoped to this venue lists every event on
+                  it — undated and archived ones included — with open and delete on each row. */}
+              {deleteError.eventCount > 0 && (
+                <Link
+                  href={`/production?venue=${encodeURIComponent(deleteError.venueId)}`}
+                  onClick={closeMenu}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-semibold text-accent hover:text-accent-hover"
+                >
+                  <CalendarSearch className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                  {deleteError.eventCount === 1 ? "צפייה באירוע" : `צפייה ב־${deleteError.eventCount} האירועים`}
+                </Link>
+              )}
+            </div>
+          )}
+
+          {editError && (
             <p className="w-full break-words rounded-sm bg-alert-tint px-4 py-3 text-xs leading-relaxed text-alert">
-              {deleteError}
+              {editError.message}
             </p>
           )}
 
@@ -238,6 +377,17 @@ export function VenueSwitcher({
           </button>
         </div>
       )}
+
+      {/* Inside rootRef on purpose: a click in the dialog is then not an "outside" click, so the
+          menu stays open behind it and a refusal has somewhere to appear. */}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={`למחוק את המתחם "${pendingDelete?.name ?? ""}"?`}
+        body="כל המידע המקושר למתחם זה יימחק — השרטוט, האזורים וההרשאות שניתנו עליו. האם למחוק בכל זאת?"
+        confirmLabel="מחיקה"
+        onConfirm={confirmDelete}
+        onClose={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

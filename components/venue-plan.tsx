@@ -1,12 +1,14 @@
 "use client";
 
-import { outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
+import { fromLocalFrame, outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, toLocalFrame, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
-import { featureFootprint, nodeMap, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { FootprintShape } from "@/components/footprint-shape";
+import { PlantGlyph } from "@/components/plant-glyph";
+import { SurfaceFill } from "@/components/surface-fill";
 import { detectFaces, type Face } from "@/lib/venues/faces";
-import { stairsGeometry } from "@/lib/venues/stairs";
+import { stairsFlights } from "@/lib/venues/stairs";
 import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
@@ -44,11 +46,15 @@ import { EntranceDoor, RotateHandle } from "@/components/plan-canvas";
 // so /halls keeps the image locked and asks for it to be unlocked on purpose.
 export function PlanUnderlayLayer({
   underlay,
+  selected = false,
   onMove,
   onCommit,
   clientToMm,
 }: {
   underlay?: PlanUnderlay;
+  /** The designer clicked the plan and its lock chip is open — draw the same solid accent outline
+   *  and wash a selected zone or feature wears, so it is obvious WHAT the chip is acting on. */
+  selected?: boolean;
   onMove?: (p: Point) => void;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => Point;
@@ -76,6 +82,34 @@ export function PlanUnderlayLayer({
       />
       {/* While unlocked, the outline says where the image's edges are — a pale scan can otherwise
           fade into the plane, leaving nothing to aim a drag at. */}
+      {selected && !movable && (
+        <>
+          {/* A white under-stroke first, so the accent line stays visible over a dark photo. */}
+          <rect
+            x={underlay.x}
+            y={underlay.y}
+            width={underlay.widthMm}
+            height={underlay.heightMm}
+            fill="var(--color-accent)"
+            fillOpacity={0.1}
+            stroke="var(--color-canvas)"
+            strokeWidth={6}
+            vectorEffect="non-scaling-stroke"
+            className="pointer-events-none"
+          />
+          <rect
+            x={underlay.x}
+            y={underlay.y}
+            width={underlay.widthMm}
+            height={underlay.heightMm}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth={2.5}
+            vectorEffect="non-scaling-stroke"
+            className="pointer-events-none"
+          />
+        </>
+      )}
       {movable && (
         <rect
           x={underlay.x}
@@ -317,6 +351,133 @@ export function ZoneRegions({
   );
 }
 
+// Where each live corner drag started, keyed by pointerId — module scope for the same reason as
+// featureDrag below: the first move re-renders the host and rebuilds these handlers mid-gesture.
+const regionDrag = new Map<number, { index: number; x: number; y: number; from: Point; dragging: boolean }>();
+
+/** The editable outline of a freehand zone (lib/venues/region-edit.ts): a handle on every corner to
+ *  drag, a smaller one mid-edge that becomes a new corner the moment it is dragged, and a
+ *  double-click on a corner to take it away. Drawn only for the one selected region zone — a face
+ *  zone's outline is its walls, which the canvas already lets you drag. */
+export function RegionOutlineEditor({
+  boundary,
+  mm,
+  clientToMm,
+  onMovePoint,
+  onInsertPoint,
+  onRemovePoint,
+  onCommit,
+}: {
+  boundary: Point[];
+  mm: (px: number) => number;
+  clientToMm: (clientX: number, clientY: number) => { x: number; y: number };
+  onMovePoint: (index: number, to: Point) => void;
+  /** Adds a corner mid-edge `index` and returns the new corner's index, which the drag then moves. */
+  onInsertPoint: (index: number) => number;
+  onRemovePoint: (index: number) => void;
+  onCommit: () => void;
+}) {
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    const d = regionDrag.get(e.pointerId);
+    if (d?.dragging) onCommit();
+    regionDrag.delete(e.pointerId);
+  };
+  const drag = (index: number | null, edge: number | null) => ({
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      const at = index ?? edge!;
+      regionDrag.set(e.pointerId, {
+        // A mid-edge handle has no corner yet: -1 until the drag actually starts, so a plain click
+        // on it adds nothing.
+        index: index ?? -1 - at,
+        x: e.clientX,
+        y: e.clientY,
+        from: index !== null ? boundary[index] : clientToMm(e.clientX, e.clientY),
+        dragging: false,
+      });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const d = regionDrag.get(e.pointerId);
+      if (!d || e.buttons !== 1) return;
+      if (!d.dragging) {
+        if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+        d.dragging = true;
+        if (d.index < 0) d.index = onInsertPoint(-1 - d.index);
+      }
+      const start = clientToMm(d.x, d.y);
+      const now = clientToMm(e.clientX, e.clientY);
+      onMovePoint(d.index, { x: d.from.x + now.x - start.x, y: d.from.y + now.y - start.y });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  });
+  const r = mm(6);
+  return (
+    // A click on a handle is not a click on the empty plan: letting it bubble to the canvas would
+    // clear the selection, and with it these handles, before a double-click could land.
+    <g onClick={(e) => e.stopPropagation()}>
+      {boundary.map((a, i) => {
+        const b = boundary[(i + 1) % boundary.length];
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        // Too short on screen to fit a third handle between its two corners: offer none.
+        if (Math.hypot(b.x - a.x, b.y - a.y) < mm(36)) return null;
+        return (
+          <g key={`m${i}`} {...drag(null, i)} role="button" aria-label="הוספת פינה — גרירה" className="group cursor-copy touch-none">
+            <circle cx={mx} cy={my} r={mm(10)} fill="transparent" />
+            <circle
+              cx={mx}
+              cy={my}
+              r={mm(4)}
+              fill="var(--color-accent)"
+              fillOpacity={0.45}
+              className="transition-opacity group-hover:fill-opacity-100"
+            />
+          </g>
+        );
+      })}
+      {boundary.map((p, i) => (
+        <g
+          key={`p${i}`}
+          {...drag(i, null)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onRemovePoint(i);
+          }}
+          tabIndex={0}
+          role="button"
+          aria-label={`פינה ${i + 1} — גרירה להזזה · לחיצה כפולה למחיקה`}
+          className="group cursor-move touch-none"
+        >
+          <title>גררו להזזה · לחיצה כפולה מוחקת את הפינה</title>
+          <circle cx={p.x} cy={p.y} r={mm(12)} fill="transparent" />
+          <circle
+            cx={p.x}
+            cy={p.y}
+            r={r}
+            fill="#ffffff"
+            stroke="var(--color-accent)"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            className="transition-colors group-hover:fill-accent-tint"
+          />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/** The drawing order with every surface moved beneath everything else, each group keeping its own
+ *  order. A lawn laid after the palms must not bury them: the ground is under what stands on it
+ *  whatever order it was added in, and restacking reorders surfaces only among themselves. */
+function groundFirst(features: StructureFeature[]): StructureFeature[] {
+  return [...features.filter((f) => f.kind === "surface"), ...features.filter((f) => f.kind !== "surface")];
+}
+
 /** Fixed things a designer plans around and cannot move — the pool, a built stage, a permanent bar. */
 export function StructureFeatures({
   structure,
@@ -329,6 +490,7 @@ export function StructureFeatures({
   onRotate,
   onCommit,
   clientToMm,
+  onContextMenu,
 }: {
   structure: VenueStructure;
   mm: (px: number) => number;
@@ -351,10 +513,13 @@ export function StructureFeatures({
   onRotate?: (id: string, rotationDeg: number) => void;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
+  /** A right-click landed on this feature. Reported, not handled: the event still bubbles on to the
+   *  canvas, whose own right-click menu the host fills in knowing which feature it was over. */
+  onContextMenu?: (id: string) => void;
 }) {
   return (
     <>
-      {structure.features.map((f) => {
+      {groundFirst(structure.features).map((f) => {
         const selected = selectedIds?.includes(f.id) ?? false;
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",
@@ -374,12 +539,13 @@ export function StructureFeatures({
         // The flight comes back already in world millimetres, rotation and all, so it is drawn
         // OUTSIDE the feature's rotated group — inside it, the group's own transform would turn a
         // stage's stairs a second time.
-        const stairs = stairsGeometry(f);
+        const flights = stairsFlights(f);
         const stairsDrag = draggableStairs(f, onMoveStairs, onCommit, clientToMm);
         return (
           <g key={f.id}>
-            {stairs && (
+            {flights.map((stairs, n) => (
               <g
+                key={n}
                 {...stairsDrag}
                 onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
                 className={onMoveStairs ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
@@ -387,7 +553,7 @@ export function StructureFeatures({
               >
                 <path
                   d={outlinePathD(stairs.outline)}
-                  fill={selected ? "var(--color-accent-wash)" : "var(--color-inset)"}
+                  fill={selected ? "var(--color-accent-wash)" : (f.stairs?.fill ?? "var(--color-inset)")}
                   stroke={selected ? "var(--color-accent)" : "var(--color-muted)"}
                   strokeWidth={selected ? 2.5 : 1.25}
                   vectorEffect="non-scaling-stroke"
@@ -407,11 +573,12 @@ export function StructureFeatures({
                   />
                 ))}
               </g>
-            )}
+            ))}
             <g
               transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}
               {...drag}
               onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
+              onContextMenu={onContextMenu ? () => onContextMenu(f.id) : undefined}
               className={onMove ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
             >
               {/* One shape resolver for the whole app (components/footprint-shape.tsx): a bar the
@@ -420,9 +587,50 @@ export function StructureFeatures({
                   footprint is centred on its own origin, so the position is a translate — the
                   label and the resize handles below keep their absolute coordinates. */}
               <g transform={`translate(${f.x} ${f.y})`}>
-                <FootprintShape footprint={featureFootprint(f)} {...common} />
+                {f.kind === "surface" ? (
+                  <>
+                    {/* The ground: a real-scale texture filling its own shape, with the same
+                        dashed selection outline as a plant rather than a dashed resting border. */}
+                    <SurfaceFill
+                      material={surfaceMaterial(f)}
+                      footprint={featureFootprint(f)}
+                      w={f.widthMm}
+                      d={f.depthMm}
+                      id={f.id}
+                      color={f.style?.fill}
+                      opacity={f.style?.fillOpacity}
+                    />
+                    {selected && (
+                      <FootprintShape
+                        footprint={featureFootprint(f)}
+                        fill="none"
+                        stroke="var(--color-accent)"
+                        strokeWidth={2}
+                        strokeDasharray="4 3"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    )}
+                  </>
+                ) : f.kind === "plant" ? (
+                  <>
+                    {/* A plant is its picture, not a labelled outline: the footprint stays as an
+                        invisible hit area (transparent is a paint, so the gaps between the fronds
+                        still take the click) and only draws its outline to show it is selected. */}
+                    <PlantGlyph species={plantSpecies(f)} w={f.widthMm} d={f.depthMm} id={f.id} color={f.style?.fill} opacity={f.style?.fillOpacity} />
+                    <FootprintShape
+                      footprint={featureFootprint(f)}
+                      fill="transparent"
+                      stroke={selected ? "var(--color-accent)" : "none"}
+                      strokeWidth={2}
+                      strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
+                ) : (
+                  <FootprintShape footprint={featureFootprint(f)} {...common} />
+                )}
               </g>
-              <text
+              {f.kind !== "plant" && f.kind !== "surface" && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"
@@ -432,7 +640,7 @@ export function StructureFeatures({
                 className="pointer-events-none"
               >
                 {f.label}
-              </text>
+              </text>}
 
               {/* Resize handles — only on a selected feature, and only once a host is actually
                   listening (see onResize's doc). Sit inside this same rotated group so they turn
@@ -444,16 +652,45 @@ export function StructureFeatures({
                   constrain convention every design tool gives its resize handles. */}
               {selected && onResize && (
                 f.shape === "circle" ? (
-                  <ResizeHandle
-                    {...resizableRadius(f, onResize, onCommit, clientToMm)}
-                    cursor="cursor-nesw-resize"
-                    label={`שינוי קוטר של ${f.label} — גרירה`}
-                    cx={f.x + f.widthMm / 2}
-                    cy={f.y}
-                    mm={mm}
-                  />
+                  // Four handles round the rim, on the diagonals where a designer reaches for a
+                  // corner — one lone handle was easy to miss, and was often round the far side.
+                  ([[1, 1], [-1, 1], [-1, -1], [1, -1]] as const).map(([sx, sy]) => (
+                    <ResizeHandle
+                      key={`r${sx}${sy}`}
+                      {...resizableRadius(f, onResize, onCommit, clientToMm)}
+                      cursor={sx === sy ? "cursor-nwse-resize" : "cursor-nesw-resize"}
+                      label={`שינוי גודל של ${f.label} — גרירה`}
+                      cx={f.x + (sx * f.widthMm * Math.SQRT1_2) / 2}
+                      cy={f.y + (sy * f.widthMm * Math.SQRT1_2) / 2}
+                      mm={mm}
+                    />
+                  ))
                 ) : (
                   <>
+                    {/* A dashed box ties the corner handles to what they scale. */}
+                    <rect
+                      x={f.x - f.widthMm / 2}
+                      y={f.y - f.depthMm / 2}
+                      width={f.widthMm}
+                      height={f.depthMm}
+                      fill="none"
+                      stroke="var(--color-accent)"
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke"
+                      className="pointer-events-none"
+                    />
+                    {([[1, 1], [-1, 1], [-1, -1], [1, -1]] as const).map(([sx, sy]) => (
+                      <ResizeHandle
+                        key={`c${sx}${sy}`}
+                        {...resizableCorner(f, sx, sy, onResize, onCommit, clientToMm)}
+                        cursor={sx === sy ? "cursor-nwse-resize" : "cursor-nesw-resize"}
+                        label={`שינוי גודל של ${f.label} — גרירה · Shift לשמירה על יחס הממדים`}
+                        cx={f.x + (sx * f.widthMm) / 2}
+                        cy={f.y + (sy * f.depthMm) / 2}
+                        mm={mm}
+                      />
+                    ))}
                     {([1, -1] as const).map((sign) => (
                       <ResizeHandle
                         key={`w${sign}`}
@@ -513,17 +750,23 @@ function ResizeHandle({
   mm,
   ...drag
 }: ReturnType<typeof resizable> & { label: string; cursor: string; cx: number; cy: number; mm: (px: number) => number }) {
-  const size = mm(10);
+  const size = mm(11);
+  // White with an accent ring, the handle every design tool draws: it reads against a dark canopy
+  // and a pale floor alike, where a solid violet square vanished into the palms.
   return (
-    <g {...drag} tabIndex={0} role="button" aria-label={label} className={`${cursor} touch-none`}>
-      <circle cx={cx} cy={cy} r={mm(11)} fill="transparent" />
+    <g {...drag} tabIndex={0} role="button" aria-label={label} className={`group ${cursor} touch-none`}>
+      <circle cx={cx} cy={cy} r={mm(12)} fill="transparent" />
       <rect
         x={cx - size / 2}
         y={cy - size / 2}
         width={size}
         height={size}
-        className="text-accent hover:text-accent-deep"
-        fill="currentColor"
+        rx={mm(2.5)}
+        fill="#ffffff"
+        stroke="var(--color-accent)"
+        strokeWidth={1.75}
+        vectorEffect="non-scaling-stroke"
+        className="transition-colors group-hover:fill-accent-tint"
       />
     </g>
   );
@@ -662,6 +905,57 @@ function resizable(
         if (axis === "width") depthMm = other; else widthMm = other;
       }
       onResize(f.id, { widthMm, depthMm, x: center.x, y: center.y });
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+}
+
+// One corner of one feature — both measurements at once, the way every design tool scales a box.
+// The OPPOSITE corner stays put (in the feature's own turned frame), so dragging a hedge's end out
+// grows it away from the corner it was already lined up against. Shift keeps the proportions, which
+// on a plant is the difference between a bigger palm and an oval one.
+function resizableCorner(
+  f: StructureFeature,
+  sx: 1 | -1,
+  sy: 1 | -1,
+  onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+) {
+  if (!onResize || !clientToMm) return {};
+  const end = (e: React.PointerEvent) => {
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    if (featureResize.get(e.pointerId)?.dragging) onCommit?.();
+    featureResize.delete(e.pointerId);
+  };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      featureResize.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false, ratio: f.widthMm / f.depthMm });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const origin = featureResize.get(e.pointerId);
+      if (!origin || e.buttons !== 1) return;
+      if (!origin.dragging) {
+        if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 4) return;
+        origin.dragging = true;
+      }
+      const rot = f.rotationDeg ?? 0;
+      const centre = { x: f.x, y: f.y };
+      const p = toLocalFrame(clientToMm(e.clientX, e.clientY), centre, rot);
+      const anchor = { x: (-sx * f.widthMm) / 2, y: (-sy * f.depthMm) / 2 };
+      let widthMm = Math.max(MIN_FEATURE_MM, Math.round(sx * (p.x - anchor.x)));
+      let depthMm = Math.max(MIN_FEATURE_MM, Math.round(sy * (p.y - anchor.y)));
+      if (e.shiftKey) {
+        // The larger of the two stretches wins, so the corner still tracks the pointer on one axis.
+        if (widthMm / origin.ratio > depthMm) depthMm = Math.max(MIN_FEATURE_MM, Math.round(widthMm / origin.ratio));
+        else widthMm = Math.max(MIN_FEATURE_MM, Math.round(depthMm * origin.ratio));
+      }
+      const c = fromLocalFrame({ x: anchor.x + (sx * widthMm) / 2, y: anchor.y + (sy * depthMm) / 2 }, centre, rot);
+      onResize(f.id, { widthMm, depthMm, x: Math.round(c.x), y: Math.round(c.y) });
     },
     onPointerUp: end,
     onPointerCancel: end,

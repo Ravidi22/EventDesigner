@@ -32,6 +32,7 @@
     "db:verify": "tsx lib/db/verify-roundtrip.ts",
     "check:outline": "tsx lib/studio/use-outline-editor.ts",
     "check:faces": "tsx lib/venues/faces.ts",
+    "check:region": "tsx lib/venues/region-edit.ts",
     "check:underlay": "tsx lib/venues/underlay.ts",
     "check:csv": "tsx lib/catalog/csv.ts",
     "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",

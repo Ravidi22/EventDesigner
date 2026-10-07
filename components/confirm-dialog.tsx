@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { Button } from "./button";
+import { CloseButton } from "./close-button";
 
 // The question asked before something is destroyed.
 //
@@ -49,7 +50,12 @@ export function ConfirmDialog({
       className="modal m-auto max-h-none rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
     >
       <div className="w-[min(92vw,25rem)] p-5 text-right">
-        <h2 className="font-display text-base leading-snug text-ink">{title}</h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="font-display text-base leading-snug text-ink">{title}</h2>
+          {/* tabIndex -1: showModal() focuses the first focusable element, and that must stay
+              ביטול (see the footer). The ✕ is for the pointer; Escape is the keyboard's way out. */}
+          <CloseButton tabIndex={-1} className="-me-1 -mt-1" onClick={onClose} />
+        </div>
         {body && <div className="mt-2 text-sm leading-relaxed text-ink-soft">{body}</div>}
 
         {/* ⚠ THE ORDER IS LOAD-BEARING. showModal() focuses the first focusable element, so ביטול is
@@ -57,17 +63,16 @@ export function ConfirmDialog({
             with one Enter. The destructive button is pushed to the far end, the same shape the edit
             drawer's footer already has. */}
         <div className="mt-5 flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={onClose}>
+          {/* The SAFE answer is the prominent one: ביטול is the dialog's one filled CTA, so the eye
+              and the Enter key both land on it. The destructive choice is borderless alert text —
+              readable, deliberate to reach, and never the thing that looks like "continue". */}
+          <Button size="sm" variant="primary" onClick={onClose}>
             ביטול
           </Button>
-          {/* Outline geometry with the alert stroke, written out rather than passed to Button: the
-              `danger` variant is ghost-weight, which is right for a button sitting quietly in a
-              footer and too quiet for the one thing this dialog exists to ask about. Same treatment
-              as the confirm in app/(app)/settings/data-section.tsx. */}
           <button
             type="button"
             onClick={onConfirm}
-            className="ms-auto inline-flex h-9 items-center justify-center rounded-pill border-[1.5px] border-alert px-4 text-[13px] font-bold text-alert transition-colors hover:bg-alert-tint"
+            className="ms-auto inline-flex h-9 items-center justify-center rounded-pill px-4 text-[13px] font-bold text-alert transition-colors hover:bg-alert-tint"
           >
             {confirmLabel}
           </button>

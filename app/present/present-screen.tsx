@@ -8,6 +8,7 @@ import { activeEvent } from "@/lib/events/storage";
 import { fetchFolder, toggleLike, fetchImages, fetchPresentations } from "@/lib/gallery/actions";
 import { IconButton } from "@/components/icon-button";
 import { Photo } from "@/components/photo";
+import { PresentationSlide } from "@/components/presentation-slide";
 
 // F-2.4 present mode: fullscreen flip through ONE presentation. `meeting` gates the client-only
 // bits — like / "תיק האירוע" — so a studio preview of the same presentation stays a plain
@@ -131,43 +132,34 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
           <ChevronRight className="h-6 w-6" strokeWidth={1.75} />
         </NavArrow>
 
-        <figure
+        <PresentationSlide
           key={current.id}
-          className="present-in relative aspect-[16/9] w-[min(88vw,135vh)] shrink overflow-hidden rounded-xl border border-border shadow-dialog"
-        >
-          {/* `contain`, not `cover`: this is the screen a client is looking at, and cropping the
-              photograph they were shown to fit a 16:9 box is not ours to do. */}
-          <Photo image={current} fit="contain" className="absolute inset-0 h-full w-full" />
-
-          {/* Name + description overlay the photo's lower edge, over an ink scrim for legibility. */}
-          <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/85 via-ink/25 to-transparent px-5 pb-4 pt-14">
-            <p className="nums text-xs tracking-wide text-canvas/70">
-              {index + 1} מתוך {total}
-            </p>
-            <h2 className="mt-0.5 font-display text-h2 text-canvas sm:text-h1">{current.name}</h2>
-            {current.description && <p className="mt-0.5 text-sm text-canvas/80">{current.description}</p>}
-          </figcaption>
-
-          {/* Like — pinned to the opposite corner, a small pop confirms the toggle. Meeting-only. */}
-          {meeting && (
-            <button
-              type="button"
-              onClick={like}
-              disabled={!event}
-              aria-pressed={liked}
-              aria-label={liked ? `הסרת "${current.name}" מתיק האירוע` : `שמירת "${current.name}" לתיק האירוע`}
-              title={liked ? "הסרה מתיק האירוע" : "שמירה לתיק האירוע"}
-              onAnimationEnd={() => setPulse(false)}
-              className="absolute inset-inline-end-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-canvas/85 transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              <Heart
-                className={(pulse ? "animate-like-pop " : "") + "h-5 w-5 " + (liked ? "text-accent" : "text-muted")}
-                strokeWidth={2}
-                fill={liked ? "currentColor" : "none"}
-              />
-            </button>
-          )}
-        </figure>
+          image={current}
+          index={index}
+          total={total}
+          className="w-[min(88vw,135vh)] shrink"
+          action={
+            /* Like — pinned to the opposite corner, a small pop confirms the toggle. Meeting-only. */
+            meeting ? (
+              <button
+                type="button"
+                onClick={like}
+                disabled={!event}
+                aria-pressed={liked}
+                aria-label={liked ? `הסרת "${current.name}" מתיק האירוע` : `שמירת "${current.name}" לתיק האירוע`}
+                title={liked ? "הסרה מתיק האירוע" : "שמירה לתיק האירוע"}
+                onAnimationEnd={() => setPulse(false)}
+                className="absolute inset-inline-end-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-canvas/85 transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <Heart
+                  className={(pulse ? "animate-like-pop " : "") + "h-5 w-5 " + (liked ? "text-accent" : "text-muted")}
+                  strokeWidth={2}
+                  fill={liked ? "currentColor" : "none"}
+                />
+              </button>
+            ) : undefined
+          }
+        />
 
         <NavArrow label="הבא" onClick={() => go(1)}>
           <ChevronLeft className="h-6 w-6" strokeWidth={1.75} />

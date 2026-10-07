@@ -36,6 +36,14 @@ export interface FeatureStairs {
   widthMm: number;
   /** Slide along that edge, from its centre. 0 = centred. */
   offsetMm: number;
+  /** A second, identical flight on the OPPOSITE edge — a חופה stage climbed from both sides. A flag
+   *  on the one flight rather than a second flight of its own, because that is what it is: the two
+   *  are built as a pair, and a pair that could be edited apart would have to be kept in step by
+   *  hand. Absent = one flight, which is every stage saved before this existed. */
+  bothSides?: boolean;
+  /** What the treads are finished in, as a colour — timber steps up to a white stage are not the
+   *  stage's colour. Absent = the plan's own neutral, which is every flight saved before this. */
+  fill?: string;
 }
 
 /** What a flight is attached to. Structural rather than importing StructureFeature: it keeps this
@@ -98,6 +106,8 @@ export function normalizeStairs(host: StairsHost, stairs: FeatureStairs): Featur
     treadMm: Math.max(MIN_TREAD_MM, Math.round(stairs.treadMm)),
     widthMm,
     offsetMm: clamp(Math.round(stairs.offsetMm), -slack, slack),
+    ...(stairs.bothSides ? { bothSides: true } : {}),
+    ...(stairs.fill ? { fill: stairs.fill } : {}),
   };
 }
 
@@ -144,14 +154,27 @@ export interface StairsGeometry {
  *  rotated group, and handing them geometry that has to be rotated *again* is how a stage at 30°
  *  ends up with its stairs at 60°. */
 export function stairsGeometry(host: StairsHost): StairsGeometry | null {
+  return host.stairs ? flightGeometry(host, host.stairs, host.stairs.side) : null;
+}
+
+const OPPOSITE: Record<StairsSide, StairsSide> = { front: "back", back: "front", left: "right", right: "left" };
+
+/** Every flight the feature has, to draw: the one it stores, and its twin across the deck when
+ *  `bothSides` is set. What a renderer should call — stairsGeometry alone is the stored flight. */
+export function stairsFlights(host: StairsHost): StairsGeometry[] {
   const stairs = host.stairs;
-  if (!stairs) return null;
+  if (!stairs) return [];
+  const sides = stairs.bothSides ? [stairs.side, OPPOSITE[stairs.side]] : [stairs.side];
+  return sides.map((side) => flightGeometry(host, stairs, side));
+}
+
+function flightGeometry(host: StairsHost, stairs: FeatureStairs, side: StairsSide): StairsGeometry {
   const centre = { x: host.x, y: host.y };
   const rot = host.rotationDeg ?? 0;
-  const { out, along } = frame(stairs.side);
+  const { out, along } = frame(side);
   // How far the chosen edge sits from the deck's centre, measured along `out` — the depth for the
   // front/back edges, the width for the left/right ones (the other axis to sideLengthMm's).
-  const edge = (stairs.side === "front" || stairs.side === "back" ? host.depthMm : host.widthMm) / 2;
+  const edge = (side === "front" || side === "back" ? host.depthMm : host.widthMm) / 2;
   const halfFlight = stairs.widthMm / 2;
   const run = stairsRunMm(stairs);
   const treads = Math.max(1, stairs.steps - 1);
@@ -217,6 +240,12 @@ if ((import.meta as { main?: boolean }).main) {
   assert(geo.nosings.length === 2, "3 treads show 2 interior step edges; the outer two are the footprint's own");
   assert(Math.abs(geo.centre.y - 1450) < 1e-6 && Math.abs(geo.centre.x) < 1e-6, "the flight's centre is the middle of its run");
   assert(stairsGeometry(stage) === null, "a feature without stairs has no flight");
+
+  // A pair: the twin hangs off the opposite edge, the same size, and survives normalising.
+  assert(stairsFlights({ ...stage, stairs: first }).length === 1 && stairsFlights(stage).length === 0, "one flight unless a pair is asked for");
+  const pair = stairsFlights({ ...stage, stairs: normalizeStairs(stage, { ...first, bothSides: true }) });
+  assert(pair.length === 2, "bothSides draws a second flight, and normalising keeps the flag");
+  assert(Math.abs(pair[0].centre.y + pair[1].centre.y) < 1e-6 && pair[1].centre.y < 0, "…mirrored across the deck");
 
   // A flight on the left edge hangs off -x, and its width is bounded by the *depth* of the stage.
   const onLeft = normalizeStairs(stage, { ...first, side: "left", widthMm: 9000 });

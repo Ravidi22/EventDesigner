@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -9,6 +10,7 @@ import {
   CalendarHeart,
   CircleCheck,
   CircleSlash,
+  Trash2,
   MessagesSquare,
   PenTool,
   Plus,
@@ -17,7 +19,8 @@ import {
 } from "lucide-react";
 import type { Runway, RunwayRow } from "@/lib/production/runway";
 import { LANE_HINT, LANE_LABEL, type LaneId } from "@/lib/production/runway";
-import { confirmEvent, markEventLost, patchEvent, reopenEvent } from "@/lib/events/actions";
+import { confirmEvent, deleteEvent, markEventLost, patchEvent, reopenEvent } from "@/lib/events/actions";
+import { useVenues } from "@/lib/venues/use-venues";
 import { setActiveEventId } from "@/lib/events/storage";
 import type { MenuItem } from "@/components/menu";
 import { SearchInput } from "@/components/search-input";
@@ -62,8 +65,24 @@ import {
 // And the aesthetic instruction that outranks all of them: THE SCREEN IS SILENT WHEN NOTHING IS
 // WRONG. Alert ink appears for a late checkpoint and for a collision, and for nothing else. A
 // designer whose book is on schedule opens this and sees dates and names.
-export function ProductionScreen({ runway }: { runway: Runway }) {
+export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?: string }) {
   const router = useRouter();
+  const { venues, remove: removeVenue } = useVenues();
+
+  // `?venue=` (see page.tsx): "what is still on this property", asked when deleting it was refused.
+  // Every count on the screen is taken from the scoped rows, so the lane badges and the list agree.
+  const venue = venueId ? venues.find((v) => v.id === venueId) : undefined;
+  const rows = useMemo(
+    () => (venueId ? runway.rows.filter((r) => r.event.venueId === venueId) : runway.rows),
+    [runway.rows, venueId],
+  );
+  const counts = useMemo(() => {
+    if (!venueId) return runway.counts;
+    const scoped: Record<LaneId, number> = { production: 0, proposal: 0, early: 0, closed: 0 };
+    for (const r of rows) scoped[r.lane]++;
+    return scoped;
+  }, [rows, runway.counts, venueId]);
+  const needsAttention = venueId ? rows.filter((r) => r.alert).length : runway.needsAttention;
 
   // `production` by default: the lane the designer is being PAID for. An event the client has said
   // yes to is work with a delivery date; everything else is still a conversation.
@@ -82,7 +101,7 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
   // that confirmed it.
   const [filter, setFilter] = useState<FilterId>(() => {
     const order: LaneId[] = ["production", "proposal", "early", "closed"];
-    return order.find((lane) => runway.counts[lane] > 0) ?? "production";
+    return order.find((lane) => counts[lane] > 0) ?? "production";
   });
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
@@ -94,6 +113,11 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
   // owned here rather than one per card — the same arrangement the catalog uses, and the reason
   // every delete in a surface asks the same question in the same words.
   const [losing, setLosing] = useState<RunwayRow | null>(null);
+  // Same arrangement for the one delete that cannot be undone. Archive and "not closed" both keep
+  // the event; this is for the one that should not exist at all — a test event, a duplicate, or
+  // the last thing standing between the designer and deleting a venue.
+  const [deleting, setDeleting] = useState<RunwayRow | null>(null);
+  const [deletingVenue, setDeletingVenue] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -112,12 +136,12 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
   const q = query.trim().toLowerCase();
   const visible = useMemo(
     () =>
-      runway.rows.filter((r) => {
+      rows.filter((r) => {
         const inFilter = filter === "attention" ? Boolean(r.alert) : r.lane === filter;
         if (!inFilter) return false;
         return !q || `${r.event.clientName} ${r.event.zonesLabel}`.toLowerCase().includes(q);
       }),
-    [runway.rows, filter, q],
+    [rows, filter, q],
   );
 
   const groups = useMemo(() => groupByMonth(visible), [visible]);
@@ -215,6 +239,7 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
     if (!e.lostAt) {
       items.push({ label: "סומן כלא נסגר", icon: CircleSlash, onSelect: () => setLosing(row), danger: true });
     }
+    items.push({ label: "מחיקת אירוע", icon: Trash2, onSelect: () => setDeleting(row), danger: true });
     return items;
   };
 
@@ -224,11 +249,29 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
   // right and the one worth keeping. "No events at all" is a first run and has to teach; "the lane
   // is empty" needs to say what belongs in it (LANE_HINT); "the search hid them" needs the way back.
   const laneToOffer = (["production", "proposal", "early", "closed"] as LaneId[])
-    .filter((id) => id !== filter && runway.counts[id] > 0)
-    .sort((a, b) => runway.counts[b] - runway.counts[a])[0];
+    .filter((id) => id !== filter && counts[id] > 0)
+    .sort((a, b) => counts[b] - counts[a])[0];
+
+  const venueName = venue?.name ?? "המתחם";
 
   const list =
-    runway.rows.length === 0 ? (
+    venueId && rows.length === 0 ? (
+      // The end of the errand that brought the designer here: nothing is left on the venue, so the
+      // delete the switcher refused can happen now, from where they are.
+      <EmptyState
+        icon={CircleCheck}
+        title={`אין אירועים ב${venue ? `״${venueName}״` : "מתחם הזה"}`}
+        body="כל האירועים שהיו משויכים למתחם נמחקו, ואפשר למחוק אותו עכשיו."
+        action={
+          venue ? (
+            <Button variant="outline" onClick={() => setDeletingVenue(true)}>
+              <Trash2 className="h-4 w-4" strokeWidth={2} />
+              מחיקת המתחם
+            </Button>
+          ) : undefined
+        }
+      />
+    ) : rows.length === 0 ? (
       <EmptyState
         icon={CalendarHeart}
         title="אין עדיין אירועים"
@@ -262,7 +305,7 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
           title={`אין אירועים ב״${LANE_LABEL[filter]}״`}
           body={LANE_HINT[filter]}
           onClear={laneToOffer ? () => setFilter(laneToOffer) : undefined}
-          clearLabel={laneToOffer ? `מעבר ל״${LANE_LABEL[laneToOffer]}״ (${runway.counts[laneToOffer]})` : undefined}
+          clearLabel={laneToOffer ? `מעבר ל״${LANE_LABEL[laneToOffer]}״ (${counts[laneToOffer]})` : undefined}
         />
       )
     ) : (
@@ -306,6 +349,21 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
         </p>
       )}
 
+      {/* Scoped to one venue (page.tsx's `?venue=`): say so, and give the whole book back. Without
+          this line the lane counts would quietly disagree with every other visit to this screen. */}
+      {venueId && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-4 py-2.5 text-sm">
+          <span className="font-semibold text-ink">אירועים ב״{venueName}״</span>
+          <span className="nums text-muted">{rows.length}</span>
+          {rows.length > 0 && (
+            <span className="text-muted">— כדי למחוק את המתחם, מחקו את האירועים שבו מתפריט ה״…״ של כל אירוע.</span>
+          )}
+          <Link href="/production" className="ms-auto font-semibold text-accent hover:text-accent-hover">
+            הצגת כל האירועים
+          </Link>
+        </div>
+      )}
+
       {/* The ribbon is navigation for the list underneath it, so it is drawn only when there is a
           list to navigate — thirteen disabled cells over an empty state say nothing. */}
       {visible.some((r) => r.event.date) && (
@@ -315,8 +373,8 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
       <div className="mb-4 flex shrink-0 flex-wrap items-center gap-3">
         <LaneFilter
           value={filter}
-          counts={runway.counts}
-          needsAttention={runway.needsAttention}
+          counts={counts}
+          needsAttention={needsAttention}
           onChange={setFilter}
         />
         {/* The shared component as-is, same bordered white field as every other search box in the
@@ -347,6 +405,38 @@ export function ProductionScreen({ runway }: { runway: Runway }) {
           if (row) void run(row.event.id, () => markEventLost(row.event.id));
         }}
         onClose={() => setLosing(null)}
+      />
+
+      <ConfirmDialog
+        open={deleting !== null}
+        title={deleting ? `למחוק את ${deleting.event.clientName}?` : ""}
+        body="האירוע יימחק לצמיתות, ואיתו האזורים, העיצוב, ההצעות, הפגישות והגלריה שלו. הוצאות שנרשמו עליו נשארות בספרים, ללא שיוך. אם רק רוצים להסתיר אותו — העברה לארכיון שומרת הכול."
+        confirmLabel="מחיקת האירוע"
+        onConfirm={() => {
+          const row = deleting;
+          setDeleting(null);
+          if (row) void run(row.event.id, () => deleteEvent(row.event.id));
+        }}
+        onClose={() => setDeleting(null)}
+      />
+
+      <ConfirmDialog
+        open={deletingVenue}
+        title={`למחוק את ${venueName}?`}
+        body="המתחם יימחק לצמיתות, ואיתו הקירות, האזורים וההרשאות שניתנו עליו."
+        confirmLabel="מחיקת המתחם"
+        onConfirm={() => {
+          setDeletingVenue(false);
+          if (!venueId) return;
+          setError(null);
+          void removeVenue(venueId)
+            .then((refused) => {
+              if (refused) setError(refused.error);
+              else router.push("/production");
+            })
+            .catch(() => setError("הפעולה לא הושלמה. נסה שוב."));
+        }}
+        onClose={() => setDeletingVenue(false)}
       />
 
       <EventDialog open={creating} onClose={() => setCreating(false)} />

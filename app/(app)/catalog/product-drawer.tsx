@@ -94,7 +94,7 @@ function SectionDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
       <span className="text-[11px] font-semibold text-faint">{label}</span>
-      <div className="h-px flex-1 bg-border-soft" />
+      <div className="h-px flex-1 bg-[#ebe8f5]" />
     </div>
   );
 }
@@ -635,7 +635,7 @@ export function ProductDrawer({
               </button>
             </div>
             {draft.variants.filter((v) => !v.archived).length === 0 ? (
-              <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted">
+              <p className="rounded-md border-[1.5px] border-dashed border-[#ddd6f0] px-3 py-2.5 text-xs text-[#a29eb2]">
                 אין גוונים. הוסיפו את הצבעים שיש לכם — הם אלה שייבחרו על התוכנית ויופרדו ברשימת הציוד.
               </p>
             ) : (
@@ -679,7 +679,7 @@ export function ProductDrawer({
           </div>
         </div>
 
-        <footer className="flex items-center gap-2 border-t border-border bg-surface px-5 py-3.5">
+        <footer className="flex items-center gap-2 border-t border-[#ebe8f5] bg-surface px-5 py-3.5">
           <Button type="submit">שמירה</Button>
           <Button variant="ghost" onClick={onClose}>
             ביטול

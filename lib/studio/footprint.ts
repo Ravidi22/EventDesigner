@@ -194,8 +194,18 @@ export function shapeFootprint(
     // malformed custom → fall through to a safe rectangle
   }
   if (shape === "circle") return { kind: "circle", diameterMm: d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM };
-  const widthMm = d.widthMm || MIN_FOOTPRINT_MM;
-  const depthMm = d.depthMm || MIN_FOOTPRINT_MM;
+  // Same single-measurement idea as circle above, just squared off instead of round — a "square"
+  // Footprint kind of its own would only ever draw identically to "rect" with widthMm===depthMm,
+  // so it resolves straight to that instead of adding a fourth shape every renderer has to know.
+  if (shape === "square") {
+    const side = d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM;
+    return { kind: "rect", widthMm: side, depthMm: side };
+  }
+  // d.diameterMm is in this fallback chain too: a round-dims product (only a diameter field, no
+  // width/depth) that's explicitly drawn as a rect/ellipse should still draw at its real size
+  // instead of silently collapsing to the generic MIN_FOOTPRINT_MM box.
+  const widthMm = d.widthMm || d.diameterMm || MIN_FOOTPRINT_MM;
+  const depthMm = d.depthMm || d.diameterMm || MIN_FOOTPRINT_MM;
   // A derived shape resolves to a custom footprint the app draws FOR the designer: the canvas, the
   // printed placement map, the drag image and the seating that walks a table's edges all already
   // know how to render an outline with bowed edges, so a new shape needs nothing new anywhere else.
@@ -249,6 +259,8 @@ if (isMain(import.meta.url)) {
   assert(eq(resolveFootprint(base), { kind: "rect", widthMm: 600, depthMm: 600 }), "missing dims → floor default");
   assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 800, depthMm: 400, heightMm: 100 }, appearance: { shape: "ellipse", content: "none" } }), { kind: "ellipse", widthMm: 800, depthMm: 400 }), "explicit ellipse");
   assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 120, depthMm: 120, heightMm: 350 }, appearance: { shape: "circle", content: "none" } }), { kind: "circle", diameterMm: 120 }), "circle falls back to width when no diameter");
+  assert(eq(resolveFootprint({ ...base, dimensions: { diameterMm: 1800, heightMm: 750 }, appearance: { shape: "ellipse", content: "none" } }), { kind: "ellipse", widthMm: 1800, depthMm: 1800 }), "a round-dims product drawn as ellipse falls back to its real diameter, not the generic floor default");
+  assert(eq(resolveFootprint({ ...base, dimensions: { diameterMm: 1800, heightMm: 750 }, appearance: { shape: "square", content: "none" } }), { kind: "rect", widthMm: 1800, depthMm: 1800 }), "square resolves to an equal-sided rect, sized from whichever dimension is set");
   const outline = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 50, y: 100 }];
   assert(eq(resolveFootprint({ ...base, appearance: { shape: "custom", outline, content: "none" } }), { kind: "custom", outline }), "valid custom");
   assert(eq(resolveFootprint({ ...base, dimensions: { widthMm: 200, depthMm: 200, heightMm: 1 }, appearance: { shape: "custom", outline: [{ x: 0, y: 0 }], content: "none" } }), { kind: "rect", widthMm: 200, depthMm: 200 }), "malformed custom → rect fallback");

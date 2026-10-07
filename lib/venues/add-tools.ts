@@ -12,14 +12,23 @@
 // than an array inside one of them: two pickers building their own ids separately is two protocols
 // that agree until one of them grows a department.
 //
-// Only the two departments a VENUE has built versions of are catalog-backed. A pool, a "מבנה" and an
+// Only the two departments a VENUE has built versions of are catalog-backed. A pool, a "מבנה", a palm and an
 // "אחר" are shapes on a property, not products in a catalog, and there is nothing to pick from.
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, type CategoryGroupId } from "@/lib/catalog/categories";
-import { FEATURE_KIND_LABEL, type FeatureKind } from "./structure";
+import {
+  FEATURE_KIND_LABEL,
+  PLANT_SPECIES,
+  PLANT_SPECIES_LABEL,
+  SURFACE_MATERIALS,
+  SURFACE_MATERIAL_LABEL,
+  type FeatureKind,
+  type PlantSpecies,
+  type SurfaceMaterial,
+} from "./structure";
 import { isMain } from "../self-check";
 
-export type AddToolSection = "structure" | "bars" | "stages";
+export type AddToolSection = "structure" | "ground" | "plants" | "bars" | "stages";
 
 export interface AddTool {
   /** Stable within one list, and the entire payload of a drag onto the canvas. */
@@ -30,12 +39,18 @@ export interface AddTool {
   kind: FeatureKind | null;
   /** The catalog row this places. Absent = a plain feature at the model's own rough default size. */
   product?: Product;
+  /** The species, iff `kind === "plant"`. */
+  plant?: PlantSpecies;
+  /** The material, iff `kind === "surface"`. */
+  surface?: SurfaceMaterial;
 }
 
-export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "bars", "stages"];
+export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "ground", "plants", "bars", "stages"];
 
 export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   structure: "מבנה",
+  ground: "רצפה וקרקע",
+  plants: "צמחייה",
   bars: "ברים ומזנונים",
   stages: "במות",
 };
@@ -65,6 +80,14 @@ const CATALOG_BACKED: { section: AddToolSection; group: CategoryGroupId; kind: F
  */
 export function addTools(products: Product[] = []): AddTool[] {
   const tools: AddTool[] = PLAIN.map((t) => ({ ...t, section: "structure" }));
+  // The ground and the planting are drawn, not picked off a shelf — no catalog has an opinion
+  // about a lawn or a palm.
+  for (const surface of SURFACE_MATERIALS) {
+    tools.push({ id: `surface:${surface}`, label: SURFACE_MATERIAL_LABEL[surface], section: "ground", kind: "surface", surface });
+  }
+  for (const plant of PLANT_SPECIES) {
+    tools.push({ id: `plant:${plant}`, label: PLANT_SPECIES_LABEL[plant], section: "plants", kind: "plant", plant });
+  }
 
   for (const { section, group, kind } of CATALOG_BACKED) {
     // F-4.5: an archived row stays resolvable for the placements that already point at it, and off
@@ -108,7 +131,7 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 6, "an empty catalog offers the six things the plan has always offered");
+  assert(empty.length === 6 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the six things the plan has always offered, and the planting");
   assert(empty.filter((t) => t.product).length === 0, "…none of them backed by a row that isn't there");
   for (const kind of ["bar", "stage"] as const) {
     const t = empty.find((x) => x.id === kind)!;

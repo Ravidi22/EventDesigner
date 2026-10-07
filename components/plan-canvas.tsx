@@ -351,6 +351,7 @@ export function PlanCanvas({
   onUndo,
   onRedo,
   contextMenuItems,
+  panTool = false,
   backdrop,
   overlay,
   graph,
@@ -410,6 +411,9 @@ export function PlanCanvas({
   onRedo?: () => void;
   // Right-click builds its menu from these (e.g. the hall's add entrance/stage/bar). No items → no menu.
   contextMenuItems?: (point: Point) => ContextMenuItem[];
+  /** The hand tool: a plain left drag moves the view, over anything drawn on the plan. Space held
+   *  does the same for the length of the press, whatever this is. */
+  panTool?: boolean;
   // World-space content painted under everything the canvas owns (below the walls, above the grid).
   // The venue plan puts its zone tints and fixed features here, so a wall shared by two zones is
   // still drawn once, by the canvas, on top of both — rather than each zone painting its own copy.
@@ -934,7 +938,7 @@ export function PlanCanvas({
   };
 
   const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (spaceHeld) return; // space is the pan modifier — never draw/select while it's down
+    if (spaceHeld || panTool) return; // the hand, or Space: a press here moves the view — never draw/select
     if (panMoved.current) return; // …nor on the click that closes a pan the user let go of space during
     if (marqueeMoved.current) { marqueeMoved.current = false; return; } // …nor on the click that ends a marquee drag
     // An armed tape takes the click ahead of everything, in BOTH modes — "how wide is that gap"
@@ -971,6 +975,25 @@ export function PlanCanvas({
     if (!svg) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // A pinch on a trackpad arrives as a wheel with ctrlKey set (every browser), and Ctrl+wheel on
+      // a mouse means zoom everywhere — both zoom, in proportion to how far the fingers moved.
+      if (e.ctrlKey || e.metaKey) {
+        zoomAround(e.clientX, e.clientY, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01))));
+        return;
+      }
+      // A two-finger swipe on a trackpad MOVES the view, the way every map and design tool does; a
+      // laptop has no middle button and nobody is told about Space. Told apart from a mouse wheel
+      // (which keeps zooming, as it always has here) by what a wheel never sends: a sideways
+      // component, a fractional step, or a step smaller than one notch. Shift+wheel pans sideways.
+      const trackpad = e.deltaMode === 0 && (e.deltaX !== 0 || !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 40);
+      if (trackpad || e.shiftKey) {
+        cancelFocus();
+        const px = e.deltaMode === 1 ? 16 : 1; // lines → pixels, for the odd wheel that reports lines
+        const dx = (e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX) * px;
+        const dy = (e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY) * px;
+        setCenter((c) => ({ x: c.x + dx * mmPerPx, y: c.y + dy * mmPerPx }));
+        return;
+      }
       zoomAround(e.clientX, e.clientY, e.deltaY > 0 ? 1.1 : 1 / 1.1);
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
@@ -1142,8 +1165,8 @@ export function PlanCanvas({
         // host draws into backdrop/overlay. A drawing surface has nothing worth text-selecting, and
         // a drag across a label that highlights it instead of moving the plan reads as broken.
         "h-full w-full touch-none select-none focus:outline-none " +
-        (spaceHeld
-          ? "cursor-grab"
+        (spaceHeld || panTool
+          ? "cursor-grab [&_*]:cursor-grab!"
           : hoverClose && closable
             ? "cursor-pointer"
             : tapeOn || mode === "draw" || cursor === "crosshair"
@@ -1161,7 +1184,21 @@ export function PlanCanvas({
       role="img"
       aria-label={ariaLabel}
       onClick={handleCanvasClick}
+      // The hand (and Space, and the middle button) take the press in the CAPTURE phase, before any
+      // layer underneath sees it: over a palm or a zone tint, a drag with the hand is still a drag
+      // of the view, not of the palm. Without this a press on anything draggable stopped the event
+      // on its way up, and the view could only be moved from the few bare patches between things.
+      onPointerDownCapture={(e) => {
+        if (!((panTool || spaceHeld) && e.button === 0) && e.button !== 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+        panMoved.current = false;
+        cancelFocus();
+        (e.currentTarget as Element).setPointerCapture(e.pointerId);
+        pan.current = { x: e.clientX, y: e.clientY, moved: false, ax: e.clientX, ay: e.clientY };
+      }}
       onPointerDown={(e) => {
+        if (pan.current && !pan.current.deferred) return; // already taken by the capture phase above
         panMoved.current = false;
         if (spaceHeld || e.button === 1) {
           e.preventDefault();
@@ -1401,11 +1438,26 @@ export function PlanCanvas({
           const b = graphNodeAt(w.b);
           if (!a || !b) return null;
           const curve = w.curve ?? null;
+          // Zoomed out, a short wall is barely longer than its own diamond — surfacing the handle
+          // would leave the wall nothing to click but the diamond and its two corners. Bowing a
+          // wall that small on screen isn't a real gesture anyway; zooming in brings it back.
+          if (!isSelected && dragGraphWall !== w.id && Math.hypot(b.x - a.x, b.y - a.y) < mm(40)) return null;
           const mid = edgeMidpoint(a, b, curve);
           const bulgeDrag = dragHandlers(
             clientToMm,
             (p) => onCurveGraphWall(w.id, "bulge", p),
-            () => onSelectGraph?.({ kind: "wall", id: w.id }, false),
+            // Select on the PRESS only (so a drag bows the wall it is holding), never again on the
+            // click that follows: onSelectGraph goes through pick's toggle, so selecting on both
+            // phases selected the wall and cleared it again in one click — the "clicking a wall
+            // opens nothing" bug, worst zoomed out where the diamond covers most of a short wall.
+            // A modifier click skips the press (see dragHandlers) and toggles on the click instead.
+            (mods) => {
+              if (mods.phase === "press") {
+                if (!isSelected) onSelectGraph?.({ kind: "wall", id: w.id }, false);
+              } else if (mods.shift) {
+                onSelectGraph?.({ kind: "wall", id: w.id }, true);
+              }
+            },
             (dragging) => setDragGraphWall(dragging ? w.id : null),
             onCommit,
           );

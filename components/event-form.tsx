@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, X } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { patchEvent } from "@/lib/events/actions";
 import { beginEvent } from "@/lib/events/begin";
@@ -15,8 +15,8 @@ import { MultiSelect } from "./multi-select";
 import { TextField } from "./text-field";
 import { NumberField } from "./number-field";
 import { DateField } from "./date-field";
-import { IconButton } from "./icon-button";
 import { fieldLabelClassName } from "./control";
+import { CloseButton } from "./close-button";
 
 // F-1.3: the event's own details — who, when, where, how many.
 //
@@ -168,9 +168,7 @@ export function EventForm({
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3.5">
         <h2 className="text-base font-semibold text-ink">{event ? "פרטי האירוע" : "אירוע חדש"}</h2>
         {onCancel && (
-          <IconButton label="סגירה" onClick={onCancel}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
+          <CloseButton label="סגירה" onClick={onCancel} />
         )}
       </header>
 

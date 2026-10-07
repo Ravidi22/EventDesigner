@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Trash2, X } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { Supplier } from "@/lib/suppliers/types";
 import { Button } from "@/components/button";
-import { IconButton } from "@/components/icon-button";
 import { TextField } from "@/components/text-field";
+import { CloseButton } from "@/components/close-button";
 
 export function blankSupplier(): Supplier {
   return { id: "", name: "" };
@@ -75,9 +75,7 @@ export function SupplierDrawer({
       >
         <header className="flex items-center justify-between border-b border-border bg-surface px-5 py-3.5">
           <h2 className="font-display text-base">{isEdit ? "עריכת ספק" : "ספק חדש"}</h2>
-          <IconButton label="סגור" onClick={onClose}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
+          <CloseButton label="סגור" onClick={onClose} />
         </header>
 
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">

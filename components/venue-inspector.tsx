@@ -3,7 +3,21 @@
 import { useState, type ReactNode } from "react";
 import {
   Box,
+  Grid2x2,
+  Grid3x3,
+  Leaf,
+  Mountain,
+  Rows3,
+  Sun,
+  Hexagon,
+  Flower2,
+  Fence,
+  Shrub,
+  Sprout,
+  TreeDeciduous,
+  TreePalm,
   CircleDot,
+  Copy,
   DoorOpen,
   Footprints,
   GlassWater,
@@ -11,7 +25,9 @@ import {
   Minus,
   Plus,
   Presentation,
+  Ruler,
   Shapes,
+  Square,
   Trash2,
   Waves,
   X,
@@ -21,6 +37,13 @@ import { bulgeDepthMm, maxBulgeDepthMm, wallAngleDeg, wallLengthMm } from "@/lib
 import type { ElementStyle } from "@/lib/element-style";
 import {
   FEATURE_KIND_LABEL,
+  PLANT_DEFAULTS,
+  PLANT_SPECIES,
+  PLANT_SPECIES_LABEL,
+  SURFACE_MATERIALS,
+  SURFACE_MATERIAL_LABEL,
+  surfaceMaterial,
+  plantSpecies,
   addEntrance,
   addStairs,
   isHangingPoint,
@@ -39,6 +62,8 @@ import {
   wallPoints,
   type CeilingRig,
   type FeatureKind,
+  type PlantSpecies,
+  type SurfaceMaterial,
   type StructureFeature,
   type VenueStructure,
   type WallKind,
@@ -69,13 +94,15 @@ import {
   SegmentedToggle,
 } from "@/components/plan-canvas";
 
-export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other"];
+export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface"];
 export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   pool: Waves,
   stage: Presentation,
   bar: GlassWater,
   structure: Box,
   other: Shapes,
+  plant: Sprout,
+  surface: Grid2x2,
 };
 
 /** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one
@@ -84,10 +111,37 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
  *
  *  A record and not a function returning one: a component that comes back from a CALL is a new
  *  component on every render (react-hooks/static-components), and these are rendered in a grid. */
-export const ADD_TOOL_ICON: Record<string, LucideIcon> = { entrance: DoorOpen, ...FEATURE_ICON };
+export const SURFACE_ICON: Record<SurfaceMaterial, LucideIcon> = {
+  grass: Leaf,
+  paving: Grid2x2,
+  deck: Rows3,
+  gravel: Hexagon,
+  sand: Sun,
+  soil: Mountain,
+  tile: Grid3x3,
+  plain: Square,
+};
+
+export const PLANT_ICON: Record<PlantSpecies, LucideIcon> = {
+  palm: TreePalm,
+  tree: TreeDeciduous,
+  shrub: Shrub,
+  pot: Sprout,
+  hedge: Fence,
+  flowers: Flower2,
+};
+
+export const ADD_TOOL_ICON: Record<string, LucideIcon> = {
+  entrance: DoorOpen,
+  ...FEATURE_ICON,
+  ...Object.fromEntries(PLANT_SPECIES.map((p) => [`plant:${p}`, PLANT_ICON[p]])),
+  ...Object.fromEntries(SURFACE_MATERIALS.map((m) => [`surface:${m}`, SURFACE_ICON[m]])),
+};
 
 /** The key into it. Kept beside the record so no caller has to remember the "entrance" fallback. */
 export function addToolIconKey(tool: AddTool): string {
+  if (tool.plant) return `plant:${tool.plant}`;
+  if (tool.surface) return `surface:${tool.surface}`;
   return tool.kind ?? "entrance";
 }
 const KIND_NOUN: Record<PlanSelectionKind, string> = {
@@ -127,6 +181,7 @@ export function VenueInspector({
   structure,
   apply,
   onDelete,
+  onDuplicate,
   onClose,
   draftZone,
   onDraftZoneChange,
@@ -139,6 +194,8 @@ export function VenueInspector({
   apply: (fn: (s: VenueStructure) => VenueStructure) => void;
   /** Deletes the whole selection. The host owns it — a mixed group spans four collections. */
   onDelete: () => void;
+  /** Copies the selected features (Ctrl/⌘+D does the same). Absent = no duplicate button. */
+  onDuplicate?: () => void;
   onClose: () => void;
   /** A picked-but-not-yet-real area (F-1.3-adjacent) — a face just closed by a wall, or a freehand
    *  region just closed. Not a `PlanSelection`: it has no id yet, so it takes over the panel on its
@@ -214,6 +271,13 @@ export function VenueInspector({
       מחיקה
     </Button>
   );
+  // Features only: a copied wall or corner would be a second, unconnected piece of the graph.
+  const duplicateBtn = onDuplicate && (
+    <Button variant="outline" size="sm" onClick={onDuplicate} title="שכפול (Ctrl+D)">
+      <Copy className="h-4 w-4" strokeWidth={2} />
+      שכפול
+    </Button>
+  );
 
   // --- a group -----------------------------------------------------------------------------------
   if (selection.length > 1) {
@@ -263,7 +327,7 @@ export function VenueInspector({
           </InspectorGroup>
         )}
         <InspectorDivider orientation="column" />
-        <div className={FOOTER}>{deleteBtn}</div>
+        <div className={FOOTER}>{kind === "feature" && duplicateBtn}{deleteBtn}</div>
       </div>
     );
   }
@@ -495,7 +559,10 @@ export function VenueInspector({
   return (
     <div className={WRAP}>
       <div className="flex items-center justify-between gap-2">
-        <InspectorHeader icon={Shapes} label={FEATURE_KIND_LABEL[feature.kind]} />
+        <InspectorHeader
+          icon={feature.kind === "plant" ? PLANT_ICON[plantSpecies(feature)] : feature.kind === "surface" ? SURFACE_ICON[surfaceMaterial(feature)] : Shapes}
+          label={FEATURE_KIND_LABEL[feature.kind]}
+        />
         {closeBtn}
       </div>
       <InspectorDivider orientation="column" />
@@ -512,6 +579,38 @@ export function VenueInspector({
             Select rather than a segmented toggle: eleven segments is not a toggle. "מותאם" is
             listed only when the feature already is one — there is no outline editor here to draw a
             new one with, and the shape came off a catalog row that has. */}
+        {feature.kind === "surface" && (
+          // A surface keeps the shape control below — a lawn can be an L or an oval — and adds what
+          // it is laid in. The name follows the material only while it is still the default one.
+          <Select
+            value={surfaceMaterial(feature)}
+            options={SURFACE_MATERIALS.map((m) => ({ value: m, label: SURFACE_MATERIAL_LABEL[m] }))}
+            onChange={(v) => {
+              const next = v as SurfaceMaterial;
+              const renamed = feature.label !== SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)];
+              patch({ surface: next, ...(renamed ? {} : { label: SURFACE_MATERIAL_LABEL[next] }) });
+            }}
+            aria-label="חומר"
+            className="w-32"
+          />
+        )}
+        {feature.kind === "plant" ? (
+          // A plant's species IS its shape — the drawing is the palm or the hedge, and a palm
+          // reshaped into a ח is nothing a garden has. Changing it brings the new species' own
+          // rough size along, as placing it fresh would; the name follows only if it was still the
+          // species' own default, never over one the designer typed.
+          <Select
+            value={plantSpecies(feature)}
+            options={PLANT_SPECIES.map((p) => ({ value: p, label: PLANT_SPECIES_LABEL[p] }))}
+            onChange={(v) => {
+              const next = v as PlantSpecies;
+              const renamed = feature.label !== PLANT_SPECIES_LABEL[plantSpecies(feature)];
+              patch({ plant: next, ...PLANT_DEFAULTS[next], ...(renamed ? {} : { label: PLANT_SPECIES_LABEL[next] }) });
+            }}
+            aria-label="סוג צמח"
+            className="w-32"
+          />
+        ) : (
         <Select
           value={feature.shape}
           options={MAP_SHAPES.filter((sh) => sh !== "custom" || feature.shape === "custom").map((sh) => ({
@@ -522,6 +621,7 @@ export function VenueInspector({
           aria-label="צורה"
           className="w-32"
         />
+        )}
       </InspectorGroup>
       <InspectorDivider orientation="column" />
       <InspectorGroup>
@@ -574,7 +674,7 @@ export function VenueInspector({
       </InspectorGroup>
       <InspectorDivider orientation="column" />
       <StairsFields feature={feature} apply={apply} />
-      <div className={FOOTER}>{deleteBtn}</div>
+      <div className={FOOTER}>{duplicateBtn}{deleteBtn}</div>
     </div>
   );
 }
@@ -683,7 +783,7 @@ function StairsFields({
 }) {
   // Offered on anything raised enough to need them, rather than on the stage alone: a 60cm built
   // platform labelled מבנה needs steps for exactly the same reason a stage does.
-  if (feature.kind !== "stage" && feature.heightMm < 300) return null;
+  if (feature.kind === "plant" || feature.kind === "surface" || (feature.kind !== "stage" && feature.heightMm < 300)) return null;
 
   const stairs = feature.stairs;
   if (!stairs) {
@@ -708,6 +808,15 @@ function StairsFields({
           options={STAIRS_SIDES.map((side) => ({ value: side as StairsSide, label: STAIRS_SIDE_LABEL[side] }))}
           onChange={(side) => set({ side })}
           ariaLabel="צד המדרגות"
+        />
+        <SegmentedToggle
+          value={stairs.bothSides ? "both" : "one"}
+          options={[
+            { value: "one", label: "צד אחד" },
+            { value: "both", label: "שני הצדדים" },
+          ]}
+          onChange={(v) => set({ bothSides: v === "both" })}
+          ariaLabel="מדרגות בצד אחד או בשני הצדדים"
         />
       </InspectorGroup>
       <InspectorGroup>
@@ -764,8 +873,9 @@ function StairsFields({
 }
 
 // The zone's own fields, shown inline in the list under the selected zone. Everything here is what
-// a zone actually *is* — a name, a kind, how many people fit, how high the ceiling is — since its
-// shape belongs to the walls and is not editable from a zone at all.
+// a zone actually *is* — a name, a kind, how many people fit, how high the ceiling is. Its shape is
+// edited on the canvas: a freehand zone by its own corner handles (RegionOutlineEditor), a walled one
+// by its walls — this panel only says which, and offers the one-click tidy for a freehand trace.
 //
 // Capacity and ceiling were read-only on the card before this: the list displayed both and offered
 // no way to set either, which is a dead end for the two numbers the designer quotes from.
@@ -775,6 +885,7 @@ export function ZoneFields({
   onDelete,
   addTools = [],
   onAddElement,
+  onTidy,
 }: {
   zone: Zone;
   onChange: (patch: Partial<Zone>) => void;
@@ -790,6 +901,8 @@ export function ZoneFields({
    *  belongs to the plan, a zone claims it only by sitting inside its boundary — see resolveZones),
    *  so the host decides *where* "inside this zone" means; this just says what was picked. */
   onAddElement?: (tool: AddTool) => void;
+  /** Straightens a freehand outline (lib/venues/region-edit.ts tidyRegion). Absent on a walled zone. */
+  onTidy?: () => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   return (
@@ -801,6 +914,31 @@ export function ZoneFields({
         placeholder="שם האזור"
         className="h-9 w-full rounded-sm border border-border bg-canvas px-2.5 text-sm font-semibold text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
       />
+      {/* How to reshape it — on the canvas, and differently for the two kinds of zone, which is
+          exactly what a designer looking at a selected area cannot tell from the tint alone. */}
+      {zone.source.type === "region" ? (
+        <div className="flex items-start justify-between gap-2 rounded-sm bg-inset px-2.5 py-2">
+          <p className="text-[11px] leading-relaxed text-muted">
+            גררו פינה כדי להזיז אותה · גררו את הנקודה שבאמצע צלע כדי להוסיף פינה · לחיצה כפולה על פינה מוחקת אותה
+          </p>
+          {onTidy && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onTidy}
+              title="מיישר צלעות שכמעט ישרות ומסיר פינות מיותרות"
+              className="shrink-0"
+            >
+              <Ruler className="h-4 w-4" strokeWidth={2} />
+              יישור צורה
+            </Button>
+          )}
+        </div>
+      ) : (
+        <p className="rounded-sm bg-inset px-2.5 py-2 text-[11px] leading-relaxed text-muted">
+          הצורה נקבעת לפי הקירות שסביב האזור — גררו קיר או פינה במצב בחירה כדי לשנות אותה
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-1">
         <div className="flex flex-wrap gap-1">
           {(Object.keys(ZONE_KIND_LABEL) as ZoneKind[]).map((k) => (

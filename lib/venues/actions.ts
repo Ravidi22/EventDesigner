@@ -21,6 +21,7 @@ import { currentActor, type Actor } from "@/lib/db/org";
 import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
 import { users, venues, venueGrants, zones, venueStructures, events, eventZones } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
+import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import {
   atLeast,
   isGrantKind,
@@ -443,14 +444,32 @@ export async function renameVenue(id: string, name: string): Promise<Venue[]> {
   return fetchVenues();
 }
 
+/** Set or clear a venue's picture — the round mark the switcher shows in place of the initial.
+ *  Same rules as the letterhead logo (lib/settings/actions.ts): only a file THIS studio uploaded is
+ *  kept, and the file it replaces is deleted after the write, read before it. */
+export async function setVenueLogo(id: string, logoUrl: string | null): Promise<Venue[]> {
+  const { actor } = await requireVenueAccess(id, "manager");
+  const scope = and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId));
+  const [before] = await db().select({ logoUrl: venues.logoUrl }).from(venues).where(scope).limit(1);
+  const next = ownedFileUrl(logoUrl, actor.organizationId);
+  await db().update(venues).set({ logoUrl: next, updatedAt: new Date() }).where(scope);
+  await removeReplacedFile(before?.logoUrl, next, actor.organizationId);
+  revalidateShell();
+  return fetchVenues();
+}
+
 /** Delete a venue and everything that is only its own — the wall graph, its zones, and any grants
  *  handed out on it all cascade with it (ON DELETE CASCADE in the schema).
  *
  *  Checked up front rather than left to the database: `events.venue_id` is ON DELETE RESTRICT on
  *  purpose, so a venue with a real event on it would otherwise fail with a stack trace instead of a
  *  sentence — the record of where that event happened is a bigger loss than the click that
- *  triggered this one. */
-export async function deleteVenue(id: string): Promise<Venue[] | { error: string }> {
+ *  triggered this one.
+ *
+ *  The refusal carries the COUNT, not only the sentence: the switcher turns it into a link to
+ *  exactly those events (/production?venue=…). A refusal that names no way out is a dead end, and an
+ *  undated event on the venue is otherwise easy to lose track of. */
+export async function deleteVenue(id: string): Promise<Venue[] | { error: string; eventCount: number }> {
   const { actor } = await requireVenueAccess(id, "manager");
   const database = db();
 
@@ -458,7 +477,16 @@ export async function deleteVenue(id: string): Promise<Venue[] | { error: string
     .select({ count: sql<number>`count(*)::int` })
     .from(events)
     .where(and(eq(events.venueId, id), eq(events.organizationId, actor.organizationId)));
-  if ((booked?.count ?? 0) > 0) return { error: "לא ניתן למחוק מתחם שיש בו אירועים — הסירו קודם את השיוך שלהם" };
+  const eventCount = booked?.count ?? 0;
+  if (eventCount > 0) {
+    return {
+      error:
+        eventCount === 1
+          ? "יש במתחם אירוע אחד — יש למחוק אותו לפני מחיקת המתחם"
+          : `יש במתחם ${eventCount} אירועים — יש למחוק אותם לפני מחיקת המתחם`,
+      eventCount,
+    };
+  }
 
   await database.delete(venues).where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
   revalidateShell();

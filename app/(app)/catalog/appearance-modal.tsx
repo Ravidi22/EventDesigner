@@ -23,6 +23,7 @@ import { PlanCanvas, SelectionInspector } from "@/components/plan-canvas";
 import { fieldLabelClassName } from "@/components/control";
 import { AppearancePreview, PlanContent } from "./appearance-preview";
 import { IconPicker } from "./icon-picker";
+import { CloseButton } from "@/components/close-button";
 
 type Curves = (EdgeCurve | null)[];
 const padCurves = (c: Curves | undefined, len: number): Curves => Array.from({ length: len }, (_, i) => c?.[i] ?? null);
@@ -267,6 +268,8 @@ export function AppearanceModal({
               </Button>
             </>
           )}
+          {/* After ניקוי, which already takes the far edge when it is there. */}
+          <CloseButton className={custom ? "" : "ms-auto"} onClick={onClose} />
         </header>
 
         <div className="flex min-h-0 flex-1">

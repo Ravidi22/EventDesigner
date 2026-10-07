@@ -1,19 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Trash2, X } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { Expense } from "@/lib/suppliers/types";
 import type { SupplierSummary } from "@/lib/suppliers/types";
 import type { Product } from "@/lib/catalog/types";
 import type { EventSummary } from "@/lib/events/types";
 import { Button } from "@/components/button";
-import { IconButton } from "@/components/icon-button";
 import { Select } from "@/components/select";
 import { SwitchRow } from "@/components/toggle";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { DateField } from "@/components/date-field";
 import { fieldLabelClassName } from "@/components/control";
+import { CloseButton } from "@/components/close-button";
 
 /** Today as the SERVER's calendar day would write it. `toISOString().slice(0,10)` is the UTC day,
  *  which is yesterday for anyone working after 9pm in Israel — the same trap lib/venues/actions.ts
@@ -134,9 +134,7 @@ export function ExpenseDrawer({
       >
         <header className="flex items-center justify-between border-b border-border bg-surface px-5 py-3.5">
           <h2 className="font-display text-base">{isEdit ? "עריכת הוצאה" : "הוצאה חדשה"}</h2>
-          <IconButton label="סגור" onClick={onClose}>
-            <X className="h-5 w-5" strokeWidth={2} />
-          </IconButton>
+          <CloseButton label="סגור" onClick={onClose} />
         </header>
 
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">

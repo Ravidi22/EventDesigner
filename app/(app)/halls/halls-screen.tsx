@@ -2,11 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
+  BringToFront,
   Building2,
   Check,
+  Copy,
   ChevronUp,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
+  Hand,
+  Images,
   Layers,
   Loader2,
   Lock,
@@ -16,12 +22,14 @@ import {
   Plus,
   Ruler,
   Search as SearchIcon,
+  SendToBack,
   Shapes,
   Trash2,
   TriangleAlert,
   Unlock,
   Upload,
   Users,
+  X,
 } from "lucide-react";
 import { endpointFromLengthAngle, polygonCentroid, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import { constrainAngleDeg } from "@/lib/studio/snap";
@@ -38,12 +46,17 @@ import {
   calibrateUnderlay,
   clampOpacity,
   placeUnderlay,
+  underlayCorners,
   type CalibrationResult,
 } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import {
   addEntrance,
   addFeature,
+  duplicateFeatures,
+  canRestack,
+  restackFeatures,
+  type Restack,
   addNode,
   addRig,
   addWall,
@@ -64,8 +77,10 @@ import {
   updateFeature,
   updateStairs,
   type WallKind,
+  PLANT_DEFAULTS,
 } from "@/lib/venues/structure";
 import { stairsPlacementAt } from "@/lib/venues/stairs";
+import { insertRegionPoint, moveRegionPoint, removeRegionPoint, tidyRegion } from "@/lib/venues/region-edit";
 import { detectFaces, faceAt, pointInPolygon } from "@/lib/venues/faces";
 import {
   isOpenAir,
@@ -79,16 +94,20 @@ import {
 import {
   ZoneRegions,
   StructureFeatures,
+  RegionOutlineEditor,
   StructureDoors,
   PlanUnderlayLayer,
   CalibrationOverlay,
 } from "@/components/venue-plan";
+import { UnderlayCropModal } from "@/components/underlay-crop-modal";
 import { VenueInspector, ZoneFields, ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { formatDimensions } from "@/lib/catalog/format";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { FootprintShape } from "@/components/footprint-shape";
+import { PlantGlyph } from "@/components/plant-glyph";
+import { SurfaceFill } from "@/components/surface-fill";
 import {
   hitsInBox,
   isSelected,
@@ -97,7 +116,7 @@ import {
   type PlanSelection,
   type SelectionBox,
 } from "@/lib/venues/selection";
-import { PlanCanvas, type CanvasFocus } from "@/components/plan-canvas";
+import { PlanCanvas, type CanvasFocus, type ContextMenuItem } from "@/components/plan-canvas";
 import { SidePanel } from "@/components/side-panel";
 import { useHistory } from "@/lib/studio/use-history";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
@@ -241,6 +260,9 @@ export function HallsScreen() {
   const [wallKind, setWallKind] = useState<WallKind>("wall");
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
   const [region, setRegion] = useState<Point[] | null>(null); // freehand zone boundary in progress
+  // The hand: a plain drag moves the view instead of selecting, over anything on the plan. A toggle
+  // beside the modes rather than a mode of its own, so turning it off lands back where you were.
+  const [handTool, setHandTool] = useState(false);
   const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind } | null>(null);
   // A rod is one standalone segment, so there is no chained run the way walls have: press for one
   // end, release for the other. A press that does not travel is an eyebolt, not a mistake.
@@ -451,6 +473,17 @@ export function HallsScreen() {
     (fn: (z: Zone[]) => Zone[]) => hist.set((p) => ({ ...p, zones: fn(p.zones) })),
     [hist],
   );
+  // A freehand zone's outline, rewritten — through `amend` while a corner is being dragged (one
+  // undo step per drag, like a wall corner), through `set` for a one-off edit.
+  const editRegion = useCallback(
+    (id: string, fn: (b: Point[]) => Point[], during: "drag" | "edit" = "edit") => {
+      const apply = (zs: Zone[]) =>
+        zs.map((z) => (z.id === id && z.source.type === "region" ? { ...z, source: { type: "region" as const, boundary: fn(z.source.boundary) } } : z));
+      if (during === "drag") hist.amend((p) => ({ ...p, zones: apply(p.zones) }));
+      else hist.set((p) => ({ ...p, zones: apply(p.zones) }));
+    },
+    [hist],
+  );
 
   // --- selection ---------------------------------------------------------------------------------
   // One list covering every kind of thing on the plan. The canvas owns walls and corners (it draws
@@ -481,6 +514,73 @@ export function HallsScreen() {
       });
     }
   }, [selection, editStructure, editZones]);
+
+  // Copies of the selected features, which become the selection — so a second Ctrl+D copies the
+  // copy, and a row of palms is one palm and a few keystrokes. Walls, corners and doors are part of
+  // the connected graph and are not copied; a mixed selection copies just its features.
+  const featureSelection = selection.filter((r) => r.kind === "feature").map((r) => r.id);
+  const duplicateSelection = useCallback(() => {
+    const ids = selection.filter((r) => r.kind === "feature").map((r) => r.id);
+    if (ids.length === 0) return;
+    const { structure: next, featureIds } = duplicateFeatures(structure, ids);
+    editStructure(() => next);
+    setSelection(featureIds.map((id) => ({ kind: "feature" as const, id })));
+  }, [selection, structure, editStructure]);
+
+  // Drawing order: which of two overlapping features covers the other (a palm over the shrub at
+  // its foot). Also on Ctrl+] / Ctrl+[ (with Shift: all the way), the keys every design tool uses.
+  const restackSelection = useCallback(
+    (how: Restack, ids = selection.filter((r) => r.kind === "feature").map((r) => r.id)) => {
+      if (ids.length === 0) return;
+      editStructure((st) => restackFeatures(st, ids, how));
+    },
+    [selection, editStructure],
+  );
+
+  // A right-click on a feature is reported by the feature layer (which knows what is under the
+  // pointer, glyph and all) a moment before the canvas asks for its menu — the event bubbles from
+  // one to the other — so the id waits here for that one question and is then cleared.
+  const contextFeatureRef = useRef<string | null>(null);
+  const featureMenuItems = (): ContextMenuItem[] => {
+    const hit = contextFeatureRef.current;
+    contextFeatureRef.current = null;
+    if (!hit || !structure.features.some((f) => f.id === hit)) return [];
+    // Right-clicking one of several selected features acts on all of them; right-clicking anything
+    // else selects it first, the way a file manager does, so the menu is never about something the
+    // designer cannot see is selected.
+    const selected = selection.filter((r) => r.kind === "feature").map((r) => r.id);
+    const ids = selected.includes(hit) ? selected : [hit];
+    if (!selected.includes(hit)) setSelection([{ kind: "feature", id: hit }]);
+    const item = (label: string, icon: ContextMenuItem["icon"], how: Restack): ContextMenuItem => ({
+      label,
+      icon,
+      disabled: !canRestack(structure, ids, how),
+      onSelect: () => restackSelection(how, ids),
+    });
+    return [
+      item("הבאה לחזית", BringToFront, "front"),
+      item("הזזה קדימה", ArrowUp, "forward"),
+      item("הזזה אחורה", ArrowDown, "backward"),
+      item("שליחה לרקע", SendToBack, "back"),
+      {
+        label: "שכפול",
+        icon: Copy,
+        onSelect: () => {
+          const { structure: next, featureIds } = duplicateFeatures(structure, ids);
+          editStructure(() => next);
+          setSelection(featureIds.map((id) => ({ kind: "feature" as const, id })));
+        },
+      },
+      {
+        label: "מחיקה",
+        icon: Trash2,
+        onSelect: () => {
+          setSelection([]);
+          editStructure((st) => ids.reduce((acc, id) => removeFeature(acc, id), st));
+        },
+      },
+    ];
+  };
 
   // A marquee catches everything on the plan, not just one layer of it. The canvas hands over the
   // box rather than the hits — the graph and the tinted regions are both this screen's data, so
@@ -605,11 +705,26 @@ export function HallsScreen() {
       } else if ((e.key === "Delete" || e.key === "Backspace") && selection.length > 0) {
         e.preventDefault();
         deleteSelection();
+      } else if (e.code === "KeyH" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // e.code: on a Hebrew layout H types "י". The same key every design tool gives its hand.
+        setHandTool((v) => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.code === "KeyD" && selection.some((r) => r.kind === "feature")) {
+        // e.code, not e.key: on a Hebrew layout the D key types "ג".
+        e.preventDefault(); // the browser's own Ctrl+D is "bookmark this page"
+        duplicateSelection();
+      } else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.code === "BracketRight" || e.code === "BracketLeft") &&
+        selection.some((r) => r.kind === "feature")
+      ) {
+        e.preventDefault();
+        const up = e.code === "BracketRight";
+        restackSelection(e.shiftKey ? (up ? "front" : "back") : up ? "forward" : "backward");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, runNodeId, region, selection, deleteSelection, finishRegion]);
+  }, [mode, runNodeId, region, selection, deleteSelection, duplicateSelection, restackSelection, finishRegion]);
 
   // PlanCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
   // against every existing corner — so this only decides what a click *means* in the current mode.
@@ -721,13 +836,34 @@ export function HallsScreen() {
   const [calibAnswer, setCalibAnswer] = useState("");
   const [underlayBusy, setUnderlayBusy] = useState(false);
   const [underlayNote, setUnderlayNote] = useState<string | null>(null);
+  // A freshly-picked file waiting on the crop modal — null closes it. Set from the file input's
+  // onChange instead of uploading straight away, so nothing reaches storage until "סיום".
+  const [cropFile, setCropFile] = useState<File | null>(null);
+  // The "pick an existing plan instead" list, collapsed by default — only the empty state offers it.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // The locked plan is pointer-transparent — that is what keeps it from being nudged — which also
+  // left it with no answer at all when clicked: unlocking or removing it was a control in the side
+  // panel nobody thought to look for. So a click that lands on the plan and nothing else gets the
+  // Canva answer: a small bar with the unlock right there. It docks at the TOP of the canvas, not
+  // at the pointer — at the pointer it sat on the very plan (and the walls traced over it) that
+  // the designer had just clicked to look at.
+  const [underlayChip, setUnderlayChip] = useState(false);
+  const underlayChipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setUnderlay(venue?.plan.underlay);
     setUnderlayUnlocked(false);
+    setUnderlayChip(false);
     setCalib(null);
     setUnderlayNote(null);
+    setCropFile(null);
+    setPickerOpen(false);
   }, [venueId, venue?.plan.underlay]);
+
+  // Other venues in the studio that already have a plan photo — reusing one skips a re-upload (and
+  // a re-photograph) when two properties share the same source drawing. `venues` already comes from
+  // fetchVenues(), already scoped to what this member can see, so no extra fetch or access check.
+  const reusableUnderlays = venues.filter((v) => v.id !== venueId && v.plan.underlay?.url);
 
   /** Write the plan back to the venue. Separate from saveVenuePlan (walls and zones): this is the
    *  venue RECORD, and it needs `manager` where the graph needs `editor`. */
@@ -773,6 +909,28 @@ export function HallsScreen() {
     }
   };
 
+  // Reuse another venue's plan photo instead of uploading again. No upload call at all — the bytes
+  // already exist at that URL; only the placement is fresh, since a source venue's x/y/scale/rotation
+  // was calibrated for THAT property's plane and means nothing on this one (this venue still needs
+  // its own calibration afterward, same as any new underlay).
+  const reuseUnderlay = async (source: Venue) => {
+    const u = source.plan.underlay;
+    if (!u?.url) return;
+    setPickerOpen(false);
+    setUnderlayBusy(true);
+    setUnderlayNote(null);
+    try {
+      const { width, height } = await imageSize(u.url);
+      const placed = placeUnderlay(u.url, u.fileName, width, height);
+      setUnderlay(placed);
+      setUnderlayUnlocked(true);
+      await persistUnderlay(placed);
+      setUnderlayNote("כעת כיילו: סמנו קטע שאורכו ידוע לכם");
+    } finally {
+      setUnderlayBusy(false);
+    }
+  };
+
   const patchUnderlay = (patch: Partial<PlanUnderlay>) =>
     setUnderlay((u) => (u ? { ...u, ...patch } : u));
 
@@ -805,6 +963,12 @@ export function HallsScreen() {
   const selectedZoneIds = selection.filter((s) => s.kind === "zone").map((s) => s.id);
   const soleZoneId = selection.length === 1 && selection[0].kind === "zone" ? selection[0].id : null;
   const isSelectMode = mode === "select";
+  // The one freehand zone whose outline is open for editing: exactly one zone selected, and drawn
+  // freehand (a face zone is reshaped through its walls, which the canvas already hands you).
+  const editableRegion =
+    isSelectMode && selection.length === 1 && selection[0].kind === "zone"
+      ? zones.find((z) => z.id === selection[0].id && z.source.type === "region")
+      : undefined;
 
   // ⚠ NOTHING FRAMES ITSELF ON SELECTION HERE, and that is deliberate. Picking a stage, a bar or a
   // pool on the plan used to travel the view onto it, on the argument that you were about to edit
@@ -834,7 +998,7 @@ export function HallsScreen() {
     }
     const { structure: next, featureId } = addFeature(
       structure,
-      tool.product ? newFeatureFromProduct(tool.kind, tool.product, p) : newFeature(tool.kind, p),
+      tool.product ? newFeatureFromProduct(tool.kind, tool.product, p) : newFeature(tool.kind, p, tool.plant ?? tool.surface),
     );
     editStructure(() => next);
     setSelection([{ kind: "feature", id: featureId }]);
@@ -895,7 +1059,10 @@ export function HallsScreen() {
   // it" reachable without it, straight from the mode you're already in for everything else.
   const onSelectModeCanvasClick = (p: Point) => {
     if (armedTool) { placeArmedTool(p); return; }
-    tryNameEnclosedFace(p);
+    if (tryNameEnclosedFace(p)) return;
+    const onLockedPlan =
+      !!underlay?.url && !underlayUnlocked && !calib && pointInPolygon(p, underlayCorners(underlay));
+    setUnderlayChip(onLockedPlan);
   };
 
   return (
@@ -914,8 +1081,12 @@ export function HallsScreen() {
           the fold, depending on the viewport's actual height once the chrome above it is accounted
           for. min-h-0 is load-bearing: without it a grid row won't shrink below its content's
           natural size, and the canvas's own min-h-96 would then win a fight with "fill exactly what
-          remains" instead of losing to it gracefully once space is tight. */}
-      <div className="grid min-h-0 flex-1 gap-x-4 gap-y-3 lg:grid-cols-[1fr_auto]">
+          remains" instead of losing to it gracefully once space is tight.
+          The explicit row (lg:grid-rows-[minmax(0,1fr)]) is load-bearing too: an implicit grid row
+          is `auto`, which grows to its tallest item's content — and the zone panel's content is
+          the whole zone list, scroller or not. A long list stretched the row past the page, the
+          canvas stretched with it (lg:h-full), and the bottom dock went below the fold. */}
+      <div className="grid min-h-0 flex-1 gap-x-4 gap-y-3 lg:grid-cols-[1fr_auto] lg:grid-rows-[minmax(0,1fr)]">
         <section
           className="relative min-h-96 overflow-hidden rounded-md border border-border bg-accent-tint lg:h-full lg:min-h-0"
           onPointerMove={(e) => {
@@ -924,7 +1095,54 @@ export function HallsScreen() {
             setCursorPos({ x: e.clientX - r.left, y: e.clientY - r.top, w: r.width });
           }}
           onPointerLeave={() => setCursorPos(null)}
+          // Any press outside the locked-plan chip dismisses it; a click that lands on the plan again
+          // re-opens it at the new spot (onSelectModeCanvasClick).
+          onPointerDownCapture={(e) => {
+            if (!underlayChipRef.current?.contains(e.target as Node)) setUnderlayChip(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setUnderlayChip(false);
+          }}
         >
+          {/* Docked top-centre, clear of the plan. It offers the ACTION, not the state: locked shows
+              only "שחרור נעילה", unlocked only "נעילה" — a "רקע נעול" label beside an unlock button
+              said the same thing twice. While unlocked it stays up on its own (a dragged plan is
+              pointer-captured, so no click reaches onSelectModeCanvasClick to open it), which is
+              also what keeps the way back to locked in sight for the whole time it is open. */}
+          {underlay?.url && !calib && (underlayChip || underlayUnlocked) && (
+            <div
+              ref={underlayChipRef}
+              role="dialog"
+              aria-label="תוכנית רקע"
+              className="absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center gap-1 rounded-md border border-border bg-canvas p-1 text-xs shadow-lifted"
+            >
+              <button
+                autoFocus={!underlayUnlocked}
+                onClick={() => {
+                  setUnderlayUnlocked((v) => !v);
+                  setUnderlayChip(false);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 font-semibold text-accent hover:bg-accent-tint focus-visible:bg-accent-tint focus-visible:outline-none"
+              >
+                {underlayUnlocked ? (
+                  <Lock className="h-3.5 w-3.5" strokeWidth={1.6} />
+                ) : (
+                  <Unlock className="h-3.5 w-3.5" strokeWidth={1.6} />
+                )}
+                {underlayUnlocked ? "נעילה" : "שחרור נעילה"}
+              </button>
+              <button
+                onClick={() => {
+                  setUnderlayChip(false);
+                  void removeUnderlay();
+                }}
+                className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 font-semibold text-alert hover:bg-inset focus-visible:bg-inset focus-visible:outline-none"
+              >
+                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.6} />
+                הסרה
+              </button>
+            </div>
+          )}
           {/* The venue's name, floating on the canvas itself — white, so it reads as its own chip
               sitting on the purple canvas rather than blending into it — and beside it, whether the
               plan is actually written down.
@@ -989,6 +1207,8 @@ export function HallsScreen() {
             selected={[]}
             onSelect={() => setSelection([])}
             onAddVertex={onPick}
+            panTool={handTool}
+            contextMenuItems={isSelectMode ? featureMenuItems : undefined}
             onCloseOutline={() => {}}
             onCancelDraw={() => {
               setRunNodeId(null);
@@ -1047,6 +1267,7 @@ export function HallsScreen() {
                       never while a calibration is being marked (the clicks belong to that). */}
                   <PlanUnderlayLayer
                     underlay={underlay}
+                    selected={!!underlayChip && !underlayUnlocked}
                     clientToMm={clientToMm}
                     onMove={
                       underlayUnlocked && !calib ? (p) => patchUnderlay({ x: p.x, y: p.y }) : undefined
@@ -1068,9 +1289,25 @@ export function HallsScreen() {
                     onMoveStairs={isSelectMode ? moveStairs : undefined}
                     onResize={isSelectMode ? resizeFeature : undefined}
                     onRotate={isSelectMode ? rotateFeature : undefined}
+                    onContextMenu={isSelectMode ? (id) => (contextFeatureRef.current = id) : undefined}
                     onCommit={endGesture}
                     clientToMm={clientToMm}
                   />
+                  {editableRegion && editableRegion.source.type === "region" && (
+                    <RegionOutlineEditor
+                      boundary={editableRegion.source.boundary}
+                      mm={mm}
+                      clientToMm={clientToMm}
+                      onMovePoint={(i, to) => editRegion(editableRegion.id, (b) => moveRegionPoint(b, i, to), "drag")}
+                      onInsertPoint={(i) => {
+                        // The new corner is part of the drag that made it: undo takes both back at once.
+                        editRegion(editableRegion.id, (b) => insertRegionPoint(b, i).boundary, "drag");
+                        return i + 1;
+                      }}
+                      onRemovePoint={(i) => editRegion(editableRegion.id, (b) => removeRegionPoint(b, i))}
+                      onCommit={endGesture}
+                    />
+                  )}
                   {region && region.length > 1 && (
                     <polyline
                       points={[...region, region[0]].map((p) => `${p.x},${p.y}`).join(" ")}
@@ -1143,10 +1380,10 @@ export function HallsScreen() {
                 <CalibrationOverlay from={calib?.from ?? null} to={calib?.to ?? null} mm={mm} />
 
                 {/* Ceiling rods. Drawn in every mode — dashed and muted — so they can be checked
-                    against the room while it's still being built; they only take hit targets of
-                    their own in "rigs" mode, the same "supplying it turns the affordance on" rule
-                    every other layer here follows. A marquee in select mode still catches them
-                    (see lib/venues/selection.ts's hitsInBox), just not a direct click. */}
+                    against the room while it's still being built. They take a click in "rigs" mode and
+                    in select mode alike: a rod could once be picked only in the mode that draws them,
+                    so one dropped by a stray click sat there unclickable in the mode everything else is
+                    edited in — and Delete, which removes whatever is selected, had nothing to act on. */}
                 {mode === "rigs" && (
                   <rect
                     x={-2_000_000}
@@ -1203,7 +1440,7 @@ export function HallsScreen() {
                       >
                         {r.label}
                       </text>
-                      {mode === "rigs" &&
+                      {(mode === "rigs" || isSelectMode) &&
                         (isHangingPoint(r) ? (
                           <circle
                             cx={r.a.x}
@@ -1347,7 +1584,7 @@ export function HallsScreen() {
               <button
                 type="button"
                 title="מצב בחירה"
-                aria-pressed={isSelectMode && !armedTool}
+                aria-pressed={isSelectMode && !armedTool && !handTool}
                 onClick={() => {
                   if (!isSelectMode) {
                     setMode("select");
@@ -1355,15 +1592,32 @@ export function HallsScreen() {
                     setRegion(null);
                     setDraftZone(null);
                   }
+                  setHandTool(false);
                   setArmedToolId(null);
                   setAddMenuOpen(false);
                 }}
                 className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                  isSelectMode && !armedTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
+                  isSelectMode && !armedTool && !handTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
                 }`}
               >
                 <MousePointer2 className="h-[18px] w-[18px]" strokeWidth={1.6} />
                 בחירה
+              </button>
+              <button
+                type="button"
+                title="הזזת התצוגה (H) · גם: רווח + גרירה, או גלגלת עם שתי אצבעות"
+                aria-pressed={handTool}
+                onClick={() => {
+                  setHandTool((v) => !v);
+                  setArmedToolId(null);
+                  setAddMenuOpen(false);
+                }}
+                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  handTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
+                }`}
+              >
+                <Hand className="h-[18px] w-[18px]" strokeWidth={1.6} />
+                הזזה
               </button>
             </div>
           </div>
@@ -1393,6 +1647,7 @@ export function HallsScreen() {
                   structure={structure}
                   apply={editStructure}
                   onDelete={deleteSelection}
+                  onDuplicate={featureSelection.length > 0 ? duplicateSelection : undefined}
                   onClose={() => setSelection([])}
                   draftZone={draftZone}
                   onDraftZoneChange={(patch) => draftZone && setDraftZone({ ...draftZone, ...patch })}
@@ -1491,23 +1746,76 @@ export function HallsScreen() {
                   העלו תצלום או סריקה של תוכנית המקום, כיילו אותה לפי מידה ידועה, וציירו את הקירות
                   מעליה.
                 </p>
-                <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset">
-                  <Upload className="h-4 w-4" strokeWidth={1.4} />
-                  {underlayBusy ? "מעלה…" : "העלאת תוכנית"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    disabled={underlayBusy}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      // Cleared so choosing the SAME file again still fires a change event — the
-                      // obvious thing to do after a failed upload.
-                      e.target.value = "";
-                      if (f) void onUploadUnderlay(f);
-                    }}
-                  />
-                </label>
+
+                {pickerOpen ? (
+                  <div className="rounded-sm border border-border bg-canvas p-2">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-ink">בחירה מתוכנית קיימת</span>
+                      <button
+                        type="button"
+                        onClick={() => setPickerOpen(false)}
+                        aria-label="סגירת הרשימה"
+                        className="rounded-full p-0.5 text-muted hover:bg-inset hover:text-ink"
+                      >
+                        <X className="h-3.5 w-3.5" strokeWidth={2} />
+                      </button>
+                    </div>
+                    <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto">
+                      {reusableUnderlays.map((v) => (
+                        <li key={v.id}>
+                          <button
+                            type="button"
+                            disabled={underlayBusy}
+                            onClick={() => void reuseUnderlay(v)}
+                            className="flex w-full items-center gap-2 rounded-sm px-1.5 py-1.5 text-start hover:bg-inset disabled:opacity-50"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx */}
+                            <img
+                              src={v.plan.underlay!.url}
+                              alt=""
+                              className="h-10 w-10 shrink-0 rounded-sm object-cover"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
+                              <span className="block truncate text-xs text-muted">{v.plan.underlay!.fileName}</span>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset">
+                      <Upload className="h-4 w-4" strokeWidth={1.4} />
+                      {underlayBusy ? "מעלה…" : "העלאת תוכנית"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={underlayBusy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          // Cleared so choosing the SAME file again still fires a change event — the
+                          // obvious thing to do after a failed upload (or a cancelled crop).
+                          e.target.value = "";
+                          if (f) setCropFile(f);
+                        }}
+                      />
+                    </label>
+                    {reusableUnderlays.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={underlayBusy}
+                        onClick={() => setPickerOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset disabled:opacity-50"
+                      >
+                        <Images className="h-4 w-4" strokeWidth={1.4} />
+                        בחירה מתוכנית קיימת
+                      </button>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <div className="flex flex-col gap-2.5">
@@ -1738,6 +2046,7 @@ export function HallsScreen() {
                             zone={r.zone}
                             onChange={(patch) => patchZone(r.zone.id, patch)}
                             onDelete={() => removeZone(r.zone.id)}
+                            onTidy={r.zone.source.type === "region" ? () => editRegion(r.zone.id, (b) => tidyRegion(b)) : undefined}
                             // A feature belongs to a zone only by sitting inside its boundary (see
                             // resolveZones) — there's no field to set, just a point to drop it at.
                             // The boundary's own centroid is the one point guaranteed to read as
@@ -1786,6 +2095,15 @@ export function HallsScreen() {
           </div>
         </SidePanel>
       </div>
+
+      <UnderlayCropModal
+        file={cropFile}
+        onCancel={() => setCropFile(null)}
+        onConfirm={(cropped) => {
+          setCropFile(null);
+          void onUploadUnderlay(cropped);
+        }}
+      />
     </div>
   );
 }
@@ -1808,6 +2126,31 @@ const FLYOUT_MARGIN = 16; // never closer than this to the viewport edge
  *  swatch and icon that were standing in for one. */
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+  if (tool.surface) {
+    // A swatch of the material itself, at its real scale — a 1.6m square: four slabs across, a
+    // dozen deck boards, enough lawn to see the grain.
+    const s = 1600;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-11 w-11" aria-hidden>
+          <SurfaceFill material={tool.surface} footprint={{ kind: "rect", widthMm: s, depthMm: s }} w={s} d={s} id={tool.id} />
+        </svg>
+      </span>
+    );
+  }
+  if (tool.plant) {
+    // The planting shows the very drawing it will place, at its own proportions — the section is a
+    // little garden to pick from, which an icon of a leaf six times over is not.
+    const { widthMm: w, depthMm: d } = PLANT_DEFAULTS[tool.plant];
+    const pad = Math.max(w, d) * 0.1;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-success-tint">
+        <svg viewBox={`${-w / 2 - pad} ${-d / 2 - pad} ${w + pad * 2} ${d + pad * 2}`} className="h-9 w-9" aria-hidden>
+          <PlantGlyph species={tool.plant} w={w} d={d} id={tool.id} />
+        </svg>
+      </span>
+    );
+  }
   if (!tool.product) {
     return (
       <span
