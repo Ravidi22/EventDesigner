@@ -17,6 +17,12 @@
 //            under the walkway minimum it is flagged
 //   aisle    the narrowest edge-to-edge gap in each row and column of tables
 //
+// WHAT STANDS ON A STAGE is measured off the STAGE, not the room: a head table set on a platform is
+// placed by the crew from the platform's edge, and a figure running from it to the far wall crosses
+// the stage and says nothing anyone can lay out with. So a thing whose centre is on a stage leaves
+// the room's chains, ties and gaps, and gets the stage's own instead — chains from the stage's edges
+// to its rows and columns of tables, and two ties from any other item to the nearest stage edges.
+//
 // Pure geometry over world polygons the caller built — no catalog, no React — so it runs under node
 // (npm run check:measurements). Which kinds a sheet carries is the sheet's choice (PlanSheet.measure).
 import type { Point } from "@/lib/studio/hall";
@@ -128,7 +134,9 @@ function cast(p: Point, dir: Point, walls: [Point, Point][]): Point | null {
     const w = sub(a, p);
     const t = (w.x * e.y - w.y * e.x) / den;
     const u = (w.x * dir.y - w.y * dir.x) / den;
-    if (t > 1 && u >= 0 && u <= 1 && t < bestT) {
+    // A hit at zero counts: an element touching a wall or the stage beside it is AT it, and the
+    // caller drops that direction — skipping it would measure on through to whatever is beyond.
+    if (t >= -1e-6 && u >= 0 && u <= 1 && t < bestT) {
       bestT = t;
       best = { x: p.x + dir.x * t, y: p.y + dir.y * t };
     }
@@ -159,8 +167,16 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
     ...input.walls,
     ...input.boundaries.flatMap((b) => b.map((p, i) => [p, b[(i + 1) % b.length]] as [Point, Point])),
   ];
+  const stages = input.solids.filter((s) => s.kind === "stage");
+  // The stage a thing stands on (its centre inside the outline), or none.
+  const hostOf = (sd: Solid | Point): Solid | undefined => {
+    const c = "polygon" in sd ? centroid(sd.polygon) : sd;
+    return stages.find((st) => st !== sd && pointInPolygon(c, st.polygon));
+  };
+  const onFloor = (sd: Solid) => !hostOf(sd);
   const tables = input.solids.filter((s) => s.kind === "table");
   const elements = input.solids.filter((s) => s.kind !== "table");
+  const sideRuns = (poly: Point[]) => poly.map((p, i) => [p, poly[(i + 1) % poly.length]] as [Point, Point]);
 
   if (opts.overall) {
     for (const boundary of input.boundaries) {
@@ -171,16 +187,62 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
     }
   }
 
+  // WHERE A STAGE'S CHAIN RUNS. Off the stage on the side settingOut picks, unless that line crosses
+  // another element or leaves the room (a stage along a wall has nothing but wall on its far side,
+  // and a stage beside another has the other stage there). Then the opposite side; then INSIDE the
+  // stage, along the strip between its edge and its first row of tables — the chain then reads
+  // edge → table → table on the stage itself; and only if nothing is clear, where it started.
+  const inRoom = (p: Point) => input.boundaries.length === 0 || input.boundaries.some((b) => pointInPolygon(p, b));
+  const clearChain = (c: ReturnType<typeof settingOut>[number], host: Solid, onIt: Solid[]) => {
+    const xs = host.polygon.map((p) => p.x), ys = host.polygon.map((p) => p.y);
+    const lo = c.axis === "x" ? Math.min(...ys) : Math.min(...xs);
+    const hi = c.axis === "x" ? Math.max(...ys) : Math.max(...xs);
+    const off = lo - c.lineAt;
+    const near = (pick: "lo" | "hi") => {
+      const edges = onIt.flatMap((t) => t.polygon.map((p) => (c.axis === "x" ? p.y : p.x)));
+      if (edges.length === 0) return null;
+      const inner = pick === "lo" ? Math.min(...edges) : Math.max(...edges);
+      const band = pick === "lo" ? inner - lo : hi - inner;
+      return band >= 400 ? (pick === "lo" ? lo + band / 2 : hi - band / 2) : null;
+    };
+    const candidates = [
+      { at: c.lineAt, outside: true },
+      { at: hi + off, outside: true },
+      { at: near("lo"), outside: false },
+      { at: near("hi"), outside: false },
+    ].filter((k): k is { at: number; outside: boolean } => k.at !== null);
+    const others = input.solids.filter((sd) => sd !== host && (sd.kind !== "table" || !onIt.includes(sd)));
+    const clear = (at: number, outside: boolean) => {
+      const a = c.axis === "x" ? { x: c.stops[0], y: at } : { x: at, y: c.stops[0] };
+      const b = c.axis === "x" ? { x: c.stops[c.stops.length - 1], y: at } : { x: at, y: c.stops[c.stops.length - 1] };
+      const seg = [a, b];
+      const pool = outside ? others : onIt;
+      if (pool.some((sd) => polygonGap(seg, sd.polygon).mm === 0)) return false;
+      return !outside || (inRoom(a) && inRoom(b) && inRoom({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }));
+    };
+    const pick = candidates.find((k) => clear(k.at, k.outside));
+    return pick ? { ...c, lineAt: pick.at } : c;
+  };
+
+  const pushChain = (c: ReturnType<typeof settingOut>[number]) => {
+    const at = (s: number) => (c.axis === "x" ? { x: s, y: c.lineAt } : { x: c.lineAt, y: s });
+    for (let i = 1; i < c.stops.length; i++) {
+      dims.push({ kind: "chain", a: at(c.stops[i - 1]), b: at(c.stops[i]), offset: { x: 0, y: 0 }, mm: c.stops[i] - c.stops[i - 1] });
+    }
+    c.feet.forEach((f, i) => leaders.push({ from: at(c.stops[i + 1]), to: f }));
+  };
   if (opts.chains) {
+    const floorCentres = input.centres.filter((c) => !hostOf(c));
+    // On each stage: its edges to its rows and columns of tables, set further out than the stage's
+    // own side figures so the two never share a line.
+    for (const st of stages) {
+      const here = input.centres.filter((c) => hostOf(c) === st);
+      const onIt = tables.filter((t) => hostOf(t) === st);
+      for (const c of settingOut(here, st.polygon, { offsetMm: offsetMm * 1.4 })) pushChain(clearChain(c, st, onIt));
+    }
     for (const boundary of input.boundaries) {
-      const here = input.boundaries.length === 1 ? input.centres : input.centres.filter((c) => pointInPolygon(c, boundary));
-      for (const c of settingOut(here, boundary, { offsetMm })) {
-        const at = (s: number) => (c.axis === "x" ? { x: s, y: c.lineAt } : { x: c.lineAt, y: s });
-        for (let i = 1; i < c.stops.length; i++) {
-          dims.push({ kind: "chain", a: at(c.stops[i - 1]), b: at(c.stops[i]), offset: { x: 0, y: 0 }, mm: c.stops[i] - c.stops[i - 1] });
-        }
-        c.feet.forEach((f, i) => leaders.push({ from: at(c.stops[i + 1]), to: f }));
-      }
+      const here = input.boundaries.length === 1 ? floorCentres : floorCentres.filter((c) => pointInPolygon(c, boundary));
+      for (const c of settingOut(here, boundary, { offsetMm })) pushChain(c);
     }
   }
 
@@ -190,7 +252,22 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
       // A shaped stage is measured on every side — it is built side by side, and a crew checks each
       // one. A rectangle (any stage that is one) and everything else is a box: its width and its
       // depth, off two adjacent sides; the opposite two would only say the same numbers again.
-      const sides = e.kind === "stage" && !isRectangle(e.polygon) ? e.polygon.map((_, i) => i) : [0, 1];
+      //
+      // Of each pair of opposite sides, the one facing OPEN floor: a stage pushed against another
+      // has its figure on the free side, not printed across its neighbour.
+      const openSide = (i: number) => {
+        const a = e.polygon[i], b = e.polygon[(i + 1) % e.polygon.length];
+        const l = len(sub(b, a)) || 1;
+        let nn = { x: (b.y - a.y) / l, y: -(b.x - a.x) / l };
+        const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if ((m.x - mid.x) * nn.x + (m.y - mid.y) * nn.y < 0) nn = { x: -nn.x, y: -nn.y };
+        const probe = { x: m.x + nn.x * offsetMm, y: m.y + nn.y * offsetMm };
+        return inRoom(probe) && !elements.some((x) => x !== e && x !== hostOf(e) && pointInPolygon(probe, x.polygon));
+      };
+      const rectangular = e.polygon.length === 4 && (e.kind !== "stage" || isRectangle(e.polygon));
+      const sides = !rectangular
+        ? e.polygon.map((_, i) => i)
+        : [openSide(0) || !openSide(2) ? 0 : 2, openSide(1) || !openSide(3) ? 1 : 3];
       for (const i of sides) {
         const a = e.polygon[i];
         const b = e.polygon[(i + 1) % e.polygon.length];
@@ -206,6 +283,12 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
 
   if (opts.ties) {
     for (const e of elements) {
+      const host = hostOf(e);
+      // A tie runs to the first thing in its way — a wall, or another element standing on the same
+      // floor: a stage measured "to the far wall" straight through the stage beside it says nothing.
+      // Touching that element (under 5cm) leaves that direction to the other side.
+      const blockers = elements.filter((x) => x !== e && x !== host && hostOf(x) === host).flatMap((x) => sideRuns(x.polygon));
+      const against = [...(host ? sideRuns(host.polygon) : walls), ...blockers];
       // From the element's extreme vertex in each direction, square to the wall it faces; keep the
       // nearer of left/right and of up/down. Two figures fix the element; four would only restate
       // the room's width.
@@ -217,7 +300,7 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
         let pick: Dim | null = null;
         for (const s of dirs) {
           const from = ext(axis, s);
-          const hit = cast(from, axis === "x" ? { x: s, y: 0 } : { x: 0, y: s }, walls);
+          const hit = cast(from, axis === "x" ? { x: s, y: 0 } : { x: 0, y: s }, against);
           if (!hit) continue;
           const mm = len(sub(hit, from));
           if (mm < 50 || mm > 40000) continue;
@@ -230,8 +313,8 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
 
   if (opts.gaps) {
     const seen = new Set<string>();
-    for (const e of elements) {
-      for (const pool of [tables, elements.filter((x) => x.id !== e.id)]) {
+    for (const e of elements.filter(onFloor)) {
+      for (const pool of [tables.filter(onFloor), elements.filter((x) => x.id !== e.id && onFloor(x))]) {
         let best: { s: Solid; g: ReturnType<typeof polygonGap> } | null = null;
         for (const s of pool) {
           const g = polygonGap(e.polygon, s.polygon);
@@ -249,7 +332,11 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
   if (opts.aisles && tables.length > 1) {
     // Rows and columns as the chains find them, then the NARROWEST gap in each — the one that
     // decides whether a waiter with a tray gets through.
-    const withC = tables.map((t) => ({ t, c: centroid(t.polygon) }));
+    // The room's tables and each stage's tables are separate rooms as far as an aisle goes.
+    const hosts = new Map<Solid | undefined, Solid[]>();
+    for (const t of tables) hosts.set(hostOf(t), [...(hosts.get(hostOf(t)) ?? []), t]);
+    for (const group of hosts.values()) {
+    const withC = group.map((t) => ({ t, c: centroid(t.polygon) }));
     for (const axis of ["y", "x"] as const) {
       // A width already figured on this axis is not figured again: ten columns at the same 1.80
       // are one fact, and ten copies of it bury the ones that differ.
@@ -266,6 +353,7 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
         said.push(best.mm);
         dims.push({ kind: "aisle", a: best.a, b: best.b, offset: { x: 0, y: 0 }, mm: best.mm, warn: best.mm < minWalkwayMm });
       }
+    }
     }
   }
 
@@ -293,8 +381,10 @@ if (isMain(import.meta.url)) {
   assert(of("size").length === 2 && of("size").some((d) => d.mm === 6000) && of("size").some((d) => d.mm === 3000), "a rectangular stage is figured by its width and depth");
   const ell = measurements({ ...input, solids: [{ id: "L", kind: "stage", polygon: [{ x: 1000, y: 1000 }, { x: 7000, y: 1000 }, { x: 7000, y: 3000 }, { x: 4000, y: 3000 }, { x: 4000, y: 5000 }, { x: 1000, y: 5000 }] }] }, { sizes: true, offsetMm: 900 });
   assert(ell.dims.length === 6, "a shaped stage is figured on every side");
-  const back = of("size").find((d) => d.a.y === 500 && d.b.y === 500)!;
-  assert(back.offset.y < 0, "a side's figure sits OUTSIDE the stage");
+  // The stage stands 0.50 off the back wall — no room for a figure there — so its width is figured
+  // along the front, outside the stage.
+  const width = of("size").find((d) => d.mm === 6000)!;
+  assert(width.a.y === 3500 && width.offset.y > 0, "a side's figure sits OUTSIDE the stage, on the side with room for it");
   const ties = of("tie");
   assert(ties.length === 2, "two ties fix an element");
   assert(ties.some((d) => d.mm === 500), "the stage is 0.50 off the back wall");
@@ -310,5 +400,38 @@ if (isMain(import.meta.url)) {
   const tight = measurements({ ...input, solids: [stage, t("near", 10000, 4600)] }, { gaps: true, offsetMm: 900 });
   assert(tight.dims[0]?.warn === true && Math.abs(tight.dims[0].mm - 200) < 1, "a 0.20 gap under the walkway minimum is flagged");
   assert(polygonGap(rect(0, 0, 10, 10), rect(5, 5, 10, 10)).mm === 0, "overlapping solids have no gap");
+  // A platform carrying a head table and a DJ booth: both measured off the platform, not the room.
+  const platform = { id: "plat", kind: "stage" as const, polygon: rect(2000, 1000, 8000, 3000) };
+  const head = t("head", 4000, 2500);
+  const booth = { id: "booth", kind: "item" as const, polygon: rect(8000, 1500, 1500, 1500) };
+  const floorT = t("floor", 6000, 9000);
+  const onStage = measurements(
+    { boundaries: [room], walls, solids: [platform, head, booth, floorT], centres: [centroid(head.polygon), centroid(floorT.polygon)] },
+    { chains: true, ties: true, gaps: true, offsetMm: 900 },
+  );
+  const boothTies = onStage.dims.filter((d) => d.kind === "tie" && d.a.x >= 8000 && d.a.x <= 9500 && d.a.y >= 1500 && d.a.y <= 3000);
+  assert(boothTies.length === 2 && boothTies.every((d) => d.mm <= 1000), "an item on a stage is tied to the stage's edges (0.50 / 0.50), not the walls");
+  // The platform's top side is 1.00 off the wall, so a chain there would sit outside the room: it
+  // takes the platform's open side instead (4000 + 1260).
+  const stageChain = onStage.dims.filter((d) => d.kind === "chain" && d.a.y === d.b.y && Math.abs(d.a.y - 5260) < 1);
+  assert(stageChain.length === 2 && stageChain[0].mm === 2000, "a table on a stage is chained from the stage's edge (2.00 in), on the side that is in the room");
+  assert(!onStage.dims.some((d) => d.kind === "gap" && (d.a.x === head.polygon[0].x || d.b.x === head.polygon[0].x) && d.mm > 3000), "a table on a stage is not gapped against the room");
+  // Two stages side by side along a wall: the square's tie does not cross the strip to the far wall,
+  // and the strip's chain does not run through the square.
+  const strip = { id: "strip", kind: "stage" as const, polygon: rect(16000, 1000, 3000, 10000) };
+  const square = { id: "square", kind: "stage" as const, polygon: rect(11000, 3000, 5000, 5000) };
+  const onStrip = [t("s1", 17500, 3000), t("s2", 17500, 6000), t("s3", 17500, 9000)];
+  const pair = measurements(
+    { boundaries: [room], walls, solids: [strip, square, ...onStrip], centres: onStrip.map((x) => centroid(x.polygon)) },
+    { chains: true, ties: true, offsetMm: 900 },
+  );
+  const squareTies = pair.dims.filter((d) => d.kind === "tie" && d.a.x >= 11000 && d.a.x <= 16000 && d.a.y >= 3000 && d.a.y <= 8000);
+  assert(squareTies.every((d) => !(d.b.x > 16000)), "a stage's tie stops at the stage beside it");
+  assert(squareTies.some((d) => d.mm === 11000), "…and measures to the open side instead (11.00 to the left wall)");
+  const pairSizes = measurements({ boundaries: [room], walls, solids: [strip, square], centres: [] }, { sizes: true, offsetMm: 900 });
+  const squareSizes = pairSizes.dims.filter((d) => d.a.x >= 11000 && d.a.x <= 16000 && d.b.x >= 11000 && d.b.x <= 16000 && d.a.y >= 3000 && d.b.y <= 8000);
+  assert(squareSizes.every((d) => !(d.a.x === 16000 && d.b.x === 16000)), "a stage's depth is figured on its open side, not across the stage it touches");
+  const rowChain = pair.dims.filter((d) => d.kind === "chain" && d.a.x === d.b.x);
+  assert(rowChain.length > 0 && rowChain.every((d) => d.a.x > 16000), "the strip's row chain runs inside the strip, not through the square");
   console.log("measurements self-check passed");
 }

@@ -10,6 +10,7 @@
 // Text is set horizontally whatever the line's angle: every figure is a number, and a crew reads a
 // number on a sheet taped to a wall without turning their head.
 import type { Point } from "@/lib/studio/hall";
+import { pointInPolygon } from "@/lib/venues/faces";
 import { isMain } from "../self-check";
 
 export interface Box {
@@ -36,9 +37,25 @@ export interface LabelRequest {
 
 const hit = (p: Box, q: Box) => p.minX < q.maxX && q.minX < p.maxX && p.minY < q.maxY && q.minY < p.maxY;
 
+/** Whether a figure's box overlaps a shape — by its corners, edge midpoints and centre falling
+ *  inside, or a vertex of the shape falling inside the box. Exact enough for a figure a few
+ *  millimetres across, and exact where a bounding box is not: an L-shaped stage's bounding box
+ *  covers the empty corner where its figures belong. */
+function overlaps(b: Box, poly: Point[]): boolean {
+  const mx = (b.minX + b.maxX) / 2, my = (b.minY + b.maxY) / 2;
+  const probes = [
+    { x: b.minX, y: b.minY }, { x: b.maxX, y: b.minY }, { x: b.maxX, y: b.maxY }, { x: b.minX, y: b.maxY },
+    { x: mx, y: b.minY }, { x: b.maxX, y: my }, { x: mx, y: b.maxY }, { x: b.minX, y: my }, { x: mx, y: my },
+  ];
+  if (probes.some((q) => pointInPolygon(q, poly))) return true;
+  return poly.some((q) => q.x > b.minX && q.x < b.maxX && q.y > b.minY && q.y < b.maxY);
+}
+
 /** `obstacles` block every figure (the doors). `furniture` blocks only figures beside their line —
- *  a figure ON its line in an aisle between two tables necessarily sits among their chairs. */
-export function placeLabels(reqs: LabelRequest[], obstacles: Box[], furniture: Box[] = []): Point[] {
+ *  a figure ON its line in an aisle between two tables necessarily sits among their chairs. `shapes`
+ *  are outlines (stages, rugs, bars) no figure beside its line may sit on: a stage's lengths are read
+ *  OUTSIDE the stage, never across the decks. */
+export function placeLabels(reqs: LabelRequest[], obstacles: Box[], furniture: Box[] = [], shapes: Point[][] = []): Point[] {
   const taken: Box[] = [];
   return reqs.map((r) => {
     const blockers = r.inline ? obstacles : [...obstacles, ...furniture];
@@ -50,19 +67,21 @@ export function placeLabels(reqs: LabelRequest[], obstacles: Box[], furniture: B
     // How far off the line the CENTRE must be so the box clears it, at this line's angle.
     const off = r.gap + Math.abs(n.x) * (r.w / 2) + Math.abs(n.y) * (r.h / 2);
     const reach = Math.abs(u.x) * (r.w / 2) + Math.abs(u.y) * (r.h / 2) + r.gap;
-    const alongs = [0.5, 0.35, 0.65, 0.2, 0.8, 0.08, 0.92].map((t) => t * L);
-    alongs.push(-reach, L + reach);
+    // Alongside its own line first, on either side; only then past an end. Going past the end
+    // before trying the other side is how a stage's 4.88 used to float off beyond the stage's corner
+    // while there was room for it right under its line.
+    const middles = [0.5, 0.35, 0.65, 0.2, 0.8, 0.08, 0.92].map((t) => t * L);
+    const ends = [-reach, L + reach];
     const sides: number[] = [...(r.inline ? [0] : []), r.side, -r.side];
     const box = (c: Point): Box => ({ minX: c.x - r.w / 2, minY: c.y - r.h / 2, maxX: c.x + r.w / 2, maxY: c.y + r.h / 2 });
+    const candidates = [...sides.flatMap((sd) => middles.map((t) => [sd, t])), ...sides.flatMap((sd) => ends.map((t) => [sd, t]))];
     let chosen: Point | null = null;
-    outer: for (const s of sides) {
-      for (const t of alongs) {
-        const c = { x: r.a.x + u.x * t + n.x * off * s, y: r.a.y + u.y * t + n.y * off * s };
-        const b = box(c);
-        if (!blockers.some((o) => hit(o, b)) && !taken.some((o) => hit(o, b))) {
-          chosen = c;
-          break outer;
-        }
+    for (const [sd, t] of candidates) {
+      const c = { x: r.a.x + u.x * t + n.x * off * sd, y: r.a.y + u.y * t + n.y * off * sd };
+      const b = box(c);
+      if (!blockers.some((o) => hit(o, b)) && !taken.some((o) => hit(o, b)) && (r.inline || !shapes.some((sh) => overlaps(b, sh)))) {
+        chosen = c;
+        break;
       }
     }
     const fallback = { x: r.a.x + u.x * (L / 2) + n.x * off * (r.inline ? 0 : r.side), y: r.a.y + u.y * (L / 2) + n.y * off * (r.inline ? 0 : r.side) };
@@ -90,5 +109,12 @@ if (isMain(import.meta.url)) {
   assert(past.x + 500 <= -50 || past.x - 500 >= 650, "a figure too big for its line goes past the end");
   const [onLine] = placeLabels([{ ...line, inline: true }], []);
   assert(onLine.y === 0, "an inline figure sits on its own line when it can");
+  // An L-shaped stage: its top-left run's figure belongs ABOVE that run, in the notch the bounding
+  // box would have called occupied — and never on the stage.
+  const ell = [{ x: 0, y: 2000 }, { x: 4000, y: 2000 }, { x: 4000, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 8000 }, { x: 0, y: 8000 }];
+  const [topRun] = placeLabels([{ a: { x: 0, y: 1700 }, b: { x: 4000, y: 1700 }, w: 1000, h: 400, gap: 100, side: -1 }], [], [], [ell]);
+  assert(topRun.y < 1700 && topRun.x > 0 && topRun.x < 4000, "a figure sits outside the stage, alongside its own run");
+  const [pushed] = placeLabels([{ a: { x: 0, y: 1700 }, b: { x: 4000, y: 1700 }, w: 1000, h: 400, gap: 100, side: 1 }], [], [], [ell]);
+  assert(pushed.y < 1700, "a figure whose preferred side is the stage goes to the other side");
   console.log("labels self-check passed");
 }

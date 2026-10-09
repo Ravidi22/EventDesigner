@@ -48,7 +48,9 @@ const DEFAULT_PAPER: Extent = { widthMm: 210, heightMm: 297 };
 const DEFAULT_MARGIN_MM = 16;
 
 /** Height of the bottom strip: the ruled title-block cells plus the graphic-scale band above them. */
-const TITLE_CELLS_MM = 20;
+// 16mm: a label, a value and a muted second line. It was 20mm of one value per cell across eight
+// cells, and the values ran into each other ("51 שולחנות · 562 מקומותאירית עיצובים").
+const TITLE_CELLS_MM = 16;
 const SCALE_BAND_MM = 11;
 const TITLE_BLOCK_MM = TITLE_CELLS_MM + SCALE_BAND_MM;
 /** The north arrow sits over the drawing's top-end corner. There used to be a 46mm side column for
@@ -191,24 +193,26 @@ export function SheetFrame({
   // label on the swatch's end side. Widths are estimated — SVG has no text measurement before paint
   // — at a generous Hebrew glyph average, so items never collide; one that would run off the frame
   // is dropped rather than drawn over the border.
+  // The count, at the band's far end — read last, after the drawing and its key.
+  const summaryRoom = summary ? summary.length * LEGEND_FONT_MM * 0.52 + 6 : 0;
   const laidLegend: (LegendRow & { swatchX: number; textX: number; fits: boolean })[] = [];
   for (let i = 0, cursor = barLeft - 10; i < rows.length; i++) {
     const swatchX = cursor - SWATCH_MM;
     const textX = swatchX - 1.6;
     cursor = textX - rows[i].label.length * LEGEND_FONT_MM * 0.55 - 6;
-    laidLegend.push({ ...rows[i], swatchX, textX, fits: cursor > left });
+    laidLegend.push({ ...rows[i], swatchX, textX, fits: cursor > left + summaryRoom });
   }
 
-  // Seven ruled cells, laid out start (right) to end (left) in the order they are read.
-  const cells: { weight: number; label: string; value: string }[] = [
-    { weight: 1.6, label: "מקום ולקוח", value: subtitle ? `${title} · ${subtitle}` : title },
-    { weight: 1, label: "שם הגיליון", value: sheet.label },
-    { weight: 0.7, label: "גיליון", value: `${sheetNumber} / ${sheetCount}` },
+  // FIVE cells, start (right) to end (left) in the order they are read, each a value and an optional
+  // muted second line — what belongs together shares a cell (the sheet and its number in the set,
+  // the date and the version) instead of standing in a cell of its own. The tables-and-seats count
+  // is not title-block business; it rides on the scale band (below).
+  const cells: { weight: number; label: string; value: string; sub?: string }[] = [
+    { weight: 1.7, label: "אירוע", value: subtitle || title, sub: subtitle ? title : undefined },
+    { weight: 1.5, label: "גיליון", value: sheet.label, sub: `${sheetNumber} מתוך ${sheetCount}` },
     { weight: 0.7, label: "קנה מידה", value: `1:${denominator}` },
-    { weight: 0.9, label: "תאריך", value: date },
-    { weight: 0.7, label: "גרסה", value: `גרסה ${version}` },
-    ...(summary ? [{ weight: 1.2, label: "שולחנות ומקומות", value: summary }] : []),
-    { weight: 1, label: "סטודיו", value: studio ?? "" },
+    { weight: 1, label: "תאריך", value: date, sub: `גרסה ${version}` },
+    { weight: 1.1, label: "סטודיו", value: studio ?? "" },
   ];
   const cellUnit = (right - left) / cells.reduce((s, c) => s + c.weight, 0);
   let cursor = right;
@@ -309,6 +313,12 @@ export function SheetFrame({
         </g>
       )}
 
+      {summary && (
+        <text x={left + 2} y={barTop + 1.6 + SWATCH_MM / 2} direction="rtl" textAnchor="end" dominantBaseline="central" fontSize={LEGEND_FONT_MM} fontWeight={600} fontFamily="Assistant, sans-serif" fill={INK_SOFT} className="nums">
+          {summary}
+        </text>
+      )}
+
       {/* The graphic scale bar — drawn as well as stated, so a photocopy at the wrong percentage is
           still readable with a ruler even though the "1:denominator" cell below it is now lying. */}
       <g>
@@ -344,25 +354,46 @@ export function SheetFrame({
       {/* The title block — hairline-ruled cells along the bottom edge. */}
       <g>
         <line x1={left} y1={titleTop} x2={right} y2={titleTop} stroke={INK} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
-        {laidCells.map((c, i) => (
-          <g key={i}>
-            {i > 0 && (
-              <line x1={c.x + c.w} y1={titleTop} x2={c.x + c.w} y2={titleTop + TITLE_CELLS_MM} stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
-            )}
-            <text x={c.x + c.w / 2} y={titleTop + 4.4} textAnchor="middle" fontSize={2.3} fontFamily="Assistant, sans-serif" fill={MUTED}>
-              {c.label}
-            </text>
-            <text x={c.x + c.w / 2} y={titleTop + 10.5} textAnchor="middle" fontSize={3.4} fontWeight={600} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
-              {c.value}
-            </text>
-          </g>
-        ))}
+        {laidCells.map((c, i) => {
+          const value = fitText(c.value, c.w - 3, 3.4, 2.4);
+          const sub = c.sub ? fitText(c.sub, c.w - 3, 2.5, 2) : null;
+          return (
+            <g key={i}>
+              {i > 0 && (
+                <line x1={c.x + c.w} y1={titleTop} x2={c.x + c.w} y2={titleTop + TITLE_CELLS_MM} stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+              )}
+              <text x={c.x + c.w / 2} y={titleTop + 3.6} textAnchor="middle" fontSize={2.2} fontFamily="Assistant, sans-serif" fill={MUTED}>
+                {c.label}
+              </text>
+              <text x={c.x + c.w / 2} y={titleTop + 8.6} textAnchor="middle" fontSize={value.size} fontWeight={600} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
+                {value.text}
+              </text>
+              {sub && (
+                <text x={c.x + c.w / 2} y={titleTop + 12.8} textAnchor="middle" fontSize={sub.size} fontFamily="Assistant, sans-serif" fill={INK_SOFT} className="nums">
+                  {sub.text}
+                </text>
+              )}
+            </g>
+          );
+        })}
       </g>
     </svg>
   );
 }
 
 /** The three fill patterns, at a given tile scale. See the note at the `<defs>` that calls this. */
+/** A title-block value at the largest size that fits its cell, down to `min`; past that, cut with an
+ *  ellipsis rather than printed into the next cell. Widths are estimated (SVG has no measuring
+ *  before paint) at a generous glyph average. */
+function fitText(text: string, widthMm: number, base: number, min: number): { text: string; size: number } {
+  const per = 0.54;
+  if (!text) return { text, size: base };
+  const size = Math.max(min, Math.min(base, widthMm / (text.length * per)));
+  if (text.length * per * size <= widthMm) return { text, size };
+  const keep = Math.max(1, Math.floor(widthMm / (per * size)) - 1);
+  return { text: text.slice(0, keep) + "…", size };
+}
+
 /** Hebrew has no hyphenation and SVG no wrapping: split on spaces at an estimated glyph width. */
 function wrap(text: string, maxChars: number): string[] {
   const lines: string[] = [];
