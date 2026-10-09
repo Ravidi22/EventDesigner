@@ -287,8 +287,8 @@ export function CanvasStage({
   /** Items dragged on the table being dressed: where every item on it now stands, in the table's own
    *  frame — one frame of a gesture, closed by onEndDrag. */
   onArrangeDressing?: (tableId: string, positions: { id: string; position: Point }[]) => void;
-  /** Write each table's number on it (a block's once, on the block) — the hall pass and the full
-   *  studio. The design pass draws the room clean. Never the `4/12`: that stays on the bar. */
+  /** Write each table's number and its `seated/seats` on it (a block's once, on the block) — the
+   *  hall pass and the full studio. The design pass draws the room clean: one switch for both lines. */
   showTableNumbers?: boolean;
 }) {
   // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
@@ -1493,8 +1493,10 @@ export function CanvasStage({
                     ctx={ctx}
                     drag={nodeProps({ kind: "table", id: t.id }, ctx)}
                     onOpen={onFocusTable ? () => onFocusTable(t.id) : undefined}
-                    // A grouped table draws no number of its own — its block draws the one they share.
+                    // A grouped table draws neither a number nor a count of its own — its block draws
+                    // the one of each they share.
                     number={showTableNumbers && !t.groupId && !t.unnumbered && t.number > 0 ? t.number : null}
+                    showSeats={showTableNumbers && !t.groupId}
                     onNudge={(pos) => {
                       onMoveTable(t.id, pos);
                       onEndDrag();
@@ -1535,25 +1537,26 @@ export function CanvasStage({
           })}
 
           {/* The group, drawn once over its members: the outline that says where the one larger
-              table ends, while it is selected. Its number and occupancy are NOT written on the sketch
-              — the designer asked for a clean drawing; they live in the inspector (and on the printed
-              map, which the crew finds tables by). (The block's CHAIRS are drawn in the stack, under
-              its first table.) */}
+              table ends, while it is selected, and — in the passes that write numbers — its ONE label.
+              (The block's CHAIRS are drawn in the stack, under its first table.) */}
           {layerVisible.tables && tableGroups.map((g) => (
             <g key={`group-${g.id}`} className="pointer-events-none" {...layerAttrs("tables")}>
-              {/* The block's ONE number, on the block — haloed, because the middle of a block is
-                  exactly where two of its tables meet and a seam would run through the digits. */}
-              {showTableNumbers && g.number !== null && g.number > 0 && (
-                <text
+              {/* The block's ONE number over its ONE occupancy — what its tables hold between them
+                  (groupSeated): nobody seated at a block of four thinks of themselves as being at the
+                  second table of it. Haloed, because the middle of a block is exactly where two of its
+                  tables meet and a seam would run through the digits. */}
+              {showTableNumbers && (
+                <TableLabel
                   x={g.centre.x}
                   y={g.centre.y}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
-                  style={{ fontSize: numberSizeMm(ctx, Math.min(g.widthMm, g.depthMm)), fontWeight: 600, ...NUMBER_HALO, strokeWidth: numberSizeMm(ctx, Math.min(g.widthMm, g.depthMm)) * 0.16 }}
-                >
-                  {g.number}
-                </text>
+                  number={g.number !== null && g.number > 0 ? g.number : null}
+                  seated={g.seated}
+                  seats={g.seats}
+                  shortSideMm={Math.min(g.widthMm, g.depthMm)}
+                  ctx={ctx}
+                  ink={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
+                  halo
+                />
               )}
               {/* Only while the block is selected. At rest a block of tables reads as the one table it
                   is — a dashed box round it all evening ran straight through its own chairs. */}
@@ -2403,9 +2406,26 @@ function numberSizeMm(ctx: CanvasLayerContext, shortSideMm: number): number {
   const scale = Math.min(TABLE_NUMBER_MM, shortSideMm > 0 ? shortSideMm * 0.5 : TABLE_NUMBER_MM);
   return Math.max(ctx.mm(11), Math.min(scale, ctx.mm(26)));
 }
-/** A knocked-out ring of the plan's surface under a block's number, so the seam between two of its
+/** A knocked-out ring of the plan's surface under a block's label, so the seam between two of its
  *  tables stops at the digits instead of running through them. */
 const NUMBER_HALO = { paintOrder: "stroke" as const, stroke: "var(--color-surface)", strokeLinejoin: "round" as const };
+/** The halo for a label of this size — scaled with the glyphs, so it is a ring and not a blob. */
+const haloFor = (sizeMm: number) => ({ ...NUMBER_HALO, strokeWidth: sizeMm * 0.16 });
+/** The seat count's size under a number: a step smaller than it (CAPACITY_STEP), but never under 9
+ *  screen pixels — a number held at its 11px floor would otherwise carry a count nobody can read.
+ *  Always the smaller of the two, since its floor is below the number's. */
+const CAPACITY_STEP = 0.6;
+function capacitySizeMm(ctx: CanvasLayerContext, numberMm: number): number {
+  return Math.max(ctx.mm(9), numberMm * CAPACITY_STEP);
+}
+/** Where the two lines of a table's label sit: the NUMBER over the COUNT, centred together on the
+ *  label's point. 0.78em is about the height of a line of digits, which is what has to be centred —
+ *  not the em box, most of which is the descender space digits never use. */
+const LINE = 0.78;
+const labelStack = (numberMm: number, capacityMm: number) => ({
+  number: -(capacityMm * LINE) / 2,
+  capacity: (numberMm * LINE) / 2,
+});
 
 const CORNERS = [
   [-1, -1],
@@ -2568,6 +2588,7 @@ function TableNode({
   onNudge,
   onOpen,
   number = null,
+  showSeats = false,
 }: {
   table: DesignTable;
   selected: boolean;
@@ -2583,6 +2604,10 @@ function TableNode({
   /** The number to write on it, or null for none (a block's member, an unnumbered table, the head
    *  table, the design pass). */
   number?: number | null;
+  /** Write its `seated/seats` under the number — centred alone on a head table or an unnumbered
+   *  one, which have the count without the number. The same passes as the number; a block's member
+   *  leaves it to the block. */
+  showSeats?: boolean;
 }) {
   const overflow = util > 1;
   const clothColour = cloth ? (resolve(cloth.variantId)?.swatch ?? "var(--color-accent-tint)") : undefined;
@@ -2609,9 +2634,13 @@ function TableNode({
     vectorEffect: "non-scaling-stroke" as const,
   };
   const footprint = tableFootprint(table);
-  const labelAt = number !== null ? labelAnchor(footprint) : { x: 0, y: 0 };
-  const upright = uprightTransform(table.rotation, table.mirrored);
   const seats = table.seats ?? 0;
+  // A label when there is a number to write, or a seat count the pass shows (a head table and an
+  // unnumbered one have the count without the number).
+  const labelled = number !== null || (showSeats && seats > 0);
+  const labelAt = labelled ? labelAnchor(footprint) : { x: 0, y: 0 };
+  const upright = uprightTransform(table.rotation, table.mirrored);
+  const darkCloth = !!clothColour && isDark(clothColour);
   const tableProduct = table.variantId ? resolve(table.variantId)?.product : undefined;
   const tableSurface = clothColour || overflow ? undefined : anySurface(tableProduct?.appearance) ? tableProduct?.appearance : undefined;
 
@@ -2654,27 +2683,158 @@ function TableNode({
           <FootprintShape footprint={footprint} {...shape} fill="none" className="pointer-events-none" />
         </>
       )}
-      {/* The NUMBER, when the pass asks for it (the hall pass and the full studio — never the design
-          pass, which is drawn clean). Never the "4/12": that is on the table's bar. At the shape's
-          visual centre (labelAnchor — the middle of the band on an arc) and UPRIGHT whatever way the
-          table turns or flips: a 6 that reads as a 9 at 180° is worse than none. Sized in plan mm but
-          held between a legible and a quiet size on screen (numberSizeMm), in the muted ink — light
-          on a dark cloth, accent while selected. */}
-      {number !== null && (
+      {/* The LABEL, when the pass asks for it (the hall pass and the full studio — never the design
+          pass, which is drawn clean): the number over the `seated/seats`, stacked as ONE label
+          (TableLabel), either alone dead centre. At the shape's visual centre (labelAnchor — the
+          middle of the band on an arc) and UPRIGHT whatever way the table turns or flips: a 6 that
+          reads as a 9 at 180° is worse than none. Sized in plan mm but held between a legible and a
+          quiet size on screen (numberSizeMm), in the muted ink — light on a dark cloth, where the
+          count also gives up its full/over colours (neither reads on it; the bar still says which) —
+          accent while selected. */}
+      {labelled && (
         <g transform={`translate(${labelAt.x} ${labelAt.y})${upright ? ` ${upright}` : ""}`} className="pointer-events-none">
-          <text
+          <TableLabel
             x={0}
             y={0}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill={selected ? "var(--color-accent)" : clothColour && isDark(clothColour) ? "var(--color-canvas)" : "var(--color-muted)"}
-            style={{ fontSize: numberSizeMm(ctx, Math.min(footprintBounds(footprint).w, footprintBounds(footprint).h)), fontWeight: 600 }}
-          >
-            {number}
-          </text>
+            number={number}
+            seated={table.seated ?? 0}
+            seats={showSeats ? seats : 0}
+            shortSideMm={Math.min(footprintBounds(footprint).w, footprintBounds(footprint).h)}
+            ctx={ctx}
+            ink={selected ? "var(--color-accent)" : darkCloth ? "var(--color-canvas)" : "var(--color-muted)"}
+            semantic={!darkCloth}
+          />
         </g>
       )}
     </g>
+  );
+}
+
+/** A table's label — its NUMBER over its `seated/seats` — centred together as ONE label on the point
+ *  it is given: the shape's visual centre (labelAnchor) for a table, the block's centre for a group.
+ *  Either line alone sits dead centre: a head table or an unnumbered one has a count but no number,
+ *  a table with no seats has a number but no count; nothing to write draws nothing.
+ *
+ *  Stacked as one label, not as a number at dead centre with a second line hung off the bottom of
+ *  it. Hung, the pair reads bottom-heavy — and on anything shallow (a block of two 180×120s is only
+ *  1200 deep) the count ends up sitting on the table's own edge. The number is sized by numberSizeMm
+ *  (true scale, held legible on screen) and the count a step under it (capacitySizeMm); both wear
+ *  the halo when asked (a block — see NUMBER_HALO). Plain props, so a memoised caller stays cheap. */
+function TableLabel({
+  x,
+  y,
+  number,
+  seated,
+  seats,
+  shortSideMm,
+  ctx,
+  ink,
+  semantic = true,
+  halo = false,
+}: {
+  x: number;
+  y: number;
+  /** The number to write, or null for none. */
+  number: number | null;
+  seated: number;
+  /** 0 writes no count. */
+  seats: number;
+  /** The short side of what the label sits on — the number never takes more than half of it. */
+  shortSideMm: number;
+  ctx: CanvasLayerContext;
+  /** The number's ink, and the count's when it has nothing to say (CapacityLabel). */
+  ink: string;
+  /** Whether the count takes its full/over colours — off on a dark cloth, where neither reads. */
+  semantic?: boolean;
+  /** Knock the surface out from around the glyphs — a block, whose centre is a seam. */
+  halo?: boolean;
+}) {
+  const numberMm = numberSizeMm(ctx, shortSideMm);
+  const capacityMm = capacitySizeMm(ctx, numberMm);
+  const stack = labelStack(numberMm, capacityMm);
+  const showNumber = number !== null;
+  const showCapacity = seats > 0;
+  return (
+    <>
+      {showNumber && (
+        <text
+          x={x}
+          // Lifted by half a count line when one hangs under it, so that the PAIR is what sits in the
+          // middle. Alone, it is still dead centre.
+          y={y + (showCapacity ? stack.number : 0)}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill={ink}
+          style={{ fontSize: numberMm, fontWeight: 600, ...(halo ? haloFor(numberMm) : {}) }}
+        >
+          {number}
+        </text>
+      )}
+      {showCapacity && (
+        <CapacityLabel
+          x={x}
+          y={y + (showNumber ? stack.capacity : 0)}
+          seated={seated}
+          seats={seats}
+          size={capacityMm}
+          baseInk={ink}
+          semantic={semantic}
+          halo={halo}
+        />
+      )}
+    </>
+  );
+}
+
+/** `4/12` — how many of a table's chairs are spoken for, out of how many it has. `0/12` on purpose:
+ *  the designer reads it as "people at this table / places", and a 0 says nobody has been seated
+ *  yet, which a bare 12 would not.
+ *
+ *  Written LEFT TO RIGHT explicitly. This page is RTL, and in an RTL paragraph the slash between two
+ *  numbers is a neutral character that takes the paragraph's direction: `0/12` comes out reading
+ *  `12/0`, which is not a typographic nuisance but a different and wrong fact. Same reason
+ *  TimeField's columns are the app's other deliberate LTR island.
+ *
+ *  Colour carries the only two states worth interrupting for: full, and over. Everything between
+ *  takes the number's own ink, because a table that is half laid is not news. */
+function CapacityLabel({
+  x,
+  y,
+  seated,
+  seats,
+  size,
+  baseInk,
+  semantic = true,
+  halo = false,
+}: {
+  x: number;
+  y: number;
+  seated: number;
+  seats: number;
+  size: number;
+  baseInk: string;
+  semantic?: boolean;
+  /** Knock the surface out from around the glyphs — see NUMBER_HALO. */
+  halo?: boolean;
+}) {
+  const ink =
+    !semantic || seated < seats
+      ? baseInk
+      : seated > seats
+        ? "var(--color-alert-ink)"
+        : "var(--color-success-ink)";
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor="middle"
+      dominantBaseline="central"
+      fill={ink}
+      style={{ fontSize: size, fontWeight: 600, direction: "ltr", ...(halo ? haloFor(size) : {}) }}
+      className="pointer-events-none nums"
+    >
+      {`${seated}/${seats}`}
+    </text>
   );
 }
 

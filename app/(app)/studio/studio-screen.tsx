@@ -3098,8 +3098,8 @@ export function StudioScreen({
             // The table's focus mode belongs to the DESIGN pass (and the full studio): in the hall
             // pass a double-click on a table is an ordinary click, and the bar offers no roller.
             onFocusTable={mode === "hall" ? undefined : dressTable}
-            // The number on each table: the hall pass is ABOUT the numbering, the design pass is
-            // about the dressing and is drawn clean.
+            // The number and seat count on each table: the hall pass is ABOUT the numbering and the
+            // seating, the design pass is about the dressing and is drawn clean.
             showTableNumbers={mode !== "design"}
             onExitDressing={() => setDressing(null)}
             onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
