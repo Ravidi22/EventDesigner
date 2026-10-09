@@ -532,7 +532,7 @@ export function StructureFeatures({
   // The callbacks are read through a ref so a node that skipped a render still calls the host's
   // CURRENT handler; whether each is supplied at all (which switches affordances on) is passed as
   // the presence of the stable wrapper, so it still re-renders when that changes.
-  const handlers = { onSelect, onMove, onMoveStairs, onResize, onRotate, onCommit, clientToMm, onContextMenu };
+  const handlers = { onSelect: onSelectAny, onMove: onMoveAny, onMoveStairs, onResize, onRotate, onCommit, clientToMm, onContextMenu: onContextMenuAny };
   const live = useRef(handlers);
   useLayoutEffect(() => {
     live.current = handlers;
