@@ -588,6 +588,14 @@ async function verifyEvents() {
   check("setupDate survives the day it was given", booked?.setupDate === "2026-10-11", String(booked?.setupDate));
   check("confirming does not invent a loss", booked?.lostAt === undefined, String(booked?.lostAt));
 
+  // גווני האירוע (events.shades, migration 0013): an ordered list of names, cleaned on the way in —
+  // one per key, so the niqqud spelling of a shade already listed is dropped — and an empty list
+  // reads back as absent.
+  const shaded = (await patchEvent(original.id, { shades: ["בורדו", "זהב", "זָהָב"] })).find((e) => e.id === original.id);
+  check("shades keep their order, one per key", shaded?.shades?.join("|") === "בורדו|זהב", String(shaded?.shades));
+  const unshaded = (await patchEvent(original.id, { shades: [] })).find((e) => e.id === original.id);
+  check("an empty palette reads back as absent", unshaded?.shades === undefined, String(unshaded?.shades));
+
   const lost = (await patchEvent(original.id, { lostAt: 1_780_000_000_000 })).find((e) => e.id === original.id);
   check("lostAt survives as epoch ms", lost?.lostAt === 1_780_000_000_000, String(lost?.lostAt));
 

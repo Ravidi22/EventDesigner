@@ -6,6 +6,7 @@
 // event's `step` is an index into THAT list, clamped on read.
 //
 // MEETING-MODE RULE: no prices, costs or internal data on any stage except the closing quote.
+import { isMain } from "../self-check";
 
 /** What the dashboard calls an event parked on a stage. Fewer values than there are stages — the
  *  two drawing passes are both "בעיצוב" to anyone reading a status chip. */
@@ -84,6 +85,16 @@ export function stepAt(flow: readonly MeetingStepId[], index: number): MeetingSt
   return STEP_BY_ID[flow[safe]] ?? STEP_BY_ID.details;
 }
 
+/** Where a meeting opens: the stage named in the URL (?stage=<id>) when the flow has it and the
+ *  event has already reached it, else the furthest stage reached — clamped, like stepAt. The URL
+ *  carries the stage the designer was ON, so a reload or a remount puts them back there rather than
+ *  on the furthest one; a stage past the furthest is not reachable from the stepper either. */
+export function resumeIndex(flow: readonly MeetingStepId[], furthest: number, stage: string | null): number {
+  const reached = Math.min(Math.max(furthest, 0), flow.length - 1);
+  const at = stage ? flow.indexOf(stage as MeetingStepId) : -1;
+  return at >= 0 && at <= reached ? at : reached;
+}
+
 /** Turning a stage back on puts it back where the default flow has it, relative to the stages that
  *  are already on — appending it after the quote would be technically fine and practically wrong. */
 export function toggleStep(flow: readonly MeetingStepId[], id: MeetingStepId): MeetingStepId[] {
@@ -103,4 +114,19 @@ export function moveStep(flow: readonly MeetingStepId[], id: MeetingStepId, delt
   const next = [...flow];
   [next[from], next[to]] = [next[to], next[from]];
   return next;
+}
+
+if (isMain(import.meta.url)) {
+  const assert = (c: boolean, m: string) => {
+    if (!c) throw new Error("FAIL: " + m);
+  };
+  const flow = DEFAULT_FLOW; // details, hall, gallery, design, quote
+  assert(resumeIndex(flow, 3, null) === 3, "no ?stage: the furthest reached");
+  assert(resumeIndex(flow, 3, "hall") === 1, "?stage wins when it was reached");
+  assert(resumeIndex(flow, 3, "design") === 3, "?stage at the furthest");
+  assert(resumeIndex(flow, 1, "quote") === 1, "a stage not reached yet is not opened");
+  assert(resumeIndex(flow, 3, "nonsense") === 3, "an unknown id falls back");
+  assert(resumeIndex(["details", "design"], 4, "gallery") === 1, "a stage the flow dropped falls back, clamped");
+  assert(resumeIndex(flow, -2, "hall") === 0, "a negative step clamps to the first stage");
+  console.log("meeting steps: ok");
 }

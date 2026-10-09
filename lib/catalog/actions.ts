@@ -15,6 +15,7 @@ import { revalidateCatalog } from "@/lib/db/revalidate";
 import { products, productVariants, designDocuments } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
+import { catalogShades, type CatalogShade } from "./shades";
 import { toProducts, toProductRow, toVariantRows } from "./db-mapping";
 import { STANDARD_ITEMS, STANDARD_STAGE_KEYS, STANDARD_STAGE_PART_KEYS } from "./standard/items";
 import { installStandardCatalog } from "./standard/install";
@@ -89,6 +90,13 @@ export async function fetchProducts(): Promise<Product[]> {
     );
 
   return toProducts(rows, variantRows);
+}
+
+/** The distinct shades the catalog's live rows carry — what the event details offer as גווני
+ *  האירוע (lib/catalog/shades.ts). Names and swatches only: the form shows chips, never the rows,
+ *  and it is safe on a screen the client watches (no prices). */
+export async function fetchCatalogShades(): Promise<CatalogShade[]> {
+  return catalogShades(await fetchProducts());
 }
 
 /** Create or update one product and its variants, atomically.

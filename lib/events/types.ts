@@ -44,6 +44,9 @@ export interface EventSummary {
   /** Load-in day (ISO yyyy-mm-dd), when the truck arrives before the event day. Absent = same day.
    *  An event is a window, not a day — see the column note in lib/db/schema.ts. */
   setupDate?: string;
+  /** גווני האירוע: variant names from the studio's catalog, first preferred. An item placed for
+   *  this event wears the first of them it stocks (lib/catalog/shades.ts). Absent = no palette. */
+  shades?: string[];
   archived?: boolean;
   createdAt: number;
 }

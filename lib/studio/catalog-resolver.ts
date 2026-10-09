@@ -9,6 +9,7 @@ import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
 import { CATEGORY_BY_ID, anchorOf, type Sizing } from "@/lib/catalog/categories";
 import type { Anchor } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
+import { shadeVariant } from "@/lib/catalog/shades";
 import { tableAreaMm2 } from "./geometry";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 
@@ -59,8 +60,21 @@ export const deckOf: DeckLookup = (variantId) => {
   return r ? deckTypeOf(variantId, r.product) : undefined;
 };
 
+// The open event's shades (EventSummary.shades), primed by the studio when its event resolves —
+// the same synchronous-cache shape as the catalog above, and for the same reason: a drop decides
+// its variant mid-gesture and cannot wait on a read. Client-only in practice: nothing on the server
+// primes it, so there it is always empty and changes nothing.
+let eventShades: readonly string[] = [];
+
+/** The studio's open event changed: its palette is what every default below prefers now. */
+export function primeEventShades(shades: readonly string[] | undefined): void {
+  eventShades = shades ?? [];
+}
+
+/** The shade an item lands in when nobody picked one: the first of the open event's shades it
+ *  stocks (lib/catalog/shades.ts), else its first variant, as it always was. */
 export function defaultVariantId(product: Product): string {
-  return product.variants[0]?.id ?? product.id;
+  return shadeVariant(product.variants, eventShades)?.id ?? product.variants[0]?.id ?? product.id;
 }
 
 function footprint(product: Product): number {

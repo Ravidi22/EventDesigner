@@ -59,6 +59,17 @@ export function revalidateEvents(): void {
   revalidate("/production");
 }
 
+/** An event's meeting stage moved (reachStep), and nothing else about it. The stage is read only by
+ *  the dashboard's chips, calendar and statistics — the production runway is derived from facts and
+ *  never reads `step` — so this is the dashboard alone, not revalidateEvents().
+ *
+ *  ⚠ ANY revalidatePath in a server action also re-renders the page the action was called FROM
+ *  (Next 16: "TODO: only revalidate if the path matches"), so on /meeting every "continue" sends a
+ *  fresh tree back. The meeting must survive that — see the `params` note in meeting-screen.tsx. */
+export function revalidateEventStage(): void {
+  revalidate("/dashboard");
+}
+
 /** The diary lives on the dashboard alone. */
 export function revalidateAppointments(): void {
   revalidate("/dashboard");

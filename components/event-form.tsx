@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { patchEvent } from "@/lib/events/actions";
@@ -11,7 +11,10 @@ import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
 import { fetchSketchTemplates } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
+import { fetchCatalogShades } from "@/lib/catalog/actions";
+import { hasShade, toggleShade, type CatalogShade } from "@/lib/catalog/shades";
 import { Button } from "./button";
+import { Swatch } from "./swatch-field";
 import { Select } from "./select";
 import { MultiSelect } from "./multi-select";
 import { TextField } from "./text-field";
@@ -64,6 +67,10 @@ export function EventForm({
   const [venueId, setVenueId] = useState(event?.venueId ?? "");
   const [zoneIds, setZoneIds] = useState<string[]>(event?.zoneIds ?? []);
   const [guests, setGuests] = useState(event?.guests ?? 0);
+  // גווני האירוע, in the order they were picked — first preferred (lib/catalog/shades.ts). The
+  // offer is the catalog's own variant names, so a shade nothing stocks cannot be chosen.
+  const [shades, setShades] = useState<string[]>(event?.shades ?? []);
+  const [catalogShades, setCatalogShades] = useState<CatalogShade[]>([]);
   // A saved sketch to open the event on (create only — an existing event already has its drawing).
   // "" is a blank plan, which is the common case and the one that costs nothing to say.
   const [sketches, setSketches] = useState<SketchTemplateSummary[]>([]);
@@ -85,6 +92,16 @@ export function EventForm({
     void fetchVenues().then(setVenues);
     setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
   }, [event?.venueId]);
+
+  useEffect(() => {
+    let live = true;
+    fetchCatalogShades()
+      .then((list) => live && setCatalogShades(list))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (event) return;
@@ -124,6 +141,7 @@ export function EventForm({
       setVenueId(event.venueId ?? loadActiveVenueId() ?? "");
       setZoneIds(event.zoneIds);
       setGuests(event.guests ?? 0);
+      setShades(event.shades ?? []);
     }
   }, [event]);
 
@@ -157,6 +175,7 @@ export function EventForm({
       venueId: venueId || undefined,
       zoneIds: picked.map((z) => z.id),
       zonesLabel: labelForZones(picked),
+      shades,
     };
     try {
       // This WAITS for the write, unlike the meeting's later stages. The whole meeting hangs off the
@@ -259,6 +278,8 @@ export function EventForm({
           </div>
         </div>
 
+        <ShadePicker offered={catalogShades} value={shades} onChange={setShades} />
+
         {/* Open the event on a saved sketch (lib/studio/sketch-actions.ts) rather than a blank plan.
             Sketches drawn in THIS venue lead and the rest say so: a sketch from another property
             still loads, at its own millimetres, less what hung on that property's walls. Create only
@@ -316,5 +337,63 @@ export function EventForm({
         </Button>
       </footer>
     </form>
+  );
+}
+
+/** גווני האירוע: the catalog's own shade names as chips, several at once, in the order picked — the
+ *  number on a chip is its preference. The offer keeps the catalog's order (most stocked first) so
+ *  nothing moves under the pointer; a picked shade the catalog no longer carries stays at the end,
+ *  where it can be taken off. Hidden while the catalog has no shades at all. */
+function ShadePicker({
+  offered,
+  value,
+  onChange,
+}: {
+  offered: CatalogShade[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const labelId = useId();
+  const stale = value.filter((s) => !offered.some((o) => hasShade([o.name], s)));
+  const chips: { name: string; swatch?: string }[] = [...offered, ...stale.map((name) => ({ name }))];
+  if (!chips.length) return null;
+  const rankOf = (name: string) => value.findIndex((s) => hasShade([s], name));
+  return (
+    <div>
+      <span id={labelId} className={fieldLabelClassName}>
+        גווני האירוע
+      </span>
+      <div role="group" aria-labelledby={labelId} className="flex flex-wrap gap-1.5">
+        {chips.map((c) => {
+          const rank = rankOf(c.name);
+          const on = rank !== -1;
+          return (
+            <button
+              key={c.name}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onChange(toggleShade(value, c.name))}
+              className={
+                "inline-flex items-center gap-1.5 rounded-pill border py-1 ps-1.5 pe-3 text-sm transition-colors " +
+                (on
+                  ? "border-accent bg-accent-tint font-semibold text-accent"
+                  : "border-border bg-canvas text-ink-soft hover:border-accent-line hover:bg-accent-tint")
+              }
+            >
+              <Swatch color={c.swatch} size={16} />
+              {c.name}
+              {on && (
+                <span className="text-xs font-bold tabular-nums" aria-label={`עדיפות ${rank + 1}`}>
+                  {rank + 1}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-muted">
+        פריט שמונח בסקיצה מקבל את הגוון הראשון ברשימה שיש לו — לפי סדר הבחירה.
+      </p>
+    </div>
   );
 }
