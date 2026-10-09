@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Minus,
   Plus,
@@ -48,6 +48,8 @@ import {
   BookmarkPlus,
   Replace,
   Check,
+  LayoutGrid,
+  PaintRoller,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
@@ -194,7 +196,10 @@ export function Inspector({
   onClose,
   onQuantity,
   onDelete,
-  onSmartApply,
+  onDressTable,
+  renderPattern,
+  renderDesigns,
+  onScale,
   onApplyToAllTables,
   onVariant,
   onSpan,
@@ -292,7 +297,15 @@ export function Inspector({
   onClose: () => void;
   onQuantity: (id: string, delta: number) => void;
   onDelete: () => void;
-  onSmartApply: () => void;
+  /** Open a table's focus mode — where the items on it are moved about and arranged. */
+  onDressTable: (tableId: string) => void;
+  /** The "which tables" panel (TablePatternPicker), bound to a source table and — when one item is
+   *  being applied rather than the table's whole dressing — that item. */
+  renderPattern: (sourceTableId: string, placementId?: string) => ReactNode;
+  /** The saved table designs panel (TableDesignsPanel), bound to a table. */
+  renderDesigns: (tableId: string) => ReactNode;
+  /** How big one placed item is DRAWN (Placement.scale) — not what it costs or how many there are. */
+  onScale: (placementId: string, scale: number) => void;
   onApplyToAllTables: (placementId: string) => void;
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
@@ -1170,6 +1183,9 @@ export function Inspector({
         )}
 
         {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
+        {/* A row that stretches has its own size field above; everything else of a fixed size can
+            still be drawn bigger or smaller on THIS plan — a fuller arrangement on the head table. */}
+        {!sizePanel && !stretch && !drape && !p.stage && <ScalePopover scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />}
         <BreachPopover breaches={breaches} />
 
         {/* A drape covers its whole wall by default; this puts it back after it was shortened. */}
@@ -1194,12 +1210,14 @@ export function Inspector({
         <StackMenu show={canRestack} onRestack={onRestack} />
         <SelectionMenu items={selectItems} />
 
+        {/* On a table: put it on others in a pattern, and move it about its own table. */}
         {table && (
-          <Menu
-            label="עוד פעולות לפריט"
-            side="top"
-            items={[{ label: `החל על כל שולחנות ${table.type}`, icon: Copy, onSelect: onSmartApply }]}
-          />
+          <>
+            <Popover label="החלת הפריט על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+              {renderPattern(table.id, p.id)}
+            </Popover>
+            <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />
+          </>
         )}
         {onMakeStage && <BarButton icon={Grid2x2} label="הפיכה לבמה — מדרגות, גובה ומפלסים" onClick={onMakeStage} />}
         <Actions
@@ -1372,6 +1390,17 @@ export function Inspector({
         </Popover>
       )}
 
+      {/* Dressing: the table's focus mode, and its whole dressing onto others in a pattern. */}
+      <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />
+      <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
+        {renderDesigns(t.id)}
+      </Popover>
+      {count > 0 && (
+        <Popover label="החלת עיצוב השולחן על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+          {renderPattern(t.id)}
+        </Popover>
+      )}
+
       {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
       <BreachPopover breaches={breaches} />
 
@@ -1510,7 +1539,7 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
                         }
                       >
                         <span className="h-9 w-9 shrink-0 overflow-hidden rounded-sm border border-border">
-                          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} productId={p.id} />
+                          <ProductImage product={p} />
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className={"block truncate text-sm font-medium " + (on ? "text-accent" : "text-ink")}>{p.name}</span>
@@ -1746,4 +1775,35 @@ function occupancyInk(seated: number, seats: number): string {
   if (seated > seats) return "text-alert-ink font-semibold";
   if (seated === seats) return "text-success-ink font-semibold";
   return "text-muted";
+}
+
+/** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
+ *  the quote, the packing list and the order still count it as the row it is. */
+function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
+  const pct = Math.round(scale * 100);
+  return (
+    <Popover label="גודל על התוכנית" icon={Scaling} value={ltr(`${pct}%`)}>
+      <div className="grid grid-cols-4 gap-1" role="group" aria-label="גדלים מוכנים">
+        {[75, 100, 125, 150].map((v) => (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={pct === v}
+            onClick={() => onScale(v / 100)}
+            className={
+              "nums rounded-sm py-1 text-xs font-semibold transition-colors " +
+              (pct === v ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
+            }
+          >
+            {ltr(`${v}%`)}
+          </button>
+        ))}
+      </div>
+      <PanelRow label="אחוז" htmlFor="placement-scale">
+        <NumberField id="placement-scale" decimals={0} min={30} max={300} value={pct} onChange={(v) => onScale(v / 100)} className="w-20" />
+        <span className="text-xs text-muted">%</span>
+      </PanelRow>
+      <Note>גודל הציור בלבד — המחיר, הכמות ורשימת הציוד לא משתנים.</Note>
+    </Popover>
+  );
 }

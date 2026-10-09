@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageStair, StageTemplate } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
@@ -18,7 +18,7 @@ import { coverOn, deckOf, defaultVariantId, resolve, shadesOf } from "@/lib/stud
 import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
-import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
+import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, anchorOf, isRunner, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
 import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import {
   DEFAULT_NUMBERING,
@@ -75,11 +75,15 @@ import {
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
-import { deleteStageTemplate, fetchStageRules, fetchStageTemplates, saveStageTemplate } from "@/lib/settings/actions";
+import { deleteStageTemplate, deleteTableDesign, fetchStageRules, fetchStageTemplates, fetchTableDesigns, saveStageTemplate, saveTableDesign } from "@/lib/settings/actions";
+import { TableDesignsPanel } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type StickItem } from "@/lib/studio/stage-draw";
 import { StageFillPanel, type StageFillState } from "./stage-fill-panel";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, sizedFootprint } from "@/lib/studio/footprint";
-import { tableFootprint } from "@/components/footprint-shape";
+import { dressingSpots, tableBox, tableFootprint } from "@/components/footprint-shape";
+import { arrange, clampToTable, toTableFrame, type ArrangeKind } from "@/lib/design-document/dressing";
+import { DressingBar } from "./dressing-bar";
+import { TablePatternPicker } from "./table-pattern-picker";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
 import { autoStack, floorStack, isStackable, restackTo, type StackBox, type StackKind } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
@@ -149,7 +153,7 @@ const tableKind = (t: DesignTable) => (t.variantId ? resolve(t.variantId)?.produ
  *  cloth or standing, hung on a wall or stretched like a rug. A centrepiece cannot become a drape. */
 const swapClass = (p: Product) => {
   const cat = CATEGORY_BY_ID[p.category];
-  return `${p.layer}|${cat?.anchor ?? "free"}|${cat?.sizing ?? "fixed"}`;
+  return `${p.layer}|${anchorOf(p)}|${cat?.sizing ?? "fixed"}`;
 };
 /** Which kind of floor thing a placement is for the stack (lib/design-document/stacking.ts) — or
  *  none for what is not on the floor at all: a drape hangs on a wall, a cloth or a chip belongs to a
@@ -211,6 +215,9 @@ export function StudioScreen({
   // across a corner of the hall is how you get hold of them. One selected thing is the ordinary
   // case and still the only one the inspector has fields for.
   const [selected, setSelected] = useState<SelectionRef[]>([]);
+  /** The table being dressed — its focus mode (see DressingOverlay in canvas-stage.tsx). Screen state,
+   *  not the document's: it is where the designer is looking, not a fact about the event. */
+  const [dressing, setDressing] = useState<string | null>(null);
   // FOUR PLANES, not three: the tables are one of their own (lib/studio/planes.ts). A table and a
   // stage both stand on the floor, so "work in the floor layer" used to name them both at once —
   // and the designer who has finished laying the tables and is now placing stages over them had no
@@ -481,13 +488,26 @@ export function StudioScreen({
       // A table wears ONE cloth: dropping a second onto a dressed table recolours the one that is
       // already there rather than stacking. Not a remove+add — that would record the removal as a
       // deliberate divergence and make the next "on all tables" skip this table (F-5.3).
-      const worn = cat?.anchor === "table" ? coverOn(doc, t.id) : undefined;
+      // (A runner is not a cloth — it lies on top of one: isRunner, lib/catalog/categories.ts.)
+      const worn = anchorOf(product) === "table" ? coverOn(doc, t.id) : undefined;
       if (worn) {
         act({ type: "setPlacementVariant", id: worn.id, variantId });
         setSelected([{ kind: "table", id: t.id }]);
         return true;
       }
-      act({ type: "addPlacement", placement: { ...base, tableId: t.id, position: { x: 0, y: 0 } } });
+      // On the table being dressed, or one already arranged by hand, it stands WHERE IT WAS LET GO —
+      // in the table's own frame, kept on its top. The first such drop onto a table still laid out
+      // automatically freezes the items already there where they were drawn, in the same history
+      // entry, so nothing jumps. Anywhere else the automatic layout finds it a place.
+      if (t.id === dressing || t.arranged) {
+        const position = clampToTable(tableBox(t), catalogBox(product), toTableFrame(t, { x, y }));
+        const freeze: Action[] = t.arranged
+          ? []
+          : [{ type: "arrangeDressing", tableId: t.id, positions: dressingSpots(t, chipsOn(t.id)).map((sp) => ({ id: sp.p.id, position: sp.local })) }];
+        batch([...freeze, { type: "addPlacement", placement: { ...base, tableId: t.id, position } }]);
+      } else {
+        act({ type: "addPlacement", placement: { ...base, tableId: t.id, position: { x: 0, y: 0 } } });
+      }
     } else if (product.category === "stages") {
       // A stage from the rail is a STAGE — stairs, height, levels, resizing in whole decks — not a
       // box. asStage leaves a non-rectangular one (a round stage) as the item it is.
@@ -669,6 +689,12 @@ export function StudioScreen({
   }, [activeLayer, doc, pickMany]);
 
   const sole = selected.length === 1 ? selected[0] : null;
+
+  /** The design items standing on a table — not its cloth, which is the table's surface. */
+  const chipsOn = (tableId: string) =>
+    doc.placements.filter((p) => p.layer === "table" && p.tableId === tableId && resolve(p.variantId)?.anchor !== "table");
+  // Derived, so a table deleted (or undone away) while it was being dressed simply ends the mode.
+  const dressingTable = dressing ? doc.tables.find((t) => t.id === dressing) : undefined;
 
 
   // One undo puts the whole selection back, however many things were in it.
@@ -2273,18 +2299,167 @@ export function StudioScreen({
   };
 
 
-  const smartApply = () => {
-    if (sole?.kind !== "placement") return;
-    const p = doc.placements.find((x) => x.id === sole.id);
-    const table = p?.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
-    if (!p || !table) return;
-    act({
-      type: "applyToTables",
-      tableIds: doc.tables.filter((t) => t.type === table.type).map((t) => t.id),
-      placement: { variantId: p.variantId, layer: "table", quantity: p.quantity, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
-    });
-    showHint(`הוחל על כל שולחנות ${table.type}`);
+  // --- dressing a table ------------------------------------------------------------------------------
+  // A table's focus mode, its arrange actions, and putting what is on it onto other tables in a
+  // pattern (lib/studio/table-patterns.ts). Where things stand on a table is
+  // lib/design-document/dressing.ts.
+
+  /** Open a table to dress it: framed, with the table itself selected so its bar (the cloth, the
+   *  chairs) is the one along the bottom. */
+  const dressTable = useCallback((tableId: string) => {
+    setDressing(tableId);
+    setSelected([{ kind: "table", id: tableId }]);
+  }, []);
+
+  /** An arrange action on the table being dressed — on the selected items when there are some (two
+   *  or more; one is enough for "to the centre"), on all of them otherwise. One history entry. */
+  const arrangeDressed = (kind: ArrangeKind | "auto") => {
+    const t = doc.tables.find((x) => x.id === dressing);
+    if (!t) return;
+    if (kind === "auto") {
+      act({ type: "resetDressing", tableId: t.id });
+      return;
+    }
+    const spots = dressingSpots(t, chipsOn(t.id));
+    const current = new Map(spots.map((sp) => [sp.p.id, sp.local]));
+    // A runner stays where it lies — the arrangement is of what is set out ON it.
+    const laid = spots.filter((sp) => !sp.runner);
+    const picked = selected.filter((r) => r.kind === "placement" && laid.some((sp) => sp.p.id === r.id)).map((r) => r.id);
+    const subset = picked.length >= (kind === "center" ? 1 : 2) ? picked : undefined;
+    const next = arrange(kind, tableBox(t), laid.map((sp) => sp.box), current, subset);
+    act({ type: "arrangeDressing", tableId: t.id, positions: [...next].map(([id, position]) => ({ id, position })) });
   };
+
+  /** The arrow keys on the table being dressed: the selected items on it step 1cm (Shift: 5cm) in
+   *  the direction of the key ON SCREEN — carried into the table's frame, so a table turned 90° still
+   *  moves its candlestick the way the arrow points — and stay on the table top. True when something
+   *  moved, so the key is spent. */
+  const nudgeDressing = useCallback(
+    (key: string, big: boolean): boolean => {
+      const t = dressing ? doc.tables.find((x) => x.id === dressing) : undefined;
+      if (!t) return false;
+      const step = big ? 50 : 10;
+      const d = key === "ArrowLeft" ? { x: -step, y: 0 } : key === "ArrowRight" ? { x: step, y: 0 } : key === "ArrowUp" ? { x: 0, y: -step } : key === "ArrowDown" ? { x: 0, y: step } : null;
+      if (!d) return false;
+      const chips = doc.placements.filter((p) => p.layer === "table" && p.tableId === t.id && resolve(p.variantId)?.anchor !== "table");
+      const picked = new Set(selected.filter((r) => r.kind === "placement").map((r) => r.id));
+      if (!chips.some((c) => picked.has(c.id))) return false;
+      const local = toTableFrame({ position: { x: 0, y: 0 }, rotation: t.rotation, mirrored: t.mirrored }, d);
+      const box = tableBox(t);
+      act({
+        type: "arrangeDressing",
+        tableId: t.id,
+        positions: dressingSpots(t, chips).map((sp) => ({
+          id: sp.p.id,
+          position: picked.has(sp.p.id) ? clampToTable(box, sp.box, { x: sp.local.x + local.x, y: sp.local.y + local.y }) : sp.local,
+        })),
+      });
+      return true;
+    },
+    [dressing, doc, selected, act],
+  );
+
+  /** One item onto a set of tables. It recolours a table already wearing another shade of the same
+   *  product rather than giving it a second one, and keeps its place on the table — on a target that
+   *  is arranged by hand; an automatic one lays it out itself. */
+  const applyItemTo = (placementId: string, groups: { tableIds: string[]; variantId?: string }[]) => {
+    const p = doc.placements.find((x) => x.id === placementId);
+    const count = groups.reduce((n, g) => n + g.tableIds.length, 0);
+    if (!p || count === 0) return;
+    // One action per shade, in one history entry: two shades in alternation are one thing done.
+    batch(
+      groups.map((g) => ({
+        type: "applyToTables" as const,
+        tableIds: g.tableIds,
+        placement: { variantId: g.variantId ?? p.variantId, layer: "table" as const, quantity: p.quantity, position: p.position, rotation: p.rotation, scale: p.scale },
+        replaces: shadesOf(p.variantId).map((sh) => sh.id),
+      })),
+    );
+    showHint(`${resolve(p.variantId)?.product.name ?? "הפריט"} הוחל על ${count} שולחנות${groups.length > 1 ? " בשני גוונים" : ""}`);
+  };
+
+  /** A table's whole dressing onto a set of tables. */
+  const applyDressingFrom = (fromTableId: string, toTableIds: string[], mode: "add" | "replace") => {
+    if (toTableIds.length === 0) return;
+    // The shades of whatever the source is wearing, so a target already in cream is recoloured to the
+    // source's gold rather than handed a second cloth. A table wears one cloth; the quote sums every
+    // placement, so the second one would be billed.
+    const replaces = doc.placements
+      .filter((p) => p.layer === "table" && p.tableId === fromTableId)
+      .flatMap((p) => shadesOf(p.variantId).map((sh) => sh.id));
+    act({ type: "copyDressing", fromTableId, toTableIds, mode, replaces });
+    showHint(mode === "replace" ? `${toTableIds.length} שולחנות עוצבו מחדש` : `העיצוב הוחל על ${toTableIds.length} שולחנות`);
+  };
+
+  // ── saved table designs (TableDesign) ──────────────────────────────────────────────────────────
+  const [designs, setDesigns] = useState<TableDesign[]>([]);
+  useEffect(() => {
+    let live = true;
+    fetchTableDesigns()
+      .then((d) => live && setDesigns(d))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /** Everything on a table — its cloth too — saved under a name, standing where it stands. */
+  const saveDesign = async (tableId: string, name: string) => {
+    const t = doc.tables.find((x) => x.id === tableId);
+    const items = doc.placements
+      .filter((p) => p.layer === "table" && p.tableId === tableId)
+      .map((p) => ({ variantId: p.variantId, quantity: p.quantity, position: p.position, rotation: p.rotation, scale: p.scale || 1 }));
+    if (!t || items.length === 0) return;
+    const res = await saveTableDesign({ id: uid(), name, ...(t.arranged ? { arranged: true } : {}), items });
+    if ("error" in res) {
+      showHint(res.error);
+      return;
+    }
+    setDesigns(res);
+    showHint(`העיצוב ״${name}״ נשמר — אפשר להלביש בו כל שולחן, בכל אירוע`);
+  };
+
+  /** A saved design onto one table, in place of what it wears. */
+  const wearDesign = (tableId: string, designId: string) => {
+    const d = designs.find((x) => x.id === designId);
+    if (!d) return;
+    act({
+      type: "dressTables",
+      tableIds: [tableId],
+      design: { items: d.items, arranged: d.arranged },
+      mode: "replace",
+      replaces: d.items.flatMap((it) => shadesOf(it.variantId).map((sh) => sh.id)),
+    });
+    showHint(`השולחן הולבש ב״${d.name}״ — להחלה על שולחנות נוספים: ״דפוס״`);
+  };
+
+  const renderDesigns = (tableId: string) => (
+    <TableDesignsPanel
+      designs={designs}
+      canSave={doc.placements.some((p) => p.layer === "table" && p.tableId === tableId)}
+      onSave={(name) => void saveDesign(tableId, name)}
+      onApply={(id) => wearDesign(tableId, id)}
+      onDelete={(id) => void deleteTableDesign(id).then(setDesigns)}
+    />
+  );
+
+  /** The "which tables" panel, bound to a source table — and to one item on it, when that is what
+   *  is being applied rather than the whole table. */
+  const renderPattern = (sourceTableId: string, placementId?: string) => (
+    <TablePatternPicker
+      tables={doc.tables}
+      sourceId={sourceTableId}
+      selectedTableIds={selected.filter((r) => r.kind === "table").map((r) => r.id)}
+      whole={!placementId}
+      item={(() => {
+        const p = placementId ? doc.placements.find((x) => x.id === placementId) : undefined;
+        return p ? { variantId: p.variantId, shades: shadesOf(p.variantId) } : undefined;
+      })()}
+      onApply={(groups, mode) =>
+        placementId ? applyItemTo(placementId, groups) : applyDressingFrom(sourceTableId, groups.flatMap((g) => g.tableIds), mode)
+      }
+    />
+  );
 
   // "על כל השולחנות" — the whole room in one cloth, whatever each table's type. `replaces` carries
   // the product's other shades, so tables already dressed in gold are recoloured rather than given
@@ -2315,11 +2490,7 @@ export function StudioScreen({
     // The shades of whatever the source table is wearing, so a target already in cream is
     // recoloured to the source's gold rather than handed a second cloth. A table wears one cloth;
     // the quote sums every placement, so the second one would be billed.
-    const replaces = doc.placements
-      .filter((p) => p.layer === "table" && p.tableId === fromTableId)
-      .flatMap((p) => shadesOf(p.variantId).map((sh) => sh.id));
-    act({ type: "copyDressing", fromTableId, toTableIds, mode, replaces });
-    showHint(mode === "replace" ? `${toTableIds.length} שולחנות עוצבו מחדש` : `העיצוב הוחל על ${toTableIds.length} שולחנות`);
+    applyDressingFrom(fromTableId, toTableIds, mode);
   };
 
   // --- swapping for another catalog row ------------------------------------------------------------
@@ -2418,7 +2589,7 @@ export function StudioScreen({
   /** The cloths a table's own cloth can be swapped for — offered in its cloth panel, since a cloth is
    *  the table's surface and is never selected on its own. */
   const clothOptions = useMemo(
-    () => catalog.filter((p) => !p.archived && p.category === "tablecloths").map((p) => ({ value: p.id, label: p.name })),
+    () => catalog.filter((p) => !p.archived && p.category === "tablecloths" && !isRunner(p)).map((p) => ({ value: p.id, label: p.name })),
     [catalog],
   );
 
@@ -2472,6 +2643,8 @@ export function StudioScreen({
           removeStair(activeEdge);
           setActiveEdge(null);
         } else deleteSelection();
+      } else if (!typing && !mod && !e.defaultPrevented && e.key.startsWith("Arrow") && nudgeDressing(e.key, e.shiftKey)) {
+        e.preventDefault();
       } else if (!typing && e.key === "Escape" && !e.defaultPrevented) {
         // (Not when the canvas already spent this Escape putting its tape measure away, or ending
         // the area being drawn — both take it in the capture phase.)
@@ -2479,6 +2652,7 @@ export function StudioScreen({
         // the edge item, then the selection, then — with nothing left selected — the zone eye and
         // the active layer, which are what keep the empty-selection bar on screen.
         if (stageFill?.phase === "pick") setStageFill(null);
+        else if (dressing) setDressing(null);
         else if (activeEdge) setActiveEdge(null);
         else if (selected.length > 0) setSelected([]);
         else {
@@ -2489,7 +2663,7 @@ export function StudioScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, copy, cut, paste, groupSelection, ungroupSelection, selectAll, restack, selected.length, activeEdge, removeStair, stageFill?.phase]);
+  }, [deleteSelection, copy, cut, paste, groupSelection, ungroupSelection, selectAll, restack, selected.length, activeEdge, removeStair, stageFill?.phase, dressing, nudgeDressing]);
 
   // --- the right-click menu ------------------------------------------------------------------------
   // The same verbs the bar offers, where the pointer already is. The menu is built the instant the
@@ -2670,7 +2844,29 @@ export function StudioScreen({
             areaRefDeg={stageTool?.kind === "level" && toolStage ? toolStage.rotation || 0 : undefined}
             stairPick={stairPick}
             onPickStair={pickStair}
+            dressingTableId={dressingTable?.id ?? null}
+            onFocusTable={dressTable}
+            onExitDressing={() => setDressing(null)}
+            onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
           />
+          {/* The table being dressed: how its items stand, and which tables should look like it. */}
+          {dressingTable && (
+            <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center">
+              <div className="pointer-events-auto flex min-w-0 justify-center">
+                <DressingBar
+                  title={dressingTable.number > 0 ? `עיצוב שולחן ${dressingTable.number}` : "עיצוב שולחן הראש"}
+                  count={chipsOn(dressingTable.id).length}
+                  selectedCount={selected.filter((r) => r.kind === "placement" && chipsOn(dressingTable.id).some((c) => c.id === r.id)).length}
+                  arranged={!!dressingTable.arranged}
+                  onArrange={arrangeDressed}
+                  onAuto={() => arrangeDressed("auto")}
+                  picker={renderPattern(dressingTable.id)}
+                  designs={renderDesigns(dressingTable.id)}
+                  onClose={() => setDressing(null)}
+                />
+              </div>
+            </div>
+          )}
           {/* What the area tool is waiting for, where the tape says what IT is waiting for. */}
           {stageFill?.phase === "draw" && (
             <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
@@ -2773,7 +2969,10 @@ export function StudioScreen({
                 onClose={() => setSelected([])}
                 onQuantity={changeQuantity}
                 onDelete={deleteSelection}
-                onSmartApply={smartApply}
+                onDressTable={dressTable}
+                renderPattern={renderPattern}
+                renderDesigns={renderDesigns}
+                onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
@@ -2857,7 +3056,7 @@ export function StudioScreen({
               with a button in it, so it takes the pointer — the ✕ is the way out for a designer
               who has never heard of Escape, and the one a tablet has. */}
           {armed && !placing && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
+            <div className={"pointer-events-none absolute inset-x-0 flex justify-center " + (dressingTable ? "top-28" : "top-4")}>
               <div
                 role="status"
                 className="pointer-events-auto flex items-center gap-2 rounded-full border border-accent-line bg-surface/95 py-1 ps-3 pe-1 text-xs text-ink-soft shadow-floating"

@@ -1,47 +1,26 @@
-import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import type { Product } from "@/lib/catalog/types";
+import { AppearancePreview } from "./appearance-preview";
 
-// Three soft washes echoing the same peach → blush → violet family a saturated reference used,
-// just pulled back to tint strength — a grid of a dozen cards can't each carry a full-strength
-// gradient (DESIGN.md: at most one saturated surface per screen) without turning into visual
-// noise, but a pale, per-product cycle still reads as "warm and varied", not an empty grey gap.
-const PLACEHOLDER_THEMES = [
-  "from-peach/40 to-blush/30",
-  "from-blush/35 to-accent-tint",
-  "from-accent-tint to-indigo-50",
-];
-
-function placeholderTheme(productId: string): string {
-  let hash = 0;
-  for (let i = 0; i < productId.length; i++) hash = (hash * 31 + productId.charCodeAt(i)) >>> 0;
-  return PLACEHOLDER_THEMES[hash % PLACEHOLDER_THEMES.length];
-}
-
-// The product photo is the card hero. Until the designer uploads one, we show a calm,
-// honest per-category glyph rather than a broken image or a fake stock photo.
-export function ProductImage({
-  imageUrl,
-  category,
-  name,
-  productId,
-  className = "",
-}: {
-  imageUrl?: string;
-  category: string;
-  name: string;
-  productId: string;
-  className?: string;
-}) {
-  if (imageUrl) {
+// The product photo is the card hero. Until the designer uploads one, the card shows the item AS THE
+// PLAN DRAWS IT — the table with its chairs, the stage in its decks' timber, the candelabrum with its
+// candles, in its own shade — on a tile with the plan's own dotted ground. That is a truer picture of
+// the row than the category glyph it replaced (every table in the catalog wore the same table icon),
+// and it is the picture the designer will meet on the sketch.
+export function ProductImage({ product, className = "" }: { product: Product; className?: string }) {
+  if (product.imageUrl) {
     // eslint-disable-next-line @next/next/no-img-element -- user-supplied URLs; next/image needs remote config we don't have yet
-    return <img src={imageUrl} alt={name} className={`h-full w-full object-cover ${className}`} />;
+    return <img src={product.imageUrl} alt={product.name} className={`h-full w-full object-cover ${className}`} />;
   }
-  const Icon = CATEGORY_BY_ID[category]?.icon;
   return (
     <div
-      className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${placeholderTheme(productId)} ${className}`}
+      className={`flex h-full w-full items-center justify-center bg-canvas p-[8%] ${className}`}
+      style={{
+        backgroundImage: "radial-gradient(var(--color-border) 1px, transparent 1px)",
+        backgroundSize: "10px 10px",
+      }}
       aria-hidden="true"
     >
-      {Icon ? <Icon className="h-9 w-9 text-accent/40" strokeWidth={1.5} /> : null}
+      <AppearancePreview product={product} className="h-full w-full" />
     </div>
   );
 }

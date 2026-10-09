@@ -333,7 +333,7 @@ function ProductRow({
         }
       >
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} productId={p.id} />
+          <ProductImage product={p} />
         </div>
         <div className="min-w-0 flex-1">
           <p className={"truncate text-sm font-medium " + (armed ? "text-accent" : "text-ink")}>{p.name}</p>

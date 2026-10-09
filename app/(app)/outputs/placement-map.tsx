@@ -16,7 +16,9 @@ import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, nodeMap, wallPoints } from "@/lib/venues/structure";
 import { stairsFlights } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
-import { FootprintShape, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
+import { FootprintShape, dressingSpots, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
+import { DrapePleats, ItemSymbol, RugPattern, SeatChair } from "@/components/item-symbol";
+import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import {
@@ -38,7 +40,7 @@ import { uprightTransform } from "@/lib/design-document/mirror";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
-import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { overallDimensions, type DimensionLine } from "@/lib/outputs/dimensions";
 import type { Extent } from "@/lib/outputs/scale";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
@@ -434,8 +436,8 @@ export function PlacementMap({
           {[...chipsByTable.entries()].flatMap(([tableId, chips]) => {
             const t = tableById.get(tableId);
             if (!t) return [];
-            return chips.map((p, i) => (
-              <PlacementGlyph key={p.id} placement={p} x={t.position.x} y={t.position.y + (i - (chips.length - 1) / 2) * 840} />
+            return dressingSpots(t, chips).map(({ p, at, rotation, footprint }) => (
+              <PlacementGlyph key={p.id} placement={{ ...p, rotation }} x={at.x} y={at.y} shape={footprint} />
             ));
           })}
 
@@ -480,6 +482,7 @@ export function PlacementMap({
                   strokeDasharray={OVERHEAD_DASH}
                   vectorEffect="non-scaling-stroke"
                 />
+                <DrapePleats lengthMm={resolved.lengthMm} depthMm={DRAPE_MM} ink={INK} opacity={0.6} />
               </g>
             );
           })}
@@ -834,22 +837,9 @@ function GhostTable({ t }: { t: DesignTable }) {
 /** A banquet chair, drawn exactly as the studio canvas draws it (canvas-stage.tsx's own Chair) — the
  *  seat's own rotation already points +x at the table, so this needs no further geometry. */
 function ChairGlyph({ seat }: { seat: Seat }) {
-  const halfD = CHAIR_D_MM / 2;
-  const halfW = CHAIR_W_MM / 2;
   return (
     <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
-      <rect
-        x={-halfD}
-        y={-halfW}
-        width={CHAIR_D_MM}
-        height={CHAIR_W_MM}
-        rx={95}
-        fill="#ffffff"
-        stroke={INK}
-        strokeWidth={LINE_WEIGHTS.furniture}
-        vectorEffect="non-scaling-stroke"
-      />
-      <rect x={-halfD} y={-halfW} width={CHAIR_BACK_MM} height={CHAIR_W_MM} rx={CHAIR_BACK_MM / 2} fill={INK} fillOpacity={0.35} />
+      <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={INK} print />
     </g>
   );
 }
@@ -857,22 +847,27 @@ function ChairGlyph({ seat }: { seat: Seat }) {
 /** One free-standing placement: a stage, a bar, a chandelier, a loose chair — whatever the catalog
  *  says its shape is, outlined at furniture weight. `overhead` forces it unfilled and dashed
  *  (components/footprint-shape.tsx), the one convention every surface that draws this plan shares. */
-function PlacementGlyph({ placement, x, y, overhead }: { placement: Placement; x: number; y: number; overhead?: boolean }) {
+function PlacementGlyph({ placement, x, y, overhead, shape }: { placement: Placement; x: number; y: number; overhead?: boolean; shape?: Footprint }) {
   const r = resolve(placement.variantId);
-  const footprint: Footprint =
+  const footprint: Footprint = shape ?? (
     r?.sizing === "stretch"
       ? { kind: "rect", ...(placement.sizeMm ?? fallbackSize(r)) }
-      : placementFootprint(placement); // at the size it was stretched to, when its row allows that
+      : placementFootprint(placement)); // at the size it was stretched to, when its row allows that
   const scale = placement.scale || 1;
   // The row's own weight and dash, collapsed to ink-on-paper (TableGlyph's reason). A stage keeps the
   // sheet's furniture weight whatever deck it was built from, as it does on screen.
   const style = resolveStyle(placement.stage ? undefined : productStyle(r?.product), "monochrome", { fill: "#ffffff", stroke: INK, strokeWidth: LINE_WEIGHTS.furniture });
+  // The category's picture, in ink — the same one the studio draws, so the crew sees a chair where
+  // the designer put a chair (lib/catalog/symbols.ts).
+  const symbol = placement.stage ? null : symbolOf(r?.product, footprint);
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} />}
+      {r?.product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={INK} opacity={0.8} />}
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
-        fill={style.fill}
+        fill={symbol ? "none" : style.fill}
         stroke={style.stroke}
         strokeWidth={style.strokeWidth}
         strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}

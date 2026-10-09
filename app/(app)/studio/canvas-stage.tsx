@@ -4,7 +4,7 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState } from
 import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
-import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { deckOf, resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, rotatedExtent, tableAt } from "@/lib/studio/geometry";
@@ -17,7 +17,12 @@ import { zoneBounds } from "@/lib/venues/zone";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
-import { FootprintShape, tableBlockedSides, tableFootprint, placementFootprint, productStyle } from "@/components/footprint-shape";
+import { FootprintShape, dressingSpots, tableBlockedSides, tableBox, tableFootprint, placementFootprint, productStyle } from "@/components/footprint-shape";
+import { clampToTable, toTableFrame } from "@/lib/design-document/dressing";
+import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair } from "@/components/item-symbol";
+import { ItemSurface } from "@/components/surface-fill";
+import { anySurface } from "@/lib/catalog/textures";
+import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
@@ -156,6 +161,10 @@ export function CanvasStage({
   stairPick,
   onPickStair,
   onContextMenu,
+  dressingTableId,
+  onFocusTable,
+  onExitDressing,
+  onArrangeDressing,
 }: {
   doc: DesignDocumentContent;
   plan: EventPlan;
@@ -259,6 +268,16 @@ export function CanvasStage({
   /** The right-click menu for a set of things: the thing under the pointer (selected first, when
    *  it was not), or the whole selection when it was one of them or the click landed on floor. */
   onContextMenu?: (refs: SelectionRef[]) => ContextMenuItem[];
+  /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
+   *  items on it free to be dragged about its top. Null = the whole plan, as usual. */
+  dressingTableId?: string | null;
+  /** A double-click on a table (or on an item on it): dress THAT table. */
+  onFocusTable?: (tableId: string) => void;
+  /** A click on the room around the table being dressed — back to the plan. */
+  onExitDressing?: () => void;
+  /** Items dragged on the table being dressed: where every item on it now stands, in the table's own
+   *  frame — one frame of a gesture, closed by onEndDrag. */
+  onArrangeDressing?: (tableId: string, positions: { id: string; position: Point }[]) => void;
 }) {
   // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
   // off the gesture: dragging a table (or a stage, a rug — anything standing on the floor) holds
@@ -321,6 +340,31 @@ export function CanvasStage({
     nonce.current += 1;
     setFocus({ minX, minY, maxX, maxY, nonce: nonce.current, immediate: first });
   }, [minX, minY, maxX, maxY, widthMm, heightMm]);
+
+  // Dressing a table: travel in close enough that the table fills the view with its chairs round
+  // it, and back out to the event when it is let go — the same two moves a designer makes by hand,
+  // made for them, so a candlestick 25cm across is something the pointer can actually take hold of.
+  const dressingTable = dressingTableId ? doc.tables.find((t) => t.id === dressingTableId) : undefined;
+  const wasDressing = useRef(false);
+  useEffect(() => {
+    const t = dressingTableId ? doc.tables.find((x) => x.id === dressingTableId) : undefined;
+    if (!t) {
+      if (!wasDressing.current) return;
+      wasDressing.current = false;
+      if (!widthMm && !heightMm) return;
+      nonce.current += 1;
+      setFocus({ minX, minY, maxX, maxY, nonce: nonce.current });
+      return;
+    }
+    wasDressing.current = true;
+    const b = tableBox(t);
+    const reach = Math.max(b.widthMm, b.depthMm) / 2 + 900; // the chairs, and a little room round them
+    nonce.current += 1;
+    setFocus({ minX: t.position.x - reach, minY: t.position.y - reach, maxX: t.position.x + reach, maxY: t.position.y + reach, nonce: nonce.current });
+    // Only when the table being dressed changes — not every time the document does, or every drag
+    // on the table would re-frame it under the pointer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dressingTableId]);
 
   // The property as THIS event has arranged it. Every reference to the venue's geometry below goes
   // through this rather than through plan.structure, so a bar the designer pushed across the room is
@@ -413,6 +457,12 @@ export function CanvasStage({
   // to front" can put a table over a rug or an object under a table. A plan nobody has restacked
   // comes out of here in exactly the order the three separate passes used to draw it in.
   const stack = useMemo(() => floorStack(doc, classify), [doc, classify]);
+  // Where each table's items stand — laid out once per change of the plan, not once per frame of a
+  // pan or a zoom (the layer below re-renders on every one).
+  const spotsByTable = useMemo(
+    () => new Map(doc.tables.map((t) => [t.id, dressingSpots(t, sorted.chipsByTable.get(t.id) ?? [])])),
+    [doc.tables, sorted],
+  );
 
   /** The lookups the merged pass needs: a table or placement by id, without walking a list per entry. */
   const tableById = useMemo(() => new Map(doc.tables.map((t) => [t.id, t])), [doc.tables]);
@@ -1337,10 +1387,9 @@ export function CanvasStage({
                     // selected from the table's inspector. (catalog-resolver gives tablecloths zero
                     // footprint for the same reason: a cover consumes no room on the table it covers.)
                     cloth={sorted.coverByTable.get(t.id)}
-                    // A grouped table draws no number of its own — its group draws the one they share.
-                    showNumber={!t.groupId}
                     ctx={ctx}
                     drag={nodeProps({ kind: "table", id: t.id }, ctx)}
+                    onOpen={onFocusTable ? () => onFocusTable(t.id) : undefined}
                     onNudge={(pos) => {
                       onMoveTable(t.id, pos);
                       onEndDrag();
@@ -1381,9 +1430,10 @@ export function CanvasStage({
           })}
 
           {/* The group, drawn once over its members: the outline that says where the one larger
-              table ends, and the single number it carries instead of each table carrying its own.
-              It traces tables, so it dims and hides with them rather than floating over them at
-              full contrast. (The block's CHAIRS are drawn in the stack, under its first table.) */}
+              table ends, while it is selected. Its number and occupancy are NOT written on the sketch
+              — the designer asked for a clean drawing; they live in the inspector (and on the printed
+              map, which the crew finds tables by). (The block's CHAIRS are drawn in the stack, under
+              its first table.) */}
           {layerVisible.tables && tableGroups.map((g) => (
             <g key={`group-${g.id}`} className="pointer-events-none" {...layerAttrs("tables")}>
               {/* Only while the block is selected. At rest a block of tables reads as the one table it
@@ -1403,31 +1453,6 @@ export function CanvasStage({
                 vectorEffect="non-scaling-stroke"
               />
               )}
-              {g.number > 0 && (
-                <text
-                  x={g.centre.x}
-                  y={g.centre.y + (g.seats > 0 ? GROUP_LABEL.number : 0)}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
-                  style={{ fontSize: GROUP_NUMBER_MM, fontWeight: 700, ...HALO }}
-                >
-                  {g.number}
-                </text>
-              )}
-              {/* One block, one occupancy — what its tables hold between them. Nobody seated at a
-                  block of four thinks of themselves as being at the second table of it. */}
-              {g.seats > 0 && (
-                <CapacityLabel
-                  x={g.centre.x}
-                  y={g.centre.y + (g.number > 0 ? GROUP_LABEL.capacity : 0)}
-                  seated={g.seated}
-                  seats={g.seats}
-                  size={GROUP_CAPACITY_MM}
-                  baseInk={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
-                  halo
-                />
-              )}
             </g>
           ))}
 
@@ -1439,16 +1464,21 @@ export function CanvasStage({
             {layerVisible.table &&
               layerVisible.tables &&
               doc.tables.map((t) => {
-                const chips = sorted.chipsByTable.get(t.id) ?? [];
-                return chips.map((p, i) => (
+                // The table being dressed draws its items over the scrim, below — not twice.
+                if (t.id === dressingTableId) return null;
+                // Where each stands on its table (lib/design-document/dressing.ts): as the designer
+                // arranged it, or laid out automatically — and turned with the table.
+                return (spotsByTable.get(t.id) ?? []).map(({ p, at, rotation, footprint }) => (
                   <PlacementNode
                     key={p.id}
-                    placement={p}
-                    x={t.position.x}
-                    y={t.position.y + (i - (chips.length - 1) / 2) * 840}
+                    shape={footprint}
+                    placement={rotation === p.rotation ? p : { ...p, rotation }}
+                    x={at.x}
+                    y={at.y}
                     selected={isSel("placement", p.id)}
                     ctx={ctx}
                     drag={nodeProps({ kind: "placement", id: p.id }, ctx, false)}
+                    onOpen={onFocusTable ? () => onFocusTable(t.id) : undefined}
                   />
                 ));
               })}
@@ -1467,6 +1497,27 @@ export function CanvasStage({
                 />
               ))}
           </g>
+
+          {dressingTable && (
+            <DressingOverlay
+              table={dressingTable}
+              chips={sorted.chipsByTable.get(dressingTable.id) ?? []}
+              cloth={sorted.coverByTable.get(dressingTable.id)}
+              ring={seatRingByTable.get(dressingTable.id)}
+              util={tableUtilization(doc, dressingTable)}
+              ctx={ctx}
+              isSelected={(id) => isSel("placement", id)}
+              selectedIds={selection.filter((r) => r.kind === "placement").map((r) => r.id)}
+              tableDrag={nodeProps({ kind: "table", id: dressingTable.id }, ctx, false)}
+              chipDrag={(id) => nodeProps({ kind: "placement", id }, ctx, false)}
+              onArrange={(positions) => onArrangeDressing?.(dressingTable.id, positions)}
+              onEnd={() => {
+                ctx.endSnap();
+                onEndDrag();
+              }}
+              onExit={() => onExitDressing?.()}
+            />
+          )}
 
           {/* ONE rotate handle for whatever is selected, rather than a knob on every node. A table
               turned on its own and six turned together are the same gesture about a different
@@ -1648,6 +1699,7 @@ export function CanvasStage({
               })}
               clear={clearedDrop}
               onPlace={onPlaceArmed}
+              dressingTableId={dressingTableId}
               onDisarm={onDisarm}
             />
           )}
@@ -2026,6 +2078,10 @@ function DrapeNode({
           onSelect(isAdditiveClick(e));
         }}
       />
+      {/* Its pleats — the fabric gathered on the rail — so a drape reads as cloth, not as paint. */}
+      <g transform={`translate(${(from.x + to.x) / 2} ${(from.y + to.y) / 2}) rotate(${(Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI})`}>
+        <DrapePleats lengthMm={resolved.lengthMm} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} />
+      </g>
       {/* The selection outline is a second stroke rather than a colour change: a drape's whole
           point is the colour it is, and highlighting must not repaint it. */}
       <line
@@ -2130,6 +2186,20 @@ function CarpetNode({
         aria-label={`${r?.label ?? "שטיח"} — ${(size.widthMm / 1000).toFixed(1)}×${(size.depthMm / 1000).toFixed(1)} מטר`}
         className="cursor-move touch-none focus:outline-none"
       />
+      {/* A lawn runner, a sisal mat, a printed rug: what it is woven of (or the designer's own
+          picture of it), tinted by its shade. Over the rect (which keeps the pointer), under the
+          border and the handles. */}
+      {anySurface(r?.product.appearance) && (
+        <g transform={`translate(${x} ${y})`} className="pointer-events-none">
+          <ItemSurface appearance={r?.product.appearance} footprint={{ kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
+        </g>
+      )}
+      {/* A rug's border and fringe — the two things that make a rectangle on the floor a rug. */}
+      {r?.product.category === "rugs" && (
+        <g transform={`translate(${x} ${y})`}>
+          <RugPattern w={size.widthMm} h={size.depthMm} />
+        </g>
+      )}
       {selected &&
         CORNERS.map(([sx, sy]) => {
           const corner = { x: x + sx * halfW, y: y + sy * halfD };
@@ -2188,76 +2258,15 @@ function CarpetNode({
  *  Sized in world millimetres, so chairs shrink with the plan like the tables they belong to; only
  *  the hairline holds a constant screen width, which is what keeps a room of 400 legible zoomed out. */
 function Chair({ seat }: { seat: Seat }) {
-  const halfD = CHAIR_D_MM / 2;
-  const halfW = CHAIR_W_MM / 2;
   return (
     <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
-      <rect
-        x={-halfD}
-        y={-halfW}
-        width={CHAIR_D_MM}
-        height={CHAIR_W_MM}
-        rx={95}
-        fill="var(--color-tray)"
-        stroke="var(--color-muted)"
-        strokeOpacity={0.4}
-        strokeWidth={1}
-        vectorEffect="non-scaling-stroke"
-      />
-      <rect
-        x={-halfD}
-        y={-halfW}
-        width={CHAIR_BACK_MM}
-        height={CHAIR_W_MM}
-        rx={CHAIR_BACK_MM / 2}
-        fill="var(--color-muted)"
-        fillOpacity={0.5}
-      />
+      <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
     </g>
   );
 }
 
 /** How far a group's dashed outline stands off the tables inside it. */
 const GROUP_PAD_MM = 260;
-
-// Type sizes, in plan millimetres — fixed rather than scaled to the table, so that every number in
-// the room is the same size and the plan can be read at a glance instead of table by table.
-const TABLE_NUMBER_MM = 520;
-const TABLE_CAPACITY_MM = 300;
-const GROUP_NUMBER_MM = 640;
-const GROUP_CAPACITY_MM = 340;
-
-/** Where the two lines of a table's label sit: the NUMBER over the CAPACITY, centred together on
- *  the middle of the table.
- *
- *  As one label, not as a number at dead centre with a second line hung off the bottom of it. Hung,
- *  the pair reads bottom-heavy — and on anything shallow (a block of two 180×120s is only 1200 deep)
- *  the capacity ends up sitting on the table's own edge. Centring the PAIR keeps the promise the
- *  number was given when it moved to the middle: one label, in one place, on every shape.
- *
- *  0.78em is about the height of a line of digits, which is what has to be centred — not the em box,
- *  most of which is the descender space digits never use. */
-const LINE = 0.78;
-const labelStack = (numberSize: number, capacitySize: number) => ({
-  number: -(capacitySize * LINE) / 2,
-  capacity: (numberSize * LINE) / 2,
-});
-const TABLE_LABEL = labelStack(TABLE_NUMBER_MM, TABLE_CAPACITY_MM);
-const GROUP_LABEL = labelStack(GROUP_NUMBER_MM, GROUP_CAPACITY_MM);
-
-/** A knocked-out ring of the table's own surface colour, drawn UNDER the glyphs (paint-order) so a
- *  line running behind the text stops at it.
- *
- *  A block's label is centred on the block, and the centre of a block is exactly where the two
- *  tables meet — so the one place the number is guaranteed to land is on top of a seam. Cartography
- *  has solved this for a century: halo the type, don't move it. Only the group needs it; a lone
- *  table has nothing drawn through its middle but a centrepiece the designer put there. */
-const HALO = {
-  paintOrder: "stroke" as const,
-  stroke: "var(--color-surface)",
-  strokeWidth: 70,
-  strokeLinejoin: "round" as const,
-};
 
 const CORNERS = [
   [-1, -1],
@@ -2410,22 +2419,22 @@ function TableNode({
   selected,
   util,
   cloth,
-  showNumber,
   ctx,
   drag,
   onNudge,
+  onOpen,
 }: {
   table: DesignTable;
   selected: boolean;
   util: number;
-  /** The cover this table wears, if any — drawn as the table's own fill. */
+  /** The cover this table wears, if any — drawn as fabric round and over the table (ClothDrape). */
   cloth?: Placement;
-  /** False for a table inside a group: the group draws the one number they share. */
-  showNumber: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
   /** An arrow-key step. Discrete, so it closes its own history entry immediately. */
   onNudge: (pos: Point) => void;
+  /** Double-click: dress this table (its focus mode). */
+  onOpen?: () => void;
 }) {
   const overflow = util > 1;
   const clothColour = cloth ? (resolve(cloth.variantId)?.swatch ?? "var(--color-accent-tint)") : undefined;
@@ -2443,22 +2452,18 @@ function TableNode({
     // problem to notice, not a colour choice, and it has to stay legible whatever is on the table.
     fill: overflow ? "var(--color-warn-tint)" : (clothColour ?? style.fill),
     fillOpacity: overflow || !clothColour ? style.fillOpacity : 1,
-    stroke: selected ? "var(--color-accent)" : overflow ? "var(--color-warn)" : style.stroke,
-    strokeWidth: selected ? 4 : style.strokeWidth,
+    // Under a cloth the table's own edge is only a crease in the fabric — still there, so the
+    // tabletop reads, but quiet. Selection and overflow keep their full weight.
+    stroke: selected ? "var(--color-accent)" : overflow ? "var(--color-warn)" : clothColour ? "var(--color-ink)" : style.stroke,
+    strokeOpacity: selected || overflow || !clothColour ? style.strokeOpacity : 0.22,
+    strokeWidth: selected ? 4 : clothColour && !overflow ? 1 : style.strokeWidth,
     strokeDasharray: style.dashArray.length ? style.dashArray.join(" ") : undefined,
     vectorEffect: "non-scaling-stroke" as const,
   };
   const footprint = tableFootprint(table);
-  const labelAt = labelAnchor(footprint);
-  const upright = uprightTransform(table.rotation, table.mirrored);
   const seats = table.seats ?? 0;
-  // The number has to stay readable on whatever colour the cloth is, so it goes dark on a light
-  // cloth and light on a dark one rather than trusting one fixed grey.
-  const numberInk = selected
-    ? "var(--color-accent)"
-    : clothColour && isDark(clothColour)
-      ? "var(--color-canvas)"
-      : "var(--color-muted)";
+  const tableProduct = table.variantId ? resolve(table.variantId)?.product : undefined;
+  const tableSurface = clothColour || overflow ? undefined : anySurface(tableProduct?.appearance) ? tableProduct?.appearance : undefined;
 
   return (
     <g
@@ -2466,8 +2471,16 @@ function TableNode({
       transform={`translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`שולחן ${table.number || ""}${seats > 0 ? ` — ${table.seated ?? 0} מתוך ${seats} מקומות` : ""} — גרירה להזזה`}
+      aria-label={`שולחן ${table.number || ""}${seats > 0 ? ` — ${table.seated ?? 0} מתוך ${seats} מקומות` : ""} — גרירה להזזה${onOpen ? " · לחיצה כפולה לעיצוב השולחן" : ""}`}
       className="cursor-move touch-none focus:outline-none"
+      onDoubleClick={
+        onOpen
+          ? (e) => {
+              e.stopPropagation();
+              onOpen();
+            }
+          : undefined
+      }
       onKeyDown={(e) => {
         const step = e.shiftKey ? 500 : 100;
         if (e.key === "ArrowLeft") onNudge({ x: table.position.x - step, y: table.position.y });
@@ -2478,106 +2491,171 @@ function TableNode({
         e.preventDefault();
       }}
     >
+      {clothColour && !overflow && <ClothDrape footprint={footprint} colour={clothColour} />}
       <FootprintShape footprint={footprint} {...shape} />
-      {/* The label rides the table's POSITION and not its angle. Turning a table turns the table:
-          the number is not printed on the cloth, it is how a crew and a client find one table in a
-          room of forty, and a 6 that comes out as a 9 at 180° is worse than one that is merely hard
-          to read. The counter-turn is about the label's own point — the shape's visual centre
-          (labelAnchor): (0,0) on a rectangle or a round, but the middle of the band on an arc, whose
-          box centre is in the air the ring curves round — which the parent <g> has already carried
-          into place with the table, so the pair sits ON the table at every angle and only stops
-          leaning. The chairs are NOT counter-turned: a chair is a thing in the room and it faces the
-          edge it is pulled up to. Same split the printed map already makes, where the numbers are
-          drawn outside the rotated group (app/(app)/outputs/placement-map.tsx). */}
-      <g transform={`translate(${labelAt.x} ${labelAt.y})${upright ? ` ${upright}` : ""}`}>
-        {showNumber && table.number > 0 && (
-          <text
-            x={0}
-            // Centred on every shape. A round table used to carry its number up near the top edge, out
-            // of the way of whatever stands in the middle of it — but the number is how the crew finds
-            // the table, and having it in one place on a round and another on a rectangle means
-            // reading the plan twice. A centrepiece drawn over it is the lesser problem.
-            //
-            // It lifts by half a line when a capacity hangs under it, so that the PAIR is what sits in
-            // the middle. Alone, it is still dead centre.
-            y={seats > 0 ? TABLE_LABEL.number : 0}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill={numberInk}
-            style={{ fontSize: TABLE_NUMBER_MM, fontWeight: 600 }}
-            className="pointer-events-none"
-          >
-            {table.number}
-          </text>
-        )}
-        {/* Under the number, and dead centre in its place on a head table, which has seats but no
-            number. A table inside a group draws neither — the group draws the one of each they
-            share (showNumber). */}
-        {showNumber && seats > 0 && (
-          <CapacityLabel
-            x={0}
-            y={table.number > 0 ? TABLE_LABEL.capacity : 0}
-            seated={table.seated ?? 0}
-            seats={seats}
-            size={TABLE_CAPACITY_MM}
-            baseInk={numberInk}
-            // On a dark cloth the alert and success inks are both unreadable, and a capacity nobody
-            // can read reports nothing at all. Legibility wins; the inspector still says which it is.
-            semantic={!(clothColour && isDark(clothColour))}
-          />
-        )}
-      </g>
+      {/* Bare (no cloth, no overflow warning) a table shows what it is made of — a farm table's
+          planks, a marble top, each of its shapes in its own — over its fill, and its edge drawn
+          again on top so the selection still reads. */}
+      {tableSurface && (
+        <>
+          <g className="pointer-events-none">
+            <ItemSurface appearance={tableSurface} footprint={footprint} color={table.style?.fill ?? tableSurface.style?.fill} seed={table.id} />
+          </g>
+          <FootprintShape footprint={footprint} {...shape} fill="none" className="pointer-events-none" />
+        </>
+      )}
+      {/* No number and no "4/12" on the sketch: the designer asked for the drawing to be the room,
+          not its bookkeeping. Both are on the table's bar in the inspector, and the printed placement
+          map still writes the number — the crew finds tables by it. */}
     </g>
   );
 }
 
-/** `4/12` — how many of a table's chairs are spoken for, out of how many it has.
+/** THE TABLE BEING DRESSED — its focus mode. The room is held back behind a scrim (a click on it
+ *  goes back to the plan) and the table is drawn again above it, with its chairs, its two centre
+ *  lines, and its items free to be dragged about its top.
  *
- *  Written LEFT TO RIGHT explicitly. This page is RTL, and in an RTL paragraph the slash between two
- *  numbers is a neutral character that takes the paragraph's direction: `0/12` comes out reading
- *  `12/0`, which is not a typographic nuisance but a different and wrong fact. Same reason
- *  TimeField's columns are the app's other deliberate LTR island.
- *
- *  Colour carries the only two states worth interrupting for: full, and over. Everything between
- *  takes the number's own ink, because a table that is half laid is not news. */
-function CapacityLabel({
-  x,
-  y,
-  seated,
-  seats,
-  size,
-  baseInk,
-  semantic = true,
-  halo = false,
+ *  A drag here moves items IN THE TABLE'S OWN FRAME (lib/design-document/dressing.ts): the pointer's
+ *  room point is carried into the frame, clamped to the table top, and pulled onto a centre line
+ *  within a few pixels of it — which is how a pair of candlesticks ends up exactly symmetric without
+ *  typing a number. Several selected items move together by the one delta. Every frame sends EVERY
+ *  item's place, so the first drag on an automatically laid-out table freezes the others where they
+ *  were drawn instead of letting them jump. */
+function DressingOverlay({
+  table,
+  chips,
+  cloth,
+  ring,
+  util,
+  ctx,
+  isSelected,
+  selectedIds,
+  tableDrag,
+  chipDrag,
+  onArrange,
+  onEnd,
+  onExit,
 }: {
-  x: number;
-  y: number;
-  seated: number;
-  seats: number;
-  size: number;
-  baseInk: string;
-  semantic?: boolean;
-  /** Knock the table surface out from around the glyphs — see HALO. */
-  halo?: boolean;
+  table: DesignTable;
+  chips: Placement[];
+  cloth?: Placement;
+  ring?: { transform: string; seats: Seat[] };
+  util: number;
+  ctx: CanvasLayerContext;
+  isSelected: (placementId: string) => boolean;
+  selectedIds: string[];
+  tableDrag: DragProps;
+  chipDrag: (placementId: string) => DragProps;
+  onArrange: (positions: { id: string; position: Point }[]) => void;
+  onEnd: () => void;
+  onExit: () => void;
 }) {
-  const ink =
-    !semantic || seated < seats
-      ? baseInk
-      : seated > seats
-        ? "var(--color-alert-ink)"
-        : "var(--color-success-ink)";
+  const gesture = useRef<{ pressed: string; origins: Map<string, Point>; moving: Set<string> } | null>(null);
+  /** The lines the held item has just snapped to, in the table's frame — drawn while it is held. */
+  const [snapped, setSnapped] = useState<{ x?: number; y?: number } | null>(null);
+  const spots = dressingSpots(table, chips);
+  const box = tableBox(table);
+  const sizes = new Map(spots.map((sp) => [sp.p.id, sp.box]));
+  const transform = `translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`;
+  const snapMm = ctx.mm(8);
+
+  const moveFrom = (pressed: string) => (world: Point) => {
+    if (!gesture.current) {
+      const picked = selectedIds.filter((id) => sizes.has(id));
+      gesture.current = {
+        pressed,
+        origins: new Map(spots.map((s) => [s.p.id, s.local])),
+        moving: new Set(picked.includes(pressed) ? picked : [pressed]),
+      };
+    }
+    const g = gesture.current;
+    const o = g.origins.get(pressed) ?? { x: 0, y: 0 };
+    const local = toTableFrame(table, world);
+    let dx = local.x - o.x;
+    let dy = local.y - o.y;
+    // The item being held is pulled, within a few pixels, onto a line worth being on: the table's
+    // centre lines, in line with another item, or MIRRORED across the centre from another item —
+    // which is how a pair of candlesticks ends up exactly symmetric without typing a number.
+    const still = [...g.origins].filter(([id]) => !g.moving.has(id)).map(([, at]) => at);
+    const nearest = (v: number, options: number[]) => {
+      let best: number | undefined;
+      for (const c of options) if (Math.abs(v - c) < snapMm && (best === undefined || Math.abs(v - c) < Math.abs(v - best))) best = c;
+      return best;
+    };
+    const sx = nearest(o.x + dx, [0, ...still.flatMap((a) => [a.x, -a.x])]);
+    const sy = nearest(o.y + dy, [0, ...still.flatMap((a) => [a.y, -a.y])]);
+    if (sx !== undefined) dx = sx - o.x;
+    if (sy !== undefined) dy = sy - o.y;
+    setSnapped(sx === undefined && sy === undefined ? null : { x: sx, y: sy });
+    onArrange(
+      [...g.origins].map(([id, at]) => ({
+        id,
+        position: g.moving.has(id) ? clampToTable(box, sizes.get(id) ?? { widthMm: 0, depthMm: 0 }, { x: at.x + dx, y: at.y + dy }) : at,
+      })),
+    );
+  };
+
+  const guide = { stroke: "var(--color-accent)", strokeOpacity: 0.4, strokeWidth: 1, strokeDasharray: "4 4", vectorEffect: "non-scaling-stroke" as const };
   return (
-    <text
-      x={x}
-      y={y}
-      textAnchor="middle"
-      dominantBaseline="central"
-      fill={ink}
-      style={{ fontSize: size, fontWeight: 600, direction: "ltr", ...(halo ? HALO : {}) }}
-      className="pointer-events-none nums"
-    >
-      {`${seated}/${seats}`}
-    </text>
+    <g>
+      {/* The room, held back. Pan (Space, the middle button) is taken before this sees the press. */}
+      <rect
+        x={-1e7}
+        y={-1e7}
+        width={2e7}
+        height={2e7}
+        fill="var(--color-canvas)"
+        fillOpacity={0.8}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onExit();
+        }}
+        aria-hidden
+      />
+      {ring && (
+        <g transform={ring.transform} className="pointer-events-none">
+          {ring.seats.map((seat, i) => (
+            <Chair key={i} seat={seat} />
+          ))}
+        </g>
+      )}
+      <TableNode table={table} selected={false} util={util} cloth={cloth} ctx={ctx} drag={tableDrag} onNudge={() => {}} />
+      <g transform={transform} className="pointer-events-none">
+        <line x1={-box.widthMm / 2} y1={0} x2={box.widthMm / 2} y2={0} {...guide} />
+        <line x1={0} y1={-box.depthMm / 2} x2={0} y2={box.depthMm / 2} {...guide} />
+        {/* What the held item snapped to, solid, for as long as it is held. */}
+        {snapped?.x !== undefined && (
+          <line x1={snapped.x} y1={-box.depthMm / 2} x2={snapped.x} y2={box.depthMm / 2} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        )}
+        {snapped?.y !== undefined && (
+          <line x1={-box.widthMm / 2} y1={snapped.y} x2={box.widthMm / 2} y2={snapped.y} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        )}
+      </g>
+      {spots.map(({ p, at, rotation, footprint }) => {
+        const d = chipDrag(p.id);
+        return (
+          <PlacementNode
+            key={p.id}
+            shape={footprint}
+            placement={rotation === p.rotation ? p : { ...p, rotation }}
+            x={at.x}
+            y={at.y}
+            selected={isSelected(p.id)}
+            ctx={ctx}
+            drag={{
+              ...d,
+              onMove: moveFrom(p.id),
+              onEnd: () => {
+                gesture.current = null;
+                setSnapped(null);
+                onEnd();
+              },
+            }}
+          />
+        );
+      })}
+    </g>
   );
 }
 
@@ -2592,13 +2670,19 @@ function PlacementNode({
   railing,
   gaps,
   activeItem,
+  onOpen,
+  shape,
 }: {
   placement: Placement;
+  /** Draw it with this shape rather than its catalog footprint — a runner trimmed to its table. */
+  shape?: Footprint;
   x: number;
   y: number;
   selected: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
+  /** Double-click — on an item on a table, dress that table. */
+  onOpen?: () => void;
   overhead?: boolean;
   railing?: EdgeRun[];
   gaps?: EdgeRun[];
@@ -2625,16 +2709,31 @@ function PlacementNode({
   // cloth): dark ink on a light fill, light on a dark one. An overhead item is never filled.
   const dark = !overhead && !!own && fillOpacity > 0.5 && isDark(own);
   // At the size it was stretched to, when its row is resizable (Product.resize).
-  const footprint: Footprint = placementFootprint(placement);
+  const footprint: Footprint = shape ?? placementFootprint(placement);
   // A stage writes nothing inside itself — its outline, front and stairs already say what it is,
   // and a word across the middle sat on top of the levels and the seams.
-  const content = placement.stage
+  // Its category's picture — a candelabrum, a bunch of flowers, a sofa — rather than its outline with
+  // a word in it (lib/catalog/symbols.ts). The picture says what it is, so nothing is written inside.
+  const symbol = placement.stage ? null : symbolOf(product, footprint);
+  // What it is made of (MapAppearance.texture) — timber, marble, a lawn — as its fill. A picture is
+  // its own fill, and an overhead item is never filled at all.
+  const surfaced = !symbol && !overhead && anySurface(product?.appearance);
+  const content = placement.stage || symbol
     ? { mode: "none" as const }
     : product
       ? resolveContent(product)
       : { mode: "name" as const, name: r?.label ?? "פריט" };
   const bounds = footprintBounds(footprint);
   const scale = placement.scale || 1;
+  const edge = {
+    stroke: selected ? "var(--color-accent)" : style.stroke,
+    strokeOpacity: selected ? 1 : style.strokeOpacity,
+    // A stage is large: the 4px a small item is selected with reads as a heavy frame round a
+    // platform, so it keeps its resting weight and says "selected" in colour alone.
+    strokeWidth: selected && !placement.stage ? 4 : style.strokeWidth,
+    strokeDasharray: style.dashArray.length ? style.dashArray.join(" ") : undefined,
+    vectorEffect: "non-scaling-stroke" as const,
+  };
   const label = content.mode === "name" ? content.name : "";
   // No ellipsis in SVG text: size the type to the footprint the way Konva did, then clip the string
   // to what that box can hold rather than letting it run out past the shape's edge.
@@ -2658,7 +2757,32 @@ function PlacementNode({
       role="button"
       aria-label={`${r?.label ?? "פריט"}${drag.onMove ? " — גרירה להזזה" : ""}`}
       className={(drag.onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
+      onDoubleClick={
+        onOpen
+          ? (e) => {
+              e.stopPropagation();
+              onOpen();
+            }
+          : undefined
+      }
     >
+      {symbol && product && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(product)} />}
+      {symbol ? (
+        // The picture is the item; its footprint stays as the thing that takes the pointer (an
+        // invisible fill) and, once selected, as the accent outline that says how much room it takes.
+        <FootprintShape
+          footprint={footprint}
+          overhead={overhead}
+          fill="#ffffff"
+          fillOpacity={0}
+          stroke={selected ? "var(--color-accent)" : overhead ? style.stroke : "none"}
+          strokeOpacity={selected ? 1 : style.strokeOpacity}
+          strokeWidth={selected ? 2 : 1}
+          strokeDasharray={selected && !overhead ? "5 3" : undefined}
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : (
+      <>
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
@@ -2667,14 +2791,20 @@ function PlacementNode({
         // every call site.
         fill={fill}
         fillOpacity={fillOpacity}
-        stroke={selected ? "var(--color-accent)" : style.stroke}
-        strokeOpacity={selected ? 1 : style.strokeOpacity}
-        // A stage is large: the 4px a small item is selected with reads as a heavy frame round a
-        // platform, so it keeps its resting weight and says "selected" in colour alone.
-        strokeWidth={selected && !placement.stage ? 4 : style.strokeWidth}
-        strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
-        vectorEffect="non-scaling-stroke"
+        {...edge}
       />
+      {/* What each of its shapes is made of (a material, or a picture of the designer's own), over
+          the fill, and the edge again on top of it so a selected item still says so. */}
+      {surfaced && (
+        <>
+          <g className="pointer-events-none">
+            <ItemSurface appearance={product?.appearance} footprint={footprint} color={own} seed={placement.id} />
+          </g>
+          <FootprintShape footprint={footprint} fill="none" {...edge} className="pointer-events-none" />
+        </>
+      )}
+      </>
+      )}
       {placement.stage && (
         <StageMarks
           stage={placement.stage}
@@ -3444,6 +3574,7 @@ function ArmedPane({
   clear,
   onPlace,
   onDisarm,
+  dressingTableId,
 }: {
   product: Product;
   ctx: CanvasLayerContext;
@@ -3455,6 +3586,8 @@ function ArmedPane({
   clear: (p: Point, item: CarriedItem) => Point;
   onPlace: (at: Point, keep: boolean) => void;
   onDisarm?: () => void;
+  /** The table being dressed, if any — it takes items where they are put. */
+  dressingTableId?: string | null;
 }) {
   const item = carriedOf(product);
   const onWall = CATEGORY_BY_ID[product.category]?.anchor === "wall";
@@ -3531,7 +3664,9 @@ function ArmedPane({
               vectorEffect="non-scaling-stroke"
             />
           </g>
-          {ghost(table.position)}
+          {/* A table dressed by hand takes the item where it is let go (the studio's dropProduct); one
+              laid out automatically finds it a place, so the ghost waits at its centre. */}
+          {ghost(table.arranged || table.id === dressingTableId ? at : table.position)}
         </>
       )}
       {at && onTable && !table && ghost(at, true)}

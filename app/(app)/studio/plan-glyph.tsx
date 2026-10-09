@@ -7,6 +7,10 @@ import { resolveContent, resolveFootprint, footprintBounds } from "@/lib/studio/
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { FootprintShape, productStyle } from "@/components/footprint-shape";
+import { ItemSymbol } from "@/components/item-symbol";
+import { ItemSurface } from "@/components/surface-fill";
+import { anySurface } from "@/lib/catalog/textures";
+import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 
 // The thing under the pointer while an item is being dragged off the rail — the same picture that
 // lands when it is let go.
@@ -37,7 +41,9 @@ export function glyphSize(product: Product, mmPerPx: number): { w: number; h: nu
 /** The item as the plan draws it — the picture that follows the pointer out of the rail. */
 export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: number }) {
   const footprint = resolveFootprint(product);
-  const content = resolveContent(product);
+  // The category's picture when it has one (lib/catalog/symbols.ts) — the same one it lands as.
+  const symbol = symbolOf(product, footprint);
+  const content = symbol ? { mode: "none" as const, name: product.name } : resolveContent(product);
   const b = footprintBounds(footprint);
   const { w, h } = glyphSize(product, mmPerPx);
   const label = content.mode === "name" ? content.name : "";
@@ -65,16 +71,37 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
       style={{ overflow: "visible", filter: "drop-shadow(0 4px 10px rgb(109 85 189 / 0.35))" }}
       aria-hidden
     >
+      {symbol && (
+        <ItemSymbol
+          kind={symbol}
+          footprint={footprint}
+          count={symbolCount(product, symbol)}
+          tone={product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill}
+          overhead={product.layer === "ceiling"}
+          chairStyle={chairStyleOf(product)}
+        />
+      )}
       <FootprintShape
         footprint={footprint}
         fill={style.fill}
-        fillOpacity={style.fillOpacity}
+        fillOpacity={symbol ? 0 : style.fillOpacity}
         stroke={style.stroke}
         strokeOpacity={style.strokeOpacity}
         strokeWidth={style.strokeWidth}
         strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
+      {!symbol && anySurface(product.appearance) && (
+        <>
+          <ItemSurface
+            appearance={product.appearance}
+            footprint={footprint}
+            color={product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill}
+            seed={product.id}
+          />
+          <FootprintShape footprint={footprint} fill="none" stroke={style.stroke} strokeOpacity={style.strokeOpacity} strokeWidth={style.strokeWidth} vectorEffect="non-scaling-stroke" />
+        </>
+      )}
       {content.mode === "name" && (
         <text x={at.x} y={at.y} textAnchor="middle" dominantBaseline="central" fill={dark ? "var(--color-canvas)" : "var(--color-ink)"} style={{ fontSize }}>
           {shown}
