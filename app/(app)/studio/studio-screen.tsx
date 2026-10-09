@@ -93,7 +93,7 @@ import { TablePatternPicker } from "./table-pattern-picker";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
 import { hangTargetsOf, positionHungAt } from "./hang-targets";
 import { centreOver } from "@/lib/studio/hang";
-import { autoStack, floorStack, isStackable, restackTo, type StackBox, type StackKind } from "@/lib/design-document/stacking";
+import { autoStack, floorStack, isStackable, restackTo, type StackBox, type StackEntry, type StackKind } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
 import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
@@ -976,9 +976,26 @@ export function StudioScreen({
     [stack, docRefs],
   );
 
+  /** Every floor thing's turned box, keyed the way the stacker keys them — what tells it which thing
+   *  stands on which (autoStack after a drag, and the cargo "to the front" carries). */
+  const stackBoxes = useCallback(
+    (present: DesignDocumentContent, s: StackEntry[]) => {
+      const arranged = arrangedStructure(plan.structure, present);
+      const boxes = new Map<string, StackBox>();
+      for (const e of s) {
+        const g = itemGeometry(present, arranged, plan.structure, e.ref);
+        if (g) boxes.set(`${e.ref.kind}:${e.ref.id}`, g.box);
+      }
+      return boxes;
+    },
+    [plan.structure],
+  );
+
   const restack = useCallback(
     (to: "front" | "back") => {
-      const assign = restackTo(stack, stackRefs(selected), to);
+      // With the boxes, "to the front" brings along what stands on the moved things — the head table
+      // on a stage comes up with the stage instead of being left underneath it.
+      const assign = restackTo(stack, stackRefs(selected), to, stackBoxes(doc, stack));
       // Empty means it is already there — say so, rather than opening a history entry that changes
       // nothing and leaving the designer to wonder whether the button worked.
       if (assign.length === 0) {
@@ -988,7 +1005,7 @@ export function StudioScreen({
       act({ type: "restack", assign });
       showHint(to === "front" ? "הובא לחזית" : "נשלח לאחור");
     },
-    [selected, act, stack, stackRefs],
+    [selected, act, stack, stackRefs, stackBoxes, doc],
   );
 
   /** The end of a canvas gesture: the history entry closes, and what landed on what is settled —
@@ -996,7 +1013,13 @@ export function StudioScreen({
    *  (lib/design-document/stacking.ts autoStack). Worked out INSIDE the history updater, against
    *  the document as it is after the gesture's last frame (the only place that is guaranteed to
    *  hold it), and folded into the gesture's own entry, so one Ctrl+Z takes the move and the lift
-   *  back together. Nothing landed on anything: the history is returned untouched. */
+   *  back together. Nothing landed on anything: the history is returned untouched.
+   *
+   *  Only what the gesture CHANGED is settled. The document as it stood before the gesture is the
+   *  last past entry — the first move frame opened the entry with dispatch, and a move reducer
+   *  always returns a fresh document — so the moved things' boxes are read from there and handed
+   *  over as `before`: a table the designer sent behind a stage is not brought back up by nudging
+   *  either of them, only by a new landing. */
   const settleDrag = useCallback(
     (moved?: SelectionRef[]) => {
       endDrag();
@@ -1005,13 +1028,17 @@ export function StudioScreen({
       setHistory((h) => {
         const present = h.present;
         const s = floorStack(present, classifyStack);
-        const arrangedNow = arrangedStructure(plan.structure, present);
-        const boxes = new Map<string, StackBox>();
-        for (const e of s) {
-          const g = itemGeometry(present, arrangedNow, plan.structure, e.ref);
-          if (g) boxes.set(`${e.ref.kind}:${e.ref.id}`, g.box);
+        const boxes = stackBoxes(present, s);
+        const was = h.past[h.past.length - 1];
+        const before = new Map(boxes);
+        if (was) {
+          const arrangedWas = arrangedStructure(plan.structure, was);
+          for (const r of refs) {
+            const g = itemGeometry(was, arrangedWas, plan.structure, r);
+            if (g) before.set(`${r.kind}:${r.id}`, g.box);
+          }
         }
-        const assign = autoStack(s, boxes, refs);
+        const assign = autoStack(s, boxes, refs, before);
         let next = assign.length ? amend(h, { type: "restack", assign }) : h;
         // A stage moved up to a wall: a flight or banquette it carried outside that now has no floor
         // in front of it is set into the stage instead (lib/design-document/stage.ts
@@ -1031,7 +1058,7 @@ export function StudioScreen({
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [endDrag, docRefs, plan.structure],
+    [endDrag, docRefs, plan.structure, stackBoxes],
   );
 
   // --- bulk edits --------------------------------------------------------------------------------
