@@ -38,6 +38,8 @@ import {
   type NumberingOptions,
 } from "@/lib/design-document/groups";
 import { arrangedFeature, arrangedStructure, isFeatureMoved } from "@/lib/design-document/features";
+import { featureMovable } from "@/lib/venues/structure";
+import { ALIGN_LABEL, alignedCentres, alignUnits, needsThree, type AlignOp } from "@/lib/studio/align";
 import { mirrorFlips, type MirrorAxis, type MirrorSubject } from "@/lib/design-document/mirror";
 import { axisGap, clearanceIssues, distributedCentres, placeAtGap, polysGap, spacedCentres, spreadAxis, type CentredBox } from "@/lib/studio/proximity";
 import { defaultFront, lengthSnapper, polygonsOverlap, resizeRect, signedArea, type DeckType } from "@/lib/studio/stage-fill";
@@ -655,7 +657,8 @@ export function StudioScreen({
       [
         ...doc.tables.map((t) => ({ kind: "table" as const, id: t.id })),
         ...doc.placements.filter((p) => !p.tableId && !p.perch).map((p) => ({ kind: "placement" as const, id: p.id })),
-        ...plan.structure.features.map((f) => ({ kind: "feature" as const, id: f.id })),
+        // Only what this sketch may move (featureMovable) — a column or the floor is the room.
+        ...plan.structure.features.filter(featureMovable).map((f) => ({ kind: "feature" as const, id: f.id })),
       ],
       false,
     );
@@ -1293,6 +1296,63 @@ export function StudioScreen({
     });
     showHint(`פוזרו ${distributeUnits.length} פריטים ${axis === "x" ? "לרוחב" : "לאורך"} — רווח שווה ביניהם`);
   }, [distributeUnits, act, featureOffset]);
+
+  // --- alignment (יישור) ----------------------------------------------------------------------------
+  /** What an alignment moves: each loose thing on its own and each group as one block, in the order
+   *  they were selected (lib/studio/align.ts). Null when fewer than two units, or when something
+   *  selected has no free position (a cloth, a drape) — the menu is then not offered. */
+  const alignSet = useMemo(() => {
+    if (selected.length < 2) return null;
+    const geos = selected.map(geometryOf);
+    if (geos.some((g) => !g || !g.movable)) return null;
+    const units = alignUnits((geos as ItemGeometry[]).map((g) => ({ ...g, key: `${g.ref.kind}:${g.ref.id}` })));
+    return units.length >= 2 ? units : null;
+  }, [selected, geometryOf]);
+  /** The unit the others line up with. Remembered by key, so it survives the alignment moving the
+   *  rest; when it is not (or no longer) in the selection, the FIRST selected is the key. */
+  const [alignKeyId, setAlignKeyId] = useState<string | null>(null);
+  // A selection that can no longer be aligned forgets its key, so the next one starts from its own
+  // first-selected rather than from a key chosen for an earlier selection.
+  if (!alignSet && alignKeyId !== null) setAlignKeyId(null);
+  const alignKey = alignSet ? Math.max(0, alignSet.findIndex((u) => u.key === alignKeyId)) : 0;
+  const alignKeyLabel = alignSet ? (alignSet[alignKey].members.length > 1 ? "הקבוצה" : alignSet[alignKey].members[0].label) : "";
+
+  const alignSelection = useCallback(
+    (op: AlignOp) => {
+      if (!alignSet || (needsThree(op) && alignSet.length < 3)) return;
+      const centres = alignedCentres(alignSet.map((u) => u.box), alignKey, op);
+      const moves: { kind: SelectionKind; id: string; position: Point }[] = [];
+      alignSet.forEach((u, i) => {
+        const dx = centres[i].x - u.box.x;
+        const dy = centres[i].y - u.box.y;
+        if (!dx && !dy) return;
+        // The box moved; each member's own centre moves with it by the same delta (a turned item's
+        // box is not centred on the point it stands on).
+        for (const m of u.members) moves.push({ kind: m.ref.kind, id: m.ref.id, position: { x: Math.round(m.centre.x + dx), y: Math.round(m.centre.y + dy) } });
+      });
+      if (moves.length === 0) {
+        showHint("כבר מיושרים");
+        return;
+      }
+      act({
+        type: "moveMany",
+        moves: moves.map((m) =>
+          m.kind === "feature" ? { ...m, position: (({ dx, dy }) => ({ x: dx, y: dy }))(featureOffset(m.id, m.position)) } : m,
+        ),
+      });
+      showHint(needsThree(op) ? ALIGN_LABEL[op] : `${ALIGN_LABEL[op]} — לפי ${alignKeyLabel}`);
+    },
+    [alignSet, alignKey, alignKeyLabel, act, featureOffset],
+  );
+  /** Another unit becomes the key: the next one in selection order, or the last one selected. */
+  const pickAlignKey = useCallback(
+    (which: "next" | "last") => {
+      if (!alignSet) return;
+      const i = which === "last" ? alignSet.length - 1 : (alignKey + 1) % alignSet.length;
+      setAlignKeyId(alignSet[i].key);
+    },
+    [alignSet, alignKey],
+  );
 
   // --- stage fill ---------------------------------------------------------------------------------
   /** The pieces the catalog can build a stage from: everything rectangular the studio keeps under
@@ -2825,6 +2885,7 @@ export function StudioScreen({
             }
             onRotateMany={rotateMany}
             onEndDrag={settleDrag}
+            alignKeyBox={alignSet ? alignSet[alignKey].box : null}
             onContextMenu={contextItems}
             onResizePlacement={(id, sizeMm, position) => {
               // A stage's handles stretch its OUTLINE — the decks follow on their own.
@@ -3048,6 +3109,7 @@ export function StudioScreen({
                 onSelectSimilar={selectSimilar}
                 canDistribute={canDistribute}
                 onDistribute={distributeEvenly}
+                align={alignSet ? { units: alignSet.length, keyLabel: alignKeyLabel, onAlign: alignSelection, onPickKey: pickAlignKey } : null}
                 dressCandidateCount={dressCandidateCount}
                 onCopyDressing={copyDressingToSelection}
                 onMirror={canMirror ? mirrorSelection : undefined}

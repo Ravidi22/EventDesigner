@@ -17,6 +17,7 @@
     "check:hang": "tsx lib/studio/hang.ts",
     "check:geometry": "tsx lib/studio/geometry.ts",
     "check:collide": "tsx lib/studio/collide.ts",
+    "check:align": "tsx lib/studio/align.ts",
     "check:snap": "tsx lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",

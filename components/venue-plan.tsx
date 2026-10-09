@@ -484,14 +484,15 @@ export function StructureFeatures({
   structure,
   mm,
   selectedIds,
-  onSelect,
-  onMove,
+  onSelect: onSelectAny,
+  onMove: onMoveAny,
   onMoveStairs,
   onResize,
   onRotate,
   onCommit,
   clientToMm,
-  onContextMenu,
+  onContextMenu: onContextMenuAny,
+  interactive,
 }: {
   structure: VenueStructure;
   mm: (px: number) => number;
@@ -517,10 +518,18 @@ export function StructureFeatures({
   /** A right-click landed on this feature. Reported, not handled: the event still bubbles on to the
    *  canvas, whose own right-click menu the host fills in knowing which feature it was over. */
   onContextMenu?: (id: string) => void;
+  /** Which features take the pointer at all. Absent = every one (the hall editor). The studio passes
+   *  featureMovable: a feature an event may not move is drawn as part of the room and lets clicks and
+   *  rubber-bands through, like a wall. */
+  interactive?: (f: StructureFeature) => boolean;
 }) {
   return (
     <>
       {groundFirst(structure.features).map((f) => {
+        const live = !interactive || interactive(f);
+        const onSelect = live ? onSelectAny : undefined;
+        const onMove = live ? onMoveAny : undefined;
+        const onContextMenu = live ? onContextMenuAny : undefined;
         const selected = selectedIds?.includes(f.id) ?? false;
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",

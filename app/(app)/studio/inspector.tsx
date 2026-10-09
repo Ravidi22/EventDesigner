@@ -73,6 +73,7 @@ import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Menu, type MenuItem } from "@/components/menu";
+import { AlignMenu, type AlignPanel } from "./align-menu";
 import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
@@ -226,6 +227,7 @@ export function Inspector({
   onSelectSimilar,
   canDistribute,
   onDistribute,
+  align,
   dressCandidateCount,
   onCopyDressing,
   onMirror,
@@ -360,6 +362,8 @@ export function Inspector({
    *  distributeEvenly, so the command never offers to do less than it says. */
   canDistribute: boolean;
   onDistribute: () => void;
+  /** יישור by one of the selected (align-menu.tsx) — null when the selection cannot be aligned. */
+  align: AlignPanel | null;
   /** How many of the currently selected tables a copied table's dressing would actually land on
    *  (the source table itself, if it happens to be among them, is excluded) — 0 hides the control
    *  and is also the reducer's own no-op case, so this only ever offers something that does
@@ -545,6 +549,7 @@ export function Inspector({
           </Button>
         )}
         {onStickStages && <BarButton icon={Magnet} label="הצמדה — סגירת הרווחים ויישור" onClick={onStickStages} />}
+        <AlignMenu align={align} />
         <Rotation value={facing} onChange={onFace} />
         <MirrorMenu onMirror={onMirror} />
         {stageGroup.grouped ? (
@@ -614,6 +619,7 @@ export function Inspector({
 
         {/* "1.5m between them" — typed, rather than nudged until the tape agrees. */}
         {spacing && <SpacingPopover key={spacing.key} spacing={spacing} onSpace={onSpace} />}
+        <AlignMenu align={align} />
 
         {/* Each turns about its OWN centre here, which is how a scattered handful is squared to the
             room. */}
