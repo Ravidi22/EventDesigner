@@ -57,6 +57,9 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { floorStack, type StackKind } from "@/lib/design-document/stacking";
+import { centreOver, wallRuns } from "@/lib/studio/hang";
+import { hangPointOf, hangTargetsOf, positionHungAt } from "./hang-targets";
+import { HangTies } from "./hang-ties";
 
 // The studio's design surface — the app's one canvas (components/plan-canvas.tsx) with the design
 // document drawn into its layers.
@@ -548,6 +551,21 @@ export function CanvasStage({
    *  an alignment the designer could have meant. */
   const alignTo = useMemo(() => boxesOn((p) => layerVisible[p]), [boxesOn, layerVisible]);
 
+  // THE ONE CEILING ITEM selected (or being carried — a press selects it): measured live off the
+  // walls and off what it hangs over (HangTies), and pulled to that thing's middle as it is dragged
+  // across it (lib/studio/hang.ts). Only worked out while there is one, so a plan with nothing
+  // overhead selected pays nothing for it.
+  const hangSubject = useMemo(() => {
+    if (selection.length !== 1 || selection[0].kind !== "placement" || !layerVisible.ceiling) return null;
+    const p = placementById.get(selection[0].id);
+    return p && sorted.ceiling.includes(p) ? p : null;
+  }, [selection, placementById, sorted.ceiling, layerVisible.ceiling]);
+  const hangTargets = useMemo(() => (hangSubject ? hangTargetsOf(doc, structure) : []), [hangSubject, doc, structure]);
+  const hangWalls = useMemo(
+    () => (hangSubject ? [...wallRuns(plan.structure), ...plan.zones.filter((z) => z.boundary.length >= 3).flatMap((z) => z.boundary.map((q, i) => [q, z.boundary[(i + 1) % z.boundary.length]] as [Point, Point]))] : []),
+    [hangSubject, plan.structure, plan.zones],
+  );
+
   // ── The area tool ────────────────────────────────────────────────────────────────────────────
   // Corners so far, and where the next one would land. Local: nothing outside this canvas cares
   // about a half-drawn outline, and throwing it away is what Escape does.
@@ -958,7 +976,7 @@ export function CanvasStage({
 
   /** The move handler for one item: the group's shared delta when it is part of a live
    *  multi-selection, otherwise its own snapped move. */
-  const moveFor = (ref: SelectionRef, ctx: CanvasLayerContext) => (p: Point) => {
+  const moveFor = (ref: SelectionRef, ctx: CanvasLayerContext) => (p: Point, mods?: { alt: boolean }) => {
     // The first frame of a gesture: from here on the planes the gesture cannot be about are held
     // back (see autoPlane) and what it carries is painted on top (see `lifted`). `solids` is set on
     // this same first frame below, so it is the marker.
@@ -1019,8 +1037,17 @@ export function CanvasStage({
     // move frame only (??=), before any of this drag's writes have landed.
     solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : snapped);
     const clear = clearOf(snapped);
-    const at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
+    let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
+    // A ceiling item crossing a table or an element is pulled to its middle when its hang point
+    // comes within a few pixels of it; Alt lets go, as it does every other pull.
+    if (hangSubject && ref.kind === "placement" && ref.id === hangSubject.id && !mods?.alt) {
+      const over = centreOver(hangPointOf({ ...hangSubject, position: p }), hangTargets, ctx.mm(14));
+      if (over) {
+        at = positionHungAt(hangSubject, over.point);
+        ctx.endSnap();
+      }
+    }
 
     if (ref.kind === "table") onMoveTable(ref.id, at);
     else if (ref.kind === "feature") onMoveFeature(ref.id, at);
@@ -1645,6 +1672,14 @@ export function CanvasStage({
                   overhead
                 />
               ))}
+
+            {/* The selected ceiling item, measured: off the walls, and off the middle of what it
+                hangs over (hang-ties.tsx). */}
+            {hangSubject &&
+              (() => {
+                const at = hangPointOf(hangSubject);
+                return <HangTies at={at} walls={hangWalls} over={centreOver(at, hangTargets)?.point ?? null} mm={ctx.mm} />;
+              })()}
           </g>
 
           {/* THE AREA TOOL. A pane over the whole plan while corners are being placed — every click
@@ -2351,7 +2386,8 @@ export interface DragProps {
   onClick: (additive: boolean) => void;
   /** A right-click. The canvas's own handler opens the menu on the same event; this says what for. */
   onContext?: () => void;
-  onMove?: (p: Point) => void;
+  /** `mods.alt`: Alt is held — every pull lets go (a ceiling item's pull to a table's middle). */
+  onMove?: (p: Point, mods?: { alt: boolean }) => void;
   onEnd?: () => void;
 }
 
@@ -2395,7 +2431,7 @@ function draggable(at: Point, ctx: CanvasLayerContext, h: DragProps) {
       // nudges drift, and the grab point would slide out from under the pointer.
       const from = ctx.clientToMm(origin.cx, origin.cy);
       const to = ctx.clientToMm(e.clientX, e.clientY);
-      h.onMove({ x: Math.round(origin.ox + to.x - from.x), y: Math.round(origin.oy + to.y - from.y) });
+      h.onMove({ x: Math.round(origin.ox + to.x - from.x), y: Math.round(origin.oy + to.y - from.y) }, { alt: e.altKey });
     },
     onPointerUp: end,
     onPointerCancel: end,

@@ -17,6 +17,8 @@
 //   gap      edge to edge between an element and its nearest table and its nearest other element;
 //            under the walkway minimum it is flagged
 //   aisle    the narrowest edge-to-edge gap in each row and column of tables
+//   offset   a ceiling item's hang point off the centre of what it hangs over, in two legs (its
+//            wall ties are ordinary ties, from the hang point — lib/studio/hang.ts owns both)
 //
 // WHAT STANDS ON A STAGE is measured off the STAGE, not the room: a head table set on a platform is
 // placed by the crew from the platform's edge, and a figure running from it to the far wall crosses
@@ -30,9 +32,10 @@ import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { overallDimensions } from "./dimensions";
 import { cluster, settingOut } from "./setting-out";
+import { centreOffset, wallTies } from "@/lib/studio/hang";
 import { isMain } from "../self-check";
 
-export type DimKind = "overall" | "chain" | "size" | "tie" | "gap" | "aisle";
+export type DimKind = "overall" | "chain" | "size" | "tie" | "gap" | "aisle" | "offset";
 
 export interface Dim {
   kind: DimKind;
@@ -69,6 +72,9 @@ export interface MeasureInput {
   solids: Solid[];
   /** Numbered units' centres — a block of tables is one centre. */
   centres: Point[];
+  /** Ceiling items by their hang point, and the centre of the table or element each hangs over
+   *  (absent = over bare floor). Measured only when `hangs` is asked for. */
+  hung?: { id: string; at: Point; over?: Point }[];
 }
 
 export interface MeasureOptions {
@@ -78,6 +84,8 @@ export interface MeasureOptions {
   ties?: boolean;
   gaps?: boolean;
   aisles?: boolean;
+  /** Ceiling items: two wall ties from each hang point, and its offset off what it hangs over. */
+  hangs?: boolean;
   /** How far an offset dimension sits off what it measures, in world mm. */
   offsetMm: number;
   /** The narrowest a walkway may be before it is flagged. */
@@ -543,6 +551,16 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
     }
   }
 
+  if (opts.hangs) {
+    // From the HANG POINT, square to the walls — nothing on the floor is in the way of a ceiling —
+    // and, over a table or an element, how far off its centre. Hung dead centre, the offset is none
+    // and the drawing (the item over the ghosted table) already says so.
+    for (const h of input.hung ?? []) {
+      for (const t of wallTies(h.at, walls)) dims.push({ kind: "tie", a: t.a, b: t.b, offset: { x: 0, y: 0 }, mm: t.mm });
+      if (h.over) for (const t of centreOffset(h.at, h.over)) dims.push({ kind: "offset", a: t.a, b: t.b, offset: { x: 0, y: 0 }, mm: t.mm });
+    }
+  }
+
   return { dims, leaders };
 }
 
@@ -652,5 +670,24 @@ if (isMain(import.meta.url)) {
   const block = { id: "bar", kind: "item" as const, polygon: rect(8000, 5000, 4000, 2000) };
   const rg = measurements({ boundaries: [room], walls, solids: [block, roundTable], centres: [] }, { gaps: true, offsetMm: 900 });
   assert(rg.dims.length === 1 && Math.abs(rg.dims[0].mm - 1100) < 1, "the gap to a round table is to its rim (9.00 − 0.90 − 7.00 = 1.10)");
+  // Ceiling: a chandelier centred over t1 has its two wall ties and no offset; one hung 0.40 off
+  // t2's centre has the offset too; and no figure is drawn for a sheet that does not ask.
+  const hungInput = {
+    ...input,
+    hung: [
+      { id: "c1", at: { x: 4000, y: 6000 }, over: { x: 4000, y: 6000 } },
+      { id: "c2", at: { x: 8400, y: 6000 }, over: { x: 8000, y: 6000 } },
+      { id: "c3", at: { x: 15000, y: 10000 } },
+    ],
+  };
+  const ceiling = measurements(hungInput, { hangs: true, offsetMm: 900 });
+  const tiesFrom = (p: Point) => ceiling.dims.filter((d) => d.kind === "tie" && d.a.x === p.x && d.a.y === p.y);
+  const c1 = tiesFrom({ x: 4000, y: 6000 });
+  assert(c1.length === 2 && c1.some((d) => d.mm === 4000) && c1.some((d) => d.mm === 6000), "a hung item is tied to the walls from its hang point (4.00 / 6.00)");
+  const c3 = tiesFrom({ x: 15000, y: 10000 });
+  assert(c3.some((d) => d.mm === 5000) && c3.some((d) => d.mm === 2000), "…to the nearer wall of each pair (5.00 right, 2.00 down)");
+  const offsets = ceiling.dims.filter((d) => d.kind === "offset");
+  assert(offsets.length === 1 && Math.abs(offsets[0].mm - 400) < 1, "one hung 0.40 off its table's centre says so; one dead centre says nothing");
+  assert(measurements(hungInput, { offsetMm: 900 }).dims.length === 0, "the hang figures are drawn only on a sheet that asks for them");
   console.log("measurements self-check passed");
 }

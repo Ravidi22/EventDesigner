@@ -78,6 +78,8 @@ import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
+import { ArrowDownToLine } from "lucide-react";
+import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
 import type { Selection, SpinMode } from "./canvas-stage";
 
 // The studio's object inspector: ONE BAR along the bottom of the canvas, not a panel down its side.
@@ -203,6 +205,7 @@ export function Inspector({
   renderPattern,
   renderDesigns,
   onScale,
+  onHang,
   onApplyToAllTables,
   onVariant,
   onSpan,
@@ -313,6 +316,9 @@ export function Inspector({
   renderDesigns: (tableId: string) => ReactNode;
   /** How big one placed item is DRAWN (Placement.scale) — not what it costs or how many there are. */
   onScale: (placementId: string, scale: number) => void;
+  /** How high one CEILING item hangs above the floor (Placement.hangHeightMm); null = its catalog
+   *  row's default again. A rigging fact — nothing priced or packed reads it. */
+  onHang?: (placementId: string, heightMm: number | null) => void;
   onApplyToAllTables: (placementId: string) => void;
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
@@ -1205,6 +1211,9 @@ export function Inspector({
         {/* A row that stretches has its own size field above; everything else of a fixed size can
             still be drawn bigger or smaller on THIS plan — a fuller arrangement on the head table. */}
         {!sizePanel && !stretch && !drape && !p.stage && <ScalePopover scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />}
+        {p.layer === "ceiling" && !drape && onHang && (
+          <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
+        )}
         <BreachPopover breaches={breaches} />
 
         {/* A drape covers its whole wall by default; this puts it back after it was shortened. */}
@@ -1813,6 +1822,35 @@ function occupancyInk(seated: number, seats: number): string {
   if (seated > seats) return "text-alert-ink font-semibold";
   if (seated === seats) return "text-success-ink font-semibold";
   return "text-muted";
+}
+
+/** How high one ceiling item hangs above the floor — its own height on this plan, or its catalog
+ *  row's when it has none (lib/studio/hang.ts). Printed beside it on the ceiling plan. */
+function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: number; onHang: (mm: number | null) => void }) {
+  const shown = own ?? fallback;
+  return (
+    <Popover label="גובה תלייה" icon={ArrowDownToLine} value={shown ? ltr(`${(shown / 1000).toFixed(2)} מ׳`) : "לא צוין"}>
+      <PanelRow label="מהרצפה (ס״מ)" htmlFor="placement-hang">
+        <NumberField
+          id="placement-hang"
+          decimals={0}
+          min={0}
+          max={HANG_MAX_MM / 10}
+          hideZero
+          placeholder={fallback ? String(Math.round(fallback / 10)) : "—"}
+          value={own ? Math.round(own / 10) : 0}
+          onChange={(v) => onHang(v > 0 ? v * 10 : null)}
+          className="w-20"
+        />
+      </PanelRow>
+      {own !== undefined && (
+        <Button size="sm" variant="ghost" className="w-full" onClick={() => onHang(null)}>
+          {fallback ? `חזרה לגובה מהקטלוג (${(fallback / 1000).toFixed(2)} מ׳)` : "ניקוי הגובה"}
+        </Button>
+      )}
+      <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
+    </Popover>
+  );
 }
 
 /** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:

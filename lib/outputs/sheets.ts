@@ -27,7 +27,7 @@ export interface PlanSheet {
   numbers: boolean;
   /** Which measurements this sheet carries (lib/outputs/measurements.ts). The room's overall width
    *  and depth are on every sheet and are not a flag. */
-  measure?: { chains?: boolean; sizes?: boolean; ties?: boolean; gaps?: boolean; aisles?: boolean };
+  measure?: { chains?: boolean; sizes?: boolean; ties?: boolean; gaps?: boolean; aisles?: boolean; hangs?: boolean };
 }
 
 // Walls, doors and zone floors are on EVERY sheet and are therefore not a flag: a plan with no room
@@ -47,7 +47,9 @@ export const PLAN_SHEETS: PlanSheet[] = [
   // The design sheet is about the look: the numbers are on the hall plan, and printed over the
   // dressing here they only cover it.
   { id: "design", label: "שרטוט עיצוב", layers: ["floor", "table"], tables: "full", chairs: true, numbers: false },
-  { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, numbers: true },
+  // The rigger marks each hook point on the floor before hoisting: two ties from it to the walls,
+  // its offset off the centre of the table it hangs over, and its height (lib/studio/hang.ts).
+  { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, numbers: true, measure: { hangs: true } },
   // "groups" filters by catalog category group, not by layer -- the stage sheet wants ONLY the stage
   // group off the floor layer, not every floor placement.
   { id: "stage", label: "תוכנית במה", layers: ["floor"], groups: ["grp-stages"], tables: "none", chairs: false, numbers: false, measure: { sizes: true, ties: true } },
@@ -92,6 +94,7 @@ if (isMain(import.meta.url)) {
   assert(new Set(PLAN_SHEETS.map((s) => s.id)).size === PLAN_SHEETS.length, "sheet ids are unique");
   assert(PLAN_SHEETS.every((s) => s.label.trim().length > 0), "every sheet is named on screen");
   assert(sheetById("ceiling")!.tables === "ghost", "the ceiling plan ghosts the tables, so a rigger knows what is underneath");
+  assert(!!sheetById("ceiling")!.measure?.hangs && PLAN_SHEETS.filter((s) => s.measure?.hangs).length === 1, "only the ceiling plan carries the hang points' ties and heights");
   assert(sheetById("hall")!.layers.includes("floor"), "the hall plan carries the furniture standing on the floor");
   assert(!!sheetById("dims")!.measure?.gaps, "the dimension plan carries the gaps");
   assert(sheetById("design")!.layers.includes("table"), "the design sheet carries what is ON the tables");

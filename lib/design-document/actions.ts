@@ -60,6 +60,9 @@ export type Action =
   // round. A drawing size, not a different product: the quote, the packing list and the order count
   // it as the row it is. Held to 30%–300%; 1 = the catalog's size.
   | { type: "setPlacementScale"; id: string; scale: number }
+  // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
+  // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
+  | { type: "setPlacementHang"; id: string; heightMm: number | null }
   // Switching a placed item to another shade of the same product (F-4.2). Not a remove+add: the
   // item keeps its id, its place on the plan and the size it was stretched to — only its colour
   // changes, which is exactly what the designer is doing when the client says "in cream instead".
@@ -326,6 +329,19 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
       return {
         ...doc,
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, scale } : p)),
+      };
+    }
+    case "setPlacementHang": {
+      // Whole centimetres, inside a room; 0 or null clears it back to the row's default.
+      const h = action.heightMm === null ? 0 : Math.round(Math.min(30000, Math.max(0, action.heightMm)) / 10) * 10;
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { hangHeightMm: _old, ...rest } = p;
+          void _old;
+          return h > 0 ? { ...rest, hangHeightMm: h } : rest;
+        }),
       };
     }
     case "setPlacementVariant":
@@ -980,6 +996,9 @@ if (isMain(import.meta.url)) {
 
     const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
     assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
+    const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });
+    assert(hung.placements[0].hangHeightMm === 3200, "a hang height is kept in whole centimetres");
+    assert(!("hangHeightMm" in apply(hung, { type: "setPlacementHang", id: "a", heightMm: null }).placements[0]), "null hands it back to the catalog's height");
 
     const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
     assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");
