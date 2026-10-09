@@ -1,6 +1,6 @@
 import Link from "next/link";
+import { Fragment } from "react";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
-import { placementLegend } from "@/lib/outputs/aggregate";
 import { numberedUnits, groupSeats } from "@/lib/design-document/groups";
 import { productName } from "@/lib/outputs/lookup";
 import {
@@ -43,6 +43,9 @@ import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/
 import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { overallDimensions, type DimensionLine } from "@/lib/outputs/dimensions";
+import { settingOut, type Chain } from "@/lib/outputs/setting-out";
+import type { TableKit } from "@/lib/outputs/table-kits";
+import { pointInPolygon } from "@/lib/venues/faces";
 import type { Extent } from "@/lib/outputs/scale";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
 import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps, type LegendRow } from "./sheet-frame";
@@ -56,12 +59,14 @@ const INK_SOFT = "#4a4658";
 const MUTED = "#7c7889";
 
 // Compress a sorted list of table numbers into ranges: [1,2,3,5] → "1–3, 5".
-function formatTables(nums: number[]): string {
+export function formatTables(nums: number[]): string {
   const parts: string[] = [];
   for (let i = 0; i < nums.length; ) {
     let j = i;
     while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
-    parts.push(i === j ? num(nums[i]) : `${num(nums[i])}–${num(nums[j])}`);
+    // A range is isolated left-to-right (LRI … PDI): in a Hebrew line the bidi algorithm otherwise
+    // reads the dash between two numbers as right-to-left and prints "1–5" as "5–1".
+    parts.push(i === j ? num(nums[i]) : `⁦${num(nums[i])}–${num(nums[j])}⁩`);
     i = j + 1;
   }
   return parts.join(", ");
@@ -78,7 +83,7 @@ const CORNERS: [number, number][] = [
   [-1, 1],
 ];
 
-function tableGroupBoxes(doc: DesignDocumentContent) {
+export function tableGroupBoxes(doc: DesignDocumentContent) {
   return (doc.groups ?? [])
     .map((g) => {
       const members = doc.tables.filter((t) => t.groupId === g.id);
@@ -137,17 +142,24 @@ export function PlacementMap({
   paper,
   marginMm,
   railingAboveMm = null,
+  letters,
+  summary,
 }: {
   doc: DesignDocumentContent;
   plan: EventPlan;
   sheet?: PlanSheet;
   /** The studio's railing rule (settings → במות) — null when it is off. */
   railingAboveMm?: number | null;
+  /** Table id → its design kit's letter (lib/outputs/table-kits.ts), printed under the number. */
+  letters?: Map<string, string>;
 } & Partial<Omit<SheetFrameProps, "world" | "children" | "sheet">>) {
   // `sheet` and the rest of SheetFrame's own props are optional here, defaulting to the hall plan
   // at page one of one, so the component stays correct and self-contained for any caller that only
   // wants "the plan" without choosing a sheet.
-  const legend = placementLegend(doc, productName);
+  //
+  // Only the DRAWING. The table schedule and the stage build used to be rendered here as extra pages
+  // after every sheet, so a set of five sheets over two zones printed the same schedule ten times;
+  // the set (outputs-screen.tsx) now places each once (KitSchedule, StageSchedule below).
   // World mm around the frame: enough for the overall dimensions (900mm off the room, plus their
   // figures) to land inside the clip rather than be cut by it.
   const pad = 1600;
@@ -256,8 +268,21 @@ export function PlacementMap({
   })();
   const buildSheet = sheet.id === "stage";
 
+  // Setting-out chains (lib/outputs/setting-out.ts), on the sheet that sets the room out. One per
+  // zone on the sheet, over that zone's numbered units — a block of tables is ONE centre.
+  const unitCentres = numberedUnits(doc).map((u) => {
+    const members = doc.tables.filter((t) => u.tableIds.includes(t.id));
+    return {
+      x: members.reduce((n, t) => n + t.position.x, 0) / (members.length || 1),
+      y: members.reduce((n, t) => n + t.position.y, 0) / (members.length || 1),
+    };
+  });
+  const roomZones = plan.zones.filter((z) => z.boundary.length >= 3);
+  const chains: Chain[] = sheet.setOut
+    ? roomZones.flatMap((z) => settingOut(roomZones.length === 1 ? unitCentres : unitCentres.filter((c) => pointInPolygon(c, z.boundary)), z.boundary))
+    : [];
+
   return (
-    <div className="space-y-8">
       <SheetFrame
         world={world}
         sheet={sheet}
@@ -270,6 +295,7 @@ export function PlacementMap({
         date={date}
         north={north}
         legend={legendRows ?? symbolKey}
+        summary={summary}
         paper={paper}
         marginMm={marginMm}
       >
@@ -422,20 +448,33 @@ export function PlacementMap({
                 return Math.min(b.w, b.h);
               }));
               const size = Math.max(2.4 * den, Math.min(4 * den, short * 0.42));
+              // The kit letter rides under the number in a ring — "which arrangement goes on this
+              // table" answered at the table, with the detail sheet of that letter behind it.
+              const letter = letters?.get(members[0].id);
+              const lift = letter ? size * 0.42 : 0;
               return (
-                <text
-                  key={unit.id}
-                  x={at.x}
-                  y={at.y}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fontSize={size}
-                  fontWeight={700}
-                  fontFamily="Assistant, sans-serif"
-                  fill={INK}
-                >
-                  {unit.number > 0 ? unit.number : "ראש"}
-                </text>
+                <Fragment key={unit.id}>
+                  <text
+                    x={at.x}
+                    y={at.y - lift}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={size}
+                    fontWeight={700}
+                    fontFamily="Assistant, sans-serif"
+                    fill={INK}
+                  >
+                    {unit.number > 0 ? unit.number : "ראש"}
+                  </text>
+                  {letter && (
+                    <g transform={`translate(${at.x} ${at.y + size * 0.62})`}>
+                      <circle r={size * 0.38} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+                      <text textAnchor="middle" dominantBaseline="central" fontSize={size * 0.5} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK}>
+                        {letter}
+                      </text>
+                    </g>
+                  )}
+                </Fragment>
               );
             })}
 
@@ -537,45 +576,13 @@ export function PlacementMap({
           {plan.zones
             .filter((r) => r.boundary.length >= 3)
             .flatMap((r) => overallDimensions(r.boundary).map((d, i) => <DimensionGlyph key={`${r.zone.id}-${i}`} d={d} den={den} />))}
+
+          {chains.map((c, i) => (
+            <ChainGlyph key={`chain-${i}`} c={c} den={den} />
+          ))}
         </g>
         )}
       </SheetFrame>
-
-      {buildSheet && stages.length > 0 && (
-        <StageSchedule stages={stages} railingAboveMm={railingAboveMm} wallDistance={wallDistance} doc={doc} />
-      )}
-
-      {/* The table SCHEDULE (שולחן ← ערכת עיצוב) — a different document from the frame's symbol
-          key, and both belong on a drawing set. Meaningless on a sheet that draws no tables.
-          It carries its own 16mm inset because the map view prints at `@page { margin: 0 }`: the
-          drawing sheet owns its margin inside the SVG, and this section is the only thing on that
-          page that would otherwise run to the paper's edge. */}
-      {sheet.tables !== "none" && (
-        <section className="break-before-page p-[16mm] print:p-[16mm]">
-          <h3 className="mb-2 border-b border-ink pb-1 text-base font-semibold text-ink">מקרא</h3>
-          <dl className="divide-y divide-border">
-            {legend.map((e, i) => (
-              <div key={i} className="flex items-baseline gap-3 break-inside-avoid py-2 text-sm">
-                <dt className="nums w-40 shrink-0 font-semibold text-ink">
-                  {e.tableNumbers.length === 1 ? `שולחן ${num(e.tableNumbers[0])}` : `שולחנות ${formatTables(e.tableNumbers)}`}
-                </dt>
-                <dd className="text-ink-soft">
-                  {e.items.length > 0 ? e.items.join(" · ") : <span className="text-muted">ללא עיצוב</span>}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {legend.every((e) => e.items.length === 0) && (
-            <p className="mt-4 text-sm text-muted">
-              עדיין לא שובצו פריטים.{" "}
-              <Link href="/studio" className="font-medium text-accent hover:text-accent-hover">
-                חזרה לסטודיו →
-              </Link>
-            </p>
-          )}
-        </section>
-      )}
-    </div>
   );
 }
 
@@ -721,7 +728,7 @@ function StageGlyph({ p, build, railing, label, den }: { p: StagePlacement; buil
  *  the base and of each level, the decks per level, the flights (with their steps), the skirt, and
  *  the railing when the studio's rule asks for one. Counts only — this is a printing surface, and a
  *  price never goes near it (npm run check:costs). */
-function StageSchedule({
+export function StageSchedule({
   stages,
   railingAboveMm,
   wallDistance,
@@ -735,7 +742,7 @@ function StageSchedule({
   const m = (mm: number) => (Math.round(mm / 10) / 100).toString();
   const cm = (mm: number) => Math.round(mm / 10);
   return (
-    <section className="break-before-page p-[16mm] print:p-[16mm]">
+    <section>
       <h3 className="mb-2 border-b border-ink pb-1 text-base font-semibold text-ink">פירוט במות</h3>
       {stages.map((p, i) => {
         const stage = p.stage;
@@ -827,7 +834,7 @@ function StageSchedule({
   );
 }
 
-function TableGlyph({ t }: { t: DesignTable }) {
+export function TableGlyph({ t }: { t: DesignTable }) {
   // The catalog row's look under the table's own — the studio's merge (productStyle). Colour never
   // survives to print, but a dash or a weight chosen for the row has to: on paper they are what
   // carries the meaning the colour did on screen.
@@ -875,7 +882,7 @@ function GhostTable({ t }: { t: DesignTable }) {
 
 /** A banquet chair, drawn exactly as the studio canvas draws it (canvas-stage.tsx's own Chair) — the
  *  seat's own rotation already points +x at the table, so this needs no further geometry. */
-function ChairGlyph({ seat }: { seat: Seat }) {
+export function ChairGlyph({ seat }: { seat: Seat }) {
   return (
     <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
       <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={INK} print />
@@ -886,7 +893,7 @@ function ChairGlyph({ seat }: { seat: Seat }) {
 /** One free-standing placement: a stage, a bar, a chandelier, a loose chair — whatever the catalog
  *  says its shape is, outlined at furniture weight. `overhead` forces it unfilled and dashed
  *  (components/footprint-shape.tsx), the one convention every surface that draws this plan shares. */
-function PlacementGlyph({ placement, x, y, overhead, shape }: { placement: Placement; x: number; y: number; overhead?: boolean; shape?: Footprint }) {
+export function PlacementGlyph({ placement, x, y, overhead, shape }: { placement: Placement; x: number; y: number; overhead?: boolean; shape?: Footprint }) {
   const r = resolve(placement.variantId);
   const footprint: Footprint = shape ?? (
     r?.sizing === "stretch"
@@ -948,5 +955,125 @@ function DimensionGlyph({ d, den }: { d: DimensionLine; den: number }) {
         {d.label} מ׳
       </text>
     </g>
+  );
+}
+
+/** A setting-out chain: the line along the room, a tick at the wall and at every row or column
+ *  centre, the distance between each pair, and a faint extension line from each tick to the table
+ *  it measures to. Figures that would not fit their segment are left off rather than overprinted —
+ *  the next one along still gives the crew a running check. */
+function ChainGlyph({ c, den }: { c: Chain; den: number }) {
+  const horizontal = c.axis === "x";
+  const pt = (along: number) => (horizontal ? { x: along, y: c.lineAt } : { x: c.lineAt, y: along });
+  const a = pt(c.stops[0]);
+  const b = pt(c.stops[c.stops.length - 1]);
+  const tick = 1.4 * den;
+  const common = { stroke: INK, strokeWidth: LINE_WEIGHTS.annotation, vectorEffect: "non-scaling-stroke" as const };
+  return (
+    <g>
+      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} {...common} />
+      {c.stops.map((s, i) => {
+        const q = pt(s);
+        return (
+          <line
+            key={`t${i}`}
+            x1={q.x - (horizontal ? tick / 2 : -tick / 2)}
+            y1={q.y + (horizontal ? tick / 2 : -tick / 2)}
+            x2={q.x + (horizontal ? tick / 2 : -tick / 2)}
+            y2={q.y - (horizontal ? tick / 2 : -tick / 2)}
+            {...common}
+          />
+        );
+      })}
+      {c.feet.map((f, i) => {
+        const q = pt(c.stops[i + 1]);
+        return <line key={`e${i}`} x1={q.x} y1={q.y} x2={f.x} y2={f.y} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />;
+      })}
+      {c.stops.slice(1).map((s, i) => {
+        const from = c.stops[i];
+        const len = s - from;
+        // On paper: a horizontal figure needs its own width, a vertical one only its height.
+        if (len / den < (horizontal ? 8 : 4)) return null;
+        const mid = pt((from + s) / 2);
+        return (
+          <text
+            key={`f${i}`}
+            x={mid.x - (horizontal ? 0 : 1.2 * den)}
+            y={mid.y - (horizontal ? 1.2 * den : 0)}
+            textAnchor={horizontal ? "middle" : "end"}
+            direction="ltr"
+            dominantBaseline={horizontal ? "auto" : "central"}
+            fontSize={2.2 * den}
+            fontFamily="Assistant, sans-serif"
+            fill={INK}
+            className="nums"
+          >
+            {(len / 1000).toFixed(2)}
+          </text>
+        );
+      })}
+    </g>
+  );
+}
+
+/** The kit schedule — the set's one page of "which tables carry what": each kit's letter (the one
+ *  printed on the plan), its tables, and what one table of it carries, with the components a
+ *  florist is phoned with. Undressed tables are listed last so a table missing from every kit is
+ *  visibly missing, not silently absent. Counts only: a printing surface (npm run check:costs). */
+export function KitSchedule({
+  kits,
+  undressed,
+  lookup,
+  details,
+}: {
+  kits: TableKit[];
+  /** Numbers of units that carry nothing. */
+  undressed: number[];
+  lookup: (variantId: string) => { variantLabel: string; components?: { label: string; count: number }[] } | undefined;
+  /** Kit keys that have a detail sheet in this set — so the row can say "ראו פרט". */
+  details: Set<string>;
+}) {
+  return (
+    <section>
+      <h3 className="mb-2 border-b border-ink pb-1 text-base font-semibold text-ink">ערכות עיצוב לשולחנות</h3>
+      <dl className="divide-y divide-border">
+        {kits.map((k) => (
+          <div key={k.key} className="flex items-baseline gap-3 break-inside-avoid py-2 text-sm">
+            <dt className="flex w-44 shrink-0 items-baseline gap-2">
+              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-ink text-sm font-bold text-ink">{k.letter}</span>
+              <span className="nums font-semibold text-ink">
+                {k.units.length === 1 ? `שולחן ${num(k.units[0].number)}` : `שולחנות ${formatTables(k.units.map((u) => u.number))}`}
+              </span>
+            </dt>
+            <dd className="min-w-0 flex-1 text-ink-soft">
+              {k.items
+                .map((i) => {
+                  const info = lookup(i.variantId);
+                  const name = info?.variantLabel ?? productName(i.variantId) ?? "פריט";
+                  return i.quantity > 1 ? `${name} ×${i.quantity}` : name;
+                })
+                .join(" · ")}
+              {details.has(k.key) && <span className="ms-2 text-caption text-muted">(ראו פרט {k.letter})</span>}
+            </dd>
+          </div>
+        ))}
+        {undressed.length > 0 && (
+          <div className="flex items-baseline gap-3 py-2 text-sm">
+            <dt className="nums w-44 shrink-0 ps-8 font-semibold text-ink">
+              {undressed.length === 1 ? `שולחן ${num(undressed[0])}` : `שולחנות ${formatTables(undressed)}`}
+            </dt>
+            <dd className="text-muted">ללא עיצוב</dd>
+          </div>
+        )}
+      </dl>
+      {kits.length === 0 && (
+        <p className="mt-4 text-sm text-muted">
+          עדיין לא שובצו פריטים על השולחנות.{" "}
+          <Link href="/studio" className="font-medium text-accent hover:text-accent-hover">
+            חזרה לסטודיו →
+          </Link>
+        </p>
+      )}
+    </section>
   );
 }

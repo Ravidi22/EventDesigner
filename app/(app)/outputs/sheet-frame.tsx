@@ -76,6 +76,20 @@ export interface LegendRow {
   swatch: LegendSwatch;
 }
 
+/** One row of the notes column: a mark (the callout number on the drawing), a line, and an optional
+ *  muted second line. */
+export interface NoteRow {
+  mark?: string;
+  text: string;
+  detail?: string;
+}
+
+/** Width of the notes column, when a sheet has one (the table details). Start side — the right, in
+ *  RTL — because it is read before the drawing: what this kit is, then where it goes. */
+const NOTES_MM = 72;
+const NOTE_FONT_MM = 2.8;
+const NOTE_DETAIL_MM = 2.4;
+
 export interface SheetFrameProps {
   /** The drawing's own extent, in world millimetres — feeds `fitScale`. */
   world: Extent;
@@ -96,6 +110,10 @@ export interface SheetFrameProps {
    *  a venue plan states one) draws no arrow at all — a guessed north is worse than none. */
   north?: number;
   legend?: LegendRow[];
+  /** A column of notes at the sheet's start side — a heading line and numbered rows. */
+  notes?: { heading: string; sub?: string; rows: NoteRow[] };
+  /** "24 שולחנות · 240 מקומות" — a title-block cell, when the sheet has tables to count. */
+  summary?: string;
   /** The drawing itself, authored in world millimetres with its bounding box's top-left at (0,0).
    *  A function receives the fitted denominator, so text inside the drawing can be sized in PRINTED
    *  millimetres: a table number authored in room millimetres is 6mm tall at 1:100 and a 1mm smudge
@@ -122,6 +140,8 @@ export function SheetFrame({
   date,
   north,
   legend,
+  notes,
+  summary,
   children,
 }: SheetFrameProps) {
   const rows = legend ?? [];
@@ -129,7 +149,7 @@ export function SheetFrame({
 
   // The usable frame: paper, minus the printed margin on every edge, minus the bottom strip.
   const frame: Extent = {
-    widthMm: Math.max(0, paper.widthMm - marginMm * 2),
+    widthMm: Math.max(0, paper.widthMm - marginMm * 2 - (notes ? NOTES_MM + 4 : 0)),
     heightMm: Math.max(0, paper.heightMm - marginMm * 2 - TITLE_BLOCK_MM),
   };
   const { denominator, paperMm } = fitScale(world, frame);
@@ -173,6 +193,7 @@ export function SheetFrame({
     { weight: 0.7, label: "קנה מידה", value: `1:${denominator}` },
     { weight: 0.9, label: "תאריך", value: date },
     { weight: 0.7, label: "גרסה", value: `גרסה ${version}` },
+    ...(summary ? [{ weight: 1.2, label: "שולחנות ומקומות", value: summary }] : []),
     { weight: 1, label: "סטודיו", value: studio ?? "" },
   ];
   const cellUnit = (right - left) / cells.reduce((s, c) => s + c.weight, 0);
@@ -304,6 +325,8 @@ export function SheetFrame({
         })}
       </g>
 
+      {notes && <NotesColumn notes={notes} x={right - NOTES_MM} top={marginMm + 4} bottom={barTop - 3} width={NOTES_MM} />}
+
       {/* The title block — hairline-ruled cells along the bottom edge. */}
       <g>
         <line x1={left} y1={titleTop} x2={right} y2={titleTop} stroke={INK} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
@@ -326,6 +349,81 @@ export function SheetFrame({
 }
 
 /** The three fill patterns, at a given tile scale. See the note at the `<defs>` that calls this. */
+/** Hebrew has no hyphenation and SVG no wrapping: split on spaces at an estimated glyph width. */
+function wrap(text: string, maxChars: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if (line && (line + " " + word).length > maxChars) {
+      lines.push(line);
+      line = word;
+    } else line = line ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function NotesColumn({ notes, x, top, bottom, width }: { notes: NonNullable<SheetFrameProps["notes"]>; x: number; top: number; bottom: number; width: number }) {
+  const right = x + width;
+  const textRight = right - 9;
+  const maxChars = Math.floor((width - 11) / (NOTE_FONT_MM * 0.5));
+  const text = (y: number, body: string, size: number, weight: number, fill: string, at = textRight) => (
+    <text x={at} y={y} direction="rtl" textAnchor="start" fontSize={size} fontWeight={weight} fontFamily="Assistant, sans-serif" fill={fill}>
+      {body}
+    </text>
+  );
+  const out: ReactNode[] = [];
+  let y = top + 4;
+  for (const line of wrap(notes.heading, Math.floor(width / (3.6 * 0.5)))) {
+    out.push(<g key={`h${y}`}>{text(y, line, 3.6, 700, INK, right - 1)}</g>);
+    y += 4.8;
+  }
+  if (notes.sub) {
+    for (const line of wrap(notes.sub, Math.floor(width / (NOTE_DETAIL_MM * 0.5)))) {
+      out.push(<g key={`s${y}`}>{text(y, line, NOTE_DETAIL_MM, 400, INK_SOFT, right - 1)}</g>);
+      y += 3.4;
+    }
+  }
+  y += 2;
+  out.push(<line key="rule" x1={x} y1={y} x2={right} y2={y} stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />);
+  y += 5;
+  for (let i = 0; i < notes.rows.length; i++) {
+    const r = notes.rows[i];
+    const lines = wrap(r.text, maxChars);
+    const details = r.detail ? wrap(r.detail, Math.floor((width - 11) / (NOTE_DETAIL_MM * 0.5))) : [];
+    const need = lines.length * 3.6 + details.length * 3.1 + 2.4;
+    if (y + need > bottom) {
+      out.push(<g key="more">{text(y, `ועוד ${notes.rows.length - i} פריטים`, NOTE_DETAIL_MM, 400, MUTED)}</g>);
+      break;
+    }
+    out.push(
+      <g key={i}>
+        {r.mark && (
+          <>
+            <circle cx={right - 3.6} cy={y - 1} r={2.5} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+            <text x={right - 3.6} y={y - 1} textAnchor="middle" dominantBaseline="central" fontSize={2.6} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
+              {r.mark}
+            </text>
+          </>
+        )}
+        {lines.map((l, k) => (
+          <g key={`l${k}`}>{text(y + k * 3.6, l, NOTE_FONT_MM, 600, INK)}</g>
+        ))}
+        {details.map((l, k) => (
+          <g key={`d${k}`}>{text(y + lines.length * 3.6 + k * 3.1 - 0.4, l, NOTE_DETAIL_MM, 400, INK_SOFT)}</g>
+        ))}
+      </g>,
+    );
+    y += need + 1.6;
+  }
+  return (
+    <g>
+      <line x1={x - 2} y1={top - 4} x2={x - 2} y2={bottom + 1} stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+      {out}
+    </g>
+  );
+}
+
 function hatchDefs(suffix: string, k: number) {
   return (
     <>

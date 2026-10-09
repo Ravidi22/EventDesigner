@@ -13,7 +13,9 @@ import { isMain } from "../self-check";
 
 /** The scales a plan is drawn at. Standard architectural steps — a crew reading 1:75 knows what it
  *  is looking at, where 1:87 would just be the number that happened to fit. */
-export const SCALES = [20, 25, 50, 75, 100, 150, 200, 250, 500, 1000] as const;
+// 1:10 to 1:40 are for the table details (a single table, its chairs and their callouts, drawn to be
+// set from) — 1:30 and 1:40 because a 180 round with its callouts lands just past 1:25.
+export const SCALES = [10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 250, 500, 1000] as const;
 
 export interface Extent {
   widthMm: number;

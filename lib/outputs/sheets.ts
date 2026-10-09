@@ -22,6 +22,8 @@ export interface PlanSheet {
   tables: TablePresence;
   chairs: boolean;
   numbers: boolean;
+  /** Draws the setting-out chains (lib/outputs/setting-out.ts) — on the sheet a room is laid from. */
+  setOut?: boolean;
 }
 
 // Walls, doors and zone floors are on EVERY sheet and are therefore not a flag: a plan with no room
@@ -31,7 +33,7 @@ export const PLAN_SHEETS: PlanSheet[] = [
   // a crew loading the room needs to see. "layers" filters PLACEMENTS by layer; the stage and the
   // bar are not a separate layer, they are floor placements like the tables, so the floor layer
   // carries them without a groups filter.
-  { id: "hall", label: "שרטוט אולם", layers: ["floor"], tables: "full", chairs: true, numbers: true },
+  { id: "hall", label: "שרטוט אולם", layers: ["floor"], tables: "full", chairs: true, numbers: true, setOut: true },
   { id: "design", label: "שרטוט עיצוב", layers: ["floor", "table"], tables: "full", chairs: true, numbers: true },
   { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, numbers: true },
   // "groups" filters by catalog category group, not by layer -- the stage sheet wants ONLY the stage
