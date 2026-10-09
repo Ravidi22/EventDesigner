@@ -8,8 +8,8 @@ import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/sea
 import { deckOf, resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, rotatedExtent, tableAt } from "@/lib/studio/geometry";
-import { overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
-import { featureFootprint, type VenueStructure } from "@/lib/venues/structure";
+import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
+import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
@@ -128,6 +128,7 @@ export function CanvasStage({
   onMoveMany,
   onRotateMany,
   onEndDrag,
+  alignKeyBox,
   onResizePlacement,
   onSpanPlacement,
   onDropProduct,
@@ -199,6 +200,9 @@ export function CanvasStage({
    *  `moved` is what the gesture actually carried (a drag's cargo, a rotate's members), for the
    *  host to settle what now stands on what; absent for a gesture that moved nothing in particular. */
   onEndDrag: (moved?: SelectionRef[]) => void;
+  /** The KEY of a multi-selection — what יישור lines the others up with (lib/studio/align.ts) —
+   *  as its turned box. Marked on the plan so the designer can see which one stays put. */
+  alignKeyBox?: SnapBox | null;
   /** A carpet stretched by its corner: the new size, and the centre it moved to (the opposite
    *  corner stays put, which is what dragging one corner means). */
   onResizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
@@ -534,8 +538,15 @@ export function CanvasStage({
    *  that is visible but not the one being worked in, which is the whole of what activating one
    *  buys: lay the tables, switch to רצפה, and a band round three stages standing on top of them
    *  takes the three stages. */
+  // A venue feature is on it only when /halls lets it move in a sketch (featureMovable) — a column
+  // or the hall's own floor is something to line up WITH (it stays on `alignTo`), never cargo.
   const movable = useMemo(
-    () => boxesOn((p) => layerVisible[p] && isLive(p)),
+    () =>
+      boxesOn((p) => layerVisible[p] && isLive(p)).filter((m) => {
+        if (m.ref.kind !== "feature") return true;
+        const f = structure.features.find((x) => x.id === m.ref.id);
+        return !!f && featureMovable(f);
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boxesOn, layerVisible, activeLayer, autoPlane],
   );
@@ -936,16 +947,41 @@ export function CanvasStage({
   /** The delta that keeps this gesture's movers out of everything solid, given where the drag has
    *  taken them. Zero when nothing being dragged is solid, or nothing is in the way — which is the
    *  usual frame, and costs one empty loop. */
-  const clearOf = (target: Point): Point => {
+  const clearOf = (target: Point, reachMm: number): Point => {
     const s = solids.current;
-    if (!s || s.movers.length === 0) return { x: 0, y: 0 };
+    if (!s || s.movers.length === 0 || freeDrag.current) return { x: 0, y: 0 };
     const dx = target.x - s.origin.x;
     const dy = target.y - s.origin.y;
-    return pushApart(
+    // A MAGNET, not a wall (collide.ts nudgeApart): held flush only while the overlap is a few
+    // pixels deep, so a drag is never trapped behind the thing it brushed past.
+    return nudgeApart(
       s.movers.map((m) => ({ ...m, x: m.x + dx, y: m.y + dy })),
       s.obstacles,
+      reachMm,
       s.ignore,
     );
+  };
+
+  /** Alt held during a drag: no snap, no magnet — the item goes exactly where the pointer is. Read
+   *  off every pointer move (capture phase, so it is current before any node's own handler runs);
+   *  the feature layer's drag hands over no event of its own to read it from. */
+  const freeDrag = useRef(false);
+  useEffect(() => {
+    const read = (e: PointerEvent) => {
+      freeDrag.current = e.altKey;
+    };
+    window.addEventListener("pointermove", read, true);
+    window.addEventListener("pointerdown", read, true);
+    return () => {
+      window.removeEventListener("pointermove", read, true);
+      window.removeEventListener("pointerdown", read, true);
+    };
+  }, []);
+  /** The canvas's snap, unless Alt says otherwise — then the guides go out and the point is kept. */
+  const snapUnlessFree = (ctx: CanvasLayerContext, p: Point, opts: Parameters<CanvasLayerContext["snap"]>[1]): Point => {
+    if (!freeDrag.current) return ctx.snap(p, opts);
+    ctx.endSnap();
+    return { x: Math.round(p.x), y: Math.round(p.y) };
   };
 
   /** Everything a drag in progress is moving right now — the pressed item alone on a solo drag, or
@@ -985,13 +1021,13 @@ export function CanvasStage({
       // off the others. The rest of the selection is dropped from the references, or the block would
       // align to itself and never move at all.
       const moved = { x: box.x + (p.x - start.x), y: box.y + (p.y - start.y) };
-      const snapped = ctx.snap(moved, {
+      const snapped = snapUnlessFree(ctx, moved, {
         boxes: alignTo.filter((m) => !isSel(m.ref.kind, m.ref.id)).map((m) => m.box),
         self: { widthMm: box.widthMm, depthMm: box.depthMm },
       });
-      // …and then out of anything solid it has been pushed into. The snap already offers flush; this
-      // is what stops the drag going through it.
-      const clear = clearOf(snapped);
+      // …and then held flush against anything solid it has only just touched. The snap already
+      // offers flush; this keeps it there for the last few pixels without trapping the drag.
+      const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
       const dx = snapped.x - box.x + clear.x;
       const dy = snapped.y - box.y + clear.y;
       onMoveMany(
@@ -1007,18 +1043,17 @@ export function CanvasStage({
     // itself excluded, or it would align to where it already is and could never be pulled off. Its
     // own extent goes along too: that is what lets the gap either side of it be measured.
     const self = alignTo.find((m) => sameRef(m.ref, ref))?.box;
-    const snapped = ctx.snap(p, {
+    const snapped = snapUnlessFree(ctx, p, {
       boxes: alignTo.filter((m) => !sameRef(m.ref, ref)).map((m) => m.box),
       self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
     });
-    // Two things cannot stand in the same place. The snap above has already offered the edge of
-    // whatever is nearby; this is what stops the drag from carrying on THROUGH it and leaving one
-    // deck on top of another — a plan the crew cannot build. Same-kind only, and an overlap that
-    // was already there when the drag began is left alone (lib/studio/collide.ts).
-    // `self` is this item's box as it stood when the gesture began: beginSolids runs on the first
-    // move frame only (??=), before any of this drag's writes have landed.
+    // Two of a kind touching are held FLUSH rather than one sliding a pixel into the other — but
+    // only within a few pixels (nudgeApart): push on and the item follows the pointer, overlap and
+    // all. Same-kind only, and an overlap that was already there when the drag began is left alone
+    // (lib/studio/collide.ts). `self` is this item's box as it stood when the gesture began:
+    // beginSolids runs on the first move frame only (??=), before any of this drag's writes landed.
     solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : snapped);
-    const clear = clearOf(snapped);
+    const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
     const at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
 
@@ -1290,7 +1325,13 @@ export function CanvasStage({
                 selectedIds={selection.filter((r) => r.kind === "feature").map((r) => r.id)}
                 onSelect={(id, additive) => onSelect({ kind: "feature", id }, additive)}
                 onMove={(id, pos) => moveFor({ kind: "feature", id }, ctx)(pos)}
-                onCommit={onEndDrag}
+                // endDrag, NOT onEndDrag: the gesture's frozen state (groupDrag, solids, the lifted
+                // cargo, the gesture plane) has to be cleared here exactly as a table's drag clears
+                // it. Handing the end straight to the host left all of it behind, so the NEXT drag
+                // anywhere reused this one's snapshot — a later group drag moved the bar and table
+                // from before, untouched, and a single drag was pushed off phantom boxes.
+                onCommit={endDrag(ctx)}
+                interactive={featureMovable}
                 clientToMm={ctx.clientToMm}
               />
             </g>
@@ -1301,6 +1342,35 @@ export function CanvasStage({
       overlay={(ctx) => (
         <>
           <StructureDoors structure={plan.structure} />
+
+          {/* The alignment KEY of a multi-selection: the one יישור lines the rest up with, and the
+              one that stays put. A dashed frame a little outside its box and the word on it — drawn
+              only while several things are selected, which is the only time there is a key. */}
+          {alignKeyBox && selection.length > 1 && (
+            <g className="pointer-events-none" aria-hidden>
+              <rect
+                x={alignKeyBox.x - alignKeyBox.widthMm / 2 - ctx.mm(6)}
+                y={alignKeyBox.y - alignKeyBox.depthMm / 2 - ctx.mm(6)}
+                width={alignKeyBox.widthMm + ctx.mm(12)}
+                height={alignKeyBox.depthMm + ctx.mm(12)}
+                rx={ctx.mm(4)}
+                fill="none"
+                stroke="var(--color-accent)"
+                strokeWidth={1.5}
+                strokeDasharray="6 3"
+                vectorEffect="non-scaling-stroke"
+              />
+              <text
+                x={alignKeyBox.x}
+                y={alignKeyBox.y - alignKeyBox.depthMm / 2 - ctx.mm(10)}
+                textAnchor="middle"
+                fill="var(--color-accent-deep)"
+                style={{ fontSize: ctx.mm(11), fontWeight: 600 }}
+              >
+                מפתח ליישור
+              </text>
+            </g>
+          )}
 
           {/* SAFETY DISTANCES, under everything they belong to. A halo is the item's own outline
               grown by its rule (a round-joined stroke twice the distance wide, which is exactly the
@@ -2361,6 +2431,10 @@ export interface DragProps {
 // drifts a pixel under the finger must select, not nudge.
 const dragOrigin = new Map<number, { cx: number; cy: number; ox: number; oy: number; moved: boolean }>();
 const DRAG_THRESHOLD_PX = 4;
+/** How deep (in screen px) a dragged item may overlap one of its own kind and still be held flush
+ *  against it — past this it lets go and follows the pointer (collide.ts nudgeApart). A little more
+ *  than the snap's own 6px pull, so a flush snap and the hold that keeps it agree. */
+const NUDGE_REACH_PX = 8;
 // Set when a gesture crossed the threshold, so the click that always follows its pointerup can skip
 // the selection logic. Without it, dragging a group would re-fire "select just me" the instant the
 // drag ended, undoing the very group the drag just moved. Not pointerId-keyed — one drag-then-click

@@ -43,6 +43,7 @@ import {
   SURFACE_MATERIAL_LABEL,
   surfaceMaterial,
   plantSpecies,
+  featureMovable,
   addEntrance,
   addStairs,
   moveNode,
@@ -81,6 +82,7 @@ import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
 import { StyleFields } from "@/components/style-fields";
+import { Switch } from "@/components/toggle";
 import {
   InspectorDivider,
   InspectorGroup,
@@ -649,6 +651,22 @@ export function VenueInspector({
         />
       </InspectorGroup>
       <InspectorDivider orientation="column" />
+      {/* Whether an EVENT may move this in its sketch. Default by kind (featureMovable): a bar and a
+          stage yes, everything else no. A sketch only ever stores its own offset — this plan is
+          never written from there. Stored explicitly once touched, so the answer stops depending on
+          the default. */}
+      {feature.kind !== "surface" && (
+        <InspectorGroup>
+          <label className="flex items-center gap-2 text-xs font-semibold text-ink-soft">
+            <Switch
+              checked={featureMovable(feature)}
+              onChange={(movable) => patch({ movable })}
+              label="ניתן להזזה בסקיצה"
+            />
+            ניתן להזזה בסקיצה
+          </label>
+        </InspectorGroup>
+      )}
       <InspectorGroup>
         <StyleFields style={feature.style} onChange={(style: ElementStyle | undefined) => patch({ style })} strokeWidthDefault={1.25} />
       </InspectorGroup>

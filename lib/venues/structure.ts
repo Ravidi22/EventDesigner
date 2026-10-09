@@ -140,6 +140,19 @@ export interface StructureFeature {
   plant?: PlantSpecies;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
+  /** May an EVENT move this in its sketch ("ניתן להזזה בסקיצה")? Absent = the kind's default — see
+   *  featureMovable. Only ever an offset in that event's document (lib/design-document/features.ts);
+   *  the property's own position is never written from a sketch. */
+  movable?: boolean;
+}
+
+/** Whether a sketch may pick this feature up and move or turn it. The venue says so per feature at
+ *  /halls; a feature saved before the switch existed answers by its kind: a bar and a stage are the
+ *  things a venue rolls about between events, a column, a door's surround, the pool, the planting
+ *  and the floor itself are not. A feature that is not movable is drawn in the sketch but takes no
+ *  clicks — it is the room, like a wall. */
+export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
+  return f.movable ?? (f.kind === "bar" || f.kind === "stage");
 }
 
 /** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
