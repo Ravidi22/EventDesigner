@@ -753,10 +753,12 @@ export function CanvasStage({
     const p = doc.placements.find((x) => x.id === ref.id);
     // A STAGE that is a rectangle stretches like any resizable item, in whole modules of the decks it
     // is built from — so a pull from its front grows it by a row of decks, not by 37cm. An L or a T
-    // has no box to pull; it is re-drawn in the area tool instead.
+    // has no box to pull; it is re-drawn in the area tool instead. (One stage picked out of its
+    // group is the selection on purpose — the host collapses to it on a click — so it gets its
+    // handles like any other.)
     if (p?.stage) {
       const size = stageRect(p.stage);
-      if (!size || p.groupId) return null;
+      if (!size) return null;
       const pullTo = lengthSnapper(stageDeckTypes(p.stage, deckOf));
       const snap = (mm: number, magnetMm: number) => Math.max(100, pullTo(mm, { magnetMm }));
       const clamp = (s: { widthMm: number; depthMm: number }, magnetMm = 0) => ({ widthMm: snap(s.widthMm, magnetMm), depthMm: snap(s.depthMm, magnetMm) });
@@ -790,7 +792,7 @@ export function CanvasStage({
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
     const p = doc.placements.find((x) => x.id === selection[0].id);
     // Not a round stage: its rim is dozens of chords, and a grip on each would only dent the curve.
-    return p?.stage && !stageRect(p.stage) && !p.groupId && !p.stage.smooth?.length ? (p as StagePlacement) : null;
+    return p?.stage && !stageRect(p.stage) && !p.stage.smooth?.length ? (p as StagePlacement) : null;
   }, [selection, doc]);
   /** The stage as it stood when a drag of its corner or side began. */
   const shapingFrom = useRef<StagePlacement | null>(null);

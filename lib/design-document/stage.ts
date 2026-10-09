@@ -33,7 +33,7 @@ import type { Placement, Point, StageBuild, StageEdgeKind, StageLevel, StageStai
 import type { Product } from "../catalog/types";
 import { asRect, defaultFront, fillWithDecks, signedArea, type DeckType, type FillResult, type LaidDeck } from "../studio/stage-fill";
 import { footprintBounds, resolveFootprint } from "../studio/footprint";
-import { cleanOutline, pushSide, splitSide, unionOutline } from "../studio/stage-draw";
+import { cleanOutline, pushSide, splitSide, stickBoxes, unionOutline } from "../studio/stage-draw";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
 import { isMain } from "../self-check";
 
@@ -1489,6 +1489,104 @@ export function besideNeighbours(wallDistance: WallDistance | undefined, others:
   };
 }
 
+// ── Grouping stages: touching → one stage, apart → a group ─────────────────────────────────────
+//
+// Ctrl+G over a selection made only of stages does not make a group of them when they stand against
+// each other: a grouped stage is still N stages — N skirts, stairs on the seams, N builds — where the
+// designer pushed them together to make ONE platform. So the ones that touch are merged (mergeStages:
+// one outline, one skirt round the outside, nothing on the seam), and only what is still apart after
+// that is grouped. "Touching" is decided here, with the same distance the rest of this file calls
+// "against" (WALL_HUG_MM): a side that close to another stage already gets no stairs and no skirt,
+// so the app has already treated the two as one platform — grouping makes it so. The gap between them
+// is closed (stickBoxes) before they merge, as "איחוד" does.
+
+/** Stages this close to each other are standing against each other, and share at least this much
+ *  of a side — two stages meeting only at a corner are not one platform. */
+export const STAGE_TOUCH_MM = WALL_HUG_MM;
+
+/** A merged cluster: the largest keeps its id, place, front and settings as the anchor. */
+export interface StageMerge {
+  anchor: StagePlacement;
+  others: StagePlacement[];
+  stage: StageBuild;
+  position: Point;
+  rotation: number;
+}
+
+/** Whether a stage can be part of a merge at all: square-cornered (unionOutline refuses anything
+ *  else — a round stage's rim is dozens of chords that are square to nothing). */
+const mergeable = (p: StagePlacement): boolean =>
+  !p.stage.smooth?.length &&
+  p.stage.outline.every((a, i) => {
+    const b = p.stage.outline[(i + 1) % p.stage.outline.length];
+    return Math.abs(a.x - b.x) <= 2 || Math.abs(a.y - b.y) <= 2;
+  });
+
+/** Two stages standing against each other: square to one another, their boxes within `tolMm` in
+ *  the first one's frame, and overlapping along the side they meet on by STAGE_TOUCH_MM at least. */
+function stagesTouch(a: StagePlacement, b: StagePlacement, tolMm: number): boolean {
+  if (!mergeable(a) || !mergeable(b)) return false;
+  const d = ((((a.rotation || 0) - (b.rotation || 0)) % 90) + 90) % 90;
+  if (Math.min(d, 90 - d) >= 0.5) return false;
+  const box = (p: StagePlacement) => {
+    const pts = p.stage.outline.map((q) => toStageFrame(a, toRoom(p, q)));
+    const xs = pts.map((q) => q.x);
+    const ys = pts.map((q) => q.y);
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  };
+  const A = box(a);
+  const B = box(b);
+  const ovX = Math.min(A.maxX, B.maxX) - Math.max(A.minX, B.minX);
+  const ovY = Math.min(A.maxY, B.maxY) - Math.max(A.minY, B.minY);
+  return (ovX >= -tolMm && ovY >= STAGE_TOUCH_MM) || (ovY >= -tolMm && ovX >= STAGE_TOUCH_MM);
+}
+
+/** The stages in clusters of ones that stand against each other (stagesTouch, transitively) — a
+ *  stage touching nothing is a cluster of one. Order is kept: a cluster is listed where its first
+ *  member was. */
+export function touchingStages(stages: readonly StagePlacement[], tolMm = STAGE_TOUCH_MM): StagePlacement[][] {
+  const parent = stages.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < stages.length; i++)
+    for (let j = i + 1; j < stages.length; j++) if (stagesTouch(stages[i], stages[j], tolMm)) parent[find(j)] = find(i);
+  const out = new Map<number, StagePlacement[]>();
+  stages.forEach((p, i) => {
+    const r = find(i);
+    out.set(r, [...(out.get(r) ?? []), p]);
+  });
+  return [...out.values()];
+}
+
+/** Ctrl+G over stages: every cluster of touching ones pushed flush and merged into ONE stage (its
+ *  largest member the anchor — it keeps its id and its front), and the rest returned loose. A cluster
+ *  that will not merge after all (an outline with a hole in it) is loose too, whole. The caller
+ *  finishes each merged stage's bare edges (fillGaps) and groups whatever is left when more than one
+ *  thing is. */
+export function mergeTouching(stages: readonly StagePlacement[], tolMm = STAGE_TOUCH_MM): { merged: StageMerge[]; loose: StagePlacement[] } {
+  const merged: StageMerge[] = [];
+  const loose: StagePlacement[] = [];
+  for (const cluster of touchingStages(stages, tolMm)) {
+    if (cluster.length < 2) {
+      loose.push(...cluster);
+      continue;
+    }
+    const moves = stickBoxes(
+      cluster.map((p) => {
+        const xs = p.stage.outline.map((q) => q.x);
+        const ys = p.stage.outline.map((q) => q.y);
+        return { id: p.id, centre: p.position, rotation: p.rotation || 0, widthMm: Math.max(...xs) - Math.min(...xs), depthMm: Math.max(...ys) - Math.min(...ys) };
+      }),
+    );
+    const parts = cluster
+      .map((p) => (moves.has(p.id) ? { ...p, position: moves.get(p.id)! } : p))
+      .sort((p, q) => Math.abs(signedArea(q.stage.outline)) - Math.abs(signedArea(p.stage.outline)));
+    const m = mergeStages(parts);
+    if (!m) loose.push(...cluster);
+    else merged.push({ anchor: parts[0], others: parts.slice(1), ...m });
+  }
+  return { merged, loose };
+}
+
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
@@ -1859,5 +1957,41 @@ if (isMain(import.meta.url)) {
   assert(pieceDecks.length === 1 && pieceDecks[0].typeId === "disc4" && pieceDecks[0].round === true, "…standing on the one round piece it is");
   assert(stageHeight(piece.stage, deckOf2) === 400 && piece.stage.stairs?.length === 1 && edgeKind(piece.stage.stairs[0]) === "stairs", "…at its height, with stairs round its open rim");
   assert(!stairFits(piece, { id: "x", edge: 0, t: 0.5, widthMm: 1000, inner: true }, deckOf2).ok, "…and nothing can be sunk into one solid piece");
+
+  // ── Ctrl+G over stages: touching → one stage, apart → a group (mergeTouching).
+  // Two 244×122 sheets laid flush side by side, each finished with stairs all round.
+  const sheet: DeckType = { id: "sheet", widthMm: 2440, depthMm: 1220, heightMm: 400 };
+  const deckOf3: DeckLookup = (id) => (id === "sheet" ? sheet : decks[id]);
+  const laySheet = (id: string, x: number, y: number) =>
+    stageFromPiece({ id, variantId: "sheet", layer: "floor", quantity: 1, scale: 1, rotation: 0, position: { x, y } }, { widthMm: 2440, depthMm: 1220 }, { decks: ["sheet"], heightMm: 400, deckOf: deckOf3, newId: nid, withEdges: true });
+  const s1 = laySheet("s1", 1220, 610);
+  const s2 = laySheet("s2", 3660, 610);
+  assert(s1.stage.stairs?.length === 4 && s2.stage.stairs?.length === 4, "(each sheet starts with stairs on all four sides)");
+  const pair = mergeTouching([s1, s2]);
+  assert(pair.merged.length === 1 && pair.loose.length === 0, "two flush sheets grouped are ONE merged stage, nothing loose");
+  const one = pair.merged[0];
+  assert(one.anchor.id === "s1" && one.others.length === 1 && one.others[0].id === "s2", "…the first of two equals its anchor, the other folded in");
+  const oneAt: StagePlacement = { ...one.anchor, stage: one.stage, position: one.position, rotation: one.rotation, mirrored: false };
+  assert(stageRect(one.stage)?.widthMm === 4880 && stageRect(one.stage)?.depthMm === 1220, "…a 4.88×1.22 rectangle");
+  assert(layStage(one.stage, deckOf3).decks.length === 2, "…built of the two sheets");
+  assert(one.stage.stairs?.length === 4 && one.stage.stairs.every((it) => it.full), "…with one full run of stairs on each of its four sides — none on the seam");
+  assert(edgeGaps(oneAt, deckOf3).length === 0 && skirtMm(oneAt, deckOf3) === 0, "…nothing bare, and nothing to skirt");
+  // Three sheets, two of them touching: one merged stage and one loose — to be grouped by the caller.
+  const s3 = laySheet("s3", 9000, 610);
+  const trio = mergeTouching([s1, s2, s3]);
+  assert(trio.merged.length === 1 && trio.loose.length === 1 && trio.loose[0].id === "s3", "three sheets where two touch: one merged, one loose");
+  assert(touchingStages([s1, s2, s3]).length === 2, "…two clusters");
+  // A round stage touching nothing — and one pushed against a sheet — is never merged.
+  assert(mergeTouching([piece]).merged.length === 0 && mergeTouching([piece]).loose.length === 1, "a round stage alone is left as it is");
+  const discBeside = { ...piece, position: { x: 1220, y: 1220 + 2000 } };
+  const withDisc = mergeTouching([s1, discBeside]);
+  assert(withDisc.merged.length === 0 && withDisc.loose.length === 2, "…and a round stage against a sheet is not merged into it (its rim is no side)");
+  // A gap within STAGE_TOUCH_MM is closed and merged; a wider one stays apart. A corner is not a side.
+  const near = mergeTouching([s1, laySheet("s4", 3660 + 200, 610)]);
+  assert(near.merged.length === 1 && stageRect(near.merged[0].stage)?.widthMm === 4880, "a sheet 20cm off is pushed flush and merged");
+  assert(mergeTouching([s1, laySheet("s5", 3660 + STAGE_TOUCH_MM + 100, 610)]).merged.length === 0, "…one 40cm off is left apart");
+  assert(mergeTouching([s1, laySheet("s6", 3660, 610 + 1220)]).merged.length === 0, "…and one meeting it only at a corner too");
+  assert(mergeTouching([s1, { ...s2, rotation: 30 }]).merged.length === 0, "…and one at 30° to it");
+  assert(touchingStages([s1, s2, s3]).flat().length === 3, "every stage is in exactly one cluster");
   console.log("stage self-check passed");
 }

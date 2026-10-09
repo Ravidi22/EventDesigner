@@ -195,6 +195,38 @@ export interface StageGroupPanel {
   surface: string | null | undefined;
   surfaceOptions: { value: string; label: string }[];
   areaMm2: number;
+  /** The rest of a stage's bar, over the whole group (set when `grouped`): what the lot is built of,
+   *  how big it stands, its edges and railing, and the switches every member shares. */
+  whole?: {
+    /** The group's box, in the first stage's frame. */
+    size: { widthMm: number; depthMm: number };
+    deckCount: number;
+    /** Decked floor over outlined floor, across the group. */
+    coverage: number;
+    decks: { name: string; count: number }[];
+    /** Runs of each kind over every member, and how many flights and ramps. */
+    stairsMm: number;
+    flights: number;
+    benchMm: number;
+    benchSeats: number;
+    barrierMm: number;
+    backdropMm: number;
+    ramps: number;
+    /** Corner pieces: on everywhere (true), off everywhere (false), or mixed (undefined). */
+    corners: boolean | undefined;
+    cornerCount: number;
+    /** Decks may exceed the line: all / none / mixed. */
+    exceed: boolean | undefined;
+    railingMm: number | null;
+    railingAboveMm: number | null;
+    stairsCounted: boolean;
+    skirtCounted: boolean;
+    benchCounted: boolean;
+    barrierCounted: boolean;
+    /** Every stage in the group, to pick one out for its own bar (levels, a flight, the outline) —
+     *  its size as a Latin figure the bar wraps LTR, null for a shaped one. */
+    members: { id: string; label: string; size: string | null }[];
+  };
 }
 
 export function Inspector({
@@ -279,6 +311,12 @@ export function Inspector({
   onGroupStageHeight,
   onGroupFillEdges,
   onGroupStageSurface,
+  onGroupStageCorners,
+  onGroupStageExceed,
+  onGroupSaveTemplate,
+  onGroupExplode,
+  onPickStage,
+  onBackToGroup,
   onStickStages,
   onMergeStages,
   onMakeStage,
@@ -445,6 +483,17 @@ export function Inspector({
   onGroupStageHeight?: (heightMm: number) => void;
   onGroupFillEdges?: (kind: EdgeKindId) => void;
   onGroupStageSurface?: (variantId: string | null) => void;
+  /** …and, for a GROUP of stages (stageGroup.grouped), the rest of a stage's bar over all of them:
+   *  corners and exceed on every member, every member saved as a template (one each — a template
+   *  is one outline), every member taken apart into its decks, one member picked out for its own
+   *  bar (levels, a flight on a side, the outline, מידות). */
+  onGroupStageCorners?: (on: boolean) => void;
+  onGroupStageExceed?: (on: boolean) => void;
+  onGroupSaveTemplate?: (name: string) => void;
+  onGroupExplode?: () => void;
+  onPickStage?: (id: string) => void;
+  /** Set on a stage's own bar when it was picked out of its group: the group back as the selection. */
+  onBackToGroup?: () => void;
   /** Set when two or more stages are selected: close the gaps between them / make them one stage. */
   onStickStages?: () => void;
   onMergeStages?: () => void;
@@ -616,8 +665,57 @@ export function Inspector({
             label="קצוות"
             icon={Footprints}
             tone={sg.gapsMm > 0 ? "warn" : "default"}
-            value={sg.gapsMm > 0 ? `${gm(sg.gapsMm)} מ׳ פתוחים` : "סגור"}
+            value={sg.gapsMm > 0 ? `${gm(sg.gapsMm)} מ׳ פתוחים` : sg.whole?.flights ? `${sg.whole.flights} מדרגות` : "סגור"}
+            panelClassName="w-80"
           >
+            {/* A group's edges, counted over every member — what the single stage's bar lists. */}
+            {sg.whole && (sg.whole.flights > 0 || sg.whole.benchMm > 0 || sg.whole.barrierMm > 0 || sg.whole.backdropMm > 0 || sg.whole.ramps > 0) && (
+              <ul className="mb-2 space-y-1 text-sm">
+                {sg.whole.flights > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">מדרגות{sg.whole.stairsCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums text-muted">{`${sg.whole.flights} · ${gm(sg.whole.stairsMm)} מ׳`}</span>
+                  </li>
+                )}
+                {sg.whole.benchMm > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">בנקט{sg.whole.benchCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums text-muted">{`${gm(sg.whole.benchMm)} מ׳ · ${sg.whole.benchSeats} מקומות`}</span>
+                  </li>
+                )}
+                {sg.whole.barrierMm > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">מחסום{sg.whole.barrierCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums text-muted">{`${gm(sg.whole.barrierMm)} מ׳`}</span>
+                  </li>
+                )}
+                {sg.whole.backdropMm > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">קיר רקע</span>
+                    <span className="nums text-muted">{`${gm(sg.whole.backdropMm)} מ׳`}</span>
+                  </li>
+                )}
+                {sg.whole.ramps > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">רמפה</span>
+                    <span className="nums text-muted">{sg.whole.ramps}</span>
+                  </li>
+                )}
+              </ul>
+            )}
+            {sg.whole && onGroupStageCorners && (sg.whole.cornerCount > 0 || sg.whole.corners !== true) && (
+              <div className="mb-2">
+                <Segmented
+                  label={`פינות בין שתי ריצות — בכל הבמות${sg.whole.corners === undefined ? " (כרגע שונות)" : ""}`}
+                  value={sg.whole.corners === false ? "off" : "on"}
+                  options={[
+                    ["on", "פינה מלאה"],
+                    ["off", "פתוחה"],
+                  ] as const}
+                  onChange={(v) => onGroupStageCorners(v === "on")}
+                />
+              </div>
+            )}
             {sg.gapsMm > 0 ? (
               <div className="space-y-1.5">
                 <p className="text-xs text-alert-ink">{gm(sg.gapsMm)} מ׳ של שפה פתוחה בבמות שבקבוצה.</p>
@@ -651,8 +749,88 @@ export function Inspector({
             <Note>{`אותו משטח על כל הבמות בקבוצה (${gm(sg.areaMm2 / 1000)} מ״ר).`}</Note>
           </Popover>
         )}
+        {/* A GROUP of stages carries the rest of a stage's bar, over all of them: how big the lot
+            stands, what it is built of (with the exceed switch on every member), its railing, a
+            template per member, every member taken apart — and one member picked out for the tools
+            that belong to ONE stage: levels, a flight on a side, the outline, exact מידות. A click
+            on a member of the selected group does the same. */}
+        {sg.whole && (
+          <Popover label="מידות" icon={Ruler} value={ltr(`${gm(sg.whole.size.widthMm)}×${gm(sg.whole.size.depthMm)} מ׳`)} panelClassName="w-72">
+            <Note>
+              {`הקבוצה כולה תופסת ${gm(sg.whole.size.widthMm)}×${gm(sg.whole.size.depthMm)} מ׳ — ${sg.count} חלקים. `}
+              מידה מדויקת לבמה אחת, מפלסים, מדרגות בצד ועריכת הצורה — בלחיצה על אותה במה בתוך הקבוצה, או ב״במה בודדת״ כאן.
+            </Note>
+          </Popover>
+        )}
+        {sg.whole && (
+          <Popover label="בנויה מ" icon={Blocks} value={`${sg.whole.deckCount} פלטות`} panelClassName="w-72">
+            {sg.whole.decks.length > 0 ? (
+              <ul className="space-y-1 text-xs">
+                {sg.whole.decks.map((d) => (
+                  <li key={d.name} className="flex justify-between gap-3">
+                    <span className="text-ink">{d.name}</span>
+                    <span className="nums font-semibold text-ink">×{d.count}</span>
+                  </li>
+                ))}
+                {sg.skirtMm > 0 && (
+                  <li className="flex justify-between gap-3 border-t border-border-soft pt-1">
+                    <span className="text-ink">חצאית{sg.whole.skirtCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums font-semibold text-ink">{ltr(`${gm(sg.skirtMm)} מ׳`)}</span>
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <Note>אף פלטה לא נכנסת — אולי הפלטות שנבחרו נמחקו מהקטלוג.</Note>
+            )}
+            {onGroupStageExceed && (
+              <div className="mt-2">
+                <Segmented
+                  label={`פלטה שעוברת את הקו — בכל הבמות${sg.whole.exceed === undefined ? " (כרגע שונות)" : ""}`}
+                  value={sg.whole.exceed === true ? "on" : "off"}
+                  options={[
+                    ["off", "בתוך הקו"],
+                    ["on", "מותר לחרוג"],
+                  ] as const}
+                  onChange={(v) => onGroupStageExceed(v === "on")}
+                />
+              </div>
+            )}
+            <Note>
+              {sg.whole.coverage < 0.995 ? `הפלטות מכסות ${Math.floor(sg.whole.coverage * 100)}% מהרצפה המסומנת. ` : ""}
+              כל במה בקבוצה מחושבת מהפלטות שלה; הצעת המחיר ורשימת הציוד סופרות את כולן, את המדרגות ואת מטרי החצאית.
+            </Note>
+          </Popover>
+        )}
+        {sg.whole && sg.whole.railingMm !== null && sg.whole.railingMm > 0 && (
+          <Popover label="מעקה" icon={Fence} tone="warn" value={ltr(`${gm(sg.whole.railingMm)} מ׳`)} panelClassName="w-72">
+            <Note>
+              לפי הכלל שנקבע בהגדרות (מעל {Math.round((sg.whole.railingAboveMm ?? 0) / 10)} ס״מ), צריך מעקה בצדדים הפתוחים
+              של הבמות בקבוצה, המסומנים בקו מנוקד. החזית לא מסומנת לעולם.
+            </Note>
+          </Popover>
+        )}
+        {sg.whole && onPickStage && (
+          <Popover label="במה בודדת" icon={Grid2x2} value={`${sg.whole.members.length} במות`} panelClassName="w-72">
+            <div className="space-y-1">
+              {sg.whole.members.map((mbr) => (
+                <Button key={mbr.id} size="sm" variant="outline" className="w-full" onClick={() => onPickStage(mbr.id)}>
+                  {mbr.label}
+                  {mbr.size ? <> · {ltr(mbr.size)}</> : null}
+                </Button>
+              ))}
+            </div>
+            <Note>בחירת במה אחת מתוך הקבוצה — לסרגל שלה: מפלסים, מדרגות בצד, עריכת הצורה ומידות. ״חזרה לקבוצה״ בסרגל שלה, או Esc.</Note>
+          </Popover>
+        )}
+        {sg.whole && onGroupSaveTemplate && (
+          <SaveTemplatePopover
+            onSave={onGroupSaveTemplate}
+            note={`תבנית היא במה אחת: כל אחת מ־${sg.whole.members.length} הבמות בקבוצה נשמרת כתבנית משלה, בשם הזה וממוספרת. במה מתבנית מוצבת מכלי ״מילוי במות״.`}
+          />
+        )}
         <Rotation value={facing} onChange={onFace} />
         <MirrorMenu onMirror={onMirror} />
+        {sg.whole && onGroupExplode && <BarButton icon={Blocks} label="פירוק כל הבמות לפלטות נפרדות" onClick={onGroupExplode} />}
         {stageGroup.grouped ? (
           <BarButton icon={Ungroup} label="פירוק הקבוצה" onClick={onUngroup} />
         ) : (
@@ -1052,6 +1230,8 @@ export function Inspector({
             .join(" · ")}
           onClose={onClose}
         >
+          {/* One stage picked out of its group: its own bar, with the group a click away. */}
+          {onBackToGroup && <BarButton icon={Group} label="חזרה לקבוצת הבמות · Esc" onClick={onBackToGroup} />}
           {sp.size && (
             <Popover label="מידות" icon={Ruler} value={ltr(`${m(sp.size.widthMm)}×${m(sp.size.depthMm)} מ׳`)} panelClassName="w-72">
               <PanelRow label="חזית (ס״מ)" htmlFor="stage-w">
@@ -1793,7 +1973,7 @@ function MirrorMenu({ onMirror }: { onMirror?: (axis: MirrorAxis) => void }) {
 /** The size of a stretchable item, in the module it is built in. Commits on blur — a stage built in
  *  1m decks would otherwise snap to 1m the moment the "4" of "450" was typed. */
 /** "Save this stage as a template": a name, and the button. */
-function SaveTemplatePopover({ onSave }: { onSave: (name: string) => void }) {
+function SaveTemplatePopover({ onSave, note }: { onSave: (name: string) => void; note?: string }) {
   const [name, setName] = useState("");
   return (
     <Popover label="תבנית" icon={BookmarkPlus} value="שמירה">
@@ -1810,7 +1990,7 @@ function SaveTemplatePopover({ onSave }: { onSave: (name: string) => void }) {
         <BookmarkPlus className="h-3.5 w-3.5" strokeWidth={2} />
         שמירה כתבנית
       </Button>
-      <Note>הצורה, המפלסים, הקצוות, המשטח והעיצוב על הבנקטים נשמרים. במה מתבנית מוצבת מכלי ״מילוי במות״.</Note>
+      <Note>{note ?? "הצורה, המפלסים, הקצוות, המשטח והעיצוב על הבנקטים נשמרים. במה מתבנית מוצבת מכלי ״מילוי במות״."}</Note>
     </Popover>
   );
 }

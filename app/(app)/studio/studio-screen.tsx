@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
@@ -14,7 +14,7 @@ import { tableAt } from "@/lib/studio/geometry";
 import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { coverOn, deckOf, defaultVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
+import { coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -61,6 +61,7 @@ import {
   toRoom,
   toStageFrame,
   mergeStages,
+  mergeTouching,
   benchInRoom,
   defaultEdgeItems,
   edgeGaps,
@@ -580,10 +581,33 @@ export function StudioScreen({
   );
   const featureRefs = useCallback((refs: SelectionRef[]) => refs.filter((r) => r.kind === "feature"), []);
 
+  // A STAGE GROUP collapses to the member clicked. A group of stages is one thing to drag, but the
+  // tools that belong to one stage — its levels, a flight on one of its sides, its outline, an exact
+  // size — need that one stage to be the selection; so a plain click on a member of a stage group
+  // that is ALREADY the selection picks that stage alone, and its own bar appears (with "חזרה
+  // לקבוצה"; Esc does the same). The press that selects a group and the click that follows it both
+  // arrive here (plan-canvas.tsx dragHandlers), so "the group is already selected" is not enough to
+  // tell a first click from a second: the press remembers that IT selected the group, and the click
+  // after it leaves the group be. Decided OUTSIDE the updater — an updater must be pure (StrictMode
+  // runs it twice) — against the selection as of the last render.
+  const selectedNow = useRef(selected);
+  selectedNow.current = selected;
+  const pressExpanded = useRef<string | null>(null);
   const pick = useCallback(
     (ref: SelectionRef | null, additive: boolean) => {
+      let collapse = false;
+      if (ref && !additive && ref.kind === "placement") {
+        const key = `${ref.kind}:${ref.id}`;
+        const cur = selectedNow.current;
+        const whole = expandToGroups(doc, [{ kind: ref.kind, id: ref.id }]);
+        const wholeSelected = whole.length > 1 && whole.every((w) => cur.some((c) => c.kind === w.kind && c.id === w.id));
+        if (!wholeSelected) pressExpanded.current = whole.length > 1 ? key : null;
+        else if (pressExpanded.current === key) pressExpanded.current = null;
+        else collapse = whole.every((w) => w.kind === "placement" && isStagePiece(doc.placements.find((p) => p.id === w.id)));
+      } else pressExpanded.current = null;
       setSelected((cur) => {
         if (!ref) return cur.length ? [] : cur;
+        if (collapse) return [ref];
         // A venue feature is in no group and can be in none, so it selects as itself.
         const picked = ref;
         const whole: SelectionRef[] =
@@ -722,6 +746,15 @@ export function StudioScreen({
   }, [activeLayer, doc, pickMany]);
 
   const sole = selected.length === 1 ? selected[0] : null;
+  /** One stage picked out of its group (see pick): the whole group back as the selection — the bar's
+   *  "חזרה לקבוצה", and what Esc does before it clears the selection. */
+  const backToGroup = useMemo(() => {
+    if (sole?.kind !== "placement") return undefined;
+    const p = doc.placements.find((x) => x.id === sole.id);
+    if (!p?.stage || !p.groupId) return undefined;
+    const whole: SelectionRef[] = expandToGroups(doc, [{ kind: "placement", id: p.id }]);
+    return whole.length > 1 ? () => setSelected(whole) : undefined;
+  }, [sole, doc]);
 
   /** The design items standing on a table — not its cloth, which is the table's surface. */
   const chipsOn = (tableId: string) =>
@@ -1421,7 +1454,9 @@ export function StudioScreen({
       catalog
         .filter((p) => STAGE_PIECE_CATEGORIES.includes(p.category) && !p.archived)
         .filter((p) => (p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect")) === "rect" && !p.appearance?.parts?.length)
-        .map((p) => ({ name: p.name, ...deckTypeOf(defaultVariantId(p), p) }))
+        // The FIRST variant, not the event's shade: a deck's id is structural — a stage stores it and
+        // is laid from it — and must be the same id whatever event is open (firstVariantId).
+        .map((p) => ({ name: p.name, ...deckTypeOf(firstVariantId(p), p) }))
         .filter((t) => t.widthMm > 0 && t.depthMm > 0),
     [catalog],
   );
@@ -1561,7 +1596,8 @@ export function StudioScreen({
   const stageParts = useMemo(() => {
     const first = (category: string) => {
       const p = catalog.find((x) => x.category === category && !x.archived);
-      return p ? defaultVariantId(p) : undefined;
+      // Structural, like a deck's id (see deckTypes): the row a stage COUNTS its stairs as.
+      return p ? firstVariantId(p) : undefined;
     };
     return {
       stairsVariant: first("stage-stairs"),
@@ -1723,7 +1759,7 @@ export function StudioScreen({
       surface: stage.surfaceVariant ?? null,
       surfaceOptions: catalog
         .filter((x) => x.category === "stage-surfaces" && !x.archived)
-        .map((x) => ({ value: defaultVariantId(x), label: x.name })),
+        .map((x) => ({ value: firstVariantId(x), label: x.name })),
       areaMm2: stageAreaMm2(stage, deckOf),
       corners: stage.corners !== false,
       exceed: stage.exceed === true,
@@ -1777,10 +1813,9 @@ export function StudioScreen({
   /** The stage, taken apart into the decks it was built of — loose, grouped, where they stood — and
    *  its flights into loose stairs beside them. One way: the plan holds decks from here on, for the
    *  designer who needs to move one by hand. */
-  const explodeStage = useCallback(() => {
-    if (!soleStage) return;
-    const decks = stageDecksInRoom(soleStage, deckOf);
-    if (decks.length === 0) return;
+  const explodeOne = (sp: StagePlacement): { actions: Action[]; added: Placement[]; decks: number } | null => {
+    const decks = stageDecksInRoom(sp, deckOf);
+    if (decks.length === 0) return null;
     const added: Placement[] = decks.map((d) => ({
       id: uid(),
       variantId: d.typeId,
@@ -1790,16 +1825,16 @@ export function StudioScreen({
       rotation: d.rotation,
       scale: 1,
     }));
-    const stairsVariant = soleStage.stage.stairsVariant;
+    const stairsVariant = sp.stage.stairsVariant;
     if (stairsVariant && resolve(stairsVariant)) {
-      for (const st of soleStage.stage.stairs ?? []) {
-        const shape = stairShape(soleStage.stage, st, deckOf);
+      for (const st of sp.stage.stairs ?? []) {
+        const shape = stairShape(sp.stage, st, deckOf);
         if (!shape) continue;
         // Its middle, and the way its edge runs there (a flight on a curve, along the tangent).
-        const a = toRoom(soleStage, shape.base);
-        const c = toRoom(soleStage, shape.foot);
+        const a = toRoom(sp, shape.base);
+        const c = toRoom(sp, shape.foot);
         const t = (shape.angleDeg * Math.PI) / 180;
-        const b = toRoom(soleStage, { x: shape.base.x + Math.cos(t), y: shape.base.y + Math.sin(t) });
+        const b = toRoom(sp, { x: shape.base.x + Math.cos(t), y: shape.base.y + Math.sin(t) });
         added.push({
           id: uid(),
           variantId: stairsVariant,
@@ -1812,9 +1847,9 @@ export function StudioScreen({
       }
     }
     // What stood on its banquettes stays where it stood, free of the stage.
-    const dressed = doc.placements.filter((x) => x.perch?.stageId === soleStage.id);
+    const dressed = doc.placements.filter((x) => x.perch?.stageId === sp.id);
     const freed = dressed.flatMap((x) => {
-      const bench = benchInRoom(soleStage, x.perch!.itemId, deckOf);
+      const bench = benchInRoom(sp, x.perch!.itemId, deckOf);
       const mates = dressed.filter((y) => y.perch!.itemId === x.perch!.itemId);
       const f = bench ? (mates.indexOf(x) + 0.5) / mates.length - 0.5 : 0;
       const spot = bench?.along(f);
@@ -1825,14 +1860,25 @@ export function StudioScreen({
       ];
     });
     const groupId = uid();
-    batch([
-      ...freed,
-      { type: "removePlacement", id: soleStage.id },
-      ...added.map((placement) => ({ type: "addPlacement" as const, placement })),
-      ...(added.length > 1 ? [{ type: "group" as const, groupId, refs: added.map((p) => ({ kind: "placement" as const, id: p.id })) }] : []),
-    ]);
-    setSelected(added.map((p) => ({ kind: "placement" as const, id: p.id })));
-    showHint(`הבמה פורקה ל־${decks.length} פלטות`);
+    return {
+      actions: [
+        ...freed,
+        { type: "removePlacement", id: sp.id },
+        ...added.map((placement) => ({ type: "addPlacement" as const, placement })),
+        ...(added.length > 1 ? [{ type: "group" as const, groupId, refs: added.map((p) => ({ kind: "placement" as const, id: p.id })) }] : []),
+      ],
+      added,
+      decks: decks.length,
+    };
+  };
+  const explodeStage = useCallback(() => {
+    if (!soleStage) return;
+    const taken = explodeOne(soleStage);
+    if (!taken) return;
+    batch(taken.actions);
+    setSelected(taken.added.map((p) => ({ kind: "placement" as const, id: p.id })));
+    showHint(`הבמה פורקה ל־${taken.decks} פלטות`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soleStage, batch, doc.placements]);
 
   // ── A stage's own parts: its height, its levels, its flights ─────────────────────────────────
@@ -2251,9 +2297,52 @@ export function StudioScreen({
     const heights = new Set(real.map((p) => stageHeight(p.stage, deckOf)));
     const surfaces = new Set(real.map((p) => p.stage.surfaceVariant ?? null));
     const sum = (f: (p: StagePlacement) => number) => real.reduce((t, p) => t + f(p), 0);
+    const grouped = groups.size === 1 && !groups.has(undefined);
+    /** A GROUP of stages: the rest of a stage's bar, counted over every member (StageGroupPanel.whole). */
+    const whole = (() => {
+      if (!grouped || real.length === 0) return undefined;
+      const frame = real[0];
+      const pts = real.flatMap((p) => stageOutlineInRoom(p).map((q) => toStageFrame(frame, q)));
+      const xs = pts.map((q) => q.x);
+      const ys = pts.map((q) => q.y);
+      const laid = real.map((p) => ({ p, laid: layStage(p.stage, deckOf) }));
+      const counts = new Map<string, number>();
+      for (const { laid: l } of laid) for (const d of l.decks) counts.set(d.typeId, (counts.get(d.typeId) ?? 0) + 1);
+      const floor = sum((p) => stageAreaMm2(p.stage));
+      const shapes = real.flatMap((p) => (p.stage.stairs ?? []).flatMap((st) => { const s = edgeItemShape(p.stage, st, deckOf); return s ? [s] : []; }));
+      const run = (k: StageEdgeKind) => shapes.filter((s) => s.kind === k).reduce((t, s) => t + s.widthMm, 0);
+      const tri = (f: (s: StageBuild) => boolean) => (real.every((p) => f(p.stage)) ? true : real.every((p) => !f(p.stage)) ? false : undefined);
+      const stageSize = (p: StagePlacement) => {
+        const r = stageRect(p.stage);
+        return r ? `${Math.round(r.widthMm / 10) / 100}×${Math.round(r.depthMm / 10) / 100} מ׳` : null;
+      };
+      return {
+        size: { widthMm: Math.round(Math.max(...xs) - Math.min(...xs)), depthMm: Math.round(Math.max(...ys) - Math.min(...ys)) },
+        deckCount: laid.reduce((t, { laid: l }) => t + l.decks.length, 0),
+        coverage: floor > 0 ? laid.reduce((t, { p, laid: l }) => t + l.coverage * stageAreaMm2(p.stage), 0) / floor : 1,
+        decks: [...counts.entries()].map(([id, count]) => ({ name: resolve(id)?.product.name ?? "פלטה", count })),
+        stairsMm: run("stairs"),
+        flights: shapes.filter((s) => s.kind === "stairs").length,
+        benchMm: run("bench"),
+        benchSeats: shapes.filter((s) => s.kind === "bench").reduce((t, s) => t + s.seats, 0),
+        barrierMm: run("barrier"),
+        backdropMm: run("backdrop"),
+        ramps: shapes.filter((s) => s.kind === "ramp").length,
+        corners: tri((s) => s.corners !== false),
+        cornerCount: sum((p) => stageCorners(p.stage, deckOf).length),
+        exceed: tri((s) => s.exceed === true),
+        railingMm: railingAboveMm ? sum((p) => (stageRailings?.[p.id] ?? []).reduce((t, r) => t + r.lengthMm, 0)) : null,
+        railingAboveMm,
+        stairsCounted: real.every((p) => !!(p.stage.stairsVariant ?? stageParts.stairsVariant)),
+        skirtCounted: real.every((p) => !!(p.stage.skirtVariant ?? stageParts.skirtVariant)),
+        benchCounted: real.every((p) => !!(p.stage.benchVariant ?? stageParts.benchVariant)),
+        barrierCounted: real.every((p) => !!(p.stage.barrierVariant ?? stageParts.barrierVariant)),
+        members: real.map((p, i) => ({ id: p.id, label: `במה ${i + 1}`, size: stageSize(p) })),
+      };
+    })();
     return {
       count: selectedStages.length,
-      grouped: groups.size === 1 && !groups.has(undefined),
+      grouped,
       stages: real.length,
       pieces: selectedStages.length - real.length,
       heightMm: heights.size === 1 ? [...heights][0] : null,
@@ -2262,11 +2351,12 @@ export function StudioScreen({
       surface: surfaces.size === 1 ? [...surfaces][0] : real.length ? undefined : null,
       surfaceOptions: catalog
         .filter((x) => x.category === "stage-surfaces" && !x.archived)
-        .map((x) => ({ value: defaultVariantId(x), label: x.name })),
+        .map((x) => ({ value: firstVariantId(x), label: x.name })),
       areaMm2: sum((p) => stageAreaMm2(p.stage, deckOf)),
+      whole,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, selectedStages, doc.placements, wallDistance, catalog]);
+  }, [selected, selectedStages, doc.placements, wallDistance, catalog, railingAboveMm, stageRailings, stageParts]);
 
   /** The stage tools over a stage group: each sets every stage in it, in one history entry. */
   const groupStagesOf = () => selectedStages.filter((p): p is StagePlacement => !!p.stage);
@@ -2295,6 +2385,59 @@ export function StudioScreen({
         return { type: "setPlacementStage" as const, id: p.id, stage: variantId ? { ...rest, surfaceVariant: variantId } : rest };
       }),
     );
+  };
+  /** …and the two switches a stage's bar has, on every stage of the group (StageBuild.corners / exceed). */
+  const setGroupCorners = (on: boolean) => {
+    const list = groupStagesOf();
+    if (!list.length) return;
+    batch(
+      list.map((p) => {
+        const { corners: _was, ...rest } = p.stage;
+        return { type: "setPlacementStage" as const, id: p.id, stage: on ? rest : { ...rest, corners: false } };
+      }),
+    );
+  };
+  const setGroupExceed = (on: boolean) => {
+    const list = groupStagesOf();
+    if (!list.length) return;
+    batch(
+      list.map((p) => {
+        const { exceed: _was, ...rest } = p.stage;
+        return { type: "setPlacementStage" as const, id: p.id, stage: on ? { ...rest, exceed: true } : rest };
+      }),
+    );
+  };
+  /** Every stage of the group saved as its own template. A template is ONE outline
+   *  (StageTemplate.stage), and a group is stages that did NOT merge — they stand apart — so there is
+   *  no one outline to save: each goes under the name given, numbered, with its own banquette dressing. */
+  const saveGroupTemplates = async (name: string) => {
+    const list = groupStagesOf();
+    if (!list.length) return;
+    let latestList: StageTemplate[] | null = null;
+    for (const [i, p] of list.entries()) {
+      const dressing = doc.placements
+        .filter((x) => x.perch?.stageId === p.id)
+        .map((x) => ({ itemId: x.perch!.itemId, variantId: x.variantId, quantity: x.quantity }));
+      const res = await saveStageTemplate({ id: uid(), name: list.length > 1 ? `${name} ${i + 1}` : name, stage: p.stage, ...(dressing.length ? { dressing } : {}) });
+      if ("error" in res) {
+        showHint(res.error);
+        return;
+      }
+      latestList = res;
+    }
+    if (latestList) setTemplates(latestList);
+    showHint(list.length > 1 ? `נשמרו ${list.length} תבניות — ״${name} 1״ עד ״${name} ${list.length}״, במה לכל תבנית` : `התבנית ״${name}״ נשמרה`);
+  };
+  /** Every stage of the group taken apart at once (explodeOne) — one entry; each stage's decks grouped
+   *  as its own, as a single stage's are. */
+  const explodeGroup = () => {
+    const parts = groupStagesOf()
+      .map(explodeOne)
+      .filter((x): x is NonNullable<typeof x> => !!x);
+    if (!parts.length) return;
+    batch(parts.flatMap((x) => x.actions));
+    setSelected(parts.flatMap((x) => x.added.map((p) => ({ kind: "placement" as const, id: p.id }))));
+    showHint(`${parts.length} במות פורקו ל־${parts.reduce((t, x) => t + x.decks, 0)} פלטות`);
   };
 
   /** Their turned boxes, as stickBoxes reads them. */
@@ -2352,9 +2495,21 @@ export function StudioScreen({
       showHint("אי אפשר לאחד — הבמות צריכות להיות מלבניות ובאותו כיוון (או בזווית ישרה זו לזו)");
       return;
     }
+    batch(mergeActions(parts, merged));
+    setSelected([{ kind: "placement", id: parts[0].id }]);
+    ensureStageParts();
+    showHint(`${parts.length} במות אוחדו לבמה אחת`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStages, stickItems, asStage, batch, wallDistance, doc.placements, ensureStageParts]);
+
+  /** The actions that make `parts` ONE stage, `merged` being what mergeStages made of them (the
+   *  first part the anchor): what stood on the others' banquettes moved to the anchor, the others
+   *  removed, the anchor given the merged build — its new edges finished (stairs where there is
+   *  floor, a barrier where there is not), as a new stage's are — and its catalog stretch dropped.
+   *  Shared by "איחוד לבמה אחת" and by Ctrl+G over touching stages (groupStages). */
+  const mergeActions = (parts: readonly StagePlacement[], merged: { stage: StageBuild; position: DocPoint; rotation: number }): Action[] => {
     const anchor = parts[0];
     const others = new Set(parts.slice(1).map((p) => p.id));
-    // The merged edges are new: whatever is bare gets stairs, as a new stage does.
     const mergedAt: StagePlacement = { ...anchor, stage: merged.stage, position: merged.position, rotation: merged.rotation, mirrored: false };
     const wd = besideNeighbours(
       wallDistance,
@@ -2363,21 +2518,61 @@ export function StudioScreen({
     const gaps = fillGaps(mergedAt, deckOf, "stairs", uid, wd)
       .filter((it) => !it.level)
       .map((it) => (stairFits(mergedAt, it, deckOf, wd).ok ? it : { ...it, kind: "barrier" as const }));
-    merged.stage.stairs = [...(merged.stage.stairs ?? []), ...gaps];
-    batch([
+    const stage: StageBuild = { ...merged.stage, stairs: [...(merged.stage.stairs ?? []), ...gaps] };
+    return [
       // What stood on the others' banquettes moves to the merged stage — their items kept their ids.
       ...doc.placements
         .filter((x) => x.perch && others.has(x.perch.stageId))
         .map((x) => ({ type: "setPlacementPerch" as const, id: x.id, perch: { stageId: anchor.id, itemId: x.perch!.itemId } })),
       ...[...others].map((id) => ({ type: "removePlacement" as const, id })),
-      { type: "setPlacementStage", id: anchor.id, stage: merged.stage, position: merged.position, rotation: merged.rotation, mirrored: false, scale: 1 },
+      { type: "setPlacementStage", id: anchor.id, stage, position: merged.position, rotation: merged.rotation, mirrored: false, scale: 1 },
       // A piece that was never a stage leaves its catalog stretch behind — the outline is the size now.
       ...(doc.placements.find((x) => x.id === anchor.id)?.sizeMm ? [{ type: "resizePlacement" as const, id: anchor.id, sizeMm: null }] : []),
-    ]);
-    setSelected([{ kind: "placement", id: anchor.id }]);
+    ];
+  };
+
+  /** Ctrl+G over a selection made only of stages — TOUCHING → MERGE, APART → A GROUP. A grouped
+   *  stage is still N stages (N skirts, stairs on the seams, N builds), which is never what pushing
+   *  them together meant; so every cluster of stages standing against each other becomes ONE stage
+   *  (lib/design-document/stage.ts mergeTouching: pushed flush, one outline, nothing on the seam), a
+   *  piece not yet a stage becomes one, and only when more than one thing is left are those grouped
+   *  — a design group, whose bar carries the stage tools. One history entry for the lot. When
+   *  everything merged into one, the result is a single stage with its full bar, and no group. */
+  const groupStages = useCallback(() => {
+    const parts = selectedStages.map((p) => asStage(p, false)).filter((p): p is StagePlacement => !!p);
+    if (parts.length < 2) return;
+    const { merged, loose } = mergeTouching(parts);
+    const actions: Action[] = merged.flatMap((m) => mergeActions([m.anchor, ...m.others], m));
+    // A loose piece that was never a stage becomes one — finished on every open side, as "הפיכה
+    // לבמה" does — so the group holds stages only.
+    for (const p of loose) {
+      const was = doc.placements.find((x) => x.id === p.id);
+      const sp = was && !was.stage ? asStage(was) : null;
+      if (sp) actions.push({ type: "removePlacement", id: p.id }, { type: "addPlacement", placement: sp });
+    }
+    const units = [...merged.map((m) => m.anchor.id), ...loose.map((p) => p.id)];
+    if (units.length > 1) actions.push({ type: "group", groupId: uid(), refs: units.map((id) => ({ kind: "placement" as const, id })) });
+    batch(actions);
+    setSelected(units.map((id) => ({ kind: "placement" as const, id })));
     ensureStageParts();
-    showHint(`${parts.length} במות אוחדו לבמה אחת`);
-  }, [selectedStages, stickItems, asStage, batch, wallDistance, doc.placements, ensureStageParts]);
+    const joined = merged.reduce((t, m) => t + 1 + m.others.length, 0);
+    showHint(
+      [
+        joined > 0 ? `${joined} במות אוחדו ל${merged.length === 1 ? "במה אחת" : `־${merged.length} במות`}` : null,
+        units.length > 1 ? (joined > 0 ? `${units.length} החלקים שנותרו קובצו — אינם צמודים זה לזה` : `${units.length} במות קובצו — אינן צמודות זו לזו`) : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStages, asStage, batch, wallDistance, doc.placements, ensureStageParts]);
+  /** Ctrl+G, the bar's קיבוץ, the menu's: stages have their own grouping (groupStages); anything
+   *  else groups as it always did (groupSelection). */
+  const groupAny = useCallback(() => {
+    const own = docRefs(selected);
+    if (own.length >= 2 && own.length === selected.length && selectedStages.length === own.length) groupStages();
+    else groupSelection();
+  }, [selected, selectedStages, docRefs, groupStages, groupSelection]);
 
   const startLevel = useCallback(() => {
     if (!soleStage) return;
@@ -2874,7 +3069,7 @@ export function StudioScreen({
       } else if (mod && !typing && isShortcut(e, "g")) {
         e.preventDefault();
         if (e.shiftKey) ungroupSelection();
-        else groupSelection();
+        else groupAny();
       } else if (mod && !typing && isShortcut(e, "a")) {
         if (hasTextSelection()) return;
         e.preventDefault();
@@ -2903,6 +3098,8 @@ export function StudioScreen({
         if (stageFill?.phase === "pick") setStageFill(null);
         else if (dressing) setDressing(null);
         else if (activeEdge) setActiveEdge(null);
+        // One stage picked out of its group goes back to the group first (see pick).
+        else if (backToGroup) backToGroup();
         else if (selected.length > 0) setSelected([]);
         else {
           setZoneFocus(null);
@@ -2912,15 +3109,15 @@ export function StudioScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, copy, cut, paste, groupSelection, ungroupSelection, selectAll, restack, selected.length, activeEdge, removeStair, stageFill?.phase, dressing, nudgeDressing]);
+  }, [deleteSelection, copy, cut, paste, groupAny, ungroupSelection, selectAll, restack, selected.length, activeEdge, removeStair, stageFill?.phase, dressing, nudgeDressing, backToGroup]);
 
   // --- the right-click menu ------------------------------------------------------------------------
   // The same verbs the bar offers, where the pointer already is. The menu is built the instant the
   // button goes down, before React has re-rendered with whatever the canvas just selected under it
   // — so each row reaches for the LATEST handlers through a ref rather than closing over this
   // render's, which would act on the selection as it was a click ago.
-  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection });
-  latest.current = { restack, duplicate, deleteSelection, groupSelection };
+  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny });
+  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny };
   const contextItems = useCallback(
     (refs: SelectionRef[]): ContextMenuItem[] => {
       const own = docRefs(refs);
@@ -3034,7 +3231,11 @@ export function StudioScreen({
               })
             }
             onRotateMany={rotateMany}
-            onEndDrag={settleDrag}
+            onEndDrag={(moved) => {
+              // A drag is not the click that collapses a stage group to one member (see pick).
+              pressExpanded.current = null;
+              settleDrag(moved);
+            }}
             alignKeyBox={alignSet ? alignSet[alignKey].box : null}
             onContextMenu={contextItems}
             onResizePlacement={(id, sizeMm, position) => {
@@ -3207,7 +3408,7 @@ export function StudioScreen({
                 onChairForSelection={setChairForSelection}
                 onChair={(id, variantId) => act({ type: "setTableChair", ids: [id], variantId })}
                 group={groupPanel}
-                onGroup={groupSelection}
+                onGroup={groupAny}
                 onUngroup={ungroupSelection}
                 onRenumberGroup={(groupId, number) => act({ type: "renumberGroup", groupId, number })}
                 onSeats={(id, seats) => act({ type: "setTableSeats", id, seats })}
@@ -3289,6 +3490,12 @@ export function StudioScreen({
                 onGroupStageHeight={setGroupStageHeight}
                 onGroupFillEdges={fillGroupEdges}
                 onGroupStageSurface={setGroupSurface}
+                onGroupStageCorners={setGroupCorners}
+                onGroupStageExceed={setGroupExceed}
+                onGroupSaveTemplate={(name) => void saveGroupTemplates(name)}
+                onGroupExplode={explodeGroup}
+                onPickStage={(id) => setSelected([{ kind: "placement", id }])}
+                onBackToGroup={backToGroup}
                 onStickStages={selectedStages.length >= 2 ? stickStages : undefined}
                 onMergeStages={selectedStages.length >= 2 ? mergeSelectedStages : undefined}
                 onMakeStage={makeStage}

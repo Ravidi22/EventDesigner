@@ -77,6 +77,15 @@ export function defaultVariantId(product: Product): string {
   return shadeVariant(product.variants, eventShades)?.id ?? product.variants[0]?.id ?? product.id;
 }
 
+/** A product's first variant, whatever the open event's shades — the STRUCTURAL id a stage stores
+ *  and is looked up by: a deck it may be built from, the studio's stairs/skirt/banquette rows, a
+ *  surface. defaultVariantId is for what the designer DROPS; here a shade-matched pick would make a
+ *  deck product that stocks a variant named like an event shade a different id per event, so a
+ *  stage's stored `surfaceVariant` matched no option and its chosen decks read as gone. */
+export function firstVariantId(product: Product): string {
+  return product.variants[0]?.id ?? product.id;
+}
+
 function footprint(product: Product): number {
   // Tablecloths cover the table rather than sit on it — they don't consume area (F-5.4).
   if (product.category === "tablecloths") return 0;
