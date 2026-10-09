@@ -1049,7 +1049,11 @@ export function StudioScreen({
           if (!sp?.stage?.stairs?.length) continue;
           const others = present.placements.filter((x) => x.stage && x.id !== sp.id).map((x) => stageOutlineInRoom(x as StagePlacement));
           const wd = others.length ? besideNeighbours(wallDistance, others) : wallDistance;
-          const settled = settleEdgeItems(sp as StagePlacement, sp.stage.stairs, deckOf, uid, wd, { inner: true, otherwise: "keep" });
+          // `inner: false`: a MOVE never sinks a flight into the stage by itself — that changes the
+          // deck count, the area and the skirt on the quote, and settleEdgeItems leaves an inner
+          // flight inner, so dragging the stage back out would not undo it. The bar warns
+          // (outerFits) and a click through placeEdgeItem is the one place a flight is set in.
+          const settled = settleEdgeItems(sp as StagePlacement, sp.stage.stairs, deckOf, uid, wd, { inner: false, otherwise: "keep" });
           if (settled.some((it, i) => it !== sp.stage!.stairs![i]) || settled.length !== sp.stage.stairs.length) {
             next = amend(next, { type: "setPlacementStage", id: sp.id, stage: { ...sp.stage, stairs: settled } });
           }

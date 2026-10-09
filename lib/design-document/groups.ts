@@ -397,7 +397,11 @@ export function tableNumber(doc: DesignDocumentContent, table: DesignTable): num
   const g = doc.groups?.find((x) => x.id === table.groupId);
   if (g?.number !== undefined) return g.number;
   const siblings = doc.tables.filter((t) => t.groupId === table.groupId);
-  return Math.min(...siblings.map((t) => t.number));
+  // The lowest number among the siblings that HAVE one: an unnumbered gift table grouped in still
+  // carries its old stored number, and the plan, the print and numberedUnits all ignore it — the bar
+  // and the labels must say the same number they do.
+  const numbered = siblings.filter((t) => !t.unnumbered);
+  return Math.min(...(numbered.length ? numbered : siblings).map((t) => t.number));
 }
 
 /** One table of a block that is being swapped for another size: where it stands, which way it faces,
@@ -542,6 +546,14 @@ if (isMain(import.meta.url)) {
   const unnumbered: DesignDocumentContent = { ...doc, groups: [{ id: "g1" }] };
   assert(numberedUnits(unnumbered)[0].number === 3, "an unnumbered group falls back to its lowest member");
   assert(tableNumber(unnumbered, unnumbered.tables[1]) === 3, "…and so does the table asking");
+  // A gift table taken out of the numbering keeps its old stored number underneath (1, lower than
+  // its sibling's 3): the plan and the print show 3, so the bar must say 3 too — never the hidden 1.
+  const withGift: DesignDocumentContent = {
+    ...unnumbered,
+    tables: unnumbered.tables.map((t) => (t.id === unnumbered.tables[0].id ? { ...t, number: 1, unnumbered: true as const } : t)),
+  };
+  assert(numberedUnits(withGift)[0].number === 7 && tableNumber(withGift, withGift.tables[1]) === 7, "a block's number skips an unnumbered sibling's hidden number (7, not the gift table's 1)");
+  assert(tableNumber(withGift, withGift.tables[0]) === 7, "…whichever member asks");
 
   // ── renumbering ───────────────────────────────────────────────────────────────────────────────
   {
