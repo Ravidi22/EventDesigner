@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   CircleDot,
   Crosshair,
@@ -616,6 +616,25 @@ export function PlanCanvas({
     ? { minX: center.x - (rect.w * mmPerPx) / 2, minY: center.y - (rect.h * mmPerPx) / 2, w: rect.w * mmPerPx, h: rect.h * mmPerPx }
     : contentBox;
 
+  // The view is moving: say so on the <svg> itself (no React state — a re-render per wheel step is
+  // the cost being avoided), so the costly texture filters stand down until it settles (globals.css).
+  const movingTimer = useRef<number | undefined>(undefined);
+  const markMoving = () => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    if (!svg.hasAttribute("data-moving")) svg.setAttribute("data-moving", "");
+    window.clearTimeout(movingTimer.current);
+    movingTimer.current = window.setTimeout(() => svg.removeAttribute("data-moving"), 200);
+  };
+  useEffect(() => () => window.clearTimeout(movingTimer.current), []);
+  // A plan OPENS moving, too: it is painted at the fallback frame, then fitted once measured, then
+  // often flown to a zone — three frames nobody looks at, and each one used to rasterise every
+  // texture's noise and every plant's filter in full. Before the first paint, so not even that one
+  // pays; the grain comes in once, ~200ms after the view has come to rest.
+  useLayoutEffect(() => {
+    markMoving();
+  }, []);
+
   const clampZoom = (m: number) => Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, m));
   const fitTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
     if (rw === 0 || rh === 0) return;
@@ -623,6 +642,7 @@ export function PlanCanvas({
     // big enough to need more than MAX_MM_PER_PX to fit lands the view beyond what a manual zoom-out
     // can ever reach, and the first scroll or tap of "-" snaps it back down to the ceiling instead of
     // continuing outward, which reads as "zooming out doesn't work" rather than "already at the limit".
+    markMoving();
     setMmPerPx(clampZoom(Math.max(box.w / rw, box.h / rh) * 1.06));
     setCenter({ x: box.minX + box.w / 2, y: box.minY + box.h / 2 });
   };
@@ -653,6 +673,7 @@ export function PlanCanvas({
     cancelFocus();
     if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
     const to = focusTarget(box, rw, rh);
+    markMoving();
     setCenter({ x: to.x, y: to.y });
     setMmPerPx(to.mmPerPx);
   };
@@ -669,6 +690,7 @@ export function PlanCanvas({
     const step = (now: number) => {
       t0 ??= now;
       const k = easeOutCubic(Math.min(1, (now - t0) / FOCUS_MS));
+      markMoving(); // every frame: the flight outlasts one 200ms hold, and its tail used to land in full grain
       setCenter({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
       setMmPerPx(from.mmPerPx + (to.mmPerPx - from.mmPerPx) * k);
       focusAnim.current = k < 1 ? requestAnimationFrame(step) : null;
@@ -726,18 +748,6 @@ export function PlanCanvas({
     const screen = pt.matrixTransform(ctm);
     return { x: screen.x, y: screen.y };
   };
-
-  // The view is moving: say so on the <svg> itself (no React state — a re-render per wheel step is
-  // the cost being avoided), so the costly texture filters stand down until it settles (globals.css).
-  const movingTimer = useRef<number | undefined>(undefined);
-  const markMoving = () => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    if (!svg.hasAttribute("data-moving")) svg.setAttribute("data-moving", "");
-    window.clearTimeout(movingTimer.current);
-    movingTimer.current = window.setTimeout(() => svg.removeAttribute("data-moving"), 200);
-  };
-  useEffect(() => () => window.clearTimeout(movingTimer.current), []);
 
   const zoomByCenter = (factor: number) => {
     cancelFocus();
