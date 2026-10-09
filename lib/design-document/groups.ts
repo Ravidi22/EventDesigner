@@ -814,5 +814,16 @@ if (isMain(import.meta.url)) {
     assert(refitBlock(run(0).slice(0, 1)) === null, "one table is not a block");
   }
 
+  // One stage picked out of its group (the studio collapses a stage group to the member clicked):
+  // the selection is not "the group", so the inspector shows that stage's own bar — and expanding
+  // the lone member is how the group comes back (Esc, "חזרה לקבוצה").
+  {
+    const deck = (id: string): Placement => ({ id, variantId: "stage", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, groupId: "g" });
+    const stages: DesignDocumentContent = { calibration: { mmPerUnit: 9 }, tables: [], placements: [deck("s1"), deck("s2")], groups: [{ id: "g" }] };
+    assert(soleGroupId(stages, [{ kind: "placement", id: "s1" }]) === undefined, "one member of a group is not the group");
+    assert(soleGroupId(stages, [{ kind: "placement", id: "s1" }, { kind: "placement", id: "s2" }]) === "g", "…both of them are");
+    assert(expandToGroups(stages, [{ kind: "placement", id: "s1" }]).length === 2, "…and the lone member expands back to the whole group");
+  }
+
   console.log("groups self-check passed");
 }

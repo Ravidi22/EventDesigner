@@ -1147,6 +1147,20 @@ if (isMain(import.meta.url)) {
     assert(groupOf(mixed, "g3")?.number === undefined, "a group nobody numbered carries no number");
     assert(groupOf(mixed, undefined) === undefined, "an ungrouped thing has no group");
 
+    // Ctrl+G over a group of stages (studio-screen groupStages): the ones that touched were merged
+    // — the folded-in member removed — and what was left re-grouped under a new id, in one entry.
+    // The old group goes with its member; the survivors belong to the new one and to nothing else.
+    const deckAt = (id: string, x: number): Placement => ({ id, variantId: "stage", layer: "floor", quantity: 1, position: { x, y: 0 }, rotation: 0, scale: 1 });
+    let regrouped: DesignDocumentContent = { calibration: { mmPerUnit: 9 }, tables: [], placements: [deckAt("p", 0), deckAt("q", 2000), deckAt("r", 9000)] };
+    regrouped = apply(regrouped, { type: "group", groupId: "old", refs: ["p", "q", "r"].map((id) => ({ kind: "placement" as const, id })) });
+    regrouped = apply(regrouped, { type: "removePlacement", id: "q" });
+    regrouped = apply(regrouped, { type: "group", groupId: "new", refs: [{ kind: "placement", id: "p" }, { kind: "placement", id: "r" }] });
+    assert(regrouped.groups?.length === 1 && regrouped.groups[0].id === "new", "a stage group whose touching members merged is re-grouped under a new id, the old one gone");
+    assert(regrouped.placements.length === 2 && regrouped.placements.every((p) => p.groupId === "new"), "…and every survivor belongs to it alone");
+    // All of them merged into one: a group of one is no group, so the lone stage stands free.
+    const allOne = apply(apply(regrouped, { type: "removePlacement", id: "r" }), { type: "setPlacementStage", id: "p", stage: { outline: [{ x: -1000, y: -500 }, { x: 1000, y: -500 }, { x: 1000, y: 500 }, { x: -1000, y: 500 }], front: 0, decks: ["stage"] } });
+    assert(!allOne.groups?.length && allOne.placements[0].groupId === undefined && !!allOne.placements[0].stage, "…and when every member merged into one, that stage is in no group");
+
     // Occupancy: never negative, and never silently trimmed to the seat count either.
     const chaired = apply(before, { type: "setTableChair", ids: ["a"], variantId: "napoleon" });
     assert(chaired.tables[0].chairVariantId === "napoleon", "a table takes the chair it was given");
