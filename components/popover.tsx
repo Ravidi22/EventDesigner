@@ -255,17 +255,26 @@ export function Popover({
   );
 }
 
-/** The box a panel must stay inside: the window, cut down by every ancestor that clips. */
+/** The box a panel must stay inside: the window, cut down by every ancestor that clips — and by the
+ *  nearest `<dialog>`, which clips nothing (it sits in the top layer, and an absolutely placed panel
+ *  simply hangs out past its frame) but IS the whole screen as far as the person using it is
+ *  concerned: the appearance editor's bars opened their panels half outside the modal. */
 function clipBounds(from: HTMLElement): { left: number; right: number; top: number; bottom: number } {
   const b = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
-  for (let el = from.parentElement; el && el !== document.body; el = el.parentElement) {
-    const s = getComputedStyle(el);
-    if (s.overflowX === "visible" && s.overflowY === "visible") continue;
-    const r = el.getBoundingClientRect();
+  const cut = (r: DOMRect) => {
     b.left = Math.max(b.left, r.left);
     b.top = Math.max(b.top, r.top);
     b.right = Math.min(b.right, r.right);
     b.bottom = Math.min(b.bottom, r.bottom);
+  };
+  for (let el = from.parentElement; el && el !== document.body; el = el.parentElement) {
+    if (el.tagName === "DIALOG") {
+      cut(el.getBoundingClientRect());
+      break;
+    }
+    const s = getComputedStyle(el);
+    if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+    cut(el.getBoundingClientRect());
   }
   return b;
 }
