@@ -121,6 +121,16 @@ export interface SheetFrameProps {
   children: ReactNode | ((denominator: number) => ReactNode);
 }
 
+/** The scale a drawing would print at on this paper — the same frame arithmetic SheetFrame lays
+ *  itself out by, so the set can try both orientations and keep the one that draws it larger. */
+export function sheetScale(world: Extent, paper: Extent, marginMm = DEFAULT_MARGIN_MM, withNotes = false): number {
+  const frame = {
+    widthMm: Math.max(0, paper.widthMm - marginMm * 2 - (withNotes ? NOTES_MM + 4 : 0)),
+    heightMm: Math.max(0, paper.heightMm - marginMm * 2 - TITLE_BLOCK_MM),
+  };
+  return fitScale(world, frame).denominator;
+}
+
 const trim = (n: number) => {
   const r = Math.round(n * 100) / 100;
   return String(r);

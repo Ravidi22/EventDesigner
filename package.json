@@ -59,6 +59,8 @@
     "check:zone-sheets": "tsx lib/outputs/zone-sheets.ts",
     "check:setting-out": "tsx lib/outputs/setting-out.ts",
     "check:table-kits": "tsx lib/outputs/table-kits.ts",
+    "check:measurements": "tsx lib/outputs/measurements.ts",
+    "check:labels": "tsx lib/outputs/labels.ts",
     "check:procurement": "tsx lib/suppliers/procurement.ts",
     "check:runway": "tsx lib/production/runway.ts",
     "check:costs": "tsx lib/suppliers/cost-boundary.ts",

@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, Map, Printer, ReceiptText, type LucideIcon } from "lucide-react";
+import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { recordExport, type ExportType } from "@/lib/outputs/actions";
-import { PLAN_SHEETS } from "@/lib/outputs/sheets";
+import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
+import { resolve } from "@/lib/studio/catalog-resolver";
+import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { zoneSheets } from "@/lib/outputs/zone-sheets";
 import { kitLetters, seatingSummary, tableKits } from "@/lib/outputs/table-kits";
 import { itemLookup } from "@/lib/outputs/lookup";
@@ -19,8 +21,9 @@ import { fetchSettings, fetchStageRules } from "@/lib/settings/actions";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { PackingList } from "./packing-list";
-import { KitSchedule, PlacementMap, StageSchedule } from "./placement-map";
-import { TableDetail } from "./table-detail";
+import { KitSchedule, PlacementMap, StageSchedule, mapWorld } from "./placement-map";
+import { TableDetail, detailWorld } from "./table-detail";
+import { sheetScale } from "./sheet-frame";
 import { SetCover, type SetEntry } from "./set-cover";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
@@ -43,7 +46,9 @@ const EXPORT_OF: Record<View, ExportType> = {
 };
 
 type Paper = "A4" | "A3";
-type Orient = "portrait" | "landscape";
+/** "auto" lets each drawing sheet take the orientation that prints ITS zone larger — a deep room
+ *  portrait, a long one landscape, in one booklet (CSS named pages). Text pages stay portrait. */
+type Orient = "auto" | "portrait" | "landscape";
 
 /** Trim sizes in millimetres. The preview is drawn at these exact dimensions — mm is a real CSS
  *  unit on screen — so what a designer reads here breaks its lines where the PDF will break them.
@@ -58,7 +63,7 @@ export function OutputsScreen() {
   // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
   const [view, setView] = useState<View>("quote");
   const [paper, setPaper] = useState<Paper>("A4");
-  const [orient, setOrient] = useState<Orient>("landscape");
+  const [orient, setOrient] = useState<Orient>("auto");
   const [version, setVersion] = useState(1);
   // The studio's railing rule, for the stage sheet (settings → במות). Off until read, and off if
   // the read fails — the sheet then simply marks no railing, which is what an unset rule means.
@@ -87,7 +92,12 @@ export function OutputsScreen() {
     );
   // PLAN_SHEETS' own order, not the order ticked — sheet numbering ("2 / 3") has to be stable
   // regardless of the sequence a designer happened to click them in.
-  const selectedSheets = PLAN_SHEETS.filter((s) => sheetIds.includes(s.id));
+  // ...and only the ones that would draw something: a ceiling plan with nothing on the ceiling is
+  // offered as empty in the rail and never printed.
+  const categoryOf = (variantId: string) => {
+    const cat = resolve(variantId)?.product.category;
+    return cat ? { category: cat, group: CATEGORY_BY_ID[cat]?.group } : undefined;
+  };
   // EventSurface resolved all of this in one call for the whole surface.
   const { workspace, ready } = useEventWorkspace();
 
@@ -119,6 +129,8 @@ export function OutputsScreen() {
   // One sheet per zone the event occupies and has something in (lib/outputs/zone-sheets.ts) — each
   // framed on its own room instead of all of them on one page at whatever scale the union fits.
   const zonePlans = useMemo(() => zoneSheets(doc, plan), [doc, plan]);
+  const hasContent = (sheet: (typeof PLAN_SHEETS)[number]) => sheetHasContent(sheet, doc, categoryOf);
+  const selectedSheets = PLAN_SHEETS.filter((s) => sheetIds.includes(s.id) && hasContent(s));
   // Zones the designer has switched OFF, rather than on: a zone that gains its first table since is
   // printed by default, not silently left out of the set.
   const [hiddenZones, setHiddenZones] = useState<string[]>([]);
@@ -143,25 +155,39 @@ export function OutputsScreen() {
   const detailOn = (k: (typeof kits)[number]) => detailPick[k.key] ?? k.recommended;
   const [withCover, setWithCover] = useState(true);
   const [withKits, setWithKits] = useState(true);
+  const [openSection, setOpenSection] = useState<"layers" | "zones" | "details" | "book" | null>("layers");
   const stages = doc.placements.filter((p): p is StagePlacement => !!p.stage);
   const kitted = new Set(kits.flatMap((k) => k.units.map((u) => u.id)));
   const undressed = numberedUnits(doc).filter((u) => !kitted.has(u.id)).map((u) => u.number);
 
+  // Each drawing sheet's own paper: in "auto", whichever orientation fits its drawing at the larger
+  // scale (a tie goes landscape — the title block reads better on a wide sheet).
+  const flip = ([a, b]: [number, number]): [number, number] => [b, a];
+  const sizeOf = (o: "portrait" | "landscape"): [number, number] => (o === "portrait" ? TRIM[paper] : flip(TRIM[paper]));
+  const textOrient: "portrait" | "landscape" = orient === "auto" ? "portrait" : orient;
+  const orientFor = (world: { widthMm: number; heightMm: number }, notes = false): "portrait" | "landscape" => {
+    if (orient !== "auto") return orient;
+    const at = (o: "portrait" | "landscape") => {
+      const [pw, ph] = sizeOf(o);
+      return sheetScale(world, { widthMm: pw, heightMm: ph }, MARGIN_MM, notes);
+    };
+    return at("portrait") < at("landscape") ? "portrait" : "landscape";
+  };
   type SetPage =
     | { kind: "cover" }
-    | { kind: "map"; sheet: (typeof selectedSheets)[number]; z: (typeof shownZones)[number]; n: number }
+    | { kind: "map"; sheet: (typeof selectedSheets)[number]; z: (typeof shownZones)[number]; n: number; o: "portrait" | "landscape" }
     | { kind: "stages" }
-    | { kind: "detail"; kit: (typeof kits)[number]; n: number }
+    | { kind: "detail"; kit: (typeof kits)[number]; n: number; o: "portrait" | "landscape" }
     | { kind: "kits" };
   const setPages: SetPage[] = [];
   let framed = 0;
   // Grouped by LAYER, then zone: the sets are handed out by trade (the rigger takes every ceiling
   // plan), so all of one trade's pages come off the printer together.
   for (const sheet of selectedSheets) {
-    for (const z of shownZones) setPages.push({ kind: "map", sheet, z, n: ++framed });
+    for (const z of shownZones) setPages.push({ kind: "map", sheet, z, n: ++framed, o: orientFor(mapWorld(z.bounds)) });
     if (sheet.id === "stage" && stages.length > 0) setPages.push({ kind: "stages" });
   }
-  for (const kit of kits) if (detailOn(kit)) setPages.push({ kind: "detail", kit, n: ++framed });
+  for (const kit of kits) if (detailOn(kit)) setPages.push({ kind: "detail", kit, n: ++framed, o: orientFor(detailWorld(kit, doc), true) });
   if (withKits && (kits.length > 0 || undressed.length > 0)) setPages.push({ kind: "kits" });
   if (withCover) setPages.unshift({ kind: "cover" });
   const sheetTotal = framed;
@@ -210,7 +236,7 @@ export function OutputsScreen() {
   };
 
   const today = new Date().toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
-  const [w, h] = orient === "portrait" ? TRIM[paper] : [TRIM[paper][1], TRIM[paper][0]];
+  const [w, h] = sizeOf(textOrient);
   // The quote prints its own letterhead (./quote-sheet.tsx) and a plan sheet carries a proper
   // drafting title block (sheet-frame.tsx) — only the packing list has neither, so it's the one
   // view that needs this generic stamp above it.
@@ -226,7 +252,9 @@ export function OutputsScreen() {
           the title block alone on a second sheet. Three ticked sheets printed six pages. This block
           cascades after globals.css and so wins. The packing list and the quote keep the 16mm page
           margin, which is the only margin they have. */}
-      <style>{`@media print { @page { size: ${paper} ${orient}; ${view === "map" ? "margin: 0;" : ""} } }`}</style>
+      {/* Named pages carry each drawing sheet's own orientation into the PDF; the default page is
+          the text pages' (and the quote's and packing list's). */}
+      <style>{`@media print { @page { size: ${paper} ${textOrient}; ${view === "map" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
 
       {/* THE SHAPE IS THE STUDIO'S, deliberately: a rail of things to work on down the start edge,
           the work itself filling the rest. This used to be one horizontal strip doing four unrelated
@@ -244,7 +272,7 @@ export function OutputsScreen() {
           `no-print` on the whole rail. What is left when it goes is the sheet column, which is the
           deliverable. */}
       <aside className="no-print flex w-[212px] shrink-0 flex-col border-s border-border bg-surface">
-        <nav className="flex min-h-0 flex-col gap-[3px] overflow-y-auto p-2.5" aria-label="מסמכי האירוע">
+        <nav className="flex min-h-0 shrink flex-col gap-[3px] overflow-y-auto p-2.5" aria-label="מסמכי האירוע">
           {VIEWS.map(({ id, icon: Icon }) => (
             <div key={id}>
               {/* The app's own active-nav treatment, because that is what these are — the sidebar's
@@ -265,23 +293,37 @@ export function OutputsScreen() {
                 {TITLES[id]}
               </button>
 
-              {/* THE SET'S CONTENTS, nested under the map while it is the open document: which layers,
-                  which zones, which tables get a detail, and the cover and schedule. Several can be
-                  lit at once in every group, where the documents above are exclusive. */}
+              {/* THE SET'S CONTENTS, nested under the map while it is the open document. Four sections,
+                  one open at a time, each closed one summarised on its own line — the rail used to
+                  show all four lists at once, and on a real event (seven layers, two zones, a dozen
+                  kits) the print button ended up below the fold. */}
               {id === "map" && view === "map" && (
-                <div className="mt-1 flex flex-col gap-2.5 ps-4">
-                  <RailGroup title="שכבות">
-                    {PLAN_SHEETS.map((sheet) => (
-                      <RailToggle key={sheet.id} on={sheetIds.includes(sheet.id)} onClick={() => toggleSheet(sheet.id)}>
-                        {sheet.label}
-                      </RailToggle>
-                    ))}
-                  </RailGroup>
+                <div className="mt-1 flex flex-col gap-0.5 ps-3">
+                  <RailSection
+                    title="שכבות"
+                    summary={selectedSheets.length === 1 ? selectedSheets[0].label : `${selectedSheets.length} שכבות`}
+                    open={openSection === "layers"}
+                    onToggle={() => setOpenSection((o) => (o === "layers" ? null : "layers"))}
+                  >
+                    {PLAN_SHEETS.map((sheet) => {
+                      const empty = !hasContent(sheet);
+                      return (
+                        <RailToggle key={sheet.id} on={!empty && sheetIds.includes(sheet.id)} disabled={empty} hint={empty ? "ריק" : undefined} onClick={() => toggleSheet(sheet.id)}>
+                          {sheet.label}
+                        </RailToggle>
+                      );
+                    })}
+                  </RailSection>
 
                   {/* Only when the event spans more than one zone with something in it. Each zone is
                       its own page of every ticked layer. */}
                   {zonePlans.length > 1 && (
-                    <RailGroup title="אזורים">
+                    <RailSection
+                      title="אזורים"
+                      summary={`${shownZones.length} מתוך ${zonePlans.length}`}
+                      open={openSection === "zones"}
+                      onToggle={() => setOpenSection((o) => (o === "zones" ? null : "zones"))}
+                    >
                       {zonePlans.map(({ zone }) =>
                         zone ? (
                           <RailToggle key={zone.zone.id} on={!hiddenZones.includes(zone.zone.id)} onClick={() => toggleZone(zone.zone.id)}>
@@ -289,13 +331,18 @@ export function OutputsScreen() {
                           </RailToggle>
                         ) : null,
                       )}
-                    </RailGroup>
+                    </RailSection>
                   )}
 
                   {/* One detail per KIT, not per table — the suggested ones (a head table, a block,
                       anything with a real arrangement on it) start lit. */}
                   {kits.length > 0 && (
-                    <RailGroup title="פרטי שולחן">
+                    <RailSection
+                      title="פרטי שולחן"
+                      summary={`${kits.filter(detailOn).length} מתוך ${kits.length}`}
+                      open={openSection === "details"}
+                      onToggle={() => setOpenSection((o) => (o === "details" ? null : "details"))}
+                    >
                       {kits.map((k) => (
                         <RailToggle
                           key={k.key}
@@ -303,23 +350,28 @@ export function OutputsScreen() {
                           onClick={() => setDetailPick((m) => ({ ...m, [k.key]: !detailOn(k) }))}
                           hint={k.recommended ? "מומלץ" : undefined}
                         >
-                          <span className="font-bold">{k.letter}</span>
-                          <span className="nums ms-1.5">
-                            {k.units.length === 1 ? `שולחן ${k.units[0].number || "ראש"}` : `${k.units.length} שולחנות`}
+                          <span className="font-bold">ערכה {k.letter}</span>
+                          <span className="nums ms-1.5 font-normal">
+                            · {k.units.length === 1 ? `שולחן ${k.units[0].number || "ראש"}` : `${k.units.length} שולחנות`}
                           </span>
                         </RailToggle>
                       ))}
-                    </RailGroup>
+                    </RailSection>
                   )}
 
-                  <RailGroup title="בחוברת">
+                  <RailSection
+                    title="בחוברת"
+                    summary={[withCover && "שער", withKits && "טבלת ערכות"].filter(Boolean).join(" · ") || "שרטוטים בלבד"}
+                    open={openSection === "book"}
+                    onToggle={() => setOpenSection((o) => (o === "book" ? null : "book"))}
+                  >
                     <RailToggle on={withCover} onClick={() => setWithCover((v) => !v)}>
                       שער ותוכן עניינים
                     </RailToggle>
                     <RailToggle on={withKits} onClick={() => setWithKits((v) => !v)}>
                       טבלת ערכות
                     </RailToggle>
-                  </RailGroup>
+                  </RailSection>
                 </div>
               )}
             </div>
@@ -328,7 +380,7 @@ export function OutputsScreen() {
 
         {/* Page setup and the print itself, under the rule — you touch these once, after you have
             decided what you are printing. F-6.1. */}
-        <div className="flex flex-col gap-2.5 border-t border-border p-2.5">
+        <div className="flex shrink-0 flex-col gap-2.5 border-t border-border p-2.5">
           <div className="flex items-center justify-between gap-2">
             <span className="text-caption text-muted">גיליון</span>
             <Seg>
@@ -345,7 +397,13 @@ export function OutputsScreen() {
           <div className="flex items-center justify-between gap-2">
             <span className="text-caption text-muted">כיוון</span>
             <Seg>
-              <SegItem active={orient === "portrait"} onClick={() => setOrient("portrait")} small>
+              {/* "Auto" only means something where a booklet mixes sheets; elsewhere it is portrait. */}
+              {view === "map" && (
+                <SegItem active={orient === "auto"} onClick={() => setOrient("auto")} small>
+                  אוטו׳
+                </SegItem>
+              )}
+              <SegItem active={orient === "portrait" || (orient === "auto" && view !== "map")} onClick={() => setOrient("portrait")} small>
                 לאורך
               </SegItem>
               <SegItem active={orient === "landscape"} onClick={() => setOrient("landscape")} small>
@@ -386,22 +444,26 @@ export function OutputsScreen() {
             // (sheet-frame.tsx: venue/client, sheet name, "n / total", scale, date, version) instead
             // of the generic header above, so `stamped` is never used here.
             setPages.map((pg) => {
+              const paperOf = (o: "portrait" | "landscape") => {
+                const [pw, ph] = sizeOf(o);
+                return { widthMm: pw, heightMm: ph };
+              };
               const frame = {
                 subtitle: event?.clientName,
                 studio: studioName || undefined,
                 sheetCount: sheetTotal,
                 version,
                 date: today,
-                paper: { widthMm: w, heightMm: h },
                 marginMm: MARGIN_MM,
               };
+              const pageOf = (o: "portrait" | "landscape") => ({ page: o === "portrait" ? "sheet-portrait" : "sheet-landscape" });
               // A text page of the set (cover, schedules): the page's own margin, because the map
               // view prints at `@page { margin: 0 }` — the drawing sheets own theirs inside the SVG.
               const textPage = (key: string, body: React.ReactNode, fixed = false) => (
                 <article
                   key={key}
                   className="sheet bg-canvas shadow-lifted"
-                  style={{ width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
+                  style={{ ...pageOf(textOrient), width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
                 >
                   {body}
                 </article>
@@ -440,13 +502,13 @@ export function OutputsScreen() {
                 );
               if (pg.kind === "detail")
                 return (
-                  <article key={`detail-${pg.kit.key}`} className="sheet bg-canvas shadow-lifted">
-                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} {...frame} />
+                  <article key={`detail-${pg.kit.key}`} className="sheet bg-canvas shadow-lifted" style={pageOf(pg.o)}>
+                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
                   </article>
                 );
               const { sheet, z } = pg;
               return (
-                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className="sheet bg-canvas shadow-lifted">
+                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className="sheet bg-canvas shadow-lifted" style={pageOf(pg.o)}>
                   <PlacementMap
                     doc={z.doc}
                     plan={{ ...plan, zones: z.zone ? [z.zone] : plan.zones, bounds: z.bounds }}
@@ -456,6 +518,7 @@ export function OutputsScreen() {
                     railingAboveMm={railingAboveMm}
                     letters={sheet.tables === "full" ? letters : undefined}
                     summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
+                    paper={paperOf(pg.o)}
                     {...frame}
                   />
                 </article>
@@ -526,12 +589,36 @@ function SegItem({
   );
 }
 
-/** A labelled group of toggles in the rail. */
-function RailGroup({ title, children }: { title: string; children: React.ReactNode }) {
+/** A collapsible section of the set: its title and a one-line summary of what is in it while closed,
+ *  the toggles when open. */
+function RailSection({
+  title,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  summary: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
   return (
-    <div>
-      <p className="px-2.5 pb-1 text-caption font-medium text-muted">{title}</p>
-      <ul className="flex flex-col gap-[3px]">{children}</ul>
+    <div className={"rounded-sm " + (open ? "bg-inset pb-1.5" : "")}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-start transition-colors hover:bg-accent-tint"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-caption font-semibold text-ink-soft">{title}</span>
+          {!open && <span className="block truncate text-[11px] text-muted">{summary}</span>}
+        </span>
+        <ChevronDown className={"h-3.5 w-3.5 shrink-0 text-muted transition-transform " + (open ? "rotate-180" : "")} strokeWidth={1.6} />
+      </button>
+      {open && <ul className="flex flex-col gap-[2px] px-1">{children}</ul>}
     </div>
   );
 }
@@ -539,16 +626,18 @@ function RailGroup({ title, children }: { title: string; children: React.ReactNo
 /** One switchable row of the set: a check that fills when it is in, the label, and an optional
  *  muted hint at the end ("מומלץ"). A square check rather than the old dot, because every group
  *  here is multi-select and a dot reads as a radio button. */
-function RailToggle({ on, onClick, hint, children }: { on: boolean; onClick: () => void; hint?: string; children: React.ReactNode }) {
+function RailToggle({ on, onClick, hint, disabled, children }: { on: boolean; onClick: () => void; hint?: string; disabled?: boolean; children: React.ReactNode }) {
   return (
     <li>
       <button
         type="button"
         onClick={onClick}
+        disabled={disabled}
         aria-pressed={on}
         className={
-          "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-start text-caption transition-colors hover:bg-accent-tint " +
-          (on ? "font-semibold text-accent" : "text-muted hover:text-ink-soft")
+          "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-start text-caption transition-colors " +
+          (disabled ? "cursor-default text-muted/60 " : "hover:bg-accent-tint ") +
+          (on ? "font-semibold text-accent" : disabled ? "" : "text-muted hover:text-ink-soft")
         }
       >
         <span

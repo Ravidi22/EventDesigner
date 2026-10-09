@@ -8,6 +8,7 @@ import {
   doorGeometry,
   fromLocalFrame,
   outlinePathD,
+  sampleEdgePoints,
   wallAngleDeg,
   wallLengthMm,
   wallSegmentD,
@@ -42,10 +43,9 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
-import { overallDimensions, type DimensionLine } from "@/lib/outputs/dimensions";
-import { settingOut, type Chain } from "@/lib/outputs/setting-out";
+import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
+import { placeLabels, type Box } from "@/lib/outputs/labels";
 import type { TableKit } from "@/lib/outputs/table-kits";
-import { pointInPolygon } from "@/lib/venues/faces";
 import type { Extent } from "@/lib/outputs/scale";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
 import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps, type LegendRow } from "./sheet-frame";
@@ -126,6 +126,39 @@ function fallbackSize(r?: Resolved): { widthMm: number; depthMm: number } {
   return { widthMm: b?.w || 2000, depthMm: b?.h || 1400 };
 }
 
+/** World mm round the framed zone: room for the overall dimensions (900mm off the room) and their
+ *  figures to land inside the clip rather than be cut by it. */
+export const MAP_PAD_MM = 1600;
+
+/** The extent a map sheet draws for a frame — exported so the set can pick each sheet's paper
+ *  orientation from the same numbers the sheet will fit itself to. */
+export function mapWorld(bounds: { widthMm: number; heightMm: number }): Extent {
+  return { widthMm: bounds.widthMm + MAP_PAD_MM * 2, heightMm: bounds.heightMm + MAP_PAD_MM * 2 };
+}
+
+type Pt = { x: number; y: number };
+
+/** A footprint's outline in its own frame, for measuring. Circles and ellipses as 24-gons (a gap to a
+ *  round table is measured to the round, not to its bounding square); a custom or multi-part shape
+ *  by its bounding box, which is what its width × depth state. */
+function outlineOf(fp: Footprint): Pt[] {
+  const ring = (rx: number, ry: number) => Array.from({ length: 24 }, (_, i) => ({ x: rx * Math.cos((i / 24) * Math.PI * 2), y: ry * Math.sin((i / 24) * Math.PI * 2) }));
+  if (fp.kind === "circle") return ring(fp.diameterMm / 2, fp.diameterMm / 2);
+  if (fp.kind === "ellipse") return ring(fp.widthMm / 2, fp.depthMm / 2);
+  const b = footprintBounds(fp);
+  return [
+    { x: -b.w / 2, y: -b.h / 2 },
+    { x: b.w / 2, y: -b.h / 2 },
+    { x: b.w / 2, y: b.h / 2 },
+    { x: -b.w / 2, y: b.h / 2 },
+  ];
+}
+
+/** Into the room through the same translate · rotate · flip `placed` draws with. */
+function toWorld(pts: Pt[], at: Pt, rotation: number, mirrored?: boolean, scale = 1): Pt[] {
+  return pts.map((q) => fromLocalFrame({ x: (mirrored ? -q.x : q.x) * scale, y: q.y * scale }, at, rotation || 0));
+}
+
 export function PlacementMap({
   doc,
   plan,
@@ -160,9 +193,7 @@ export function PlacementMap({
   // Only the DRAWING. The table schedule and the stage build used to be rendered here as extra pages
   // after every sheet, so a set of five sheets over two zones printed the same schedule ten times;
   // the set (outputs-screen.tsx) now places each once (KitSchedule, StageSchedule below).
-  // World mm around the frame: enough for the overall dimensions (900mm off the room, plus their
-  // figures) to land inside the clip rather than be cut by it.
-  const pad = 1600;
+  const pad = MAP_PAD_MM;
   // Framed on the zones this event occupies. Walls, doors and features are all drawn from the venue
   // structure, and the frame is what keeps the rest of the property off the crew's page — an
   // adjacent room's wall crops at the edge instead of being special-cased out.
@@ -196,7 +227,7 @@ export function PlacementMap({
     ...(sheet.tables === "ghost" ? [{ label: "שולחן (להתמצאות בלבד)", swatch: "dot-ghost" as const }] : []),
     ...(sheet.layers.includes("ceiling") ? [{ label: "מעל גובה החתך", swatch: "overhead" as const }] : []),
   ];
-  const world: Extent = { widthMm: box.widthMm + pad * 2, heightMm: box.heightMm + pad * 2 };
+  const world: Extent = mapWorld(box);
 
   // Placements filtered on the SHEET, never on a hard-coded category: `layers` picks which of the
   // document's placements belong on this drawing at all, and `groups` (when the sheet sets one)
@@ -204,6 +235,10 @@ export function PlacementMap({
   // otherwise draw every table and bar standing on the same floor.
   const shown = doc.placements.filter((p) => {
     if (!sheet.layers.includes(p.layer)) return false;
+    if (sheet.categories) {
+      const cat = resolve(p.variantId)?.product.category;
+      if (!cat || !sheet.categories.includes(cat)) return false;
+    }
     if (sheet.groups) {
       const cat = resolve(p.variantId)?.product.category;
       const group = cat ? CATEGORY_BY_ID[cat]?.group : undefined;
@@ -268,8 +303,25 @@ export function PlacementMap({
   })();
   const buildSheet = sheet.id === "stage";
 
-  // Setting-out chains (lib/outputs/setting-out.ts), on the sheet that sets the room out. One per
-  // zone on the sheet, over that zone's numbered units — a block of tables is ONE centre.
+  // THE MEASURED THINGS, as world polygons (lib/outputs/measurements.ts): every table without its
+  // chairs, and every element the crew places by tape — a stage, a rug, anything with a side of
+  // 1.5m or more. Built once here; which figures are drawn from them is the sheet's choice.
+  const solids: Solid[] = [];
+  if (sheet.tables !== "none") {
+    for (const t of doc.tables) solids.push({ id: t.id, kind: "table", polygon: toWorld(outlineOf(tableFootprint(t)), t.position, t.rotation, t.mirrored) });
+  }
+  for (const p of floorItems) {
+    if (p.stage) {
+      solids.push({ id: p.id, kind: "stage", polygon: toWorld(p.stage.outline, p.position, p.rotation, p.mirrored) });
+      continue;
+    }
+    const r = resolve(p.variantId);
+    const fp: Footprint = r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p);
+    const b = footprintBounds(fp);
+    const rug = r?.product.category === "rugs";
+    if (!rug && Math.max(b.w, b.h) * (p.scale || 1) < 1500) continue;
+    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(outlineOf(fp), p.position, p.rotation, p.mirrored, p.scale || 1) });
+  }
   const unitCentres = numberedUnits(doc).map((u) => {
     const members = doc.tables.filter((t) => u.tableIds.includes(t.id));
     return {
@@ -277,10 +329,46 @@ export function PlacementMap({
       y: members.reduce((n, t) => n + t.position.y, 0) / (members.length || 1),
     };
   });
+  // Walls as straight runs — a bowed wall sampled, so a stage is measured to where the wall IS.
+  const wallRuns: [Pt, Pt][] = structure.walls.flatMap((w) => {
+    const pts = wallPoints(structure, w, nodes);
+    if (!pts) return [];
+    const run = w.curve ? sampleEdgePoints(pts.a, pts.b, w.curve, 12) : [pts.a, pts.b];
+    return run.slice(1).map((q, i) => [run[i], q] as [Pt, Pt]);
+  });
   const roomZones = plan.zones.filter((z) => z.boundary.length >= 3);
-  const chains: Chain[] = sheet.setOut
-    ? roomZones.flatMap((z) => settingOut(roomZones.length === 1 ? unitCentres : unitCentres.filter((c) => pointInPolygon(c, z.boundary)), z.boundary))
-    : [];
+  const measureInput: MeasureInput = { boundaries: roomZones.map((z) => z.boundary), walls: wallRuns, solids, centres: unitCentres };
+  const roomCentre = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };
+
+  // Doors, resolved once: drawn below, and an obstacle every figure on the sheet steps around.
+  const doors = structure.entrances.flatMap((e) => {
+    const wall = structure.walls.find((w) => w.id === e.wallId);
+    const pts = wall ? wallPoints(structure, wall, nodes) : null;
+    if (!wall || !pts) return [];
+    const door = doorGeometry(pts.a, pts.b, e.distanceMm, e.widthMm, e.swingInward, wallInteriorHint(faces, pts.a, pts.b, wall.a, wall.b), e.doubleDoor, wall.curve ?? null);
+    return [{ e, wall, pts, door }];
+  });
+  // The whole swing, both sides of the wall: a figure must not sit in the doorway either way.
+  const doorBoxes: Box[] = doors.map(({ door, e }) => {
+    const pts = [door.gapStart, door.gapEnd, ...door.leaves.flatMap((l) => [l.tip, l.arcTo])];
+    const r = e.widthMm * 0.15;
+    return {
+      minX: Math.min(...pts.map((q) => q.x)) - r,
+      minY: Math.min(...pts.map((q) => q.y)) - r,
+      maxX: Math.max(...pts.map((q) => q.x)) + r,
+      maxY: Math.max(...pts.map((q) => q.y)) + r,
+    };
+  });
+  // Furniture keeps figures beside a line off it — tables with their chairs' reach.
+  const furnitureBoxes: Box[] = solids.map((sd) => {
+    const grow = sd.kind === "table" && sheet.chairs ? CHAIR_D_MM + 80 : 0;
+    return {
+      minX: Math.min(...sd.polygon.map((q) => q.x)) - grow,
+      minY: Math.min(...sd.polygon.map((q) => q.y)) - grow,
+      maxX: Math.max(...sd.polygon.map((q) => q.x)) + grow,
+      maxY: Math.max(...sd.polygon.map((q) => q.y)) + grow,
+    };
+  });
 
   return (
       <SheetFrame
@@ -335,13 +423,9 @@ export function PlacementMap({
               wall it sat inside the room among the tables. The symbol says which way the door
               opens and how far into the room it sweeps, which is what a crew laying a row next to
               it needs; the word said neither. */}
-          {structure.entrances.map((e) => {
-            const wall = structure.walls.find((w) => w.id === e.wallId);
-            const pts = wall ? wallPoints(structure, wall, nodes) : null;
-            if (!wall || !pts) return null;
+          {doors.map(({ e, wall, pts, door }) => {
             const len = wallLengthMm(pts.a, pts.b) || 1;
             const half = e.widthMm / 2;
-            const door = doorGeometry(pts.a, pts.b, e.distanceMm, e.widthMm, e.swingInward, wallInteriorHint(faces, pts.a, pts.b, wall.a, wall.b), e.doubleDoor, wall.curve ?? null);
             return (
               <g key={e.id}>
                 {/* Struck along the wall as drawn — on a bowed wall a straight chord would print the
@@ -413,6 +497,37 @@ export function PlacementMap({
             );
           })}
 
+          {/* Chairs. Derived from each table's own seat count, never placed — the same rule the
+              studio canvas draws by (lib/studio/seating.ts). A group's ring goes round the outside
+              of the whole block, not one ring per member, or the seam between two tables would draw
+              chairs nobody could sit in. Drawn BEFORE the tables, so a table's white top covers the
+              front of every chair tucked under it, as it does in the room. */}
+          {sheet.chairs && (
+            <>
+              {doc.tables
+                .filter((t) => !t.groupId && t.seats)
+                .map((t) => (
+                  <g
+                    key={`seat-${t.id}`}
+                    transform={placed(t.position, t.rotation, t.mirrored)}
+                  >
+                    {seatsAround(tableFootprint(t), t.seats!, undefined, tableBlockedSides(t)).map((s, i) => (
+                      <ChairGlyph key={i} seat={s} />
+                    ))}
+                  </g>
+                ))}
+              {tableGroups
+                .filter((g) => g.seats > 0)
+                .map((g) => (
+                  <g key={`seat-g-${g.id}`} transform={`translate(${g.centre.x} ${g.centre.y})`}>
+                    {seatsAround({ kind: "rect", widthMm: g.widthMm, depthMm: g.depthMm }, g.seats).map((s, i) => (
+                      <ChairGlyph key={i} seat={s} />
+                    ))}
+                  </g>
+                ))}
+            </>
+          )}
+
           {/* Tables. "full" is the studio's own shape and style; "ghost" flattens every table to the
               same faint dot pattern with no number — a rigger needs to know which table is under a
               chandelier, not read the room's seating plan. "none" skips them outright. */}
@@ -478,36 +593,6 @@ export function PlacementMap({
               );
             })}
 
-          {/* Chairs. Derived from each table's own seat count, never placed — the same rule the
-              studio canvas draws by (lib/studio/seating.ts). A group's ring goes round the outside
-              of the whole block, not one ring per member, or the seam between two tables would draw
-              chairs nobody could sit in. */}
-          {sheet.chairs && (
-            <>
-              {doc.tables
-                .filter((t) => !t.groupId && t.seats)
-                .map((t) => (
-                  <g
-                    key={`seat-${t.id}`}
-                    transform={placed(t.position, t.rotation, t.mirrored)}
-                  >
-                    {seatsAround(tableFootprint(t), t.seats!, undefined, tableBlockedSides(t)).map((s, i) => (
-                      <ChairGlyph key={i} seat={s} />
-                    ))}
-                  </g>
-                ))}
-              {tableGroups
-                .filter((g) => g.seats > 0)
-                .map((g) => (
-                  <g key={`seat-g-${g.id}`} transform={`translate(${g.centre.x} ${g.centre.y})`}>
-                    {seatsAround({ kind: "rect", widthMm: g.widthMm, depthMm: g.depthMm }, g.seats).map((s, i) => (
-                      <ChairGlyph key={i} seat={s} />
-                    ))}
-                  </g>
-                ))}
-            </>
-          )}
-
           {/* Table-layer items — clustered on their table, like the studio canvas draws them. */}
           {[...chipsByTable.entries()].flatMap(([tableId, chips]) => {
             const t = tableById.get(tableId);
@@ -570,16 +655,16 @@ export function PlacementMap({
             <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} overhead />
           ))}
 
-          {/* Overall dimensions — one width and one depth per zone this event occupies, figured the
-              way a plan states them: a line with witness lines at both ends and the metres reading
-              along it. */}
-          {plan.zones
-            .filter((r) => r.boundary.length >= 3)
-            .flatMap((r) => overallDimensions(r.boundary).map((d, i) => <DimensionGlyph key={`${r.zone.id}-${i}`} d={d} den={den} />))}
-
-          {chains.map((c, i) => (
-            <ChainGlyph key={`chain-${i}`} c={c} den={den} />
-          ))}
+          {/* Every figure on the sheet — the room's overall size and whatever this sheet measures —
+              through one placer that keeps numbers off doors, furniture and each other. */}
+          <MeasureLayer
+            input={measureInput}
+            opts={{ overall: true, ...sheet.measure, offsetMm: 900 }}
+            den={den}
+            obstacles={doorBoxes}
+            furniture={furnitureBoxes}
+            roomCentre={roomCentre}
+          />
         </g>
         )}
       </SheetFrame>
@@ -923,99 +1008,6 @@ export function PlacementGlyph({ placement, x, y, overhead, shape }: { placement
   );
 }
 
-/** One overall dimension: witness lines off the room's own corners, the figured line between them,
- *  and the metres reading along it — a line with a ruler function, not a caption. `overallDimensions`
- *  only ever returns a run along a horizontal or a vertical edge, so the offset is applied on
- *  whichever axis the segment does NOT run along. */
-function DimensionGlyph({ d, den }: { d: DimensionLine; den: number }) {
-  const horizontal = d.from.y === d.to.y;
-  const off = horizontal ? { x: 0, y: d.offsetMm } : { x: d.offsetMm, y: 0 };
-  const a = { x: d.from.x + off.x, y: d.from.y + off.y };
-  const b = { x: d.to.x + off.x, y: d.to.y + off.y };
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  const tick = 1.4 * den; // 1.4 printed mm — a small architectural tick, not an arrowhead
-  const tickOff = horizontal ? { x: 0, y: tick } : { x: tick, y: 0 };
-  const common = { stroke: INK, strokeWidth: LINE_WEIGHTS.annotation, vectorEffect: "non-scaling-stroke" as const };
-  return (
-    <g>
-      <line x1={d.from.x} y1={d.from.y} x2={a.x} y2={a.y} {...common} stroke={MUTED} />
-      <line x1={d.to.x} y1={d.to.y} x2={b.x} y2={b.y} {...common} stroke={MUTED} />
-      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} {...common} />
-      <line x1={a.x - tickOff.x / 2} y1={a.y - tickOff.y / 2} x2={a.x + tickOff.x / 2} y2={a.y + tickOff.y / 2} {...common} />
-      <line x1={b.x - tickOff.x / 2} y1={b.y - tickOff.y / 2} x2={b.x + tickOff.x / 2} y2={b.y + tickOff.y / 2} {...common} />
-      <text
-        x={mid.x + (horizontal ? 0 : 2 * den)}
-        y={mid.y + (horizontal ? -1.2 * den : 0)}
-        textAnchor="middle"
-        fontSize={2.4 * den}
-        fontFamily="Assistant, sans-serif"
-        fill={INK}
-        className="nums"
-      >
-        {d.label} מ׳
-      </text>
-    </g>
-  );
-}
-
-/** A setting-out chain: the line along the room, a tick at the wall and at every row or column
- *  centre, the distance between each pair, and a faint extension line from each tick to the table
- *  it measures to. Figures that would not fit their segment are left off rather than overprinted —
- *  the next one along still gives the crew a running check. */
-function ChainGlyph({ c, den }: { c: Chain; den: number }) {
-  const horizontal = c.axis === "x";
-  const pt = (along: number) => (horizontal ? { x: along, y: c.lineAt } : { x: c.lineAt, y: along });
-  const a = pt(c.stops[0]);
-  const b = pt(c.stops[c.stops.length - 1]);
-  const tick = 1.4 * den;
-  const common = { stroke: INK, strokeWidth: LINE_WEIGHTS.annotation, vectorEffect: "non-scaling-stroke" as const };
-  return (
-    <g>
-      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} {...common} />
-      {c.stops.map((s, i) => {
-        const q = pt(s);
-        return (
-          <line
-            key={`t${i}`}
-            x1={q.x - (horizontal ? tick / 2 : -tick / 2)}
-            y1={q.y + (horizontal ? tick / 2 : -tick / 2)}
-            x2={q.x + (horizontal ? tick / 2 : -tick / 2)}
-            y2={q.y - (horizontal ? tick / 2 : -tick / 2)}
-            {...common}
-          />
-        );
-      })}
-      {c.feet.map((f, i) => {
-        const q = pt(c.stops[i + 1]);
-        return <line key={`e${i}`} x1={q.x} y1={q.y} x2={f.x} y2={f.y} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />;
-      })}
-      {c.stops.slice(1).map((s, i) => {
-        const from = c.stops[i];
-        const len = s - from;
-        // On paper: a horizontal figure needs its own width, a vertical one only its height.
-        if (len / den < (horizontal ? 8 : 4)) return null;
-        const mid = pt((from + s) / 2);
-        return (
-          <text
-            key={`f${i}`}
-            x={mid.x - (horizontal ? 0 : 1.2 * den)}
-            y={mid.y - (horizontal ? 1.2 * den : 0)}
-            textAnchor={horizontal ? "middle" : "end"}
-            direction="ltr"
-            dominantBaseline={horizontal ? "auto" : "central"}
-            fontSize={2.2 * den}
-            fontFamily="Assistant, sans-serif"
-            fill={INK}
-            className="nums"
-          >
-            {(len / 1000).toFixed(2)}
-          </text>
-        );
-      })}
-    </g>
-  );
-}
-
 /** The kit schedule — the set's one page of "which tables carry what": each kit's letter (the one
  *  printed on the plan), its tables, and what one table of it carries, with the components a
  *  florist is phoned with. Undressed tables are listed last so a table missing from every kit is
@@ -1075,5 +1067,96 @@ export function KitSchedule({
         </p>
       )}
     </section>
+  );
+}
+
+const INLINE_KINDS: DimKind[] = ["tie", "gap", "aisle"];
+
+/** The figures. Each dimension is a line with a tick at both ends — witness lines back to what it
+ *  measures when it is drawn off it — and its number, placed by lib/outputs/labels.ts and haloed in
+ *  white so no line runs through a digit. A gap under the walkway minimum prints ⚠ and dashed. */
+function MeasureLayer({
+  input,
+  opts,
+  den,
+  obstacles,
+  furniture,
+  roomCentre,
+}: {
+  input: MeasureInput;
+  opts: MeasureOptions;
+  den: number;
+  obstacles: Box[];
+  furniture: Box[];
+  roomCentre: Pt;
+}) {
+  const { dims, leaders } = measurements(input, opts);
+  const font = (d: Dim) => (d.kind === "overall" ? 2.4 : 2.2) * den;
+  const label = (d: Dim) => `${d.warn ? "⚠ " : ""}${(d.mm / 1000).toFixed(2)}`;
+  const lines = dims.map((d) => {
+    const pa = { x: d.a.x + d.offset.x, y: d.a.y + d.offset.y };
+    const pb = { x: d.b.x + d.offset.x, y: d.b.y + d.offset.y };
+    const L = Math.hypot(pb.x - pa.x, pb.y - pa.y) || 1;
+    const u = { x: (pb.x - pa.x) / L, y: (pb.y - pa.y) / L };
+    const n = { x: -u.y, y: u.x };
+    // Which side the figure prefers: away from what it measures (an offset line), away from the
+    // room (a chain along its edge), either (a figure in an aisle sits on its own line).
+    const away = d.offset.x || d.offset.y ? d.offset : { x: (pa.x + pb.x) / 2 - roomCentre.x, y: (pa.y + pb.y) / 2 - roomCentre.y };
+    const side: 1 | -1 = n.x * away.x + n.y * away.y >= 0 ? 1 : -1;
+    return { d, pa, pb, u, n, side };
+  });
+  const at = placeLabels(
+    lines.map(({ d, pa, pb, side }) => {
+      const f = font(d);
+      return { a: pa, b: pb, w: label(d).length * f * 0.56 + f * 0.4, h: f * 1.15, gap: 0.7 * den, side, inline: INLINE_KINDS.includes(d.kind) };
+    }),
+    obstacles,
+    furniture,
+  );
+  const tick = 1.3 * den;
+  const ink = { stroke: INK, strokeWidth: LINE_WEIGHTS.annotation, vectorEffect: "non-scaling-stroke" as const };
+  return (
+    <g>
+      {leaders.map((l: Leader, i) => (
+        <line key={`l${i}`} x1={l.from.x} y1={l.from.y} x2={l.to.x} y2={l.to.y} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
+      ))}
+      {lines.map(({ d, pa, pb, u, n }, i) => {
+        const off = Math.hypot(d.offset.x, d.offset.y);
+        const o = off ? { x: d.offset.x / off, y: d.offset.y / off } : null;
+        const slash = { x: ((u.x + n.x) / Math.SQRT2) * (tick / 2), y: ((u.y + n.y) / Math.SQRT2) * (tick / 2) };
+        return (
+          <g key={`d${i}`}>
+            {o && (
+              <>
+                <line x1={d.a.x + o.x * 0.6 * den} y1={d.a.y + o.y * 0.6 * den} x2={pa.x + o.x * den} y2={pa.y + o.y * den} {...ink} stroke={MUTED} />
+                <line x1={d.b.x + o.x * 0.6 * den} y1={d.b.y + o.y * 0.6 * den} x2={pb.x + o.x * den} y2={pb.y + o.y * den} {...ink} stroke={MUTED} />
+              </>
+            )}
+            <line x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} {...ink} strokeDasharray={d.warn ? "3 2" : undefined} />
+            {[pa, pb].map((q, k) => (
+              <line key={k} x1={q.x - slash.x} y1={q.y - slash.y} x2={q.x + slash.x} y2={q.y + slash.y} {...ink} />
+            ))}
+            <text
+              x={at[i].x}
+              y={at[i].y}
+              textAnchor="middle"
+              dominantBaseline="central"
+              direction="ltr"
+              fontSize={font(d)}
+              fontWeight={d.warn || d.kind === "overall" ? 700 : 500}
+              fontFamily="Assistant, sans-serif"
+              fill={INK}
+              stroke="#ffffff"
+              strokeWidth={0.6 * den}
+              strokeLinejoin="round"
+              paintOrder="stroke"
+              className="nums"
+            >
+              {label(d)}
+            </text>
+          </g>
+        );
+      })}
+    </g>
   );
 }

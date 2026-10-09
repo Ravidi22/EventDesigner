@@ -81,6 +81,34 @@ function perimeter(c: Pt, halfW: number, halfH: number) {
   return { total, toT, toPt };
 }
 
+/** The unit's box in the room, through each member's rotation, and the drawing round it: the table,
+ *  its chairs and the ring the callouts ride on. */
+function detailFrame(members: DesignTable[]) {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const t of members) {
+    const b = footprintBounds(tableFootprint(t));
+    for (const [sx, sy] of CORNERS) {
+      const q = fromLocalFrame({ x: (sx * b.w) / 2, y: (sy * b.h) / 2 }, t.position, t.rotation || 0);
+      xs.push(q.x);
+      ys.push(q.y);
+    }
+  }
+  const box = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+  const centre = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };
+  const ringW = (box.maxX - box.minX) / 2 + CALLOUT_RING_MM;
+  const ringH = (box.maxY - box.minY) / 2 + CALLOUT_RING_MM;
+  const world = { widthMm: ringW * 2 + PAD_MM * 2, heightMm: ringH * 2 + PAD_MM * 2 };
+  const offset = { x: PAD_MM + ringW - centre.x, y: PAD_MM + ringH - centre.y };
+  return { box, centre, ringW, ringH, world, offset };
+}
+
+/** What a kit's detail sheet draws, for choosing its paper before it renders. */
+export function detailWorld(kit: TableKit, doc: DesignDocumentContent) {
+  const unit = kit.units[0];
+  return detailFrame(doc.tables.filter((t) => unit.tableIds.includes(t.id))).world;
+}
+
 export function TableDetail({
   kit,
   doc,
@@ -107,23 +135,7 @@ export function TableDetail({
     ),
   );
 
-  // The unit's box in the room, through each member's rotation.
-  const xs: number[] = [];
-  const ys: number[] = [];
-  for (const t of members) {
-    const b = footprintBounds(tableFootprint(t));
-    for (const [sx, sy] of CORNERS) {
-      const q = fromLocalFrame({ x: (sx * b.w) / 2, y: (sy * b.h) / 2 }, t.position, t.rotation || 0);
-      xs.push(q.x);
-      ys.push(q.y);
-    }
-  }
-  const box = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
-  const centre = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };
-  const ringW = (box.maxX - box.minX) / 2 + CALLOUT_RING_MM;
-  const ringH = (box.maxY - box.minY) / 2 + CALLOUT_RING_MM;
-  const world = { widthMm: ringW * 2 + PAD_MM * 2, heightMm: ringH * 2 + PAD_MM * 2 };
-  const offset = { x: PAD_MM + ringW - centre.x, y: PAD_MM + ringH - centre.y };
+  const { centre, ringW, ringH, world, offset } = detailFrame(members);
 
   // One mark per distinct item, in the kit's own order — the notes list the same marks.
   const markOf = new Map(kit.items.map((i, n) => [i.variantId, String(n + 1)]));
@@ -189,11 +201,8 @@ export function TableDetail({
         spread();
         return (
           <g transform={`translate(${offset.x} ${offset.y})`}>
-            {members.map((t) => (
-              <TableGlyph key={t.id} t={t} />
-            ))}
-            {/* Chairs as the plan draws them: round a lone table by its own seat count, round the
-                outside of a block by the block's. */}
+            {/* Chairs as the plan draws them, and first: round a lone table by its own seat count,
+                round the outside of a block by the block's. */}
             {!block &&
               members
                 .filter((t) => t.seats)
@@ -211,6 +220,10 @@ export function TableDetail({
                 ))}
               </g>
             )}
+            {/* The table over its chairs — a chair's front is tucked under the table top. */}
+            {members.map((t) => (
+              <TableGlyph key={t.id} t={t} />
+            ))}
             {spots.map(({ p, at, rotation, footprint }) => (
               <PlacementGlyph key={p.id} placement={{ ...p, rotation } as Placement} x={at.x} y={at.y} shape={footprint} />
             ))}
