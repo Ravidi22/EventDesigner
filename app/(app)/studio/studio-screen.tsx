@@ -179,6 +179,16 @@ const classifyStack = (p: Placement): StackKind | undefined => {
 /** Never swap targets: tables have their own swap, and stages are built, not picked. */
 const unswappable = (p: Product) => p.category === "tables" || CATEGORY_BY_ID[p.category]?.group === "grp-stages";
 
+/** One thing the spacing command moves: a loose item, or a whole group as one block. */
+type SpacingUnit = {
+  key: string;
+  label: string;
+  centre: Point;
+  box: CentredBox;
+  polysAt: ItemGeometry["polysAt"];
+  members: ItemGeometry[];
+};
+
 export function StudioScreen({
   mode = "full",
   initialProducts,
@@ -1188,7 +1198,34 @@ export function StudioScreen({
     if (selected.length < 2) return null;
     const geos = selected.map(geometryOf);
     if (geos.some((g) => !g || !g.movable)) return null;
-    return geos as ItemGeometry[];
+    // A GROUP is one unit here, as it is to distribute: spacing two blocks apart must not pull the
+    // tables inside each block away from one another. Units keep the order things were selected in,
+    // so the first one picked is still the one that stays put.
+    const byUnit = new Map<string, ItemGeometry[]>();
+    for (const g of geos as ItemGeometry[]) {
+      const key = g.groupId ? `group:${g.groupId}` : `${g.ref.kind}:${g.ref.id}`;
+      byUnit.set(key, [...(byUnit.get(key) ?? []), g]);
+    }
+    if (byUnit.size < 2) return null;
+    return [...byUnit.entries()].map(([key, members]): SpacingUnit => {
+      if (members.length === 1) {
+        const g = members[0];
+        return { key, label: g.label, centre: g.centre, box: g.box, polysAt: g.polysAt, members };
+      }
+      const minX = Math.min(...members.map((m) => m.box.x - m.box.widthMm / 2));
+      const maxX = Math.max(...members.map((m) => m.box.x + m.box.widthMm / 2));
+      const minY = Math.min(...members.map((m) => m.box.y - m.box.depthMm / 2));
+      const maxY = Math.max(...members.map((m) => m.box.y + m.box.depthMm / 2));
+      const centre = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+      return {
+        key,
+        label: members[0].label,
+        centre,
+        box: { ...centre, widthMm: maxX - minX, depthMm: maxY - minY },
+        polysAt: (c) => members.flatMap((m) => m.polysAt({ x: m.centre.x + c.x - centre.x, y: m.centre.y + c.y - centre.y })),
+        members,
+      };
+    });
   }, [selected, geometryOf]);
 
   /** What the spacing panel reads before anything is typed: the air there is now, on each axis and
@@ -1196,7 +1233,7 @@ export function StudioScreen({
   const spacing = useMemo(() => {
     if (!spacingGeos) return null;
     const boxes = spacingGeos.map((g) => g.box);
-    const key = spacingGeos.map((g) => `${g.ref.kind}:${g.ref.id}`).join("|");
+    const key = spacingGeos.map((g) => g.key).join("|");
     if (spacingGeos.length === 2) {
       const [a, b] = spacingGeos;
       return {
@@ -1229,7 +1266,8 @@ export function StudioScreen({
       if (mode === "direct") {
         if (spacingGeos.length !== 2) return;
         const [a, b] = spacingGeos;
-        moves.push({ kind: b.ref.kind, id: b.ref.id, position: placeAtGap(a.polysAt(a.centre), a.centre, b.centre, b.polysAt, gapMm) });
+        const at = placeAtGap(a.polysAt(a.centre), a.centre, b.centre, b.polysAt, gapMm);
+        for (const m of b.members) moves.push({ kind: m.ref.kind, id: m.ref.id, position: { x: Math.round(m.centre.x + at.x - b.centre.x), y: Math.round(m.centre.y + at.y - b.centre.y) } });
       } else {
         const anchor = spacingGeos[0];
         const row = [...spacingGeos].sort((p, q) => p.box[mode] - q.box[mode]);
@@ -1241,11 +1279,12 @@ export function StudioScreen({
             if (i === 0) return;
             // The box moved; the item's own centre moves with it by the same delta (a turned
             // triangle's box is not centred on the point it stands on).
-            moves.push({
-              kind: g.ref.kind,
-              id: g.ref.id,
-              position: { x: Math.round(g.centre.x + centres[i].x - g.box.x), y: Math.round(g.centre.y + centres[i].y - g.box.y) },
-            });
+            for (const m of g.members)
+              moves.push({
+                kind: m.ref.kind,
+                id: m.ref.id,
+                position: { x: Math.round(m.centre.x + centres[i].x - g.box.x), y: Math.round(m.centre.y + centres[i].y - g.box.y) },
+              });
           });
         }
       }
