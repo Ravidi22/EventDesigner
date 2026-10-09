@@ -66,7 +66,8 @@ export function copySelection(
   const tables = doc.tables.filter((t) => tableIds.has(t.id));
   const placements = doc.placements.filter((p) => {
     if (anchoredToWall(p.variantId)) return false;
-    return (p.tableId !== undefined && tableIds.has(p.tableId)) || placementIds.has(p.id);
+    // A stage's banquette dressing comes with the stage, as a table's dressing comes with the table.
+    return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || placementIds.has(p.id);
   });
   const grouped = new Set([...tables, ...placements].map((x) => x.groupId).filter((g): g is string => !!g));
   return { tables, placements, groups: (doc.groups ?? []).filter((g) => grouped.has(g.id)) };
@@ -86,10 +87,14 @@ export function copySelection(
  */
 export function pasteInto(
   clip: Clip,
-  opts: { dx: number; dy: number; firstNumber: number; newId: () => string },
+  opts: { dx: number; dy: number; firstNumber: number; newId: () => string; keepNumbers?: boolean },
 ): Clip {
   const remap = new Map<string, string>();
   for (const t of clip.tables) remap.set(t.id, opts.newId());
+  // Placement ids are minted up front too, so an item on a copied stage's banquette can be re-pointed
+  // at the copy — its edge-item ids travel inside the stage unchanged, so only the stage id moves.
+  const remapP = new Map<string, string>();
+  for (const p of clip.placements) remapP.set(p.id, opts.newId());
   // Groups are re-minted the same way ids are. A pasted block is a NEW block: it has to be
   // ungroupable on its own, and dragging it must not drag the tables it was copied from.
   const regroup = new Map<string, string>();
@@ -101,7 +106,9 @@ export function pasteInto(
   const tables = clip.tables.map((t) => ({
     ...rejoin(t),
     id: remap.get(t.id)!,
-    number: t.number > 0 ? n++ : 0,
+    // A loaded sketch keeps the numbers it was saved with — it IS the room; a paste is a copy into
+    // a room that already has numbers, and takes the next free ones.
+    number: opts.keepNumbers ? t.number : t.number > 0 ? n++ : 0,
     position: { x: t.position.x + opts.dx, y: t.position.y + opts.dy },
     // A copy is another TABLE, not another sitting of the same people. It brings its size, its
     // cloth and its chairs; it starts empty. (`seated: undefined` rather than a deleted key, so
@@ -111,8 +118,9 @@ export function pasteInto(
 
   const placements = clip.placements.map((p) => ({
     ...rejoin(p),
-    id: opts.newId(),
+    id: remapP.get(p.id)!,
     ...(p.tableId === undefined ? {} : { tableId: remap.get(p.tableId) ?? p.tableId }),
+    ...(p.perch === undefined ? {} : { perch: { ...p.perch, stageId: remapP.get(p.perch.stageId) ?? p.perch.stageId } }),
     // A table-layer item's `position` is an offset within its table, not a point on the plan, so it
     // must NOT take the paste delta — the renderer clusters those onto the table itself.
     position: p.tableId === undefined ? { x: p.position.x + opts.dx, y: p.position.y + opts.dy } : p.position,
@@ -233,6 +241,8 @@ if (isMain(import.meta.url)) {
 
   // A free placement takes the delta; the fragment moves as one rigid thing.
   const pair = copySelection(doc, [{ kind: "table", id: "t1" }, { kind: "placement", id: "p-arch" }], isDrape);
+  const kept = pasteInto(pair, { dx: 0, dy: 0, firstNumber: 3, newId, keepNumbers: true });
+  assert(kept.tables[0].number === pair.tables[0].number, "a sketch loaded whole keeps its numbers");
   const rigid = pasteInto(pair, { dx: 1000, dy: 2000, firstNumber: 3, newId });
   const arch = rigid.placements.find((p) => p.variantId === "arch")!;
   assert(arch.position.x === 9000 && arch.position.y === 4000, "a free placement carries the same delta");

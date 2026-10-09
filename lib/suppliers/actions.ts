@@ -31,8 +31,11 @@ import {
 } from "@/lib/db/schema";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { Product } from "@/lib/catalog/types";
+import { cleanFlowers } from "@/lib/catalog/flowers";
 import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { nearestWall } from "@/lib/studio/anchor";
+import { deckTypeOf } from "@/lib/design-document/stage";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
 import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
@@ -285,11 +288,15 @@ export async function fetchEventMargin(eventId: string): Promise<EventMargin> {
  *  and can never be mistaken for one by anything downstream. */
 const derivedKey = (variantId: string, field: string) => `derived:${variantId}:${field}`;
 
+/** The item index, and — per variant id — the derived consumable keys a placement of it fans out
+ *  to. Returned together so the demand assembly below and the index can never disagree about
+ *  which synthetic rows exist. */
 function buildItemIndex(
   catalog: Product[],
   supplierNames: Map<string, string>,
-): Map<string, ProcurementItem> {
+): { index: Map<string, ProcurementItem>; derived: Map<string, string[]> } {
   const index = new Map<string, ProcurementItem>();
+  const derived = new Map<string, string[]>();
 
   for (const product of catalog) {
     const cat = CATEGORY_BY_ID[product.category];
@@ -315,21 +322,54 @@ function buildItemIndex(
 
     // The derived consumable, if this category has a count multiplier with a stated yield.
     const field = cat?.fields.find((f) => f.suffix);
-    const count = field ? Number(product.categoryFields?.[field.key] ?? 0) : 0;
-    if (field?.suffix && count > 0) {
-      for (const id of [product.id, ...product.variants.map((v) => v.id)]) {
-        index.set(derivedKey(id, field.key), {
+    if (!field?.suffix) continue;
+    const ids = [product.id, ...product.variants.map((v) => v.id)];
+    const flowers = cat?.flowers ? cleanFlowers(product.flowers) : undefined;
+
+    if (flowers) {
+      // A flower spec fans out per FLOWER, not as one "stems" line: the florist is phoned for roses
+      // and peonies. Under the arrangement's own supplier, who is the one selling them — and with no
+      // cost of their own, because the arrangement's line above already carries what it costs; a
+      // cost per rose would price the same flowers twice.
+      for (const id of ids) {
+        derived.set(
+          id,
+          flowers.map((f) => {
+            const key = derivedKey(id, `flower:${f.id}`);
+            index.set(key, {
+              label: `${f.name} · ${product.name}`,
+              categoryLabel,
+              stockKind: "consumable",
+              supplierId: base.supplierId,
+              supplierName: base.supplierName,
+              unit: "unit",
+              orderUnit: field.suffix,
+              orderFactor: f.qty,
+            });
+            return key;
+          }),
+        );
+      }
+      continue;
+    }
+
+    const count = Number(product.categoryFields?.[field.key] ?? 0);
+    if (count > 0) {
+      for (const id of ids) {
+        const key = derivedKey(id, field.key);
+        index.set(key, {
           label: `${field.suffix} · ${product.name}`,
           categoryLabel,
           stockKind: "consumable",
           unit: "unit",
           orderFactor: count,
         });
+        derived.set(id, [key]);
       }
     }
   }
 
-  return index;
+  return { index, derived };
 }
 
 /** A MeasureContext built from product ROWS rather than the browser's primed catalog cache
@@ -352,6 +392,18 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
       const b = footprintBounds(resolveFootprint(product));
       return { widthMm: b.w, depthMm: b.h };
     },
+    // A stage counts as its decks (lib/design-document/stage.ts) — laid by the same lookup the
+    // studio draws them with, so the quote bills the build the designer saw.
+    deckOf: (variantId) => {
+      const product = byVariant.get(variantId);
+      return product ? deckTypeOf(variantId, product) : undefined;
+    },
+    stagePart: (kind) => {
+      const category = ({ stairs: "stage-stairs", bench: "stage-benches", barrier: "stage-barriers", backdrop: "stage-backdrops", ramp: "stage-ramps", skirt: "stage-skirts", chair: "chairs" })[kind];
+      for (const [variantId, p] of byVariant) if (p.category === category && !p.archived) return variantId;
+      return undefined;
+    },
+    wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
   };
 }
 
@@ -405,7 +457,7 @@ export async function fetchProcurement(from: string, to: string): Promise<Procur
   ]);
   const catalog = toProducts(productRows, variantRows);
   const supplierNames = new Map(supplierRows.map((s) => [s.id, s.name]));
-  const itemIndex = buildItemIndex(catalog, supplierNames);
+  const { index: itemIndex, derived: derivedOf } = buildItemIndex(catalog, supplierNames);
   const lookup = (variantId: string) => itemIndex.get(variantId);
 
   if (eventRows.length === 0) return procurementReport([], lookup, { from, to });
@@ -506,13 +558,10 @@ export async function fetchProcurement(from: string, to: string): Promise<Procur
         else rows.push({ variantId: spare.variantId, quantity: spare.quantity });
       }
 
-      // Fan the count-multipliers out into their own consumable rows (candles off candlesticks).
+      // Fan the count-multipliers out into their own consumable rows (candles off candlesticks, one
+      // row per flower off an arrangement with a spec).
       for (const row of [...rows]) {
-        const product = byVariant.get(row.variantId);
-        const field = product ? CATEGORY_BY_ID[product.category]?.fields.find((f) => f.suffix) : undefined;
-        if (!field) continue;
-        const key = derivedKey(row.variantId, field.key);
-        if (itemIndex.has(key)) rows.push({ variantId: key, quantity: row.quantity });
+        for (const key of derivedOf.get(row.variantId) ?? []) rows.push({ variantId: key, quantity: row.quantity });
       }
 
       // "Measured" only matters where something is measured rather than counted. An event with no

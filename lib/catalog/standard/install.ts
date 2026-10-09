@@ -4,12 +4,12 @@
 // lib/google/sync.ts are: "give this organisation the standard tables" must not be a POST endpoint
 // that takes an organisation id from whoever calls it. It is reached from exactly two places — the
 // moment a studio is created (lib/auth/actions.ts) and the backfill script next door.
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { products } from "@/lib/db/schema";
 import { toProductRow } from "../db-mapping";
 import { standardProductId } from "./id";
-import { STANDARD_ITEMS, standardProduct } from "./items";
+import { RETIRED_STANDARD_KEYS, STANDARD_ITEMS, standardProduct } from "./items";
 
 /**
  * Insert whatever this studio is missing. Returns how many rows were actually added.
@@ -25,8 +25,10 @@ import { STANDARD_ITEMS, standardProduct } from "./items";
  * It does NOT revalidate — at sign-up there is no screen yet, and the backfill runs outside Next
  * where there is no router cache to invalidate.
  */
-export async function installStandardCatalog(organizationId: string): Promise<number> {
-  const rows = STANDARD_ITEMS.map((item) =>
+export async function installStandardCatalog(organizationId: string, keys?: readonly string[]): Promise<number> {
+  const items = keys ? STANDARD_ITEMS.filter((item) => keys.includes(item.key)) : STANDARD_ITEMS;
+  if (items.length === 0) return 0;
+  const rows = items.map((item) =>
     toProductRow(standardProduct(item, standardProductId(organizationId, item.key)), organizationId),
   );
 
@@ -67,4 +69,24 @@ export async function redrawStandardCatalog(organizationId: string): Promise<num
     changed += rows.length;
   }
   return changed;
+}
+
+/**
+ * Archive this studio's copies of the base items the app no longer ships (RETIRED_STANDARD_KEYS).
+ * Returns how many rows changed.
+ *
+ * ARCHIVED, never deleted: a design drawn with one still has to resolve it, and an archived product
+ * does (Product.archived). One column, like the redraw — a studio that renamed or priced its copy
+ * keeps both, and can un-archive it in the catalog if it still wants the thing. Opt-in for the same
+ * reason the redraw is: it is the app changing rows the studio owns.
+ */
+export async function retireStandardCatalog(organizationId: string): Promise<number> {
+  const ids = RETIRED_STANDARD_KEYS.map((key) => standardProductId(organizationId, key));
+  if (ids.length === 0) return 0;
+  const rows = await db()
+    .update(products)
+    .set({ archived: true, updatedAt: new Date() })
+    .where(and(inArray(products.id, ids), eq(products.organizationId, organizationId), eq(products.archived, false)))
+    .returning({ id: products.id });
+  return rows.length;
 }

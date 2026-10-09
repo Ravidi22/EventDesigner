@@ -24,6 +24,7 @@ import {
   type CheckpointOffsets,
 } from "@/lib/production/runway";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "./types";
+import type { Point, StageTemplate } from "@/lib/design-document/types";
 
 /** Postgres `numeric` arrives as a string — arbitrary precision, so the driver will not silently
  *  narrow it. A VAT rate is a small decimal well inside what a double holds exactly. */
@@ -248,4 +249,104 @@ export async function resetCheckpointOffsets(): Promise<CheckpointOffsets> {
   revalidateSettings();
   revalidateProduction();
   return { ...DEFAULT_OFFSETS };
+}
+
+// ── Stage rules ──────────────────────────────────────────────────────────────────────────────────
+
+/** How a studio wants its stages checked (lib/design-document/stage.ts). One rule today: above what
+ *  height the open sides of a stage need a railing — null when the studio has not said, which is the
+ *  default and means no railing is ever asked for. */
+export interface StageRules {
+  railingAboveMm: number | null;
+}
+
+/** Its own read, like the checkpoint schedule: one column off the settings row, asked for by the
+ *  studio (which draws the railing), the stage plan (which prints it) and the settings screen. */
+export async function fetchStageRules(): Promise<StageRules> {
+  const organizationId = await currentOrg();
+  const [row] = await db()
+    .select({ railingAboveMm: studioSettings.stageRailingAboveMm })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+  return { railingAboveMm: row?.railingAboveMm ?? null };
+}
+
+/** Null turns the rule off. A number is clamped to 10cm–3m and whole millimetres — anything else is
+ *  a typo, not a rule. */
+export async function saveStageRules(input: unknown): Promise<StageRules> {
+  const organizationId = await currentOrg();
+  const raw = input && typeof input === "object" ? (input as { railingAboveMm?: unknown }).railingAboveMm : null;
+  const railingAboveMm =
+    typeof raw === "number" && Number.isFinite(raw) ? Math.round(Math.min(3000, Math.max(100, raw))) : null;
+  await db()
+    .insert(studioSettings)
+    .values({ organizationId, stageRailingAboveMm: railingAboveMm, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: studioSettings.organizationId,
+      set: { stageRailingAboveMm: railingAboveMm, updatedAt: new Date() },
+    });
+  revalidateSettings();
+  return { railingAboveMm };
+}
+
+// ── Stage templates ──────────────────────────────────────────────────────────────────────────────
+
+const MAX_TEMPLATES = 40;
+const MAX_TEMPLATE_BYTES = 60_000;
+
+/** A template as it arrived over the wire, checked enough to keep garbage out of the row: an id and a
+ *  name, a stage with an outline of real points, and a size cap. Every POST reaches here. */
+function cleanTemplate(input: unknown): StageTemplate | null {
+  if (!input || typeof input !== "object") return null;
+  const t = input as Partial<StageTemplate>;
+  const point = (q: unknown) => !!q && typeof q === "object" && Number.isFinite((q as Point).x) && Number.isFinite((q as Point).y);
+  if (typeof t.id !== "string" || t.id.length > 64) return null;
+  if (typeof t.name !== "string" || !t.name.trim()) return null;
+  const st = t.stage;
+  if (!st || !Array.isArray(st.outline) || st.outline.length < 3 || st.outline.length > 200 || !st.outline.every(point)) return null;
+  if (!Array.isArray(st.decks) || typeof st.front !== "number") return null;
+  const clean: StageTemplate = {
+    id: t.id,
+    name: t.name.trim().slice(0, 60),
+    stage: st,
+    ...(Array.isArray(t.dressing) ? { dressing: t.dressing.slice(0, 200) } : {}),
+  };
+  return JSON.stringify(clean).length <= MAX_TEMPLATE_BYTES ? clean : null;
+}
+
+export async function fetchStageTemplates(): Promise<StageTemplate[]> {
+  const organizationId = await currentOrg();
+  const [row] = await db()
+    .select({ templates: studioSettings.stageTemplates })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+  return row?.templates ?? [];
+}
+
+async function writeTemplates(organizationId: string, templates: StageTemplate[]): Promise<StageTemplate[]> {
+  await db()
+    .insert(studioSettings)
+    .values({ organizationId, stageTemplates: templates, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: studioSettings.organizationId, set: { stageTemplates: templates, updatedAt: new Date() } });
+  return templates;
+}
+
+/** Save (or replace, by id) one template. A bad shape is a user-correctable failure, not a throw. */
+export async function saveStageTemplate(input: unknown): Promise<StageTemplate[] | { error: string }> {
+  const organizationId = await currentOrg();
+  const t = cleanTemplate(input);
+  if (!t) return { error: "לא ניתן לשמור את הבמה כתבנית" };
+  const current = await fetchStageTemplates();
+  const next = [...current.filter((x) => x.id !== t.id), t];
+  if (next.length > MAX_TEMPLATES) return { error: `אפשר לשמור עד ${MAX_TEMPLATES} תבניות במה` };
+  return writeTemplates(organizationId, next);
+}
+
+export async function deleteStageTemplate(id: unknown): Promise<StageTemplate[]> {
+  const organizationId = await currentOrg();
+  if (typeof id !== "string") throw new Error("id must be a string");
+  const current = await fetchStageTemplates();
+  return writeTemplates(organizationId, current.filter((x) => x.id !== id));
 }

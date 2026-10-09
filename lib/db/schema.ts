@@ -50,8 +50,8 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { DesignDocumentContent } from "@/lib/design-document/types";
-import type { MapAppearance } from "@/lib/catalog/types";
+import type { DesignDocumentContent, StageTemplate } from "@/lib/design-document/types";
+import type { FlowerLine, MapAppearance, ResizeSpec } from "@/lib/catalog/types";
 import type { VenuePlan } from "@/lib/venues/types";
 import type { VenueStructure } from "@/lib/venues/structure";
 import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
@@ -254,6 +254,15 @@ export const studioSettings = pgTable("studio_settings", {
    *  and adding a seventh checkpoint should not be a migration. Nullable = "never configured",
    *  which normalizeOffsets() reads as the defaults. */
   checkpointOffsets: jsonb("checkpoint_offsets").$type<CheckpointOffsets>(),
+  /** Above how many mm a stage's open sides need a railing (lib/design-document/stage.ts,
+   *  railingRuns). NULL = the rule is OFF, which is the default: a safety threshold is the studio's
+   *  to state — it differs by country, venue and insurer — and an app that guessed one would be
+   *  either nagging or wrong. The stage's front is never railed whatever this says. */
+  stageRailingAboveMm: integer("stage_railing_above_mm"),
+  /** The studio's saved stages (StageTemplate[], lib/design-document/types.ts) — a shape, its
+   *  levels and edges, its finishes, placed again from the stage tool. jsonb for the reason
+   *  checkpointOffsets is: a short list rewritten whole and never queried into. Null = none saved. */
+  stageTemplates: jsonb("stage_templates").$type<StageTemplate[]>(),
   updatedAt: updated(),
 });
 
@@ -325,6 +334,11 @@ export const products = pgTable(
       .notNull()
       .default({}),
     spec: text("spec"),
+    /** The flower spec of an arrangement — rows of { name, qty } (FlowerLine), for the categories
+     *  that take one. JSON rather than a child table because it is only ever read whole, with its
+     *  product, and nobody queries "every arrangement with peonies"; a florist's order is reduced
+     *  from the drawings, not from this column. NULL = no spec. */
+    flowers: jsonb("flowers").$type<FlowerLine[]>(),
     unitPrice: numeric("unit_price", { precision: 12, scale: 2 }),
     priceUnit: priceUnitEnum("price_unit").notNull().default("unit"),
     styleTags: text("style_tags").array().notNull().default([]),
@@ -346,6 +360,14 @@ export const products = pgTable(
      *  what happens to their design when the owner archives it?) and it needs RLS, which arrives
      *  with auth. The flag is recorded now so the day those land, the data is already there. */
     visibility: visibilityEnum("visibility").notNull().default("private"),
+
+    /** How far the plan may stretch this item, and in what module (see ResizeSpec). NULL = a thing
+     *  of one size, which is most of a catalog. JSON rather than four columns because it is only
+     *  ever read whole, by the canvas, and nobody queries "every product that stretches past 6m". */
+    resize: jsonb("resize").$type<ResizeSpec>(),
+    /** The clear floor this item needs around it, in mm — the studio's safety-distance warning.
+     *  NULL = no rule, which is not the same as 0 and must not be collapsed into it. */
+    clearanceMm: integer("clearance_mm"),
 
     // ── Procurement (lib/suppliers/) ───────────────────────────────────────────────────────────
     /** Who this item is bought or rented from. ONE supplier, not a join table: a many-to-many with
@@ -697,6 +719,28 @@ export const designDocuments = pgTable(
     // studio ever does on open.
     uniqueIndex("design_documents_event_version_key").on(t.eventId, t.version),
   ],
+);
+
+/** A sketch saved to be started from again (lib/studio/sketch-actions.ts): a whole design document
+ *  under the studio's own name for it — "חתונה 300 באולם הגדול" — chosen when an event is opened, or
+ *  loaded into one already drawn. Its own table rather than a jsonb list on studio_settings (the
+ *  way stage templates are kept): a sketch is a whole document, hundreds of placements, and a list
+ *  of forty of them rewritten whole on every save is the storage bill design_documents was built to
+ *  avoid. `venueId` is the property it was drawn in — its coordinates are that venue's millimetres,
+ *  and what hung on its walls is dropped when the sketch is loaded somewhere else. Set null on
+ *  delete: the sketch outlives the venue, as a drawing. */
+export const sketchTemplates = pgTable(
+  "sketch_templates",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    venueId: uuid("venue_id").references(() => venues.id, { onDelete: "set null" }),
+    content: jsonb("content").$type<DesignDocumentContent>().notNull(),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("sketch_templates_org_idx").on(t.organizationId)],
 );
 
 // ── Gallery ────────────────────────────────────────────────────────────────────────────────────

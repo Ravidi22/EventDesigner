@@ -5,6 +5,7 @@ import { Copy, Globe, Layers, Palette, Pencil, Trash2 } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, LAYER_LABEL } from "@/lib/catalog/categories";
 import { formatDimensions, formatPrice } from "@/lib/catalog/format";
+import { flowerSummary } from "@/lib/catalog/flowers";
 import { Menu, type MenuItem } from "@/components/menu";
 import { ProductImage } from "./product-image";
 
@@ -36,6 +37,8 @@ export function ProductCard({
 }) {
   const category = CATEGORY_BY_ID[product.category];
   const tags = product.styleTags;
+  // An arrangement's spec, as one line — the thing that tells two "סידור נמוך" cards apart.
+  const flowers = flowerSummary(product.flowers);
   // The open panel hangs past the bottom of the card, and the next card in the grid is later in the
   // DOM — so without lifting this one out of the flow the menu is painted underneath its neighbour.
   // (The card also becomes its own stacking context while hovered, because of the -translate-y, so
@@ -89,6 +92,12 @@ export function ProductCard({
             <span>{formatDimensions(product.dimensions)}</span>
             <span className="text-border" aria-hidden="true">·</span>
             <span>{category?.label}</span>
+            {flowers && (
+              <>
+                <span className="text-border" aria-hidden="true">·</span>
+                <span className="truncate">{flowers}</span>
+              </>
+            )}
             {tags.length > 0 && (
               <>
                 <span className="text-border" aria-hidden="true">·</span>
@@ -150,6 +159,7 @@ export function ProductCard({
         </div>
 
         <p className="nums mt-1 text-sm text-muted">{formatDimensions(product.dimensions)}</p>
+        {flowers && <p className="nums mt-0.5 truncate text-xs text-muted">{flowers}</p>}
 
         <div className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
           <span>{category?.label}</span>

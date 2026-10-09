@@ -9,6 +9,7 @@
 // Run: npm run check:csv
 import type { Layer } from "../design-document/types";
 import { PRICE_UNIT_LABEL, STOCK_KIND_LABEL, type Product } from "./types";
+import { flowerSummary } from "./flowers";
 import { isMain } from "../self-check";
 
 const COLS: Record<string, string> = {
@@ -137,6 +138,7 @@ const HEADER = [
   "מקדם הזמנה",
   "גוונים",
   "תגיות",
+  "פרחים",
   "מפרט",
 ];
 
@@ -194,6 +196,9 @@ export function productsToCsv(
       p.orderUnit ? p.orderFactor ?? 1 : "",
       p.variants.filter((v) => !v.archived).map((v) => v.name).join(" · "),
       p.styleTags.join(" · "),
+      // The flower spec as rows read: "ורד ×12 · פיאוני ×5". Export only — the import mints plain
+      // products, and a spec is typed in the drawer where its rows multiply.
+      flowerSummary(p.flowers),
       p.spec ?? "",
     ]
       .map(cell)
@@ -284,6 +289,11 @@ if (isMain(import.meta.url)) {
   assert(out[2][13] === "גליל" && out[2][14] === "1", "an order unit with no factor is one for one");
   assert(out[1][13] === "" && out[1][14] === "", "no order unit, no factor");
   assert(splitCsvRows(productsToCsv([product({ priceUnit: "m2" })], cats))[1][9] === 'למ"ר', "a quote inside a cell survives");
+  const specced = splitCsvRows(
+    productsToCsv([product({ flowers: [{ id: "a", name: "ורד", qty: 12 }, { id: "b", name: "פיאוני", qty: 5 }] })], cats),
+  );
+  assert(specced[0][17] === "פרחים" && specced[1][17] === "ורד ×12 · פיאוני ×5", "the flower spec exports as rows read");
+  assert(out[1][17] === "", "no spec, empty cell");
 
   // The round trip the shared column names exist for.
   const back = parseCsvProducts(CSV_BOM + sheet, cats, id);

@@ -142,7 +142,8 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
               {g.rows.map((r) => {
                 const spare = spares[r.variantId] ?? 0;
                 // Multiplier math covers spares too: candles = holders × arms (F-6.2).
-                const derivedTotal = r.derived ? Math.round((r.derived.quantity / r.quantity) * (r.quantity + spare)) : 0;
+                const withSpare = (perPlan: number) => Math.round((perPlan / r.quantity) * (r.quantity + spare));
+                const derivedTotal = r.derived ? withSpare(r.derived.quantity) : 0;
                 return (
                   <tr key={r.variantId} className="border-t border-border">
                     <td className="py-2 text-ink">
@@ -150,6 +151,18 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                       {r.derived && (
                         <span className="mt-0.5 block text-xs text-muted">
                           כולל <span className="nums">{derivedTotal}</span> {r.derived.label}
+                          {/* The flower spec, totalled for the whole event: what the florist is
+                              asked for, flower by flower, under the stem total it adds up to. */}
+                          {r.breakdown && (
+                            <span className="nums block">
+                              {r.breakdown.map((b, i) => (
+                                <span key={`${b.label}-${i}`}>
+                                  {i > 0 && " · "}
+                                  {b.label} ×{withSpare(b.quantity)}
+                                </span>
+                              ))}
+                            </span>
+                          )}
                         </span>
                       )}
                     </td>

@@ -10,12 +10,23 @@ import {
   Square,
   Flower2,
   Boxes,
+  Grid2x2,
+  Footprints,
+  PanelBottom,
+  RectangleHorizontal,
+  Fence,
+  PanelTop,
+  Accessibility,
+  Layers2,
   Wine,
   Tent,
   Blinds,
   Rainbow,
   Milestone,
   Sprout,
+  Sofa,
+  Droplets,
+  Shapes,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, StockKind } from "./types";
@@ -104,29 +115,80 @@ export interface CategoryDef {
    *  drape's height is its DROP, the one thing that still tells two rolls of curtain apart, so that
    *  category keeps asking. */
   needsHeight?: boolean;
+  /** Clicking this item on the studio's rail arms it for ONE placement rather than keeping it armed
+   *  until Escape (see `placesOnce`). For the things an event has one of — a stage, a chuppah —
+   *  where the click after the first is far likelier to be "now let me edit it" than "another one". */
+  placeOnce?: boolean;
+  /** This category's products carry a flower spec (Product.flowers): rows of flower × stems, edited
+   *  in the drawer, summed into the `stems` count-multiplier, and fanned out per flower on the
+   *  packing list and the florist's order. A category with this MUST also have the `stems` field —
+   *  the list is what fills it. Turn it on for an arch or a chuppah the day a studio specs those by
+   *  the stem; nothing else needs to change. */
+  flowers?: boolean;
+}
+
+/** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
+ *  because the catalog is mostly things laid in runs: forty tables, forty cloths, a row of columns.
+ *
+ *  Stretch items let go too, without a flag: a rug or a drape is drawn to its size the moment it
+ *  lands, and that needs it selected with its handles up — not a second one stamped beside it.
+ *  Shift on the click keeps any of them armed for the one event that really does want two. */
+export function placesOnce(c: CategoryDef | undefined): boolean {
+  return !!c && (c.placeOnce === true || c.sizing === "stretch");
 }
 
 export const CATEGORIES: CategoryDef[] = [
   { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
   { id: "chairs", label: "כיסאות", group: "grp-seating", defaultLayer: "floor", icon: Armchair, dims: "box", fields: [] },
+  // Lounge seating — a corner of sofas and armchairs round a low table, not a place laid for dinner.
+  // No seat field: a sofa is counted as one sofa on the packing list, and nothing multiplies off it.
+  { id: "sofas", label: "ספות", group: "grp-seating", defaultLayer: "floor", icon: Sofa, dims: "box", fields: [] },
   { id: "tablecloths", label: "מפות", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], anchor: "table", needsHeight: false },
   // The one category that defaults to consumable: a centrepiece is flowers far more often than it
   // is the vase they stand in, and a designer who stocks reusable pieces changes one field.
   { id: "centerpieces", label: "מרכזי שולחן", group: "grp-table-design", defaultLayer: "table", icon: Flower2, dims: "round", fields: [], defaultStock: "consumable" },
   // Flowers, bought by the stem and arranged into one piece. The stem count is a count-multiplier
   // like a chandelier's arms and behaves as one everywhere: the packing list prints "גבעולים ×
-  // arrangements" and procurement orders that many (lib/suppliers/actions.ts). How many stems the
-  // supplier sells in a bunch is a different question, and it stays where it lives — orderUnit.
-  { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable" },
+  // arrangements" and procurement orders that many (lib/suppliers/actions.ts). It is DERIVED when
+  // the arrangement carries a flower spec (`flowers` — rows of flower × stems, lib/catalog/
+  // flowers.ts) and typed only when it carries none. How many stems the supplier sells in a bunch
+  // is a different question, and it stays where it lives — orderUnit.
+  { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", flowers: true },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
-  { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [] },
+  { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [], placeOnce: true },
+  // The loose modules a stage is built from — a 200×100 deck, the 100×100 that finishes an odd row.
+  // The stage-fill tool (lib/studio/stage-fill.ts) builds from these AND from the studio's own
+  // platforms in "stages": a studio that owns a 400×300 builds a 7×4 from it and a few decks.
+  { id: "stage-decks", label: "פלטות במה", group: "grp-stages", defaultLayer: "floor", icon: Grid2x2, dims: "box", fields: [] },
+  // What a stage needs besides its decks, counted off the stage itself (lib/design-document/stage.ts)
+  // rather than placed by hand: a flight of STAIRS per opening the designer put on the plan, and the
+  // SKIRT that hides the legs along every open side — measured, so a skirt is usually priced למטר.
+  { id: "stage-stairs", label: "מדרגות במה", group: "grp-stages", defaultLayer: "floor", icon: Footprints, dims: "box", fields: [] },
+  { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [] },
+  // The other two ways an open stage edge is finished (StageEdgeKind): a banquette people sit on
+  // along the outside of the edge, and a barrier on it. Both counted by the metre off the stage.
+  { id: "stage-benches", label: "בנקטים", group: "grp-stages", defaultLayer: "floor", icon: RectangleHorizontal, dims: "box", fields: [] },
+  { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [] },
+  // A wall standing on a stage edge (a flower wall, a draped frame) by the metre; a ramp by the ramp;
+  // and what covers the deck (carpet, dance floor) by the square metre of stage.
+  { id: "stage-backdrops", label: "קירות רקע לבמה", group: "grp-stages", defaultLayer: "floor", icon: PanelTop, dims: "box", fields: [] },
+  { id: "stage-ramps", label: "רמפות נגישות", group: "grp-stages", defaultLayer: "floor", icon: Accessibility, dims: "box", fields: [] },
+  { id: "stage-surfaces", label: "משטחי במה", group: "grp-stages", defaultLayer: "floor", icon: Layers2, dims: "box", fields: [], needsHeight: false },
   { id: "bars", label: "ברים", group: "grp-bars", defaultLayer: "floor", icon: Wine, dims: "both", fields: [] },
-  { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [] },
+  { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [], placeOnce: true },
   { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch" },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
+  // Columns and pillars — a Roman column, a display plinth, a pedestal a bust stands on.
   { id: "columns", label: "עמודים", group: "grp-accessories", defaultLayer: "floor", icon: Milestone, dims: "round", fields: [] },
+  // Water features: a fountain is round far more often than not.
+  { id: "fountains", label: "מזרקות", group: "grp-accessories", defaultLayer: "floor", icon: Droplets, dims: "round", fields: [] },
+  // The long tail. "אחר" is the box for the thing the catalog has no name for yet — a prop, a sign,
+  // a sculpture, a photo booth — so it is drawn on the plan at its measured size and counted on the
+  // packing list rather than left off both for want of a category. Both shapes, because it is
+  // whatever it is.
+  { id: "other", label: "אחר", group: "grp-accessories", defaultLayer: "floor", icon: Shapes, dims: "both", fields: [] },
 ];
 
 export const CATEGORY_BY_ID: Record<string, CategoryDef> = Object.fromEntries(

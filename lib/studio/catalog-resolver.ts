@@ -9,6 +9,7 @@ import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
 import { CATEGORY_BY_ID, type Anchor, type Sizing } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
 import { tableAreaMm2 } from "./geometry";
+import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 
 export interface Resolved {
   product: Product;
@@ -32,7 +33,7 @@ export interface Resolved {
 /** The two categories whose key has to match a venue FeatureKind, so that the house staging and a
  *  hired deck are the same kind of thing as far as the floor is concerned. Every other category is
  *  its own key, under its own name. */
-const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", bars: "bar" };
+const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", "stage-decks": "stage", bars: "bar" };
 
 /**
  * Which things cannot share the same floor as this one.
@@ -50,6 +51,12 @@ export function solidKind(product: Product): string | undefined {
   if ((cat?.anchor ?? "free") !== "free" || cat?.sizing === "stretch") return undefined;
   return SOLID_BY_CATEGORY[product.category] ?? product.category;
 }
+
+/** A stage's decks, as the fill sees them, out of the primed catalog (lib/design-document/stage.ts). */
+export const deckOf: DeckLookup = (variantId) => {
+  const r = resolve(variantId);
+  return r ? deckTypeOf(variantId, r.product) : undefined;
+};
 
 export function defaultVariantId(product: Product): string {
   return product.variants[0]?.id ?? product.id;

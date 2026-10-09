@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import {
   Box,
   Grid2x2,
@@ -22,7 +22,6 @@ import {
   Footprints,
   GlassWater,
   Layers,
-  Minus,
   Plus,
   Presentation,
   Ruler,
@@ -46,21 +45,17 @@ import {
   plantSpecies,
   addEntrance,
   addStairs,
-  isHangingPoint,
   moveNode,
   nodeMap,
   removeStairs,
-  rigLengthMm,
   setWallAngle,
   setWallBulge,
   setWallLength,
   updateEntrance,
   updateFeature,
-  updateRig,
   updateStairs,
   updateWall,
   wallPoints,
-  type CeilingRig,
   type FeatureKind,
   type PlantSpecies,
   type SurfaceMaterial,
@@ -68,7 +63,6 @@ import {
   type VenueStructure,
   type WallKind,
 } from "@/lib/venues/structure";
-import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   MAX_STEPS,
   STAIRS_SIDES,
@@ -150,7 +144,6 @@ const KIND_NOUN: Record<PlanSelectionKind, string> = {
   node: "פינות",
   door: "כניסות",
   feature: "אלמנטים",
-  rig: "מוטות",
 };
 
 // This inspector's own shell — a vertical stack, not INSPECTOR_WRAP's horizontal bar. The halls
@@ -540,19 +533,6 @@ export function VenueInspector({
     );
   }
 
-  if (one.kind === "rig") {
-    const rig = (structure.rigs ?? []).find((r) => r.id === one.id);
-    if (!rig) return null;
-    return (
-      <RigPanel
-        rig={rig}
-        onChange={(patch) => apply((s) => updateRig(s, rig.id, patch))}
-        onDelete={onDelete}
-        closeBtn={closeBtn}
-      />
-    );
-  }
-
   const feature = structure.features.find((f) => f.id === one.id);
   if (!feature) return null;
   const patch = (p: Parameters<typeof updateFeature>[2]) => apply((s) => updateFeature(s, feature.id, p));
@@ -675,92 +655,6 @@ export function VenueInspector({
       <InspectorDivider orientation="column" />
       <StairsFields feature={feature} apply={apply} />
       <div className={FOOTER}>{duplicateBtn}{deleteBtn}</div>
-    </div>
-  );
-}
-
-// A ceiling rod. Its own component, not another branch inlined into VenueInspector above, because
-// its delete asks first — a native <dialog>, like every other destructive confirmation in the app —
-// and that dialog's open/close is its own piece of state; VenueInspector already returns early for
-// several other selection kinds before reaching this one, and a hook can't live after a conditional
-// return that sometimes skips it.
-function RigPanel({
-  rig,
-  onChange,
-  onDelete,
-  closeBtn,
-}: {
-  rig: CeilingRig;
-  onChange: (patch: Partial<Omit<CeilingRig, "id">>) => void;
-  onDelete: () => void;
-  closeBtn: ReactNode;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  const hanging = isHangingPoint(rig);
-  return (
-    <div className={WRAP}>
-      <div className="flex items-center justify-between gap-2">
-        <InspectorHeader icon={Minus} label="מוט תקרה" />
-        {closeBtn}
-      </div>
-      <InspectorDivider orientation="column" />
-      <InspectorGroup>
-        <input
-          value={rig.label}
-          onChange={(e) => onChange({ label: e.target.value })}
-          aria-label="שם המוט"
-          className="h-10 w-28 rounded-md border border-border bg-canvas px-2 text-sm text-ink transition-colors hover:border-accent-line focus-visible:border-accent focus-visible:outline-none"
-        />
-      </InspectorGroup>
-      <InspectorDivider orientation="column" />
-      <InspectorGroup>
-        <NumberField
-          layout="inline"
-          label="גובה (מ׳)"
-          decimals={2}
-          min={0}
-          step={0.1}
-          commitOnBlur
-          value={rig.heightMm / 1000}
-          onChange={(m) => onChange({ heightMm: Math.round(m * 1000) })}
-          className="w-20"
-        />
-        {/* loadKg is recorded and printed, never validated against (lib/venues/structure.ts) — 0
-            reads as "not rated" here exactly like a zone's blank capacity fields. */}
-        <NumberField
-          layout="inline"
-          label="עומס (ק״ג)"
-          decimals={0}
-          min={0}
-          step={5}
-          hideZero
-          commitOnBlur
-          value={rig.loadKg ?? 0}
-          onChange={(kg) => onChange({ loadKg: kg > 0 ? Math.round(kg) : undefined })}
-          className="w-20"
-        />
-      </InspectorGroup>
-      <InspectorDivider orientation="column" />
-      <span className="shrink-0 text-xs text-muted">
-        {hanging ? "נקודת תלייה" : <>אורך <span className="nums">{(rigLengthMm(rig) / 1000).toFixed(2)}</span> מ׳</>}
-      </span>
-      <InspectorDivider orientation="column" />
-      <div className={FOOTER}>
-        <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
-          <Trash2 className="h-4 w-4" strokeWidth={2} />
-          מחיקה
-        </Button>
-      </div>
-      <ConfirmDialog
-        open={confirming}
-        title={`למחוק את ${rig.label}?`}
-        confirmLabel="מחיקה"
-        onConfirm={() => {
-          setConfirming(false);
-          onDelete();
-        }}
-        onClose={() => setConfirming(false)}
-      />
     </div>
   );
 }

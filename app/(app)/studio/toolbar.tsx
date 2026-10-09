@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered } from "lucide-react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2 } from "lucide-react";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
 import { NumberField } from "@/components/number-field";
 import { Select } from "@/components/select";
+import { TextField } from "@/components/text-field";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import type { SketchTemplateSummary } from "@/lib/studio/sketches";
 
 // Slim studio sub-toolbar — sits under the app-shell topbar (which carries the title + event
 // context). Tools only: undo/redo, which zone to work in, layer visibility, and the honest save
@@ -41,6 +44,11 @@ export function Toolbar({
   numbering,
   onNumbering,
   renumberCount,
+  sketches,
+  sketchEmpty,
+  onSaveSketch,
+  onLoadSketch,
+  onDeleteSketch,
   saveState,
   onRetrySave,
 }: {
@@ -74,6 +82,13 @@ export function Toolbar({
   /** How many units the current settings would actually change — so the panel can say what pressing
    *  the button will do before it is pressed, and say "nothing" without pretending otherwise. */
   renumberCount: number;
+  /** The studio's saved sketches, and what can be done with them from here (studio-screen). */
+  sketches: SketchTemplateSummary[];
+  /** Nothing drawn yet — nothing to save, and loading needs no confirmation. */
+  sketchEmpty: boolean;
+  onSaveSketch: (name: string) => void;
+  onLoadSketch: (id: string, mode: "replace" | "add") => void;
+  onDeleteSketch: (id: string) => void;
   saveState: "saving" | "saved" | "error";
   onRetrySave: () => void;
 }) {
@@ -121,6 +136,11 @@ export function Toolbar({
         count={renumberCount}
         canRenumber={canRenumber}
       />
+
+      {/* Saved sketches: the whole drawing kept under a name, to start the next event from or to
+          load into this one. Beside the numbering panel because it is the same kind of thing — a
+          question about the document as a whole, not about what is selected in it. */}
+      <SketchMenu sketches={sketches} sketchEmpty={sketchEmpty} onSave={onSaveSketch} onLoad={onLoadSketch} onDelete={onDeleteSketch} />
 
       {/* Which part of the property to work in. It FRAMES rather than filters: the rest of the plan
           stays drawn and stays reachable, held back so the חופה reads as the thing being designed
@@ -267,7 +287,7 @@ function NumberingMenu({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className={open ? "text-accent" : undefined}
+        pressed={open}
       >
         <ListOrdered className="h-4 w-4" strokeWidth={2} />
       </IconButton>
@@ -372,6 +392,145 @@ function NumberingMenu({
           >
             {canRenumber ? `מספור מחדש · ${count} שולחנות` : "המספור כבר לפי הסדר"}
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Save the drawing under a name; load a saved one, in place of this drawing or on top of it; let
+ *  one go. A panel off one button, like the numbering menu, and for the same reason: it is used at
+ *  the start and the end of a sketch and never in between.
+ *
+ *  Loading IN PLACE asks first when there is something to lose, and says Ctrl+Z brings it back —
+ *  which is true (loadDocument is one history entry) and is what makes the confirmation a
+ *  courtesy rather than a gate. Adding never asks: it only ever puts more on the plan. */
+function SketchMenu({
+  sketches,
+  sketchEmpty,
+  onSave,
+  onLoad,
+  onDelete,
+}: {
+  sketches: SketchTemplateSummary[];
+  sketchEmpty: boolean;
+  onSave: (name: string) => void;
+  onLoad: (id: string, mode: "replace" | "add") => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [confirm, setConfirm] = useState<{ kind: "replace" | "delete"; id: string; name: string } | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      // The confirmation's own Escape closes the confirmation, not the panel under it.
+      if (e.key === "Escape" && !(e.target instanceof Element && e.target.closest("dialog"))) setOpen(false);
+    };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={box}>
+      <IconButton
+        label="סקיצות שמורות — שמירה וטעינה"
+        size="md"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        pressed={open}
+      >
+        <LayoutTemplate className="h-4 w-4" strokeWidth={2} />
+      </IconButton>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="סקיצות שמורות"
+          className="absolute top-full z-40 mt-1.5 w-80 rounded-md border border-border bg-surface p-3 shadow-lifted"
+          style={{ insetInlineStart: 0 }}
+        >
+          <p className="mb-2 text-xs leading-relaxed text-muted">
+            סקיצה שמורה היא נקודת התחלה: פותחים ממנה אירוע חדש, או טוענים אותה לכל סקיצה — במקום מה
+            שמצויר או בנוסף לו.
+          </p>
+
+          <div className="flex items-end gap-2">
+            <TextField
+              label="שמירת הסקיצה הנוכחית"
+              value={name}
+              onChange={setName}
+              placeholder="חתונה 300 באולם הגדול"
+              wrapperClassName="min-w-0 flex-1"
+            />
+            <Button
+              size="sm"
+              disabled={!name.trim() || sketchEmpty}
+              onClick={() => {
+                onSave(name.trim());
+                setName("");
+              }}
+            >
+              שמירה
+            </Button>
+          </div>
+          {sketchEmpty && <p className="mt-1 text-xs text-muted">הסקיצה ריקה — אין עדיין מה לשמור.</p>}
+
+          <div className="mt-3 border-t border-border-soft pt-2">
+            {sketches.length === 0 ? (
+              <p className="text-xs text-muted">עדיין אין סקיצות שמורות.</p>
+            ) : (
+              <ul className="max-h-64 space-y-0.5 overflow-y-auto">
+                {sketches.map((sk) => (
+                  <li key={sk.id} className="flex items-center gap-1 rounded-sm px-1.5 py-1 hover:bg-bg">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-ink">{sk.name}</div>
+                      <div className="nums text-xs text-muted">{`${sk.tables} שולחנות · ${sk.items} פריטים`}</div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      title="במקום מה שמצויר עכשיו"
+                      onClick={() => (sketchEmpty ? onLoad(sk.id, "replace") : setConfirm({ kind: "replace", id: sk.id, name: sk.name }))}
+                    >
+                      טעינה
+                    </Button>
+                    <Button size="sm" variant="ghost" title="בנוסף למה שמצויר עכשיו" onClick={() => onLoad(sk.id, "add")}>
+                      הוספה
+                    </Button>
+                    <IconButton label={`מחיקת הסקיצה ״${sk.name}״`} onClick={() => setConfirm({ kind: "delete", id: sk.id, name: sk.name })}>
+                      <Trash2 className="h-4 w-4" strokeWidth={2} />
+                    </IconButton>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <ConfirmDialog
+            open={confirm !== null}
+            title={confirm?.kind === "delete" ? `למחוק את הסקיצה ״${confirm.name}״?` : `להחליף את מה שמצויר ב״${confirm?.name ?? ""}״?`}
+            body={confirm?.kind === "replace" ? "מה שמצויר עכשיו יוחלף בסקיצה השמורה. Ctrl+Z מחזיר אותו." : undefined}
+            confirmLabel={confirm?.kind === "delete" ? "מחיקה" : "החלפה"}
+            onConfirm={() => {
+              if (confirm) {
+                if (confirm.kind === "delete") onDelete(confirm.id);
+                else onLoad(confirm.id, "replace");
+              }
+              setConfirm(null);
+            }}
+            onClose={() => setConfirm(null)}
+          />
         </div>
       )}
     </div>

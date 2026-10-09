@@ -11,7 +11,7 @@ import { nodeMap, wallPoints, type VenueStructure } from "./structure";
 import type { ResolvedZone } from "./zone";
 import { isMain } from "../self-check";
 
-export type PlanSelectionKind = "zone" | "wall" | "node" | "door" | "feature" | "rig";
+export type PlanSelectionKind = "zone" | "wall" | "node" | "door" | "feature";
 
 export interface PlanSelection {
   kind: PlanSelectionKind;
@@ -74,9 +74,6 @@ export function hitsInBox(structure: VenueStructure, zones: ResolvedZone[], box:
   }
 
   for (const f of structure.features) if (inside(f)) hits.push({ kind: "feature", id: f.id });
-
-  // A rod, like a wall, counts only when the box holds both its ends.
-  for (const r of structure.rigs ?? []) if (inside(r.a) && inside(r.b)) hits.push({ kind: "rig", id: r.id });
 
   for (const e of structure.entrances) {
     const w = structure.walls.find((x) => x.id === e.wallId);
@@ -186,18 +183,6 @@ if (isMain(import.meta.url)) {
   assert(ids(left.filter((h) => h.kind === "zone")) === "zone:z-left", "only the zone whose centre is in the box");
   assert(ids(left.filter((h) => h.kind === "feature")) === "feature:f1", "the feature inside comes along");
   assert(ids(left.filter((h) => h.kind === "door")) === "door:d1", "the door on the shared wall is in the box");
-
-  // A rod is selectable like anything else on the plan, and its id under another kind is not it.
-  {
-    const rigA: PlanSelection = { kind: "rig", id: "a" };
-    assert(ids(toggleSelection([], rigA, false)) === "rig:a", "a rod can be selected");
-    assert(ids(toggleSelection([{ kind: "wall", id: "a" }], rigA, true)) === "rig:a,wall:a", "a rod and a wall may share an id string");
-    const rigged = { ...s, rigs: [{ id: "r1", label: "מוט", a: { x: 1000, y: 1000 }, b: { x: 3000, y: 1000 }, heightMm: 4000 }] };
-    const hits = hitsInBox(rigged, [], { minX: 0, minY: 0, maxX: 5000, maxY: 5000 });
-    assert(hits.some((h) => h.kind === "rig" && h.id === "r1"), "a marquee over both ends catches the rod");
-    const partial = hitsInBox(rigged, [], { minX: 0, minY: 0, maxX: 2000, maxY: 5000 });
-    assert(!partial.some((h) => h.kind === "rig"), "…and a marquee over only one end does not");
-  }
 
   // A box in the empty middle of nothing takes nothing.
   assert(hitsInBox(s, zones, { minX: 20000, minY: 20000, maxX: 21000, maxY: 21000 }).length === 0, "an empty box selects nothing");

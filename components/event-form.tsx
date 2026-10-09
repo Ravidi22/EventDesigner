@@ -9,6 +9,8 @@ import { labelForZones } from "@/lib/events/plan";
 import { loadActiveVenueId, type Venue, type Zone } from "@/lib/venues/storage";
 import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
+import { fetchSketchTemplates } from "@/lib/studio/sketch-actions";
+import type { SketchTemplateSummary } from "@/lib/studio/sketches";
 import { Button } from "./button";
 import { Select } from "./select";
 import { MultiSelect } from "./multi-select";
@@ -62,6 +64,10 @@ export function EventForm({
   const [venueId, setVenueId] = useState(event?.venueId ?? "");
   const [zoneIds, setZoneIds] = useState<string[]>(event?.zoneIds ?? []);
   const [guests, setGuests] = useState(event?.guests ?? 0);
+  // A saved sketch to open the event on (create only — an existing event already has its drawing).
+  // "" is a blank plan, which is the common case and the one that costs nothing to say.
+  const [sketches, setSketches] = useState<SketchTemplateSummary[]>([]);
+  const [sketchId, setSketchId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Whether this form is still on screen once `onSaved` has resolved. Usually it is not — the
@@ -79,6 +85,17 @@ export function EventForm({
     void fetchVenues().then(setVenues);
     setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
   }, [event?.venueId]);
+
+  useEffect(() => {
+    if (event) return;
+    let live = true;
+    fetchSketchTemplates()
+      .then((list) => live && setSketches(list))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [event]);
 
   // The zones offered depend on the venue picked above, so this refetches when that changes.
   useEffect(() => {
@@ -151,7 +168,13 @@ export function EventForm({
       } else {
         // The venue list is already in state from the picker below — no need to go back to the
         // server for a scale we are holding.
-        await onSaved(await beginEvent({ ...fields, mmPerUnit: venues.find((v) => v.id === venueId)?.plan.mmPerUnit ?? 1 }));
+        await onSaved(
+          await beginEvent({
+            ...fields,
+            mmPerUnit: venues.find((v) => v.id === venueId)?.plan.mmPerUnit ?? 1,
+            sketchTemplateId: sketchId || undefined,
+          }),
+        );
       }
     } catch {
       setError("לא ניתן לשמור את האירוע. נסו שוב.");
@@ -235,6 +258,34 @@ export function EventForm({
             </p>
           </div>
         </div>
+
+        {/* Open the event on a saved sketch (lib/studio/sketch-actions.ts) rather than a blank plan.
+            Sketches drawn in THIS venue lead and the rest say so: a sketch from another property
+            still loads, at its own millimetres, less what hung on that property's walls. Create only
+            — an event that exists has its drawing, and the studio's own menu loads into that. */}
+        {!event && sketches.length > 0 && (
+          <div>
+            <span className={fieldLabelClassName}>התחלה מסקיצה שמורה</span>
+            <Select
+              value={sketchId}
+              onChange={setSketchId}
+              aria-label="התחלה מסקיצה שמורה"
+              options={[
+                { value: "", label: "סקיצה ריקה" },
+                ...[...sketches]
+                  .sort((a, b) => Number(!!venueId && b.venueId === venueId) - Number(!!venueId && a.venueId === venueId))
+                  .map((sk) => ({
+                    value: sk.id,
+                    label: `${sk.name} · ${sk.tables} שולחנות${venueId && sk.venueId && sk.venueId !== venueId ? " · מתחם אחר" : ""}`,
+                  })),
+              ]}
+              className="w-full"
+            />
+            <p className="mt-1.5 text-xs leading-relaxed text-muted">
+              הסקיצה נטענת לאירוע כנקודת התחלה. סקיצה שצוירה במתחם אחר מגיעה בלי הווילונות שלה.
+            </p>
+          </div>
+        )}
 
         <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

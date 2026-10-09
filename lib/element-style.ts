@@ -76,6 +76,19 @@ export function resolveStyle(style: ElementStyle | undefined, mode: StyleMode, d
   };
 }
 
+/** Is this colour dark enough that ink written on it has to go light? Perceived luminance
+ *  (ITU-R BT.601), the same rule the catalog swatches read by. Non-hex values (a CSS variable, a
+ *  token fallback) are treated as light, which is what every tint in this palette is. Shared by the
+ *  studio canvas and the rail's drag image, which both write a name or an icon inside a fill the
+ *  designer chose. */
+export function isDark(color: string): boolean {
+  const hex = color.trim().replace("#", "");
+  const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+  if (!/^[0-9a-f]{6}$/i.test(full)) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+  return (r * 299 + g * 587 + b * 114) / 1000 < 140;
+}
+
 // ponytail: self-check. Run: node --experimental-strip-types lib/element-style.ts
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {

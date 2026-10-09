@@ -1,5 +1,5 @@
 import { requireStudio } from "@/lib/auth/guard";
-import { fetchCheckpointOffsets, fetchSettings } from "@/lib/settings/actions";
+import { fetchCheckpointOffsets, fetchSettings, fetchStageRules } from "@/lib/settings/actions";
 import { fetchCurrentMember, fetchMembers } from "@/lib/team/actions";
 import { fetchGoogleStatus } from "@/lib/google/actions";
 import { SettingsScreen } from "./settings-screen";
@@ -20,7 +20,7 @@ import { SettingsScreen } from "./settings-screen";
 export default async function SettingsPage() {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
   await requireStudio();
-  const [settings, me, members, google, offsets] = await Promise.all([
+  const [settings, me, members, google, offsets, stageRules] = await Promise.all([
     fetchSettings(),
     fetchCurrentMember(),
     fetchMembers(),
@@ -33,6 +33,7 @@ export default async function SettingsPage() {
     // widening BusinessSettings with a field only one section wants. It joins the parallel read
     // rather than the checkpoint section's mount, for the reason above.
     fetchCheckpointOffsets(),
+    fetchStageRules(),
   ]);
   return (
     <SettingsScreen
@@ -41,6 +42,7 @@ export default async function SettingsPage() {
       initialMembers={members}
       initialGoogle={google}
       initialOffsets={offsets}
+      initialStageRules={stageRules}
     />
   );
 }

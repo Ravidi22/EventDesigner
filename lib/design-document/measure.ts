@@ -11,6 +11,7 @@
 // caller that has no plan to hand — the server rendering a quote from stored JSON — gets the honest
 // fallback of the item's own count. See lib/outputs/lookup.ts for the wiring.
 import type { DesignDocumentContent, Placement } from "./types";
+import { edgeItemShape, edgeKind, skirtMm, stageAreaMm2, stageCorners, stageDeckCounts, type DeckLookup, type StagePlacement, type WallDistance } from "./stage";
 import { isMain } from "../self-check";
 
 /** What a placement's amount is counted in, decided by the product's price unit. */
@@ -25,6 +26,16 @@ export interface MeasureContext {
   /** The product's catalog footprint, in mm — the fallback size for a stretch item that has not
    *  been resized on the plan yet. */
   footprintMm?: (variantId: string) => { widthMm: number; depthMm: number } | undefined;
+  /** A deck's measurements, for counting a STAGE as the decks it is built from (Placement.stage).
+   *  Absent = no catalog to lay them with, and a stage then counts as one of its own variant — a
+   *  caller that can say less says less, rather than inventing a build. */
+  deckOf?: DeckLookup;
+  /** How far a point is from the venue's nearest wall — which sides of a stage are against one, and
+   *  so need no skirt. Absent = no plan, and every side is counted as open. */
+  wallDistance?: WallDistance;
+  /** The studio's row for a stage part, for a stage that names none — one drawn before the studio
+   *  had a banquette in its catalog still bills its banquette once it does. */
+  stagePart?: (kind: "stairs" | "bench" | "barrier" | "backdrop" | "ramp" | "skirt" | "chair") => string | undefined;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -65,8 +76,69 @@ export function measure(p: Placement, ctx: MeasureContext): number {
  *  is never a stretch item, so there is nothing to measure: it is one table. */
 export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): Map<string, number> {
   const totals = new Map<string, number>();
+  const add = (variantId: string, amount: number) => totals.set(variantId, round2((totals.get(variantId) ?? 0) + amount));
   for (const p of doc.placements) {
-    totals.set(p.variantId, round2((totals.get(p.variantId) ?? 0) + measure(p, ctx)));
+    // A STAGE is the decks it is built from, each measured in its own product's price unit: a deck
+    // priced per unit counts decks, one priced per m² counts the floor they cover. Never the stage's
+    // own variant — that is only the deck it was mostly built from when it was drawn.
+    if (p.stage && ctx.deckOf) {
+      for (const [variantId, decks] of stageDeckCounts(p.stage, ctx.deckOf)) {
+        const unit = ctx.unitOf(variantId);
+        for (const d of decks)
+          add(variantId, (unit === "m2" ? (d.widthMm / 1000) * (d.depthMm / 1000) : unit === "m" ? d.widthMm / 1000 : 1) * p.quantity);
+      }
+      // Its edge items and its skirt, each in its own product's unit: by the metre, or by how many
+      // pieces of that product's width it takes — a 6m run of stairs is six 1m stair modules side by
+      // side, not one flight.
+      const runOf = (variantId: string, mm: number) => {
+        if (mm <= 0) return;
+        const unit = ctx.unitOf(variantId);
+        const piece = ctx.footprintMm?.(variantId)?.widthMm || 1000;
+        add(variantId, (unit === "unit" ? Math.ceil(mm / piece - 1e-6) : round2(mm / 1000)) * p.quantity);
+      };
+      const variantOf = (kind: "stairs" | "bench" | "barrier" | "backdrop" | "ramp") =>
+        ({
+          stairs: p.stage!.stairsVariant,
+          bench: p.stage!.benchVariant,
+          barrier: p.stage!.barrierVariant,
+          backdrop: p.stage!.backdropVariant,
+          ramp: p.stage!.rampVariant,
+        })[kind] ?? ctx.stagePart?.(kind);
+      for (const it of p.stage.stairs ?? []) {
+        const shape = edgeItemShape(p.stage, it, ctx.deckOf);
+        if (!shape) continue;
+        const kind = edgeKind(it);
+        const variant = variantOf(kind);
+        if (!variant) continue;
+        // A ramp is one ramp (or so many metres of run); everything else is measured along its edge.
+        if (kind === "ramp") add(variant, (ctx.unitOf(variant) === "m" ? round2(shape.depthMm / 1000) : 1) * p.quantity);
+        else runOf(variant, shape.widthMm);
+      }
+      // The chairs standing on its banquettes, as the studio's chairs — a table's chairs are packed
+      // off the table, a banquette's off the banquette.
+      const chairRow = ctx.stagePart?.("chair");
+      if (chairRow) {
+        const deckOf = ctx.deckOf;
+        const seated = (p.stage.stairs ?? []).reduce((n, it) => n + (edgeKind(it) === "bench" ? (edgeItemShape(p.stage!, it, deckOf)?.seats ?? 0) : 0), 0);
+        if (seated > 0) add(chairRow, seated * p.quantity);
+      }
+      // Corner pieces: one more stair module for a stair corner; a banquette corner adds its depth.
+      for (const c of stageCorners(p.stage, ctx.deckOf)) {
+        const variant = variantOf(c.kind);
+        if (!variant) continue;
+        if (c.kind === "stairs" && ctx.unitOf(variant) === "unit") add(variant, p.quantity);
+        else runOf(variant, c.depthMm);
+      }
+      // The surface: by the square metre of deck.
+      if (p.stage.surfaceVariant) {
+        const m2 = stageAreaMm2(p.stage) / 1e6;
+        add(p.stage.surfaceVariant, (ctx.unitOf(p.stage.surfaceVariant) === "m2" ? round2(m2) : 1) * p.quantity);
+      }
+      const skirt = p.stage.skirtVariant ?? ctx.stagePart?.("skirt");
+      if (skirt) runOf(skirt, skirtMm(p as StagePlacement, ctx.deckOf, ctx.wallDistance));
+      continue;
+    }
+    add(p.variantId, measure(p, ctx));
   }
   for (const t of doc.tables) {
     if (!t.variantId) continue;
@@ -125,6 +197,90 @@ if (isMain(import.meta.url)) {
   assert(tabled.get("round180") === 2, "two tables of the same row total two");
   assert(tabled.get("candlestick") === 4, "…alongside the placements, untouched");
   assert(tabled.size === 2, "a table with no catalog row adds nothing to total");
+
+  // A stage counts as its decks, in each deck's own unit.
+  const stageCtx: MeasureContext = {
+    unitOf: (v) => (v === "deck-m2" ? "m2" : "unit"),
+    deckOf: (v) => (v === "deck" || v === "deck-m2" ? { id: v, widthMm: 2000, depthMm: 1000 } : undefined),
+  };
+  const stage = (decks: string[]) => ({
+    ...base,
+    id: "s",
+    variantId: decks[0],
+    quantity: 1,
+    stage: { outline: [{ x: -3000, y: -2000 }, { x: 3000, y: -2000 }, { x: 3000, y: 2000 }, { x: -3000, y: 2000 }], front: 0, decks },
+  });
+  const byDeck = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [stage(["deck"])] }, stageCtx);
+  assert(byDeck.get("deck") === 12, "a 6×4 stage of 2×1 decks priced per unit is twelve decks");
+  const byArea = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [stage(["deck-m2"])] }, stageCtx);
+  assert(byArea.get("deck-m2") === 24, "…and priced per m², twenty-four square metres");
+  const finished = measureTotals(
+    {
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [
+        {
+          ...stage(["deck"]),
+          stage: {
+            ...stage(["deck"]).stage,
+            stairs: [{ id: "f", edge: 1, t: 0.5, widthMm: 1000 }],
+            stairsVariant: "stairs",
+            skirtVariant: "skirt",
+          },
+        },
+      ],
+    },
+    { ...stageCtx, unitOf: (v) => (v === "skirt" ? "m" : "unit"), wallDistance: (p) => Math.abs(p.y - 2000) },
+  );
+  assert(finished.get("stairs") === 1, "a stage with one flight orders one flight");
+  assert(finished.get("skirt") === 13, "…and 13m of skirt: front 6 and two sides of 4, less the flight's metre, with the back against the wall");
+
+  const edged = measureTotals(
+    {
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [
+        {
+          ...stage(["deck"]),
+          stage: {
+            ...stage(["deck"]).stage,
+            stairs: [
+              { id: "s", edge: 1, t: 0.5, widthMm: 0, full: true },
+              { id: "b", kind: "bench" as const, edge: 0, t: 0.5, widthMm: 0, full: true },
+              { id: "r", kind: "barrier" as const, edge: 3, t: 0.5, widthMm: 2500 },
+            ],
+            stairsVariant: "stairs",
+            benchVariant: "bench",
+            barrierVariant: "rail",
+          },
+        },
+      ],
+    },
+    { ...stageCtx, unitOf: (v) => (v === "bench" || v === "rail" ? "m" : "unit") },
+  );
+  assert(edged.get("stairs") === 4, "stairs the whole of a 4m side are four 1m stair modules");
+  assert(edged.get("bench") === 6 && edged.get("rail") === 2.5, "…a banquette along the 6m front is 6m, and a barrier its own 2.5m");
+  const floored = measureTotals(
+    {
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [{ ...stage(["deck"]), stage: { ...stage(["deck"]).stage, surfaceVariant: "carpet" } }],
+    },
+    { ...stageCtx, unitOf: (v) => (v === "carpet" ? "m2" : "unit") },
+  );
+  assert(floored.get("carpet") === 24, "a carpet on a 6×4 stage is 24m²");
+  const seatedBench = measureTotals(
+    {
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [{ ...stage(["deck"]), stage: { ...stage(["deck"]).stage, stairs: [{ id: "b", kind: "bench" as const, edge: 0, t: 0.5, widthMm: 0, full: true }] } }],
+    },
+    { ...stageCtx, stagePart: (k) => (k === "chair" ? "chair" : undefined) },
+  );
+  assert(seatedBench.get("chair") === 10, "a banquette along a 6m front packs its ten chairs");
+
+  const noCatalog = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [stage(["deck"])] }, { unitOf: () => "unit" });
+  assert(noCatalog.get("deck") === 1, "with no catalog to lay it with, a stage counts as itself rather than guessing");
 
   console.log("measure self-check passed");
 }

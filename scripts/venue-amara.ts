@@ -460,6 +460,7 @@ function previewSvg(): string {
     const fp = featureFootprint(f);
     const shape =
       fp.kind === "custom" ? `<polygon points="${poly(fp.outline)}"/>`
+      : fp.kind === "multi" ? fp.parts.map((p) => `<polygon points="${poly(p.outline)}"/>`).join("")
       : fp.kind === "circle" ? `<circle r="${fp.diameterMm / 2}"/>`
       : fp.kind === "ellipse" ? `<ellipse rx="${fp.widthMm / 2}" ry="${fp.depthMm / 2}"/>`
       : `<rect x="${-fp.widthMm / 2}" y="${-fp.depthMm / 2}" width="${fp.widthMm}" height="${fp.depthMm}"/>`;

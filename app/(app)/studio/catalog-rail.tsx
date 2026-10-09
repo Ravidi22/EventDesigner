@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Heart, SlidersHorizontal, X } from "lucide-react";
+import { Heart, MousePointerClick, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
@@ -35,6 +35,10 @@ export function CatalogRail({
   groups,
   hint,
   mmPerPx,
+  onAddProduct,
+  addedIds = [],
+  armedId = null,
+  onArm,
 }: {
   products?: Product[];
   groups?: CategoryGroupId[];
@@ -43,6 +47,17 @@ export function CatalogRail({
    *  reads once, at the moment a drag starts, so the picture under the pointer is the item at the
    *  size it will land. Absent = a sensible hall zoom, which is what the rail assumed before. */
   mmPerPx?: RefObject<number>;
+  /** Opens the product form over the studio — so an item the client asks for that the catalog does
+   *  not have yet is made here, mid-meeting, instead of by leaving the meeting for /catalog. */
+  onAddProduct?: () => void;
+  /** Products added from this rail since the screen opened, newest first. They are pinned above
+   *  everything, because the reason one was just made is to drag it onto the plan. */
+  addedIds?: string[];
+  /** The product a click on the plan will place, while one is armed (click-to-place). */
+  armedId?: string | null;
+  /** A click on a row arms it; a click on the armed row, or the start of a drag, lets go (null).
+   *  Absent = rows are drag-only, as they were. */
+  onArm?: (productId: string | null) => void;
 } = {}) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
@@ -70,25 +85,38 @@ export function CatalogRail({
     };
   }, []);
 
+  // A product just added clears the filters, during render rather than in an effect (the same
+  // pattern as useCatalog's seed): a search for "פמוט" still typed in the box would otherwise hide
+  // the new "קשת ורדים" the designer is about to reach for.
+  const [seenAdded, setSeenAdded] = useState(addedIds.length);
+  if (addedIds.length !== seenAdded) {
+    setSeenAdded(addedIds.length);
+    setFilters(EMPTY_FILTERS);
+  }
+
   const set = (patch: Partial<FilterState>) => setFilters((f) => ({ ...f, ...patch }));
   const toggleTag = (tag: string) =>
     setFilters((f) => ({ ...f, tags: f.tags.includes(tag) ? f.tags.filter((t) => t !== tag) : [...f.tags, tag] }));
 
   const allowedGroups = useMemo(() => (groups ? new Set(groups) : null), [groups]);
 
-  const { liked, rest } = useMemo(() => {
+  const { added, liked, rest } = useMemo(() => {
     const byId = new Map(products.map((p) => [p.id, p]));
+    const addedSet = new Set(addedIds);
     const likedSet = new Set(likedIds);
     const inScope = (p: Product) => !allowedGroups || allowedGroups.has(CATEGORY_BY_ID[p.category]?.group);
     const match = (p: Product) => inScope(p) && matchesFilters(p, filters);
     // The event folder is filtered too, not exempted: a search for "פמוט" that still shows six
     // liked chuppah photos above the result is a search that didn't happen.
-    const liked = likedIds.map((id) => byId.get(id)).filter((p): p is Product => !!p && match(p));
-    const rest = products.filter((p) => !likedSet.has(p.id) && match(p));
-    return { liked, rest };
-  }, [filters, likedIds, products, allowedGroups]);
+    const added = addedIds.map((id) => byId.get(id)).filter((p): p is Product => !!p && match(p));
+    const liked = likedIds
+      .map((id) => byId.get(id))
+      .filter((p): p is Product => !!p && !addedSet.has(p.id) && match(p));
+    const rest = products.filter((p) => !addedSet.has(p.id) && !likedSet.has(p.id) && match(p));
+    return { added, liked, rest };
+  }, [filters, addedIds, likedIds, products, allowedGroups]);
 
-  const empty = liked.length === 0 && rest.length === 0;
+  const empty = added.length === 0 && liked.length === 0 && rest.length === 0;
   const active = hasActiveFilters(filters);
 
   return (
@@ -120,6 +148,17 @@ export function CatalogRail({
               <span className="absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-accent" aria-hidden />
             )}
           </button>
+          {onAddProduct && (
+            <button
+              type="button"
+              onClick={onAddProduct}
+              aria-label="הוספת פריט חדש לקטלוג"
+              title="הוספת פריט חדש לקטלוג"
+              className="shrink-0 rounded-md border border-border p-2 text-muted transition-colors hover:border-accent-line hover:bg-accent-tint hover:text-accent"
+            >
+              <Plus className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          )}
         </div>
 
         {showFilters && (
@@ -158,6 +197,19 @@ export function CatalogRail({
       </div>
 
       <div className="scroll-slim flex-1 overflow-y-auto p-2">
+        {added.length > 0 && (
+          <>
+            <SectionLabel>
+              <Sparkles className="h-3.5 w-3.5 text-accent" strokeWidth={2} />
+              נוסף עכשיו
+            </SectionLabel>
+            <ul className="mb-4 flex flex-col gap-1">
+              {added.map((p) => (
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
+              ))}
+            </ul>
+          </>
+        )}
         {liked.length > 0 && (
           <>
             <SectionLabel>
@@ -167,21 +219,24 @@ export function CatalogRail({
             </SectionLabel>
             <ul className="flex flex-col gap-1">
               {liked.map((p) => (
-                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} />
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
               ))}
             </ul>
             <SectionLabel className="mt-4">כל הקטלוג</SectionLabel>
           </>
         )}
+        {added.length > 0 && liked.length === 0 && rest.length > 0 && <SectionLabel>כל הקטלוג</SectionLabel>}
         <ul className="flex flex-col gap-1">
           {rest.map((p) => (
-            <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} />
+            <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
           ))}
         </ul>
         {empty && <p className="p-4 text-center text-sm text-muted">אין תוצאות</p>}
       </div>
       <p className="border-t border-border px-3 py-2 text-xs leading-relaxed text-muted">
-        {hint ?? "גרור פריט אל האולם. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה."}
+        {armedId
+          ? "לחיצה על התוכנית מניחה את הפריט המסומן. Esc, לחיצה ימנית או לחיצה נוספת על הפריט — לסיום."
+          : (hint ?? "לחצו על פריט ואז על התוכנית, או גררו אותו. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה.")}
       </p>
     </aside>
   );
@@ -228,12 +283,42 @@ function showPlanGlyph(e: React.DragEvent, product: Product, mmPerPx: number) {
   }, 0);
 }
 
-function ProductRow({ product: p, mmPerPx }: { product: Product; mmPerPx?: RefObject<number> }) {
+function ProductRow({
+  product: p,
+  mmPerPx,
+  armed,
+  onArm,
+}: {
+  product: Product;
+  mmPerPx?: RefObject<number>;
+  armed: boolean;
+  onArm?: (productId: string | null) => void;
+}) {
+  const toggle = () => onArm?.(armed ? null : p.id);
   return (
     <li>
       <div
         draggable
+        // A button as well as a drag source: a click arms the row and the plan places it, click after
+        // click, until Escape — forty tables are forty clicks, not forty drags across the screen.
+        role={onArm ? "button" : undefined}
+        tabIndex={onArm ? 0 : undefined}
+        aria-pressed={onArm ? armed : undefined}
+        title={onArm ? (armed ? "לחיצה נוספת מפסיקה את ההנחה" : "לחיצה — הנחה על התוכנית; גרירה — הנחה אחת") : undefined}
+        onClick={onArm ? toggle : undefined}
+        onKeyDown={
+          onArm
+            ? (e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                toggle();
+              }
+            : undefined
+        }
         onDragStart={(e) => {
+          // A drag is its own one-off placement; holding an armed item through it would leave the
+          // plan placing something the designer has visibly moved on from.
+          if (armed) onArm?.(null);
           e.dataTransfer.setData("text/product", p.id);
           e.dataTransfer.effectAllowed = "copy";
           // The canvas cannot read dataTransfer until the drop, so it is told separately how big
@@ -242,16 +327,26 @@ function ProductRow({ product: p, mmPerPx }: { product: Product; mmPerPx?: RefOb
           showPlanGlyph(e, p, mmPerPx?.current ?? 20);
         }}
         onDragEnd={dropCarried}
-        className="group flex cursor-grab items-center gap-2.5 rounded-md border border-transparent p-1.5 transition-colors hover:border-border hover:bg-bg active:cursor-grabbing"
+        className={
+          "group flex cursor-grab items-center gap-2.5 rounded-md border p-1.5 transition-colors active:cursor-grabbing " +
+          (armed ? "border-accent-line bg-accent-tint" : "border-transparent hover:border-border hover:bg-bg")
+        }
       >
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border">
           <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} productId={p.id} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-ink">{p.name}</p>
+          <p className={"truncate text-sm font-medium " + (armed ? "text-accent" : "text-ink")}>{p.name}</p>
           <p className="nums truncate text-xs text-muted">{formatDimensions(p.dimensions)}</p>
         </div>
-        <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">{LAYER_LABEL[p.layer]}</span>
+        {armed ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-surface px-1.5 py-0.5 text-xs font-semibold text-accent">
+            <MousePointerClick className="h-3.5 w-3.5" strokeWidth={2} />
+            מניחים
+          </span>
+        ) : (
+          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">{LAYER_LABEL[p.layer]}</span>
+        )}
       </div>
     </li>
   );

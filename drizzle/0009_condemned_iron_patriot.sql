@@ -1,0 +1,1 @@
+ALTER TABLE "studio_settings" ADD COLUMN "stage_templates" jsonb;

@@ -1,8 +1,9 @@
-import type { Footprint } from "./footprint";
-import { customShapeBounds } from "./footprint";
+import type { BuiltOutline, Footprint } from "./footprint";
+import { flattenEdge, footprintOutlines } from "./footprint";
 import { absoluteControlPoints } from "./geometry";
 import type { EdgeCurve, Point } from "./hall";
 import { isMain } from "../self-check";
+import { buildArcOutline } from "./footprint";
 
 // Where the chairs go.
 //
@@ -67,30 +68,138 @@ export const CHAIR_BACK_MM = 95;
  *  edge is under the table. */
 export const CHAIR_OFFSET_MM = CHAIR_D_MM / 2 - CHAIR_TUCK_MM;
 
+const CURVE_STEPS = 16; // per bowed edge of an outline
 const CIRCLE_STEPS = 96; // fine enough that a sampled circle is a circle at any zoom a hall is seen at
-const CURVE_STEPS = 16; // per bowed edge of a custom outline
 
-const cubicAt = (t: number, a: Point, c1: Point, c2: Point, b: Point): Point => {
-  const u = 1 - t;
-  const w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t;
+/** One side of a table as the seating sees it — a run of edge somebody could sit along.
+ *
+ *  A SIDE IS NOT AN EDGE of the outline. A derived shape cuts its arcs into quarters so that every
+ *  extreme is a vertex (lib/studio/footprint.ts, rule 2), and a חצי עיגול is therefore three edges
+ *  for what anyone at the table would call two sides: the flat one and the bow. Edges that meet
+ *  SMOOTHLY — same direction on both sides of the vertex — are one side here, so the bow's chairs
+ *  are spaced evenly along the whole bow instead of centred on each quarter of it, and a designer
+ *  blocking "the bow" blocks one thing rather than two halves of it. */
+export interface SeatSide {
+  pts: Point[];
+  lengths: number[];
+  len: number;
+  /** +1 or −1: the winding of the outline this side belongs to, which is what says which way is
+   *  OUT. Not the direction from the centre — on the inner edge of a ring or a ח, out is toward the
+   *  middle, and a chair there faces the other way. */
+  orient: number;
+  /** The side is buried against another shape of the same item — the seam where a round end meets
+   *  its counter. Not an edge anybody sits at, so it takes no chairs, blocked or not. */
+  covered: boolean;
+}
+
+const dist = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
+
+const SMOOTH_COS = Math.cos((3 * Math.PI) / 180); // within 3° reads as one continuous edge
+
+function smooth(u: Point, v: Point): boolean {
+  const lu = Math.hypot(u.x, u.y);
+  const lv = Math.hypot(v.x, v.y);
+  if (lu === 0 || lv === 0) return false;
+  return (u.x * v.x + u.y * v.y) / (lu * lv) > SMOOTH_COS;
+}
+
+/** Shoelace sign of a closed polyline — which way round it was drawn. */
+function windingOf(pts: Point[]): number {
+  let sum = 0;
+  pts.forEach((p, i) => {
+    const q = pts[(i + 1) % pts.length];
+    sum += p.x * q.y - q.x * p.y;
+  });
+  return sum >= 0 ? 1 : -1;
+}
+
+/** One closed outline's sides: its edges flattened, then joined wherever two meet smoothly. */
+function outlineSides(o: BuiltOutline): { sides: Point[][]; polygon: Point[]; orient: number } {
+  const n = o.outline.length;
+  const edges = o.outline.map((a, i) => {
+    const b = o.outline[(i + 1) % n];
+    const curve: EdgeCurve | null = o.edgeCurves?.[i] ?? null;
+    const pts = flattenEdge(a, b, curve, CURVE_STEPS);
+    // The direction the edge leaves its start and arrives at its end — the control arms when it is
+    // curved, the chord when it is not (or when an arm is folded onto its own endpoint).
+    const { c1, c2 } = curve ? absoluteControlPoints(a, b, curve) : { c1: b, c2: a };
+    const leave = dist(a, c1) > 1e-6 ? { x: c1.x - a.x, y: c1.y - a.y } : { x: b.x - a.x, y: b.y - a.y };
+    const arrive = dist(c2, b) > 1e-6 ? { x: b.x - c2.x, y: b.y - c2.y } : { x: b.x - a.x, y: b.y - a.y };
+    return { pts, leave, arrive };
+  });
+  const polygon = edges.flatMap((e) => e.pts.slice(0, -1));
+  const orient = windingOf(polygon);
+  const joins = (i: number) => smooth(edges[(i - 1 + n) % n].arrive, edges[i].leave);
+
+  // Start at a corner, so no side is split in two by where the outline happened to begin. An
+  // outline with no corner at all is one closed loop — a circle drawn as four quarters.
+  const start = edges.findIndex((_, i) => !joins(i));
+  if (start === -1) return { sides: [[...polygon, polygon[0]]], polygon, orient };
+  const sides: Point[][] = [];
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n;
+    if (k > 0 && joins(i)) sides[sides.length - 1].push(...edges[i].pts.slice(1));
+    else sides.push([...edges[i].pts]);
+  }
+  return { sides, polygon, orient };
+}
+
+function inside(p: Point, poly: Point[]): boolean {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) hit = !hit;
+  }
+  return hit;
+}
+
+/** A point `along` a side, with the outward normal of the segment it landed on. */
+function pointOnSide(side: SeatSide, along: number): { on: Point; nx: number; ny: number } {
+  const { pts, lengths, orient } = side;
+  let seg = 0;
+  let walked = 0;
+  while (seg < lengths.length - 1 && walked + lengths[seg] < along) {
+    walked += lengths[seg];
+    seg++;
+  }
+  const a = pts[seg];
+  const b = pts[seg + 1];
+  const len = lengths[seg] || 1;
+  const t = Math.min(1, Math.max(0, (along - walked) / len));
+  // The edge's OWN normal, turned outward by the outline's winding. Not the direction from the
+  // centre: at the corner of a long banquet table those differ by nearly 45°, and a chair square to
+  // the side it belongs to is the difference between a plan that reads and one that looks knocked
+  // over — and on the inside of a ring, the centre is the direction that is OUT.
+  const dx = (b.x - a.x) / len;
+  const dy = (b.y - a.y) / len;
   return {
-    x: w0 * a.x + w1 * c1.x + w2 * c2.x + w3 * b.x,
-    y: w0 * a.y + w1 * c1.y + w2 * c2.y + w3 * b.y,
+    on: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t },
+    nx: orient * dy,
+    ny: -orient * dx,
   };
-};
+}
 
-/** The footprint's edges, in its own centred frame — one open polyline per SIDE, each walked from
- *  its own start so the chairs on it can be centred on it.
+/** How far out from a side to look for another shape of the same item. */
+const SEAM_PROBE_MM = 60;
+
+/** The footprint's sides, in its own centred frame — each walked from its own start so the chairs on
+ *  it can be centred on it. The INDEX of a side in this list is what MapAppearance.blockedSides and
+ *  DesignTable.blockedSides store.
  *
- *  A rectangle has four. A circle has ONE, the whole loop, which is why a round table still gets the
- *  even ring it always did. A custom shape has one per edge of its outline.
+ *  A rectangle has four. A circle or an ellipse has ONE, the whole loop, which is why a round table
+ *  still gets the even ring it always did. Every other shape has one per run of smoothly joined
+ *  edges (see SeatSide), and a composite item has the sides of each of its shapes in turn, the
+ *  seams between them marked `covered`.
  *
- *  A BOWED EDGE IS SAMPLED, not shortened to its chord. The one custom shape in the base library is
- *  the חצי עיגול, whose outline is two quarter-arcs over a chord — walking the chord instead puts
- *  its chairs up to 175mm inside the table, which at that size means they vanish under it. The
- *  flattening lives here because this is the only caller that needs one: everything else draws the
- *  curve, and SVG can draw a bezier. */
-function sidesOf(f: Footprint): Point[][] {
+ *  A BOWED EDGE IS SAMPLED, not shortened to its chord: walking the chord of a חצי עיגול's bow puts
+ *  its chairs up to 175mm inside the table, which at that size means they vanish under it. */
+export function seatSides(f: Footprint): SeatSide[] {
+  const measure = (pts: Point[], orient: number, covered = false): SeatSide => {
+    const lengths = pts.slice(0, -1).map((p, i) => dist(p, pts[i + 1]));
+    return { pts, lengths, len: lengths.reduce((a, b) => a + b, 0), orient, covered };
+  };
+
   if (f.kind === "circle" || f.kind === "ellipse") {
     const rx = (f.kind === "circle" ? f.diameterMm : f.widthMm) / 2;
     const ry = (f.kind === "circle" ? f.diameterMm : f.depthMm) / 2;
@@ -98,42 +207,35 @@ function sidesOf(f: Footprint): Point[][] {
       const a = (i / CIRCLE_STEPS) * Math.PI * 2;
       return { x: Math.cos(a) * rx, y: Math.sin(a) * ry };
     });
-    return [loop]; // closed by repeating the first point — one side, walked all the way round
+    return [measure(loop, 1)]; // closed by repeating the first point — one side, walked all the way round
   }
-  if (f.kind === "custom") {
-    const b = customShapeBounds(f.outline);
-    const at = (i: number) => ({ x: f.outline[i].x - b.cx, y: f.outline[i].y - b.cy });
-    return f.outline.map((_, i) => {
-      const a = at(i);
-      const end = at((i + 1) % f.outline.length);
-      // Offsets are relative to the edge's OWN endpoints (the EdgeCurve convention), so they
-      // survive the recentring above untouched.
-      const curve: EdgeCurve | null = f.edgeCurves?.[i] ?? null;
-      if (!curve) return [a, end];
-      const { c1, c2 } = absoluteControlPoints(a, end, curve);
-      const pts = [a];
-      for (let k = 1; k < CURVE_STEPS; k++) pts.push(cubicAt(k / CURVE_STEPS, a, c1, c2, end));
-      pts.push(end);
-      return pts;
-    });
+  if (f.kind === "rect") {
+    const w = f.widthMm / 2;
+    const d = f.depthMm / 2;
+    const c = [
+      { x: -w, y: -d },
+      { x: w, y: -d },
+      { x: w, y: d },
+      { x: -w, y: d },
+    ];
+    return [0, 1, 2, 3].map((i) => measure([c[i], c[(i + 1) % 4]], 1));
   }
-  const w = f.widthMm / 2;
-  const d = f.depthMm / 2;
-  const c = [
-    { x: -w, y: -d },
-    { x: w, y: -d },
-    { x: w, y: d },
-    { x: -w, y: d },
-  ];
-  return [
-    [c[0], c[1]],
-    [c[1], c[2]],
-    [c[2], c[3]],
-    [c[3], c[0]],
-  ];
-}
 
-const dist = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
+  const parts = footprintOutlines(f).map(outlineSides);
+  const out: SeatSide[] = [];
+  parts.forEach((part, pi) => {
+    for (const pts of part.sides) {
+      const side = measure(pts, part.orient);
+      if (parts.length > 1 && side.len > 0) {
+        const { on, nx, ny } = pointOnSide(side, side.len / 2);
+        const probe = { x: on.x + nx * SEAM_PROBE_MM, y: on.y + ny * SEAM_PROBE_MM };
+        side.covered = parts.some((other, oi) => oi !== pi && inside(probe, other.polygon));
+      }
+      out.push(side);
+    }
+  });
+  return out;
+}
 
 /** Split `count` between sides in proportion to their lengths, exactly — largest remainder, so the
  *  shares always add back up to `count` however the rounding falls. A side too short to earn one
@@ -150,86 +252,137 @@ function apportion(lengths: number[], count: number): number[] {
     .sort((a, b) => b.frac - a.frac || b.len - a.len);
   for (const o of order) {
     if (left <= 0) break;
+    if (lengths[o.i] <= 0) continue;
     share[o.i]++;
     left--;
   }
   return share;
 }
 
-/** How a RECTANGLE shares its chairs out: [top, right, bottom, left], with top === bottom and
- *  left === right, matching the side order sidesOf builds.
- *
- *  Chairs are apportioned in PAIRS — half the count, split between one width-side and one
- *  depth-side by length, then mirrored. An odd chair cannot be mirrored, so it goes on the longest
- *  side, where there is the most room for it and the asymmetry shows least. */
-function apportionRect(widthMm: number, depthMm: number, count: number): number[] {
-  const pairs = Math.floor(count / 2);
-  const [w, d] = apportion([widthMm, depthMm], pairs);
-  const share = [w, d, w, d];
-  if (count % 2 === 1) share[widthMm >= depthMm ? 0 : 1]++;
+/** How many chairs one side can take without two of them sharing a floor tile — measured along the
+ *  line the chairs actually stand on, not along the table edge. On a convex edge that line is longer
+ *  than the edge; on a CONCAVE one — the inside of a ring — it is shorter, and on a small quarter
+ *  ring it is shorter than a single chair. Shared out by edge length alone, that inner curve was
+ *  handed three chairs to stack on one spot. */
+export const SEAT_PITCH_MM = CHAIR_W_MM + 40;
+function capacityOf(side: SeatSide, offsetMm: number): number {
+  const STEPS = 32;
+  let run = 0;
+  let prev: Point | null = null;
+  for (let k = 0; k <= STEPS; k++) {
+    const { on, nx, ny } = pointOnSide(side, (k / STEPS) * side.len);
+    const p = { x: on.x + nx * offsetMm, y: on.y + ny * offsetMm };
+    if (prev) run += dist(prev, p);
+    prev = p;
+  }
+  // A closed loop (a round table) is `run` of chairs end to end; an open side also gets one at each
+  // end's half-pitch, which is the same count.
+  return Math.floor(run / SEAT_PITCH_MM + 1e-9);
+}
+
+/** Proportional shares, then any side over its capacity hands the excess to sides with room — by
+ *  length again among those. When every side is full the excess stays where it fell: the seat count
+ *  is what the packing list orders, and the plan showing a crowded table is the plan telling the
+ *  truth about it. */
+function apportionCapped(lengths: number[], caps: number[], count: number): number[] {
+  const share = apportion(lengths, count);
+  for (let round = 0; round < lengths.length; round++) {
+    let excess = 0;
+    share.forEach((n, i) => {
+      if (n > caps[i]) {
+        excess += n - caps[i];
+        share[i] = caps[i];
+      }
+    });
+    if (excess === 0) return share;
+    const room = lengths.map((l, i) => (share[i] < caps[i] ? l : 0));
+    if (room.every((l) => l <= 0)) {
+      // Nowhere left: put it back where length says, overflow and all.
+      return apportion(lengths, count);
+    }
+    const extra = apportion(room, excess);
+    extra.forEach((n, i) => (share[i] += n));
+  }
   return share;
 }
 
-/** A point `along` one side, with the outward normal of the segment it landed on. */
-function walkSide(pts: Point[], lengths: number[], along: number, offsetMm: number): Seat {
-  let seg = 0;
-  let walked = 0;
-  while (seg < lengths.length - 1 && walked + lengths[seg] < along) {
-    walked += lengths[seg];
-    seg++;
+/** How a RECTANGLE shares its chairs out: [top, right, bottom, left], with top === bottom and
+ *  left === right, matching the side order seatSides builds.
+ *
+ *  Chairs are apportioned in PAIRS — half the count, split between one width-side and one
+ *  depth-side by length, then mirrored. An odd chair cannot be mirrored, so it goes on the longest
+ *  side, where there is the most room for it and the asymmetry shows least.
+ *
+ *  With sides blocked there is no cross to lay, so the open sides share by length — and then any
+ *  two OPPOSITE sides that are both still open even out between them, which is what keeps a head
+ *  table with its back to the room from seating three at one end and two at the other. */
+function apportionRect(widthMm: number, depthMm: number, count: number, open: boolean[]): number[] {
+  if (open.every(Boolean)) {
+    const pairs = Math.floor(count / 2);
+    const [w, d] = apportion([widthMm, depthMm], pairs);
+    const share = [w, d, w, d];
+    if (count % 2 === 1) share[widthMm >= depthMm ? 0 : 1]++;
+    return share;
   }
-  const a = pts[seg];
-  const b = pts[seg + 1];
-  const len = lengths[seg] || 1;
-  const t = Math.min(1, Math.max(0, (along - walked) / len));
-  const on = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-
-  // The edge's OWN normal, turned to point away from the middle of the shape. Not the direction
-  // from the centre: at the corner of a long banquet table those differ by nearly 45°, and a chair
-  // square to the side it belongs to is the difference between a plan that reads and one that looks
-  // knocked over.
-  let nx = (b.y - a.y) / len;
-  let ny = -(b.x - a.x) / len;
-  if (nx * on.x + ny * on.y < 0) {
-    nx = -nx;
-    ny = -ny;
+  const share = apportion([widthMm, depthMm, widthMm, depthMm].map((l, i) => (open[i] ? l : 0)), count);
+  // A side whose opposite is blocked has nothing to mirror — the odd chair of a pair goes there.
+  const lone = [0, 1, 2, 3].find((i) => open[i] && !open[(i + 2) % 4]);
+  for (const [a, b] of [[0, 2], [1, 3]]) {
+    if (!open[a] || !open[b]) continue;
+    let both = share[a] + share[b];
+    if (both % 2 === 1 && lone !== undefined) {
+      both--;
+      share[lone]++;
+    }
+    share[a] = Math.ceil(both / 2);
+    share[b] = Math.floor(both / 2);
   }
-  return {
-    x: on.x + nx * offsetMm,
-    y: on.y + ny * offsetMm,
-    // Facing the table: the inward direction, which is the normal reversed.
-    facingDeg: (Math.atan2(-ny, -nx) * 180) / Math.PI,
-  };
+  return share;
 }
 
 /**
  * `count` chairs around a footprint, each tucked `CHAIR_TUCK_MM` under its edge and facing it.
  *
- * Each side takes a share proportional to its length and then centres it: `n` chairs on a side of
- * length `L` sit at `(k + 0.5) · L / n` from that side's own start, which is symmetric about its
- * midpoint and leaves the same margin at both corners. On a round table there is one side and the
- * same formula is the even ring.
+ * Each open side takes a share proportional to its length and then centres it: `n` chairs on a
+ * side of length `L` sit at `(k + 0.5) · L / n` from that side's own start, which is symmetric about
+ * its midpoint and leaves the same margin at both corners. On a round table there is one side and
+ * the same formula is the even ring.
+ *
+ * `blocked` are indices into seatSides(). The count is NOT reduced by them — it is what the packing
+ * list orders, so the chairs move to the sides that are open. Every side blocked seats nobody on the
+ * plan, which is what the designer said.
  */
-export function seatsAround(footprint: Footprint, count: number, offsetMm = CHAIR_OFFSET_MM): Seat[] {
+export function seatsAround(
+  footprint: Footprint,
+  count: number,
+  offsetMm = CHAIR_OFFSET_MM,
+  blocked: readonly number[] = [],
+): Seat[] {
   if (count <= 0) return [];
-  const sides = sidesOf(footprint)
-    .map((pts) => {
-      const lengths = pts.slice(0, -1).map((p, i) => dist(p, pts[i + 1]));
-      return { pts, lengths, len: lengths.reduce((a, b) => a + b, 0) };
-    })
-    .filter((s) => s.len > 0);
-  if (sides.length === 0) return [];
+  const sides = seatSides(footprint);
+  const open = sides.map((s, i) => s.len > 0 && !s.covered && !blocked.includes(i));
+  if (!open.some(Boolean)) return [];
 
   // A rectangle is laid in a cross; anything else is shared out by length alone.
   const share =
-    footprint.kind === "rect" && sides.length === 4
-      ? apportionRect(footprint.widthMm, footprint.depthMm, count)
-      : apportion(sides.map((s) => s.len), count);
+    footprint.kind === "rect"
+      ? apportionRect(footprint.widthMm, footprint.depthMm, count, open)
+      : apportionCapped(
+          sides.map((s, i) => (open[i] ? s.len : 0)),
+          sides.map((s, i) => (open[i] ? capacityOf(s, offsetMm) : 0)),
+          count,
+        );
   const seats: Seat[] = [];
   sides.forEach((side, i) => {
     const n = share[i];
     for (let k = 0; k < n; k++) {
-      seats.push(walkSide(side.pts, side.lengths, ((k + 0.5) * side.len) / n, offsetMm));
+      const { on, nx, ny } = pointOnSide(side, ((k + 0.5) * side.len) / n);
+      seats.push({
+        x: on.x + nx * offsetMm,
+        y: on.y + ny * offsetMm,
+        // Facing the table: the inward direction, which is the normal reversed.
+        facingDeg: (Math.atan2(-ny, -nx) * 180) / Math.PI,
+      });
     }
   });
   return seats;
@@ -383,6 +536,75 @@ if (isMain(import.meta.url)) {
 
   // A degenerate footprint cannot place a chair, and must not try.
   assert(seatsAround({ kind: "rect", widthMm: 0, depthMm: 0 }, 6).length === 0, "a table with no size seats nobody");
+
+  // ── sides, and the ones nobody sits at ──────────────────────────────────────────────────────
+  // A חצי עיגול is two sides to anyone at it — the flat one and the bow — however many edges its
+  // outline was cut into to keep its apex a vertex.
+  assert(seatSides(halfRoundFootprint).length === 2, "a half round is two sides: the chord and the bow");
+  assert(seatSides({ kind: "rect", widthMm: 1800, depthMm: 1200 }).length === 4, "a rectangle is four");
+  assert(seatSides({ kind: "circle", diameterMm: 1800 }).length === 1, "a round table is one");
+
+  // A head table with its back to the room: nothing on the top side, and the ten chairs it seats
+  // still all at the table — the count is what the packing list orders.
+  const head = seatsAround({ kind: "rect", widthMm: 2400, depthMm: 1200 }, 10, 300, [0]);
+  assert(head.length === 10, "a blocked side moves its chairs, it does not lose them");
+  assert(head.every((s) => s.y > -900 + 1), "…and none of them sits along the blocked side");
+  const headEnds = [head.filter((s) => near(s.x, -1500, 1)).length, head.filter((s) => near(s.x, 1500, 1)).length];
+  assert(headEnds[0] === headEnds[1], `…with the two open ends still matching (${headEnds})`);
+  assert(seatsAround({ kind: "rect", widthMm: 2400, depthMm: 1200 }, 10, 300, [0, 1, 2, 3]).length === 0, "every side blocked seats nobody on the plan");
+  assert(seatsAround({ kind: "circle", diameterMm: 1800 }, 10, 300, [7]).length === 10, "an index past the last side blocks nothing");
+
+  // The ring from the reference photo: a half ring 4m across, 75cm deep, chairs on both arcs and
+  // none on the two short caps. Every chair faces the band — the outer ones inward, the inner ones
+  // OUT toward the middle of the ring, which is where the band is from there.
+  const ringFootprint = { kind: "custom" as const, ...buildArcOutline(4000, { sweepDeg: 180, bandMm: 750 }) };
+  const ringSides = seatSides(ringFootprint);
+  assert(ringSides.length === 4, `a ring piece is four sides: outer arc, cap, inner arc, cap (${ringSides.length})`);
+  const caps = ringSides.map((s, i) => ({ i, len: s.len })).filter((s) => s.len < 800).map((s) => s.i);
+  assert(caps.length === 2, "…two of them the short caps across the band");
+  const ringSeats = seatsAround(ringFootprint, 20, 300, caps);
+  assert(ringSeats.length === 20, "twenty seats, twenty chairs");
+  // Recentred on its box, the ring's centre is at (0, 1000).
+  const fromCentre = ringSeats.map((s) => Math.hypot(s.x, s.y - 1000));
+  const outer = fromCentre.filter((r) => near(r, 2000 + 300, 30)).length;
+  const inner = fromCentre.filter((r) => near(r, 1250 - 300, 30)).length;
+  assert(outer + inner === 20 && outer > inner && inner > 0, `chairs ring both arcs, more on the longer one (${outer} out, ${inner} in)`);
+  const faces = (s: Seat, tx: number, ty: number) => {
+    const want = (Math.atan2(ty - s.y, tx - s.x) * 180) / Math.PI;
+    return near((((s.facingDeg - want) % 360) + 540) % 360 - 180, 0, 3);
+  };
+  assert(
+    ringSeats.every((s) => (Math.hypot(s.x, s.y - 1000) > 1600 ? faces(s, 0, 1000) : !faces(s, 0, 1000))),
+    "outer chairs face the ring's centre, inner chairs face away from it — both toward the band",
+  );
+
+  // A small quarter ring: its inner curve is shorter at the chair line than one chair is wide, so it
+  // seats nobody and the outer curve takes the lot — rather than three chairs stacked on one spot.
+  const smallQuarter = { kind: "custom" as const, ...buildArcOutline(1800, { sweepDeg: 90, bandMm: 600 }) };
+  const sqSides = seatSides(smallQuarter);
+  const sqCaps = sqSides.map((s, i) => (s.pts.length === 2 ? i : -1)).filter((i) => i >= 0);
+  const sqSeats = seatsAround(smallQuarter, 3, 300, sqCaps);
+  assert(sqSeats.length === 3, "a small quarter ring still seats its count");
+  // Recentred on its box; its circle's centre sits below it. Inner chairs would be within 900mm of it.
+  const sqCentreY = (() => {
+    const o = buildArcOutline(1800, { sweepDeg: 90, bandMm: 600 }).outline[0];
+    return o.y + Math.sqrt(900 ** 2 - o.x ** 2);
+  })();
+  assert(sqSeats.every((s) => Math.hypot(s.x, s.y - sqCentreY) > 900), "…all of them on the outer curve, none crammed on the inner");
+
+  // Two shapes, one item: a counter and a round end. The seam where they meet is not a side.
+  const combo = { kind: "multi" as const, parts: [
+    { outline: [{ x: -1250, y: -300 }, { x: 750, y: -300 }, { x: 750, y: 300 }, { x: -1250, y: 300 }] },
+    ...footprintOutlines({ kind: "circle", diameterMm: 1000 }).map((o) => ({ ...o, outline: o.outline.map((p) => ({ x: p.x + 750, y: p.y })) })),
+  ] };
+  const comboSides = seatSides(combo);
+  assert(comboSides.filter((s) => s.covered).length === 1, "the counter's end under the round is the one buried side");
+  const comboSeats = seatsAround(combo, 10, 300);
+  assert(comboSeats.length === 10, "a composite item seats its whole count");
+  assert(
+    comboSeats.every((s) => !(Math.abs(s.x - 750) < 200 && Math.abs(s.y) < 300)),
+    "…and nobody sits in the seam between its two shapes",
+  );
 
   console.log("seating self-check passed");
 }

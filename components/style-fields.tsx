@@ -54,8 +54,12 @@ function ColorField({
       {/* The row is a control like any other, so it is built out of controlClassName's own
           geometry — h-10 and rounded-sm — rather than the shorter, rounder box it used to be:
           stacked under a NumberField and a Select in the same panel, three different heights and
-          two different radii read as three unrelated widgets. */}
-      <div className={`${controlClassName} flex items-center gap-1.5 px-1.5`}>
+          two different radii read as three unrelated widgets. It is FOCUSED like any other too:
+          `control-group` (app/globals.css) moves the app's focus ring off whichever of the inputs
+          inside has it and onto this box, with the accent border a TextField takes, so the row
+          lights up instead of a bare sharp-cornered rectangle lighting up inside it. A Tailwind
+          `focus-visible:outline-none` on the inputs cannot do that — see the note by that rule. */}
+      <div className={`${controlClassName} control-group flex items-center gap-1.5 px-1.5`}>
         {/* The swatch IS the native colour input, just cropped to a small square — clicking it
             opens the OS picker directly, no separate "edit" step. A checkerboard shows through
             when unset, so an untouched row doesn't quietly imply a colour that isn't there. */}
@@ -101,7 +105,7 @@ function ColorField({
             setHexText(toHex(value)); // an incomplete hex (1–5 digits) snaps back to the last real value
           }}
           aria-label={`${label} — קוד צבע`}
-          className="w-0 min-w-0 flex-1 bg-transparent text-xs nums text-ink placeholder:text-faint focus-visible:outline-none"
+          className="w-0 min-w-0 flex-1 bg-transparent text-xs nums text-ink placeholder:text-faint"
         />
 
         <div className="h-4 w-px shrink-0 bg-border" />
@@ -123,7 +127,7 @@ function ColorField({
             else if (e.key === "ArrowDown") { e.preventDefault(); onOpacityChange(Math.max(0, pct - 5) / 100); }
           }}
           aria-label={`${label} — שקיפות`}
-          className="w-7 bg-transparent text-end text-xs nums text-ink placeholder:text-faint focus-visible:outline-none disabled:text-faint"
+          className="w-7 bg-transparent text-end text-xs nums text-ink placeholder:text-faint disabled:text-faint"
         />
         <span className="text-xs text-muted">%</span>
 
