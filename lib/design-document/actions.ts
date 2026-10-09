@@ -19,6 +19,9 @@ export type Action =
   | { type: "setTableSeated"; id: string; seated: number }
   /** null = back to the catalog row's sides (see DesignTable.blockedSides). */
   | { type: "setTableBlockedSides"; id: string; sides: number[] | null }
+  // Which chair goes round these tables — one action for a whole selection, one undo. null = back
+  // to the studio's default chair (DesignTable.chairVariantId).
+  | { type: "setTableChair"; ids: string[]; variantId: string | null }
   | { type: "addPlacement"; placement: Placement }
   | { type: "movePlacement"; id: string; position: Placement["position"] }
   // A whole selection dragged at once. ONE action rather than N, because N of them is N history
@@ -254,6 +257,19 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         ...doc,
         tables: doc.tables.map((t) => (t.id === action.id ? { ...t, seated: Math.max(0, Math.round(action.seated)) } : t)),
       };
+    case "setTableChair": {
+      const ids = new Set(action.ids);
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (!ids.has(t.id)) return t;
+          if (action.variantId) return { ...t, chairVariantId: action.variantId };
+          const { chairVariantId: _, ...rest } = t;
+          void _;
+          return rest;
+        }),
+      };
+    }
     case "setTableBlockedSides":
       return {
         ...doc,
@@ -1023,6 +1039,9 @@ if (isMain(import.meta.url)) {
     assert(groupOf(mixed, undefined) === undefined, "an ungrouped thing has no group");
 
     // Occupancy: never negative, and never silently trimmed to the seat count either.
+    const chaired = apply(before, { type: "setTableChair", ids: ["a"], variantId: "napoleon" });
+    assert(chaired.tables[0].chairVariantId === "napoleon", "a table takes the chair it was given");
+    assert(!("chairVariantId" in apply(chaired, { type: "setTableChair", ids: ["a"], variantId: null }).tables[0]), "null puts it back on the studio's default");
     const filled = apply(before, { type: "setTableSeated", id: "a", seated: 9 });
     assert(filled.tables[0].seated === 9, "a table remembers how many of its chairs are taken");
     assert(apply(before, { type: "setTableSeated", id: "a", seated: -2 }).tables[0].seated === 0, "…never a negative number of people");

@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import Link from "next/link";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
-import { packingList } from "@/lib/outputs/aggregate";
+import { packingList, UNTYPED_CHAIRS } from "@/lib/outputs/aggregate";
 import { itemLookup, measureContext } from "@/lib/outputs/lookup";
 import { activeEvent } from "@/lib/events/storage";
 import { eventPlan } from "@/lib/events/plan";
@@ -102,7 +103,8 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
     );
   };
 
-  const groups = packingList(doc, itemLookup, measureContext(structure));
+  const chairDefault = defaultChair();
+  const groups = packingList(doc, itemLookup, measureContext(structure), (t) => chairOf(t, chairDefault));
   // Countable rows only: metres of drape and square metres of carpet are not "items", and adding
   // them into one headline number would make it mean nothing.
   const total = groups.reduce(
@@ -168,6 +170,9 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                     </td>
                     <td className="nums py-2 text-ink">{formatAmount(r.quantity, r.unit)}</td>
                     <td className="py-2">
+                      {/* No spares on the untyped chairs row: a spare is stored against a catalog
+                          variant, and this row has none until the studio adds a chair. */}
+                      {r.variantId !== UNTYPED_CHAIRS && (
                       <NumberField
                         size="sm"
                         decimals={0}
@@ -179,6 +184,7 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                         aria-label={`רזרבה עבור ${r.label}`}
                         className="w-14 print:border-transparent"
                       />
+                      )}
                     </td>
                     <td className="nums py-2 font-semibold text-ink">{formatAmount(round1(r.quantity + spare), r.unit)}</td>
                     <td className="py-2 text-center">

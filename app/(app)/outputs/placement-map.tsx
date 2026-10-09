@@ -46,6 +46,7 @@ import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/sea
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
 import type { TableKit } from "@/lib/outputs/table-kits";
+import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import type { Extent } from "@/lib/outputs/scale";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
 import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps, type LegendRow } from "./sheet-frame";
@@ -221,7 +222,28 @@ export function PlacementMap({
   /** The symbol key, built from what THIS sheet actually draws rather than from a fixed list — a
    *  key that names a pool on a sheet with no pool in it teaches the reader to stop trusting it.
    *  Only used when the caller has not supplied its own rows. */
+  // WHICH CHAIR, on the chairs sheet. Most rooms are one chair, and then the key says so once
+  // ("כיסאות: נפוליאון זהב") and the drawing carries nothing more. Only when tables differ does each
+  // table get a numbered square naming its chair, numbered by how many tables take it — the default,
+  // usually most of the room, is 1.
+  const chairSheet = sheet.id === "chairs";
+  const chairDefault = chairSheet ? defaultChair() : undefined;
+  const seatedTables = chairSheet ? doc.tables.filter((t) => (t.seats ?? 0) > 0) : [];
+  const chairCount = new Map<string, number>();
+  for (const t of seatedTables) {
+    const ch = chairOf(t, chairDefault) ?? "";
+    chairCount.set(ch, (chairCount.get(ch) ?? 0) + (t.seats ?? 0));
+  }
+  const chairKinds = [...chairCount.entries()].sort((a, b) => b[1] - a[1]);
+  const chairName = (id: string) => (id ? (resolve(id)?.label ?? "כיסא") : "כיסא (לא נבחר בקטלוג)");
+  const chairMark = new Map(chairKinds.map(([id], i) => [id, String(i + 1)]));
+  const chairKey: LegendRow[] =
+    chairKinds.length === 1
+      ? [{ label: `כיסאות: ${chairName(chairKinds[0][0])} · ${chairKinds[0][1]}`, swatch: "outline" }]
+      : chairKinds.map(([id, n]) => ({ label: `${chairName(id)} · ${n}`, swatch: "mark" as const, mark: chairMark.get(id) }));
+
   const symbolKey: LegendRow[] = [
+    ...(chairSheet ? chairKey : []),
     ...(framedFeatures.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
     ...(framedFeatures.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
     ...(sheet.tables === "ghost" ? [{ label: "שולחן (להתמצאות בלבד)", swatch: "dot-ghost" as const }] : []),
@@ -590,6 +612,22 @@ export function PlacementMap({
                     </g>
                   )}
                 </Fragment>
+              );
+            })}
+
+          {/* The chair-type mark at each table, only when the room has more than one chair. */}
+          {chairSheet &&
+            chairKinds.length > 1 &&
+            seatedTables.map((t) => {
+              const at = tableLabelPoint(t);
+              const k = 3.4 * den;
+              return (
+                <g key={`chair-mark-${t.id}`} transform={`translate(${at.x} ${at.y})`}>
+                  <rect x={-k / 2} y={-k / 2} width={k} height={k} rx={0.5 * den} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+                  <text textAnchor="middle" dominantBaseline="central" fontSize={k * 0.62} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
+                    {chairMark.get(chairOf(t, chairDefault) ?? "")}
+                  </text>
+                </g>
               );
             })}
 
@@ -1021,7 +1059,7 @@ export function KitSchedule({
   kits: TableKit[];
   /** Numbers of units that carry nothing. */
   undressed: number[];
-  lookup: (variantId: string) => { variantLabel: string; components?: { label: string; count: number }[] } | undefined;
+  lookup: (variantId: string) => { variantLabel: string; components?: { label: string; count: number }[]; imageUrl?: string } | undefined;
   /** Kit keys that have a detail sheet in this set — so the row can say "ראו פרט". */
   details: Set<string>;
 }) {
@@ -1038,14 +1076,24 @@ export function KitSchedule({
               </span>
             </dt>
             <dd className="min-w-0 flex-1 text-ink-soft">
-              {k.items
-                .map((i) => {
+              {/* Each piece with its photo when the catalog has one — the crew unpacking a crate
+                  matches a picture faster than a name. A plain <img>: the print engine prints it. */}
+              <ul className="flex flex-wrap gap-x-4 gap-y-2">
+                {k.items.map((i) => {
                   const info = lookup(i.variantId);
                   const name = info?.variantLabel ?? productName(i.variantId) ?? "פריט";
-                  return i.quantity > 1 ? `${name} ×${i.quantity}` : name;
-                })
-                .join(" · ")}
-              {details.has(k.key) && <span className="ms-2 text-caption text-muted">(ראו פרט {k.letter})</span>}
+                  return (
+                    <li key={i.variantId} className="flex items-center gap-2">
+                      {info?.imageUrl && (
+                        // eslint-disable-next-line @next/next/no-img-element -- a print sheet: the file is printed as-is, not optimised for a viewport
+                        <img src={info.imageUrl} alt="" className="h-10 w-10 shrink-0 rounded-sm border border-border object-cover" />
+                      )}
+                      <span>{i.quantity > 1 ? `${name} ×${i.quantity}` : name}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {details.has(k.key) && <p className="mt-1 text-caption text-muted">ראו פרט {k.letter}</p>}
             </dd>
           </div>
         ))}

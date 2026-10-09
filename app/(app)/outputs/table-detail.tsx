@@ -147,6 +147,7 @@ export function TableDetail({
       mark: markOf.get(i.variantId),
       text: `${info?.variantLabel ?? "פריט"}${i.quantity > 1 ? ` ×${i.quantity}` : ""}`,
       detail: [cloth ? "על השולחן כולו" : "", parts ?? ""].filter(Boolean).join(" · ") || undefined,
+      image: info?.imageUrl,
     };
   });
 

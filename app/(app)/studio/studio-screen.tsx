@@ -997,6 +997,17 @@ export function StudioScreen({
     [selected, batch, docRefs],
   );
 
+  /** One chair over every selected table (null = the studio's default) — one action, one undo. */
+  const setChairForSelection = useCallback(
+    (variantId: string | null) => {
+      const ids = docRefs(selected).filter((r) => r.kind === "table").map((r) => r.id);
+      if (ids.length === 0) return;
+      act({ type: "setTableChair", ids, variantId });
+      showHint(`${ids.length} שולחנות — ${variantId ? "כיסא הוחלף" : "כיסא ברירת מחדל"}`);
+    },
+    [selected, act, docRefs],
+  );
+
   /** Where a feature currently stands, absolute — so that turning it in place can restate the offset
    *  it already had rather than dropping it. */
   function arrangedFeatureAt(id: string): { x: number; y: number } {
@@ -2949,6 +2960,8 @@ export function StudioScreen({
                 onRestack={restack}
                 selectedTables={selected.filter((r) => r.kind === "table").length}
                 onSeatsForSelection={setSeatsForSelection}
+                onChairForSelection={setChairForSelection}
+                onChair={(id, variantId) => act({ type: "setTableChair", ids: [id], variantId })}
                 group={groupPanel}
                 onGroup={groupSelection}
                 onUngroup={ungroupSelection}

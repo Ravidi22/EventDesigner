@@ -76,6 +76,7 @@ import { Menu, type MenuItem } from "@/components/menu";
 import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
 import type { Selection, SpinMode } from "./canvas-stage";
 
@@ -182,6 +183,8 @@ export function Inspector({
   onRestack,
   selectedTables,
   onSeatsForSelection,
+  onChairForSelection,
+  onChair,
   group,
   onGroup,
   onUngroup,
@@ -276,6 +279,10 @@ export function Inspector({
   /** How many TABLES are selected — what the bulk seat control applies to. */
   selectedTables: number;
   onSeatsForSelection: (seats: number) => void;
+  /** One chair over every selected table; null = the studio's default. */
+  onChairForSelection?: (variantId: string | null) => void;
+  /** This table's chair; null = the studio's default (DesignTable.chairVariantId). */
+  onChair?: (id: string, variantId: string | null) => void;
   /** Set when the selection is EXACTLY one group — its whole membership and nothing else. */
   group: { id: string; number?: number; tables: number; items: number; seats: number; seated: number } | null;
   onGroup: () => void;
@@ -565,6 +572,18 @@ export function Inspector({
               />
               <span className="text-xs text-muted">כסאות ל־{selectedTables} שולחנות</span>
             </PanelRow>
+            {/* Which chair, over the lot — the head table's armchairs set in one go. Writes only,
+                like the count above: the selection may hold several chairs between them. */}
+            {onChairForSelection && chairOptions().length > 0 && (
+              <PanelRow label="כיסא">
+                <Select
+                  aria-label="סוג הכיסא לשולחנות שנבחרו"
+                  value=""
+                  options={[{ value: "", label: "—" }, { value: "__default", label: "ברירת המחדל של הסטודיו" }, ...chairOptions()]}
+                  onChange={(v) => v && onChairForSelection(v === "__default" ? null : v)}
+                />
+              </PanelRow>
+            )}
           </Popover>
         )}
 
@@ -1283,6 +1302,25 @@ export function Inspector({
             className="w-20"
           />
         </PanelRow>
+        {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only
+            names a table's chair where it differs; this is where it is made to differ. */}
+        {seats > 0 && onChair && chairOptions().length > 0 && (
+          <PanelRow label="כיסא">
+            <Select
+              aria-label="סוג הכיסא"
+              value={t.chairVariantId ?? ""}
+              options={[
+                { value: "", label: `ברירת מחדל${(() => {
+                  const d = defaultChair();
+                  const name = d ? chairOptions().find((o) => o.value === d)?.label : undefined;
+                  return name ? ` — ${name}` : "";
+                })()}` },
+                ...chairOptions(),
+              ]}
+              onChange={(v) => onChair(t.id, v || null)}
+            />
+          </PanelRow>
+        )}
         {seats > 0 && (
           <PanelRow label="תפוסה" htmlFor="table-seated">
             <NumberField

@@ -69,11 +69,13 @@ const OVERHEAD_SWATCH_DASH = OVERHEAD_DASH.split(" ")
   .map((n) => (n / 120) * 1.6)
   .join(" ");
 
-export type LegendSwatch = "hatch-diagonal" | "hatch-cross" | "dot-ghost" | "solid" | "outline" | "overhead";
+export type LegendSwatch = "hatch-diagonal" | "hatch-cross" | "dot-ghost" | "solid" | "outline" | "overhead" | "mark";
 
 export interface LegendRow {
   label: string;
   swatch: LegendSwatch;
+  /** The character in a "mark" swatch — the same mark the drawing prints (a chair type's number). */
+  mark?: string;
 }
 
 /** One row of the notes column: a mark (the callout number on the drawing), a line, and an optional
@@ -82,6 +84,8 @@ export interface NoteRow {
   mark?: string;
   text: string;
   detail?: string;
+  /** A product photo, drawn at the row's end so the crew can match the piece in the crate. */
+  image?: string;
 }
 
 /** Width of the notes column, when a sheet has one (the table details). Start side — the right, in
@@ -286,7 +290,7 @@ export function SheetFrame({
           {laidLegend.map((r, i) =>
             r.fits ? (
               <g key={i}>
-                <LegendSwatchGlyph swatch={r.swatch} x={r.swatchX} y={barTop + 1.6} size={SWATCH_MM} />
+                <LegendSwatchGlyph swatch={r.swatch} mark={r.mark} x={r.swatchX} y={barTop + 1.6} size={SWATCH_MM} />
                 <text
                   x={r.textX}
                   y={barTop + 1.6 + SWATCH_MM / 2}
@@ -376,7 +380,11 @@ function wrap(text: string, maxChars: number): string[] {
 function NotesColumn({ notes, x, top, bottom, width }: { notes: NonNullable<SheetFrameProps["notes"]>; x: number; top: number; bottom: number; width: number }) {
   const right = x + width;
   const textRight = right - 9;
-  const maxChars = Math.floor((width - 11) / (NOTE_FONT_MM * 0.5));
+  // A row with a photo gives its end 11mm to the picture.
+  const IMG_MM = 10;
+  const withImages = notes.rows.some((r) => r.image);
+  const textWidth = width - 11 - (withImages ? IMG_MM + 1.5 : 0);
+  const maxChars = Math.floor(textWidth / (NOTE_FONT_MM * 0.5));
   const text = (y: number, body: string, size: number, weight: number, fill: string, at = textRight) => (
     <text x={at} y={y} direction="rtl" textAnchor="start" fontSize={size} fontWeight={weight} fontFamily="Assistant, sans-serif" fill={fill}>
       {body}
@@ -400,8 +408,8 @@ function NotesColumn({ notes, x, top, bottom, width }: { notes: NonNullable<Shee
   for (let i = 0; i < notes.rows.length; i++) {
     const r = notes.rows[i];
     const lines = wrap(r.text, maxChars);
-    const details = r.detail ? wrap(r.detail, Math.floor((width - 11) / (NOTE_DETAIL_MM * 0.5))) : [];
-    const need = lines.length * 3.6 + details.length * 3.1 + 2.4;
+    const details = r.detail ? wrap(r.detail, Math.floor(textWidth / (NOTE_DETAIL_MM * 0.5))) : [];
+    const need = Math.max(lines.length * 3.6 + details.length * 3.1 + 2.4, r.image ? IMG_MM + 1.5 : 0);
     if (y + need > bottom) {
       out.push(<g key="more">{text(y, `ועוד ${notes.rows.length - i} פריטים`, NOTE_DETAIL_MM, 400, MUTED)}</g>);
       break;
@@ -414,6 +422,12 @@ function NotesColumn({ notes, x, top, bottom, width }: { notes: NonNullable<Shee
             <text x={right - 3.6} y={y - 1} textAnchor="middle" dominantBaseline="central" fontSize={2.6} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
               {r.mark}
             </text>
+          </>
+        )}
+        {r.image && (
+          <>
+            <image href={r.image} x={x} y={y - 3.4} width={IMG_MM} height={IMG_MM} preserveAspectRatio="xMidYMid slice" />
+            <rect x={x} y={y - 3.4} width={IMG_MM} height={IMG_MM} fill="none" stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
           </>
         )}
         {lines.map((l, k) => (
@@ -458,7 +472,17 @@ function hatchDefs(suffix: string, k: number) {
   );
 }
 
-function LegendSwatchGlyph({ swatch, x, y, size = 5 }: { swatch: LegendSwatch; x: number; y: number; size?: number }) {
+function LegendSwatchGlyph({ swatch, mark, x, y, size = 5 }: { swatch: LegendSwatch; mark?: string; x: number; y: number; size?: number }) {
+  if (swatch === "mark") {
+    return (
+      <g>
+        <rect x={x} y={y} width={size} height={size} rx={0.6} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+        <text x={x + size / 2} y={y + size / 2} textAnchor="middle" dominantBaseline="central" fontSize={size * 0.62} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
+          {mark}
+        </text>
+      </g>
+    );
+  }
   if (swatch === "overhead") {
     return <line x1={x} y1={y + size / 2} x2={x + size} y2={y + size / 2} stroke={INK} strokeWidth={LINE_WEIGHTS.overhead} strokeDasharray={OVERHEAD_SWATCH_DASH} vectorEffect="non-scaling-stroke" />;
   }

@@ -39,6 +39,7 @@ export const itemLookup: ItemLookup = (variantId) => {
         ? { label: armsField.suffix!, count: arms }
         : undefined,
     components: flowers?.length ? flowers.map((f) => ({ label: f.name, count: f.qty })) : undefined,
+    imageUrl: r.variant?.imageUrl || r.product.imageUrl || undefined,
   };
 };
 

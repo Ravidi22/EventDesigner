@@ -42,6 +42,11 @@ export interface DesignTable {
    *  — a table pushed against a wall on this plan. Indices into seatSides() of its footprint. Absent
    *  = inherit the catalog's; an empty list = open all round, whatever the catalog says. */
   blockedSides?: number[];
+  /** Which chair stands round THIS table — a row of the catalog's `chairs` category. Absent = the
+   *  studio's default chair (lib/catalog/chairs.ts), which is every table ever drawn: most rooms are
+   *  one chair, and the plan only has to say so where a table differs (the head table's armchairs).
+   *  It is what the chairs sheet names per table and what the packing list counts the chairs as. */
+  chairVariantId?: string;
   style?: ElementStyle; // free-form per-table look (fill/stroke/dash); absent = the renderer's default
   /** Drawn as its own mirror image — see Placement.mirrored, which this means exactly. */
   mirrored?: boolean;
