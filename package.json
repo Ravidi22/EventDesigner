@@ -56,6 +56,7 @@
     "check:scale": "tsx lib/outputs/scale.ts",
     "check:sheets": "tsx lib/outputs/sheets.ts",
     "check:dimensions": "tsx lib/outputs/dimensions.ts",
+    "check:zone-sheets": "tsx lib/outputs/zone-sheets.ts",
     "check:procurement": "tsx lib/suppliers/procurement.ts",
     "check:runway": "tsx lib/production/runway.ts",
     "check:costs": "tsx lib/suppliers/cost-boundary.ts",

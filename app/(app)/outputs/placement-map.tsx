@@ -5,15 +5,16 @@ import { numberedUnits, groupSeats } from "@/lib/design-document/groups";
 import { productName } from "@/lib/outputs/lookup";
 import {
   absoluteControlPoints,
+  doorGeometry,
   fromLocalFrame,
   outlinePathD,
-  pointAtDistance,
   wallAngleDeg,
   wallLengthMm,
   wallSegmentD,
 } from "@/lib/studio/geometry";
 import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, nodeMap, wallPoints } from "@/lib/venues/structure";
+import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { stairsFlights } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
 import { FootprintShape, dressingSpots, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
@@ -147,7 +148,9 @@ export function PlacementMap({
   // at page one of one, so the component stays correct and self-contained for any caller that only
   // wants "the plan" without choosing a sheet.
   const legend = placementLegend(doc, productName);
-  const pad = 800;
+  // World mm around the frame: enough for the overall dimensions (900mm off the room, plus their
+  // figures) to land inside the clip rather than be cut by it.
+  const pad = 1600;
   // Framed on the zones this event occupies. Walls, doors and features are all drawn from the venue
   // structure, and the frame is what keeps the rest of the property off the crew's page — an
   // adjacent room's wall crops at the edge instead of being special-cased out.
@@ -158,6 +161,13 @@ export function PlacementMap({
   // are the property's and are unchanged; only the features move (lib/design-document/features.ts).
   const structure = arrangedStructure(plan.structure, doc);
   const nodes = nodeMap(structure);
+  // Which side of each wall is inside, so a door swings into the room it belongs to.
+  const faces = detectFaces(structure);
+  // A feature counts as on this sheet when it stands inside the frame — the sheet frames one zone
+  // and clips the rest of the property, so a pool two courtyards away is not in its key.
+  const inFrame = (pt: { x: number; y: number }) =>
+    pt.x >= box.minX - pad && pt.x <= box.maxX + pad && pt.y >= box.minY - pad && pt.y <= box.maxY + pad;
+  const framedFeatures = structure.features.filter((f) => inFrame(f));
 
   // SheetFrame draws children in WORLD millimetres with the drawing's own bounding box's top-left at
   // (0,0) — every wall, table and placement below is still authored in the venue's own absolute mm,
@@ -169,8 +179,8 @@ export function PlacementMap({
    *  key that names a pool on a sheet with no pool in it teaches the reader to stop trusting it.
    *  Only used when the caller has not supplied its own rows. */
   const symbolKey: LegendRow[] = [
-    ...(structure.features.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
-    ...(structure.features.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
+    ...(framedFeatures.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
+    ...(framedFeatures.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
     ...(sheet.tables === "ghost" ? [{ label: "שולחן (להתמצאות בלבד)", swatch: "dot-ghost" as const }] : []),
     ...(sheet.layers.includes("ceiling") ? [{ label: "מעל גובה החתך", swatch: "overhead" as const }] : []),
   ];
@@ -263,6 +273,10 @@ export function PlacementMap({
         paper={paper}
         marginMm={marginMm}
       >
+        {/* A function of the fitted scale, so every figure below is sized in PRINTED millimetres
+            (`den * mm`) — the crew reads the page, and a number authored in room millimetres is a
+            smudge at 1:500 and a headline at 1:50. */}
+        {(den: number) => (
         <g transform={`translate(${offsetX} ${offsetY})`}>
           {/* Zone floors — white ground for the rooms being set up */}
           {plan.zones
@@ -289,29 +303,44 @@ export function PlacementMap({
             }
             return <line key={w.id} x1={pts.a.x} y1={pts.a.y} x2={pts.b.x} y2={pts.b.y} {...common} />;
           })}
-          {/* Doors — a gap struck through the wall, labelled */}
+          {/* Doors — the gap struck through the wall, and the leaf with its swing, exactly as the
+              studio and the hall editor draw them (doorGeometry). It used to be the gap and the
+              word "כניסה" underneath — always underneath, whatever way the wall ran, so on a side
+              wall it sat inside the room among the tables. The symbol says which way the door
+              opens and how far into the room it sweeps, which is what a crew laying a row next to
+              it needs; the word said neither. */}
           {structure.entrances.map((e) => {
             const wall = structure.walls.find((w) => w.id === e.wallId);
             const pts = wall ? wallPoints(structure, wall, nodes) : null;
-            if (!pts) return null;
+            if (!wall || !pts) return null;
             const len = wallLengthMm(pts.a, pts.b) || 1;
-            const centre = pointAtDistance(pts.a, pts.b, e.distanceMm);
             const half = e.widthMm / 2;
+            const door = doorGeometry(pts.a, pts.b, e.distanceMm, e.widthMm, e.swingInward, wallInteriorHint(faces, pts.a, pts.b, wall.a, wall.b), e.doubleDoor, wall.curve ?? null);
             return (
               <g key={e.id}>
                 {/* Struck along the wall as drawn — on a bowed wall a straight chord would print the
                     gap beside the wall instead of through it. Wider than the wall's own weight so it
                     fully erases the line underneath at any scale. */}
                 <path
-                  d={wallSegmentD(pts.a, pts.b, wall?.curve ?? null, Math.max(0, (e.distanceMm - half) / len), Math.min(1, (e.distanceMm + half) / len))}
+                  d={wallSegmentD(pts.a, pts.b, wall.curve ?? null, Math.max(0, (e.distanceMm - half) / len), Math.min(1, (e.distanceMm + half) / len))}
                   fill="none"
                   stroke="#ffffff"
                   strokeWidth={LINE_WEIGHTS.wall * 2}
                   vectorEffect="non-scaling-stroke"
                 />
-                <text x={centre.x} y={centre.y + 950} textAnchor="middle" fontSize={520} fontFamily="Assistant, sans-serif" fill={MUTED}>
-                  כניסה
-                </text>
+                {door.leaves.map((leaf, i) => (
+                  <g key={i}>
+                    <line x1={leaf.hinge.x} y1={leaf.hinge.y} x2={leaf.tip.x} y2={leaf.tip.y} stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+                    <path
+                      d={`M ${leaf.tip.x} ${leaf.tip.y} A ${leaf.lenMm} ${leaf.lenMm} 0 0 ${leaf.sweepFlag} ${leaf.arcTo.x} ${leaf.arcTo.y}`}
+                      fill="none"
+                      stroke={INK_SOFT}
+                      strokeWidth={LINE_WEIGHTS.annotation}
+                      strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                ))}
               </g>
             );
           })}
@@ -350,7 +379,7 @@ export function PlacementMap({
                   <g transform={`translate(${f.x} ${f.y})`}>
                     <FootprintShape footprint={featureFootprint(f)} {...common} />
                   </g>
-                  <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={520} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
+                  <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
                     {f.label}
                   </text>
                 </g>
@@ -385,6 +414,14 @@ export function PlacementMap({
                       x: members.reduce((n, x) => n + x.position.x, 0) / members.length,
                       y: members.reduce((n, x) => n + x.position.y, 0) / members.length,
                     };
+              // As big as the table allows, between 2.4mm (still legible held at arm's length) and
+              // 4mm on paper (a numeral the crew can find across the room once the sheet is taped
+              // to a wall). The table's own short side is the ceiling, so a number stays inside it.
+              const short = Math.max(...members.map((x) => {
+                const b = footprintBounds(tableFootprint(x));
+                return Math.min(b.w, b.h);
+              }));
+              const size = Math.max(2.4 * den, Math.min(4 * den, short * 0.42));
               return (
                 <text
                   key={unit.id}
@@ -392,8 +429,8 @@ export function PlacementMap({
                   y={at.y}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fontSize={620}
-                  fontWeight={600}
+                  fontSize={size}
+                  fontWeight={700}
                   fontFamily="Assistant, sans-serif"
                   fill={INK}
                 >
@@ -450,6 +487,7 @@ export function PlacementMap({
                 build={buildSheet}
                 railing={buildSheet ? railingRuns(p as StagePlacement, deckOf, railingAboveMm, wallDistance) : []}
                 label={stages.length > 1 ? `במה ${stages.indexOf(p as StagePlacement) + 1}` : undefined}
+                den={den}
               />
             ) : (
               <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} />
@@ -498,8 +536,9 @@ export function PlacementMap({
               along it. */}
           {plan.zones
             .filter((r) => r.boundary.length >= 3)
-            .flatMap((r) => overallDimensions(r.boundary).map((d, i) => <DimensionGlyph key={`${r.zone.id}-${i}`} d={d} />))}
+            .flatMap((r) => overallDimensions(r.boundary).map((d, i) => <DimensionGlyph key={`${r.zone.id}-${i}`} d={d} den={den} />))}
         </g>
+        )}
       </SheetFrame>
 
       {buildSheet && stages.length > 0 && (
@@ -544,7 +583,7 @@ export function PlacementMap({
 const LEGS_PER_DECK = 4;
 
 /** A stage on the drawing, in its own frame (the same one the studio lays its decks in). */
-function StageGlyph({ p, build, railing, label }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string }) {
+function StageGlyph({ p, build, railing, label, den }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string; den: number }) {
   const stage = p.stage;
   const laid = build ? layStage(stage, deckOf) : null;
   const upright = uprightTransform(p.rotation, p.mirrored);
@@ -672,8 +711,8 @@ function StageGlyph({ p, build, railing, label }: { p: StagePlacement; build: bo
           vectorEffect="non-scaling-stroke"
         />
       ))}
-      {build && audience && text(audience.x, audience.y, "קהל", 300, 600, INK_SOFT)}
-      {label && !build && text(0, 0, label, 360, 600, INK_SOFT)}
+      {build && audience && text(audience.x, audience.y, "קהל", 2.4 * den, 600, INK_SOFT)}
+      {label && !build && text(0, 0, label, 2.8 * den, 600, INK_SOFT)}
     </g>
   );
 }
@@ -881,13 +920,13 @@ function PlacementGlyph({ placement, x, y, overhead, shape }: { placement: Place
  *  and the metres reading along it — a line with a ruler function, not a caption. `overallDimensions`
  *  only ever returns a run along a horizontal or a vertical edge, so the offset is applied on
  *  whichever axis the segment does NOT run along. */
-function DimensionGlyph({ d }: { d: DimensionLine }) {
+function DimensionGlyph({ d, den }: { d: DimensionLine; den: number }) {
   const horizontal = d.from.y === d.to.y;
   const off = horizontal ? { x: 0, y: d.offsetMm } : { x: d.offsetMm, y: 0 };
   const a = { x: d.from.x + off.x, y: d.from.y + off.y };
   const b = { x: d.to.x + off.x, y: d.to.y + off.y };
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  const tick = 150; // world mm — a small architectural tick, not an arrowhead
+  const tick = 1.4 * den; // 1.4 printed mm — a small architectural tick, not an arrowhead
   const tickOff = horizontal ? { x: 0, y: tick } : { x: tick, y: 0 };
   const common = { stroke: INK, strokeWidth: LINE_WEIGHTS.annotation, vectorEffect: "non-scaling-stroke" as const };
   return (
@@ -898,10 +937,10 @@ function DimensionGlyph({ d }: { d: DimensionLine }) {
       <line x1={a.x - tickOff.x / 2} y1={a.y - tickOff.y / 2} x2={a.x + tickOff.x / 2} y2={a.y + tickOff.y / 2} {...common} />
       <line x1={b.x - tickOff.x / 2} y1={b.y - tickOff.y / 2} x2={b.x + tickOff.x / 2} y2={b.y + tickOff.y / 2} {...common} />
       <text
-        x={mid.x + (horizontal ? 0 : 220)}
-        y={mid.y + (horizontal ? -220 : 0)}
+        x={mid.x + (horizontal ? 0 : 2 * den)}
+        y={mid.y + (horizontal ? -1.2 * den : 0)}
         textAnchor="middle"
-        fontSize={380}
+        fontSize={2.4 * den}
         fontFamily="Assistant, sans-serif"
         fill={INK}
         className="nums"

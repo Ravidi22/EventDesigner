@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { fitScale, scaleBarSteps, type Extent } from "@/lib/outputs/scale";
 import type { PlanSheet } from "@/lib/outputs/sheets";
 import { OVERHEAD_DASH } from "@/components/footprint-shape";
@@ -51,11 +51,15 @@ const DEFAULT_MARGIN_MM = 16;
 const TITLE_CELLS_MM = 20;
 const SCALE_BAND_MM = 11;
 const TITLE_BLOCK_MM = TITLE_CELLS_MM + SCALE_BAND_MM;
-/** Width of the side column that carries the north arrow and the legend — reserved only when this
- *  sheet actually has one or the other, so a sheet with neither gets the full page for its drawing. */
-const GUTTER_MM = 46;
+/** The north arrow sits over the drawing's top-end corner. There used to be a 46mm side column for
+ *  it and the legend, reserved on every sheet that had either — a fifth of an A4's width spent on a
+ *  box holding two swatches, while the plan beside it dropped a whole scale step to fit what was
+ *  left. The legend now runs along the scale band (which was empty but for the bar), so the drawing
+ *  gets the full width of the frame. */
 const NORTH_BOX_MM = 18;
-const GAP_MM = 4;
+/** Legend layout along the scale band, in paper mm. */
+const SWATCH_MM = 4;
+const LEGEND_FONT_MM = 2.8;
 
 /** The legend's "overhead" swatch is a few millimetres wide, not a whole plan — OVERHEAD_DASH's 120/90
  *  world-mm pair is reused at the same on:off ratio, scaled down to fit, rather than a second dash
@@ -92,8 +96,11 @@ export interface SheetFrameProps {
    *  a venue plan states one) draws no arrow at all — a guessed north is worse than none. */
   north?: number;
   legend?: LegendRow[];
-  /** The drawing itself, authored in world millimetres with its bounding box's top-left at (0,0). */
-  children: ReactNode;
+  /** The drawing itself, authored in world millimetres with its bounding box's top-left at (0,0).
+   *  A function receives the fitted denominator, so text inside the drawing can be sized in PRINTED
+   *  millimetres: a table number authored in room millimetres is 6mm tall at 1:100 and a 1mm smudge
+   *  at 1:500, and the crew reads the page, not the room. */
+  children: ReactNode | ((denominator: number) => ReactNode);
 }
 
 const trim = (n: number) => {
@@ -118,19 +125,17 @@ export function SheetFrame({
   children,
 }: SheetFrameProps) {
   const rows = legend ?? [];
-  const hasSide = north !== undefined || rows.length > 0;
-  const sideGutter = hasSide ? GUTTER_MM : 0;
+  const clipId = `sheet-clip-${useId().replace(/:/g, "")}`;
 
-  // The usable frame: paper, minus the printed margin on every edge, minus the bottom strip, minus
-  // the side column when this sheet has a north arrow or a legend to put in it.
+  // The usable frame: paper, minus the printed margin on every edge, minus the bottom strip.
   const frame: Extent = {
-    widthMm: Math.max(0, paper.widthMm - marginMm * 2 - sideGutter),
+    widthMm: Math.max(0, paper.widthMm - marginMm * 2),
     heightMm: Math.max(0, paper.heightMm - marginMm * 2 - TITLE_BLOCK_MM),
   };
   const { denominator, paperMm } = fitScale(world, frame);
   const scale = 1 / denominator;
   // Centred in whichever axis the fitted drawing doesn't fill.
-  const drawX = marginMm + sideGutter + Math.max(0, (frame.widthMm - paperMm.widthMm) / 2);
+  const drawX = marginMm + Math.max(0, (frame.widthMm - paperMm.widthMm) / 2);
   const drawY = marginMm + Math.max(0, (frame.heightMm - paperMm.heightMm) / 2);
 
   const titleTop = paper.heightMm - marginMm - TITLE_CELLS_MM;
@@ -138,13 +143,27 @@ export function SheetFrame({
   const left = marginMm;
   const right = paper.widthMm - marginMm;
 
-  // The graphic scale bar: bottom-start (the sheet's start edge — the right, in this RTL app), so it
-  // reads "0" nearest the edge a Hebrew reader starts from. Budgeted independently of the drawing's
-  // own width — a small room's drawing should not get a scale bar sized to match it.
+  // The graphic scale bar: bottom-start (the sheet's start edge — the right, in this RTL app), and
+  // reading "0" at that end, nearest the edge a Hebrew reader starts from. Budgeted independently of
+  // the drawing's own width — a small room's drawing should not get a scale bar sized to match it.
+  // Inset off the border so the "0" over its last tick does not sit on the frame line.
   const { metres, steps } = scaleBarSteps(denominator, Math.min(60, frame.widthMm || 60));
   const barTotalMm = (metres * 1000) / denominator;
-  const barLeft = right - barTotalMm;
+  const barRight = right - 3;
+  const barLeft = barRight - barTotalMm;
   const stepMm = barTotalMm / steps;
+
+  // The legend, laid start to end (right to left) along the band after the bar: a swatch, then its
+  // label on the swatch's end side. Widths are estimated — SVG has no text measurement before paint
+  // — at a generous Hebrew glyph average, so items never collide; one that would run off the frame
+  // is dropped rather than drawn over the border.
+  const laidLegend: (LegendRow & { swatchX: number; textX: number; fits: boolean })[] = [];
+  for (let i = 0, cursor = barLeft - 10; i < rows.length; i++) {
+    const swatchX = cursor - SWATCH_MM;
+    const textX = swatchX - 1.6;
+    cursor = textX - rows[i].label.length * LEGEND_FONT_MM * 0.55 - 6;
+    laidLegend.push({ ...rows[i], swatchX, textX, fits: cursor > left });
+  }
 
   // Seven ruled cells, laid out start (right) to end (left) in the order they are read.
   const cells: { weight: number; label: string; value: string }[] = [
@@ -165,11 +184,8 @@ export function SheetFrame({
     return { ...c, x, w };
   });
 
-  // The side column: north arrow at its top, the legend boxed beneath.
-  const gutterX = left;
-  const gutterBottom = barTop - GAP_MM;
-  const northY = marginMm;
-  const legendTop = north !== undefined ? northY + NORTH_BOX_MM + GAP_MM : marginMm;
+  const northX = left + 3;
+  const northY = marginMm + 3;
 
   return (
     <svg
@@ -180,6 +196,14 @@ export function SheetFrame({
       aria-label={`${sheet.label} — 1:${denominator}`}
     >
       <defs>
+        {/* The drawing stops at the frame. The whole property travels with every plan (the event's
+            zone is FRAMED, not cut out), and unclipped its far walls ran past the border, through
+            the margin and across the title block. The clip is the whole frame rather than just the
+            fitted drawing, so the leftover space on the slack axis shows the property around the
+            room rather than a white band. */}
+        <clipPath id={clipId}>
+          <rect x={left} y={marginMm} width={frame.widthMm} height={frame.heightMm} />
+        </clipPath>
         {/* Each pattern is emitted TWICE, at two tile sizes. `userSpaceOnUse` tiles in whatever
             space the filled shape lives in: the drawing is inside a `<g>` scaled to world
             millimetres, where a 300mm tile is the right hatch spacing for a room — but a legend
@@ -205,11 +229,13 @@ export function SheetFrame({
       {/* The drawing itself — world millimetres, scaled to the sheet's fitted denominator. Callers
           draw walls, tables, hatched features and dashed overhead items in here, all authored at
           real-world size; this is the one place that size becomes a stated, printed scale. */}
-      <g transform={`translate(${drawX} ${drawY}) scale(${scale})`}>{children}</g>
+      <g clipPath={`url(#${clipId})`}>
+        <g transform={`translate(${drawX} ${drawY}) scale(${scale})`}>{typeof children === "function" ? children(denominator) : children}</g>
+      </g>
 
       {/* North arrow — top-end, and only when the venue plan actually states an orientation. */}
       {north !== undefined && (
-        <g transform={`translate(${gutterX + NORTH_BOX_MM / 2} ${northY + NORTH_BOX_MM / 2}) rotate(${north})`}>
+        <g transform={`translate(${northX + NORTH_BOX_MM / 2} ${northY + NORTH_BOX_MM / 2}) rotate(${north})`}>
           <line x1={0} y1={NORTH_BOX_MM / 2 - 1} x2={0} y2={-(NORTH_BOX_MM / 2 - 1)} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
           <path
             d={`M 0 ${-(NORTH_BOX_MM / 2 - 1)} L 2.6 ${-(NORTH_BOX_MM / 2 - 5)} L 0 ${-(NORTH_BOX_MM / 2 - 7)} L -2.6 ${-(NORTH_BOX_MM / 2 - 5)} Z`}
@@ -221,34 +247,30 @@ export function SheetFrame({
         </g>
       )}
 
-      {/* The legend — boxed at the side, from the rows the caller hands in. */}
-      {rows.length > 0 && (
+      {/* The legend — along the scale band, start to end after the bar. Text is right-anchored
+          explicitly (direction="rtl", anchor "start"): the side-column version inherited RTL from
+          the page and drew every label leftwards out of its own box, over its swatch. */}
+      {laidLegend.length > 0 && (
         <g>
-          <rect
-            x={gutterX}
-            y={legendTop}
-            width={GUTTER_MM - GAP_MM}
-            height={Math.max(0, gutterBottom - legendTop)}
-            fill="#ffffff"
-            stroke={HAIRLINE}
-            strokeWidth={LINE_WEIGHTS.annotation}
-            vectorEffect="non-scaling-stroke"
-          />
-          <text x={gutterX + 2.5} y={legendTop + 5} fontSize={3} fontWeight={600} fontFamily="Assistant, sans-serif" fill={INK}>
-            מקרא
-          </text>
-          {rows.map((r, i) => {
-            const y = legendTop + 10 + i * 6;
-            if (y > gutterBottom - 3) return null;
-            return (
+          {laidLegend.map((r, i) =>
+            r.fits ? (
               <g key={i}>
-                <LegendSwatchGlyph swatch={r.swatch} x={gutterX + 2.5} y={y - 3} />
-                <text x={gutterX + 9.5} y={y + 1.2} fontSize={2.8} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
+                <LegendSwatchGlyph swatch={r.swatch} x={r.swatchX} y={barTop + 1.6} size={SWATCH_MM} />
+                <text
+                  x={r.textX}
+                  y={barTop + 1.6 + SWATCH_MM / 2}
+                  direction="rtl"
+                  textAnchor="start"
+                  dominantBaseline="central"
+                  fontSize={LEGEND_FONT_MM}
+                  fontFamily="Assistant, sans-serif"
+                  fill={INK_SOFT}
+                >
                   {r.label}
                 </text>
               </g>
-            );
-          })}
+            ) : null,
+          )}
         </g>
       )}
 
@@ -258,7 +280,7 @@ export function SheetFrame({
         {Array.from({ length: steps }).map((_, i) => (
           <rect
             key={i}
-            x={barLeft + i * stepMm}
+            x={barRight - (i + 1) * stepMm}
             y={barTop + 2}
             width={stepMm}
             height={2.4}
@@ -269,7 +291,7 @@ export function SheetFrame({
           />
         ))}
         {Array.from({ length: steps + 1 }).map((_, i) => {
-          const x = barLeft + i * stepMm;
+          const x = barRight - i * stepMm;
           const figure = trim((i * metres) / steps);
           return (
             <g key={i}>
@@ -328,8 +350,7 @@ function hatchDefs(suffix: string, k: number) {
   );
 }
 
-function LegendSwatchGlyph({ swatch, x, y }: { swatch: LegendSwatch; x: number; y: number }) {
-  const size = 5;
+function LegendSwatchGlyph({ swatch, x, y, size = 5 }: { swatch: LegendSwatch; x: number; y: number; size?: number }) {
   if (swatch === "overhead") {
     return <line x1={x} y1={y + size / 2} x2={x + size} y2={y + size / 2} stroke={INK} strokeWidth={LINE_WEIGHTS.overhead} strokeDasharray={OVERHEAD_SWATCH_DASH} vectorEffect="non-scaling-stroke" />;
   }

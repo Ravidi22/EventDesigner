@@ -9,6 +9,7 @@ import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { recordExport, type ExportType } from "@/lib/outputs/actions";
 import { PLAN_SHEETS } from "@/lib/outputs/sheets";
+import { zoneSheets } from "@/lib/outputs/zone-sheets";
 import { fetchStageRules } from "@/lib/settings/actions";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
@@ -102,6 +103,21 @@ export function OutputsScreen() {
     () => (workspace ? eventPlan(event, workspace.geometry) : EMPTY_PLAN),
     [workspace, event],
   );
+
+  // One sheet per zone the event occupies and has something in (lib/outputs/zone-sheets.ts) — each
+  // framed on its own room instead of all of them on one page at whatever scale the union fits.
+  const zonePlans = useMemo(() => zoneSheets(doc, plan), [doc, plan]);
+  // Zones the designer has switched OFF, rather than on: a zone that gains its first table since is
+  // printed by default, not silently left out of the set.
+  const [hiddenZones, setHiddenZones] = useState<string[]>([]);
+  const shownZones = zonePlans.filter((z) => !z.zone || !hiddenZones.includes(z.zone.zone.id));
+  const toggleZone = (id: string) =>
+    setHiddenZones((ids) =>
+      ids.includes(id) ? ids.filter((x) => x !== id) : shownZones.length > 1 ? [...ids, id] : ids,
+    );
+  // Grouped by SHEET, then zone: the sets are handed out by trade (the rigger takes every ceiling
+  // plan), so all of one trade's pages come off the printer together.
+  const pages = selectedSheets.flatMap((sheet) => shownZones.map((z) => ({ sheet, ...z })));
 
   // The sheet number is the one that IS state: printing bumps it (see `print` below), so it is not a
   // pure function of what the server sent. Seeded from the workspace during render rather than in an
@@ -225,6 +241,39 @@ export function OutputsScreen() {
                   })}
                 </ul>
               )}
+
+              {/* Which zones print — only when the event spans more than one with something in it.
+                  Each zone is its own page of every ticked sheet. */}
+              {id === "map" && view === "map" && zonePlans.length > 1 && (
+                <div className="mt-2 ps-4">
+                  <p className="px-2.5 pb-1 text-caption text-muted">אזורים</p>
+                  <ul className="flex flex-col gap-[3px]">
+                    {zonePlans.map(({ zone }) => {
+                      if (!zone) return null;
+                      const on = !hiddenZones.includes(zone.zone.id);
+                      return (
+                        <li key={zone.zone.id}>
+                          <button
+                            type="button"
+                            onClick={() => toggleZone(zone.zone.id)}
+                            aria-pressed={on}
+                            className={
+                              "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-caption transition-colors " +
+                              (on ? "font-semibold text-accent" : "text-muted hover:text-ink-soft")
+                            }
+                          >
+                            <span
+                              aria-hidden
+                              className={"h-2 w-2 shrink-0 rounded-full border " + (on ? "border-accent bg-accent" : "border-border")}
+                            />
+                            {zone.zone.name || "אזור ללא שם"}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
             </div>
           ))}
         </nav>
@@ -283,16 +332,16 @@ export function OutputsScreen() {
             // (globals.css: .sheet breaks after itself), each carries its OWN drafting title block
             // (sheet-frame.tsx: venue/client, sheet name, "n / total", scale, date, version) instead
             // of the generic header above, so `stamped` is never used here.
-            selectedSheets.map((sheet, i) => (
-              <article key={sheet.id} className="sheet bg-canvas shadow-lifted">
+            pages.map(({ sheet, zone, doc: zoneDoc, bounds }, i) => (
+              <article key={`${sheet.id}-${zone?.zone.id ?? "all"}`} className="sheet bg-canvas shadow-lifted">
                 <PlacementMap
-                  doc={doc}
-                  plan={plan}
+                  doc={zoneDoc}
+                  plan={{ ...plan, zones: zone ? [zone] : plan.zones, bounds }}
                   sheet={sheet}
-                  title={event ? zonesLabelOf(event) : ""}
+                  title={zone?.zone.name || (event ? zonesLabelOf(event) : "")}
                   subtitle={event?.clientName}
                   sheetNumber={i + 1}
-                  sheetCount={selectedSheets.length}
+                  sheetCount={pages.length}
                   version={version}
                   date={today}
                   paper={{ widthMm: w, heightMm: h }}
