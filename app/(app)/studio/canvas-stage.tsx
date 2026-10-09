@@ -42,12 +42,15 @@ import {
   stageRect,
   toRoom,
   toStageFrame,
+  itemAlong,
+  itemSidePoint,
+  stageSide,
+  stageSides,
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
 import type { StageBuild, StageStair } from "@/lib/design-document/types";
 import { signedArea } from "@/lib/studio/stage-fill";
-import { itemAlong, itemSidePoint, stageSide, stageSides } from "@/lib/design-document/stage";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
 import { polysBox, type ClearanceIssue, type ClearanceSubject } from "@/lib/studio/proximity";
 import { itemGeometry } from "./plan-geometry";
@@ -59,7 +62,7 @@ import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/ven
 import { arrangedStructure } from "@/lib/design-document/features";
 import { floorStack, type StackKind } from "@/lib/design-document/stacking";
 import { centreOver, wallRuns } from "@/lib/studio/hang";
-import { hangPointOf, hangTargetsOf, positionHungAt } from "./hang-targets";
+import { hangPointOf, hangTargetsCache, positionHungAt } from "./hang-targets";
 import { HangTies } from "./hang-ties";
 
 // The studio's design surface — the app's one canvas (components/plan-canvas.tsx) with the design
@@ -573,7 +576,14 @@ export function CanvasStage({
     const p = placementById.get(selection[0].id);
     return p && sorted.ceiling.includes(p) ? p : null;
   }, [selection, placementById, sorted.ceiling, layerVisible.ceiling]);
-  const hangTargets = useMemo(() => (hangSubject ? hangTargetsOf(doc, structure) : []), [hangSubject, doc, structure]);
+  // What it could hang over — remembered against what THAT reads (hang-targets.ts hangTargetsCache:
+  // the tables, the floor's rows, the venue), not against `doc`: every frame of the item's own drag
+  // writes the document, and nothing on the floor has moved.
+  const [targetsOf] = useState(hangTargetsCache);
+  const hangTargets = useMemo(() => (hangSubject ? targetsOf(doc, plan.structure, structure) : []), [hangSubject, targetsOf, doc, plan.structure, structure]);
+  // The zone outlines are walls here too — a lawn has no walls, and its edge is what a rigger
+  // measures to — exactly as measurements() adds the sheet's `boundaries` for the printed ceiling
+  // plan, so the sketch's live figure and the printed one are the same figure.
   const hangWalls = useMemo(
     () => (hangSubject ? [...wallRuns(plan.structure), ...plan.zones.filter((z) => z.boundary.length >= 3).flatMap((z) => z.boundary.map((q, i) => [q, z.boundary[(i + 1) % z.boundary.length]] as [Point, Point]))] : []),
     [hangSubject, plan.structure, plan.zones],

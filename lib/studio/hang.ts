@@ -19,10 +19,10 @@
 // no React; self-checked: npm run check:hang.
 import type { Placement, Point } from "@/lib/design-document/types";
 import type { Product } from "@/lib/catalog/types";
-import type { Footprint } from "./footprint";
+import { footprintBounds, type Footprint } from "./footprint";
 import { labelAnchor } from "./label-anchor";
 import { footprintPolygons, insidePolys, polysBox, type Poly } from "./proximity";
-import { sampleEdgePoints } from "./geometry";
+import { fromLocalFrame, sampleEdgePoints } from "./geometry";
 import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
 import { isMain } from "../self-check";
 
@@ -65,6 +65,27 @@ export function anchorOffset(f: Footprint, rotationDeg = 0, mirrored = false, sc
 export function hangTarget(key: string, f: Footprint, at: Point, rotationDeg = 0, mirrored = false, scale = 1): HangTarget {
   const o = anchorOffset(f, rotationDeg, mirrored, scale);
   return { key, polys: footprintPolygons(f, at, rotationDeg, mirrored, scale), centre: { x: at.x + o.x, y: at.y + o.y } };
+}
+
+/** A block of tables pushed together as one (a design group) as something to hang over: the box
+ *  round every member, each boxed where it stands (through its own turn), and the box's centre as
+ *  the middle. The BOX, not a union of outlines — the studio draws a group's chairs round its box
+ *  for the same reason: grouping says "these are one table now", and the designer has pushed them
+ *  into a block to make that true. Two head tables as one block are one table to the crew
+ *  (numberedUnits), so this stands IN for its members: a chandelier over either half is centred on
+ *  the seam, which no member's own middle could offer. */
+export function blockTarget(key: string, members: readonly { f: Footprint; at: Point; rotationDeg?: number }[]): HangTarget {
+  const b = polysBox(
+    members.map(({ f, at, rotationDeg }) => {
+      const { w, h } = footprintBounds(f);
+      return [-1, 1].flatMap((sx) => [-1, 1].map((sy) => fromLocalFrame({ x: (sx * w) / 2, y: (sy * h) / 2 }, at, rotationDeg ?? 0)));
+    }),
+  );
+  return {
+    key,
+    polys: [[{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.minY }, { x: b.maxX, y: b.maxY }, { x: b.minX, y: b.maxY }]],
+    centre: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+  };
 }
 
 const area = (polys: Poly[]) => {
@@ -197,6 +218,18 @@ if (isMain(import.meta.url)) {
   assert(centreOver({ x: 5600, y: 5500 }, targets, 200) === null, "a drag 0.78 off the middle is not pulled to it");
   assert(near(centreOver({ x: 5100, y: 6050 }, targets, 200)!.point, { x: 5000, y: 6000 }), "a drag 0.11 off the middle is");
   assert(centreOver({ x: 15000, y: 9000 }, targets) === null, "nothing under it, nothing to centre on");
+
+  // Two tables pushed together as one head table: ONE target, its middle on the seam — a chandelier
+  // over either half is hung from the block's middle, not from the half it happens to be over.
+  const half = { kind: "rect", widthMm: 1800, depthMm: 800 } as const;
+  const block = blockTarget("block", [{ f: half, at: { x: 4100, y: 9000 } }, { f: half, at: { x: 5900, y: 9000 } }]);
+  assert(near(block.centre, { x: 5000, y: 9000 }), "a block's middle is the middle of its box, on the seam");
+  const bb = polysBox(block.polys);
+  assert(bb.minX === 3200 && bb.maxX === 6800 && bb.minY === 8600 && bb.maxY === 9400, "…and its outline is the box round both halves");
+  assert(targetUnder({ x: 4300, y: 9100 }, [...targets, block])?.key === "block", "over one half of the block it is over the block");
+  assert(near(centreOver({ x: 4300, y: 9100 }, [block])!.point, { x: 5000, y: 9000 }), "…and is centred on the seam");
+  const tb = polysBox(blockTarget("turned", [{ f: half, at: { x: 0, y: 0 }, rotationDeg: 90 }]).polys);
+  assert(near({ x: tb.minX, y: tb.minY }, { x: -400, y: -900 }) && near({ x: tb.maxX, y: tb.maxY }, { x: 400, y: 900 }), "a turned member is boxed where it stands, through its turn");
 
   // A crescent head table: its middle is on the band, not in the air at its box centre.
   const arc = hangTarget("arc", { kind: "custom", outline: [{ x: -1500, y: -500 }, { x: 1500, y: -500 }, { x: 1500, y: 500 }, { x: 1000, y: 500 }, { x: 1000, y: 0 }, { x: -1000, y: 0 }, { x: -1000, y: 500 }, { x: -1500, y: 500 }] }, { x: 3000, y: 3000 });
