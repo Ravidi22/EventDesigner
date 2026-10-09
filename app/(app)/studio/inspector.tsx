@@ -575,7 +575,7 @@ export function Inspector({
             {/* Which chair, over the lot — the head table's armchairs set in one go. Writes only,
                 like the count above: the selection may hold several chairs between them. */}
             {onChairForSelection && chairOptions().length > 0 && (
-              <PanelRow label="כיסא">
+              <PanelRow label="כיסא" stack>
                 <Select
                   aria-label="סוג הכיסא לשולחנות שנבחרו"
                   value=""
@@ -649,8 +649,7 @@ export function Inspector({
             />
             <Button
               size="sm"
-              variant="ghost"
-              className="mt-2 w-full"
+              className="mt-3 w-full"
               onClick={() => (dressMode === "replace" ? setConfirmingReplace(true) : onCopyDressing("add"))}
             >
               <Copy className="h-3.5 w-3.5" strokeWidth={2} />
@@ -996,7 +995,7 @@ export function Inspector({
                 <BarButton icon={Trash2} label={`הסרת מפלס ${i + 1}`} onClick={() => onRemoveLevel(l.id)} />
               </PanelRow>
             ))}
-            <Button size="sm" variant="ghost" className="mt-1 w-full" onClick={onAddLevel}>
+            <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onAddLevel}>
               <Plus className="h-3.5 w-3.5" strokeWidth={2} />
               הוספת מפלס מוגבה
             </Button>
@@ -1015,6 +1014,7 @@ export function Inspector({
               <Popover
                 label="קצוות"
                 icon={Footprints}
+                panelClassName="w-80"
                 tone={open ? "warn" : "default"}
                 value={open ? `${m(sp.gapsMm)} מ׳ פתוחים` : flights > 0 ? `${flights} מדרגות` : "סגור"}
               >
@@ -1068,7 +1068,7 @@ export function Inspector({
                     <p className="text-xs text-alert-ink">{m(sp.gapsMm)} מ׳ של שפה פתוחה — מסומנים באדום בתוכנית.</p>
                     <div className="flex gap-1">
                       {(["stairs", "bench", "barrier"] as const).map((k) => (
-                        <Button key={k} size="sm" variant="ghost" className="flex-1" onClick={() => onFillEdges(k)}>
+                        <Button key={k} size="sm" variant="outline" className="flex-1" onClick={() => onFillEdges(k)}>
                           {EDGE_KIND_LABEL[k]}
                         </Button>
                       ))}
@@ -1076,10 +1076,10 @@ export function Inspector({
                   </div>
                 )}
                 <div className="mt-2 border-t border-border-soft pt-2">
-                  <span className="text-xs text-muted">הוספה — ואז לחיצה על צד הבמה</span>
-                  <div className="mt-1 grid grid-cols-3 gap-1">
+                  <span className="mb-1 block text-xs font-medium text-ink-soft">הוספה — ואז לחיצה על צד הבמה</span>
+                  <div className="grid grid-cols-2 gap-1">
                     {EDGE_KINDS.map((k) => (
-                      <Button key={k} size="sm" variant="ghost" onClick={() => onAddEdge(k)}>
+                      <Button key={k} size="sm" variant="outline" onClick={() => onAddEdge(k)}>
                         <Plus className="h-3.5 w-3.5" strokeWidth={2} />
                         {EDGE_KIND_LABEL[k]}
                       </Button>
@@ -1212,7 +1212,7 @@ export function Inspector({
           <Popover label="על הקיר" icon={Maximize2} value={run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳` : "—"}>
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
               className="w-full"
               disabled={!run || (drape.from === 0 && drape.to === 1)}
               onClick={() => onSpan(p.id, { ...drape, ...WHOLE_WALL })}
@@ -1305,7 +1305,7 @@ export function Inspector({
         {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only
             names a table's chair where it differs; this is where it is made to differ. */}
         {seats > 0 && onChair && chairOptions().length > 0 && (
-          <PanelRow label="כיסא">
+          <PanelRow label="כיסא" stack>
             <Select
               aria-label="סוג הכיסא"
               value={t.chairVariantId ?? ""}
@@ -1417,7 +1417,7 @@ export function Inspector({
               label="גוון המפה"
             />
           )}
-          <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => onApplyToAllTables(cloth.id)}>
+          <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(cloth.id)}>
             <Copy className="h-3.5 w-3.5" strokeWidth={2} />
             על כל השולחנות
           </Button>
@@ -1689,7 +1689,7 @@ function SizePopover({ panel, onSize }: { panel: SizePanel; onSize: (size: { wid
         {axes.depth && spec.depth ? ` · עומק ${range(spec.depth)}` : ""}. אפשר גם למתוח בידיות שעל התוכנית.
       </Note>
       {custom && (
-        <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => onSize(null)}>
+        <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onSize(null)}>
           <Undo2 className="h-3.5 w-3.5" strokeWidth={2} />
           חזרה לגודל הקטלוג ({axes.uniform ? `⌀${cm(catalog.widthMm)}` : `${cm(catalog.widthMm)}×${cm(catalog.depthMm)}`})
         </Button>
