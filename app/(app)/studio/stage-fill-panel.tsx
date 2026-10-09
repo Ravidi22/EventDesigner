@@ -141,7 +141,7 @@ export function StageFillPanel({
         <Popover label="מידה מדויקת" icon={Ruler} value={`${100 - pct}% לא מכוסה`} panelClassName="w-72">
           <div className="space-y-1.5">
             {suggestions.map((s) => (
-              <Button key={s.direction} size="sm" variant="ghost" className="w-full justify-between" onClick={() => onResize(s.widthMm, s.depthMm)}>
+              <Button key={s.direction} size="sm" variant="outline" className="w-full justify-between" onClick={() => onResize(s.widthMm, s.depthMm)}>
                 <span>{s.direction === "smaller" ? "להקטין ל־" : "להגדיל ל־"}<span className="nums">{ltr(`${m(s.widthMm)}×${m(s.depthMm)}`)}</span></span>
                 <span className="nums text-muted">{s.decks} פלטות</span>
               </Button>

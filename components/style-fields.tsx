@@ -209,7 +209,7 @@ export function StyleFields({
             value={style?.dash ?? "solid"}
             onChange={(v) => patch({ dash: v === "solid" ? undefined : (v as DashPattern) })}
             options={DASH_OPTIONS}
-            className="w-20"
+            className="w-24"
             aria-label="סגנון קו"
           />
         </label>

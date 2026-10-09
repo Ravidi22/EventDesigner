@@ -111,7 +111,7 @@ export function TablePatternPicker({
                 disabled={disabled}
                 onClick={() => setPattern(p)}
                 className={
-                  "rounded-sm px-2 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
+                  "rounded-sm px-2 py-1.5 text-xs font-semibold leading-snug transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
                   (pattern === p ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
                 }
               >
@@ -120,7 +120,7 @@ export function TablePatternPicker({
             );
           })}
         </div>
-        <p className="mt-1.5 text-xs text-muted">{PATTERN_HINT[pattern]}</p>
+        <p className="mt-1.5 text-caption leading-relaxed text-muted">{PATTERN_HINT[pattern]}</p>
       </div>
 
       {halves && (
@@ -178,7 +178,7 @@ export function TablePatternPicker({
               <div>
                 <span className={fieldLabelClassName}>הגוון השני</span>
                 <SwatchPicker options={item!.shades.filter((sh) => sh.id !== item!.variantId)} value={second} onChange={setSecond} label="הגוון השני" />
-                <p className="mt-1 text-xs text-muted">
+                <p className="mt-1 text-caption text-muted">
                   {`${item!.shades.find((sh) => sh.id === item!.variantId)?.name ?? ""} ו${item!.shades.find((sh) => sh.id === second)?.name ?? "—"}`}
                 </p>
               </div>

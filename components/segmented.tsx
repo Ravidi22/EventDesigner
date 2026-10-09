@@ -34,8 +34,8 @@ export function Segmented<T extends string>({
             aria-pressed={value === v}
             onClick={() => onChange(v)}
             className={
-              "flex-1 rounded-sm px-2 py-1 text-xs transition-colors " +
-              (value === v ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg")
+              "min-h-8 flex-1 rounded-sm px-2 py-1 text-xs font-medium leading-snug transition-colors " +
+              (value === v ? "bg-accent text-canvas" : "text-ink-soft hover:bg-accent-tint hover:text-accent")
             }
           >
             {optionLabel}
