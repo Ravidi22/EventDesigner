@@ -8,7 +8,7 @@ import { seatsAround, CHAIR_D_MM } from "@/lib/studio/seating";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { dressingSpots, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { SheetFrame, LINE_WEIGHTS, type NoteRow, type SheetFrameProps } from "./sheet-frame";
-import { ChairGlyph, PlacementGlyph, TableGlyph, formatTables, tableGroupBoxes } from "./placement-map";
+import { ChairGlyph, PlacementGlyph, TableGlyph, tablesPhrase, tableGroupBoxes } from "./placement-map";
 
 // A TABLE DETAIL — one design kit drawn large enough to set a table from.
 //
@@ -152,8 +152,7 @@ export function TableDetail({
   });
 
   const seats = block ? (group?.seats ?? 0) : (members[0]?.seats ?? 0);
-  const numbers = kit.units.map((u) => u.number);
-  const appliesTo = numbers.length === 1 ? `שולחן ${numbers[0] || "ראש"}` : `שולחנות ${formatTables(numbers)}`;
+  const appliesTo = tablesPhrase(kit.units);
   // A kit that sits on tables of different shapes is drawn on the first; say so, rather than let the
   // crew assume the round drawn here is the shape of every table in the list.
   const shapes = new Set(
@@ -168,7 +167,7 @@ export function TableDetail({
     appliesTo,
     block ? `בלוק של ${members.length} שולחנות` : members[0] ? sizeOf(members[0]) : "",
     seats ? `${seats} כיסאות` : "",
-    shapes.size > 1 ? `הפריסה מוצגת על שולחן ${numbers[0] || "ראש"}` : "",
+    shapes.size > 1 ? `הפריסה מוצגת על ${tablesPhrase([unit])}` : "",
   ]
     .filter(Boolean)
     // RLM either side of each separator: between "Ø180" and "10" a bare "·" takes the numbers'

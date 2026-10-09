@@ -18,6 +18,12 @@ export interface DesignTable {
   id: string;
   type: string; // "round" | "rectangle" | "knight" ... (drives smart-apply, F-3.3)
   number: number; // human-facing table number for the placement map
+  /** Left out of the numbering — a cocktail table, the gift table, a table for the band. It is still
+   *  a table (drawn, seated, dressed, quoted and packed), but no number is drawn on it or printed for
+   *  it, renumbering passes it by, and it uses up no number. `number` is kept underneath, as a
+   *  grouped table keeps its own, and is reissued only if another table has taken it by the time it
+   *  is numbered again (freeNumbers in ./groups.ts). Absent = numbered, which is every table. */
+  unnumbered?: boolean;
   position: Point;
   rotation: number; // degrees
   diameterMm?: number;

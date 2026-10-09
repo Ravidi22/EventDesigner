@@ -103,12 +103,26 @@ export function pasteInto(
     x.groupId === undefined ? x : { ...x, groupId: regroup.get(x.groupId) };
 
   let n = opts.firstNumber;
+  // A pasted BLOCK takes ONE number, as the one table it is. Handing each member its own used to
+  // spend a number per member: a block of two and a lone table pasted as 6 and 8, with 7 hidden
+  // under the block and the room's sequence broken at the paste. Its members all carry the block's
+  // number underneath; an ungroup gives the second one a fresh number then (freeNumbers).
+  const blockNumber = new Map<string, number>();
+  const numberOf = (t: DesignTable): number => {
+    // A loaded sketch keeps the numbers it was saved with — it IS the room; a paste is a copy into
+    // a room that already has numbers, and takes the next free ones. A table out of the numbering
+    // stays out of it and uses none up.
+    if (opts.keepNumbers || t.unnumbered) return t.number;
+    if (t.number <= 0) return 0;
+    const g = t.groupId ? regroup.get(t.groupId) : undefined;
+    if (!g) return n++;
+    if (!blockNumber.has(g)) blockNumber.set(g, n++);
+    return blockNumber.get(g)!;
+  };
   const tables = clip.tables.map((t) => ({
     ...rejoin(t),
     id: remap.get(t.id)!,
-    // A loaded sketch keeps the numbers it was saved with — it IS the room; a paste is a copy into
-    // a room that already has numbers, and takes the next free ones.
-    number: opts.keepNumbers ? t.number : t.number > 0 ? n++ : 0,
+    number: numberOf(t),
     position: { x: t.position.x + opts.dx, y: t.position.y + opts.dy },
     // A copy is another TABLE, not another sitting of the same people. It brings its size, its
     // cloth and its chairs; it starts empty. (`seated: undefined` rather than a deleted key, so
@@ -129,7 +143,7 @@ export function pasteInto(
   // The block's number is the lowest its own new tables were given, so the copy reads in the room's
   // order rather than announcing a number from the far end of the sequence.
   const groups = (clip.groups ?? []).map((g) => {
-    const members = tables.filter((t) => t.groupId === regroup.get(g.id) && t.number > 0);
+    const members = tables.filter((t) => t.groupId === regroup.get(g.id) && t.number > 0 && !t.unnumbered);
     return {
       id: regroup.get(g.id)!,
       ...(members.length ? { number: Math.min(...members.map((t) => t.number)) } : {}),
@@ -276,6 +290,27 @@ if (isMain(import.meta.url)) {
   assert(blockOut.tables.every((t) => t.groupId === blockOut.groups[0].id), "…which is the one its tables joined");
   assert(blockOut.tables.every((t) => t.groupId !== "g"), "…never the original, which would drag both blocks at once");
   assert(blockOut.groups[0].number === 6, "the pasted block takes the lowest of its own new numbers");
+
+  // BUG (was): every member of a pasted block spent a number. A block and a lone table pasted
+  // together came out as 6 and 8, with 7 nowhere on the plan.
+  {
+    const withSolo = copySelection(
+      { ...blockDoc, tables: [...blockDoc.tables, table("s1", 9, 5000, 0)] },
+      [{ kind: "table", id: "b1" }, { kind: "table", id: "b2" }, { kind: "table", id: "s1" }],
+      isDrape,
+    );
+    const out = pasteInto(withSolo, { dx: 0, dy: 0, firstNumber: 6, newId });
+    assert(out.groups[0].number === 6, "a pasted block is one number…");
+    assert(out.tables.find((t) => !t.groupId)?.number === 7, "…so the table pasted with it is the next one, with no gap");
+  }
+
+  // A table out of the numbering stays out of it, and uses no number up.
+  {
+    const gift = { ...table("gift", 4), unnumbered: true };
+    const out = pasteInto({ tables: [gift, table("t9", 9)], placements: [], groups: [] }, { dx: 0, dy: 0, firstNumber: 10, newId });
+    assert(out.tables[0].unnumbered === true && out.tables[0].number === 4, "a pasted unnumbered table stays unnumbered");
+    assert(out.tables[1].number === 10, "…and the numbered one beside it still takes the first free number");
+  }
 
   // A group whose other member was refused (a drape) comes through as a group of one, which the
   // reducer's own pruning then drops — nothing here has to special-case it.

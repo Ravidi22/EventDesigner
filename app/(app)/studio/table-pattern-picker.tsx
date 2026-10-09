@@ -57,7 +57,8 @@ export function TablePatternPicker({
     () =>
       tables.map((t) => {
         const b = tableBox(t);
-        return { id: t.id, position: t.position, number: t.number, type: t.type, sizeMm: Math.max(b.widthMm, b.depthMm) };
+        // A table out of the numbering alternates after the numbered ones, by where it stands.
+        return { id: t.id, position: t.position, number: t.unnumbered ? Number.MAX_SAFE_INTEGER : t.number, type: t.type, sizeMm: Math.max(b.widthMm, b.depthMm) };
       }),
     [tables],
   );

@@ -27,10 +27,13 @@ import {
   groupSeats,
   numberedUnits,
   membersOf,
+  nextTableNumber,
   orderedNumbering,
   refitBlock,
   soleGroupId,
   spreadSeated,
+  tableLabel,
+  tableNumber,
   spreadSeats,
   type NumberingOptions,
 } from "@/lib/design-document/groups";
@@ -417,8 +420,9 @@ export function StudioScreen({
     hintTimer.current = setTimeout(() => setHint(null), 2600);
   };
 
-  // F-3.3: auto-running table numbering, editable per table.
-  const nextNumber = useCallback(() => doc.tables.reduce((m, t) => Math.max(m, t.number), 0) + 1, [doc.tables]);
+  // F-3.3: auto-running table numbering, editable per table. Off the numbers the plan SHOWS — a
+  // block's own number, not the hidden ones of its members, and no unnumbered table (groups.ts).
+  const nextNumber = useCallback(() => nextTableNumber(doc), [doc]);
 
   // Where a dropped item lands depends on what it is (CategoryDef.anchor), not on where the pointer
   // happened to be: a drape goes onto the nearest wall, a cloth onto the table under it, everything
@@ -845,6 +849,8 @@ export function StudioScreen({
       items: placements.length,
       seats: groupSeats(doc, soleGroup),
       seated: groupSeated(doc, soleGroup),
+      tableIds: tables.map((t) => t.id),
+      unnumbered: tables.length > 0 && tables.every((t) => t.unnumbered),
     };
   }, [doc, soleGroup]);
 
@@ -858,13 +864,17 @@ export function StudioScreen({
     // The number the block keeps is the LOWEST its members brought with them. A room numbered 1..12
     // that loses 4 and 5 into one block still reads in order, which is what the number is for; a
     // fresh number off the end would send the crew looking for table 13 in the middle of the room.
+    // The number each SHOWS — a table pulled out of another block shows that block's, not the one
+    // hidden underneath it — and none from a table out of the numbering.
     const numbers = refs
       .filter((r) => r.kind === "table")
-      .map((r) => doc.tables.find((t) => t.id === r.id)?.number ?? 0)
+      .map((r) => doc.tables.find((t) => t.id === r.id))
+      .filter((t): t is DesignTable => !!t && !t.unnumbered)
+      .map((t) => tableNumber(doc, t))
       .filter((n) => n > 0);
     act({ type: "group", groupId, refs, ...(numbers.length ? { number: Math.min(...numbers) } : {}) });
     showHint(numbers.length ? `קובצו לשולחן ${Math.min(...numbers)}` : "הפריטים קובצו");
-  }, [selected, doc.tables, act, docRefs]);
+  }, [selected, doc, act, docRefs]);
 
   const ungroupSelection = useCallback(() => {
     if (!soleGroup) return;
@@ -2304,7 +2314,10 @@ export function StudioScreen({
   // is how the designer wants to READ the room, not a fact about the event, and it is re-applied by
   // pressing the button, never automatically.
   const [numbering, setNumbering] = useState<NumberingOptions>(DEFAULT_NUMBERING);
-  const renumbering = useMemo(() => orderedNumbering(doc, numbering), [doc, numbering]);
+  // Room by room: each of the event's zones numbered in turn, so a zone's own sheet of the placement
+  // set reads as a run rather than every other number.
+  const numberingRooms = useMemo(() => plan.zones.filter((z) => z.boundary.length >= 3).map((z) => z.boundary), [plan.zones]);
+  const renumbering = useMemo(() => orderedNumbering(doc, numbering, numberingRooms), [doc, numbering, numberingRooms]);
 
   const renumberAll = useCallback(() => {
     if (renumbering.length === 0) return;
@@ -2871,7 +2884,12 @@ export function StudioScreen({
             stairPick={stairPick}
             onPickStair={pickStair}
             dressingTableId={dressingTable?.id ?? null}
-            onFocusTable={dressTable}
+            // The table's focus mode belongs to the DESIGN pass (and the full studio): in the hall
+            // pass a double-click on a table is an ordinary click, and the bar offers no roller.
+            onFocusTable={mode === "hall" ? undefined : dressTable}
+            // The number on each table: the hall pass is ABOUT the numbering, the design pass is
+            // about the dressing and is drawn clean.
+            showTableNumbers={mode !== "design"}
             onExitDressing={() => setDressing(null)}
             onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
           />
@@ -2880,7 +2898,7 @@ export function StudioScreen({
             <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center">
               <div className="pointer-events-auto flex min-w-0 justify-center">
                 <DressingBar
-                  title={dressingTable.number > 0 ? `עיצוב שולחן ${dressingTable.number}` : "עיצוב שולחן הראש"}
+                  title={`עיצוב ${tableLabel(doc, dressingTable)}`}
                   count={chipsOn(dressingTable.id).length}
                   selectedCount={selected.filter((r) => r.kind === "placement" && chipsOn(dressingTable.id).some((c) => c.id === r.id)).length}
                   arranged={!!dressingTable.arranged}
@@ -2997,7 +3015,8 @@ export function StudioScreen({
                 onClose={() => setSelected([])}
                 onQuantity={changeQuantity}
                 onDelete={deleteSelection}
-                onDressTable={dressTable}
+                onDressTable={mode === "hall" ? undefined : dressTable}
+                onTablesNumbered={(tableIds, numbered) => act({ type: "setTablesNumbered", tableIds, numbered })}
                 renderPattern={renderPattern}
                 renderDesigns={renderDesigns}
                 onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}

@@ -12,7 +12,7 @@ import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { zoneSheets } from "@/lib/outputs/zone-sheets";
-import { kitLetters, seatingSummary, tableKits } from "@/lib/outputs/table-kits";
+import { kitLetters, seatingSummary, tableKits, tablesPhrase } from "@/lib/outputs/table-kits";
 import { itemLookup } from "@/lib/outputs/lookup";
 import { numberedUnits } from "@/lib/design-document/groups";
 import type { StagePlacement } from "@/lib/design-document/stage";
@@ -158,7 +158,7 @@ export function OutputsScreen() {
   const [openSection, setOpenSection] = useState<"layers" | "zones" | "details" | "book" | null>("layers");
   const stages = doc.placements.filter((p): p is StagePlacement => !!p.stage);
   const kitted = new Set(kits.flatMap((k) => k.units.map((u) => u.id)));
-  const undressed = numberedUnits(doc).filter((u) => !kitted.has(u.id)).map((u) => u.number);
+  const undressed = numberedUnits(doc).filter((u) => !kitted.has(u.id));
 
   // Each drawing sheet's own paper: in "auto", whichever orientation fits its drawing at the larger
   // scale (a tie goes landscape — the title block reads better on a wide sheet).
@@ -352,7 +352,7 @@ export function OutputsScreen() {
                         >
                           <span className="font-bold">ערכה {k.letter}</span>
                           <span className="nums ms-1.5 font-normal">
-                            · {k.units.length === 1 ? `שולחן ${k.units[0].number || "ראש"}` : `${k.units.length} שולחנות`}
+                            · {k.units.length === 1 ? tablesPhrase(k.units) : `${k.units.length} שולחנות`}
                           </span>
                         </RailToggle>
                       ))}

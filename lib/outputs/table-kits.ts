@@ -11,7 +11,7 @@
 // with one number and one kit. Letters are assigned over the WHOLE event, never per zone, so kit ב
 // is kit ב on every sheet of the set.
 import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
-import { numberedUnits } from "../design-document/groups";
+import { byUnitOrder, numberedUnits, type NumberedUnit } from "../design-document/groups";
 import { isMain } from "../self-check";
 
 export const KIT_LETTERS = "אבגדהוזחטיכלמנסעפצקרשת";
@@ -26,7 +26,7 @@ export interface TableKit {
   /** The dressing's signature — a stable id for "which kits get a detail sheet" across renders. */
   key: string;
   letter: string;
-  units: { id: string; number: number; tableIds: string[] }[];
+  units: NumberedUnit[];
   items: KitItem[];
   /** How much a crew gains from seeing this kit drawn large. */
   score: number;
@@ -57,18 +57,20 @@ export function tableKits(doc: DesignDocumentContent): TableKit[] {
     const block = members.length > 1;
     const shaped = members.some((t) => !PLAIN_TYPES.has(t.type));
     const arranged = members.some((t) => t.arranged);
-    const score = pieces + items.length + (block ? 3 : 0) + (shaped ? 2 : 0) + (arranged ? 2 : 0) + (unit.number === 0 ? 2 : 0);
+    // An unnumbered table's stored number is not its name — it is no head table for being 0.
+    const head = !unit.unnumbered && unit.number === 0;
+    const score = pieces + items.length + (block ? 3 : 0) + (shaped ? 2 : 0) + (arranged ? 2 : 0) + (head ? 2 : 0);
     const kit = byKey.get(key) ?? { key, units: [], items, score: 0, recommended: false };
     kit.units.push(unit);
     kit.score = Math.max(kit.score, score);
     // A head table, a block, or anything scoring past a plain table with a centrepiece and a
     // runner (3 pieces, 3 items = 6) is worth a sheet of its own.
-    kit.recommended = kit.recommended || block || unit.number === 0 || score >= 7;
+    kit.recommended = kit.recommended || block || head || score >= 7;
     byKey.set(key, kit);
   }
   return [...byKey.values()]
-    .map((k) => ({ ...k, units: k.units.sort((a, b) => a.number - b.number) }))
-    .sort((a, b) => a.units[0].number - b.units[0].number)
+    .map((k) => ({ ...k, units: k.units.sort(byUnitOrder) }))
+    .sort((a, b) => byUnitOrder(a.units[0], b.units[0]))
     .map((k, i) => ({
       ...k,
       letter: i < KIT_LETTERS.length ? KIT_LETTERS[i] : `${KIT_LETTERS[i % KIT_LETTERS.length]}${Math.floor(i / KIT_LETTERS.length) + 1}`,
@@ -83,6 +85,40 @@ export function seatingSummary(doc: DesignDocumentContent): string {
   if (units === 0) return "";
   const seats = doc.tables.reduce((n, t) => n + (t.seats ?? 0), 0);
   return `${units} ${units === 1 ? "שולחן" : "שולחנות"}${seats ? ` · ${seats} מקומות` : ""}`;
+}
+
+const num = (n: number) => (n === 0 ? "ראש" : String(n));
+
+/** Compress table numbers into ranges: [1,2,3,5] → "1–3, 5".
+ *
+ *  Sorted and de-duplicated here rather than trusted to arrive that way, and the head table (0) is
+ *  never part of a range: it is a NAME, and 0 sitting next to 1 used to print "ראש–3". A range is
+ *  isolated left-to-right (LRI … PDI): in a Hebrew line the bidi algorithm otherwise reads the dash
+ *  between two numbers as right-to-left and prints "1–5" as "5–1". */
+export function formatTables(nums: number[]): string {
+  const sorted = [...new Set(nums)].sort((a, b) => a - b);
+  const parts: string[] = sorted.includes(0) ? [num(0)] : [];
+  const seq = sorted.filter((n) => n !== 0);
+  for (let i = 0; i < seq.length; ) {
+    let j = i;
+    while (j + 1 < seq.length && seq[j + 1] === seq[j] + 1) j++;
+    parts.push(i === j ? num(seq[i]) : `⁦${num(seq[i])}–${num(seq[j])}⁩`);
+    i = j + 1;
+  }
+  return parts.join(", ");
+}
+
+/** "שולחן 4", "שולחנות 1–3, 5", "שולחנות 1–3 ועוד 2 ללא מספר" — a set of table units in words,
+ *  for every printed line that says which tables something applies to. A table out of the numbering
+ *  (DesignTable.unnumbered) has no number to print and is COUNTED instead, so it is never silently
+ *  missing from the line, and never printed under a number it does not wear on the plan. */
+export function tablesPhrase(units: readonly { number: number; unnumbered?: boolean }[]): string {
+  const numbered = [...new Set(units.filter((u) => !u.unnumbered).map((u) => u.number))];
+  const loose = units.filter((u) => u.unnumbered).length;
+  const base = numbered.length === 0 ? "" : numbered.length === 1 ? `שולחן ${num(numbered[0])}` : `שולחנות ${formatTables(numbered)}`;
+  if (!loose) return base;
+  const tail = `${loose === 1 ? "שולחן" : `${loose} שולחנות`} ללא מספר`;
+  return base ? `${base} ועוד ${loose === 1 ? "אחד" : loose} ללא מספר` : tail;
 }
 
 /** Table id → its kit's letter, for the plan. */
@@ -127,5 +163,29 @@ if (isMain(import.meta.url)) {
   assert(new Set(kits.map((k) => k.letter)).size === kits.length, "letters are unique");
   assert(seatingSummary(doc) === "6 שולחנות", "a block counts as one table");
   assert(seatingSummary({ ...doc, tables: [] }) === "", "no tables, no summary");
+
+  // A table out of the numbering: still a table, in a kit, counted — never a head table, never a number.
+  {
+    const gift = { ...doc, tables: [...doc.tables, t("gift", 0, { unnumbered: true })], placements: [...doc.placements, chip("9", "gift", "vase")] } as DesignDocumentContent;
+    const gk = tableKits(gift);
+    const vaseKit = gk.find((k) => k.units.some((u) => u.tableIds.includes("gift")))!;
+    assert(vaseKit.units[vaseKit.units.length - 1].unnumbered === true, "an unnumbered table joins the kit its dressing matches, listed last");
+    assert(!gk.find((k) => k.letter === "א")!.units.some((u) => u.unnumbered), "…and its stored 0 does not make it the head table");
+    assert(seatingSummary(gift) === "7 שולחנות", "…and it is counted as a table");
+    assert(tablesPhrase(vaseKit.units) === "שולחן 3 ועוד אחד ללא מספר", "its phrase counts it rather than numbering it");
+  }
+
+  // ── printed table lists ───────────────────────────────────────────────────────────────────────
+  const plain = (s: string) => s.replace(/[⁦⁩]/g, "");
+  assert(plain(formatTables([1, 2, 3, 5])) === "1–3, 5", "consecutive numbers become a range");
+  // BUG (was): 0 and 1 are consecutive integers, so the head table was folded into a range.
+  assert(plain(formatTables([0, 1, 2, 3])) === "ראש, 1–3", "the head table is named, never the start of a range");
+  assert(plain(formatTables([5, 3, 4, 1])) === "1, 3–5", "unsorted input is sorted first");
+  assert(plain(formatTables([2, 2, 3])) === "2–3", "a repeated number is printed once");
+  assert(tablesPhrase([{ number: 4 }]) === "שולחן 4", "one table");
+  assert(plain(tablesPhrase([{ number: 2 }, { number: 1 }])) === "שולחנות 1–2", "several");
+  assert(tablesPhrase([{ number: 9, unnumbered: true }]) === "שולחן ללא מספר", "one unnumbered table is named as such");
+  assert(tablesPhrase([{ number: 9, unnumbered: true }, { number: 0, unnumbered: true }]) === "2 שולחנות ללא מספר", "…and several are counted");
+  assert(tablesPhrase([{ number: 0 }]) === "שולחן ראש", "the head table");
   console.log("table-kits self-check passed");
 }

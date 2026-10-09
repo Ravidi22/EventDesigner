@@ -48,14 +48,12 @@ import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, t
 import { placeLabels, type Box } from "@/lib/outputs/labels";
 import { centreOver, formatHang, hangHeightOf } from "@/lib/studio/hang";
 import { hangPointOf, hangTargetsOf } from "../studio/hang-targets";
-import type { TableKit } from "@/lib/outputs/table-kits";
+import { tablesPhrase, type TableKit } from "@/lib/outputs/table-kits";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { pointInPolygon } from "@/lib/venues/faces";
 import type { Extent } from "@/lib/outputs/scale";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
 import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps, type LegendRow } from "./sheet-frame";
-
-const num = (n: number) => (n === 0 ? "ראש" : String(n));
 
 // The B&W print ink — matches SheetFrame's own tokens, so the drawing and the frame around it read
 // as one document rather than two components that each remembered the palette separately.
@@ -63,19 +61,9 @@ const INK = "#1b1725";
 const INK_SOFT = "#4a4658";
 const MUTED = "#7c7889";
 
-// Compress a sorted list of table numbers into ranges: [1,2,3,5] → "1–3, 5".
-export function formatTables(nums: number[]): string {
-  const parts: string[] = [];
-  for (let i = 0; i < nums.length; ) {
-    let j = i;
-    while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
-    // A range is isolated left-to-right (LRI … PDI): in a Hebrew line the bidi algorithm otherwise
-    // reads the dash between two numbers as right-to-left and prints "1–5" as "5–1".
-    parts.push(i === j ? num(nums[i]) : `⁦${num(nums[i])}–${num(nums[j])}⁩`);
-    i = j + 1;
-  }
-  return parts.join(", ");
-}
+// Table numbers into ranges ("1–3, 5") and table units into words — pure, self-checked in
+// lib/outputs/table-kits.ts (npm run check:table-kits).
+export { formatTables, tablesPhrase } from "@/lib/outputs/table-kits";
 
 // How a block of pushed-together tables reads for the derived chair ring: one bounding box, through
 // each member's own rotation, exactly the way the studio canvas boxes a group (canvas-stage.tsx).
@@ -666,10 +654,13 @@ export function PlacementMap({
               // The kit letter rides under the number in a ring — "which arrangement goes on this
               // table" answered at the table, with the detail sheet of that letter behind it.
               const letter = letters?.get(members[0].id);
-              const lift = letter ? size * 0.42 : 0;
+              // A table out of the numbering prints no number — only its kit letter, where the
+              // number would have stood.
+              const lift = letter && !unit.unnumbered ? size * 0.42 : 0;
+              const letterAt = unit.unnumbered ? 0 : size * 0.62;
               return (
                 <Fragment key={unit.id}>
-                  <text
+                  {!unit.unnumbered && <text
                     x={at.x}
                     y={at.y - lift}
                     textAnchor="middle"
@@ -680,9 +671,9 @@ export function PlacementMap({
                     fill={INK}
                   >
                     {unit.number > 0 ? unit.number : "ראש"}
-                  </text>
+                  </text>}
                   {letter && (
-                    <g transform={`translate(${at.x} ${at.y + size * 0.62})`}>
+                    <g transform={`translate(${at.x} ${at.y + letterAt})`}>
                       <circle r={size * 0.38} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
                       <text textAnchor="middle" dominantBaseline="central" fontSize={size * 0.5} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK}>
                         {letter}
@@ -1124,8 +1115,8 @@ export function KitSchedule({
   details,
 }: {
   kits: TableKit[];
-  /** Numbers of units that carry nothing. */
-  undressed: number[];
+  /** The table units that carry nothing. */
+  undressed: { number: number; unnumbered?: boolean }[];
   lookup: (variantId: string) => { variantLabel: string; components?: { label: string; count: number }[]; imageUrl?: string } | undefined;
   /** Kit keys that have a detail sheet in this set — so the row can say "ראו פרט". */
   details: Set<string>;
@@ -1139,7 +1130,7 @@ export function KitSchedule({
             <dt className="flex w-44 shrink-0 items-baseline gap-2">
               <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-ink text-sm font-bold text-ink">{k.letter}</span>
               <span className="nums font-semibold text-ink">
-                {k.units.length === 1 ? `שולחן ${num(k.units[0].number)}` : `שולחנות ${formatTables(k.units.map((u) => u.number))}`}
+                {tablesPhrase(k.units)}
               </span>
             </dt>
             <dd className="min-w-0 flex-1 text-ink-soft">
@@ -1167,7 +1158,7 @@ export function KitSchedule({
         {undressed.length > 0 && (
           <div className="flex items-baseline gap-3 py-2 text-sm">
             <dt className="nums w-44 shrink-0 ps-8 font-semibold text-ink">
-              {undressed.length === 1 ? `שולחן ${num(undressed[0])}` : `שולחנות ${formatTables(undressed)}`}
+              {tablesPhrase(undressed)}
             </dt>
             <dd className="text-muted">ללא עיצוב</dd>
           </div>
