@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Check, Eye, Send, Share2, TriangleAlert } from "lucide-react";
+import { BackToStudio } from "./back-to-studio";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { quoteGroups, quoteTotals, type DiscountType } from "@/lib/outputs/quote";
 import { measureContext, priceLookup } from "@/lib/outputs/lookup";
@@ -30,7 +31,9 @@ import { QuoteSheet } from "./quote-sheet";
 // This file is the CONTROLS and the state. The sheet a client receives is ./quote-sheet.tsx, which
 // takes what is resolved here and renders it as a document — letterhead, מפרט, photographs, totals,
 // terms, signature. Everything on this screen that is not part of that document is `no-print`.
-export function Quote({ doc }: { doc: DesignDocumentContent }) {
+/** `meeting`: rendered as the meeting's closing stage rather than on /outputs — the empty state then
+ *  points at the stage behind it instead of linking out of the flow (./back-to-studio.tsx). */
+export function Quote({ doc, meeting = false }: { doc: DesignDocumentContent; meeting?: boolean }) {
   const [settings, setSettings] = useState<BusinessSettings | null>(null);
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [issued, setIssued] = useState<IssuedQuote | null>(null);
@@ -175,9 +178,7 @@ export function Quote({ doc }: { doc: DesignDocumentContent }) {
     return (
       <div className="mx-auto max-w-md py-20 text-center">
         <p className="text-sm text-ink-soft">עדיין אין פריטים בעיצוב.</p>
-        <Link href="/studio" className="mt-3 inline-block text-sm font-medium text-accent hover:text-accent-hover">
-          חזרה לסטודיו →
-        </Link>
+        <BackToStudio meeting={meeting} className="mt-3 inline-block text-sm" />
       </div>
     );
   }

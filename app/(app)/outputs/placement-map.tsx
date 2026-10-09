@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { BackToStudio } from "./back-to-studio";
 import { Fragment } from "react";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { numberedUnits, groupSeats } from "@/lib/design-document/groups";
@@ -1107,6 +1107,7 @@ export function KitSchedule({
   undressed,
   lookup,
   details,
+  meeting = false,
 }: {
   kits: TableKit[];
   /** The table units that carry nothing. */
@@ -1114,6 +1115,8 @@ export function KitSchedule({
   lookup: (variantId: string) => { variantLabel: string; components?: { label: string; count: number }[]; imageUrl?: string } | undefined;
   /** Kit keys that have a detail sheet in this set — so the row can say "ראו פרט". */
   details: Set<string>;
+  /** Printed from the meeting's closing stage: the empty note points back into the flow. */
+  meeting?: boolean;
 }) {
   return (
     <section>
@@ -1161,9 +1164,7 @@ export function KitSchedule({
       {kits.length === 0 && (
         <p className="mt-4 text-sm text-muted">
           עדיין לא שובצו פריטים על השולחנות.{" "}
-          <Link href="/studio" className="font-medium text-accent hover:text-accent-hover">
-            חזרה לסטודיו →
-          </Link>
+          <BackToStudio meeting={meeting} />
         </p>
       )}
     </section>

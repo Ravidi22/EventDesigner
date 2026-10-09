@@ -107,7 +107,7 @@ import { BringToFront, Copy, Group, Grid2x2Plus, SendToBack, Trash2, X } from "l
 // other component, so there is nothing left to defer and no "loading the studio" flash to cover.
 import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } from "./canvas-stage";
 import type { ContextMenuItem, MarqueeMode } from "@/components/plan-canvas";
-import { VenueAccessNotice } from "@/components/venue-access-notice";
+import { VenueAccessNotice, VenueUnsetNotice } from "@/components/venue-access-notice";
 
 const uid = () => crypto.randomUUID();
 
@@ -192,12 +192,16 @@ type SpacingUnit = {
 export function StudioScreen({
   mode = "full",
   initialProducts,
+  onSaveState,
 }: {
   mode?: StudioMode;
   /** From the server, when this screen is a page of its own (app/(app)/studio/page.tsx). Absent
    *  inside the meeting flow, which embeds this screen bare — see app/meeting/meeting-screen.tsx —
    *  and where the hook falls back to fetching for itself. */
   initialProducts?: Product[];
+  /** The autosave's state, reported up as it changes. The meeting's footer asks before leaving a
+   *  stage whose last edit failed to save — it cannot see this screen's toolbar from outside. */
+  onSaveState?: (state: "saving" | "saved" | "error") => void;
 }) {
   // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
   // that the canvas's resolver and dropProduct() read during render and mid-drag.
@@ -229,6 +233,10 @@ export function StudioScreen({
     () => (workspace ? eventPlan(workspace.event, workspace.geometry) : EMPTY_PLAN),
     [workspace],
   );
+  // An event with no property picked yet draws on a blank plane. Said on screen (VenueUnsetNotice
+  // below) rather than left to look like an undrawn hall; a studio with no event at all is the
+  // scratch drawing and gets no notice.
+  const venueUnset = ready && !!workspace?.event && !workspace.event.venueId;
   // A LIST, not one ref: several tables can be dragged across the room together, and a rubber-band
   // across a corner of the hall is how you get hold of them. One selected thing is the ordinary
   // case and still the only one the inspector has fields for.
@@ -382,6 +390,10 @@ export function StudioScreen({
     pending.current ??= doc;
     void flush();
   }, [doc, flush]);
+
+  useEffect(() => {
+    onSaveState?.(saveState);
+  }, [saveState, onSaveState]);
 
   // Warn before leaving while a write is still pending or has failed — don't let a plan slip away unsaved.
   useEffect(() => {
@@ -3339,7 +3351,7 @@ export function StudioScreen({
               under them gets a reason instead of being mistaken for an undrawn hall. */}
           {/* Everyone the plan seats — tables and banquettes. Only once there is someone to seat. */}
           {seating.tables + seating.benches > 0 && (
-            <div className={"pointer-events-none absolute inset-inline-start-4 " + (plan.access === "denied" ? "top-20" : "top-4")}>
+            <div className={"pointer-events-none absolute inset-inline-start-4 " + (plan.access === "denied" || venueUnset ? "top-20" : "top-4")}>
               <span className="nums rounded-md border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
                 {`${seating.tables + seating.benches} מקומות ישיבה`}
                 {seating.benches > 0 ? ` · ${seating.benches} על בנקטים` : ""}
@@ -3398,6 +3410,16 @@ export function StudioScreen({
             <div className="pointer-events-none absolute inset-inline-start-4 top-4">
               <div className="pointer-events-auto">
                 <VenueAccessNotice />
+              </div>
+            </div>
+          )}
+          {/* The other blank plane: an event with no property chosen yet. Common on a first meeting
+              (the event is opened before anyone has decided where the wedding is) and, until this
+              said so, indistinguishable from a hall nobody had drawn. */}
+          {venueUnset && (
+            <div className="pointer-events-none absolute inset-inline-start-4 top-4">
+              <div className="pointer-events-auto">
+                <VenueUnsetNotice />
               </div>
             </div>
           )}
