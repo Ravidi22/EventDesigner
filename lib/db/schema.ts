@@ -557,6 +557,10 @@ export const events = pgTable(
      *  two events whose dates differ by two days can still want the same chuppah and the same pair
      *  of hands at the same hour, and comparing `event_date` alone would call that clear. */
     setupDate: date("setup_date"),
+    /** גווני האירוע — variant NAMES from the studio's catalog, in the designer's order of
+     *  preference. An item placed for this event wears the first of them it stocks
+     *  (lib/catalog/shades.ts). Names, not variant ids: one shade spans every product that has it. */
+    shades: text("shades").array().notNull().default([]),
     archived: boolean("archived").notNull().default(false),
     createdAt: created(),
   },

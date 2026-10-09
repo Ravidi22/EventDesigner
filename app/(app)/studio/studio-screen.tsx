@@ -14,7 +14,7 @@ import { tableAt } from "@/lib/studio/geometry";
 import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { coverOn, deckOf, defaultVariantId, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
+import { coverOn, deckOf, defaultVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -287,6 +287,13 @@ export function StudioScreen({
     }
     setRestored(true);
   }, [ready, workspace]);
+
+  // גווני האירוע: every default shade on this screen (defaultVariantId — a drop, a swap, a table)
+  // prefers the event's palette. Cleared on the way out so another event never inherits it.
+  useEffect(() => {
+    primeEventShades(workspace?.event?.shades);
+    return () => primeEventShades(undefined);
+  }, [workspace]);
 
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only claims "saved" when
   // the write actually landed; a failed write shows an error + retry.
