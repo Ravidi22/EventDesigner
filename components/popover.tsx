@@ -109,6 +109,10 @@ export function Popover({
       const nested = e.target instanceof Element ? e.target.closest("dialog") : null;
       if (nested && panel.current?.contains(nested)) return;
       e.stopPropagation(); // see the note above the component
+      // And the default action: a <dialog> ENCLOSING the panel (the appearance editor) closes on
+      // Escape through its close watcher, which stopPropagation does not reach — the panel closed
+      // and the whole editor cancelled with it, outline edits and all.
+      e.preventDefault();
       setOpen(false);
       triggerRef.current?.focus();
     };

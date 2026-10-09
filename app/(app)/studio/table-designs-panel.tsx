@@ -9,6 +9,7 @@ import { TextField } from "@/components/text-field";
 import { Swatch } from "@/components/swatch-field";
 import { fieldLabelClassName } from "@/components/control";
 import { BarButton } from "@/components/inspector-bar";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 
 // The studio's saved table designs — "גולד רומנטי", "לבן־ירוק כפרי": a table's whole dressing under a
 // name (TableDesign), saved from a dressed table and put on any table of any event in one press. To
@@ -30,6 +31,9 @@ export function TableDesignsPanel({
   onDelete: (designId: string) => void;
 }) {
   const [name, setName] = useState("");
+  // A saved design is a studio-wide settings row with no undo, so the bin asks first — the same
+  // question every delete in the app asks (ConfirmDialog), as the toolbar's sketch list does.
+  const [confirm, setConfirm] = useState<{ id: string; name: string } | null>(null);
   return (
     <div className="space-y-3">
       {designs.length > 0 ? (
@@ -56,7 +60,7 @@ export function TableDesignsPanel({
                     <span className="nums ms-auto shrink-0 text-caption font-normal text-muted">{`${count} פריטים`}</span>
                   </button>
                   {/* A bin, not an ✕: in a popup an ✕ means "close this", and here it deleted a design. */}
-                  <BarButton icon={Trash2} tone="danger" label={`מחיקת העיצוב ״${d.name}״`} onClick={() => onDelete(d.id)} />
+                  <BarButton icon={Trash2} tone="danger" label={`מחיקת העיצוב ״${d.name}״`} onClick={() => setConfirm({ id: d.id, name: d.name })} />
                 </li>
               );
             })}
@@ -81,6 +85,18 @@ export function TableDesignsPanel({
           {canSave ? "שמירה" : "אין על השולחן מה לשמור"}
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={`למחוק את העיצוב ״${confirm?.name ?? ""}״?`}
+        body="העיצוב נמחק מהסטודיו — שולחנות שכבר לובשים אותו נשארים כמו שהם."
+        confirmLabel="מחיקה"
+        onConfirm={() => {
+          if (confirm) onDelete(confirm.id);
+          setConfirm(null);
+        }}
+        onClose={() => setConfirm(null)}
+      />
     </div>
   );
 }
