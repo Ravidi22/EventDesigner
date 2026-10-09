@@ -510,10 +510,12 @@ body {
   }
 }
 
-/* A plan in motion (PlanCanvas sets data-moving through a pan or a zoom, and clears it ~200ms after
-   the last step) drops the textures' noise filters — feTurbulence is re-rasterised at every zoom
-   step and is what made a textured plan stutter. The laid pattern (planks, slabs) stays; the grain
-   comes back when the view settles. */
+/* A plan in motion (PlanCanvas sets data-moving through a pan, a zoom, a fit or a focus flight, and
+   from before its first paint; it clears ~200ms after the view comes to rest) drops every costly
+   filter on the plan: the textures' noise and the plants' canopy/shadow filters (feTurbulence,
+   feDisplacementMap, feGaussianBlur — one graph per plant, 149 of them in a landscaped courtyard).
+   A moving view re-rasterises the whole <svg> every frame. The laid pattern (planks, slabs) and the
+   plants' leaf clumps stay; the grain and the shadows come back once, when the view settles. */
 svg[data-moving] .plan-grain {
   filter: none;
 }

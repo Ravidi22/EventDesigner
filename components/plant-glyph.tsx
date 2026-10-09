@@ -14,7 +14,7 @@
 //
 // Colour comes from one base per species (or the designer's own style.fill), with every lighter and
 // darker tone derived from it — repaint a hedge in the inspector and it stays a shaded hedge.
-import { useId, useMemo, type ReactNode } from "react";
+import { memo, useId, useMemo, type ReactNode } from "react";
 import type { PlantSpecies } from "@/lib/venues/structure";
 
 export const PLANT_BASE: Record<PlantSpecies, string> = {
@@ -64,7 +64,9 @@ function mix(hex: string, toward: string, t: number): string {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 // ── Filters ────────────────────────────────────────────────────────────────────────────────────
-// Declared per plant (ids from useId), in the drawing's own 100-unit space.
+// Declared per plant (ids from useId), in the drawing's own 100-unit space. Every group that wears
+// one is `plan-grain`, so a moving plan stands them down like the textures' noise (globals.css):
+// they are each a turbulence, a displacement and a blur, and a courtyard is a hundred-odd plants.
 
 /** The canopy treatment: a ragged leafy outline, dark and light leaf speckle clipped to it, and a
  *  soft shadow cast down-and-right from the roughened shape itself. */
@@ -157,7 +159,7 @@ function Canopy({ uid, seed, color, rings, edgeFreq, edgeScale, leafFreq }: { ui
         <CanopyFilter id={`${uid}c`} seed={seed} edgeFreq={edgeFreq} edgeScale={edgeScale} leafFreq={leafFreq} />
         <VolumeGradient id={`${uid}v`} />
       </defs>
-      <g filter={`url(#${uid}c)`}>
+      <g filter={`url(#${uid}c)`} className="plan-grain">
         <Clumps rand={rand} rings={rings} color={color} vol={`${uid}v`} />
       </g>
     </>
@@ -239,7 +241,7 @@ function Palm({ uid, seed, color }: { uid: string; seed: number; color: string }
           <stop offset="1" stopColor="#5e4228" />
         </radialGradient>
       </defs>
-      <g filter={`url(#${uid}d)`} strokeLinecap="round" fill="none">
+      <g filter={`url(#${uid}d)`} className="plan-grain" strokeLinecap="round" fill="none">
         {/* The old fronds hanging below the crown, gone straw-brown. */}
         {dead.map((f, i) => (
           <g key={`d${i}`} stroke={mix("#9a8a52", "#5f5530", f.tone * 0.5)}>
@@ -285,7 +287,7 @@ function Pot({ uid, seed, color }: { uid: string; seed: number; color: string })
           <stop offset="1" stopColor="#3f2a1c" />
         </radialGradient>
       </defs>
-      <g filter={`url(#${uid}d)`}>
+      <g filter={`url(#${uid}d)`} className="plan-grain">
         <circle r={49} fill={`url(#${uid}p)`} />
       </g>
       <circle r={43} fill="none" stroke="#7d4631" strokeOpacity={0.55} strokeWidth={1.4} />
@@ -330,7 +332,7 @@ function Hedge({ uid, seed, color, long }: { uid: string; seed: number; color: s
         <CanopyFilter id={`${uid}c`} seed={seed} edgeFreq={0.12} edgeScale={6} leafFreq={0.5} />
         <VolumeGradient id={`${uid}v`} />
       </defs>
-      <g filter={`url(#${uid}c)`}>
+      <g filter={`url(#${uid}c)`} className="plan-grain">
         <rect x={-long / 2 + 2} y={-44} width={long - 4} height={88} rx={40} fill={mix(color, "#000000", 0.25)} />
         {clumps}
       </g>
@@ -390,8 +392,8 @@ function Flowers({ uid, seed, color, long }: { uid: string; seed: number; color:
       </defs>
       <rect x={-long / 2} y={-50} width={long} height={100} rx={rx} fill="#d8d1c3" />
       <rect x={-long / 2 + 5} y={-45} width={long - 10} height={90} rx={rx - 4} fill="#4a3322" />
-      <g filter={`url(#${uid}c)`}>{foliage}</g>
-      <g filter={`url(#${uid}d)`}>{blooms}</g>
+      <g filter={`url(#${uid}c)`} className="plan-grain">{foliage}</g>
+      <g filter={`url(#${uid}d)`} className="plan-grain">{blooms}</g>
     </>
   );
 }
@@ -400,7 +402,7 @@ function Flowers({ uid, seed, color, long }: { uid: string; seed: number; color:
 
 /** A plant, centred on the origin at `w × d` millimetres. `color` overrides the species' own green —
  *  the feature's style.fill, when the designer has set one. */
-export function PlantGlyph({
+function PlantGlyphView({
   species,
   w,
   d,
@@ -457,3 +459,7 @@ export function PlantGlyph({
     </g>
   );
 }
+
+// Every prop is a plain value, so the default comparison holds a plant still while the plan pans:
+// a landscaped courtyard is a hundred-odd of these, each a hundred elements under its own filter.
+export const PlantGlyph = memo(PlantGlyphView);

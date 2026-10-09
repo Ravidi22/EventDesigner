@@ -1,6 +1,7 @@
 "use client";
 
 import { doorGeometry, fromLocalFrame, outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, toLocalFrame, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
+import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { resolveStyle } from "@/lib/element-style";
 import { usesDiameter } from "@/lib/catalog/types";
 import { isAdditiveClick } from "@/lib/keyboard";
@@ -518,10 +519,89 @@ export function StructureFeatures({
    *  canvas, whose own right-click menu the host fills in knowing which feature it was over. */
   onContextMenu?: (id: string) => void;
 }) {
+  // ONE memoised node per feature, handed callbacks that never change identity. The canvas
+  // re-renders its layers on every frame of a pan or a zoom, and a venue like a landscaped
+  // courtyard is hundreds of features (500+ in one, 125 of them plants) — re-running every one of
+  // them per frame was ~600 component calls and ~2,600 elements diffed for a view that only moved.
+  // Now a pan re-renders none of them and a zoom only the few that wear a label or are selected.
+  // The callbacks are read through a ref so a node that skipped a render still calls the host's
+  // CURRENT handler; whether each is supplied at all (which switches affordances on) is passed as
+  // the presence of the stable wrapper, so it still re-renders when that changes.
+  const handlers = { onSelect, onMove, onMoveStairs, onResize, onRotate, onCommit, clientToMm, onContextMenu };
+  const live = useRef(handlers);
+  useLayoutEffect(() => {
+    live.current = handlers;
+  });
+  const stable = useMemo<FeatureHandlers>(
+    () => ({
+      onSelect: (id, additive) => live.current.onSelect?.(id, additive),
+      onMove: (id, p) => live.current.onMove?.(id, p),
+      onMoveStairs: (id, p) => live.current.onMoveStairs?.(id, p),
+      onResize: (id, patch) => live.current.onResize?.(id, patch),
+      onRotate: (id, deg) => live.current.onRotate?.(id, deg),
+      onCommit: () => live.current.onCommit?.(),
+      clientToMm: (x, y) => live.current.clientToMm?.(x, y) ?? { x: 0, y: 0 },
+      onContextMenu: (id) => live.current.onContextMenu?.(id),
+    }),
+    [],
+  );
+  const labelPx = mm(FEATURE_LABEL_PX);
   return (
     <>
       {groundFirst(structure.features).map((f) => {
         const selected = selectedIds?.includes(f.id) ?? false;
+        return (
+          <FeatureNode
+            key={f.id}
+            f={f}
+            selected={selected}
+            labelPx={f.kind !== "plant" && f.kind !== "surface" && f.label ? labelPx : undefined}
+            mm={selected ? mm : undefined}
+            onSelect={onSelect && stable.onSelect}
+            onMove={onMove && stable.onMove}
+            onMoveStairs={onMoveStairs && stable.onMoveStairs}
+            onResize={onResize && stable.onResize}
+            onRotate={onRotate && stable.onRotate}
+            onCommit={onCommit && stable.onCommit}
+            clientToMm={clientToMm && stable.clientToMm}
+            onContextMenu={onContextMenu && stable.onContextMenu}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+type FeatureHandlers = {
+  onSelect?: (id: string, additive: boolean) => void;
+  onMove?: (id: string, p: { x: number; y: number }) => void;
+  onMoveStairs?: (id: string, p: { x: number; y: number }) => void;
+  onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void;
+  onRotate?: (id: string, rotationDeg: number) => void;
+  onCommit?: () => void;
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
+  onContextMenu?: (id: string) => void;
+};
+
+const unscaled = (px: number) => px;
+
+/** One fixed feature. Memoised on plain props — see StructureFeatures. `mm` is supplied only to a
+ *  selected feature (its handles are the only thing sized by the live zoom besides the label, which
+ *  comes in as `labelPx`), so an unselected, unlabelled feature compares equal across a zoom. */
+const FeatureNode = memo(function FeatureNode({
+  f,
+  selected,
+  labelPx,
+  mm = unscaled,
+  onSelect,
+  onMove,
+  onMoveStairs,
+  onResize,
+  onRotate,
+  onCommit,
+  clientToMm,
+  onContextMenu,
+}: FeatureHandlers & { f: StructureFeature; selected: boolean; labelPx?: number; mm?: (px: number) => number }) {
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",
           stroke: selected ? "var(--color-accent)" : "var(--color-muted)",
@@ -637,7 +717,7 @@ export function StructureFeatures({
                 textAnchor="middle"
                 dominantBaseline="central"
                 fill={selected ? "var(--color-accent-deep)" : "var(--color-muted)"}
-                style={{ fontSize: mm(FEATURE_LABEL_PX) }}
+                style={{ fontSize: labelPx }}
                 className="pointer-events-none"
               >
                 {f.label}
@@ -747,10 +827,7 @@ export function StructureFeatures({
             )}
           </g>
         );
-      })}
-    </>
-  );
-}
+});
 
 // One resize handle: the square, its hit area and its cursor. The drag props are spread in by the
 // caller (resizable/resizableRadius below), which owns all the maths — this only draws.
