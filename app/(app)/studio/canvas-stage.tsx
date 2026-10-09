@@ -47,6 +47,7 @@ import {
 } from "@/lib/design-document/stage";
 import type { StageBuild, StageStair } from "@/lib/design-document/types";
 import { signedArea } from "@/lib/studio/stage-fill";
+import { itemAlong, itemSidePoint, stageSides } from "@/lib/design-document/stage";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
 import { polysBox, type ClearanceIssue, type ClearanceSubject } from "@/lib/studio/proximity";
 import { itemGeometry } from "./plan-geometry";
@@ -440,11 +441,8 @@ export function CanvasStage({
       const stage = doc.placements.find((x) => x.id === stageId);
       const bench = stage?.stage ? benchInRoom(stage as StagePlacement, itemId, deckOf) : null;
       if (!bench) continue;
-      const u = { x: Math.cos((bench.angle * Math.PI) / 180), y: Math.sin((bench.angle * Math.PI) / 180) };
-      list.forEach((p, i) => {
-        const f = (i + 0.5) / list.length - 0.5;
-        out.push({ p, at: { x: bench.centre.x + u.x * f * bench.lengthMm, y: bench.centre.y + u.y * f * bench.lengthMm } });
-      });
+      // Spread along it — round a curved one too.
+      list.forEach((p, i) => out.push({ p, at: bench.along((i + 0.5) / list.length - 0.5) }));
     }
     return out;
   }, [sorted.perched, doc.placements]);
@@ -791,7 +789,8 @@ export function CanvasStage({
   const shapingStage = useMemo(() => {
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
     const p = doc.placements.find((x) => x.id === selection[0].id);
-    return p?.stage && !stageRect(p.stage) && !p.groupId ? (p as StagePlacement) : null;
+    // Not a round stage: its rim is dozens of chords, and a grip on each would only dent the curve.
+    return p?.stage && !stageRect(p.stage) && !p.groupId && !p.stage.smooth?.length ? (p as StagePlacement) : null;
   }, [selection, doc]);
   /** The stage as it stood when a drag of its corner or side began. */
   const shapingFrom = useRef<StagePlacement | null>(null);
@@ -3110,22 +3109,24 @@ function StageMarks({
           </g>
         );
       })}
-      {decks.map((d, i) => (
-        <rect
-          key={i}
-          x={-d.widthMm / 2}
-          y={-d.depthMm / 2}
-          width={d.widthMm}
-          height={d.depthMm}
-          transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-          fill="none"
-          stroke="var(--color-accent)"
-          strokeOpacity={0.55}
-          strokeWidth={1}
-          strokeDasharray="4 3"
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
+      {decks.map((d, i) =>
+        d.round ? null : (
+          <rect
+            key={i}
+            x={-d.widthMm / 2}
+            y={-d.depthMm / 2}
+            width={d.widthMm}
+            height={d.depthMm}
+            transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeOpacity={0.55}
+            strokeWidth={1}
+            strokeDasharray="4 3"
+            vectorEffect="non-scaling-stroke"
+          />
+        ),
+      )}
       {/* Stairs, banquettes and barriers are part of the stage on the floor — drawn always: a flight
           with a line across each tread, a banquette as a seat-coloured strip, a barrier as a heavy
           line along the inside of its edge. The one being edited is in the accent. */}
@@ -3189,12 +3190,10 @@ function StageMarks({
       {/* What nothing covers yet — an edge somebody can walk off. Only while the stage is selected,
           where the bar offers to finish it. */}
       {(gaps ?? []).map((g, i) => (
-        <line
+        <polyline
           key={`gap-${i}`}
-          x1={g.a.x}
-          y1={g.a.y}
-          x2={g.b.x}
-          y2={g.b.y}
+          points={g.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
           stroke="var(--color-alert)"
           strokeWidth={3}
           strokeDasharray="5 4"
@@ -3207,7 +3206,8 @@ function StageMarks({
         stage.outline.map((a, i) => {
           const b = stage.outline[(i + 1) % stage.outline.length];
           const L = Math.hypot(b.x - a.x, b.y - a.y);
-          if (L < 1) return null;
+          // A chord of a curved rim is not a side anyone measures.
+          if (L < 1 || (stage.smooth?.length && stageSides(stage).some((s) => s.curved && s.edges.includes(i)))) return null;
           const s = signedArea(stage.outline) >= 0 ? 1 : -1;
           const out = { x: (s * (b.y - a.y)) / L, y: (-s * (b.x - a.x)) / L };
           const at = { x: (a.x + b.x) / 2 + out.x * labelMm * 1.4, y: (a.y + b.y) / 2 + out.y * labelMm * 1.4 };
@@ -3231,12 +3231,10 @@ function StageMarks({
         })}
       {/* A railing the studio's rule asks for: a heavy dotted line along the side that needs it. */}
       {(railing ?? []).map((r, i) => (
-        <line
+        <polyline
           key={`rail-${i}`}
-          x1={r.a.x}
-          y1={r.a.y}
-          x2={r.b.x}
-          y2={r.b.y}
+          points={r.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
           stroke="var(--color-alert)"
           strokeWidth={4}
           strokeDasharray="2 5"
@@ -3270,17 +3268,8 @@ function EdgeItemHandles({
 }) {
   const start = useRef<{ item: StageStair; grab: number; from: number; to: number } | null>(null);
   const SNAP = 150;
-  /** A point under the pointer, as mm along an item's edge (and out from it). */
-  const along = (item: StageStair, clientX: number, clientY: number) => {
-    const e = itemEdge(p.stage, item);
-    if (!e) return null;
-    const q = toStageFrame(p, ctx.clientToMm(clientX, clientY));
-    const L = Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y) || 1;
-    const u = { x: (e.b.x - e.a.x) / L, y: (e.b.y - e.a.y) / L };
-    const sg = signedArea(e.outline) >= 0 ? 1 : -1;
-    const out = { x: sg * u.y, y: -sg * u.x };
-    return { s: (q.x - e.a.x) * u.x + (q.y - e.a.y) * u.y, o: (q.x - e.a.x) * out.x + (q.y - e.a.y) * out.y, L };
-  };
+  /** A point under the pointer, as mm along an item's side (and out from it) — round a curve too. */
+  const along = (item: StageStair, clientX: number, clientY: number) => itemAlong(p.stage, item, toStageFrame(p, ctx.clientToMm(clientX, clientY)));
   const snapEnd = (v: number, L: number) => (v < SNAP ? 0 : v > L - SNAP ? L : Math.abs(v - L / 2) < SNAP ? L / 2 : Math.round(v / 50) * 50);
   const write = (item: StageStair, from: number, to: number, L: number) => {
     const full = from <= 1 && to >= L - 1;
@@ -3302,18 +3291,17 @@ function EdgeItemHandles({
         if (!shape || !span || !e) return null;
         const room = shape.polygon.map((q) => toRoom(p, q));
         const on = item.id === active;
-        const u = { x: (e.b.x - e.a.x) / span.L, y: (e.b.y - e.a.y) / span.L };
-        const edgePt = (v: number) => toRoom(p, { x: e.a.x + u.x * v, y: e.a.y + u.y * v });
+        const edgePt = (v: number) => toRoom(p, itemSidePoint(p.stage, item, v) ?? e.a);
+        // Its stretch of the edge, as a line to hold it by (following a curved side).
+        const held = Array.from({ length: 17 }, (_, k) => edgePt(span.from + ((span.to - span.from) * k) / 16));
         return (
           <g key={item.id}>
             {/* The item itself: click to edit, drag to slide along its side. A barrier is too thin to
                 hit, so it is held by a fat invisible line instead of its outline. */}
             {shape.kind === "barrier" || shape.kind === "backdrop" ? (
-              <line
-                x1={edgePt(span.from).x}
-                y1={edgePt(span.from).y}
-                x2={edgePt(span.to).x}
-                y2={edgePt(span.to).y}
+              <polyline
+                points={held.map((q) => `${q.x},${q.y}`).join(" ")}
+                fill="none"
                 stroke="transparent"
                 strokeWidth={16}
                 vectorEffect="non-scaling-stroke"
@@ -3405,10 +3393,7 @@ function EdgeItemHandles({
                 />
                 {shape.kind === "bench" && (
                   <EdgeGrip
-                    at={toRoom(p, {
-                      x: (shape.polygon[2].x + shape.polygon[3].x) / 2,
-                      y: (shape.polygon[2].y + shape.polygon[3].y) / 2,
-                    })}
+                    at={toRoom(p, shape.foot)}
                     r={s5}
                     label="עומק הבנקט — גרירה"
                     cursor="cursor-ns-resize"
@@ -3419,7 +3404,9 @@ function EdgeItemHandles({
                       const st = start.current!;
                       const a = along(st.item, ev.clientX, ev.clientY);
                       if (!a) return;
-                      onChange({ ...st.item, depthMm: Math.max(250, Math.min(1500, Math.round(a.o / 50) * 50)) });
+                      // Out from the edge — or, an inner banquette, in from it.
+                      const depth = shape.inner ? -a.o : a.o;
+                      onChange({ ...st.item, depthMm: Math.max(250, Math.min(1500, Math.round(depth / 50) * 50)) });
                     }}
                   />
                 )}

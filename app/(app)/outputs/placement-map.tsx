@@ -308,11 +308,7 @@ export function PlacementMap({
       const st = doc.placements.find((x) => x.id === stageId);
       const bench = st?.stage ? benchInRoom(st as StagePlacement, itemId, deckOf) : null;
       if (!bench) continue;
-      const u = { x: Math.cos((bench.angle * Math.PI) / 180), y: Math.sin((bench.angle * Math.PI) / 180) };
-      list.forEach((p, i) => {
-        const f = (i + 0.5) / list.length - 0.5;
-        out.push({ p, at: { x: bench.centre.x + u.x * f * bench.lengthMm, y: bench.centre.y + u.y * f * bench.lengthMm } });
-      });
+      list.forEach((p, i) => out.push({ p, at: bench.along((i + 0.5) / list.length - 0.5) }));
     }
     return out;
   })();
@@ -810,17 +806,20 @@ function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacem
       ))}
       {laid?.decks.map((d, i) => (
         <g key={i}>
-          <rect
-            x={-d.widthMm / 2}
-            y={-d.depthMm / 2}
-            width={d.widthMm}
-            height={d.depthMm}
-            transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-            fill="none"
-            stroke={INK_SOFT}
-            strokeWidth={LINE_WEIGHTS.annotation}
-            vectorEffect="non-scaling-stroke"
-          />
+          {/* A round piece standing whole is the outline itself — numbered, not boxed. */}
+          {!d.round && (
+            <rect
+              x={-d.widthMm / 2}
+              y={-d.depthMm / 2}
+              width={d.widthMm}
+              height={d.depthMm}
+              transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+              fill="none"
+              stroke={INK_SOFT}
+              strokeWidth={LINE_WEIGHTS.annotation}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
           {text(d.centre.x, d.centre.y, String(i + 1), Math.min(320, Math.min(d.widthMm, d.depthMm) * 0.4), 600)}
         </g>
       ))}
@@ -842,7 +841,6 @@ function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacem
             />
           );
         }
-        const [a0, b0, c0, d0] = shape.polygon;
         return (
           <g key={st.id}>
             {shape.chairs.map((seat, k) => (
@@ -859,11 +857,9 @@ function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacem
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
             ))}
             {shape.kind === "bench" && (
-              <line
-                x1={(a0.x + d0.x) / 2}
-                y1={(a0.y + d0.y) / 2}
-                x2={(b0.x + c0.x) / 2}
-                y2={(b0.y + c0.y) / 2}
+              <polyline
+                points={shape.midline.map((q) => `${q.x},${q.y}`).join(" ")}
+                fill="none"
                 stroke={INK_SOFT}
                 strokeWidth={LINE_WEIGHTS.annotation}
                 strokeDasharray="2 3"
@@ -883,12 +879,10 @@ function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacem
         </g>
       ))}
       {railing.map((r, i) => (
-        <line
+        <polyline
           key={`rail-${i}`}
-          x1={r.a.x}
-          y1={r.a.y}
-          x2={r.b.x}
-          y2={r.b.y}
+          points={r.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
           stroke={INK}
           strokeWidth={LINE_WEIGHTS.furniture * 2.5}
           strokeDasharray="1 3"
@@ -989,14 +983,14 @@ export function StageSchedule({
             </table>
             <p className="mt-1.5 text-sm text-ink-soft">
               {flights.length > 0
-                ? `מדרגות: ${flights.length} ${flights.length === 1 ? "גרם" : "גרמים"} — ${flights.map((f) => `${m(f.widthMm)} מ׳, ${f.risers} רומים של ${cm(f.riserMm)} ס״מ`).join("; ")}`
+                ? `מדרגות: ${flights.length} ${flights.length === 1 ? "גרם" : "גרמים"} — ${flights.map((f) => `${m(f.widthMm)} מ׳, ${f.risers} רומים של ${cm(f.riserMm)} ס״מ${f.inner ? " (שקועות בבמה)" : ""}`).join("; ")}`
                 : "מדרגות: אין"}
               {benchMm > 0 ? ` · בנקט: ${m(benchMm)} מ׳ (${seats} כיסאות)` : ""}
               {barrierMm > 0 ? ` · מחסום: ${m(barrierMm)} מ׳` : ""}
               {backdropMm > 0 ? ` · קיר רקע: ${m(backdropMm)} מ׳` : ""}
               {ramps.length > 0 ? ` · רמפה: ${ramps.map((r) => `${m(r.depthMm)} מ׳ אורך`).join(", ")}` : ""}
               {corners.length > 0 ? ` · פינות: ${corners.length}` : ""}
-              {surface ? ` · משטח: ${surface} (${m(stageAreaMm2(stage) / 1000)} מ״ר)` : ""}
+              {surface ? ` · משטח: ${surface} (${m(stageAreaMm2(stage, deckOf) / 1000)} מ״ר)` : ""}
               {bare > 0 ? ` · ⚠ ${m(bare)} מ׳ שפה פתוחה` : ""}
               {" · "}
               {`חצאית: ${m(skirt)} מ׳`}

@@ -194,6 +194,11 @@ export interface StageBuild {
    *  deck rather than six and a bare strip. The designer's choice, made in the fill tool and
    *  changeable on the stage's bar; absent = the outline is the line. */
   exceed?: boolean;
+  /** The corners of `outline` the line runs THROUGH rather than turns at — vertex i joins edge i−1
+   *  to edge i as one curve. A round stage is a fine polygon with every vertex here, and its rim is
+   *  ONE side: an edge item on it is placed along the curve (lib/design-document/stage.ts
+   *  stageSide), not on one 25cm chord of it. Absent = every corner is a corner. */
+  smooth?: number[];
 }
 
 /** A stage saved to be used again — its shape, levels, edges, height, decks and finishes, and what
@@ -258,6 +263,12 @@ export interface StageStair {
   /** How many steps up, when the designer said — the studio's own flight has four whatever the
    *  height. Absent = derived from the height it climbs (risers of at most 18cm). */
   risers?: number;
+  /** Stairs or a banquette set INTO the stage rather than out from it. An inner flight is recessed
+   *  into the deck — it climbs from the floor at the edge to the deck inside the outline, and the
+   *  decks are laid around its recess; it is what a side too close to a wall for a flight's run can
+   *  still take. An inner banquette stands on the deck along the inside of the edge, its chairs
+   *  further in behind it. Absent = outside, as every item was before. Ignored on other kinds. */
+  inner?: boolean;
 }
 
 /** Where THIS EVENT puts one of the venue's own features — the rolling bar pushed against the far

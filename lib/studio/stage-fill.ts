@@ -44,6 +44,9 @@ export interface DeckType {
   depthMm: number;
   /** Two decks of different heights are not one platform. Absent = no opinion. */
   heightMm?: number;
+  /** A round (or oval) platform: one piece, never laid by this fill — a round stage built of
+   *  exactly that piece stands on it whole (lib/design-document/stage.ts layStage). */
+  round?: boolean;
 }
 
 export interface LaidDeck {
