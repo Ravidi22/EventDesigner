@@ -15,6 +15,7 @@ import { resolveSpan } from "@/lib/studio/anchor";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { featureFootprint, type VenueStructure } from "@/lib/venues/structure";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
+import { tableLabel } from "@/lib/design-document/groups";
 import { bandPolygon, footprintPolygons, polysBox, type CentredBox, type ClearanceSubject, type Poly } from "@/lib/studio/proximity";
 
 /** The drawn thickness of a drape's band — the same number canvas-stage.tsx draws it at, so a drape
@@ -71,7 +72,8 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
     const product = t.variantId ? resolve(t.variantId)?.product : undefined;
     return {
       ref,
-      label: t.number > 0 ? `שולחן ${t.number}` : "שולחן ראש",
+      // What the plan calls it — a block's number, not the one hidden under it; none for an unnumbered table.
+      label: tableLabel(doc, t),
       centre: t.position,
       polysAt,
       box: boxOf(polysAt(t.position)),

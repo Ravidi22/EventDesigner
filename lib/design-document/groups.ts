@@ -113,27 +113,117 @@ export function spreadSeats(
   return tables.map((t, i) => ({ id: t.id, seats: each + (i < extra ? 1 : 0) }));
 }
 
-/** One entry per NUMBERED thing on the plan: a lone table, or a whole group as the single larger
- *  table it now is. This is what the placement map labels and what the legend lists — both used to
- *  walk `doc.tables` directly, which with grouping would print the same number three times across
- *  one block and leave the crew reading a map with three table 4s on it.
+/** One table on the plan as the crew counts it: a lone table, or a whole block. */
+export interface NumberedUnit {
+  id: string;
+  number: number;
+  tableIds: string[];
+  /** Left out of the numbering on purpose (DesignTable.unnumbered) — a cocktail table, a gift table.
+   *  It is still a table: counted, seated, dressed, packed. It just has no number to print, and
+   *  `number` is then whatever it was stored with, which nothing may show. */
+  unnumbered?: true;
+}
+
+/** Numbered units in number order, the unnumbered ones after them. */
+export const byUnitOrder = (a: NumberedUnit, b: NumberedUnit) => (a.unnumbered ? 1 : 0) - (b.unnumbered ? 1 : 0) || a.number - b.number;
+
+/** One entry per TABLE UNIT on the plan: a lone table, or a whole group as the single larger table
+ *  it now is. This is what the placement map labels and what the legend lists — both used to walk
+ *  `doc.tables` directly, which with grouping would print the same number three times across one
+ *  block and leave the crew reading a map with three table 4s on it.
  *
- *  A group nobody numbered falls back to the lowest number its members brought with them, so a
- *  document can never produce an unnumbered unit out of a set of numbered tables. */
-export function numberedUnits(
-  doc: DesignDocumentContent,
-): { id: string; number: number; tableIds: string[] }[] {
-  const units: { id: string; number: number; tableIds: string[] }[] = [];
+ *  A group nobody numbered falls back to the lowest number its numbered members brought with them,
+ *  so a document can never produce an unnumbered unit out of a set of numbered tables. A unit the
+ *  designer took out of the numbering (every one of its tables `unnumbered`) is still here — it is
+ *  still a table — flagged, and sorted last. */
+export function numberedUnits(doc: DesignDocumentContent): NumberedUnit[] {
+  const units: NumberedUnit[] = [];
   for (const t of doc.tables) {
-    if (!t.groupId) units.push({ id: t.id, number: t.number, tableIds: [t.id] });
+    if (!t.groupId) units.push({ id: t.id, number: t.number, tableIds: [t.id], ...(t.unnumbered ? { unnumbered: true as const } : {}) });
   }
   for (const g of doc.groups ?? []) {
     const tables = doc.tables.filter((t) => t.groupId === g.id);
     if (tables.length === 0) continue; // a group of stages is not a table and has no number
-    const number = g.number ?? Math.min(...tables.map((t) => t.number));
-    units.push({ id: g.id, number, tableIds: tables.map((t) => t.id) });
+    const numbered = tables.filter((t) => !t.unnumbered);
+    const number = g.number ?? Math.min(...(numbered.length ? numbered : tables).map((t) => t.number));
+    units.push({ id: g.id, number, tableIds: tables.map((t) => t.id), ...(numbered.length === 0 ? { unnumbered: true as const } : {}) });
   }
-  return units.sort((a, b) => a.number - b.number);
+  return units.sort(byUnitOrder);
+}
+
+/** The numbers the plan SHOWS — one per numbered unit, the head table's 0 included. Hidden numbers
+ *  (a grouped table's own, underneath its group's) and unnumbered tables are not on it. */
+export function shownNumbers(doc: DesignDocumentContent): number[] {
+  return numberedUnits(doc)
+    .filter((u) => !u.unnumbered)
+    .map((u) => u.number);
+}
+
+/** The number a NEW table takes: one past the highest the plan shows.
+ *
+ *  Off what is shown, not off `doc.tables`: a grouped table's own number is hidden under its
+ *  group's, so reading the raw numbers both skipped (a block numbered 2 whose members still carry 7
+ *  and 8 sent the next table to 9) and collided (a block renumbered to 12 over members 3 and 4 gave
+ *  the next table 5… and the one after that, eventually, a second 12). */
+export function nextTableNumber(doc: DesignDocumentContent): number {
+  return shownNumbers(doc).reduce((m, n) => Math.max(m, n), 0) + 1;
+}
+
+/** Numbers two units on the plan both show — two table 4s the crew cannot tell apart. The head
+ *  table's 0 is a name, and two head tables are allowed. */
+export function duplicateNumbers(doc: DesignDocumentContent): Set<number> {
+  const seen = new Set<number>();
+  const twice = new Set<number>();
+  for (const n of shownNumbers(doc)) {
+    if (n > 0 && seen.has(n)) twice.add(n);
+    seen.add(n);
+  }
+  return twice;
+}
+
+/** Is this table out of the numbering — on its own, or as a block every table of which is? */
+export function isUnnumbered(doc: DesignDocumentContent, table: DesignTable): boolean {
+  if (!table.groupId) return !!table.unnumbered;
+  return doc.tables.filter((t) => t.groupId === table.groupId).every((t) => t.unnumbered);
+}
+
+/** What a table is called on screen: its unit's number, the head table, or no number at all. */
+export function tableLabel(doc: DesignDocumentContent, table: DesignTable): string {
+  if (isUnnumbered(doc, table)) return "שולחן ללא מספר";
+  const n = tableNumber(doc, table);
+  return n > 0 ? `שולחן ${n}` : "שולחן ראש";
+}
+
+/** Give each of these tables a number nobody else on the plan shows — run when tables come back
+ *  into the numbering as loose tables (an ungroup, the "ללא מספור" switch turned off).
+ *
+ *  A table KEEPS its own number when it is still free: ungrouping touches nothing it does not have
+ *  to, and a block of 3 and 7 comes apart as 3 and 7. Only a number another unit now shows — the
+ *  room was renumbered round the block while its members kept their old numbers underneath — is
+ *  replaced, by the next one off the end, which is where a new table would go. The head table's 0
+ *  and unnumbered tables are left alone. */
+export function freeNumbers(doc: DesignDocumentContent, tableIds: readonly string[]): Map<string, number> {
+  const ids = new Set(tableIds);
+  const taken = new Set(
+    numberedUnits(doc)
+      .filter((u) => !u.unnumbered && !u.tableIds.some((id) => ids.has(id)))
+      .map((u) => u.number),
+  );
+  let next = [...taken].reduce((m, n) => Math.max(m, n), 0) + 1;
+  const out = new Map<string, number>();
+  const tables = doc.tables.filter((t) => ids.has(t.id) && !t.unnumbered).sort((a, b) => a.number - b.number);
+  for (const t of tables) {
+    if (t.number === 0) continue;
+    let n = t.number;
+    if (!(Number.isInteger(n) && n > 0) || taken.has(n)) {
+      while (taken.has(next)) next++;
+      n = next;
+    }
+    taken.add(n);
+    next = Math.max(next, n + 1);
+    if (n !== t.number) out.set(t.id, n);
+  }
+  return out;
 }
 
 /** One unit's new number. `kind` says which action carries it — a lone table renumbers itself, a
@@ -211,7 +301,7 @@ export const DEFAULT_NUMBERING: Required<NumberingOptions> = {
  *     a plan that is already in order produces no edit at all and the button that calls this can say
  *     so by being disabled.
  */
-export function orderedNumbering(doc: DesignDocumentContent, options: NumberingOptions = {}): Renumbering[] {
+export function orderedNumbering(doc: DesignDocumentContent, options: NumberingOptions = {}, regions: Point[][] = []): Renumbering[] {
   const { start, corner, axis, serpentine } = { ...DEFAULT_NUMBERING, ...options };
   const band = rowBandMm(doc);
   const placed = numberedUnits(doc)
@@ -224,7 +314,31 @@ export function orderedNumbering(doc: DesignDocumentContent, options: NumberingO
         y: tables.reduce((n, t) => n + t.position.y, 0) / tables.length,
       };
     })
-    .filter((u) => u.number !== 0); // the head table is not in the sequence
+    // The head table is not in the sequence, and a table taken out of the numbering is in nothing.
+    .filter((u) => u.number !== 0 && !u.unnumbered);
+
+  // ONE ROOM AT A TIME. An event in the hall and the garden is numbered through the hall and then
+  // through the garden — banding the two into shared rows interleaved them (hall 1, garden 2, hall
+  // 3…), and the hall's own sheet of the placement set read 1, 3, 5. `regions` are the event's zone
+  // outlines in its own order; a unit outside them all goes with the nearest. None or one: one room.
+  const regionOf = (p: Point): number => {
+    if (regions.length < 2) return 0;
+    let best = 0;
+    let bestD = Infinity;
+    regions.forEach((r, i) => {
+      const d = distanceToRegion(p, r);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+  const rooms = new Map<number, typeof placed>();
+  for (const u of placed) {
+    const k = regionOf(u);
+    rooms.set(k, [...(rooms.get(k) ?? []), u]);
+  }
 
   // The corner becomes two directions, and the axis picks which coordinate bands the room into
   // rows. Everything below then works in ONE direction only — increasing `major`, then increasing
@@ -237,26 +351,44 @@ export function orderedNumbering(doc: DesignDocumentContent, options: NumberingO
   const major = (u: { x: number; y: number }) => (inRows ? u.y * down : u.x * across);
   const minor = (u: { x: number; y: number }) => (inRows ? u.x * across : u.y * down);
 
-  const rows: (typeof placed)[] = [];
-  for (const u of [...placed].sort((a, b) => major(a) - major(b))) {
-    const row = rows[rows.length - 1];
-    // Measured against the row's FIRST table, not its last: otherwise a line of tables each a
-    // little lower than the one before drifts a whole row's height without ever starting a new one.
-    if (row && major(u) - major(row[0]) <= band) row.push(u);
-    else rows.push([u]);
-  }
-
   const out: Renumbering[] = [];
-  let n = Math.round(start);
-  for (const [i, row] of rows.entries()) {
-    row.sort((a, b) => minor(a) - minor(b));
-    if (serpentine && i % 2 === 1) row.reverse();
-    for (const u of row) {
-      if (u.number !== n) out.push({ kind: u.kind, id: u.id, number: n });
-      n++;
+  let n = Math.max(1, Math.round(start));
+  for (const k of [...rooms.keys()].sort((a, b) => a - b)) {
+    const rows: (typeof placed)[] = [];
+    for (const u of [...rooms.get(k)!].sort((a, b) => major(a) - major(b))) {
+      const row = rows[rows.length - 1];
+      // Measured against the row's FIRST table, not its last: otherwise a line of tables each a
+      // little lower than the one before drifts a whole row's height without ever starting a new one.
+      if (row && major(u) - major(row[0]) <= band) row.push(u);
+      else rows.push([u]);
+    }
+    for (const [i, row] of rows.entries()) {
+      row.sort((a, b) => minor(a) - minor(b));
+      if (serpentine && i % 2 === 1) row.reverse();
+      for (const u of row) {
+        if (u.number !== n) out.push({ kind: u.kind, id: u.id, number: n });
+        n++;
+      }
     }
   }
   return out;
+}
+
+/** 0 inside the outline, else the distance to its nearest edge. */
+function distanceToRegion(p: Point, poly: Point[]): number {
+  let inside = false;
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+    best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
+  }
+  return inside ? 0 : best;
 }
 
 /** The number this table shows on the plan: the group's, when it is in one. */
@@ -549,6 +681,97 @@ if (isMain(import.meta.url)) {
     const headPlan = new Map(orderedNumbering(withHead).map((r) => [r.id, r.number]));
     assert(!headPlan.has("head"), "the head table is never renumbered");
     assert(headPlan.get("x") === 1 && headPlan.get("y") === 2, "…and the sequence starts at 1 without it");
+  }
+
+  // ── numbers the plan shows, and the next one ─────────────────────────────────────────────────
+  {
+    const at = (id: string, number: number, extra: Partial<DesignTable> = {}): DesignTable => ({
+      id,
+      type: "עגול 180",
+      number,
+      position: { x: 0, y: 0 },
+      rotation: 0,
+      diameterMm: 1800,
+      ...extra,
+    });
+    // BUG (was): nextNumber read raw table numbers. A block shown as 2 whose members still carry 7
+    // and 8 underneath sent the next table to 9 — a gap; and a block renumbered to 12 over members
+    // 3 and 4 gave the next table 5, nowhere near the end.
+    const hidden: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [at("a", 1), at("b", 7, { groupId: "g" }), at("c", 8, { groupId: "g" })],
+      placements: [],
+      groups: [{ id: "g", number: 2 }],
+    };
+    assert(nextTableNumber(hidden) === 3, "the next table follows the numbers the plan SHOWS, not hidden members'");
+    const renumbered: DesignDocumentContent = { ...hidden, tables: [at("a", 1), at("b", 3, { groupId: "g" }), at("c", 4, { groupId: "g" })], groups: [{ id: "g", number: 12 }] };
+    assert(nextTableNumber(renumbered) === 13, "…and a block's own number counts, so the next is never a second 12");
+    assert(shownNumbers(renumbered).sort((x, y) => x - y).join() === "1,12", "a block shows one number");
+    assert(duplicateNumbers({ ...hidden, tables: [...hidden.tables, at("d", 1)] }).has(1), "two table 1s are flagged");
+    assert(duplicateNumbers({ ...hidden, tables: [at("h1", 0), at("h2", 0)] }).size === 0, "…two head tables are not");
+
+    // ── a table out of the numbering ────────────────────────────────────────────────────────────
+    const loose: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [at("n1", 1), at("gift", 9, { unnumbered: true }), at("n2", 2)],
+      placements: [],
+    };
+    const lu = numberedUnits(loose);
+    assert(lu.length === 3, "an unnumbered table is still a table unit");
+    assert(lu[2].id === "gift" && lu[2].unnumbered === true, "…flagged, and sorted after the numbered ones");
+    assert(nextTableNumber(loose) === 3, "…and it does not consume a number");
+    assert(!shownNumbers(loose).includes(9), "…nor does it show one");
+    assert(tableLabel(loose, loose.tables[1]) === "שולחן ללא מספר" && tableLabel(loose, loose.tables[0]) === "שולחן 1", "its label says it has no number");
+    const spaced: DesignDocumentContent = {
+      ...loose,
+      tables: [at("r", 5, { position: { x: 6000, y: 0 } }), at("gift", 1, { unnumbered: true, position: { x: 3000, y: 0 } }), at("l", 7, { position: { x: 0, y: 0 } })],
+    };
+    const sp = orderedNumbering(spaced);
+    assert(!sp.some((r) => r.id === "gift"), "renumbering skips an unnumbered table");
+    assert(sp.find((r) => r.id === "r")?.number === 1 && sp.find((r) => r.id === "l")?.number === 2, "…and the sequence closes over it: 1, 2, no gap");
+    const giftBlock: DesignDocumentContent = {
+      ...loose,
+      tables: [at("x", 4, { groupId: "G", unnumbered: true }), at("y", 5, { groupId: "G", unnumbered: true }), at("z", 6, { groupId: "H" }), at("w", 7, { groupId: "H", unnumbered: true })],
+      groups: [{ id: "G" }, { id: "H" }],
+    };
+    const gb = numberedUnits(giftBlock);
+    assert(gb.find((u) => u.id === "G")?.unnumbered === true, "a block every table of which is unnumbered is unnumbered");
+    assert(gb.find((u) => u.id === "H")?.unnumbered === undefined && gb.find((u) => u.id === "H")?.number === 6, "a block with one numbered table is numbered by it");
+
+    // ── back into the numbering without a collision ───────────────────────────────────────────
+    const collide: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [at("a", 1), at("b", 2), at("c", 2), at("d", 3)],
+      placements: [],
+    };
+    const freed = freeNumbers(collide, ["c"]);
+    assert(freed.get("c") === 4, "a returning table whose number is taken takes the next one off the end");
+    assert(freeNumbers(collide, ["d"]).size === 0, "…and one whose number is free keeps it");
+    assert(freeNumbers({ ...collide, tables: [at("h", 0), at("a", 1)] }, ["h"]).size === 0, "the head table keeps its 0");
+    const two = freeNumbers({ ...collide, tables: [at("a", 1), at("b", 1), at("c", 1)] }, ["b", "c"]);
+    assert(two.get("b") === 2 && two.get("c") === 3, "two returning tables never land on the same number");
+  }
+
+  // ── renumbering room by room ──────────────────────────────────────────────────────────────────
+  {
+    const at = (id: string, x: number, y: number, number: number): DesignTable => ({ id, type: "עגול 180", number, position: { x, y }, rotation: 0, diameterMm: 1800 });
+    // A hall on the left and a garden on the right, their tables on the same lines across.
+    const hall = [{ x: 0, y: 0 }, { x: 10000, y: 0 }, { x: 10000, y: 10000 }, { x: 0, y: 10000 }];
+    const garden = hall.map((p) => ({ x: p.x + 12000, y: p.y }));
+    const doc2: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [at("h1", 2000, 2000, 1), at("h2", 8000, 2000, 2), at("g1", 14000, 2000, 3), at("g2", 20000, 2000, 4), at("h3", 5000, 7000, 5), at("g3", 17000, 7000, 6)],
+      placements: [],
+    };
+    const plan = new Map(orderedNumbering(doc2, {}, [hall, garden]).map((r) => [r.id, r.number]));
+    const nOf = (id: string) => plan.get(id) ?? doc2.tables.find((t) => t.id === id)!.number;
+    // BUG (was): one set of rows over both rooms read h2, h1… then g2, g1 interleaved — the hall's
+    // own sheet of the placement set printed 2, 4… with the garden's numbers in its gaps.
+    assert(["h1", "h2", "h3"].map(nOf).sort().join() === "1,2,3", "the hall is numbered first, 1..3");
+    assert(["g1", "g2", "g3"].map(nOf).sort().join() === "4,5,6", "…then the garden carries on, 4..6");
+    assert(nOf("h2") === 1 && nOf("h1") === 2, "inside a room it still reads right to left");
+    const one = new Map(orderedNumbering(doc2).map((r) => [r.id, r.number]));
+    assert((one.get("g2") ?? 4) === 1, "with no rooms given, the whole plan is one room, as before");
   }
 
   // A document drawn before grouping existed reads exactly as it always did.

@@ -77,6 +77,8 @@ import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
+import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
+import { SwitchRow } from "@/components/toggle";
 import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
 import type { Selection, SpinMode } from "./canvas-stage";
 
@@ -200,6 +202,7 @@ export function Inspector({
   onQuantity,
   onDelete,
   onDressTable,
+  onTablesNumbered,
   renderPattern,
   renderDesigns,
   onScale,
@@ -284,7 +287,7 @@ export function Inspector({
   /** This table's chair; null = the studio's default (DesignTable.chairVariantId). */
   onChair?: (id: string, variantId: string | null) => void;
   /** Set when the selection is EXACTLY one group — its whole membership and nothing else. */
-  group: { id: string; number?: number; tables: number; items: number; seats: number; seated: number } | null;
+  group: { id: string; number?: number; tables: number; items: number; seats: number; seated: number; tableIds: string[]; unnumbered: boolean } | null;
   onGroup: () => void;
   onUngroup: () => void;
   onRenumberGroup: (groupId: string, number: number) => void;
@@ -304,8 +307,12 @@ export function Inspector({
   onClose: () => void;
   onQuantity: (id: string, delta: number) => void;
   onDelete: () => void;
-  /** Open a table's focus mode — where the items on it are moved about and arranged. */
-  onDressTable: (tableId: string) => void;
+  /** Open a table's focus mode — where the items on it are moved about and arranged. Absent in the
+   *  hall pass, where a table is laid out, not dressed: the bar then offers no roller. */
+  onDressTable?: (tableId: string) => void;
+  /** Take tables out of the numbering (DesignTable.unnumbered), or put them back — a block by all of
+   *  its tables. */
+  onTablesNumbered: (tableIds: string[], numbered: boolean) => void;
   /** The "which tables" panel (TablePatternPicker), bound to a source table and — when one item is
    *  being applied rather than the table's whole dressing — that item. */
   renderPattern: (sourceTableId: string, placementId?: string) => ReactNode;
@@ -427,7 +434,7 @@ export function Inspector({
     return (
       <Bar
         icon={Group}
-        title={group.tables > 0 && group.number ? `שולחן ${group.number}` : "קבוצה"}
+        title={group.tables > 0 ? (group.unnumbered ? "שולחן ללא מספר" : group.number ? `שולחן ${group.number}` : "קבוצה") : "קבוצה"}
         facts={countLine([
           [group.tables, "שולחן אחד", "שולחנות"],
           [group.items, "פריט אחד", "פריטים"],
@@ -470,17 +477,24 @@ export function Inspector({
         )}
 
         {group.tables > 0 && (
-          <Popover label="מספר שולחן" icon={Hash} value={ltr(`#${group.number ?? 0}`)}>
-            <PanelRow>
-              <NumberField
-                id="group-number"
-                aria-label="מספר שולחן"
-                decimals={0}
-                value={group.number ?? 0}
-                onChange={(v) => onRenumberGroup(group.id, v)}
-                className="w-20"
-              />
-            </PanelRow>
+          <Popover label="מספר שולחן" icon={Hash} value={group.unnumbered ? "ללא" : ltr(`#${group.number ?? 0}`)}>
+            {!group.unnumbered && (
+              <PanelRow>
+                <NumberField
+                  id="group-number"
+                  aria-label="מספר שולחן"
+                  decimals={0}
+                  min={0}
+                  value={group.number ?? 0}
+                  onChange={(v) => onRenumberGroup(group.id, v)}
+                  className="w-20"
+                />
+              </PanelRow>
+            )}
+            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc).has(group.number) && <DuplicateNumber />}
+            <div className="mt-2">
+              <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
+            </div>
             <Note>השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו.</Note>
           </Popover>
         )}
@@ -1145,7 +1159,7 @@ export function Inspector({
         title={r?.product.name ?? "פריט"}
         facts={[
           LAYER_LABEL[p.layer],
-          table ? `שולחן ${table.number}` : null,
+          table ? tableLabel(doc, table) : null,
           drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ על הקיר` : "הקיר נמחק") : null,
         ]
           .filter(Boolean)
@@ -1235,7 +1249,7 @@ export function Inspector({
             <Popover label="החלת הפריט על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
               {renderPattern(table.id, p.id)}
             </Popover>
-            <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />
+            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />}
           </>
         )}
         {onMakeStage && <BarButton icon={Grid2x2} label="הפיכה לבמה — מדרגות, גובה ומפלסים" onClick={onMakeStage} />}
@@ -1266,23 +1280,30 @@ export function Inspector({
   return (
     <Bar
       icon={TableIcon}
-      title={t.number > 0 ? `שולחן ${t.number}` : "שולחן ראש"}
+      title={tableLabel(doc, t)}
       facts={[t.type, `${count} פריטים`].join(" · ")}
       onClose={onClose}
     >
       {/* F-3.3: auto-running numbering, editable per table */}
-      <Popover label="מספר שולחן" icon={Hash} value={ltr(`#${t.number}`)}>
-        <PanelRow>
-          <NumberField
-            id="table-number"
-            aria-label="מספר שולחן"
-            decimals={0}
-            value={t.number}
-            onChange={(v) => onRenumber(t.id, v)}
-            className="w-20"
-          />
-        </PanelRow>
-        <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד.</Note>
+      <Popover label="מספר שולחן" icon={Hash} value={t.unnumbered ? "ללא" : ltr(`#${t.number}`)}>
+        {!t.unnumbered && (
+          <PanelRow>
+            <NumberField
+              id="table-number"
+              aria-label="מספר שולחן"
+              decimals={0}
+              min={0}
+              value={t.number}
+              onChange={(v) => onRenumber(t.id, v)}
+              className="w-20"
+            />
+          </PanelRow>
+        )}
+        {!t.unnumbered && t.number > 0 && duplicateNumbers(doc).has(t.number) && <DuplicateNumber />}
+        <div className="mt-2">
+          <UnnumberedSwitch checked={!!t.unnumbered} onChange={(off) => onTablesNumbered([t.id], !off)} />
+        </div>
+        <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש.</Note>
       </Popover>
 
       {swap?.kind === "tables" && <SwapPopover swap={swap} onSwap={onSwap} label="סוג שולחן" />}
@@ -1429,7 +1450,7 @@ export function Inspector({
       )}
 
       {/* Dressing: the table's focus mode, and its whole dressing onto others in a pattern. */}
-      <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />
+      {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />}
       <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
         {renderDesigns(t.id)}
       </Popover>
@@ -1720,6 +1741,28 @@ function BreachPopover({ breaches }: { breaches: { other: string; distance: numb
 }
 
 /** Set the air between the selected things. The first one picked stays put. */
+/** "ללא מספור" — a table (or a block) the numbering passes by: a cocktail table, the gift table. */
+function UnnumberedSwitch({ checked, onChange }: { checked: boolean; onChange: (unnumbered: boolean) => void }) {
+  return (
+    <SwitchRow
+      checked={checked}
+      onChange={onChange}
+      label="ללא מספור"
+      hint="שולחן שלא נכנס לספירה — אין לו מספר על התוכנית ועל המפה, והמספור מדלג עליו. הוא עדיין נספר בהצעת המחיר ובליקוט."
+    />
+  );
+}
+
+/** Another unit on the plan shows the same number — two table 4s the crew cannot tell apart. */
+function DuplicateNumber() {
+  return (
+    <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn-ink">
+      <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+      יש שולחן נוסף עם המספר הזה
+    </p>
+  );
+}
+
 function SpacingPopover({ spacing, onSpace }: { spacing: Spacing; onSpace: (gapMm: number, mode: "x" | "y" | "direct") => void }) {
   const [mode, setMode] = useState<"x" | "y" | "direct">(spacing.axis);
   const current = mode === "direct" ? spacing.direct : spacing[mode];
@@ -1746,7 +1789,7 @@ function SpacingPopover({ spacing, onSpace }: { spacing: Spacing; onSpace: (gapM
       <Note>
         {spacing.first} נשאר במקומו
         {spacing.count === 2 ? " והשני זז." : " והשאר מסתדרים בשורה ממנו."}{" "}
-        {mode === "direct" ? "נמדד מקצה לקצה, לאורך הקו בין המרכזים." : "נמדד בין קצוות הפריטים, לאורך הציר."}
+        {mode === "direct" ? "נמדד מקצה לקצה, לאורך הקו בין המרכזים." : "נמדד בין קצוות הפריטים, לאורך הציר."} שולחן נמדד מקצה השולחן עצמו — בלי הכיסאות.
       </Note>
     </Popover>
   );

@@ -3,12 +3,19 @@
 import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
+import { freeNumbers, numberedUnits } from "./groups";
+
+/** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
+const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
 
 export type Action =
   | { type: "addTable"; table: DesignTable }
   | { type: "moveTable"; id: string; position: DesignTable["position"] }
   | { type: "removeTable"; id: string }
   | { type: "renumberTable"; id: string; number: number }
+  // Take these tables out of the numbering (DesignTable.unnumbered), or put them back — a block by
+  // all its tables at once. Back in, each takes a number nobody else shows (freeNumbers).
+  | { type: "setTablesNumbered"; tableIds: string[]; numbered: boolean }
   | { type: "styleTable"; id: string; style: ElementStyle | undefined }
   // How many chairs go round this one table. Seeded from the catalog row when it was dropped, and
   // editable after: a head table seats what the family is, not what the product says.
@@ -282,11 +289,47 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           return { ...t, blockedSides: [...new Set(action.sides)].filter((i) => Number.isInteger(i) && i >= 0).sort((a, b) => a - b) };
         }),
       };
-    case "renumberTable":
+    case "renumberTable": {
+      // A whole, non-negative number. The inspector's field formats to no decimals but PARSES them,
+      // so "2.5" typed into it was stored as table 2.5 and printed that way on the placement map.
+      const number = tableNo(action.number);
+      if (number === null) return doc;
       return {
         ...doc,
-        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number: action.number } : t)),
+        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number } : t)),
       };
+    }
+    case "setTablesNumbered": {
+      const ids = new Set(action.tableIds);
+      if (!doc.tables.some((t) => ids.has(t.id) && !!t.unnumbered === action.numbered)) return doc;
+      const flagged: DesignDocumentContent = {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (!ids.has(t.id)) return t;
+          if (!action.numbered) return { ...t, unnumbered: true };
+          const { unnumbered: _out, ...rest } = t;
+          return rest;
+        }),
+      };
+      if (!action.numbered) return flagged;
+      // Back into the numbering: a returning table keeps its number unless another table has taken
+      // it meanwhile — two table 4s is the one outcome this must never produce.
+      const lone = flagged.tables.filter((t) => ids.has(t.id) && !t.groupId).map((t) => t.id);
+      const renum = freeNumbers(flagged, lone);
+      let next: DesignDocumentContent = renum.size
+        ? { ...flagged, tables: flagged.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) }
+        : flagged;
+      // …and a returning BLOCK is numbered as the block it is.
+      for (const gid of new Set(flagged.tables.filter((t) => ids.has(t.id) && t.groupId).map((t) => t.groupId!))) {
+        const units = numberedUnits(next).filter((u) => !u.unnumbered);
+        const mine = units.find((u) => u.id === gid);
+        const taken = units.filter((u) => u.id !== gid).map((u) => u.number);
+        if (!mine || mine.number === 0 || !taken.includes(mine.number)) continue;
+        const number = taken.reduce((m, n) => Math.max(m, n), 0) + 1;
+        next = { ...next, groups: (next.groups ?? []).map((g) => (g.id === gid ? { ...g, number } : g)) };
+      }
+      return next;
+    }
     case "styleTable":
       return {
         ...doc,
@@ -467,19 +510,26 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
     case "ungroup": {
       if (!doc.groups?.some((g) => g.id === action.groupId)) return doc;
       const clear = <T extends { groupId?: string }>(x: T): T => (x.groupId === action.groupId ? { ...x, groupId: undefined } : x);
-      return {
+      const released: DesignDocumentContent = {
         ...doc,
         tables: doc.tables.map(clear),
         placements: doc.placements.map(clear),
         groups: doc.groups.filter((g) => g.id !== action.groupId),
       };
+      // Each table comes back with the number it had underneath — unless the room was renumbered
+      // round the block meanwhile and another table now shows it. Without this, a block of 1 and 2
+      // renumbered to 1 beside a table renumbered to 2 came apart as two table 2s.
+      const renum = freeNumbers(released, doc.tables.filter((t) => t.groupId === action.groupId).map((t) => t.id));
+      return renum.size ? { ...released, tables: released.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) } : released;
     }
 
     case "renumberGroup": {
       if (!doc.groups?.some((g) => g.id === action.groupId)) return doc;
+      const number = tableNo(action.number);
+      if (number === null) return doc;
       return {
         ...doc,
-        groups: doc.groups.map((g) => (g.id === action.groupId ? { ...g, number: action.number } : g)),
+        groups: doc.groups.map((g) => (g.id === action.groupId ? { ...g, number } : g)),
       };
     }
 
@@ -1030,6 +1080,46 @@ if (isMain(import.meta.url)) {
     assert(ungrouped.groups?.length === 0, "ungroup drops the group");
     assert(ungrouped.tables.every((t) => t.groupId === undefined), "…and releases every member");
     assert(ungrouped.tables.map((t) => t.number).join(",") === "3,7,9", "…leaving the numbers they always had");
+
+    // BUG (was): a block of 1 and 2, renumbered to 1 with a table beside it renumbered to 2, came
+    // apart as two table 2s — the member's hidden 2 was handed back as though nothing had changed.
+    {
+      const pair = apply(
+        { calibration: { mmPerUnit: 1 }, tables: [tbl("p", 1), tbl("q", 2), tbl("r", 3)], placements: [] },
+        { type: "group", groupId: "b", refs: [{ kind: "table", id: "p" }, { kind: "table", id: "q" }], number: 1 },
+      );
+      const room = apply(pair, { type: "renumberTable", id: "r", number: 2 });
+      const apart = apply(room, { type: "ungroup", groupId: "b" });
+      const nums = apart.tables.map((t) => t.number);
+      assert(new Set(nums).size === 3, `an ungrouped block never duplicates a number the room now shows (${nums.join(",")})`);
+      assert(apart.tables.find((t) => t.id === "p")?.number === 1, "…a member whose own number is still free keeps it");
+      assert(apart.tables.find((t) => t.id === "q")?.number === 3, "…and one whose number was taken goes to the end");
+    }
+
+    // BUG (was): the number field parses decimals and minus signs; the reducer stored them.
+    assert(apply(before, { type: "renumberTable", id: "a", number: 2.6 }).tables[0].number === 3, "a table number is whole");
+    assert(apply(before, { type: "renumberTable", id: "a", number: -4 }).tables[0].number === 0, "…and never negative");
+    assert(apply(before, { type: "renumberTable", id: "a", number: NaN }) === before, "…and nothing usable is no edit");
+    assert(apply(g.present, { type: "renumberGroup", groupId: "g1", number: 4.4 }).groups?.[0].number === 4, "a block's number is whole too");
+
+    // Out of the numbering, and back.
+    {
+      const off = apply(before, { type: "setTablesNumbered", tableIds: ["b"], numbered: false });
+      assert(off.tables.find((t) => t.id === "b")?.unnumbered === true, "a table can be taken out of the numbering");
+      assert(off.tables.find((t) => t.id === "b")?.number === 7, "…keeping its number underneath");
+      assert(apply(off, { type: "setTablesNumbered", tableIds: ["b"], numbered: false }) === off, "…and doing it again is no edit");
+      const taken = apply(off, { type: "renumberTable", id: "c", number: 7 });
+      const back = apply(taken, { type: "setTablesNumbered", tableIds: ["b"], numbered: true });
+      const b = back.tables.find((t) => t.id === "b")!;
+      assert(!("unnumbered" in b), "back in, the flag goes rather than reading false");
+      assert(b.number === 8, "…and a number another table took meanwhile is not handed back: it goes to the end");
+      const free = apply(off, { type: "setTablesNumbered", tableIds: ["b"], numbered: true });
+      assert(free.tables.find((t) => t.id === "b")?.number === 7, "…while one still free is kept");
+      const block = apply(g.present, { type: "setTablesNumbered", tableIds: ["a", "b"], numbered: false });
+      const blockTaken = apply(block, { type: "renumberTable", id: "c", number: 12 });
+      const blockBack = apply(blockTaken, { type: "setTablesNumbered", tableIds: ["a", "b"], numbered: true });
+      assert(blockBack.groups?.[0].number === 13, "a block coming back into the numbering takes a number nobody shows");
+    }
 
     // Tables and placements group together — a stage deck and the tables beside it are one thing if
     // the designer says so.

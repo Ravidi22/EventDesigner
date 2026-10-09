@@ -165,6 +165,7 @@ export function CanvasStage({
   onFocusTable,
   onExitDressing,
   onArrangeDressing,
+  showTableNumbers = false,
 }: {
   doc: DesignDocumentContent;
   plan: EventPlan;
@@ -278,6 +279,9 @@ export function CanvasStage({
   /** Items dragged on the table being dressed: where every item on it now stands, in the table's own
    *  frame — one frame of a gesture, closed by onEndDrag. */
   onArrangeDressing?: (tableId: string, positions: { id: string; position: Point }[]) => void;
+  /** Write each table's number on it (a block's once, on the block) — the hall pass and the full
+   *  studio. The design pass draws the room clean. Never the `4/12`: that stays on the bar. */
+  showTableNumbers?: boolean;
 }) {
   // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
   // off the gesture: dragging a table (or a stage, a rug — anything standing on the floor) holds
@@ -799,9 +803,12 @@ export function CanvasStage({
           }
         }
         const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        // The number it SHOWS (numberedUnits' rule): the group's, else its lowest numbered member's;
+        // none at all when every table in it is out of the numbering.
+        const numbered = tables.filter((t) => !t.unnumbered);
         return {
           id: g.id,
-          number: g.number ?? Math.min(...tables.map((t) => t.number)),
+          number: numbered.length === 0 ? null : (g.number ?? Math.min(...numbered.map((t) => t.number))),
           centre: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
           widthMm: maxX - minX,
           depthMm: maxY - minY,
@@ -1390,6 +1397,8 @@ export function CanvasStage({
                     ctx={ctx}
                     drag={nodeProps({ kind: "table", id: t.id }, ctx)}
                     onOpen={onFocusTable ? () => onFocusTable(t.id) : undefined}
+                    // A grouped table draws no number of its own — its block draws the one they share.
+                    number={showTableNumbers && !t.groupId && !t.unnumbered && t.number > 0 ? t.number : null}
                     onNudge={(pos) => {
                       onMoveTable(t.id, pos);
                       onEndDrag();
@@ -1436,6 +1445,20 @@ export function CanvasStage({
               its first table.) */}
           {layerVisible.tables && tableGroups.map((g) => (
             <g key={`group-${g.id}`} className="pointer-events-none" {...layerAttrs("tables")}>
+              {/* The block's ONE number, on the block — haloed, because the middle of a block is
+                  exactly where two of its tables meet and a seam would run through the digits. */}
+              {showTableNumbers && g.number !== null && g.number > 0 && (
+                <text
+                  x={g.centre.x}
+                  y={g.centre.y}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
+                  style={{ fontSize: numberSizeMm(ctx, Math.min(g.widthMm, g.depthMm)), fontWeight: 600, ...NUMBER_HALO, strokeWidth: numberSizeMm(ctx, Math.min(g.widthMm, g.depthMm)) * 0.16 }}
+                >
+                  {g.number}
+                </text>
+              )}
               {/* Only while the block is selected. At rest a block of tables reads as the one table it
                   is — a dashed box round it all evening ran straight through its own chairs. */}
               {g.selected && (
@@ -2268,6 +2291,18 @@ function Chair({ seat }: { seat: Seat }) {
 /** How far a group's dashed outline stands off the tables inside it. */
 const GROUP_PAD_MM = 260;
 
+/** A table number's size, in plan mm: true scale (TABLE_NUMBER_MM, no more than half the table's
+ *  short side) while that reads at between 11 and 26 screen pixels — so it never shrinks to a speck
+ *  zoomed out, nor fills the screen zoomed in on one table. */
+const TABLE_NUMBER_MM = 450;
+function numberSizeMm(ctx: CanvasLayerContext, shortSideMm: number): number {
+  const scale = Math.min(TABLE_NUMBER_MM, shortSideMm > 0 ? shortSideMm * 0.5 : TABLE_NUMBER_MM);
+  return Math.max(ctx.mm(11), Math.min(scale, ctx.mm(26)));
+}
+/** A knocked-out ring of the plan's surface under a block's number, so the seam between two of its
+ *  tables stops at the digits instead of running through them. */
+const NUMBER_HALO = { paintOrder: "stroke" as const, stroke: "var(--color-surface)", strokeLinejoin: "round" as const };
+
 const CORNERS = [
   [-1, -1],
   [1, -1],
@@ -2423,6 +2458,7 @@ function TableNode({
   drag,
   onNudge,
   onOpen,
+  number = null,
 }: {
   table: DesignTable;
   selected: boolean;
@@ -2435,6 +2471,9 @@ function TableNode({
   onNudge: (pos: Point) => void;
   /** Double-click: dress this table (its focus mode). */
   onOpen?: () => void;
+  /** The number to write on it, or null for none (a block's member, an unnumbered table, the head
+   *  table, the design pass). */
+  number?: number | null;
 }) {
   const overflow = util > 1;
   const clothColour = cloth ? (resolve(cloth.variantId)?.swatch ?? "var(--color-accent-tint)") : undefined;
@@ -2461,6 +2500,8 @@ function TableNode({
     vectorEffect: "non-scaling-stroke" as const,
   };
   const footprint = tableFootprint(table);
+  const labelAt = number !== null ? labelAnchor(footprint) : { x: 0, y: 0 };
+  const upright = uprightTransform(table.rotation, table.mirrored);
   const seats = table.seats ?? 0;
   const tableProduct = table.variantId ? resolve(table.variantId)?.product : undefined;
   const tableSurface = clothColour || overflow ? undefined : anySurface(tableProduct?.appearance) ? tableProduct?.appearance : undefined;
@@ -2471,7 +2512,7 @@ function TableNode({
       transform={`translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`שולחן ${table.number || ""}${seats > 0 ? ` — ${table.seated ?? 0} מתוך ${seats} מקומות` : ""} — גרירה להזזה${onOpen ? " · לחיצה כפולה לעיצוב השולחן" : ""}`}
+      aria-label={`${table.unnumbered ? "שולחן ללא מספר" : `שולחן ${table.number || "ראש"}`}${seats > 0 ? ` — ${table.seated ?? 0} מתוך ${seats} מקומות` : ""} — גרירה להזזה${onOpen ? " · לחיצה כפולה לעיצוב השולחן" : ""}`}
       className="cursor-move touch-none focus:outline-none"
       onDoubleClick={
         onOpen
@@ -2504,9 +2545,26 @@ function TableNode({
           <FootprintShape footprint={footprint} {...shape} fill="none" className="pointer-events-none" />
         </>
       )}
-      {/* No number and no "4/12" on the sketch: the designer asked for the drawing to be the room,
-          not its bookkeeping. Both are on the table's bar in the inspector, and the printed placement
-          map still writes the number — the crew finds tables by it. */}
+      {/* The NUMBER, when the pass asks for it (the hall pass and the full studio — never the design
+          pass, which is drawn clean). Never the "4/12": that is on the table's bar. At the shape's
+          visual centre (labelAnchor — the middle of the band on an arc) and UPRIGHT whatever way the
+          table turns or flips: a 6 that reads as a 9 at 180° is worse than none. Sized in plan mm but
+          held between a legible and a quiet size on screen (numberSizeMm), in the muted ink — light
+          on a dark cloth, accent while selected. */}
+      {number !== null && (
+        <g transform={`translate(${labelAt.x} ${labelAt.y})${upright ? ` ${upright}` : ""}`} className="pointer-events-none">
+          <text
+            x={0}
+            y={0}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fill={selected ? "var(--color-accent)" : clothColour && isDark(clothColour) ? "var(--color-canvas)" : "var(--color-muted)"}
+            style={{ fontSize: numberSizeMm(ctx, Math.min(footprintBounds(footprint).w, footprintBounds(footprint).h)), fontWeight: 600 }}
+          >
+            {number}
+          </text>
+        </g>
+      )}
     </g>
   );
 }
