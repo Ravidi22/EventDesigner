@@ -115,6 +115,10 @@ export interface CategoryDef {
    *  drape's height is its DROP, the one thing that still tells two rolls of curtain apart, so that
    *  category keeps asking. */
   needsHeight?: boolean;
+  /** The height a NEW product of this category starts with, in mm — a seed for the drawer like
+   *  `defaultStock`, stored on the row and editable. Absent = the drawer starts empty and asks. Only
+   *  where nearly every row agrees: an event table is 75cm (the base library's tables are too). */
+  defaultHeightMm?: number;
   /** Clicking this item on the studio's rail arms it for ONE placement rather than keeping it armed
    *  until Escape (see `placesOnce`). For the things an event has one of — a stage, a chuppah —
    *  where the click after the first is far likelier to be "now let me edit it" than "another one". */
@@ -138,7 +142,7 @@ export function placesOnce(c: CategoryDef | undefined): boolean {
 }
 
 export const CATEGORIES: CategoryDef[] = [
-  { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
+  { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", defaultHeightMm: 750, fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
   { id: "chairs", label: "כיסאות", group: "grp-seating", defaultLayer: "floor", icon: Armchair, dims: "box", fields: [] },
   // Lounge seating — a corner of sofas and armchairs round a low table, not a place laid for dinner.
   // No seat field: a sofa is counted as one sofa on the packing list, and nothing multiplies off it.
@@ -158,7 +162,7 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
   { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [], placeOnce: true },
-  // The loose modules a stage is built from — a 200×100 deck, the 100×100 that finishes an odd row.
+  // The loose modules a stage is built from — a 244×122 sheet, the 244×80/60/40 strips that finish a row's depth.
   // The stage-fill tool (lib/studio/stage-fill.ts) builds from these AND from the studio's own
   // platforms in "stages": a studio that owns a 400×300 builds a 7×4 from it and a few decks.
   { id: "stage-decks", label: "פלטות במה", group: "grp-stages", defaultLayer: "floor", icon: Grid2x2, dims: "box", fields: [] },

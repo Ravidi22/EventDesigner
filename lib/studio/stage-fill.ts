@@ -1,6 +1,6 @@
 // Filling an area of the plan with stage decks — "draw where the stage goes, get the decks".
 //
-// A stage is built from the decks the studio owns (200×100, 100×100, 122×244…), and working out how
+// A stage is built from the decks the studio owns (244×122 and its strips, 200×100…), and working out how
 // many of which to lay across a 7.5×4m area is arithmetic nobody should do by hand at a meeting. The
 // designer draws the area, says which side faces the room, and this lays the decks.
 //
@@ -11,7 +11,8 @@
 //      the BACK, against the wall or the backdrop, never along the edge everyone looks at. A row
 //      that leaves slack at its ends is centred, so a gap is two equal ones and not one lopsided one.
 //   2. The decks are split into FAMILIES — decks that share a module of 10cm or more (200×100 and
-//      100×100 do; 200×100 and 122×244 share 2cm and do not). One stage is built from one family:
+//      100×100 do; 200×100 and 122×244 share 2cm and do not), or a side of exactly the same length
+//      (the 244×40/60/80 strips that finish a row of 244×122 sheets). One stage is built from one family:
 //      a crew does not clamp a metric deck to an imperial one. Each family is tried, and each deck
 //      on its own, and the layout that covers most with fewest decks wins — which also rescues the
 //      cases where largest-first picks the wrong big deck.
@@ -191,15 +192,20 @@ export function asRect(polygon: readonly Point[], front: number): { widthMm: num
   return { widthMm: e(front), depthMm: e(front + 1) };
 }
 
-/** Decks that can be one platform: same height, and a shared module of FAMILY_MODULE_MM or more. */
+/** Decks that can be one platform: same height, and either a shared module of FAMILY_MODULE_MM or
+ *  more, or one side EXACTLY the same length — a 244×40 strip shares no 10cm module with the 244×122
+ *  sheet, but it is cut to the sheet's own 244cm to finish the depth of a row of them, which is what
+ *  it is for. A 200×100 and a 122×244 share neither, and stay apart. */
 function families(types: readonly DeckType[]): DeckType[][] {
   const out: DeckType[][] = [];
+  const sameSide = (o: DeckType, t: DeckType) =>
+    [o.widthMm, o.depthMm].map(r10).some((s) => s === r10(t.widthMm) || s === r10(t.depthMm));
   for (const t of types) {
     const home = out.find((f) =>
       f.every(
         (o) =>
           (o.heightMm ?? 0) === (t.heightMm ?? 0) &&
-          [o.widthMm, o.depthMm, t.widthMm, t.depthMm].map(r10).reduce((g, d) => gcd(g, d)) >= FAMILY_MODULE_MM,
+          ([o.widthMm, o.depthMm, t.widthMm, t.depthMm].map(r10).reduce((g, d) => gcd(g, d)) >= FAMILY_MODULE_MM || sameSide(o, t)),
       ),
     );
     if (home) home.push(t);
@@ -641,6 +647,24 @@ if (isMain(import.meta.url)) {
   const sheet16 = fillWithDecks(rect(0, 0, 4880, 9760), [{ id: "s", widthMm: 2440, depthMm: 1220 }]);
   assert(sheet16.decks.length === 16 && sheet16.coverage > 0.999, "a 4.88×9.76 is exactly sixteen 244×122 sheets");
 
+  // The base library's decks: the 244×122 sheet and the 80/60/40 strips cut to its length. They
+  // share no 10cm module, but one side exactly — one platform, the strips finishing the depth.
+  const sheet = { id: "122", widthMm: 2440, depthMm: 1220, heightMm: 600 };
+  const s80 = { id: "80", widthMm: 2440, depthMm: 800, heightMm: 600 };
+  const s60 = { id: "60", widthMm: 2440, depthMm: 600, heightMm: 600 };
+  const s40 = { id: "40", widthMm: 2440, depthMm: 400, heightMm: 600 };
+  const base244 = [sheet, s80, s60, s40];
+  const deep304 = fillWithDecks(rect(0, 0, 4880, 3040), base244, { front: 0 });
+  assert(deep304.coverage > 0.999, "a 4.88×3.04 stage is covered exactly by sheets and strips");
+  assert(count(deep304, "122") === 4 && count(deep304, "60") === 2, "…four sheets in two rows, and a 60cm strip behind each pair");
+  assert(deep304.decks.every((d) => d.rotation === 0), "…every one long side along the front");
+  const deep284 = fillWithDecks(rect(0, 0, 7320, 2840), base244, { front: 0 });
+  assert(deep284.coverage > 0.999 && count(deep284, "122") === 6 && count(deep284, "40") === 3, "a 7.32×2.84 is six sheets and three 40cm strips");
+  assert(count(fillWithDecks(rect(0, 0, 4880, 2440), base244), "122") === 4, "a depth the sheets divide uses no strips");
+  assert(lengthSnapper(base244)(3045, { magnetMm: 60 }) === 3040 && lengthSnapper(base244)(2845, { magnetMm: 60 }) === 2840, "the strips' depths are lengths the drawing pulls to");
+  const strips = fillWithDecks(rect(0, 0, 6000, 4000), [big, small, sheet, s40]);
+  assert(strips.decks.every((d) => d.typeId === "2x1" || d.typeId === "1x1") || strips.decks.every((d) => d.typeId === "122" || d.typeId === "40"), "a sheet and a metric deck are still never one platform");
+
   // Exceeding the line: a 6.90m front gets a seventh metre of deck 10cm over the line; a 6.30m
   // front does not get one 70cm over it; and a level never reaches past its stage.
   const strip = fillWithDecks(rect(0, 0, 6900, 1000), [big, small], { front: 0 });
@@ -658,5 +682,8 @@ if (isMain(import.meta.url)) {
   const t0 = Date.now();
   fillWithDecks(rect(0, 0, 30000, 20000), [big, small, imperial]);
   assert(Date.now() - t0 < 1500, "a ballroom-sized area answers inside a second and a half");
+  const t1 = Date.now();
+  fillWithDecks(rect(0, 0, 30000, 20000), base244);
+  assert(Date.now() - t1 < 1500, "…and so does one built from the 244 sheet and its strips (a 2cm grid)");
   console.log("stage-fill self-check passed");
 }

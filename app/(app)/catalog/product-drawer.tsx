@@ -75,7 +75,8 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     name: "",
     category: c.id,
     layer: c.defaultLayer,
-    dimensions: { heightMm: 0 },
+    // A table starts at 75cm (CategoryDef.defaultHeightMm); everything else starts empty and asks.
+    dimensions: { heightMm: c.defaultHeightMm ?? 0 },
     categoryFields: {},
     styleTags: [],
     variants: [],
@@ -435,8 +436,14 @@ export function ProductDrawer({
   const changeCategory = (id: string) =>
     setDraft((d) => {
       const c = CATEGORY_BY_ID[id];
+      // A NEW product's height re-seeds with the category while it is still the old category's seed
+      // (or empty) — a fresh row starts as a table at 75cm, and turning it into a chair must not
+      // leave it 75cm tall. A saved product's height is a measurement and is never touched.
+      const seededHeight = CATEGORY_BY_ID[d.category]?.defaultHeightMm ?? 0;
+      const reseedHeight = !d.id && (d.dimensions.heightMm === 0 || d.dimensions.heightMm === seededHeight);
       return {
         ...d,
+        ...(reseedHeight ? { dimensions: { ...d.dimensions, heightMm: c.defaultHeightMm ?? 0 } } : {}),
         category: id,
         layer: c.defaultLayer,
         categoryFields: {},

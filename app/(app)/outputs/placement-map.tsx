@@ -1185,7 +1185,7 @@ function MeasureLayer({
 }) {
   const { dims, leaders } = measurements(input, opts);
   const font = (d: Dim) => (d.kind === "overall" ? 2.4 : 2.2) * den;
-  const label = (d: Dim) => `${d.warn ? "⚠ " : ""}${(d.mm / 1000).toFixed(2)}`;
+  const label = (d: Dim) => `${d.warn ? "⚠ " : ""}${d.diameter ? "⌀" : ""}${(d.mm / 1000).toFixed(2)}`;
   const lines = dims.map((d) => {
     const pa = { x: d.a.x + d.offset.x, y: d.a.y + d.offset.y };
     const pb = { x: d.b.x + d.offset.x, y: d.b.y + d.offset.y };

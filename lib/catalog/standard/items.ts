@@ -105,11 +105,16 @@ export const STANDARD_TABLES: StandardItem[] = [
 
 // ── פלטות במה ───────────────────────────────────────────────────────────────
 
-// The deck a hall stacks in its store room — a 200×100 module on adjustable legs — and the square
-// half of one that finishes an odd row. Sized stages are not in this list any more: a stage is drawn
-// as an area and built from these, or from any platform the studio adds under "במות"
-// (lib/studio/stage-fill.ts), so it can be any size the event needs rather than one of five. The height is the one number a studio routinely changes: 60cm is where a band or a
-// chuppah usually ends up, and the same legs go down to 20 and up to 80.
+// The deck a hall stacks in its store room — the 244×122 sheet (8×4 feet) on adjustable legs — and
+// the three strips of the same 244cm length, 80, 60 and 40cm deep, that make up a stage's depth
+// where whole sheets do not divide it: 122+122+60 is a 3.04m stage, not a 2.44m one with a bare
+// strip behind it. A strip shares the sheet's long side exactly, which is what lets the fill lay the
+// four as ONE platform (families in lib/studio/stage-fill.ts) although they share no 10cm module.
+// The metric 200×100 / 100×100 pair shipped here before them; the user asked for only these four,
+// so those keys are retired below (never reused). Sized stages are not in this list either: a stage
+// is drawn as an area and built from these, or from any platform the studio adds under "במות", so
+// it can be any size the event needs. The height is the one number a studio routinely changes: 60cm
+// is where a band or a chuppah usually ends up, and the same legs go down to 20 and up to 80.
 const DECK_HEIGHT_MM = 600;
 const DECK_SPEC = "רגליים מתכווננות 20–80 סמ";
 
@@ -131,8 +136,10 @@ function deck(key: string, name: string, widthMm: number, depthMm: number): Stan
 }
 
 export const STANDARD_DECKS: StandardItem[] = [
-  deck("deck-200x100", "פלטת במה 200×100", 2000, 1000),
-  deck("deck-100x100", "פלטת במה 100×100", 1000, 1000),
+  deck("deck-244x122", "פלטת במה 244×122", 2440, 1220),
+  deck("deck-244x80", "פלטת במה 244×80", 2440, 800),
+  deck("deck-244x60", "פלטת במה 244×60", 2440, 600),
+  deck("deck-244x40", "פלטת במה 244×40", 2440, 400),
 ];
 
 /** What a stage is finished with — one flight of stairs, and the skirt round its open sides. The
@@ -252,10 +259,16 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
  *  design drawn with a במה 600×400 still has to resolve it (Product.archived). The keys stay here
  *  for exactly that reason: they are how the retire finds the rows. Never reuse one. */
 export const RETIRED_STANDARD_KEYS: string[] = [
-  // Empty. The five sized stages (stage-200x100 … stage-800x400) stopped shipping to NEW studios
-  // when the decks above did, but the studios that have them keep them: the stage tool builds from
+  // NOT the five sized stages (stage-200x100 … stage-800x400): they stopped shipping to NEW studios
+  // when the decks did, but the studios that have them keep them: the stage tool builds from
   // them (a studio's own 400×300 is a platform it owns), so archiving them would take away the very
   // pieces a designer asked the tool to use. Their keys must still never be reused.
+  //
+  // The metric decks, replaced by the 244 sheet and its strips (2026-10-09). A stage already drawn
+  // with them still lays with them — an archived row still resolves — but a new stage is offered
+  // only what is unarchived.
+  "deck-200x100",
+  "deck-100x100",
 ];
 
 // ── ברים ────────────────────────────────────────────────────────────────────
@@ -340,6 +353,12 @@ if (isMain(import.meta.url)) {
     check(p.unitPrice === undefined && p.costPrice === undefined, `${item.key}: carries no price`);
   }
 
+  // One table height: the base library's and the drawer's seed for a new table (75cm) agree.
+  check(
+    CATEGORY_BY_ID.tables.defaultHeightMm === TABLE_HEIGHT_MM && STANDARD_TABLES.every((t) => t.product.dimensions.heightMm === 750),
+    "every base table, and every new table the drawer opens, is 75cm high",
+  );
+
   // Chairs = tables × seats: a table whose count is missing silently packs no chairs.
   for (const item of STANDARD_TABLES) {
     const seats = item.product.categoryFields.seats;
@@ -391,6 +410,14 @@ if (isMain(import.meta.url)) {
   for (const item of STANDARD_DECKS) {
     check(item.product.dimensions.heightMm >= 200, `${item.key}: stands off the floor`);
   }
+  // The decks are the 244 sheet and its three strips, at one height — nothing else (the user's
+  // explicit list, 2026-10-09). One height is what lets the fill lay them as one platform.
+  const deckSizes = STANDARD_DECKS.map((i) => `${i.product.dimensions.widthMm}x${i.product.dimensions.depthMm}`).sort();
+  check(
+    JSON.stringify(deckSizes) === JSON.stringify(["2440x1220", "2440x400", "2440x600", "2440x800"]),
+    `the decks are exactly 244×122, 244×80, 244×60 and 244×40 (${deckSizes.join(", ")})`,
+  );
+  check(new Set(STANDARD_DECKS.map((i) => i.product.dimensions.heightMm)).size === 1, "…all at one height");
   for (const item of STANDARD_BARS) {
     check(item.product.dimensions.heightMm >= 1000, `${item.key}: is counter height, not table height`);
   }

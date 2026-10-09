@@ -10,7 +10,8 @@
 //
 //   overall  the room's width and depth (dimensions.ts), off its bottom and right sides
 //   chain    wall → each column/row of table centres → wall (setting-out.ts), off the top and left
-//   size     an element's own sides: every side of a stage, width × depth of a rug or a bar
+//   size     an element's own sides: every side of a stage, width × depth of a rug or a bar, the
+//            diameter of a round one (an ellipse's two axes) — never the sides of its sampling
 //   tie      an element's distance to the nearest wall, once across and once along — two numbers
 //            fix where it stands
 //   gap      edge to edge between an element and its nearest table and its nearest other element;
@@ -43,6 +44,8 @@ export interface Dim {
   mm: number;
   /** A gap narrower than the walkway minimum. */
   warn?: boolean;
+  /** The figure is a circle's diameter — printed with ⌀. */
+  diameter?: boolean;
 }
 
 export interface Leader {
@@ -159,6 +162,130 @@ const centroid = (poly: Point[]) => ({
   y: poly.reduce((n, p) => n + p.y, 0) / poly.length,
 });
 
+// ROUND THINGS ARE POLYGONS HERE, and must not be measured as polygons. A round stage, rug or table
+// arrives as a 24-gon (or finer), and measured side by side it printed two dozen figures of 0.39
+// round a 3m stage — the sampling, not the stage. So an outline that samples a circle or an ellipse
+// is read back as one (asRound) and figured by its diameter, or its two axes; its ties run from the
+// TRUE extreme of the curve and its gaps to the true circle. A shape that is only PARTLY curved (a
+// D, a capsule, an arc) keeps a figure on each straight side, drops the sampled ones (curveSides),
+// and is given its overall extent instead.
+
+/** A circle or an ellipse, read back off the polygon that samples it. `u` is the major axis. */
+export interface Round {
+  c: Point;
+  u: Point;
+  rx: number;
+  ry: number;
+  circle: boolean;
+}
+
+const roundCache = new WeakMap<Point[], Round | null>();
+
+/** The circle or ellipse `poly` samples, or null. Sixteen vertices at least — a hand-drawn
+ *  octagon or dodecagon stage is built side by side and keeps a figure per side. */
+export function asRound(poly: Point[]): Round | null {
+  const hit = roundCache.get(poly);
+  if (hit !== undefined) return hit;
+  let out: Round | null = null;
+  if (poly.length >= 16) {
+    const c = centroid(poly);
+    const ds = poly.map((p) => len(sub(p, c)));
+    const rx = Math.max(...ds);
+    const ry = Math.min(...ds);
+    if (ry > 1) {
+      const circle = rx - ry <= rx * 0.01;
+      const far = poly[ds.indexOf(rx)];
+      const u = circle ? { x: 1, y: 0 } : { x: (far.x - c.x) / rx, y: (far.y - c.y) / rx };
+      const v = { x: -u.y, y: u.x };
+      const on = poly.every((p) => {
+        const d = sub(p, c);
+        return Math.abs(Math.hypot((d.x * u.x + d.y * u.y) / rx, (d.x * v.x + d.y * v.y) / ry) - 1) < 0.02;
+      });
+      if (on) out = { c, u, rx: circle ? (rx + ry) / 2 : rx, ry: circle ? (rx + ry) / 2 : ry, circle };
+    }
+  }
+  roundCache.set(poly, out);
+  return out;
+}
+
+/** The point of the round furthest along `d` (a unit vector) — where a tie really starts. */
+function support(r: Round, d: Point): Point {
+  const v = { x: -r.u.y, y: r.u.x };
+  const du = d.x * r.u.x + d.y * r.u.y;
+  const dv = d.x * v.x + d.y * v.y;
+  const k = Math.hypot(r.rx * du, r.ry * dv) || 1;
+  return {
+    x: r.c.x + (r.rx * r.rx * du * r.u.x + r.ry * r.ry * dv * v.x) / k,
+    y: r.c.y + (r.rx * r.rx * du * r.u.y + r.ry * r.ry * dv * v.y) / k,
+  };
+}
+
+/** Which sides of an outline are samples of a curve: a run of three or more sides of like length
+ *  meeting at shallow turns (≤20°). A straight side running tangent into an arc is NOT one — it is
+ *  far longer than the samples beside it — and neither is a corner of a drawn stage (45° steps). */
+export function curveSides(poly: Point[]): boolean[] {
+  const n = poly.length;
+  const L = poly.map((p, i) => len(sub(poly[(i + 1) % n], p)));
+  const turn = poly.map((p, i) => {
+    const a = sub(p, poly[(i + n - 1) % n]);
+    const b = sub(poly[(i + 1) % n], p);
+    return Math.abs(Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y));
+  });
+  const smooth = (i: number) => {
+    const t = turn[(i + n) % n];
+    return t > (0.5 * Math.PI) / 180 && t <= (20 * Math.PI) / 180;
+  };
+  const like = (i: number, j: number) => {
+    const a = L[(i + n) % n];
+    const b = L[(j + n) % n];
+    return Math.max(a, b) <= 1.5 * Math.min(a, b);
+  };
+  const flag = L.map((_, i) => (smooth(i) && like(i, i - 1)) || (smooth(i + 1) && like(i, i + 1)));
+  const start = flag.indexOf(false);
+  if (start < 0) return flag;
+  // Runs shorter than three are a bend in a drawn side, not a curve.
+  for (let k = 0, run: number[] = []; k <= n; k++) {
+    const i = (start + k) % n;
+    if (k < n && flag[i]) run.push(i);
+    else {
+      if (run.length < 3) for (const j of run) flag[j] = false;
+      run = [];
+    }
+  }
+  return flag;
+}
+
+/** polygonGap, but to the TRUE circle where either side samples one — a gap to a round table is
+ *  otherwise measured to the flat between two of its 24 vertices. */
+export function solidGap(P: Point[], Q: Point[]): { mm: number; a: Point; b: Point } {
+  const rp = asRound(P);
+  const rq = asRound(Q);
+  const cp = rp?.circle ? rp : null;
+  const cq = rq?.circle ? rq : null;
+  if (!cp && !cq) return polygonGap(P, Q);
+  if (cp && cq) {
+    const d = sub(cq.c, cp.c);
+    const D = len(d) || 1;
+    const mm = D - cp.rx - cq.rx;
+    if (mm <= 0) return polygonGap(P, Q);
+    const u = { x: d.x / D, y: d.y / D };
+    return { mm, a: { x: cp.c.x + u.x * cp.rx, y: cp.c.y + u.y * cp.rx }, b: { x: cq.c.x - u.x * cq.rx, y: cq.c.y - u.y * cq.rx } };
+  }
+  const circ = (cp ?? cq)!;
+  const other = cp ? Q : P;
+  if (pointInPolygon(circ.c, other)) return polygonGap(P, Q);
+  let near = other[0];
+  for (let i = 0; i < other.length; i++) {
+    const q = closestOnSegment(circ.c, other[i], other[(i + 1) % other.length]);
+    if (len(sub(q, circ.c)) < len(sub(near, circ.c))) near = q;
+  }
+  const D = len(sub(near, circ.c)) || 1;
+  const mm = D - circ.rx;
+  if (mm <= 0) return polygonGap(P, Q);
+  const onCircle = { x: circ.c.x + ((near.x - circ.c.x) / D) * circ.rx, y: circ.c.y + ((near.y - circ.c.y) / D) * circ.rx };
+  return cp ? { mm, a: onCircle, b: near } : { mm, a: near, b: onCircle };
+}
+
 export function measurements(input: MeasureInput, opts: MeasureOptions): { dims: Dim[]; leaders: Leader[] } {
   const dims: Dim[] = [];
   const leaders: Leader[] = [];
@@ -264,10 +391,64 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
         const probe = { x: m.x + nn.x * offsetMm, y: m.y + nn.y * offsetMm };
         return inRoom(probe) && !elements.some((x) => x !== e && x !== hostOf(e) && pointInPolygon(probe, x.polygon));
       };
+      const clearAt = (probe: Point) => inRoom(probe) && !elements.some((x) => x !== e && x !== hostOf(e) && pointInPolygon(probe, x.polygon));
+      /** An overall figure along `ax`: the element's extent that way, drawn beyond it on the open
+       *  side. From the round's own extreme points when it is one (the extension lines then run
+       *  tangent to it), else off the extent's edge. */
+      const extent = (ax: Point, extra: Partial<Dim> = {}) => {
+        const across = { x: -ax.y, y: ax.x };
+        // A round's extremes off the curve itself, not off whichever vertices the sampling left
+        // nearest them — a turned 3m stage is 3.00 across, not 2.97.
+        const r = asRound(e.polygon);
+        const dot = (p: Point, d: Point) => p.x * d.x + p.y * d.y;
+        const neg = (d: Point) => ({ x: -d.x, y: -d.y });
+        const t = r ? [dot(support(r, neg(ax)), ax), dot(support(r, ax), ax)] : e.polygon.map((p) => dot(p, ax));
+        const w = r ? [dot(support(r, neg(across)), across), dot(support(r, across), across)] : e.polygon.map((p) => dot(p, across));
+        const [t0, t1, w0, w1] = [Math.min(...t), Math.max(...t), Math.min(...w), Math.max(...w)];
+        const at = (tt: number, ww: number) => ({ x: ax.x * tt + across.x * ww, y: ax.y * tt + across.y * ww });
+        const sMid = (t0 + t1) / 2;
+        const s = clearAt(at(sMid, w1 + offsetMm)) || !clearAt(at(sMid, w0 - offsetMm)) ? 1 : -1;
+        const wc = r ? r.c.x * across.x + r.c.y * across.y : s > 0 ? w1 : w0;
+        const reach = (s > 0 ? w1 : w0) - wc;
+        dims.push({
+          kind: "size",
+          a: at(t0, wc),
+          b: at(t1, wc),
+          offset: { x: across.x * (reach + s * offsetMm * 0.6), y: across.y * (reach + s * offsetMm * 0.6) },
+          mm: t1 - t0,
+          ...extra,
+        });
+      };
+      // A circle is its diameter; an ellipse its two axes. Nothing round its rim.
+      const round = asRound(e.polygon);
+      if (round) {
+        if (round.circle) extent(round.u, { diameter: true });
+        else for (const ax of [round.u, { x: -round.u.y, y: round.u.x }]) extent(ax);
+        continue;
+      }
       const rectangular = e.polygon.length === 4 && (e.kind !== "stage" || isRectangle(e.polygon));
+      const curved = rectangular ? null : curveSides(e.polygon);
       const sides = !rectangular
-        ? e.polygon.map((_, i) => i)
+        ? e.polygon.map((_, i) => i).filter((i) => !curved![i])
         : [openSide(0) || !openSide(2) ? 0 : 2, openSide(1) || !openSide(3) ? 1 : 3];
+      // Partly curved — a D, a capsule: the straight sides as below, and its overall width and
+      // depth along its longest straight side, unless a straight side already says that length.
+      if (curved?.some(Boolean)) {
+        const straight = sides.map((i) => [e.polygon[i], e.polygon[(i + 1) % e.polygon.length]] as const);
+        const longest = straight.reduce<readonly [Point, Point] | null>((best, s) => (!best || len(sub(s[1], s[0])) > len(sub(best[1], best[0])) ? s : best), null);
+        const l = longest ? len(sub(longest[1], longest[0])) : 0;
+        const u = longest && l > 0 ? { x: (longest[1].x - longest[0].x) / l, y: (longest[1].y - longest[0].y) / l } : { x: 1, y: 0 };
+        for (const ax of [u, { x: -u.y, y: u.x }]) {
+          const t = e.polygon.map((p) => p.x * ax.x + p.y * ax.y);
+          const span = Math.max(...t) - Math.min(...t);
+          const said = straight.some(([a, b]) => {
+            const d = sub(b, a);
+            const dl = len(d) || 1;
+            return Math.abs(d.x * ax.y - d.y * ax.x) / dl < 0.01 && Math.abs(dl - span) < 10;
+          });
+          if (!said) extent(ax);
+        }
+      }
       for (const i of sides) {
         const a = e.polygon[i];
         const b = e.polygon[(i + 1) % e.polygon.length];
@@ -292,7 +473,12 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
       // From the element's extreme vertex in each direction, square to the wall it faces; keep the
       // nearer of left/right and of up/down. Two figures fix the element; four would only restate
       // the room's width.
-      const ext = (key: "x" | "y", sign: 1 | -1) => e.polygon.reduce((best, p) => (p[key] * sign > best[key] * sign ? p : best), e.polygon[0]);
+      // A round element's extreme is on its curve, not on the sampled vertex nearest it.
+      const round = asRound(e.polygon);
+      const ext = (key: "x" | "y", sign: 1 | -1) =>
+        round
+          ? support(round, key === "x" ? { x: sign, y: 0 } : { x: 0, y: sign })
+          : e.polygon.reduce((best, p) => (p[key] * sign > best[key] * sign ? p : best), e.polygon[0]);
       for (const [axis, dirs] of [
         ["x", [-1, 1]],
         ["y", [-1, 1]],
@@ -317,7 +503,7 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
       for (const pool of [tables.filter(onFloor), elements.filter((x) => x.id !== e.id && onFloor(x))]) {
         let best: { s: Solid; g: ReturnType<typeof polygonGap> } | null = null;
         for (const s of pool) {
-          const g = polygonGap(e.polygon, s.polygon);
+          const g = solidGap(e.polygon, s.polygon);
           if (g.mm > 0 && (!best || g.mm < best.g.mm)) best = { s, g };
         }
         if (!best || best.g.mm > gapReachMm) continue;
@@ -346,7 +532,7 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
         const run = withC.filter((w) => Math.abs(w.c[axis] - line) <= 450).sort((p, q) => p.c[other] - q.c[other]);
         let best: ReturnType<typeof polygonGap> | null = null;
         for (let i = 1; i < run.length; i++) {
-          const g = polygonGap(run[i - 1].t.polygon, run[i].t.polygon);
+          const g = solidGap(run[i - 1].t.polygon, run[i].t.polygon);
           if (g.mm > 0 && (!best || g.mm < best.mm)) best = g;
         }
         if (!best || said.some((v) => Math.abs(v - best.mm) < 20)) continue;
@@ -433,5 +619,38 @@ if (isMain(import.meta.url)) {
   assert(squareSizes.every((d) => !(d.a.x === 16000 && d.b.x === 16000)), "a stage's depth is figured on its open side, not across the stage it touches");
   const rowChain = pair.dims.filter((d) => d.kind === "chain" && d.a.x === d.b.x);
   assert(rowChain.length > 0 && rowChain.every((d) => d.a.x > 16000), "the strip's row chain runs inside the strip, not through the square");
+  // A round stage arrives as a 24-gon (placement-map's outlineOf). It is figured by its diameter —
+  // one figure, not twenty-four sides of 0.39 — even turned, where no vertex sits on its extremes.
+  const ring = (cx: number, cy: number, rx: number, ry: number, deg = 0, n = 24): Point[] => {
+    const k = (deg * Math.PI) / 180;
+    return Array.from({ length: n }, (_, i) => {
+      const a = (i / n) * Math.PI * 2;
+      const x = rx * Math.cos(a), y = ry * Math.sin(a);
+      return { x: cx + x * Math.cos(k) - y * Math.sin(k), y: cy + x * Math.sin(k) + y * Math.cos(k) };
+    });
+  };
+  const roundStage = { id: "round", kind: "item" as const, polygon: ring(10000, 4000, 1500, 1500, 7) };
+  const rs = measurements({ boundaries: [room], walls, solids: [roundStage], centres: [] }, { sizes: true, ties: true, offsetMm: 900 });
+  const rsSizes = rs.dims.filter((d) => d.kind === "size");
+  assert(rsSizes.length === 1 && rsSizes[0].diameter === true && Math.abs(rsSizes[0].mm - 3000) < 1, "a round stage is figured by its diameter alone (⌀3.00), not by the sides of its 24-gon");
+  assert(Math.hypot(rsSizes[0].offset.x, rsSizes[0].offset.y) > 1500, "…drawn outside the stage, not across it");
+  const rsTies = rs.dims.filter((d) => d.kind === "tie");
+  assert(rsTies.length === 2 && rsTies.some((d) => Math.abs(d.mm - 2500) < 1), "…and tied from its true rim: 4.00 − 1.50 = 2.50 off the wall, though no vertex is there");
+  const oval = measurements({ boundaries: [room], walls, solids: [{ id: "oval", kind: "stage", polygon: ring(10000, 6000, 3000, 1500, 0, 48) }], centres: [] }, { sizes: true, offsetMm: 900 });
+  const ovalMm = oval.dims.map((d) => Math.round(d.mm)).sort((p, q) => p - q);
+  assert(ovalMm.length === 2 && ovalMm[0] === 3000 && ovalMm[1] === 6000 && !oval.dims.some((d) => d.diameter), "an elliptical stage is figured by its two axes, 6.00 × 3.00");
+  // A D (half-round) stage: its straight side, and its depth — none of the arc's sampled sides.
+  const arc = Array.from({ length: 13 }, (_, i) => ({ x: 10000 + 2000 * Math.cos(Math.PI - (i / 12) * Math.PI), y: 6000 - 2000 * Math.sin((i / 12) * Math.PI) }));
+  const dStage = measurements({ boundaries: [room], walls, solids: [{ id: "D", kind: "stage", polygon: arc }] , centres: [] }, { sizes: true, offsetMm: 900 });
+  const dMm = dStage.dims.map((d) => Math.round(d.mm)).sort((p, q) => p - q);
+  assert(dMm.length === 2 && dMm[0] === 2000 && dMm[1] === 4000, `a D stage is its 4.00 chord and its 2.00 depth, not its arc's sides (${dMm.join(", ")})`);
+  assert(curveSides(ring(0, 0, 1000, 1000)).every(Boolean) && !curveSides(rect(0, 0, 4000, 2000)).some(Boolean), "a sampled circle is all curve; a rectangle none");
+  const octagon = Array.from({ length: 8 }, (_, i) => ({ x: 3000 * Math.cos((i / 8) * Math.PI * 2), y: 3000 * Math.sin((i / 8) * Math.PI * 2) }));
+  assert(asRound(octagon) === null && !curveSides(octagon).some(Boolean), "an octagonal stage is built side by side, and keeps a figure per side");
+  // Gaps to a round table run to its true rim.
+  const roundTable = { id: "rt", kind: "table" as const, polygon: ring(10000, 9000, 900, 900, 7) };
+  const block = { id: "bar", kind: "item" as const, polygon: rect(8000, 5000, 4000, 2000) };
+  const rg = measurements({ boundaries: [room], walls, solids: [block, roundTable], centres: [] }, { gaps: true, offsetMm: 900 });
+  assert(rg.dims.length === 1 && Math.abs(rg.dims[0].mm - 1100) < 1, "the gap to a round table is to its rim (9.00 − 0.90 − 7.00 = 1.10)");
   console.log("measurements self-check passed");
 }
