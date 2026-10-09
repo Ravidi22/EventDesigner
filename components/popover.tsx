@@ -32,6 +32,7 @@ export function Popover({
   disabled,
   chevron = true,
   panelClassName = "w-64",
+  side = "top",
   children,
 }: {
   /** What the button opens, spelled out — it is the trigger's accessible name and its tooltip, and
@@ -52,6 +53,9 @@ export function Popover({
   /** The panel's width, mostly — content decides its height. A fixed width and not a max: a panel
    *  that resizes as its own fields change value is a panel that moves under the cursor. */
   panelClassName?: string;
+  /** Which way the panel opens. Upwards by default — these chips live in bars along the BOTTOM of
+   *  a canvas; "bottom" is for the one bar that sits along its top (a table being dressed). */
+  side?: "top" | "bottom";
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -130,7 +134,8 @@ export function Popover({
           aria-label={label}
           tabIndex={-1}
           className={
-            "absolute bottom-[calc(100%+8px)] left-1/2 z-40 -translate-x-1/2 rounded-md border border-border bg-surface p-3 shadow-lifted focus-visible:outline-none " +
+            (side === "bottom" ? "top-[calc(100%+8px)] " : "bottom-[calc(100%+8px)] ") +
+            "absolute left-1/2 z-40 -translate-x-1/2 rounded-md border border-border bg-surface p-3 shadow-lifted focus-visible:outline-none " +
             panelClassName
           }
         >

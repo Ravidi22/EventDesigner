@@ -509,3 +509,11 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* A plan in motion (PlanCanvas sets data-moving through a pan or a zoom, and clears it ~200ms after
+   the last step) drops the textures' noise filters — feTurbulence is re-rasterised at every zoom
+   step and is what made a textured plan stutter. The laid pattern (planks, slabs) stays; the grain
+   comes back when the view settles. */
+svg[data-moving] .plan-grain {
+  filter: none;
+}

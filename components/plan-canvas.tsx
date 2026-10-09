@@ -664,8 +664,10 @@ export function PlanCanvas({
     if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
     const from = { ...viewRef.current.center, mmPerPx: viewRef.current.mmPerPx };
     const to = focusTarget(box, rw, rh);
-    const t0 = performance.now();
+    markMoving();
+    let t0: number | null = null; // the first frame's own timestamp — the clock rAF already hands us
     const step = (now: number) => {
+      t0 ??= now;
       const k = easeOutCubic(Math.min(1, (now - t0) / FOCUS_MS));
       setCenter({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
       setMmPerPx(from.mmPerPx + (to.mmPerPx - from.mmPerPx) * k);
@@ -725,8 +727,21 @@ export function PlanCanvas({
     return { x: screen.x, y: screen.y };
   };
 
+  // The view is moving: say so on the <svg> itself (no React state — a re-render per wheel step is
+  // the cost being avoided), so the costly texture filters stand down until it settles (globals.css).
+  const movingTimer = useRef<number | undefined>(undefined);
+  const markMoving = () => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    if (!svg.hasAttribute("data-moving")) svg.setAttribute("data-moving", "");
+    window.clearTimeout(movingTimer.current);
+    movingTimer.current = window.setTimeout(() => svg.removeAttribute("data-moving"), 200);
+  };
+  useEffect(() => () => window.clearTimeout(movingTimer.current), []);
+
   const zoomByCenter = (factor: number) => {
     cancelFocus();
+    markMoving();
     setMmPerPx((m) => clampZoom(m * factor));
   };
   const zoomAround = (clientX: number, clientY: number, factor: number) => {
@@ -736,6 +751,7 @@ export function PlanCanvas({
     const r = svg.getBoundingClientRect();
     const world = clientToMm(clientX, clientY);
     const next = clampZoom(mmPerPx * factor);
+    markMoving();
     const sx = clientX - (r.left + r.width / 2); // cursor offset from viewport centre, px
     const sy = clientY - (r.top + r.height / 2);
     setCenter({ x: world.x - sx * next, y: world.y - sy * next }); // keep the cursor's world point put
@@ -1037,16 +1053,52 @@ export function PlanCanvas({
     onAddVertex(snapDraw(clientToMm(e.clientX, e.clientY), e.altKey).point);
   };
 
+  // Wheel steps arrive far faster than frames (a trackpad sends one every few milliseconds), and
+  // each one used to set the view — a full render of every table, chair and texture on the plan per
+  // step. They are gathered here and applied once per frame: the zooms multiplied, about the latest
+  // cursor; the pans summed.
+  const wheelAcc = useRef({ zoom: 1, x: 0, y: 0, dx: 0, dy: 0, frame: null as number | null });
+  const flushWheel = useRef<() => void>(() => {});
+  useEffect(() => {
+    flushWheel.current = () => {
+      const w = wheelAcc.current;
+      w.frame = null;
+      if (w.zoom !== 1) zoomAround(w.x, w.y, w.zoom);
+      if (w.dx || w.dy) {
+        const { dx, dy } = w;
+        markMoving();
+        setCenter((c) => ({ x: c.x + dx * mmPerPx, y: c.y + dy * mmPerPx }));
+      }
+      w.zoom = 1;
+      w.dx = 0;
+      w.dy = 0;
+    };
+  });
+  useEffect(() => () => {
+    if (wheelAcc.current.frame !== null) cancelAnimationFrame(wheelAcc.current.frame);
+  }, []);
+
   // Wheel-zoom (non-passive so we can preventDefault the page scroll) + space-to-pan modifier key.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
+    const queue = () => {
+      const w = wheelAcc.current;
+      if (w.frame === null) w.frame = requestAnimationFrame(() => flushWheel.current());
+    };
+    const queueZoom = (clientX: number, clientY: number, factor: number) => {
+      const w = wheelAcc.current;
+      w.zoom *= factor;
+      w.x = clientX;
+      w.y = clientY;
+      queue();
+    };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       // A pinch on a trackpad arrives as a wheel with ctrlKey set (every browser), and Ctrl+wheel on
       // a mouse means zoom everywhere — both zoom, in proportion to how far the fingers moved.
       if (e.ctrlKey || e.metaKey) {
-        zoomAround(e.clientX, e.clientY, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01))));
+        queueZoom(e.clientX, e.clientY, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01))));
         return;
       }
       // A two-finger swipe on a trackpad MOVES the view, the way every map and design tool does; a
@@ -1057,17 +1109,16 @@ export function PlanCanvas({
       if (trackpad || e.shiftKey) {
         cancelFocus();
         const px = e.deltaMode === 1 ? 16 : 1; // lines → pixels, for the odd wheel that reports lines
-        const dx = (e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX) * px;
-        const dy = (e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY) * px;
-        setCenter((c) => ({ x: c.x + dx * mmPerPx, y: c.y + dy * mmPerPx }));
+        wheelAcc.current.dx += (e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX) * px;
+        wheelAcc.current.dy += (e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY) * px;
+        queue();
         return;
       }
-      zoomAround(e.clientX, e.clientY, e.deltaY > 0 ? 1.1 : 1 / 1.1);
+      queueZoom(e.clientX, e.clientY, e.deltaY > 0 ? 1.1 : 1 / 1.1);
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mmPerPx]);
+  }, []);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -1324,6 +1375,7 @@ export function PlanCanvas({
           const dx = e.clientX - p.x;
           const dy = e.clientY - p.y;
           pan.current = { ...p, x: e.clientX, y: e.clientY, moved: true };
+          markMoving();
           setCenter((c) => ({ x: c.x - dx * mmPerPx, y: c.y - dy * mmPerPx }));
           return;
         }
