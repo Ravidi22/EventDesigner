@@ -85,6 +85,13 @@
       "when": 1791022371051,
       "tag": "0011_regular_kree",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791534321308,
+      "tag": "0012_furry_patriot",
+      "breakpoints": true
     }
   ]
 }

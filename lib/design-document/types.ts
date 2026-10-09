@@ -67,6 +67,11 @@ export interface DesignTable {
    *  and the quote — a table drawn on the plan is a table the crew has to bring, and until tables
    *  came out of the catalog there was no row to count. */
   variantId?: string;
+  /** The items on this table were placed by the designer — in the table's focus mode, or by one of
+   *  its arrange actions — and each one's `position` is where it stands, in this table's own frame.
+   *  Absent = laid out automatically every time it is drawn (lib/design-document/dressing.ts), which
+   *  is every table dressed before this existed and every one dressed by "apply to all tables". */
+  arranged?: boolean;
 }
 
 /** A drape's run along one wall of the venue, as fractions of that wall's length (0 = the wall's
@@ -89,7 +94,9 @@ export interface Placement {
   layer: Layer;
   quantity: number;
   tableId?: string; // set when layer === "table"
-  position: Point; // free point for floor/ceiling; offset within table otherwise
+  /** A free point for floor/ceiling. On a table: the offset from the table's centre IN THE TABLE'S
+   *  OWN FRAME (before its turn and mirror) — read only when the table is `arranged`. */
+  position: Point;
   rotation: number;
   scale: number;
   /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. */
@@ -183,6 +190,19 @@ export interface StageTemplate {
   stage: StageBuild;
   /** Design items on its banquettes: which banquette, which item, how many. */
   dressing?: { itemId: string; variantId: string; quantity: number }[];
+}
+
+/** A table's dressing saved under the studio's own name for it — "גולד רומנטי": the cloth, the
+ *  centrepiece, the candlesticks, how many of each and where each stood — to be put on any table of
+ *  any event in one press. Stored per studio (studio_settings.table_designs). The items name catalog
+ *  VARIANTS, like every placement; one archived since is still placed and still counted. */
+export interface TableDesign {
+  id: string;
+  name: string;
+  /** Whether the items stand where they were saved (`position`, in the table's frame) or are laid
+   *  out automatically on whatever table wears it — see DesignTable.arranged. */
+  arranged?: boolean;
+  items: { variantId: string; quantity: number; position: Point; rotation: number; scale: number }[];
 }
 
 /** A raised part of a stage, in the stage's own frame. */

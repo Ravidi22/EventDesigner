@@ -50,7 +50,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { DesignDocumentContent, StageTemplate } from "@/lib/design-document/types";
+import type { DesignDocumentContent, StageTemplate, TableDesign } from "@/lib/design-document/types";
 import type { FlowerLine, MapAppearance, ResizeSpec } from "@/lib/catalog/types";
 import type { VenuePlan } from "@/lib/venues/types";
 import type { VenueStructure } from "@/lib/venues/structure";
@@ -263,6 +263,10 @@ export const studioSettings = pgTable("studio_settings", {
    *  levels and edges, its finishes, placed again from the stage tool. jsonb for the reason
    *  checkpointOffsets is: a short list rewritten whole and never queried into. Null = none saved. */
   stageTemplates: jsonb("stage_templates").$type<StageTemplate[]>(),
+  /** The studio's saved table designs (TableDesign[], lib/design-document/types.ts) — a table's
+   *  whole dressing under a name, put on any table of any event in one press. jsonb for the reason
+   *  stageTemplates is. Null = none saved. */
+  tableDesigns: jsonb("table_designs").$type<TableDesign[]>(),
   updatedAt: updated(),
 });
 

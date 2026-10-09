@@ -24,7 +24,7 @@ import {
   type CheckpointOffsets,
 } from "@/lib/production/runway";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "./types";
-import type { Point, StageTemplate } from "@/lib/design-document/types";
+import type { Point, StageTemplate, TableDesign } from "@/lib/design-document/types";
 
 /** Postgres `numeric` arrives as a string — arbitrary precision, so the driver will not silently
  *  narrow it. A VAT rate is a small decimal well inside what a double holds exactly. */
@@ -349,4 +349,68 @@ export async function deleteStageTemplate(id: unknown): Promise<StageTemplate[]>
   if (typeof id !== "string") throw new Error("id must be a string");
   const current = await fetchStageTemplates();
   return writeTemplates(organizationId, current.filter((x) => x.id !== id));
+}
+
+// ── Table designs ────────────────────────────────────────────────────────────────────────────────
+
+const MAX_DESIGNS = 60;
+
+/** A design as it arrived over the wire: an id, a name, and items that are each a variant id with a
+ *  real position, a count and a size. Anything else is dropped rather than stored. */
+function cleanDesign(input: unknown): TableDesign | null {
+  if (!input || typeof input !== "object") return null;
+  const d = input as Partial<TableDesign>;
+  if (typeof d.id !== "string" || d.id.length > 64) return null;
+  if (typeof d.name !== "string" || !d.name.trim()) return null;
+  if (!Array.isArray(d.items) || d.items.length === 0 || d.items.length > 60) return null;
+  const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  const items: TableDesign["items"] = [];
+  for (const it of d.items) {
+    if (!it || typeof it !== "object" || typeof it.variantId !== "string" || it.variantId.length > 64) return null;
+    const at = it.position as Point | undefined;
+    items.push({
+      variantId: it.variantId,
+      quantity: Math.max(1, Math.round(num(it.quantity, 1))),
+      position: { x: Math.round(num(at?.x, 0)), y: Math.round(num(at?.y, 0)) },
+      rotation: num(it.rotation, 0),
+      scale: Math.min(3, Math.max(0.3, num(it.scale, 1))),
+    });
+  }
+  return { id: d.id, name: d.name.trim().slice(0, 60), ...(d.arranged ? { arranged: true } : {}), items };
+}
+
+export async function fetchTableDesigns(): Promise<TableDesign[]> {
+  const organizationId = await currentOrg();
+  const [row] = await db()
+    .select({ designs: studioSettings.tableDesigns })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+  return row?.designs ?? [];
+}
+
+async function writeDesigns(organizationId: string, designs: TableDesign[]): Promise<TableDesign[]> {
+  await db()
+    .insert(studioSettings)
+    .values({ organizationId, tableDesigns: designs, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: studioSettings.organizationId, set: { tableDesigns: designs, updatedAt: new Date() } });
+  return designs;
+}
+
+/** Save (or replace, by id) one table design. */
+export async function saveTableDesign(input: unknown): Promise<TableDesign[] | { error: string }> {
+  const organizationId = await currentOrg();
+  const d = cleanDesign(input);
+  if (!d) return { error: "לא ניתן לשמור את עיצוב השולחן" };
+  const current = await fetchTableDesigns();
+  const next = [...current.filter((x) => x.id !== d.id), d];
+  if (next.length > MAX_DESIGNS) return { error: `אפשר לשמור עד ${MAX_DESIGNS} עיצובי שולחן` };
+  return writeDesigns(organizationId, next);
+}
+
+export async function deleteTableDesign(id: unknown): Promise<TableDesign[]> {
+  const organizationId = await currentOrg();
+  if (typeof id !== "string") throw new Error("id must be a string");
+  const current = await fetchTableDesigns();
+  return writeDesigns(organizationId, current.filter((x) => x.id !== id));
 }

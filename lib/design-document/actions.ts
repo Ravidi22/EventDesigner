@@ -1,6 +1,6 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild } from "./types";
+import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 
@@ -53,6 +53,10 @@ export type Action =
   // into its outline — replaced by the new row's. `position` when a block is re-closed around it.
   | { type: "retypeTable"; id: string; table: RetypedTable; position?: Point }
   | { type: "setPlacementQuantity"; id: string; quantity: number }
+  // How big THIS one is drawn — a fuller arrangement on the head table, a smaller one on a cocktail
+  // round. A drawing size, not a different product: the quote, the packing list and the order count
+  // it as the row it is. Held to 30%–300%; 1 = the catalog's size.
+  | { type: "setPlacementScale"; id: string; scale: number }
   // Switching a placed item to another shade of the same product (F-4.2). Not a remove+add: the
   // item keeps its id, its place on the plan and the size it was stretched to — only its colour
   // changes, which is exactly what the designer is doing when the client says "in cream instead".
@@ -90,6 +94,16 @@ export type Action =
   // exceptions: an explicit "make these match that one" outranks a divergence recorded weeks ago,
   // and silently honouring the old one would read as the button being broken.
   | { type: "copyDressing"; fromTableId: string; toTableIds: string[]; mode: "add" | "replace"; replaces?: string[] }
+  // Where the items on one table stand, in its own frame (lib/design-document/dressing.ts) — a drag in
+  // the table's focus mode, or an arrange action. Writing any of them marks the table ARRANGED: from
+  // then on it is drawn as placed rather than laid out automatically. The caller sends every item on
+  // the table, so freezing the automatic layout and moving one item are the same single action.
+  | { type: "arrangeDressing"; tableId: string; positions: { id: string; position: Point }[] }
+  // A saved table design (TableDesign) put on these tables — "add" or "replace", exactly as
+  // copyDressing, with the design's own items standing in for a source table's.
+  | { type: "dressTables"; tableIds: string[]; design: Pick<TableDesign, "items" | "arranged">; mode: "add" | "replace"; replaces?: string[] }
+  // Back to the automatic layout: the table forgets it was arranged, and its items' offsets go.
+  | { type: "resetDressing"; tableId: string }
   // Several things become one: selecting any of them selects all, dragging any drags all, and a set
   // of tables carries a single number as though it were the one larger table it now is.
   | { type: "group"; groupId: string; refs: { kind: "table" | "placement"; id: string }[]; number?: number }
@@ -291,6 +305,13 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           p.id === action.id ? { ...p, quantity: action.quantity } : p,
         ),
       };
+    case "setPlacementScale": {
+      const scale = Math.round(Math.min(3, Math.max(0.3, action.scale)) * 100) / 100;
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => (p.id === action.id ? { ...p, scale } : p)),
+      };
+    }
     case "setPlacementVariant":
       return {
         ...doc,
@@ -375,61 +396,40 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
     case "copyDressing": {
       const source = doc.placements.filter((p) => p.layer === "table" && p.tableId === action.fromTableId);
       const targets = action.toTableIds.filter((id) => id !== action.fromTableId && doc.tables.some((t) => t.id === id));
-      if (source.length === 0 || targets.length === 0) return doc;
-      const targetSet = new Set(targets);
+      const fromArranged = doc.tables.find((t) => t.id === action.fromTableId)?.arranged;
+      return wearDressing(doc, source, fromArranged, targets, action.mode, action.replaces);
+    }
 
-      // In replace mode the targets are stripped first, so what they end up with is exactly the
-      // source's set rather than the union of the two.
-      const kept =
-        action.mode === "replace"
-          ? doc.placements.filter((p) => !(p.layer === "table" && p.tableId && targetSet.has(p.tableId)))
-          : doc.placements;
+    case "dressTables": {
+      // A saved design worn by tables: the same rules as copying one table onto others, with no
+      // table on the plan to copy from.
+      const targets = action.tableIds.filter((id) => doc.tables.some((t) => t.id === id));
+      const source = action.design.items.map((it) => ({ ...it, layer: "table" as const }));
+      return wearDressing(doc, source, action.design.arranged, targets, action.mode, action.replaces);
+    }
 
-      // A TABLE WEARS ONE CLOTH. `replaces` names the shades of the source's own cover, so a
-      // target already wearing gold is RECOLOURED to cream rather than handed a second cloth — the
-      // same rule spreadOverTables applies, and it matters for the same reason. Only one cover is
-      // ever drawn (coverByTable is keyed on tableId, so the second is invisible), but the packing
-      // list and the quote sum EVERY placement: a second cloth tells the crew to bring one that
-      // does not exist and charges the client for it.
-      const swap = new Set(action.replaces ?? []);
-      const cover = source.find((x) => swap.has(x.variantId));
-      const covered = new Set<string>(); // targets whose own cover answered for the source's
-      let recoloured = 0;
-      const based = !cover
-        ? kept
-        : kept.map((p) => {
-            if (p.layer !== "table" || !p.tableId || !targetSet.has(p.tableId) || !swap.has(p.variantId)) return p;
-            covered.add(p.tableId);
-            if (p.variantId === cover.variantId) return p;
-            recoloured++;
-            return { ...p, variantId: cover.variantId };
-          });
+    case "arrangeDressing": {
+      const table = doc.tables.find((t) => t.id === action.tableId);
+      if (!table) return doc;
+      const at = new Map(action.positions.map((m) => [m.id, m.position]));
+      return {
+        ...doc,
+        tables: table.arranged ? doc.tables : doc.tables.map((t) => (t.id === action.tableId ? { ...t, arranged: true } : t)),
+        placements: doc.placements.map((p) =>
+          p.tableId === action.tableId && at.has(p.id) ? { ...p, position: { x: Math.round(at.get(p.id)!.x), y: Math.round(at.get(p.id)!.y) } } : p,
+        ),
+      };
+    }
 
-      const added: Placement[] = [];
-      for (const tableId of targets) {
-        for (const s of source) {
-          // Its cover is already on that table, in the source's shade — recoloured just above.
-          if (s === cover && covered.has(tableId)) continue;
-          const has = based.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
-          const excepted =
-            action.mode === "add" &&
-            doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
-          if (has || excepted) continue;
-          // groupId goes too. A group means "select one and you have selected all of them, drag one
-          // and they all move" — copying the source's membership onto twenty-three copies would
-          // make every one of them move when the original is nudged, which is not what "make these
-          // match that one" asks for.
-          const { id: _old, tableId: _t, groupId: _g, ...rest } = s;
-          added.push({ ...rest, id: crypto.randomUUID(), tableId });
-        }
-      }
-      if (added.length === 0 && recoloured === 0 && kept === doc.placements) return doc;
-
-      const exceptions =
-        action.mode === "replace"
-          ? doc.exceptions?.filter((e) => !targetSet.has(e.tableId))
-          : doc.exceptions;
-      return { ...doc, placements: [...based, ...added], exceptions };
+    case "resetDressing": {
+      const table = doc.tables.find((t) => t.id === action.tableId);
+      if (!table?.arranged) return doc;
+      const { arranged: _auto, ...rest } = table;
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => (t.id === action.tableId ? rest : t)),
+        placements: doc.placements.map((p) => (p.tableId === action.tableId ? { ...p, position: { x: 0, y: 0 } } : p)),
+      };
     }
 
     case "group": {
@@ -560,6 +560,86 @@ function pruneGroups(doc: DesignDocumentContent): DesignDocumentContent {
     placements: doc.placements.map(clear),
     groups: doc.groups.filter((g) => keep.has(g.id)),
   };
+}
+
+/** The body of copyDressing and dressTables: these tables put on this dressing. `source` is the
+ *  items as they stand on the table they come from (or in the saved design); `fromArranged` is
+ *  whether that table was arranged by hand, which a replace carries onto every target. */
+function wearDressing(
+  doc: DesignDocumentContent,
+  source: Omit<Placement, "id" | "tableId">[],
+  fromArranged: boolean | undefined,
+  targets: string[],
+  mode: "add" | "replace",
+  replaces?: string[],
+): DesignDocumentContent {
+  if (source.length === 0 || targets.length === 0) return doc;
+  const targetSet = new Set(targets);
+
+  // In replace mode the targets are stripped first, so what they end up with is exactly the
+  // source's set rather than the union of the two.
+  const kept =
+    mode === "replace"
+      ? doc.placements.filter((p) => !(p.layer === "table" && p.tableId && targetSet.has(p.tableId)))
+      : doc.placements;
+
+  // A TABLE WEARS ONE CLOTH. `replaces` names the shades of the source's own cover, so a
+  // target already wearing gold is RECOLOURED to cream rather than handed a second cloth — the
+  // same rule spreadOverTables applies, and it matters for the same reason. Only one cover is
+  // ever drawn (coverByTable is keyed on tableId, so the second is invisible), but the packing
+  // list and the quote sum EVERY placement: a second cloth tells the crew to bring one that
+  // does not exist and charges the client for it.
+  const swap = new Set(replaces ?? []);
+  const cover = source.find((x) => swap.has(x.variantId));
+  const covered = new Set<string>(); // targets whose own cover answered for the source's
+  let recoloured = 0;
+  const based = !cover
+    ? kept
+    : kept.map((p) => {
+        if (p.layer !== "table" || !p.tableId || !targetSet.has(p.tableId) || !swap.has(p.variantId)) return p;
+        covered.add(p.tableId);
+        if (p.variantId === cover.variantId) return p;
+        recoloured++;
+        return { ...p, variantId: cover.variantId };
+      });
+
+  const added: Placement[] = [];
+  for (const tableId of targets) {
+    for (const s of source) {
+      // Its cover is already on that table, in the source's shade — recoloured just above.
+      if (s === cover && covered.has(tableId)) continue;
+      const has = based.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
+      const excepted =
+        mode === "add" &&
+        doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
+      if (has || excepted) continue;
+      // groupId goes too. A group means "select one and you have selected all of them, drag one
+      // and they all move" — copying the source's membership onto twenty-three copies would
+      // make every one of them move when the original is nudged, which is not what "make these
+      // match that one" asks for.
+      const { id: _old, tableId: _t, groupId: _g, ...rest } = s as Placement;
+      added.push({ ...rest, id: crypto.randomUUID(), tableId });
+    }
+  }
+  if (added.length === 0 && recoloured === 0 && kept === doc.placements) return doc;
+
+  const exceptions =
+    mode === "replace"
+      ? doc.exceptions?.filter((e) => !targetSet.has(e.tableId))
+      : doc.exceptions;
+  // "Make these match that one" means the arrangement too: a target in replace mode is laid out
+  // the way the source is — by hand where the source was arranged (the copies carry its
+  // offsets), automatically where it was not.
+  const tables =
+    mode !== "replace"
+      ? doc.tables
+      : doc.tables.map((t) => {
+          if (!targetSet.has(t.id) || !!t.arranged === !!fromArranged) return t;
+          if (fromArranged) return { ...t, arranged: true };
+          const { arranged: _auto, ...rest } = t;
+          return rest;
+        });
+  return { ...doc, tables, placements: [...based, ...added], exceptions };
 }
 
 /** The group a thing belongs to, or undefined. The one lookup every renderer needs. */
@@ -858,6 +938,44 @@ if (isMain(import.meta.url)) {
     const forced = dispatch(ex, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
     assert(forced.present.placements.some((p) => p.tableId === "t2"), "replace overrides it");
     assert((forced.present.exceptions ?? []).length === 0, "…and clears it, so it cannot come back");
+  }
+
+  // ── where things stand on a table ─────────────────────────────────────────────────────────────
+  {
+    const t = (id: string): DesignTable => ({ id, type: "מלבן", number: 1, position: { x: 0, y: 0 }, rotation: 0, widthMm: 2400, depthMm: 1000 });
+    const item = (id: string, tableId: string, variantId: string): Placement => ({ id, variantId, layer: "table", tableId, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 });
+    const base: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [t("t1"), t("t2")],
+      placements: [item("a", "t1", "candle"), item("b", "t1", "flowers")],
+    };
+    const arranged = apply(base, { type: "arrangeDressing", tableId: "t1", positions: [{ id: "a", position: { x: -700, y: 0 } }, { id: "b", position: { x: 0.4, y: 0 } }] });
+    assert(arranged.tables[0].arranged === true, "arranging a table marks it arranged");
+    assert(arranged.placements[0].position.x === -700 && arranged.placements[1].position.x === 0, "…and stores where each item stands, to the millimetre");
+    assert(apply(base, { type: "arrangeDressing", tableId: "gone", positions: [] }) === base, "arranging a missing table is not an edit");
+    assert(apply(base, { type: "arrangeDressing", tableId: "t2", positions: [{ id: "a", position: { x: 9, y: 9 } }] }).placements[0].position.x === 0, "an item on another table is not moved");
+
+    const design = { arranged: true, items: [{ variantId: "candle", quantity: 2, position: { x: 600, y: 0 }, rotation: 0, scale: 1 }] };
+    const worn = apply(base, { type: "dressTables", tableIds: ["t1", "t2", "gone"], design, mode: "replace" });
+    assert(worn.placements.filter((p) => p.variantId === "candle").length === 2 && !worn.placements.some((p) => p.variantId === "flowers"), "a saved design replaces what each table wore");
+    assert(worn.tables.every((t) => t.arranged) && worn.placements.every((p) => p.position.x === 600 && p.quantity === 2), "…standing where it was saved, as many as it was");
+    const added = apply(base, { type: "dressTables", tableIds: ["t1"], design, mode: "add" });
+    assert(added === base, "add gives a table only what it lacks — t1 already has its candle");
+
+    const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
+    assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
+
+    const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
+    assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");
+    assert(apply(base, { type: "resetDressing", tableId: "t1" }) === base, "resetting an unarranged table is not an edit");
+
+    const copied = apply(arranged, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(copied.tables[1].arranged === true, "replace carries the arrangement");
+    assert(copied.placements.find((p) => p.tableId === "t2" && p.variantId === "candle")?.position.x === -700, "…and each item's place on it");
+    const auto = apply(copied, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(auto.tables[1].arranged === true, "re-copying an arranged table keeps the target arranged");
+    const fromAuto = apply({ ...copied, tables: [t("t1"), copied.tables[1]] }, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(!("arranged" in fromAuto.tables[1]), "copying from an automatic table makes the target automatic too");
   }
 
   // ── grouping ──────────────────────────────────────────────────────────────────────────────────

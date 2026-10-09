@@ -30,6 +30,8 @@
     "check:features": "tsx lib/design-document/features.ts",
     "check:stacking": "tsx lib/design-document/stacking.ts",
     "check:mirror": "tsx lib/design-document/mirror.ts",
+    "check:dressing": "tsx lib/design-document/dressing.ts",
+    "check:table-patterns": "tsx lib/studio/table-patterns.ts",
     "check:proximity": "tsx lib/studio/proximity.ts",
     "check:stage-fill": "tsx lib/studio/stage-fill.ts",
     "check:stage": "tsx lib/design-document/stage.ts",
