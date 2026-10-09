@@ -116,6 +116,10 @@ const EDGE_KINDS: EdgeKindId[] = ["stairs", "bench", "barrier", "backdrop", "ram
 export interface StageEdgeRow {
   id: string;
   kind: EdgeKindId;
+  /** Set into the stage (StageStair.inner), and whether it could stand outside / inside where it is. */
+  inner: boolean;
+  outerFits: boolean;
+  innerFits: boolean;
   /** Which side: "בחזית", "בצד", "מאחור", "אל המפלס". */
   side: string;
   widthMm: number;
@@ -168,6 +172,24 @@ export interface StagePanel {
   /** Whether the catalog has a row to count stairs and skirt as on the quote. */
   stairsCounted: boolean;
   skirtCounted: boolean;
+}
+
+/** What the bar for several stages (a group of them, or a handful selected) shows. */
+export interface StageGroupPanel {
+  count: number;
+  grouped: boolean;
+  /** How many are stages already, and how many are pieces that are not yet. */
+  stages: number;
+  pieces: number;
+  /** Their height when they share one; null when they differ. */
+  heightMm: number | null;
+  /** Bare open edge over all of them, and skirt — sides pushed against each other are neither. */
+  gapsMm: number;
+  skirtMm: number;
+  /** Their surface when they share one (null = bare decks); undefined when they differ. */
+  surface: string | null | undefined;
+  surfaceOptions: { value: string; label: string }[];
+  areaMm2: number;
 }
 
 export function Inspector({
@@ -246,6 +268,9 @@ export function Inspector({
   onStageExceed,
   onSaveTemplate,
   stageGroup,
+  onGroupStageHeight,
+  onGroupFillEdges,
+  onGroupStageSurface,
   onStickStages,
   onMergeStages,
   onMakeStage,
@@ -385,10 +410,11 @@ export function Inspector({
   onFillEdges: (kind: EdgeKindId) => void;
   onSelectEdge: (itemId: string | null) => void;
   onRemoveStair: (stairId: string) => void;
-  /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or height. */
+  /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or height — or
+   *  whether it stands outside the stage or set into it (`inner`). */
   onStairChange: (
     stairId: string,
-    patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null },
+    patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null; inner?: boolean },
   ) => void;
   onStageSurface: (variantId: string | null) => void;
   onStageCorners: (on: boolean) => void;
@@ -396,8 +422,12 @@ export function Inspector({
   /** Save the selected stage as a named template. */
   onSaveTemplate: (name: string) => void;
   /** Set when the selection is a group (or a handful) made only of stages — the bar then speaks of
-   *  stages, and offers to make them one. */
-  stageGroup: { count: number; grouped: boolean } | null;
+   *  stages, offers to make them one, and sets what a stage's bar sets on every one of them. */
+  stageGroup: StageGroupPanel | null;
+  /** …each over every stage in it: one height, every bare edge finished, one surface. */
+  onGroupStageHeight?: (heightMm: number) => void;
+  onGroupFillEdges?: (kind: EdgeKindId) => void;
+  onGroupStageSurface?: (variantId: string | null) => void;
   /** Set when two or more stages are selected: close the gaps between them / make them one stage. */
   onStickStages?: () => void;
   onMergeStages?: () => void;
@@ -423,7 +453,8 @@ export function Inspector({
 
   // A GROUP — the designer pushed these together and said they are one thing. For tables that means
   // one number for the lot, so the number field here edits the group and not any table inside it.
-  if (group) {
+  // (A group made only of stages is a STAGE group — its own bar, below, with the stage tools.)
+  if (group && !(selectedCount > 1 && stageGroup)) {
     return (
       <Bar
         icon={Group}
@@ -511,11 +542,19 @@ export function Inspector({
   // to be one platform, so the bar says so and leads with making them one: only a single stage has
   // stairs on every edge, levels, a surface and one build.
   if (selectedCount > 1 && stageGroup) {
+    const gm = (mm: number) => String(Math.round(mm / 10) / 100);
+    const sg = stageGroup;
     return (
       <Bar
         icon={Grid2x2}
-        title={stageGroup.grouped ? "במה מקובצת" : "במות"}
-        facts={`${stageGroup.count} חלקים · איחוד לבמה אחת נותן מדרגות, מפלסים ומשטח`}
+        title={sg.grouped ? "במה מקובצת" : "במות"}
+        facts={[
+          `${sg.count} חלקים`,
+          sg.heightMm ? `${Math.round(sg.heightMm / 10)} ס״מ` : sg.stages > 1 ? "גבהים שונים" : null,
+          sg.gapsMm > 0 ? `${gm(sg.gapsMm)} מ׳ שפה פתוחה` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         onClose={onClose}
       >
         {onMergeStages && (
@@ -525,6 +564,68 @@ export function Inspector({
           </Button>
         )}
         {onStickStages && <BarButton icon={Magnet} label="הצמדה — סגירת הרווחים ויישור" onClick={onStickStages} />}
+        {/* What a stage's own bar sets, set on every stage of the group at once. Levels and single
+            edge items stay with one stage (select it, or merge first): a riser belongs to the
+            platform it stands on. */}
+        {sg.stages > 0 && onGroupStageHeight && (
+          <Popover label="גובה" icon={MoveVertical} value={sg.heightMm ? `${Math.round(sg.heightMm / 10)} ס״מ` : "שונים"} panelClassName="w-72">
+            <PanelRow label="כל הבמות" htmlFor="group-stage-height">
+              <NumberField
+                id="group-stage-height"
+                decimals={0}
+                min={10}
+                max={300}
+                value={sg.heightMm ? Math.round(sg.heightMm / 10) : 0}
+                hideZero
+                placeholder="—"
+                onChange={(cm) => cm > 0 && onGroupStageHeight(cm * 10)}
+                className="w-20"
+              />
+              <span className="text-xs text-muted">ס״מ</span>
+            </PanelRow>
+            <Note>{sg.pieces > 0 ? `${sg.pieces} חלקים עדיין אינם במה — הגובה נקבע לבמות שבקבוצה. ` : ""}במות שעומדות זו לצד זו באותו גובה הן משטח אחד.</Note>
+          </Popover>
+        )}
+        {sg.stages > 0 && onGroupFillEdges && (
+          <Popover
+            label="קצוות"
+            icon={Footprints}
+            tone={sg.gapsMm > 0 ? "warn" : "default"}
+            value={sg.gapsMm > 0 ? `${gm(sg.gapsMm)} מ׳ פתוחים` : "סגור"}
+          >
+            {sg.gapsMm > 0 ? (
+              <div className="space-y-1.5">
+                <p className="text-xs text-alert-ink">{gm(sg.gapsMm)} מ׳ של שפה פתוחה בבמות שבקבוצה.</p>
+                <div className="flex gap-1">
+                  {(["stairs", "bench", "barrier"] as const).map((k) => (
+                    <Button key={k} size="sm" variant="ghost" className="flex-1" onClick={() => onGroupFillEdges(k)}>
+                      {EDGE_KIND_LABEL[k]}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-ink">כל הצדדים הפתוחים סגורים.</p>
+            )}
+            {sg.skirtMm > 0 && <p className="mt-2 text-xs text-muted">{`חצאית: ${gm(sg.skirtMm)} מ׳`}</p>}
+            <Note>צדדים שצמודים לבמה אחרת אינם פתוחים. מדרגות או בנקט בודדים מוסיפים בבחירת במה אחת.</Note>
+          </Popover>
+        )}
+        {sg.stages > 0 && onGroupStageSurface && (
+          <Popover
+            label="משטח"
+            icon={Layers2}
+            value={sg.surface === undefined ? "שונים" : sg.surface ? (sg.surfaceOptions.find((o) => o.value === sg.surface)?.label ?? "—") : "פלטות חשופות"}
+          >
+            <Select
+              aria-label="מה מכסה את הבמות"
+              value={sg.surface ?? ""}
+              options={[{ value: "", label: "ללא — פלטות חשופות" }, ...sg.surfaceOptions]}
+              onChange={(v) => onGroupStageSurface(v || null)}
+            />
+            <Note>{`אותו משטח על כל הבמות בקבוצה (${gm(sg.areaMm2 / 1000)} מ״ר).`}</Note>
+          </Popover>
+        )}
         <Rotation value={facing} onChange={onFace} />
         <MirrorMenu onMirror={onMirror} />
         {stageGroup.grouped ? (
@@ -751,6 +852,7 @@ export function Inspector({
             title={EDGE_KIND_LABEL[it.kind]}
             facts={[
               it.side,
+              it.inner ? (it.kind === "stairs" ? "שקועות בבמה" : "על הבמה") : null,
               it.full ? "כל הצד" : `${cmOf(it.widthMm)} ס״מ`,
               it.kind === "bench" ? `${it.seats} מקומות ישיבה` : null,
               it.kind === "ramp" ? `אורך ${m(it.depthMm)} מ׳` : null,
@@ -760,6 +862,37 @@ export function Inspector({
             onClose={onClose}
           >
             <BarButton icon={ArrowRight} label="חזרה לבמה" onClick={() => onSelectEdge(null)} />
+            {(it.kind === "stairs" || it.kind === "bench") && (
+              <Popover label="מיקום" icon={Layers2} value={it.inner ? "פנימי" : "חיצוני"} tone={!it.inner && !it.outerFits ? "warn" : "default"}>
+                {it.outerFits && it.innerFits ? (
+                  <Segmented
+                    label={it.kind === "stairs" ? "איפה המדרגות" : "איפה הבנקט"}
+                    value={it.inner ? "inner" : "outer"}
+                    options={[
+                      ["outer", "מחוץ לבמה"],
+                      ["inner", it.kind === "stairs" ? "שקועות בבמה" : "על הבמה"],
+                    ] as const}
+                    onChange={(v) => onStairChange(it.id, { inner: v === "inner" })}
+                  />
+                ) : !it.outerFits && it.innerFits ? (
+                  <>
+                    <p className="text-sm text-ink">{it.inner ? "פנימי — " : ""}הצד קרוב לקיר: אין מקום {it.kind === "stairs" ? "לגרם המדרגות" : "לבנקט"} מחוץ לבמה, רק בתוכה.</p>
+                    {!it.inner && (
+                      <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => onStairChange(it.id, { inner: true })}>
+                        {it.kind === "stairs" ? "להעביר לתוך הבמה" : "להעמיד על הבמה"}
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-ink">{it.inner ? "בתוך הבמה." : "מחוץ לבמה."} {it.innerFits || it.inner ? "" : it.kind === "stairs" ? "אי אפשר לשקוע מדרגות בצד הזה." : ""}</p>
+                )}
+                <Note>
+                  {it.kind === "stairs"
+                    ? "מדרגות פנימיות שקועות בתוך קו הבמה — עולים מהרצפה בשפה, והפלטות מונחות סביבן. זו הדרך היחידה למדרגות בצד שקרוב לקיר."
+                    : "בנקט פנימי עומד על הבמה לאורך השפה, והכיסאות שלו מאחוריו, פונים החוצה."}
+                </Note>
+              </Popover>
+            )}
             <Popover label="סוג" icon={Grid2x2} value={EDGE_KIND_LABEL[it.kind]} panelClassName="w-[22rem]">
               <Segmented
                 label="מה עומד בצד הזה"

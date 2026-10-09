@@ -131,7 +131,7 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
       }
       // The surface: by the square metre of deck.
       if (p.stage.surfaceVariant) {
-        const m2 = stageAreaMm2(p.stage) / 1e6;
+        const m2 = stageAreaMm2(p.stage, ctx.deckOf) / 1e6;
         add(p.stage.surfaceVariant, (ctx.unitOf(p.stage.surfaceVariant) === "m2" ? round2(m2) : 1) * p.quantity);
       }
       const skirt = p.stage.skirtVariant ?? ctx.stagePart?.("skirt");

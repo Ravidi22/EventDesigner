@@ -78,6 +78,7 @@ import {
 import { deleteStageTemplate, deleteTableDesign, fetchStageRules, fetchStageTemplates, fetchTableDesigns, saveStageTemplate, saveTableDesign } from "@/lib/settings/actions";
 import { TableDesignsPanel } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type StickItem } from "@/lib/studio/stage-draw";
+import { isRoundPiece, placeEdgeItem, settleEdgeItems, stageSide } from "@/lib/design-document/stage";
 import { StageFillPanel, type StageFillState } from "./stage-fill-panel";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, sizedFootprint } from "@/lib/studio/footprint";
 import { dressingSpots, tableBox, tableFootprint } from "@/components/footprint-shape";
@@ -91,7 +92,7 @@ import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
-import { Inspector, type EdgeKindId, type StageEdgeRow, type StagePanel, type SwapPanel } from "./inspector";
+import { Inspector, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
 import { Bar, BarButton } from "@/components/inspector-bar";
 import { Button } from "@/components/button";
 import { BringToFront, Copy, Group, Grid2x2Plus, SendToBack, Trash2, X } from "lucide-react";
@@ -510,7 +511,7 @@ export function StudioScreen({
       }
     } else if (product.category === "stages") {
       // A stage from the rail is a STAGE — stairs, height, levels, resizing in whole decks — not a
-      // box. asStage leaves a non-rectangular one (a round stage) as the item it is.
+      // box. A round one becomes a round stage, its rim one curved side (stageFromPiece `round`).
       const plain: Placement = { ...base, position: { x, y } };
       const sp = asStage(plain);
       act({ type: "addPlacement", placement: sp ?? plain });
@@ -973,9 +974,25 @@ export function StudioScreen({
           if (g) boxes.set(`${e.ref.kind}:${e.ref.id}`, g.box);
         }
         const assign = autoStack(s, boxes, refs);
-        return assign.length ? amend(h, { type: "restack", assign }) : h;
+        let next = assign.length ? amend(h, { type: "restack", assign }) : h;
+        // A stage moved up to a wall: a flight or banquette it carried outside that now has no floor
+        // in front of it is set into the stage instead (lib/design-document/stage.ts
+        // settleEdgeItems) — in the same history entry as the move.
+        for (const r of refs) {
+          if (r.kind !== "placement") continue;
+          const sp = present.placements.find((x) => x.id === r.id);
+          if (!sp?.stage?.stairs?.length) continue;
+          const others = present.placements.filter((x) => x.stage && x.id !== sp.id).map((x) => stageOutlineInRoom(x as StagePlacement));
+          const wd = others.length ? besideNeighbours(wallDistance, others) : wallDistance;
+          const settled = settleEdgeItems(sp as StagePlacement, sp.stage.stairs, deckOf, uid, wd, { inner: true, otherwise: "keep" });
+          if (settled.some((it, i) => it !== sp.stage!.stairs![i]) || settled.length !== sp.stage.stairs.length) {
+            next = amend(next, { type: "setPlacementStage", id: sp.id, stage: { ...sp.stage, stairs: settled } });
+          }
+        }
+        return next;
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [endDrag, docRefs, plan.structure],
   );
 
@@ -1472,16 +1489,23 @@ export function StudioScreen({
       const carried = rehomeEdgeItems(was, now, uid).filter((st) => !st.level || levels?.some((l) => l.id === st.level));
       const wd = wallDistanceFor(old.id);
       const withItems: StagePlacement = { ...now, stage: { ...now.stage, stairs: carried } };
-      const bare = fillGaps(withItems, deckOf, "stairs", uid, wd)
-        .filter((it) => !it.level)
-        .map((it) => (stairFits(withItems, it, deckOf, wd).ok ? it : { ...it, kind: "barrier" as const }));
+      const bare = settleEdgeItems(
+        withItems,
+        fillGaps(withItems, deckOf, "stairs", uid, wd).filter((it) => !it.level),
+        deckOf,
+        uid,
+        wd,
+        { inner: false, otherwise: "barrier" },
+      );
       const stairs = tidyEdgeItems({ ...now.stage, stairs: [...carried, ...bare] });
       const kept = new Set(stairs.map((st) => st.id));
       // Dressing on a banquette the reshape took away goes with it.
       const orphans = doc.placements.filter((x) => x.perch?.stageId === old.id && !kept.has(x.perch.itemId));
+      // A round stage reshaped into a different number of corners is no longer the curve it was.
+      const curve = now.stage.smooth && now.stage.outline.length !== was.stage.outline.length ? { smooth: undefined } : {};
       batch([
         ...orphans.map((x) => ({ type: "removePlacement" as const, id: x.id })),
-        { type: "setPlacementStage", id: old.id, stage: { ...now.stage, stairs }, ...frame },
+        { type: "setPlacementStage", id: old.id, stage: { ...now.stage, ...curve, stairs }, ...frame },
       ]);
       setSelected([{ kind: "placement", id: old.id }]);
       showHint(`הבמה עודכנה — ${count} פלטות`);
@@ -1537,14 +1561,20 @@ export function StudioScreen({
       return cos < -0.9 ? "מאחור" : "בצד";
     };
     const railing = railingAboveMm ? (stageRailings?.[soleStage.id] ?? []) : null;
+    const wdSole = wallDistanceFor(soleStage.id);
     const edges: StageEdgeRow[] = (stage.stairs ?? []).flatMap((st) => {
       const shape = edgeItemShape(stage, st, deckOf);
       if (!shape) return [];
+      const k = edgeKind(st);
+      const sinkable = k === "stairs" || k === "bench";
       return [
         {
           id: st.id,
           kind: edgeKind(st),
-          side: st.level ? "במפלס" : side(st.edge),
+          inner: shape.inner,
+          outerFits: sinkable ? stairFits(soleStage, { ...st, inner: undefined }, deckOf, wdSole).ok : true,
+          innerFits: sinkable ? stairFits(soleStage, { ...st, inner: true }, deckOf, wdSole).ok : false,
+          side: st.level ? "במפלס" : stageSide(stage, undefined, st.edge)?.curved ? "על הקשת" : side(st.edge),
           widthMm: shape.widthMm,
           full: !!st.full,
           risers: shape.risers,
@@ -1570,7 +1600,7 @@ export function StudioScreen({
       surfaceOptions: catalog
         .filter((x) => x.category === "stage-surfaces" && !x.archived)
         .map((x) => ({ value: defaultVariantId(x), label: x.name })),
-      areaMm2: stageAreaMm2(stage),
+      areaMm2: stageAreaMm2(stage, deckOf),
       corners: stage.corners !== false,
       exceed: stage.exceed === true,
       cornerCount: stageCorners(stage, deckOf).length,
@@ -1641,13 +1671,17 @@ export function StudioScreen({
       for (const st of soleStage.stage.stairs ?? []) {
         const shape = stairShape(soleStage.stage, st, deckOf);
         if (!shape) continue;
-        const [a, b, c, d] = shape.polygon.map((q) => toRoom(soleStage, q));
+        // Its middle, and the way its edge runs there (a flight on a curve, along the tangent).
+        const a = toRoom(soleStage, shape.base);
+        const c = toRoom(soleStage, shape.foot);
+        const t = (shape.angleDeg * Math.PI) / 180;
+        const b = toRoom(soleStage, { x: shape.base.x + Math.cos(t), y: shape.base.y + Math.sin(t) });
         added.push({
           id: uid(),
           variantId: stairsVariant,
           layer: "floor",
           quantity: 1,
-          position: { x: Math.round((a.x + b.x + c.x + d.x) / 4), y: Math.round((a.y + b.y + c.y + d.y) / 4) },
+          position: { x: Math.round((a.x + c.x) / 2), y: Math.round((a.y + c.y) / 2) },
           rotation: Math.round(((((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI) % 360) + 360) % 360),
           scale: 1,
         });
@@ -1659,8 +1693,8 @@ export function StudioScreen({
       const bench = benchInRoom(soleStage, x.perch!.itemId, deckOf);
       const mates = dressed.filter((y) => y.perch!.itemId === x.perch!.itemId);
       const f = bench ? (mates.indexOf(x) + 0.5) / mates.length - 0.5 : 0;
-      const u = bench ? { x: Math.cos((bench.angle * Math.PI) / 180), y: Math.sin((bench.angle * Math.PI) / 180) } : { x: 0, y: 0 };
-      const at = bench ? { x: Math.round(bench.centre.x + u.x * f * bench.lengthMm), y: Math.round(bench.centre.y + u.y * f * bench.lengthMm) } : x.position;
+      const spot = bench?.along(f);
+      const at = spot ? { x: Math.round(spot.x), y: Math.round(spot.y) } : x.position;
       return [
         { type: "setPlacementPerch" as const, id: x.id, perch: null },
         { type: "movePlacement" as const, id: x.id, position: at },
@@ -1733,9 +1767,27 @@ export function StudioScreen({
   const changeStair = useCallback(
     (
       stairId: string,
-      patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null },
+      patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null; inner?: boolean },
     ) => {
       if (!soleStage) return;
+      // Outside or set into the stage: only where it stands (a side too close to a wall has no floor
+      // for a flight's run outside; a solid round piece has nothing to sink a flight into).
+      if (patch.inner !== undefined) {
+        const st = soleStage.stage.stairs?.find((x) => x.id === stairId);
+        if (!st) return;
+        const next: StageStair = { ...st, inner: patch.inner || undefined };
+        const fits = stairFits(soleStage, next, deckOf, wallDistanceFor(soleStage.id));
+        if (!fits.ok) {
+          showHint(
+            fits.reason === "solid"
+              ? "הבמה היא חלק עגול אחד — אי אפשר לשקוע בה מדרגות"
+              : patch.inner
+                ? "הצד הזה צמוד לקיר — אין מאיפה לעלות"
+                : "אין מספיק מקום מחוץ לבמה בצד הזה — רק פנימי",
+          );
+          return;
+        }
+      }
       // A banquette turned into stairs or a barrier puts down what stood on it.
       if (patch.kind && patch.kind !== "bench") {
         const carried = doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === stairId);
@@ -1752,6 +1804,7 @@ export function StudioScreen({
             ...(patch.full !== undefined ? { full: patch.full } : {}),
             ...(patch.depthMm !== undefined ? { depthMm: Math.round(patch.depthMm) } : {}),
             ...(patch.heightMm !== undefined ? { heightMm: Math.round(patch.heightMm) } : {}),
+            ...(patch.inner !== undefined ? { inner: patch.inner || undefined } : {}),
           };
           if (patch.seats === null) {
             const { seats: _auto, ...rest } = next;
@@ -1990,7 +2043,9 @@ export function StudioScreen({
     (kind: EdgeKindId) => {
       if (!soleStage) return;
       const wd = wallDistanceFor(soleStage.id);
-      const add = fillGaps(soleStage, deckOf, kind, uid, wd).map((it) => (stairFits(soleStage, it, deckOf, wd).ok ? it : { ...it, kind: "barrier" as const }));
+      // Asked for stairs or a banquette: outside where there is floor, set into the stage where a
+      // wall leaves none, a barrier only where neither stands.
+      const add = settleEdgeItems(soleStage, fillGaps(soleStage, deckOf, kind, uid, wd), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
       if (!add.length) return;
       patchStage(soleStage.id, (s) => ({ ...s, stairs: [...(s.stairs ?? []), ...add] }));
       ensureStageParts();
@@ -2008,6 +2063,7 @@ export function StudioScreen({
       const product = resolve(p.variantId)?.product;
       if (!product) return null;
       return stageFromPiece(p, p.sizeMm ?? catalogBox(product), {
+        round: isRoundPiece(product),
         decks: deckTypes.map((t) => t.id),
         heightMm: product.dimensions.heightMm,
         parts: stageParts,
@@ -2027,6 +2083,8 @@ export function StudioScreen({
     if (p.stage) return true;
     const product = resolve(p.variantId)?.product;
     if (!product || !STAGE_PIECE_CATEGORIES.includes(product.category)) return false;
+    // A round platform is a stage too — with a curved rim (stageFromPiece `round`).
+    if (isRoundPiece(product)) return true;
     return (product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect")) === "rect" && !product.appearance?.parts?.length;
   }
 
@@ -2059,13 +2117,61 @@ export function StudioScreen({
     [selected, doc.placements, isStagePiece],
   );
 
-  /** Several stages selected (or a group of them): the bar speaks of stages, not "items". */
-  const stageGroup = useMemo(() => {
+  /** Several stages selected (or a group of them): the bar speaks of stages, not "items" — and sets
+   *  what a stage's bar sets, on all of them. */
+  const stageGroup = useMemo<StageGroupPanel | null>(() => {
     if (selected.length < 2 || selected.some((r) => r.kind !== "placement")) return null;
     if (selectedStages.length !== selected.length) return null;
     const groups = new Set(selectedStages.map((p) => p.groupId));
-    return { count: selectedStages.length, grouped: groups.size === 1 && !groups.has(undefined) };
-  }, [selected, selectedStages]);
+    const real = selectedStages.filter((p): p is StagePlacement => !!p.stage);
+    const heights = new Set(real.map((p) => stageHeight(p.stage, deckOf)));
+    const surfaces = new Set(real.map((p) => p.stage.surfaceVariant ?? null));
+    const sum = (f: (p: StagePlacement) => number) => real.reduce((t, p) => t + f(p), 0);
+    return {
+      count: selectedStages.length,
+      grouped: groups.size === 1 && !groups.has(undefined),
+      stages: real.length,
+      pieces: selectedStages.length - real.length,
+      heightMm: heights.size === 1 ? [...heights][0] : null,
+      gapsMm: sum((p) => edgeGaps(p, deckOf, wallDistanceFor(p.id)).reduce((t, g) => t + g.lengthMm, 0)),
+      skirtMm: sum((p) => skirtMm(p, deckOf, wallDistanceFor(p.id))),
+      surface: surfaces.size === 1 ? [...surfaces][0] : real.length ? undefined : null,
+      surfaceOptions: catalog
+        .filter((x) => x.category === "stage-surfaces" && !x.archived)
+        .map((x) => ({ value: defaultVariantId(x), label: x.name })),
+      areaMm2: sum((p) => stageAreaMm2(p.stage, deckOf)),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, selectedStages, doc.placements, wallDistance, catalog]);
+
+  /** The stage tools over a stage group: each sets every stage in it, in one history entry. */
+  const groupStagesOf = () => selectedStages.filter((p): p is StagePlacement => !!p.stage);
+  const setGroupStageHeight = (heightMm: number) => {
+    const list = groupStagesOf();
+    if (!list.length) return;
+    batch(list.map((p) => ({ type: "setPlacementStage" as const, id: p.id, stage: { ...p.stage, heightMm: Math.round(heightMm) } })));
+    showHint(`${list.length} במות — ${Math.round(heightMm / 10)} ס״מ`);
+  };
+  const fillGroupEdges = (kind: EdgeKindId) => {
+    const acts = groupStagesOf().flatMap((p) => {
+      const wd = wallDistanceFor(p.id);
+      const add = settleEdgeItems(p, fillGaps(p, deckOf, kind, uid, wd), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
+      return add.length ? [{ type: "setPlacementStage" as const, id: p.id, stage: { ...p.stage, stairs: [...(p.stage.stairs ?? []), ...add] } }] : [];
+    });
+    if (!acts.length) return;
+    batch(acts);
+    ensureStageParts();
+  };
+  const setGroupSurface = (variantId: string | null) => {
+    const list = groupStagesOf();
+    if (!list.length) return;
+    batch(
+      list.map((p) => {
+        const { surfaceVariant: _was, ...rest } = p.stage;
+        return { type: "setPlacementStage" as const, id: p.id, stage: variantId ? { ...rest, surfaceVariant: variantId } : rest };
+      }),
+    );
+  };
 
   /** Their turned boxes, as stickBoxes reads them. */
   const stickItems = useCallback(
@@ -2210,18 +2316,23 @@ export function StudioScreen({
       const p = toolStage;
       if (!p) return;
       const wd = wallDistanceFor(p.id);
-      const stair: StageStair = itemAt(p, deckOf, stageTool?.edgeKind ?? "stairs", level, edge, t, uid(), wd);
-      const fits = stairFits(p, stair, deckOf, wd);
-      if (!fits.ok) {
+      // Too close to a wall for its run outside, a flight (or banquette) goes INTO the stage — the
+      // one way it fits there.
+      const placed = placeEdgeItem(p, itemAt(p, deckOf, stageTool?.edgeKind ?? "stairs", level, edge, t, uid(), wd), deckOf, wd);
+      if (!placed.ok) {
         showHint(
-          fits.reason === "wall"
+          placed.reason === "wall"
             ? "הצד הזה צמוד לקיר — אין מקום למדרגות. בחרו צד אחר"
-            : fits.reason === "flat"
+            : placed.reason === "flat"
               ? "המפלס לא גבוה מהבמה — אין לאן לעלות"
-              : "הצד קצר מדי לגרם מדרגות",
+              : placed.reason === "solid"
+                ? "הבמה היא חלק עגול אחד — אין מקום למדרגות בצד הזה"
+                : "הצד קצר מדי לגרם מדרגות",
         );
         return;
       }
+      const stair = placed.item;
+      if (stair.inner) showHint(edgeKind(stair) === "bench" ? "אין מקום לבנקט מחוץ לבמה בצד הזה — הוא עומד על הבמה" : "אין מספיק מקום מחוץ לבמה בצד הזה — המדרגות שוקעות לתוך הבמה");
       setStageTool(null);
       patchStage(p.id, (s) => ({ ...s, stairs: [...(s.stairs ?? []), stair] }));
       setSelected([{ kind: "placement", id: p.id }]);
@@ -3039,6 +3150,9 @@ export function StudioScreen({
                 onStageExceed={setExceed}
                 onSaveTemplate={(name) => void saveTemplate(name)}
                 stageGroup={stageGroup}
+                onGroupStageHeight={setGroupStageHeight}
+                onGroupFillEdges={fillGroupEdges}
+                onGroupStageSurface={setGroupSurface}
                 onStickStages={selectedStages.length >= 2 ? stickStages : undefined}
                 onMergeStages={selectedStages.length >= 2 ? mergeSelectedStages : undefined}
                 onMakeStage={makeStage}
