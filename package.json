@@ -49,6 +49,7 @@
     "check:flowers": "tsx lib/catalog/flowers.ts",
     "check:shades": "tsx lib/catalog/shades.ts",
     "check:meeting": "tsx lib/meeting/steps.ts",
+    "check:zone-selection": "tsx lib/events/zone-selection.ts",
     "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",
     "catalog:standard": "tsx lib/catalog/standard/backfill.ts",
     "catalog:design": "tsx lib/catalog/design-items.ts",

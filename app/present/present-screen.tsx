@@ -66,7 +66,13 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
   const liked = !!(event && current && folder.includes(current.id));
 
   const go = useCallback((delta: number) => setIndex((i) => (total ? (i + delta + total) % total : 0)), [total]);
-  const close = useCallback(() => router.back(), [router]);
+  // Back to where this was opened from — the meeting's gallery stage, or the studio gallery. A
+  // presentation opened cold (a new tab, a pasted link) has nothing to go back to, and a close that
+  // did nothing left the client looking at the same slide; it goes to the screen that owns it.
+  const close = useCallback(() => {
+    if (window.history.length > 1) router.back();
+    else router.push(meeting ? "/meeting" : "/gallery");
+  }, [router, meeting]);
   const like = useCallback(() => {
     if (!event || !current) return;
     const imageId = current.id;
@@ -86,10 +92,15 @@ export function PresentScreen({ presentationId, meeting }: { presentationId: str
   // Keyboard: RTL arrows (right = previous, left = next), Escape closes, Enter/L likes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Enter is the like key only while nothing focusable holds the keyboard. On a focused button
+      // or link it is THAT control's own activation — the ✕, a thumbnail, the empty state's "חזרה" —
+      // and taking it here (with the preventDefault below) left a keyboard user unable to press any
+      // of them; the empty state in particular had no way out but Space.
+      const onControl = e.target instanceof Element && !!e.target.closest("button, a, input, textarea, select");
       if (e.key === "ArrowLeft") go(1);
       else if (e.key === "ArrowRight") go(-1);
       else if (e.key === "Escape") close();
-      else if (e.key === "Enter" || e.key === "l" || e.key === "L") like();
+      else if (!onControl && (e.key === "Enter" || e.key === "l" || e.key === "L")) like();
       else return;
       e.preventDefault();
     };

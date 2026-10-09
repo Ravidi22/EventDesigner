@@ -5,16 +5,17 @@ import { ArrowLeft } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { patchEvent } from "@/lib/events/actions";
 import { beginEvent } from "@/lib/events/begin";
-import { labelForZones } from "@/lib/events/plan";
+import { zoneSelection } from "@/lib/events/zone-selection";
 import { loadActiveVenueId, type Venue, type Zone } from "@/lib/venues/storage";
 import { fetchVenues, fetchVenuePlan } from "@/lib/venues/actions";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
 import { fetchSketchTemplates } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
 import { fetchCatalogShades } from "@/lib/catalog/actions";
-import { hasShade, toggleShade, type CatalogShade } from "@/lib/catalog/shades";
+import { MAX_EVENT_SHADES, hasShade, toggleShade, type CatalogShade } from "@/lib/catalog/shades";
 import { Button } from "./button";
 import { Swatch } from "./swatch-field";
+import { TagToggle } from "./tag-toggle";
 import { Select } from "./select";
 import { MultiSelect } from "./multi-select";
 import { TextField } from "./text-field";
@@ -53,6 +54,10 @@ export function EventForm({
 }) {
   const [venues, setVenues] = useState<Venue[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
+  // Which venue `zones` belongs to. While it is not the venue picked above, the list is still in
+  // the air for that venue, and the submit below reads it that way: zones that have not arrived
+  // yet are "unknown", never "none" (lib/events/zone-selection.ts).
+  const [zonesFor, setZonesFor] = useState<string | null>(null);
   const [clientName, setClientName] = useState(event?.clientName ?? "");
   const [phone, setPhone] = useState(event?.phone ?? "");
   const [contactName, setContactName] = useState(event?.contactName ?? "");
@@ -118,11 +123,14 @@ export function EventForm({
   useEffect(() => {
     if (!venueId) {
       setZones([]);
+      setZonesFor("");
       return;
     }
     let live = true;
     void fetchVenuePlan(venueId).then(({ zones: list }) => {
-      if (live) setZones(list);
+      if (!live) return;
+      setZones(list);
+      setZonesFor(venueId);
     });
     return () => {
       live = false;
@@ -158,7 +166,11 @@ export function EventForm({
     if (saving || !clientName.trim()) return;
     setSaving(true);
     setError(null);
-    const picked = zoneIds.map((id) => zones.find((z) => z.id === id)).filter((z): z is Zone => !!z);
+    // Resolved against the zones LOADED for this venue — and while they are still loading, the
+    // event's own zones stand rather than being read as "none picked". A designer who stepped back
+    // to this form for a phone number and pressed שמירה והמשך inside the fetch window used to wipe
+    // every zone the event had (lib/events/zone-selection.ts).
+    const picked = zoneSelection(zoneIds, zonesFor === venueId ? zones : null, venueId, event);
     const fields = {
       clientName: clientName.trim(),
       phone: phone.trim(),
@@ -173,8 +185,8 @@ export function EventForm({
       setupDate: setupDate || undefined,
       guests,
       venueId: venueId || undefined,
-      zoneIds: picked.map((z) => z.id),
-      zonesLabel: labelForZones(picked),
+      zoneIds: picked.zoneIds,
+      zonesLabel: picked.zonesLabel,
       shades,
     };
     try {
@@ -232,7 +244,9 @@ export function EventForm({
           {/* תאריך keeps the START column on purpose: the calendar is a fixed 288px anchored at
               `start-0`, so from the end column it would hang off the frame's edge. */}
           <DateField label="תאריך האירוע" value={date} onChange={setDate} />
-          <NumberField label="אומדן אורחים" min={0} value={guests} onChange={setGuests} placeholder="200" />
+          {/* hideZero: a fresh event has no estimate yet, and "0" in the box read as one. The
+              placeholder is the suggestion; the stored value is still 0 until something is typed. */}
+          <NumberField label="אומדן אורחים" min={0} hideZero value={guests} onChange={setGuests} placeholder="200" />
         </div>
 
         {/* An event is a WINDOW, not a day. The truck is at the hall the afternoon before, so two
@@ -343,7 +357,13 @@ export function EventForm({
 /** גווני האירוע: the catalog's own shade names as chips, several at once, in the order picked — the
  *  number on a chip is its preference. The offer keeps the catalog's order (most stocked first) so
  *  nothing moves under the pointer; a picked shade the catalog no longer carries stays at the end,
- *  where it can be taken off. Hidden while the catalog has no shades at all. */
+ *  where it can be taken off. Hidden while the catalog has no shades at all.
+ *
+ *  The chip is the form family's own TagToggle (components/tag-toggle.tsx), with the swatch as its
+ *  leading content — not a third pressed-pill style. A palette holds MAX_EVENT_SHADES: once it is
+ *  full the chips still off are disabled and say so, where a thirteenth click used to do nothing
+ *  (cleanShades caps the list silently). The rank is part of the button's accessible name — an
+ *  aria-label on a <span> inside a button is not read. */
 function ShadePicker({
   offered,
   value,
@@ -358,6 +378,7 @@ function ShadePicker({
   const chips: { name: string; swatch?: string }[] = [...offered, ...stale.map((name) => ({ name }))];
   if (!chips.length) return null;
   const rankOf = (name: string) => value.findIndex((s) => hasShade([s], name));
+  const full = value.length >= MAX_EVENT_SHADES;
   return (
     <div>
       <span id={labelId} className={fieldLabelClassName}>
@@ -367,32 +388,32 @@ function ShadePicker({
         {chips.map((c) => {
           const rank = rankOf(c.name);
           const on = rank !== -1;
+          const blocked = !on && full;
           return (
-            <button
+            <TagToggle
               key={c.name}
-              type="button"
-              aria-pressed={on}
+              active={on}
+              disabled={blocked}
+              title={blocked ? `עד ${MAX_EVENT_SHADES} גוונים` : undefined}
               onClick={() => onChange(toggleShade(value, c.name))}
-              className={
-                "inline-flex items-center gap-1.5 rounded-pill border py-1 ps-1.5 pe-3 text-sm transition-colors " +
-                (on
-                  ? "border-accent bg-accent-tint font-semibold text-accent"
-                  : "border-border bg-canvas text-ink-soft hover:border-accent-line hover:bg-accent-tint")
-              }
             >
-              <Swatch color={c.swatch} size={16} />
-              {c.name}
-              {on && (
-                <span className="text-xs font-bold tabular-nums" aria-label={`עדיפות ${rank + 1}`}>
-                  {rank + 1}
-                </span>
-              )}
-            </button>
+              <span className="inline-flex items-center gap-1.5">
+                <Swatch color={c.swatch} size={14} />
+                {c.name}
+                {on && (
+                  <span className="nums text-xs font-bold">
+                    <span className="sr-only">עדיפות </span>
+                    {rank + 1}
+                  </span>
+                )}
+              </span>
+            </TagToggle>
           );
         })}
       </div>
       <p className="mt-1.5 text-xs leading-relaxed text-muted">
         פריט שמונח בסקיצה מקבל את הגוון הראשון ברשימה שיש לו — לפי סדר הבחירה.
+        {full && ` עד ${MAX_EVENT_SHADES} גוונים לאירוע.`}
       </p>
     </div>
   );

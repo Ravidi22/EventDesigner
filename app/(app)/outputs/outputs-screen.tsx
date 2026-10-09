@@ -58,7 +58,11 @@ const TRIM: Record<Paper, [number, number]> = { A4: [210, 297], A3: [297, 420] }
  *  is the same white border the printer leaves. Keep the two in step. */
 const MARGIN_MM = 16;
 
-export function OutputsScreen() {
+/** `frame`: which screen this is a page of. The same component closes the meeting (app/meeting) and
+ *  is /outputs on its own; the one thing that differs is where "nothing to print yet" sends the
+ *  designer — back into the stepper, or out to the studio (./back-to-studio.tsx). */
+export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meeting" }) {
+  const meeting = frame === "meeting";
   // Empty until the event's real document loads. A packing list is the one screen that must never
   // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
   const [view, setView] = useState<View>("quote");
@@ -498,7 +502,7 @@ export function OutputsScreen() {
               if (pg.kind === "kits")
                 return textPage(
                   "kits",
-                  <KitSchedule kits={kits} undressed={undressed} lookup={itemLookup} details={new Set(kits.filter(detailOn).map((k) => k.key))} />,
+                  <KitSchedule kits={kits} undressed={undressed} lookup={itemLookup} details={new Set(kits.filter(detailOn).map((k) => k.key))} meeting={meeting} />,
                 );
               if (pg.kind === "detail")
                 return (
@@ -546,7 +550,7 @@ export function OutputsScreen() {
                 </header>
               )}
 
-              {view === "packing" ? <PackingList doc={doc} eventId={event?.id ?? null} /> : <Quote doc={doc} />}
+              {view === "packing" ? <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} /> : <Quote doc={doc} meeting={meeting} />}
             </article>
             )}
           </div>

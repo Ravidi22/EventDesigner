@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
-import Link from "next/link";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
+import { BackToStudio } from "./back-to-studio";
 import { packingList, UNTYPED_CHAIRS } from "@/lib/outputs/aggregate";
 import { itemLookup, measureContext } from "@/lib/outputs/lookup";
 import { activeEvent } from "@/lib/events/storage";
@@ -19,7 +19,8 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 
 // F-6.3: manual spares per row, persisted with the event — so the "no manual fixes" success
 // metric covers reserves too, instead of pen-on-paper additions.
-export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; eventId: string | null }) {
+/** `meeting`: see Quote — the empty state points back into the flow rather than out to /studio. */
+export function PackingList({ doc, eventId, meeting = false }: { doc: DesignDocumentContent; eventId: string | null; meeting?: boolean }) {
   const [spares, setSpares] = useState<Spares>({});
   // Same reason as the quote: a drape's metres come from the wall it hangs on, which lives at the
   // venue rather than in the document the crew's list is aggregated from — so the same unreachable
@@ -116,9 +117,7 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
     return (
       <div className="mx-auto max-w-md py-20 text-center">
         <p className="text-sm text-ink-soft">עדיין אין פריטים בעיצוב.</p>
-        <Link href="/studio" className="mt-3 inline-block text-sm font-medium text-accent hover:text-accent-hover">
-          חזרה לסטודיו →
-        </Link>
+        <BackToStudio meeting={meeting} className="mt-3 inline-block text-sm" />
       </div>
     );
   }
