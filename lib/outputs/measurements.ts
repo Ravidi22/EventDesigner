@@ -33,6 +33,7 @@ import { pointInPolygon } from "@/lib/venues/faces";
 import { overallDimensions } from "./dimensions";
 import { cluster, settingOut } from "./setting-out";
 import { centreOffset, wallTies } from "@/lib/studio/hang";
+import { roundOutline } from "@/lib/design-document/stage"; // the self-check's oval stage only
 import { isMain } from "../self-check";
 
 export type DimKind = "overall" | "chain" | "size" | "tie" | "gap" | "aisle" | "offset";
@@ -198,18 +199,47 @@ export function asRound(poly: Point[]): Round | null {
   if (poly.length >= 16) {
     const c = centroid(poly);
     const ds = poly.map((p) => len(sub(p, c)));
-    const rx = Math.max(...ds);
-    const ry = Math.min(...ds);
-    if (ry > 1) {
-      const circle = rx - ry <= rx * 0.01;
-      const far = poly[ds.indexOf(rx)];
-      const u = circle ? { x: 1, y: 0 } : { x: (far.x - c.x) / rx, y: (far.y - c.y) / rx };
+    const dmax = Math.max(...ds);
+    const dmin = Math.min(...ds);
+    if (dmin > 1) {
+      const circle = dmax - dmin <= dmax * 0.01;
+      let u = { x: 1, y: 0 };
+      let rx = (dmax + dmin) / 2;
+      let ry = rx;
+      if (!circle) {
+        // The axes from the vertices' second moments, never from "the farthest vertex": a stage's
+        // roundOutline (lib/design-document/stage.ts) puts every vertex half a step OFF the axes, so
+        // read that way a 4×2 oval had a 4.5° tilt, failed the fit below, and printed its sampled
+        // width (3.99) — or, turned, its bounding box (3.60 × 2.65).
+        let sxx = 0, syy = 0, sxy = 0;
+        for (const p of poly) {
+          const d = sub(p, c);
+          sxx += d.x * d.x;
+          syy += d.y * d.y;
+          sxy += d.x * d.y;
+        }
+        const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+        u = { x: Math.cos(th), y: Math.sin(th) };
+        const v = { x: -u.y, y: u.x };
+        const along = poly.map((p) => {
+          const d = sub(p, c);
+          return { du: d.x * u.x + d.y * u.y, dv: d.x * v.x + d.y * v.y };
+        });
+        rx = Math.max(...along.map((a) => Math.abs(a.du)));
+        ry = Math.max(...along.map((a) => Math.abs(a.dv)));
+        // How far out the vertices sit on the ellipse those extremes span: exactly 1 when one lies on
+        // each axis (placement-map's outlineOf), 1/cos(π/n) when all of them sit half a step off the
+        // axes (roundOutline) — the true semi-axes are that much longer than the extreme projections.
+        const k = along.reduce((n, a) => n + Math.hypot(a.du / rx, a.dv / ry), 0) / along.length;
+        rx *= k;
+        ry *= k;
+      }
       const v = { x: -u.y, y: u.x };
       const on = poly.every((p) => {
         const d = sub(p, c);
         return Math.abs(Math.hypot((d.x * u.x + d.y * u.y) / rx, (d.x * v.x + d.y * v.y) / ry) - 1) < 0.02;
       });
-      if (on) out = { c, u, rx: circle ? (rx + ry) / 2 : rx, ry: circle ? (rx + ry) / 2 : ry, circle };
+      if (on) out = { c, u, rx, ry, circle };
     }
   }
   roundCache.set(poly, out);
@@ -657,6 +687,26 @@ if (isMain(import.meta.url)) {
   const oval = measurements({ boundaries: [room], walls, solids: [{ id: "oval", kind: "stage", polygon: ring(10000, 6000, 3000, 1500, 0, 48) }], centres: [] }, { sizes: true, offsetMm: 900 });
   const ovalMm = oval.dims.map((d) => Math.round(d.mm)).sort((p, q) => p - q);
   assert(ovalMm.length === 2 && ovalMm[0] === 3000 && ovalMm[1] === 6000 && !oval.dims.some((d) => d.diameter), "an elliptical stage is figured by its two axes, 6.00 × 3.00");
+  // A stage's OWN round outline (roundOutline) samples the ellipse half a step off its axes — no
+  // vertex lies on either — and is still read as the ellipse it is: 4.00 × 2.00 however it is
+  // turned, with ties from the true rim rather than from whichever vertex is nearest it.
+  const place = (pts: Point[], cx: number, cy: number, deg: number): Point[] => {
+    const k = (deg * Math.PI) / 180;
+    return pts.map((q) => ({ x: cx + q.x * Math.cos(k) - q.y * Math.sin(k), y: cy + q.x * Math.sin(k) + q.y * Math.cos(k) }));
+  };
+  const ovalStage = (w: number, d: number, deg: number) =>
+    measurements({ boundaries: [room], walls, solids: [{ id: "ov", kind: "stage", polygon: place(roundOutline(w, d).outline, 6000, 4000, deg) }], centres: [] }, { sizes: true, ties: true, offsetMm: 900 });
+  const close = (a: number, b: number, tol = 2) => Math.abs(a - b) <= tol;
+  for (const [w, d, deg] of [[4000, 2000, 0], [4000, 2000, 30], [6000, 3000, 45]] as const) {
+    const o = ovalStage(w, d, deg);
+    const sizes = o.dims.filter((x) => x.kind === "size").map((x) => x.mm).sort((p, q) => p - q);
+    assert(sizes.length === 2 && close(sizes[0], d) && close(sizes[1], w) && !o.dims.some((x) => x.diameter), `a ${w / 1000}×${d / 1000} oval stage turned ${deg}° is figured by its two axes (got ${sizes.map((s) => (s / 1000).toFixed(3)).join(" × ")})`);
+  }
+  const flatTies = ovalStage(4000, 2000, 0).dims.filter((x) => x.kind === "tie");
+  assert(flatTies.length === 2 && flatTies.some((x) => close(x.mm, 4000)) && flatTies.some((x) => close(x.mm, 3000)), "…and tied from its rim: 6.00 − 2.00 and 4.00 − 1.00 off the walls, though no vertex is on the axis");
+  // Turned 30°, the rim reaches √(a²cos²30° + b²sin²30°) = 1.803 across and 1.323 along.
+  const tiltedTies = ovalStage(4000, 2000, 30).dims.filter((x) => x.kind === "tie");
+  assert(tiltedTies.some((x) => close(x.mm, 6000 - 1802.8)) && tiltedTies.some((x) => close(x.mm, 4000 - 1322.9)), "…and turned, from where the curve really reaches (4.20 / 2.68)");
   // A D (half-round) stage: its straight side, and its depth — none of the arc's sampled sides.
   const arc = Array.from({ length: 13 }, (_, i) => ({ x: 10000 + 2000 * Math.cos(Math.PI - (i / 12) * Math.PI), y: 6000 - 2000 * Math.sin((i / 12) * Math.PI) }));
   const dStage = measurements({ boundaries: [room], walls, solids: [{ id: "D", kind: "stage", polygon: arc }] , centres: [] }, { sizes: true, offsetMm: 900 });

@@ -2026,7 +2026,7 @@ function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: numbe
         />
       </PanelRow>
       {own !== undefined && (
-        <Button size="sm" variant="ghost" className="w-full" onClick={() => onHang(null)}>
+        <Button size="sm" variant="outline" className="w-full" onClick={() => onHang(null)}>
           {fallback ? `חזרה לגובה מהקטלוג (${(fallback / 1000).toFixed(2)} מ׳)` : "ניקוי הגובה"}
         </Button>
       )}

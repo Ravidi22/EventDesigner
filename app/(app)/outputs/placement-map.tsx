@@ -8,7 +8,6 @@ import {
   doorGeometry,
   fromLocalFrame,
   outlinePathD,
-  sampleEdgePoints,
   wallAngleDeg,
   wallLengthMm,
   wallSegmentD,
@@ -46,7 +45,7 @@ import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
-import { centreOver, formatHang, hangHeightOf } from "@/lib/studio/hang";
+import { centreOver, formatHang, hangHeightOf, wallRuns } from "@/lib/studio/hang";
 import { hangPointOf, hangTargetsOf } from "../studio/hang-targets";
 import { tablesPhrase, type TableKit } from "@/lib/outputs/table-kits";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
@@ -377,13 +376,11 @@ export function PlacementMap({
       y: members.reduce((n, t) => n + t.position.y, 0) / (members.length || 1),
     };
   });
-  // Walls as straight runs — a bowed wall sampled, so a stage is measured to where the wall IS.
-  const wallRuns: [Pt, Pt][] = structure.walls.flatMap((w) => {
-    const pts = wallPoints(structure, w, nodes);
-    if (!pts) return [];
-    const run = w.curve ? sampleEdgePoints(pts.a, pts.b, w.curve, 12) : [pts.a, pts.b];
-    return run.slice(1).map((q, i) => [run[i], q] as [Pt, Pt]);
-  });
+  // Walls as straight runs — a bowed wall sampled, so a stage is measured to where the wall IS. The
+  // same runs the sketch ties a selected ceiling item to (lib/studio/hang.ts), so the live figure
+  // and the printed one cannot come off different walls; the zone outlines go in as walls on both
+  // sides too — measurements() adds `boundaries`, canvas-stage's hangWalls the zones.
+  const walls = wallRuns(structure);
   const roomZones = plan.zones.filter((z) => z.boundary.length >= 3);
   // CEILING ITEMS by their hang point (the shape's visual centre), and the middle of the table or
   // element each hangs over — read off the whole document, not this sheet's filter, because the
@@ -402,7 +399,7 @@ export function PlacementMap({
   });
   const measureInput: MeasureInput = {
     boundaries: roomZones.map((z) => z.boundary),
-    walls: wallRuns,
+    walls,
     solids,
     centres: unitCentres,
     hung: hung.map(({ p, at, over }) => ({ id: p.id, at, over })),
