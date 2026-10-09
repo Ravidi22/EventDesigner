@@ -46,6 +46,8 @@ import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
+import { centreOver, formatHang, hangHeightOf } from "@/lib/studio/hang";
+import { hangPointOf, hangTargetsOf } from "../studio/hang-targets";
 import type { TableKit } from "@/lib/outputs/table-kits";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { pointInPolygon } from "@/lib/venues/faces";
@@ -399,7 +401,28 @@ export function PlacementMap({
     return run.slice(1).map((q, i) => [run[i], q] as [Pt, Pt]);
   });
   const roomZones = plan.zones.filter((z) => z.boundary.length >= 3);
-  const measureInput: MeasureInput = { boundaries: roomZones.map((z) => z.boundary), walls: wallRuns, solids, centres: unitCentres };
+  // CEILING ITEMS by their hang point (the shape's visual centre), and the middle of the table or
+  // element each hangs over — read off the whole document, not this sheet's filter, because the
+  // ceiling sheet shows no floor items and a chandelier is still hung over the bar (lib/studio/hang.ts).
+  const hangTargets = ceilingItems.length ? hangTargetsOf(doc, structure) : [];
+  const hung = ceilingItems.map((p) => {
+    const at = hangPointOf(p);
+    const polygon = toWorld(outlineOf(placementFootprint(p)), p.position, p.rotation, p.mirrored, p.scale || 1);
+    return { p, at, over: centreOver(at, hangTargets)?.point, polygon, height: hangHeightOf(p, resolve(p.variantId)?.product) };
+  });
+  // Each item's height beside it, placed with the figures so none lands on another.
+  const hangNotes = hung.flatMap(({ polygon, height }) => {
+    if (height === undefined) return [];
+    const xs = polygon.map((q) => q.x), maxY = Math.max(...polygon.map((q) => q.y));
+    return [{ a: { x: Math.min(...xs), y: maxY }, b: { x: Math.max(...xs), y: maxY }, text: formatHang(height) }];
+  });
+  const measureInput: MeasureInput = {
+    boundaries: roomZones.map((z) => z.boundary),
+    walls: wallRuns,
+    solids,
+    centres: unitCentres,
+    hung: hung.map(({ p, at, over }) => ({ id: p.id, at, over })),
+  };
   const roomCentre = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };
 
   // Doors, resolved once: drawn below, and an obstacle every figure on the sheet steps around.
@@ -740,8 +763,9 @@ export function PlacementMap({
             den={den}
             obstacles={doorBoxes}
             furniture={furnitureBoxes}
-            shapes={elementShapes}
+            shapes={[...elementShapes, ...hung.map((h) => h.polygon)]}
             roomCentre={roomCentre}
+            notes={hangNotes}
           />
         </g>
         )}
@@ -1161,7 +1185,7 @@ export function KitSchedule({
   );
 }
 
-const INLINE_KINDS: DimKind[] = ["tie", "gap", "aisle"];
+const INLINE_KINDS: DimKind[] = ["tie", "gap", "aisle", "offset"];
 
 /** The figures. Each dimension is a line with a tick at both ends — witness lines back to what it
  *  measures when it is drawn off it — and its number, placed by lib/outputs/labels.ts and haloed in
@@ -1174,6 +1198,7 @@ function MeasureLayer({
   furniture,
   shapes,
   roomCentre,
+  notes = [],
 }: {
   input: MeasureInput;
   opts: MeasureOptions;
@@ -1182,6 +1207,9 @@ function MeasureLayer({
   furniture: Box[];
   shapes: Pt[][];
   roomCentre: Pt;
+  /** Text that belongs beside a line but measures nothing — a ceiling item's hang height under its
+   *  bottom edge. Placed in the same pass as the figures, after them, so it steps off them too. */
+  notes?: { a: Pt; b: Pt; text: string }[];
 }) {
   const { dims, leaders } = measurements(input, opts);
   const font = (d: Dim) => (d.kind === "overall" ? 2.4 : 2.2) * den;
@@ -1201,17 +1229,24 @@ function MeasureLayer({
     const vertical = Math.abs(u.y) > Math.abs(u.x);
     return { d, pa, pb, u, n, side, vertical };
   });
-  const at = placeLabels(
-    lines.map(({ d, pa, pb, side, vertical }) => {
-      const f = font(d);
-      const long = label(d).length * f * 0.56 + f * 0.4;
-      const tall = f * 1.15;
-      return { a: pa, b: pb, w: vertical ? tall : long, h: vertical ? long : tall, gap: 0.7 * den, side, inline: INLINE_KINDS.includes(d.kind) };
-    }),
+  const noteFont = 2.2 * den;
+  const placed = placeLabels(
+    [
+      ...lines.map(({ d, pa, pb, side, vertical }) => {
+        const f = font(d);
+        const long = label(d).length * f * 0.56 + f * 0.4;
+        const tall = f * 1.15;
+        return { a: pa, b: pb, w: vertical ? tall : long, h: vertical ? long : tall, gap: 0.7 * den, side, inline: INLINE_KINDS.includes(d.kind) };
+      }),
+      // Under its line (the item's bottom edge, drawn left to right: +1 is down the page).
+      ...notes.map((n) => ({ a: n.a, b: n.b, w: n.text.length * noteFont * 0.56 + noteFont * 0.4, h: noteFont * 1.15, gap: 0.7 * den, side: 1 as const })),
+    ],
     obstacles,
     furniture,
     shapes,
   );
+  const at = placed.slice(0, lines.length);
+  const noteAt = placed.slice(lines.length);
   const tick = 1.3 * den;
   const ink = { stroke: INK, strokeWidth: LINE_WEIGHTS.annotation, vectorEffect: "non-scaling-stroke" as const };
   return (
@@ -1257,6 +1292,26 @@ function MeasureLayer({
           </g>
         );
       })}
+      {notes.map((n, i) => (
+        <text
+          key={`n${i}`}
+          x={noteAt[i].x}
+          y={noteAt[i].y}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={noteFont}
+          fontWeight={600}
+          fontFamily="Assistant, sans-serif"
+          fill={INK}
+          stroke="#ffffff"
+          strokeWidth={0.6 * den}
+          strokeLinejoin="round"
+          paintOrder="stroke"
+          className="nums"
+        >
+          {n.text}
+        </text>
+      ))}
     </g>
   );
 }

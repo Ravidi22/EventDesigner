@@ -24,6 +24,7 @@ import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierList } from "@/lib/suppliers/use-suppliers";
 import { catalogBox, footprintBounds, resolveContent, resolveFootprint, roundSizeMm } from "@/lib/studio/footprint";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
+import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
 import { isPlacedAnywhere, isStandardProduct } from "@/lib/catalog/actions";
 import { Button } from "@/components/button";
@@ -740,6 +741,34 @@ export function ProductDrawer({
               יקבל הילה, ואזהרה כשמשהו מתקרב אליו יותר מזה. ריק = בלי כלל.
             </p>
           </div>
+
+          {/* How high a ceiling item hangs — the default every placed one starts from, overridden per
+              item in the studio. In categoryFields (lib/studio/hang.ts's HANG_FIELD): a rigging fact,
+              printed on the ceiling plan, and never a multiplier the quote or the order reads. */}
+          {draft.layer === "ceiling" && category.anchor !== "wall" && (
+            <div>
+              <NumberField
+                id="p-hang"
+                label="גובה תלייה מהרצפה (ס״מ)"
+                className="w-44"
+                min={0}
+                max={HANG_MAX_MM / 10}
+                hideZero
+                placeholder="—"
+                value={cmOf(Number(draft.categoryFields[HANG_FIELD]) || 0)}
+                onChange={(v) =>
+                  setDraft((d) => {
+                    const { [HANG_FIELD]: _old, ...rest } = d.categoryFields;
+                    void _old;
+                    return { ...d, categoryFields: v > 0 ? { ...rest, [HANG_FIELD]: Math.round(Math.min(v * 10, HANG_MAX_MM)) } : rest };
+                  })
+                }
+              />
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                מהרצפה עד תחתית הפריט. מודפס ליד הפריט בתוכנית התקרה, ואפשר לשנות לכל פריט בסקיצה. ריק = לא צוין.
+              </p>
+            </div>
+          )}
 
           <SectionDivider label="מפרט" />
 

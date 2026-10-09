@@ -111,6 +111,10 @@ export interface Placement {
    *  shaped item it is the BOUNDING BOX the shape is redrawn into; absent means "the size the
    *  catalog gives it". */
   sizeMm?: { widthMm: number; depthMm: number };
+  /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
+   *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
+   *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */
+  hangHeightMm?: number;
   /** Set on a design item standing on a stage's BANQUETTE (StageEdgeItem kind "bench") rather than on
    *  a table: the stage, and which of its edge items. Its `position` is ignored — the bench places it,
    *  spread along its length with the rest of its dressing — so it travels with the stage. Removing

@@ -85,6 +85,8 @@ import { arrange, clampToTable, toTableFrame, type ArrangeKind } from "@/lib/des
 import { DressingBar } from "./dressing-bar";
 import { TablePatternPicker } from "./table-pattern-picker";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
+import { hangTargetsOf, positionHungAt } from "./hang-targets";
+import { centreOver } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, restackTo, type StackBox, type StackKind } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
 import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
@@ -515,6 +517,12 @@ export function StudioScreen({
       const sp = asStage(plain);
       act({ type: "addPlacement", placement: sp ?? plain });
       if (sp) ensureStageParts();
+    } else if (product.layer === "ceiling") {
+      // Over a table or an element, a chandelier is hung from ITS middle — the shape's visual one
+      // (lib/studio/hang.ts) — wherever over it it was let go. Over bare floor, where it was let go.
+      const plain: Placement = { ...base, position: { x, y } };
+      const over = centreOver({ x, y }, hangTargetsOf(doc, arrangedStructure(plan.structure, doc)));
+      act({ type: "addPlacement", placement: over ? { ...plain, position: positionHungAt(plain, over.point) } : plain });
     } else {
       act({ type: "addPlacement", placement: { ...base, position: { x, y } } });
     }
@@ -2986,6 +2994,7 @@ export function StudioScreen({
                 renderPattern={renderPattern}
                 renderDesigns={renderDesigns}
                 onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
+                onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
