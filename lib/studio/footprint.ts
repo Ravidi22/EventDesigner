@@ -607,23 +607,28 @@ function sampledBounds(pieces: readonly BuiltOutline[]) {
  *  same rule a base shape is (shapeFootprint), turned about its own centre, moved to its offset from
  *  the base's centre — and then the whole lot is re-centred on its own box, because every footprint
  *  is drawn centred on the point its item stands on. */
+/** One part as an outline in the BASE shape's frame — resolved like a base shape, turned about its
+ *  own centre and moved to its offset. What the composite is built of, and what the appearance
+ *  editor hands its outline editor when a part is redrawn by hand. */
+export function placedPartOutline(part: ShapePart): BuiltOutline {
+  const t = ((part.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(t);
+  const sin = Math.sin(t);
+  const turn = (v: Point): Point => ({ x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos });
+  const o = footprintOutlines(shapeFootprint(part.shape, part))[0];
+  return {
+    outline: o.outline.map((v) => {
+      const q = turn(v);
+      return { x: q.x + (part.x || 0), y: q.y + (part.y || 0) };
+    }),
+    ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null)) } : {}),
+  };
+}
+
 export function composeFootprint(base: Footprint, parts: readonly ShapePart[]): Footprint {
-  const pieces: BuiltOutline[] = [...footprintOutlines(base)];
-  for (const part of parts) {
-    const t = ((part.rotation || 0) * Math.PI) / 180;
-    const cos = Math.cos(t);
-    const sin = Math.sin(t);
-    const turn = (v: Point): Point => ({ x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos });
-    for (const o of footprintOutlines(shapeFootprint(part.shape, part))) {
-      pieces.push({
-        outline: o.outline.map((v) => {
-          const q = turn(v);
-          return { x: q.x + (part.x || 0), y: q.y + (part.y || 0) };
-        }),
-        ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null)) } : {}),
-      });
-    }
-  }
+  // One piece per shape, in order — the base, then each part. ItemSurface (components/surface-fill)
+  // reads a part's own texture by that index.
+  const pieces: BuiltOutline[] = [...footprintOutlines(base).slice(0, 1), ...parts.map(placedPartOutline)];
   const b = sampledBounds(pieces);
   return {
     kind: "multi",
@@ -1029,6 +1034,17 @@ if (isMain(import.meta.url)) {
   });
   assert(Math.abs(footprintBounds(turned).h - 1000) < 1e-6, "a part turned 90° stands across the base, not along it");
   assert(eq(resolveFootprint({ ...combo, appearance: { shape: "rect", content: "none", parts: [] } }), { kind: "rect", widthMm: 2000, depthMm: 600 }), "no parts, no composite");
+  // A hand-drawn part: its outline wherever it was drawn, recentred on its box, which sits at x/y.
+  const drawn = resolveFootprint({
+    ...combo,
+    appearance: {
+      shape: "rect",
+      content: "none",
+      parts: [{ id: "d", shape: "custom", outline: [{ x: 5000, y: 5000 }, { x: 5400, y: 5000 }, { x: 5000, y: 5300 }], x: 1200, y: 0, rotation: 0 }],
+    },
+  });
+  const db = footprintBounds(drawn);
+  assert(drawn.kind === "multi" && drawn.parts.length === 2 && Math.abs(db.w - 2400) < 1 && Math.abs(db.h - 600) < 1, `a hand-drawn part joins the item where it was put (${db.w}×${db.h})`);
 
   // ── sized on the plan ─────────────────────────────────────────────────────────────────────────
   {

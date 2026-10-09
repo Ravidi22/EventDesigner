@@ -6,7 +6,8 @@
 import type { Product, Variant } from "@/lib/catalog/types";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
-import { CATEGORY_BY_ID, type Anchor, type Sizing } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, anchorOf, type Sizing } from "@/lib/catalog/categories";
+import type { Anchor } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
 import { tableAreaMm2 } from "./geometry";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
@@ -48,7 +49,7 @@ const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", "stage-deck
 export function solidKind(product: Product): string | undefined {
   const cat = CATEGORY_BY_ID[product.category];
   if (product.layer !== "floor") return undefined;
-  if ((cat?.anchor ?? "free") !== "free" || cat?.sizing === "stretch") return undefined;
+  if (anchorOf(product) !== "free" || cat?.sizing === "stretch") return undefined;
   return SOLID_BY_CATEGORY[product.category] ?? product.category;
 }
 
@@ -84,7 +85,7 @@ function ensureIndex(): Map<string, Resolved> {
       product,
       category: product.category,
       footprintMm2: footprint(product),
-      anchor: cat?.anchor ?? ("free" as Anchor),
+      anchor: anchorOf(product), // a runner is an item on the table, not its cloth (isRunner)
       sizing: cat?.sizing ?? ("fixed" as Sizing),
       solid: solidKind(product),
     };

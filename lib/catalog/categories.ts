@@ -195,6 +195,27 @@ export const CATEGORY_BY_ID: Record<string, CategoryDef> = Object.fromEntries(
   CATEGORIES.map((c) => [c.id, c]),
 );
 
+/** A RUNNER — a strip of fabric laid along a table, over its cloth — is filed with the cloths
+ *  (מפות), but it is not the table's cloth: a table wears one cloth AND a runner on top of it. Told
+ *  apart by its shape, which no cloth has: a strip, at most 70cm wide and at least two and a half
+ *  times as long (an organza runner is 300×40; the narrowest cloth is the table's own width plus its
+ *  drop). A row with no measurements is read by its name. Derived rather than a category of its own,
+ *  so the runners already in a catalog are runners without anyone moving them. */
+export function isRunner(p: { category: string; name: string; dimensions: { widthMm?: number; depthMm?: number } }): boolean {
+  if (p.category !== "tablecloths") return false;
+  const { widthMm: w, depthMm: d } = p.dimensions;
+  if (w && d) return Math.min(w, d) <= 700 && Math.max(w, d) >= 2.5 * Math.min(w, d);
+  return /ראנר|רנר|runner/i.test(p.name);
+}
+
+/** Where a product sits on the plan — its category's anchor, except that a runner is not the table's
+ *  cover but an item laid ON the table, so it is "free" (an item on the table's top, like a
+ *  centrepiece) and never replaces or is replaced by the cloth. */
+export function anchorOf(p: { category: string; name: string; dimensions: { widthMm?: number; depthMm?: number } }): Anchor {
+  if (isRunner(p)) return "free";
+  return CATEGORY_BY_ID[p.category]?.anchor ?? "free";
+}
+
 // The meeting draws the room in two passes (lib/meeting/steps.ts), and each one wants a different
 // half of the catalog on the rail: first the furniture that decides where people sit and look, then
 // the design that goes on top of it. Departments, not fine categories — the split is about what the
