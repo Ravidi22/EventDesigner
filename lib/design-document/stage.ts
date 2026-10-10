@@ -1184,6 +1184,118 @@ export function itemAt(p: StagePlacement, deckOf: DeckLookup, kind: StageEdgeKin
   return { id, kind, ...(level ? { level } : {}), edge: pos.edge, t: pos.t, widthMm: kind === "stairs" ? STAIR_WIDTH_MM : kind === "ramp" ? RAMP_WIDTH_MM : 2000 };
 }
 
+// ── One side, shared ─────────────────────────────────────────────────────────────────────────
+//
+// TWO ITEMS NEVER SHARE A STRETCH OF A SIDE. A flight and a banquette on one side divide it between
+// them; they do not stand through each other. The item the designer is acting on — clicked onto the
+// side, dragged wider, given a typed width, told to run the whole side — takes the stretch it asks
+// for, and whatever else stood there gives way: cut back where they overlap, split in two where the
+// new item lands in its middle, dropped when what is left is too short to be anything. Sliding an
+// item along its side is the other way round — it stops at its neighbours (freeStretch) rather than
+// eating them, because a slide is a move and a move through something is not what anyone meant.
+
+/** The shortest edge item worth keeping, mm — what the grips refuse to go under. */
+export const MIN_EDGE_ITEM_MM = 300;
+
+const wrapT = (mid: number, L: number) => ((((mid % L) + L) % L) / L);
+
+/** The items standing on the same side as `item` (same level, same side), other than itself. */
+function sideMates(stage: StageBuild, item: StageStair): StageStair[] {
+  const side = stageSide(stage, item.level, item.edge);
+  if (!side) return [];
+  return (stage.stairs ?? []).filter((it) => it.id !== item.id && it.level === item.level && stageSide(stage, it.level, it.edge)?.edge === side.edge);
+}
+
+/** The stage's edge items with every OTHER item on `keepId`'s side trimmed to clear its span. Items
+ *  elsewhere are untouched; a trimmed item keeps its id for its first piece (the second piece of a
+ *  split takes a new one, derived and unique). Unknown id: the items as they are. */
+export function shareSide(stage: StageBuild, keepId: string): StageStair[] {
+  const items = stage.stairs ?? [];
+  const keep = items.find((it) => it.id === keepId);
+  const side = keep && stageSide(stage, keep.level, keep.edge);
+  const ks = keep && itemSpan(stage, keep);
+  if (!keep || !side || !ks) return [...items];
+  const laps = side.closed ? [-side.L, 0, side.L] : [0];
+  const taken = laps.map((d) => [ks.from + d, ks.to + d] as [number, number]);
+  const mates = new Set(sideMates(stage, keep).map((it) => it.id));
+  const ids = new Set(items.map((it) => it.id));
+  const freshId = (base: string) => {
+    let k = 2;
+    while (ids.has(`${base}-${k}`)) k++;
+    const id = `${base}-${k}`;
+    ids.add(id);
+    return id;
+  };
+  const out: StageStair[] = [];
+  for (const it of items) {
+    if (!mates.has(it.id)) {
+      out.push(it);
+      continue;
+    }
+    const sp = itemSpan(stage, it);
+    if (!sp) {
+      out.push(it);
+      continue;
+    }
+    const left = uncoveredIn(sp.from, sp.to, taken).filter(([f, t]) => t - f >= MIN_EDGE_ITEM_MM);
+    if (left.length === 1 && left[0][0] <= sp.from + 1 && left[0][1] >= sp.to - 1) {
+      out.push(it); // nothing of it under the kept item
+      continue;
+    }
+    let first = true;
+    for (const [f, t] of left) {
+      const { full: _full, ...rest } = it;
+      out.push({ ...rest, id: first ? it.id : freshId(it.id), t: wrapT((f + t) / 2, side.L), widthMm: Math.round(t - f) });
+      first = false;
+    }
+  }
+  return out;
+}
+
+/** The stretch of its side `item` may stand on without touching another item on it: from the end of
+ *  the nearest item before it to the start of the nearest after it — the side's own ends on an open
+ *  side with nothing else; a full lap either way on a closed one. In mm along the side, in the same
+ *  coordinates as itemSpan (a closed side's may run past 0 or L). Null when the item has no side. */
+export function freeStretch(stage: StageBuild, item: StageStair): { from: number; to: number; L: number } | null {
+  const side = stageSide(stage, item.level, item.edge);
+  const sp = itemSpan(stage, item);
+  if (!side || !sp) return null;
+  const L = side.L;
+  const mid = (sp.from + sp.to) / 2;
+  let lo = side.closed ? mid - L : 0;
+  let hi = side.closed ? mid + L : L;
+  for (const other of sideMates(stage, item)) {
+    const o = itemSpan(stage, other);
+    if (!o) continue;
+    // On a closed side the other item is read on the lap nearest this one.
+    const shift = side.closed ? L * Math.round((mid - (o.from + o.to) / 2) / L) : 0;
+    const from = o.from + shift;
+    const to = o.to + shift;
+    if (to <= sp.from + 1) lo = Math.max(lo, to);
+    else if (from >= sp.to - 1) hi = Math.min(hi, from);
+    // Overlapping already: neither bound — the slide will carry it clear or shareSide will cut.
+  }
+  return { from: lo, to: hi, L };
+}
+
+/** Every side divided: the NARROWER item keeps its stretch and the wider gives way round it
+ *  (shareSide) — a banquette set on a side with a flight along its whole length is the deliberate
+ *  one, and the flight is what parts round it. What a merge or a reshape hands back goes through
+ *  this so no two items it carried over stand through each other. Each pass leaves everything clear
+ *  of its keeper, so a later pass never cuts an earlier keeper. */
+function resolveOverlaps(stage: StageBuild): StageStair[] {
+  const width = (it: StageStair) => {
+    const sp = itemSpan(stage, it);
+    return sp ? sp.to - sp.from : Infinity;
+  };
+  let items = [...(stage.stairs ?? [])];
+  for (const it of [...items].sort((a, b) => width(a) - width(b))) {
+    if (!items.some((x) => x.id === it.id)) continue;
+    items = shareSide({ ...stage, stairs: items }, it.id);
+  }
+  return items;
+}
+
 // ── Corners, area, seats ──────────────────────────────────────────────────────────────────────
 
 export interface CornerPiece {
@@ -1500,8 +1612,14 @@ export function rehomeEdgeItems(was: StagePlacement, now: StagePlacement, newId:
 /** Edge items tidied: on each side, items of one kind that touch or overlap become ONE item over
  *  their joint stretch (marked `full` when that is the whole side). Two decks pushed together each
  *  brought stairs along their front; the merged stage has one flight across it — and the quote counts
- *  the front once, not twice. The first item of each run keeps its own settings (steps, depth…). */
+ *  the front once, not twice. The first item of each run keeps its own settings (steps, depth…).
+ *  Then items of DIFFERENT kinds left standing through each other divide the side (resolveOverlaps),
+ *  the earlier in the list keeping its stretch. */
 export function tidyEdgeItems(stage: StageBuild): StageStair[] {
+  return resolveOverlaps({ ...stage, stairs: joinRuns(stage) });
+}
+
+function joinRuns(stage: StageBuild): StageStair[] {
   const items = stage.stairs ?? [];
   const groups = new Map<string, { it: StageStair; from: number; to: number; L: number }[]>();
   const loose: StageStair[] = [];
@@ -2139,6 +2257,30 @@ if (isMain(import.meta.url)) {
   const barred = { ...down, stage: { ...down.stage, heightMm: 900, stairs: [{ id: "b", kind: "barrier" as const, edge: 1, t: 0.5, widthMm: 0, full: true }] } };
   assert(railingRuns(barred, deckOf, 800, wallBehind).length === 1, "a side with a barrier needs no railing; the other still does");
   assert(skirtMm(barred, deckOf, wallBehind) === 14000, "…and a barrier stands on the stage, so the skirt still hangs below it");
+
+  // ── One side, shared: items divide it, never stand through each other.
+  const frontFull: StageStair = { id: "ff", edge: 0, t: 0.5, widthMm: 0, full: true };
+  const benchMid: StageStair = { id: "bm", kind: "bench", edge: 0, t: 0.5, widthMm: 2000 };
+  const shared = shareSide({ ...down.stage, stairs: [frontFull, benchMid] }, "bm");
+  assert(shared.length === 3 && shared.filter((it) => edgeKind(it) === "stairs").length === 2, "a banquette clicked onto a full flight splits it in two");
+  const [halfA, halfB] = shared.filter((it) => edgeKind(it) === "stairs").map((it) => itemSpan(down.stage, it)!).sort((a, b) => a.from - b.from);
+  assert(Math.round(halfA.from) === 0 && Math.round(halfA.to) === 2000 && Math.round(halfB.from) === 4000 && Math.round(halfB.to) === 6000, "…each half running from its corner to the banquette");
+  assert(shared.some((it) => it.id === "ff") && shared.every((it) => !it.full), "…the first half keeping the flight's id, neither still the whole side");
+  assert(edgeGaps({ ...down, stage: { ...down.stage, stairs: shared } }, deckOf, wallBehind).filter((g) => g.edge === 0).length === 0, "…and the side is still covered end to end");
+  const benchEnd: StageStair = { id: "be", kind: "bench", edge: 0, t: 0.9, widthMm: 2000 };
+  const cutBack = shareSide({ ...down.stage, stairs: [frontFull, benchEnd] }, "be");
+  assert(cutBack.length === 2 && Math.round(itemSpan(down.stage, cutBack.find((it) => it.id === "ff")!)!.to) === 4000, "a banquette at the end cuts the flight back to meet it");
+  const swallowed = shareSide({ ...down.stage, stairs: [{ id: "sm", edge: 0, t: 0.5, widthMm: 1000 }, { id: "big", kind: "bench", edge: 0, t: 0.5, widthMm: 3000 }] }, "big");
+  assert(swallowed.length === 1 && swallowed[0].id === "big", "an item wholly under the kept one is gone");
+  const sliver = shareSide({ ...down.stage, stairs: [frontFull, { id: "almost", kind: "bench", edge: 0, t: 0.5, widthMm: 5600 }] }, "almost");
+  assert(sliver.length === 1, "…and so is a sliver too short to be anything");
+  const otherSide = shareSide({ ...down.stage, stairs: [{ id: "s1", edge: 1, t: 0.5, widthMm: 0, full: true }, benchMid] }, "bm");
+  assert(otherSide.length === 2 && otherSide[0].full === true, "an item on another side is untouched");
+  const between = freeStretch({ ...down.stage, stairs: [benchMid, { id: "l", edge: 0, t: 0.1, widthMm: 1000 }, { id: "r", edge: 0, t: 0.95, widthMm: 600 }] }, benchMid)!;
+  assert(Math.round(between.from) === 1100 && Math.round(between.to) === 5400, "the free stretch runs from the item before to the item after");
+  assert(freeStretch({ ...down.stage, stairs: [benchMid] }, benchMid)!.from === 0 && freeStretch({ ...down.stage, stairs: [benchMid] }, benchMid)!.to === 6000, "…and corner to corner with nothing else there");
+  const tidied = tidyEdgeItems({ ...down.stage, stairs: [frontFull, benchMid] });
+  assert(tidied.length === 3 && tidied.some((it) => it.id === "bm") && tidied.filter((it) => edgeKind(it) === "stairs").every((it) => !it.full), "tidying divides a side two kinds were standing through — the narrower keeps its stretch, the flight parts round it");
 
   // ── Ramps, backdrops, corners, area.
   const ramp = edgeItemShape({ ...down.stage, heightMm: 600 }, { id: "r", kind: "ramp", edge: 1, t: 0.5, widthMm: 1200 }, deckOf)!;

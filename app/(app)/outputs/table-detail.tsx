@@ -214,8 +214,8 @@ export function TableDetail({
                   </g>
                 ))}
             {group && group.seats > 0 && (
-              <g transform={`translate(${group.centre.x} ${group.centre.y})`}>
-                {seatsAround({ kind: "rect", widthMm: group.widthMm, depthMm: group.depthMm }, group.seats).map((s, i) => (
+              <g transform={group.transform}>
+                {group.chairs.map((s, i) => (
                   <ChairGlyph key={i} seat={s} />
                 ))}
               </g>

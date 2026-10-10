@@ -23,7 +23,8 @@ import { isDark, resolveStyle } from "@/lib/element-style";
 import { anySurface } from "@/lib/catalog/textures";
 import { PlantGlyph } from "@/components/plant-glyph";
 import { ItemSurface, SurfaceFill } from "@/components/surface-fill";
-import { FootprintShape, dressingSpots, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
+import { FootprintShape, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
+import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair } from "@/components/item-symbol";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { climbRise } from "@/lib/studio/climb-item";
@@ -78,35 +79,24 @@ export { formatTables, tablesPhrase } from "@/lib/outputs/table-kits";
 // each member's own rotation, exactly the way the studio canvas boxes a group (canvas-stage.tsx).
 // Duplicated rather than imported because that version lives inside a client component's useMemo
 // chain, coupled to selection state this static print pass has no use for.
-const CORNERS: [number, number][] = [
-  [-1, -1],
-  [1, -1],
-  [1, 1],
-  [-1, 1],
-];
-
+/** Every block of tables on the plan as the one table it is — its frame, and its chairs, the same
+ *  ring the studio draws (lib/design-document/block.ts). */
 export function tableGroupBoxes(doc: DesignDocumentContent) {
   return (doc.groups ?? [])
     .map((g) => {
-      const members = doc.tables.filter((t) => t.groupId === g.id);
-      if (members.length === 0) return null; // a group of stages is not a table and has no chairs
-      const xs: number[] = [];
-      const ys: number[] = [];
-      for (const t of members) {
-        const b = footprintBounds(tableFootprint(t));
-        for (const [sx, sy] of CORNERS) {
-          const c = fromLocalFrame({ x: (sx * b.w) / 2, y: (sy * b.h) / 2 }, t.position, t.rotation || 0);
-          xs.push(c.x);
-          ys.push(c.y);
-        }
-      }
-      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      const block = tableBlock(doc.tables.filter((t) => t.groupId === g.id));
+      if (!block) return null; // a group of stages is not a table and has no chairs
+      const seats = groupSeats(doc, g.id);
       return {
         id: g.id,
-        centre: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-        widthMm: maxX - minX,
-        depthMm: maxY - minY,
-        seats: groupSeats(doc, g.id),
+        centre: block.centre,
+        rotation: block.rotation,
+        widthMm: block.widthMm,
+        depthMm: block.depthMm,
+        seats,
+        /** The ring, in the block's frame — drawn under `transform`. */
+        chairs: blockSeats(block, seats),
+        transform: `translate(${block.centre.x} ${block.centre.y})${block.rotation ? ` rotate(${block.rotation})` : ""}`,
       };
     })
     .filter((g): g is NonNullable<typeof g> => g !== null);
@@ -667,8 +657,8 @@ export function PlacementMap({
             return (
               <Fragment key={t.id}>
                 {ring && ring.seats > 0 && (
-                  <g transform={`translate(${ring.centre.x} ${ring.centre.y})`}>
-                    {seatsAround({ kind: "rect", widthMm: ring.widthMm, depthMm: ring.depthMm }, ring.seats).map((st, i) => (
+                  <g transform={ring.transform}>
+                    {ring.chairs.map((st, i) => (
                       <ChairGlyph key={i} seat={st} colour={colour} />
                     ))}
                   </g>

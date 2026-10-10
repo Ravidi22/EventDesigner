@@ -10,7 +10,7 @@ import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
 import { loadScratch, saveScratch } from "@/lib/studio/storage";
-import { tableAt } from "@/lib/studio/geometry";
+import { fromLocalFrame, tableAt, toLocalFrame } from "@/lib/studio/geometry";
 import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
@@ -87,10 +87,10 @@ import {
 import { deleteStageTemplate, deleteTableDesign, fetchStageRules, fetchStageTemplates, fetchTableDesigns, saveStageTemplate, saveTableDesign } from "@/lib/settings/actions";
 import { TableDesignsPanel } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/studio/stage-draw";
-import { isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, pushTogether, settleEdgeItems, stageSide } from "@/lib/design-document/stage";
+import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, pushTogether, settleEdgeItems, shareSide, stageSide } from "@/lib/design-document/stage";
 import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, sizedFootprint } from "@/lib/studio/footprint";
-import { dressingSpots, tableBox, tableFootprint } from "@/components/footprint-shape";
+import { dressingSpots, tableBlock, tableBox, tableFootprint } from "@/components/footprint-shape";
 import { arrange, clampToTable, toTableFrame, type ArrangeKind } from "@/lib/design-document/dressing";
 import { DressingBar } from "./dressing-bar";
 import { TablePatternPicker } from "./table-pattern-picker";
@@ -1174,10 +1174,26 @@ export function StudioScreen({
     (seats: number) => {
       const ids = docRefs(selected).filter((r) => r.kind === "table").map((r) => r.id);
       if (ids.length === 0) return;
-      batch(ids.map((id) => ({ type: "setTableSeats" as const, id, seats })));
-      showHint(`${ids.length} שולחנות — ${seats} כסאות`);
+      // A BLOCK is one table here, as it is everywhere else: the number is spread over its members
+      // (spreadSeats), never written onto each of them — two tables grouped as a head table seat
+      // the number typed between them, not twice it.
+      const actions: Action[] = [];
+      const blocks = new Set<string>();
+      let units = 0;
+      for (const id of ids) {
+        const t = doc.tables.find((x) => x.id === id);
+        if (!t) continue;
+        if (t.groupId) {
+          if (blocks.has(t.groupId)) continue;
+          blocks.add(t.groupId);
+          actions.push(...spreadSeats(doc, t.groupId, seats).map((x) => ({ type: "setTableSeats" as const, id: x.id, seats: x.seats })));
+        } else actions.push({ type: "setTableSeats" as const, id, seats });
+        units++;
+      }
+      batch(actions);
+      showHint(`${units} שולחנות — ${seats} כסאות`);
     },
-    [selected, batch, docRefs],
+    [selected, batch, docRefs, doc],
   );
 
   /** One chair over every selected table (null = the studio's default) — one action, one undo. */
@@ -1200,23 +1216,48 @@ export function StudioScreen({
     return { x: here.x, y: here.y };
   }
 
-  /** Turn everything selected to one absolute angle, each about its OWN centre — which is what the
-   *  inspector's number field means, as against the canvas handle's sweep about a shared pivot.
-   *  Squaring a scattered handful of items to the room is the case: they do not move, they all just
-   *  end up facing the same way. */
+  /** Turn everything selected to one absolute angle — which is what the inspector's number field
+   *  means, as against the canvas handle's sweep about a shared pivot. Each LOOSE thing turns about
+   *  its OWN centre: squaring a scattered handful of items to the room is the case, and they do not
+   *  move, they all just end up facing the same way. A GROUP turns as the one block it is, about the
+   *  block's middle: a head table of two squared to 0° stays a head table, rather than two tables each
+   *  spinning on its own spot and opening a gap at the seam (which is what "each about its own centre"
+   *  did to it). The block's facing is its first member's — the frame its chairs are laid in. */
   const faceSelection = useCallback(
     (deg: number) => {
       const refs = selected;
       if (refs.length === 0) return;
-      batch(
-        refs.map((r) =>
-          r.kind === "table"
-            ? { type: "rotateTable" as const, id: r.id, rotation: deg }
-            : r.kind === "placement"
-              ? { type: "rotatePlacement" as const, id: r.id, rotation: deg }
-              : { type: "arrangeFeature" as const, featureId: r.id, ...featureOffset(r.id, arrangedFeatureAt(r.id)), rotationDeg: featureTurn(r.id, deg) },
-        ),
-      );
+      const turns: { kind: "table" | "placement"; id: string; position: Point; rotation: number }[] = [];
+      const features: Action[] = [];
+      const byGroup = new Map<string, { kind: "table" | "placement"; id: string }[]>();
+      for (const r of refs) {
+        if (r.kind === "feature") {
+          features.push({ type: "arrangeFeature", featureId: r.id, ...featureOffset(r.id, arrangedFeatureAt(r.id)), rotationDeg: featureTurn(r.id, deg) });
+          continue;
+        }
+        const kind: "table" | "placement" = r.kind === "table" ? "table" : "placement";
+        const it = kind === "table" ? doc.tables.find((t) => t.id === r.id) : doc.placements.find((p) => p.id === r.id);
+        if (!it) continue;
+        if (it.groupId) byGroup.set(it.groupId, [...(byGroup.get(it.groupId) ?? []), { kind, id: r.id }]);
+        else turns.push({ kind, id: r.id, position: it.position, rotation: deg });
+      }
+      for (const members of byGroup.values()) {
+        const tables = members.flatMap((m) => (m.kind === "table" ? doc.tables.filter((t) => t.id === m.id) : []));
+        const items = members.flatMap((m) => (m.kind === "placement" ? doc.placements.filter((p) => p.id === m.id) : []));
+        const all: { id: string; position: Point; rotation?: number }[] = [...tables, ...items];
+        if (all.length === 0) continue;
+        const block = tables.length ? tableBlock(tables) : null;
+        const facing = block?.rotation ?? (all[0].rotation || 0);
+        const pivot = block?.centre ?? { x: all.reduce((t, m) => t + m.position.x, 0) / all.length, y: all.reduce((t, m) => t + m.position.y, 0) / all.length };
+        const delta = deg - facing;
+        const turned = (kind: "table" | "placement", m: { id: string; position: Point; rotation?: number }) => {
+          const moved = fromLocalFrame(toLocalFrame(m.position, pivot, 0), pivot, delta);
+          turns.push({ kind, id: m.id, position: { x: Math.round(moved.x), y: Math.round(moved.y) }, rotation: (m.rotation || 0) + delta });
+        };
+        tables.forEach((t) => turned("table", t));
+        items.forEach((p) => turned("placement", p));
+      }
+      batch([...(turns.length ? [{ type: "rotateMany" as const, turns }] : []), ...features]);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [selected, batch, featureOffset, featureTurn, doc, plan.structure],
@@ -2126,14 +2167,15 @@ export function StudioScreen({
         const carried = doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === stairId);
         if (carried.length) batch(carried.map((x) => ({ type: "removePlacement" as const, id: x.id })));
       }
-      patchStage(soleStage.id, (s) => ({
+      patchStage(soleStage.id, (s) => {
+        const stage = {
         ...s,
         stairs: (s.stairs ?? []).map((st) => {
           if (st.id !== stairId) return st;
           const next = {
             ...st,
             ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
-            ...(patch.widthMm !== undefined ? { widthMm: Math.max(300, Math.round(patch.widthMm)) } : {}),
+            ...(patch.widthMm !== undefined ? { widthMm: Math.max(MIN_EDGE_ITEM_MM, Math.round(patch.widthMm)) } : {}),
             ...(patch.full !== undefined ? { full: patch.full } : {}),
             ...(patch.depthMm !== undefined ? { depthMm: Math.round(patch.depthMm) } : {}),
             ...(patch.heightMm !== undefined ? { heightMm: Math.round(patch.heightMm) } : {}),
@@ -2150,7 +2192,11 @@ export function StudioScreen({
           }
           return patch.risers !== undefined ? { ...next, risers: Math.max(1, Math.round(patch.risers)) } : next;
         }),
-      }));
+        };
+        // A width typed, or "the whole side": the item takes that stretch and its neighbours on the
+        // side give way (shareSide) — two items never stand through each other.
+        return patch.widthMm !== undefined || patch.full ? { ...stage, stairs: shareSide(stage, stairId) } : stage;
+      });
       if (patch.kind) ensureStageParts();
     },
     [soleStage, patchStage, doc.placements, batch, ensureStageParts],
@@ -2826,7 +2872,12 @@ export function StudioScreen({
       const stair = placed.item;
       if (stair.inner) showHint(edgeKind(stair) === "bench" ? "אין מקום לבנקט מחוץ לבמה בצד הזה — הוא עומד על הבמה" : "אין מספיק מקום מחוץ לבמה בצד הזה — המדרגות שוקעות לתוך הבמה");
       setStageTool(null);
-      patchStage(p.id, (s) => ({ ...s, stairs: [...(s.stairs ?? []), stair] }));
+      // Clicked onto a side another item already covers, it takes its stretch and the other gives
+      // way — a banquette set onto a full flight splits the flight round it (shareSide).
+      patchStage(p.id, (s) => {
+        const next = { ...s, stairs: [...(s.stairs ?? []), stair] };
+        return { ...next, stairs: shareSide(next, stair.id) };
+      });
       setSelected([{ kind: "placement", id: p.id }]);
       setActiveEdge(stair.id);
       ensureStageParts();
@@ -3489,10 +3540,15 @@ export function StudioScreen({
               setSelected([{ kind: "placement", id: stageId }]);
               setActiveEdge(itemId);
             }}
-            onEdgeItemChange={(stageId, item) => {
+            onEdgeItemChange={(stageId, item, from) => {
               const was = doc.placements.find((x) => x.id === stageId);
-              if (was?.stage)
-                drag({ type: "setPlacementStage", id: stageId, stage: { ...was.stage, stairs: (was.stage.stairs ?? []).map((st) => (st.id === item.id ? item : st)) } });
+              if (!was?.stage) return;
+              // A grip pushed into a neighbour divides the side: the neighbour is trimmed against
+              // how the items stood when the press began, so pulling back gives it back. A slide
+              // (no `from`) was held off its neighbours by the canvas and changes nothing else.
+              const base = from ?? was.stage.stairs ?? [];
+              const stage = { ...was.stage, stairs: base.map((st) => (st.id === item.id ? item : st)) };
+              drag({ type: "setPlacementStage", id: stageId, stage: from ? { ...stage, stairs: shareSide(stage, item.id) } : stage });
             }}
             onStageOutline={(id, stage, position) => drag({ type: "setPlacementStage", id, stage, position })}
             onAreaRefused={showHint}

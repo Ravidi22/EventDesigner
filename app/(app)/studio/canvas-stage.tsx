@@ -5,6 +5,7 @@ import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { blockSeats } from "@/lib/design-document/block";
 import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
@@ -18,7 +19,7 @@ import { zoneBounds } from "@/lib/venues/zone";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
-import { FootprintShape, dressingSpots, sameFootprint, tableBlockedSides, tableBox, tableFootprint, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
+import { FootprintShape, dressingSpots, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, toTableFrame } from "@/lib/design-document/dressing";
@@ -37,7 +38,9 @@ import {
   benchInRoom,
   edgeGaps,
   edgeItemShape,
+  freeStretch,
   itemEdge,
+  MIN_EDGE_ITEM_MM,
   stageCorners,
   itemSpan,
   layStage,
@@ -343,7 +346,9 @@ export function CanvasStage({
   activeEdgeItem?: string | null;
   onEdgeItemSelect?: (stageId: string, itemId: string | null) => void;
   /** An edge item slid along its side or resized by its grips. */
-  onEdgeItemChange?: (stageId: string, item: StageStair) => void;
+  /** `from`: the stage's items when the gesture began — a resize trims its neighbours against them
+   *  (shareSide); a slide passes nothing and trims nothing. */
+  onEdgeItemChange?: (stageId: string, item: StageStair, from?: StageStair[]) => void;
   /** Placing a flight of stairs: the sides it may stand against, in room coordinates. A click on one
    *  reports which side and how far along it. */
   stairPick?: { level?: string; edge: number; a: Point; b: Point }[] | null;
@@ -1002,41 +1007,28 @@ export function CanvasStage({
 
   const isSel = (kind: SelectionKind, id: string) => selection.some((r) => r.kind === kind && r.id === id);
 
-  // A group of tables read as the ONE larger table the designer said it is: the box its members
-  // occupy between them, the number they share, and the chairs that go round the outside of the lot.
-  //
-  // The BOX, not a true union of the outlines. Grouping is how a designer says "these four are one
-  // table now", and what they have done to make that true is pushed them into a block — for which
-  // the bounding box IS the union. Computing a real polygon union would buy fidelity for the
-  // L-shaped arrangement nobody groups, at the cost of the one geometry routine in this app that
-  // could go quietly wrong.
+  // A group of tables read as the ONE larger table the designer said it is: its frame (its first
+  // member's facing), the box its members occupy between them in that frame, the number they share,
+  // and the chairs that go round the outside of the lot — round the members' REAL shapes where they
+  // stand (lib/design-document/block.ts), the seams between them left empty, their blocked sides
+  // kept, the whole ring turning with the block.
   const tableGroups = useMemo(() => {
     return (doc.groups ?? [])
       .map((g) => {
         const tables = doc.tables.filter((t) => t.groupId === g.id);
-        if (tables.length === 0) return null; // a group of stages is not a table and carries no number
-        const xs: number[] = [];
-        const ys: number[] = [];
-        for (const t of tables) {
-          const b = footprintBounds(tableFootprint(t));
-          for (const [sx, sy] of CORNERS) {
-            // Through the table's own rotation, so a group holding a turned table is boxed round
-            // where that table actually is rather than where its unrotated bounds would be.
-            const c = fromLocalFrame({ x: (sx * b.w) / 2, y: (sy * b.h) / 2 }, t.position, t.rotation || 0);
-            xs.push(c.x);
-            ys.push(c.y);
-          }
-        }
-        const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const block = tableBlock(tables);
+        if (!block) return null; // a group of stages is not a table and carries no number
         // The number it SHOWS (numberedUnits' rule): the group's, else its lowest numbered member's;
         // none at all when every table in it is out of the numbering.
         const numbered = tables.filter((t) => !t.unnumbered);
         return {
           id: g.id,
           number: numbered.length === 0 ? null : (g.number ?? Math.min(...numbered.map((t) => t.number))),
-          centre: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-          widthMm: maxX - minX,
-          depthMm: maxY - minY,
+          centre: block.centre,
+          rotation: block.rotation,
+          widthMm: block.widthMm,
+          depthMm: block.depthMm,
+          block,
           seats: groupSeats(doc, g.id),
           seated: groupSeated(doc, g.id),
           selected: tables.some((t) => isSel("table", t.id)),
@@ -1071,8 +1063,9 @@ export function CanvasStage({
       if (!g.seats) continue;
       rings.push({
         key: g.id,
-        transform: `translate(${g.centre.x} ${g.centre.y})`,
-        seats: seatsAround({ kind: "rect", widthMm: g.widthMm, depthMm: g.depthMm }, g.seats),
+        // In the block's own frame, so the ring turns with the block.
+        transform: `translate(${g.centre.x} ${g.centre.y})${g.rotation ? ` rotate(${g.rotation})` : ""}`,
+        seats: blockSeats(g.block, g.seats),
         forTable: false,
       });
     }
@@ -1315,7 +1308,7 @@ export function CanvasStage({
   const rotateGesture = useRef<{
     pivot: Point;
     startDeg: number;
-    snapshot: { ref: SelectionRef; origin: Point; rotation: number }[];
+    snapshot: { ref: SelectionRef; origin: Point; rotation: number; own: Point }[];
   } | null>(null);
 
   /** Everything in the selection that HAS a facing — see the note where the handle is drawn. */
@@ -1369,23 +1362,39 @@ export function CanvasStage({
     // note on RotateHandle's onRotate): a block already sitting at 7° turns by exactly 90° and is
     // still the block it was, rather than being sheared square to the grid the instant it is
     // touched.
-    rotateGesture.current ??= {
-      pivot: rotatable.pivot,
-      startDeg: mods.raw,
-      snapshot: rotatableRefs.map((ref) => {
-        const box = movable.find((m) => sameRef(m.ref, ref))!.box;
-        return { ref, origin: { x: box.x, y: box.y }, rotation: facingOf(ref) };
-      }),
-    };
+    rotateGesture.current ??= (() => {
+      // A GROUP is one unit of "each": a block turned about itself turns about the block's middle,
+      // never each member about its own spot (which pulls a head table of two apart at the seam).
+      const unitOf = (ref: SelectionRef) => (ref.kind === "table" ? tableById.get(ref.id)?.groupId : ref.kind === "placement" ? placementById.get(ref.id)?.groupId : undefined);
+      const unitBoxes = new Map<string, SnapBox[]>();
+      for (const ref of rotatableRefs) {
+        const u = unitOf(ref);
+        const box = movable.find((m) => sameRef(m.ref, ref))?.box;
+        if (u && box) unitBoxes.set(u, [...(unitBoxes.get(u) ?? []), box]);
+      }
+      const unitPivot = new Map([...unitBoxes].map(([u, boxes]) => [u, (({ x, y }) => ({ x, y }))(unionBox(boxes))]));
+      return {
+        pivot: rotatable.pivot,
+        startDeg: mods.raw,
+        snapshot: rotatableRefs.map((ref) => {
+          const box = movable.find((m) => sameRef(m.ref, ref))!.box;
+          const origin = { x: box.x, y: box.y };
+          const u = unitOf(ref);
+          return { ref, origin, rotation: facingOf(ref), own: (u && unitPivot.get(u)) || origin };
+        }),
+      };
+    })();
     const { pivot, startDeg, snapshot } = rotateGesture.current;
     const delta = mods.alt ? mods.raw - startDeg : constrainAngleDeg(mods.raw - startDeg);
     onRotateMany(
       snapshot.map((sn) => {
-        // EACH ABOUT ITSELF: the position is the one it started at, untouched. A room of tables
-        // turned a quarter turn is a room of tables each facing a new way — not a room whose
-        // tables have all been swept round the middle of the hall onto somebody else's spot.
-        // Same delta, same one undo, and the only difference is whether anything moves.
-        const moved = spin === "each" ? sn.origin : fromLocalFrame(toLocalFrame(sn.origin, pivot, 0), pivot, delta);
+        // EACH ABOUT ITSELF: a loose item's position is the one it started at, untouched, and a
+        // block's members swing about the block's own middle. A room of tables turned a quarter
+        // turn is a room of tables each facing a new way — not a room whose tables have all been
+        // swept round the middle of the hall onto somebody else's spot. Same delta, same one undo,
+        // and the only difference is what each thing turns about.
+        const about = spin === "each" ? sn.own : pivot;
+        const moved = fromLocalFrame(toLocalFrame(sn.origin, about, 0), about, delta);
         return {
           kind: sn.ref.kind,
           id: sn.ref.id,
@@ -1810,19 +1819,19 @@ export function CanvasStage({
               {/* Only while the block is selected. At rest a block of tables reads as the one table it
                   is — a dashed box round it all evening ran straight through its own chairs. */}
               {g.selected && (
-              <rect
-                x={g.centre.x - g.widthMm / 2 - GROUP_PAD_MM}
-                y={g.centre.y - g.depthMm / 2 - GROUP_PAD_MM}
-                width={g.widthMm + GROUP_PAD_MM * 2}
-                height={g.depthMm + GROUP_PAD_MM * 2}
-                rx={GROUP_PAD_MM}
-                fill="none"
-                stroke={g.selected ? "var(--color-accent)" : "var(--color-ink-soft)"}
-                strokeOpacity={g.selected ? 1 : 0.35}
-                strokeWidth={g.selected ? 2 : 1}
-                strokeDasharray="10 7"
-                vectorEffect="non-scaling-stroke"
-              />
+                <rect
+                  transform={`translate(${g.centre.x} ${g.centre.y})${g.rotation ? ` rotate(${g.rotation})` : ""}`}
+                  x={-g.widthMm / 2 - GROUP_PAD_MM}
+                  y={-g.depthMm / 2 - GROUP_PAD_MM}
+                  width={g.widthMm + GROUP_PAD_MM * 2}
+                  height={g.depthMm + GROUP_PAD_MM * 2}
+                  rx={GROUP_PAD_MM}
+                  fill="none"
+                  stroke="var(--color-accent)"
+                  strokeWidth={2}
+                  strokeDasharray="10 7"
+                  vectorEffect="non-scaling-stroke"
+                />
               )}
             </g>
           ))}
@@ -1931,7 +1940,7 @@ export function CanvasStage({
               ctx={ctx}
               active={activeEdgeItem ?? null}
               onSelect={(itemId) => onEdgeItemSelect(edgingStage.id, itemId)}
-              onChange={(item) => onEdgeItemChange(edgingStage.id, item)}
+              onChange={(item, from) => onEdgeItemChange(edgingStage.id, item, from)}
               onEnd={onEndDrag}
             />
           )}
@@ -3781,10 +3790,13 @@ function EdgeItemHandles({
   ctx: CanvasLayerContext;
   active: string | null;
   onSelect: (itemId: string | null) => void;
-  onChange: (item: StageStair) => void;
+  /** `from` is the stage's items as they stood when the press began — a grip pushed into a neighbour
+   *  trims it against THAT, so pulling back gives the neighbour back (lib/design-document/stage.ts
+   *  shareSide). Absent on a slide, which never trims. */
+  onChange: (item: StageStair, from?: StageStair[]) => void;
   onEnd: () => void;
 }) {
-  const start = useRef<{ item: StageStair; grab: number; from: number; to: number; at: Point; moved: boolean } | null>(null);
+  const start = useRef<{ item: StageStair; grab: number; from: number; to: number; at: Point; moved: boolean; free: { from: number; to: number } | null; items: StageStair[]; last?: number } | null>(null);
   /** The width or depth under the pointer, on a pill beside the grip, while one is being dragged. */
   const [readout, setReadout] = useState<{ at: Point; text: string } | null>(null);
   const SNAP = 150;
@@ -3800,10 +3812,10 @@ function EdgeItemHandles({
   /** A position on a closed rim, read on the turn nearest `ref` — a pointer just past the seam is
    *  L+10 to a grip at L−100, not 10. */
   const unwrap = (s: number, ref: number, L: number) => s + L * Math.round((ref - s) / L);
-  const write = (item: StageStair, from: number, to: number, L: number, closed: boolean) => {
+  const write = (item: StageStair, from: number, to: number, L: number, closed: boolean, base?: StageStair[]) => {
     const mid = (from + to) / 2;
     const full = closed ? to - from >= L - 1 : from <= 1 && to >= L - 1;
-    onChange({ ...item, t: (closed ? ((mid % L) + L) % L : mid) / L, widthMm: Math.round(to - from), full: full || undefined });
+    onChange({ ...item, t: (closed ? ((mid % L) + L) % L : mid) / L, widthMm: Math.round(to - from), full: full || undefined }, base);
   };
   /** Has this press travelled far enough to be a drag (and stays one once it has). */
   const armed = (st: NonNullable<typeof start.current>, ev: { clientX: number; clientY: number }) => {
@@ -3855,6 +3867,12 @@ function EdgeItemHandles({
           if (!a) return;
           const w = st.to - st.from;
           let from = st.from + a.s - st.grab;
+          // Round a closed rim the pointer crosses the seam: read this frame's position on the lap
+          // nearest the last one, so a slide may go on round as far as it likes.
+          if (closed) {
+            from = unwrap(from, st.last ?? st.from, a.L);
+            st.last = from;
+          }
           if (!closed) {
             // Held between the corners, and pulled to them and to the middle. A closed rim has
             // neither — the item goes round, and `write` wraps it.
@@ -3863,13 +3881,21 @@ function EdgeItemHandles({
             else if (a.L - (from + w) < SNAP) from = a.L - w;
             else if (Math.abs(from + w / 2 - a.L / 2) < SNAP) from = a.L / 2 - w / 2;
           }
+          // …and held between its NEIGHBOURS on the side: a slide stops against the next item and
+          // is pulled flush to it, never through it (freeStretch, read when the press began).
+          if (st.free) {
+            from = Math.max(st.free.from, Math.min(st.free.to - w, from));
+            if (from - st.free.from < SNAP) from = st.free.from;
+            else if (st.free.to - (from + w) < SNAP) from = st.free.to - w;
+          }
           write(st.item, from, from + w, a.L, closed);
         };
         const press = (ev: React.PointerEvent) => {
           ev.stopPropagation();
           onSelect(item.id);
           const a = along(item, ev.clientX, ev.clientY);
-          if (a) start.current = { item, grab: a.s, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false };
+          const free = freeStretch(p.stage, item);
+          if (a) start.current = { item, grab: a.s, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false, free: free && (free.to - free.from < Infinity) ? { from: free.from, to: free.to } : null, items: p.stage.stairs ?? [] };
           startPointerGesture(ev, { onMove: slide, onEnd: release });
         };
         return (
@@ -3926,7 +3952,7 @@ function EdgeItemHandles({
           // The readout stands across the edge from the body, on the side nothing of it is on.
           const beside = (q: Point) => past(q, outDir, -ctx.mm(20));
           // What a grip takes hold of.
-          const grabbed = (ev: React.PointerEvent) => ({ item, grab: 0, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false });
+          const grabbed = (ev: React.PointerEvent) => ({ item, grab: 0, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false, free: null, items: p.stage.stairs ?? [] });
           return (
             <g key={item.id}>
               <EdgeGrip
@@ -3942,8 +3968,8 @@ function EdgeItemHandles({
                   if (!got) return;
                   const { st, a } = got;
                   const s = closed ? unwrap(a.s, st.from, a.L) : a.s;
-                  const from = Math.min(st.to - 300, closed ? Math.max(st.to - a.L, Math.round(s / 50) * 50) : Math.max(0, snapEnd(s, a.L)));
-                  write(st.item, from, st.to, a.L, closed);
+                  const from = Math.min(st.to - MIN_EDGE_ITEM_MM, closed ? Math.max(st.to - a.L, Math.round(s / 50) * 50) : Math.max(0, snapEnd(s, a.L)));
+                  write(st.item, from, st.to, a.L, closed, st.items);
                   setReadout({ at: beside(edgePt(from)), text: cm(st.to - from) });
                 }}
               />
@@ -3960,8 +3986,8 @@ function EdgeItemHandles({
                   if (!got) return;
                   const { st, a } = got;
                   const s = closed ? unwrap(a.s, st.to, a.L) : a.s;
-                  const to = Math.max(st.from + 300, closed ? Math.min(st.from + a.L, Math.round(s / 50) * 50) : Math.min(a.L, snapEnd(s, a.L)));
-                  write(st.item, st.from, to, a.L, closed);
+                  const to = Math.max(st.from + MIN_EDGE_ITEM_MM, closed ? Math.min(st.from + a.L, Math.round(s / 50) * 50) : Math.min(a.L, snapEnd(s, a.L)));
+                  write(st.item, st.from, to, a.L, closed, st.items);
                   setReadout({ at: beside(edgePt(to)), text: cm(to - st.from) });
                 }}
               />

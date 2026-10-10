@@ -3,6 +3,7 @@ import type { Product } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { customShapeBounds, footprintBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
+import { blockFrame, type BlockFrame } from "@/lib/design-document/block";
 import { dressingLayout, fromTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
@@ -97,6 +98,16 @@ export function tableFootprint(table: DesignTable): Footprint {
   if (product) return sizedFootprint(product, table.sizeMm);
   if (table.diameterMm) return { kind: "circle", diameterMm: table.diameterMm };
   return { kind: "rect", widthMm: table.widthMm ?? 0, depthMm: table.depthMm ?? 0 };
+}
+
+/** A block of tables (a design group) as the one table it is: its frame and its members' shapes
+ *  where they stand, for the chairs round the lot (lib/design-document/block.ts). Every surface that
+ *  draws a block's ring reads it here — the studio canvas, the printed map, the table detail — so
+ *  none of them can seat the block differently. */
+export function tableBlock(tables: readonly DesignTable[]): BlockFrame | null {
+  return blockFrame(
+    tables.map((t) => ({ id: t.id, footprint: tableFootprint(t), position: t.position, rotation: t.rotation || 0, mirrored: t.mirrored, blockedSides: tableBlockedSides(t) })),
+  );
 }
 
 /** Where a table's number is written, in plan millimetres: the shape's own label point

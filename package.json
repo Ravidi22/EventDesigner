@@ -31,6 +31,7 @@
     "check:sketches": "tsx lib/studio/sketches.ts",
     "check:seating": "tsx lib/studio/seating.ts",
     "check:groups": "tsx lib/design-document/groups.ts",
+    "check:block": "tsx lib/design-document/block.ts",
     "check:features": "tsx lib/design-document/features.ts",
     "check:stacking": "tsx lib/design-document/stacking.ts",
     "check:mirror": "tsx lib/design-document/mirror.ts",
