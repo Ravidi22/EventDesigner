@@ -36,11 +36,9 @@ const ROWS: { op: AlignOp; icon: MenuItem["icon"] }[] = [
   { op: "bottom", icon: AlignEndHorizontal },
 ];
 
-/** "יישור" — line the selection up by one of its own members (lib/studio/align.ts). Every row is
- *  one action and one undo. The key is named in the last rows and drawn on the plan. */
-export function AlignMenu({ align }: { align: AlignPanel | null }) {
-  if (!align) return null;
-  const items: MenuItem[] = [
+/** The rows of "יישור" — the bar's menu and the plan's right-click menu offer the same ones. */
+export function alignItems(align: AlignPanel): MenuItem[] {
+  return [
     ...ROWS.map(({ op, icon }) => ({ label: ALIGN_LABEL[op], icon, onSelect: () => align.onAlign(op) })),
     ...(align.units >= 3
       ? [
@@ -51,5 +49,11 @@ export function AlignMenu({ align }: { align: AlignPanel | null }) {
     { label: `לפי: ${align.keyLabel} — החלפה לבא בתור`, icon: KeyRound, onSelect: () => align.onPickKey("next") },
     { label: "לפי האחרון שנבחר", icon: KeyRound, onSelect: () => align.onPickKey("last") },
   ];
-  return <Menu label={`יישור — לפי ${align.keyLabel}`} icon={AlignCenterVertical} side="top" items={items} />;
+}
+
+/** "יישור" — line the selection up by one of its own members (lib/studio/align.ts). Every row is
+ *  one action and one undo. The key is named in the last rows and drawn on the plan. */
+export function AlignMenu({ align }: { align: AlignPanel | null }) {
+  if (!align) return null;
+  return <Menu label={`יישור — לפי ${align.keyLabel}`} icon={AlignCenterVertical} side="top" items={alignItems(align)} />;
 }

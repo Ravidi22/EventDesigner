@@ -1,9 +1,10 @@
 "use client";
 
-import { Check, Expand, Grid2x2Plus, PenLine, Ruler, TriangleAlert } from "lucide-react";
+import { Check, Expand, Grid2x2Plus, PenLine, Ruler, TriangleAlert, X } from "lucide-react";
 import type { Point } from "@/lib/studio/hall";
 import type { DeckType, FillResult } from "@/lib/studio/stage-fill";
-import { Bar, Note, ltr } from "@/components/inspector-bar";
+import type { AreaShape } from "@/lib/studio/stage-draw";
+import { Bar, BarButton, Note, ltr } from "@/components/inspector-bar";
 import { Button } from "@/components/button";
 import { Popover } from "@/components/popover";
 import { TagToggle } from "@/components/tag-toggle";
@@ -28,10 +29,17 @@ export type StageFillState =
       /** Carried through a redraw, so "סימון מחדש" keeps the decks chosen and the stage being edited. */
       chosen?: string[];
       editing?: string;
+      /** Corner by corner, or round (lib/studio/stage-draw.ts AreaShape). Absent = corners. */
+      shape?: AreaShape;
     }
   | {
       phase: "pick";
       polygon: Point[];
+      /** The corners a curve runs through (StageBuild.smooth) — an area drawn round, or a round stage
+       *  being edited. Its corners are not grips: a curve is redrawn, not dented. */
+      smooth?: number[];
+      /** The shape it was drawn as, for "סימון מחדש". */
+      shape?: AreaShape;
       /** The edge facing the room — rows are laid from it (edge i runs polygon[i] → polygon[i+1]). */
       front: number;
       /** Variant ids of the decks the stage may be built from. */
@@ -74,6 +82,12 @@ export function StageFillPanel({
     .map((t) => ({ t, n: decks.filter((d) => d.typeId === t.id).length }))
     .filter((x) => x.n > 0);
   const areaM2 = (layout?.areaMm2 ?? 0) / 1e6;
+  // A round area has no sides to read lengths off: its size is said here instead.
+  const xs = state.polygon.map((q) => q.x);
+  const ys = state.polygon.map((q) => q.y);
+  const across = Math.max(...xs) - Math.min(...xs);
+  const deep = Math.max(...ys) - Math.min(...ys);
+  const roundSize = state.smooth?.length ? (Math.abs(across - deep) < 15 && state.smooth.length === state.polygon.length ? `קוטר ${m(across)} מ׳` : ltr(`${m(across)}×${m(deep)} מ׳`)) : null;
   // Floored, not rounded — 99.4% must not read as "100%" beside a strip that is visibly bare — but
   // from the same half-percent the layout itself calls exact, so float noise on a turned area does
   // not read as 99%.
@@ -87,7 +101,7 @@ export function StageFillPanel({
     <Bar
       icon={Grid2x2Plus}
       title={state.editing ? "עריכת במה" : "מילוי במות"}
-      facts={`${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר · ${decks.length} פלטות · כיסוי ${pct}%`}
+      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
       onClose={onClose}
     >
       <Popover label="אילו במות" icon={Grid2x2Plus} value={`${state.chosen.length} מתוך ${types.length}`} panelClassName="w-80">
@@ -172,6 +186,52 @@ export function StageFillPanel({
         <Check className="h-3.5 w-3.5" strokeWidth={2} />
         {state.editing ? "עדכון הבמה" : "הוספת הבמה"} · {decks.length} פלטות
       </Button>
+    </Bar>
+  );
+}
+
+const SHAPES: readonly (readonly [AreaShape, string, string])[] = [
+  ["corners", "פינות", "פינה אחר פינה — מלבן, ר׳, ח׳ וכל צורה ישרה"],
+  ["circle", "עיגול", "מרכז, ואז הגודל — מספר ו־Enter קובע קוטר בס״מ"],
+  ["ellipse", "אליפסה", "פינה אחת ואז הפינה שמולה · Shift לעיגול"],
+  ["half", "חצי עיגול", "הקוטר כמו צלע, ואז הצד שאליו הקשת פונה"],
+];
+
+/** What the area tool asks before anything is drawn: the SHAPE of the stage — corner by corner, or
+ *  round (a disc, an oval, a half-round), whose rim the stairs then follow — and, when the studio
+ *  has saved some, a stage from one of its templates instead. */
+export function StageDrawBar({
+  shape,
+  onShape,
+  templates,
+  onTemplate,
+  onRemoveTemplate,
+  onClose,
+}: {
+  shape: AreaShape;
+  onShape: (shape: AreaShape) => void;
+  templates: { id: string; name: string }[];
+  onTemplate: (id: string) => void;
+  onRemoveTemplate: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Bar icon={Grid2x2Plus} title="במה חדשה" facts={templates.length > 0 ? "צורה לסימון על התוכנית — או במה מתבנית" : "צורה לסימון על התוכנית"} onClose={onClose}>
+      <div role="group" aria-label="צורת הבמה" className="flex flex-wrap gap-1">
+        {SHAPES.map(([v, label, how]) => (
+          <TagToggle key={v} active={shape === v} onClick={() => onShape(v)} title={how}>
+            {label}
+          </TagToggle>
+        ))}
+      </div>
+      {templates.map((t) => (
+        <span key={t.id} className="inline-flex items-center rounded-md border border-border">
+          <Button size="sm" variant="ghost" onClick={() => onTemplate(t.id)}>
+            {t.name}
+          </Button>
+          <BarButton icon={X} label={`מחיקת התבנית ״${t.name}״`} onClick={() => onRemoveTemplate(t.id)} />
+        </span>
+      ))}
     </Bar>
   );
 }

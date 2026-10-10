@@ -293,6 +293,249 @@ export function unionOutline(polys: readonly (readonly Point[])[]): Point[] | nu
   return out.length >= 3 ? out : null;
 }
 
+// ── Round areas: a disc, an oval, a half-round ─────────────────────────────────────────────────
+//
+// The area tool draws corners; a stage that is ROUND is drawn as what it is instead — a centre and
+// a diameter, a box for an oval, a chord and a side for a half-round — and comes out as a fine
+// polygon whose corners along the curve are smooth (StageBuild.smooth), so its rim is one side and
+// the stairs round it follow it. Chords of about 25cm, as a round stage piece's are.
+
+/** How a stage area is drawn: corner by corner, or as one of the round shapes. */
+export type AreaShape = "corners" | "circle" | "ellipse" | "half";
+
+const ROUND_CHORD_MM = 250;
+
+/** An ellipse `w` × `h` about `centre`, turned `deg`, starting at its top — every corner smooth. */
+export function ellipseArea(centre: Point, w: number, h: number, deg = 0): { outline: Point[]; smooth: number[] } {
+  const a = w / 2;
+  const b = h / 2;
+  const perimeter = Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+  const n = Math.max(24, 4 * Math.ceil(perimeter / (4 * ROUND_CHORD_MM)));
+  const step = (2 * Math.PI) / n;
+  const outline = Array.from({ length: n }, (_, k) => {
+    const th = -Math.PI / 2 - step / 2 + k * step;
+    const q = rotP({ x: a * Math.cos(th), y: b * Math.sin(th) }, deg);
+    return { x: Math.round(centre.x + q.x), y: Math.round(centre.y + q.y) };
+  });
+  return { outline, smooth: outline.map((_, k) => k) };
+}
+
+/** A half-round on the chord a → b, bulging to `side` of it (+1 = the left of a → b as the numbers
+ *  run, −1 the right): the chord is a straight side, its two ends real corners, and every corner
+ *  along the arc smooth, the apex one of them. */
+export function halfRoundArea(a: Point, b: Point, side: 1 | -1): { outline: Point[]; smooth: number[] } {
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  const R = L / 2;
+  const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const u = { x: (b.x - a.x) / (L || 1), y: (b.y - a.y) / (L || 1) };
+  const n = { x: -side * u.y, y: side * u.x };
+  const steps = Math.max(4, 2 * Math.ceil((Math.PI * R) / (2 * ROUND_CHORD_MM)));
+  const outline = Array.from({ length: steps + 1 }, (_, k) => {
+    const th = (Math.PI * k) / steps;
+    return { x: Math.round(m.x - u.x * R * Math.cos(th) + n.x * R * Math.sin(th)), y: Math.round(m.y - u.y * R * Math.cos(th) + n.y * R * Math.sin(th)) };
+  });
+  return { outline, smooth: outline.map((_, k) => k).filter((k) => k > 0 && k < steps) };
+}
+
+// ── Several outlines of ANY shape, as one ─────────────────────────────────────────────────────
+//
+// unionOutline is for square stages, and its grid is exact for them. A round stage pushed against a
+// rectangular one — a half-round apron in front of a stage, a disc overlapping a catwalk — is not
+// square, and refusing it is what made Ctrl+G group them as two stages instead of building one. So
+// this is the general union: every outline's edges cut where another's cross or touch them, the
+// pieces that lie OUTSIDE every other outline kept (a stretch two outlines share facing the same way
+// once; a seam between them — shared facing opposite ways — not at all), and the kept pieces chained
+// back into one loop.
+//
+// A CURVE IS KEPT A CURVE. A round stage is a fine polygon whose corners are `smooth` (StageBuild):
+// each corner of the result says whether it is one — it is when the loop arrives at it and leaves it
+// along the same input outline, at a corner that outline called smooth. Where the curve meets the
+// other outline the loop turns, and that point is a real corner.
+
+/** An outline, and which of its corners a curve runs through (StageBuild.smooth). */
+export interface ShapeOutline {
+  outline: readonly Point[];
+  smooth?: readonly number[];
+}
+
+/**
+ * The outline of several simple outlines that overlap or touch, as one — and which of its corners
+ * are smooth. Null when they do not make ONE piece without a hole (apart, meeting at a single point,
+ * or enclosing a hole). `tolMm` is how close two lines must be to count as the same line: stages
+ * pushed flush meet within a millimetre or two, never exactly.
+ */
+export function unionShapes(shapes: readonly ShapeOutline[], tolMm = 2): { outline: Point[]; smooth: number[] } | null {
+  type V = { x: number; y: number; smooth: boolean };
+  const same = (a: Point, b: Point, d = 0.5) => Math.abs(a.x - b.x) <= d && Math.abs(a.y - b.y) <= d;
+  // Each outline wound the same way (positive area), its smooth corners carried on the points.
+  const polys: V[][] = [];
+  for (const s of shapes) {
+    const sm = new Set(s.smooth ?? []);
+    const pts: V[] = [];
+    s.outline.forEach((q, i) => {
+      const v = { x: q.x, y: q.y, smooth: sm.has(i) };
+      if (!pts.length || !same(pts[pts.length - 1], v)) pts.push(v);
+    });
+    while (pts.length > 1 && same(pts[0], pts[pts.length - 1])) pts.pop();
+    if (pts.length < 3 || Math.abs(areaOf(pts)) < 1) continue;
+    polys.push(areaOf(pts) < 0 ? pts.reverse() : pts);
+  }
+  if (!polys.length) return null;
+  const smoothOf = (loop: V[]) => loop.flatMap((v, i) => (v.smooth ? [i] : []));
+  if (polys.length === 1) return { outline: polys[0].map(({ x, y }) => ({ x, y })), smooth: smoothOf(polys[0]) };
+
+  // 1. A corner within the tolerance of another outline's corner IS that corner: shared corners
+  //    must be the same point, or the pieces will not chain.
+  for (let j = 1; j < polys.length; j++)
+    for (const v of polys[j])
+      for (let i = 0; i < j; i++) {
+        const hit = polys[i].find((w) => same(w, v, tolMm));
+        if (hit) {
+          v.x = hit.x;
+          v.y = hit.y;
+          break;
+        }
+      }
+
+  // 2. Cut every edge where another outline touches it (a corner on it) or crosses it.
+  const segD = (p: Point, a: Point, b: Point) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+    return { d: Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)), t };
+  };
+  const cuts: { t: number; p: V }[][][] = polys.map((poly) => poly.map(() => []));
+  for (let i = 0; i < polys.length; i++)
+    for (let j = 0; j < polys.length; j++) {
+      if (i === j) continue;
+      const A = polys[i];
+      const B = polys[j];
+      for (let k = 0; k < A.length; k++) {
+        const a = A[k];
+        const b = A[(k + 1) % A.length];
+        const L = Math.hypot(b.x - a.x, b.y - a.y);
+        if (L < 1e-6) continue;
+        for (const v of B) {
+          const { d, t } = segD(v, a, b);
+          if (d <= tolMm && t * L > tolMm && (1 - t) * L > tolMm) cuts[i][k].push({ t, p: { x: v.x, y: v.y, smooth: false } });
+        }
+        // Proper crossings — computed once per pair (i < j) and cut into both edges at the same point.
+        if (j < i) continue;
+        for (let m = 0; m < B.length; m++) {
+          const c = B[m];
+          const e = B[(m + 1) % B.length];
+          const r = { x: b.x - a.x, y: b.y - a.y };
+          const s = { x: e.x - c.x, y: e.y - c.y };
+          const den = r.x * s.y - r.y * s.x;
+          const M = Math.hypot(s.x, s.y);
+          if (Math.abs(den) < 1e-9 * L * M || M < 1e-6) continue;
+          const t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / den;
+          const u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / den;
+          if (t * L <= tolMm || (1 - t) * L <= tolMm || u * M <= tolMm || (1 - u) * M <= tolMm || t >= 1 || u >= 1) continue;
+          const p = { x: a.x + t * r.x, y: a.y + t * r.y, smooth: false };
+          cuts[i][k].push({ t, p });
+          cuts[j][m].push({ t: u, p: { ...p } });
+        }
+      }
+    }
+  type Seg = { a: V; b: V; poly: number; used?: boolean };
+  const segs: Seg[] = [];
+  polys.forEach((poly, i) =>
+    poly.forEach((a, k) => {
+      const b = poly[(k + 1) % poly.length];
+      const run = [a, ...cuts[i][k].sort((x, y) => x.t - y.t).map((c) => c.p), b];
+      const pts = run.filter((p, n) => n === 0 || !same(p, run[n - 1]));
+      for (let n = 0; n < pts.length - 1; n++) if (!same(pts[n], pts[n + 1])) segs.push({ a: pts[n], b: pts[n + 1], poly: i });
+    }),
+  );
+
+  // 3. Keep what is outside every other outline. On another's line: kept once when both run the same
+  //    way (a shared outer stretch), dropped from both when they run opposite ways (a seam).
+  const inside = (p: Point, poly: readonly Point[]) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i];
+      const b = poly[j];
+      if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c;
+    }
+    return c;
+  };
+  const kept = segs.filter((sg) => {
+    const m = { x: (sg.a.x + sg.b.x) / 2, y: (sg.a.y + sg.b.y) / 2 };
+    const dir = { x: sg.b.x - sg.a.x, y: sg.b.y - sg.a.y };
+    for (let j = 0; j < polys.length; j++) {
+      if (j === sg.poly) continue;
+      const B = polys[j];
+      let best = { d: Infinity, k: -1 };
+      for (let k = 0; k < B.length; k++) {
+        const { d } = segD(m, B[k], B[(k + 1) % B.length]);
+        if (d < best.d) best = { d, k };
+      }
+      if (best.d <= tolMm) {
+        const c = B[best.k];
+        const e = B[(best.k + 1) % B.length];
+        const along = dir.x * (e.x - c.x) + dir.y * (e.y - c.y) > 0;
+        if (!along || j < sg.poly) return false;
+      } else if (inside(m, B)) return false;
+    }
+    return true;
+  });
+
+  // 4. Chain the kept pieces into loops. Where two leave one point (outlines meeting at a corner),
+  //    take the sharpest turn toward the inside: it closes each loop on itself rather than passing
+  //    through the point into the other — and two loops mean two pieces, not one stage.
+  const key = (p: Point) => `${Math.round(p.x * 100)},${Math.round(p.y * 100)}`;
+  const from = new Map<string, Seg[]>();
+  for (const sg of kept) from.set(key(sg.a), [...(from.get(key(sg.a)) ?? []), sg]);
+  const loops: Seg[][] = [];
+  for (const start of kept) {
+    if (start.used) continue;
+    const loop: Seg[] = [];
+    let cur: Seg = start;
+    for (;;) {
+      cur.used = true;
+      loop.push(cur);
+      if (key(cur.b) === key(start.a)) break; // round again
+      const u = { x: cur.b.x - cur.a.x, y: cur.b.y - cur.a.y };
+      const next = (from.get(key(cur.b)) ?? [])
+        .filter((n) => !n.used)
+        .map((n) => {
+          const v = { x: n.b.x - n.a.x, y: n.b.y - n.a.y };
+          return { n, turn: Math.atan2(u.x * v.y - u.y * v.x, u.x * v.x + u.y * v.y) };
+        })
+        .sort((p, q) => q.turn - p.turn)[0]?.n;
+      if (!next) return null; // a loose end: the outlines did not close into a loop
+      cur = next;
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+  const real = loops.filter((l) => Math.abs(areaOf(l.map((s) => s.a))) > 10_000); // slivers under 1cm² are noise
+  if (real.length !== 1 || areaOf(real[0].map((s) => s.a)) <= 0) return null;
+
+  // 5. Its corners: smooth where the loop arrives and leaves along one outline at a corner that
+  //    outline called smooth; and the corners that are no corner (a straight run cut and rejoined)
+  //    taken out.
+  const loop = real[0];
+  let out: V[] = loop.map((s, i) => {
+    const prev = loop[(i - 1 + loop.length) % loop.length];
+    return { x: s.a.x, y: s.a.y, smooth: s.a.smooth && prev.poly === s.poly };
+  });
+  out = out.filter((v, i) => {
+    if (v.smooth) return true;
+    const a = out[(i - 1 + out.length) % out.length];
+    const b = out[(i + 1) % out.length];
+    const u = { x: v.x - a.x, y: v.y - a.y };
+    const w = { x: b.x - v.x, y: b.y - v.y };
+    const lu = Math.hypot(u.x, u.y);
+    const lw = Math.hypot(w.x, w.y);
+    if (lu < 0.5 || lw < 0.5) return false;
+    return Math.abs(u.x * w.y - u.y * w.x) / (lu * lw) > 1e-4 || u.x * w.x + u.y * w.y < 0;
+  });
+  if (out.length < 3) return null;
+  return { outline: out.map(({ x, y }) => ({ x, y })), smooth: smoothOf(out) };
+}
+
 // ── Editing an outline that already exists — the corners and sides of a drawn stage, dragged.
 //
 // Every one keeps the outline the shape it was: a corner moved takes the square sides that meet it
@@ -546,5 +789,63 @@ if (isMain(import.meta.url)) {
   assert(lumpy.outline.length === 4 && lumpy.front === 2, "an unpushed split cleans away, and the front is still the same side");
   const fewer = removeVertex(ell, 0, 3);
   assert(fewer.outline.length === 5 && fewer.front === 0, "a corner taken away joins its two sides");
+
+  // ANY SHAPE: the general union, curves kept.
+  {
+    const rect = (x: number, y: number, w: number, h: number) => [
+      { x, y },
+      { x: x + w, y },
+      { x: x + w, y: y + h },
+      { x, y: y + h },
+    ];
+    const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+    const overlap = unionShapes([{ outline: rect(0, 0, 4000, 4000) }, { outline: rect(2000, 2000, 4000, 4000) }]);
+    assert(!!overlap && overlap.outline.length === 8 && near(Math.abs(areaOf(overlap.outline)), 28e6, 1), "two overlapping squares are one outline of eight corners");
+    // A half-round apron flush against the front of a 6×4: its chord on the stage's edge, its arc out.
+    const arc = (cx: number, cy: number, r: number, from: number, to: number, n: number) =>
+      Array.from({ length: n + 1 }, (_, k) => {
+        const th = from + ((to - from) * k) / n;
+        return { x: Math.round(cx + r * Math.cos(th)), y: Math.round(cy + r * Math.sin(th)) };
+      });
+    const half = arc(3000, 4000, 1200, 0, Math.PI, 16); // (4200,4000) round through (3000,5200) to (1800,4000)
+    const apron = unionShapes([
+      { outline: rect(0, 0, 6000, 4000) },
+      { outline: half, smooth: half.map((_, k) => k).filter((k) => k > 0 && k < 16) },
+    ]);
+    assert(!!apron, "a half-round flush against a rectangle is one stage");
+    assert(apron!.smooth.length === 15, "…its curve still a curve: every corner along the arc smooth");
+    assert(apron!.outline.length === 4 + 17, "…the rectangle's corners, and the arc's two ends where it meets the front");
+    const ends = apron!.outline.filter((q, i) => !apron!.smooth.includes(i) && q.y === 4000 && q.x > 0 && q.x < 6000);
+    assert(ends.length === 2, "…which are real corners, not smooth ones");
+    // A disc overlapping the edge: what is inside the rectangle is gone, the crossings are corners.
+    const discPts = arc(3000, 4000, 1000, 0, 2 * Math.PI, 32).slice(0, 32);
+    const disc = unionShapes([{ outline: rect(0, 0, 6000, 4000) }, { outline: discPts, smooth: discPts.map((_, k) => k) }]);
+    assert(!!disc && disc.outline.every((q) => q.y <= 4000 + 1001), "a disc over the front edge merges");
+    assert(disc!.outline.filter((q, i) => !disc!.smooth.includes(i)).length === 6, "…four rectangle corners and the two crossings");
+    // Apart, meeting at a corner, or round a hole: not one stage.
+    assert(unionShapes([{ outline: rect(0, 0, 2000, 2000) }, { outline: rect(5000, 0, 2000, 2000) }]) === null, "two stages apart are not one");
+    assert(unionShapes([{ outline: rect(0, 0, 2000, 2000) }, { outline: rect(2000, 2000, 2000, 2000) }]) === null, "…nor two that meet only at a corner");
+    const frame = [rect(0, 0, 6000, 1000), rect(0, 5000, 6000, 1000), rect(0, 0, 1000, 6000), rect(5000, 0, 1000, 6000)].map((outline) => ({ outline }));
+    assert(unionShapes(frame) === null, "…nor four round a hole");
+    // Flush within a couple of millimetres, as stages pushed together are.
+    const flush = unionShapes([{ outline: rect(0, 0, 3000, 2000) }, { outline: rect(3001, 0, 3000, 2000) }]);
+    assert(!!flush && flush.outline.length === 4, "stages flush to a millimetre are one rectangle");
+  }
+
+  // ROUND AREAS, as the area tool draws them.
+  {
+    const disc = ellipseArea({ x: 5000, y: 5000 }, 4000, 4000);
+    assert(disc.smooth.length === disc.outline.length && disc.outline.length >= 24, "a disc is a fine polygon, every corner smooth");
+    assert(Math.abs(Math.abs(areaOf(disc.outline)) - Math.PI * 4e6) < 0.01 * Math.PI * 4e6, "…of the disc's area");
+    const tilted = ellipseArea({ x: 0, y: 0 }, 6000, 2000, 90);
+    const txs = tilted.outline.map((q) => q.x);
+    assert(Math.max(...txs) - Math.min(...txs) < 2100, "an oval turned a quarter stands on its end");
+    const half = halfRoundArea({ x: 0, y: 0 }, { x: 4000, y: 0 }, 1);
+    assert(half.outline[0].x === 0 && half.outline[half.outline.length - 1].x === 4000, "a half-round starts and ends on its chord");
+    assert(half.smooth.length === half.outline.length - 2, "…its two chord ends real corners, the arc smooth");
+    assert(half.outline.every((q) => q.y >= -1) && half.outline.some((q) => Math.abs(q.y - 2000) <= 1), "…bulging to the side asked, its apex a corner, two metres out");
+    assert(halfRoundArea({ x: 0, y: 0 }, { x: 4000, y: 0 }, -1).outline.every((q) => q.y <= 1), "…or to the other side");
+    assert(Math.abs(Math.abs(areaOf(half.outline)) - (Math.PI * 4e6) / 2) < 0.01 * Math.PI * 4e6, "…half a disc of area");
+  }
   console.log("stage-draw self-check passed");
 }

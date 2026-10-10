@@ -47,6 +47,9 @@ export interface DeckType {
   /** A round (or oval) platform: one piece, never laid by this fill — a round stage built of
    *  exactly that piece stands on it whole (lib/design-document/stage.ts layStage). */
   round?: boolean;
+  /** Any other platform that is not a rectangle — a half-round, a triangle — as its outline about
+   *  its own centre: also one piece, never laid by this fill, only stood whole (StageBuild.pieces). */
+  outline?: Point[];
 }
 
 export interface LaidDeck {
@@ -95,6 +98,11 @@ export interface FillOptions {
   /** Let a deck reach past the drawn line where that beats the bare strip it would otherwise leave
    *  — see point 5 in the header. Never past `within`: a level stays on its stage. */
   exceed?: boolean;
+  /** The outline is a CURVE (a disc, a half-round): try the rows at several offsets from its front
+   *  and keep the one that covers most. A straight front lays its first row ON the front; a curve's
+   *  front is a point, and rows counted from it in whole deck depths can miss the stage entirely —
+   *  a 4m disc of 244×122 sheets laid one sheet where three fit. */
+  phases?: boolean;
 }
 
 export const STAGE_TOLERANCE_MM = 50;
@@ -232,10 +240,12 @@ function lay(
   frame: ReturnType<typeof frameOf>,
   bound: readonly Point[] | null = null,
   exceed = false,
+  /** Where the grid starts, back from the outline's own corner — see FillOptions.phases. */
+  offset: Point = { x: 0, y: 0 },
 ): Laid {
-  const minX = Math.min(...local.map((p) => p.x));
+  const minX = Math.min(...local.map((p) => p.x)) - offset.x;
   const maxX = Math.max(...local.map((p) => p.x));
-  const minY = Math.min(...local.map((p) => p.y));
+  const minY = Math.min(...local.map((p) => p.y)) - offset.y;
   const maxY = Math.max(...local.map((p) => p.y));
   // How far past the line a deck may reach when exceeding: half the largest deck, which is where a
   // deck would be exactly as much outside as in. The grid is extended that far at the far ends
@@ -318,7 +328,7 @@ function lay(
   if (boxes.length > 0 && blocks.length === 0) {
     const lo = Math.min(...boxes.map((b) => b.x));
     const hi = Math.max(...boxes.map((b) => b.x + b.w));
-    const shift = (maxX - hi - (lo - minX)) / 2;
+    const shift = (maxX - hi - (lo - (minX + offset.x))) / 2;
     if (Math.abs(shift) > 1) {
       const ok = boxes.every((b) => footprintOk(b.x + shift, b.y, b.w, b.d));
       if (ok) for (const b of boxes) b.x += shift;
@@ -357,6 +367,7 @@ function best(
   areaMm2: number,
   bound: readonly Point[] | null = null,
   exceed = false,
+  phases = false,
 ): Laid {
   const fams = families(types);
   const candidates = [...fams, ...types.filter(() => types.length > 1).map((t) => [t])].filter(
@@ -365,13 +376,20 @@ function best(
   let winner: Laid = { decks: [], covered: 0, turned: 0 };
   let winnerKey = [-1, 0, 0];
   for (const c of candidates) {
-    const l = lay(local, blocks, c, tol, frame, bound, exceed);
-    const key = [Math.round((Math.min(1, l.covered / areaMm2) * 200)), -l.decks.length, -l.turned];
-    const better = key[0] !== winnerKey[0] ? key[0] > winnerKey[0] : key[1] !== winnerKey[1] ? key[1] > winnerKey[1] : key[2] > winnerKey[2];
-    if (better) {
-      winner = l;
-      winnerKey = key;
-    }
+    // A curve tries its rows at a few offsets within one grid step, when the step is coarse (a family
+    // of one deck size steps a whole deck at a time); a fine step already finds every row.
+    const step = Math.max(10, c.flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]).reduce((g, d) => gcd(g, d)));
+    const k = phases && step >= 200 ? Math.min(6, Math.floor(step / 100)) : 1;
+    for (let oy = 0; oy < k; oy++)
+      for (let ox = 0; ox < k; ox++) {
+        const l = lay(local, blocks, c, tol, frame, bound, exceed, { x: (ox * step) / k, y: (oy * step) / k });
+        const key = [Math.round((Math.min(1, l.covered / areaMm2) * 200)), -l.decks.length, -l.turned];
+        const better = key[0] !== winnerKey[0] ? key[0] > winnerKey[0] : key[1] !== winnerKey[1] ? key[1] > winnerKey[1] : key[2] > winnerKey[2];
+        if (better) {
+          winner = l;
+          winnerKey = key;
+        }
+      }
   }
   return winner;
 }
@@ -389,7 +407,7 @@ export function fillWithDecks(polygon: readonly Point[], types: readonly DeckTyp
   const local = polygon.map(frame.toLocal);
   const blocks = (opts.obstacles ?? []).map((ob) => ob.map(frame.toLocal));
   const bound = opts.within ? opts.within.map(frame.toLocal) : null;
-  const laid = best(local, blocks, usable, tol, frame, areaMm2, bound, !!opts.exceed);
+  const laid = best(local, blocks, usable, tol, frame, areaMm2, bound, !!opts.exceed, !!opts.phases);
   const coverage = Math.min(1, laid.covered / areaMm2);
   const rect = asRect(polygon, front);
 

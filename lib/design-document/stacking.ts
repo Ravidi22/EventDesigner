@@ -253,6 +253,37 @@ export function autoStack(
   return stack.filter((e) => rise.has(key(e.ref))).map((e) => ({ ...e.ref, order: rise.get(key(e.ref))! }));
 }
 
+/**
+ * What to write when things were just ADDED — dropped from the rail, placed by a click, a stage
+ * drawn — so that nothing new lands hidden under something already on the plan.
+ *
+ * By the default bands a new table went UNDER every object (a table dropped on a stage vanished
+ * into it), and a new object under anything that had ever been brought to the front. So a new thing
+ * goes to the FRONT of the whole floor stack, and then whatever already stands on it (smaller, its
+ * centre inside the new thing — a stage drawn over a row of tables) is put back on top of it, cargo
+ * and all, the way autoStack settles a drag. A new RUG keeps its band under everything — a rug is
+ * what things stand on — and only comes up over what it is clearly ON (a rug laid on a stage).
+ *
+ * `added` may hold several things (a pasted block): they go up together and keep their own order.
+ * Returns [] when nothing needs to change.
+ */
+export function landOnTop(stack: StackEntry[], boxes: Map<string, StackBox>, added: StackRef[]): StackAssignment[] {
+  const key = (r: StackRef) => `${r.kind}:${r.id}`;
+  const addedKeys = new Set(added.map(key));
+  const raised = restackTo(
+    stack,
+    stack.filter((e) => addedKeys.has(key(e.ref)) && e.kind !== "carpet").map((e) => e.ref),
+    "front",
+  );
+  const order = new Map(raised.map((a) => [key(a), a.order]));
+  // The stack as it stands with the new things at the front — what autoStack settles against.
+  const after = stack
+    .map((e) => (order.has(key(e.ref)) ? { ...e, order: order.get(key(e.ref))!, ordered: true } : e))
+    .sort((a, b) => a.order - b.order || a.seq - b.seq);
+  for (const a of autoStack(after, boxes, added)) order.set(key(a), a.order);
+  return stack.filter((e) => order.has(key(e.ref))).map((e) => ({ ...e.ref, order: order.get(key(e.ref))! }));
+}
+
 // ponytail: self-check. Run: npm run check:stacking
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -507,6 +538,47 @@ if (isMain(import.meta.url)) {
       cls,
     );
     assert(names(after) === "rug t2 lamp stageB stageA t1", "…so the room paints B, then A, then the table");
+  }
+
+  // WHAT IS NEW LANDS ON TOP. A table dropped onto a stage is on it, not under it; a stage drawn
+  // over a row of tables comes in front of the room and the tables come back up onto it; a rug
+  // keeps its place under everything unless it was laid ON something.
+  {
+    const k2: Record<string, StackKind | undefined> = { ...kinds, stage: "item", rug2: "carpet", lamp2: "item" };
+    const cls = (p: Placement) => k2[p.id];
+    const boxes = new Map<string, StackBox>([
+      ["table:t1", { x: 0, y: 0, widthMm: 1800, depthMm: 1800 }],
+      ["table:t2", { x: 9000, y: 0, widthMm: 1800, depthMm: 1800 }],
+      ["placement:rug", { x: 30000, y: 30000, widthMm: 8000, depthMm: 8000 }],
+      ["placement:lamp", { x: 9000, y: 500, widthMm: 400, depthMm: 400 }],
+      ["placement:stage", { x: 0, y: 0, widthMm: 6000, depthMm: 4000 }],
+      ["placement:rug2", { x: 0, y: 0, widthMm: 3000, depthMm: 2000 }],
+      ["placement:lamp2", { x: 40000, y: 0, widthMm: 400, depthMm: 400 }],
+    ]);
+    const withOrders = (base: DesignDocumentContent, a: StackAssignment[]): DesignDocumentContent => ({
+      ...base,
+      tables: base.tables.map((t) => { const m = a.find((x) => x.kind === "table" && x.id === t.id); return m ? { ...t, order: m.order } : t; }),
+      placements: base.placements.map((p) => { const m = a.find((x) => x.kind === "placement" && x.id === p.id); return m ? { ...p, order: m.order } : p; }),
+    });
+    // The stage is on the plan; table t1 is the one just dropped onto it.
+    const d: DesignDocumentContent = { ...doc, placements: [...doc.placements, place("stage")] };
+    const s = floorStack(d, cls);
+    assert(names(s) === "rug t1 t2 lamp stage", "by the bands alone a table dropped on a stage is under it");
+    const a = landOnTop(s, boxes, [{ kind: "table", id: "t1" }]);
+    assert(names(floorStack(withOrders(d, a), cls)).endsWith("stage t1"), "…landing on top puts it on the stage");
+    // The stage is the new thing, drawn over t1: it comes to the front, and t1 back up onto it.
+    const b = landOnTop(s, boxes, [{ kind: "placement", id: "stage" }]);
+    assert(names(floorStack(withOrders(d, b), cls)).endsWith("stage t1"), "a stage drawn over a table leaves the table on it");
+    assert(!b.some((x) => x.id === "t2"), "…and does not touch a table it does not cover");
+    // Already at the front: nothing to write.
+    const lamp2: DesignDocumentContent = { ...d, placements: [...d.placements, place("lamp2")] };
+    assert(landOnTop(floorStack(lamp2, cls), boxes, [{ kind: "placement", id: "lamp2" }]).length === 0, "a new object on open floor, already in front, costs nothing");
+    // A rug keeps its band — and is lifted only onto what it lies on.
+    const rug2: DesignDocumentContent = { ...d, placements: [...d.placements, place("rug2")] };
+    const r = landOnTop(floorStack(rug2, cls), boxes, [{ kind: "placement", id: "rug2" }]);
+    const rugNames = names(floorStack(withOrders(rug2, r), cls));
+    assert(rugNames.indexOf("rug2") > rugNames.indexOf("stage"), "a rug laid on a stage lies on it");
+    assert(rugNames.indexOf("rug2") < rugNames.indexOf("t1") || !r.some((x) => x.id === "t1"), "…under the table that stands there");
   }
 
   console.log("stacking self-check passed");
