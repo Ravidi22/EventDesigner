@@ -57,8 +57,12 @@ export async function fetchSettings(): Promise<BusinessSettings> {
     address: row.address,
     businessNumber: row.businessNumber,
     email: row.email,
+    instagram: row.instagram,
     logoUrl: row.logoUrl ?? undefined,
     vatRate: toRate(row.vatRate),
+    pricesIncludeVat: row.pricesIncludeVat,
+    signatureUrl: row.signatureUrl ?? undefined,
+    showBsd: row.showBsd,
     currency: row.currency,
     quoteValidityDays: row.quoteValidityDays,
     quoteTerms: row.quoteTerms,
@@ -90,11 +94,12 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
   // edits the business name writes twice, and the second write must not think the first one's file
   // is a stale one to delete. Comparing previous to next is what makes the no-op a no-op.
   const [before] = await db()
-    .select({ logoUrl: studioSettings.logoUrl })
+    .select({ logoUrl: studioSettings.logoUrl, signatureUrl: studioSettings.signatureUrl })
     .from(studioSettings)
     .where(eq(studioSettings.organizationId, organizationId))
     .limit(1);
   const logoUrl = ownedFileUrl(input.logoUrl, organizationId);
+  const signatureUrl = ownedFileUrl(input.signatureUrl, organizationId);
 
   const values = {
     businessName: clean(input.businessName),
@@ -103,8 +108,17 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
     address: clean(input.address, 300),
     businessNumber: clean(input.businessNumber, 40),
     email: clean(input.email, 120),
+    // A handle, not a URL: "@iritdesign" and "instagram.com/iritdesign/" both store as the name.
+    instagram: clean(input.instagram, 120)
+      .trim()
+      .replace(/^https?:\/\/(www\.)?instagram\.com\//i, "")
+      .replace(/^@/, "")
+      .replace(/\/+$/, ""),
     logoUrl,
     vatRate: String(vatRate),
+    pricesIncludeVat: input.pricesIncludeVat !== false,
+    signatureUrl,
+    showBsd: input.showBsd === true,
     // Clamped, not rejected, for the same reason as the VAT rate: it is a number input on an
     // autosaving form, so it passes through 0 and through half-typed values on the way to 30.
     // A quote in force for a negative number of days is not a state a client should ever see.
@@ -126,6 +140,7 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
     .onConflictDoUpdate({ target: studioSettings.organizationId, set: values });
 
   await removeReplacedFile(before?.logoUrl, logoUrl, organizationId);
+  await removeReplacedFile(before?.signatureUrl, signatureUrl, organizationId);
 
   revalidateSettings();
   return fetchSettings();

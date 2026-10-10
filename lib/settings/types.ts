@@ -10,8 +10,17 @@ export interface BusinessSettings {
   /** ע.מ / ח.פ — printed under the business name on the quote. */
   businessNumber: string;
   email: string;
+  /** Instagram handle, without the @ — printed on the quote's letterhead. */
+  instagram: string;
   logoUrl?: string;
   vatRate: number; // 0.18 = 18%
+  /** Catalog prices and a quote's typed price already include VAT (the quote shows the VAT inside
+   *  the total), or exclude it (the quote adds it on top). */
+  pricesIncludeVat: boolean;
+  /** The studio's signature, uploaded — printed over the studio's line on the quote. */
+  signatureUrl?: string;
+  /** בס״ד at the top of every quote page. */
+  showBsd: boolean;
   currency: string; // display symbol; phase 1 is ₪
   /** Days an issued quote holds its price, printed as "בתוקף עד …". */
   quoteValidityDays: number;
@@ -56,7 +65,10 @@ export const DEFAULT_SETTINGS: BusinessSettings = {
   address: "",
   businessNumber: "",
   email: "",
+  instagram: "",
   vatRate: 0.18,
+  pricesIncludeVat: true,
+  showBsd: false,
   currency: "₪",
   quoteValidityDays: 14,
   quoteTerms: "",

@@ -77,6 +77,7 @@ function assertEvent(value: unknown): asserts value is EventSummary {
   assertStamp(e.lostAt, "event.lostAt");
   // Cleaned on the way into the row (cleanShades, db-mapping.ts); only the shape is refused here.
   if (e.shades !== undefined && !Array.isArray(e.shades)) throw new Error("event.shades must be a list");
+  if (e.eventType !== undefined && typeof e.eventType !== "string") throw new Error("event.eventType must be text");
   if (typeof e.createdAt !== "number") throw new Error("event.createdAt must be epoch ms");
 }
 
@@ -230,6 +231,8 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
           setupDate: row.setupDate,
           // Same rule as setupDate: a details field missing from this list is silently dropped.
           shades: row.shades,
+          // Same rule again: the quote's title reads it, so a dropped patch is a wrong quote.
+          eventType: row.eventType,
           venueId: row.venueId,
           zonesLabel: row.zonesLabel,
           guests: row.guests,

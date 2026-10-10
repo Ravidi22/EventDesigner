@@ -26,6 +26,7 @@ export async function beginEvent(input: {
   zonesLabel: string;
   /** גווני האירוע — see EventSummary.shades. */
   shades?: string[];
+  eventType?: string;
   mmPerUnit?: number;
   /** A saved sketch to open the event on (lib/studio/sketch-actions.ts); absent = a blank plan. */
   sketchTemplateId?: string;
@@ -46,6 +47,7 @@ export async function beginEvent(input: {
     zonesLabel: input.zonesLabel,
     guests: input.guests,
     shades: input.shades,
+    eventType: input.eventType,
     step: 0,
     createdAt: Date.now(),
   };

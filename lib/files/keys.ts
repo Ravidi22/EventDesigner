@@ -13,9 +13,9 @@ import { isMain } from "../self-check";
 
 /** What a file is FOR. It decides the folder and, later, which sizes get generated — not who may
  *  read it, which is the key prefix's job. */
-export type FileKind = "gallery" | "product" | "underlay" | "logo";
+export type FileKind = "gallery" | "product" | "underlay" | "logo" | "signature";
 
-export const FILE_KINDS: FileKind[] = ["gallery", "product", "underlay", "logo"];
+export const FILE_KINDS: FileKind[] = ["gallery", "product", "underlay", "logo", "signature"];
 
 export function isFileKind(value: unknown): value is FileKind {
   return typeof value === "string" && (FILE_KINDS as string[]).includes(value);

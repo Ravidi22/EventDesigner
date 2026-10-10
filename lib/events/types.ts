@@ -47,6 +47,8 @@ export interface EventSummary {
   /** גווני האירוע: variant names from the studio's catalog, first preferred. An item placed for
    *  this event wears the first of them it stocks (lib/catalog/shades.ts). Absent = no palette. */
   shades?: string[];
+  /** סוג האירוע (EVENT_TYPES). Absent = not said. */
+  eventType?: string;
   archived?: boolean;
   createdAt: number;
 }
@@ -117,3 +119,6 @@ export function formatEventDate(iso: string): string {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "טרם נקבע" : d.toLocaleDateString("he-IL", { day: "numeric", month: "short" });
 }
+
+/** What the details form offers for סוג האירוע — the quote's title reads "הצעת מחיר לעיצוב <type>". */
+export const EVENT_TYPES = ["חתונה", "חינה", "אירוסין", "בר מצווה", "בת מצווה", "ברית", "יום הולדת", "אירוע חברה"];

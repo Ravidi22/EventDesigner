@@ -247,7 +247,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
   const stamped = view === "packing";
 
   return (
-    <div className="flex h-full min-h-0 print:block">
+    <div className="flex h-full min-h-0 print:block print:h-auto">
       {/* F-6.1: page setup applies when printing.
           A PLAN SHEET OWNS ITS OWN MARGIN. sheet-frame.tsx draws the border, the title block and
           the scale bar inside a full-trim page (210x297 for A4), so globals.css's
@@ -258,7 +258,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
           margin, which is the only margin they have. */}
       {/* Named pages carry each drawing sheet's own orientation into the PDF; the default page is
           the text pages' (and the quote's and packing list's). */}
-      <style>{`@media print { @page { size: ${paper} ${textOrient}; ${view === "map" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
+      <style>{`@media print { @page { size: ${view === "quote" ? "A4 portrait" : `${paper} ${textOrient}`}; ${view === "map" || view === "quote" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
 
       {/* THE SHAPE IS THE STUDIO'S, deliberately: a rail of things to work on down the start edge,
           the work itself filling the rest. This used to be one horizontal strip doing four unrelated
@@ -384,6 +384,9 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
 
         {/* Page setup and the print itself, under the rule — you touch these once, after you have
             decided what you are printing. F-6.1. */}
+        {/* The quote carries its own actions (share, download, print) above its pages, and is
+            always A4 portrait — a client's document, not a sheet set. */}
+        {view !== "quote" && (
         <div className="flex shrink-0 flex-col gap-2.5 border-t border-border p-2.5">
           <div className="flex items-center justify-between gap-2">
             <span className="text-caption text-muted">גיליון</span>
@@ -426,6 +429,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
             </p>
           )}
         </div>
+        )}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg print:block">
@@ -528,6 +532,17 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
                 </article>
               );
             })
+          ) : view === "quote" ? (
+            // The quote is its own A4 pages (./quote-document.tsx) — the same boxes the PDF is
+            // built from — so it does not sit inside a sheet of this screen's.
+            <Quote
+              doc={doc}
+              meeting={meeting}
+              event={event}
+              plan={plan}
+              zonePlans={zonePlans}
+              documentVersion={workspace?.document?.version ?? null}
+            />
           ) : (
             <article
               className="sheet w-full bg-canvas shadow-lifted"
@@ -550,7 +565,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
                 </header>
               )}
 
-              {view === "packing" ? <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} /> : <Quote doc={doc} meeting={meeting} />}
+              <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} />
             </article>
             )}
           </div>

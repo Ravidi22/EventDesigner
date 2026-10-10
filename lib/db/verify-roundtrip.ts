@@ -76,6 +76,7 @@ import {
   toggleLike,
 } from "@/lib/gallery/actions";
 import { issueQuote } from "@/lib/quotes/actions";
+import { DEFAULT_LAYOUT } from "@/lib/quotes/layout";
 import {
   fetchEventMargin,
   fetchProcurement,
@@ -669,14 +670,19 @@ async function verifySettings() {
     address: "רחוב הבדיקה 1, תל אביב",
     businessNumber: "515151515",
     email: "studio@example.com",
+    instagram: "@studio.test/",
     logoUrl: ownLogo,
     vatRate: 0.17,
+    pricesIncludeVat: false,
+    showBsd: true,
     currency: "€", // ignored on purpose — see below
     quoteValidityDays: 21,
     quoteTerms: "תשלום: 50% במעמד האישור.\nביטול עד 30 יום.",
   });
 
   check("settings round-trip", written.businessName === "בדיקה — סטודיו" && written.ownerName === "בדיקה");
+  check("an Instagram handle is stored bare", written.instagram === "studio.test", written.instagram);
+  check("the VAT basis round-trips", written.pricesIncludeVat === false);
   check("the address survives", written.address === "רחוב הבדיקה 1, תל אביב", written.address);
   check("the quote letterhead survives", written.businessNumber === "515151515" && written.email === "studio@example.com");
   // Multi-line, because the sheet splits this on newlines into one bullet per clause — a column
@@ -1104,13 +1110,7 @@ async function verifySuppliers() {
   );
   check("…and is priced separately as exposure", drawn.potential.cost >= 560, String(drawn.potential.cost));
 
-  await issueQuote(eventId, {
-    discountType: "amount",
-    discountValue: 0,
-    hiddenVariantIds: [],
-    mergedCategoryIds: [],
-    total: 5000,
-  });
+  await issueQuote(eventId, { layout: DEFAULT_LAYOUT, total: 5000, discount: 0 });
 
   const committed = await fetchProcurement("2026-09-01", "2026-09-30");
   const group = committed.order.find((g) => g.supplierId === supplier.id);

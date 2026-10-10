@@ -55,6 +55,7 @@ export function toEvent(row: EventRow, zoneIds: string[]): EventSummary {
     // NOT NULL DEFAULT '{}' while the type says `shades?`: an empty palette and no palette are one
     // value, folded back to absent like `archived` below.
     shades: row.shades.length ? row.shades : undefined,
+    eventType: row.eventType || undefined,
     // The column is NOT NULL DEFAULT false while the type says `archived?: boolean`. Same collapse
     // as the catalog's: absent and false are one value spelled twice, so folding it back keeps the
     // round-trip lossless.
@@ -87,6 +88,7 @@ export function toEventRow(e: EventSummary, organizationId: string): EventInsert
     // not accept it as a date.
     setupDate: e.setupDate || null,
     shades: cleanShades(e.shades),
+    eventType: (e.eventType ?? "").trim().slice(0, 40),
     archived: e.archived ?? false,
     createdAt: new Date(e.createdAt),
   };
