@@ -898,6 +898,20 @@ export function CanvasStage({
     }
     return out;
   }, [alignTo, layerVisible.ceiling, sorted.drapes, sorted.carpets, doc, structure, plan.structure]);
+  /** One target by id, off THIS render's document — what a measurement anchored to a table is
+   *  re-resolved against on every frame of the table's drag (the lazy list above is published after
+   *  the commit, one render behind during one). itemGeometry is cached per item object, so this is
+   *  two map lookups a frame and one outline for the thing that moved. Visibility is not consulted:
+   *  a measurement to an item on a plane since hidden keeps following the item. */
+  const measureTargetById = useCallback(
+    (id: string): MeasureTarget | undefined => {
+      const i = id.indexOf(":");
+      if (i < 0) return undefined;
+      const g = itemGeometry(doc, structure, plan.structure, { kind: id.slice(0, i) as SelectionKind, id: id.slice(i + 1) });
+      return g ? { id, polys: g.polysAt(g.centre) } : undefined;
+    },
+    [doc, structure, plan.structure],
+  );
 
   /** The selection's own boxes, for the centre-line guides — one crosshair per selected thing. */
   const guideItems = useMemo(
@@ -1526,6 +1540,7 @@ export function CanvasStage({
       graph={plan.structure}
       focus={focus}
       measureTargets={measureTargets}
+      measureTargetById={measureTargetById}
       // The middle that matters is the event's — the zones it is held in, or the one the eye is on —
       // not the whole property's: a stage centred on the ballroom is what the designer is checking,
       // and the property's centre may be in the car park.

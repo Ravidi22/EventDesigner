@@ -38,6 +38,7 @@
     "check:dressing": "tsx lib/design-document/dressing.ts",
     "check:table-patterns": "tsx lib/studio/table-patterns.ts",
     "check:proximity": "tsx lib/studio/proximity.ts",
+    "check:tape": "tsx lib/studio/tape.ts",
     "check:stage-fill": "tsx lib/studio/stage-fill.ts",
     "check:stage": "tsx lib/design-document/stage.ts",
     "check:stage-draw": "tsx lib/studio/stage-draw.ts",

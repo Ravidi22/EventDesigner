@@ -42,7 +42,8 @@ import {
   endpointFromLengthAngle,
 } from "@/lib/studio/geometry";
 import { snapPoint, constrainAngleDeg, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
-import { insidePolys, pointToPolys, polysGap } from "@/lib/studio/proximity";
+import { insidePolys } from "@/lib/studio/proximity";
+import { addTape, anchorAt, pruneTape, removeTape, resolveTape, tapeId, tapeReadout, type TapeAnchor, type TapeLookup, type TapeMeasurement, type TapeSegment } from "@/lib/studio/tape";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
@@ -402,6 +403,7 @@ export function PlanCanvas({
   gridMm = 1000,
   gridColorClassName = "text-border",
   measureTargets,
+  measureTargetById,
   centerGuides,
   toolbarExtras,
 }: {
@@ -520,11 +522,19 @@ export function PlanCanvas({
    *  bg-canvas a colour close to text-border in value (the halls screen's light-purple canvas,
    *  say) needs a line with more contrast against it, or the grid just disappears. */
   gridColorClassName?: string;
-  /** What the tape can pick up as a whole — click inside one and the measurement runs from its
-   *  EDGE. Topmost last, like the drawing order. Omitted = the tape measures between points only.
-   *  A FUNCTION is read only while the tape is armed: the outlines of everything on a plan are
-   *  not cheap, and a host that hands them over lazily pays for them only when they are measured. */
+  /** What the tape can pick up as a whole — press or release inside one and the measurement runs
+   *  from its EDGE. Topmost last, like the drawing order. Omitted = the tape measures between points
+   *  only. A FUNCTION is read only while the tape is armed: the outlines of everything on a plan are
+   *  not cheap, and a host that hands them over lazily pays for them only when they are measured.
+   *  Used for HIT-TESTING — at a press and a release, when nothing else is moving. */
   measureTargets?: MeasureTarget[] | (() => MeasureTarget[]);
+  /** One target by id, read off the document AS IT IS IN THIS RENDER. A measurement anchored to an
+   *  item is re-resolved every render so it follows the item while it is dragged; the list above is
+   *  published after the host's commit, which is one render behind during a drag, and a tape read
+   *  off it would lag the table by a frame. A host that can answer synchronously hands this over
+   *  (the studio: itemGeometry is cached per item object, so two lookups a frame cost nothing);
+   *  without it the list is searched. */
+  measureTargetById?: (id: string) => MeasureTarget | undefined;
   /** The centre-line guides (the crosshair button): `plan` is the area whose middle matters — the
    *  event's zones, the hall — and `items` the selection's own boxes. Supplying this is what puts the
    *  button on the canvas at all. */
@@ -594,17 +604,26 @@ export function PlanCanvas({
   // Measurements default on while drawing (that's when they're the point) and off once the shape is
   // closed — until the ruler button is pressed, after which the choice is the user's and sticks.
   const [dimsOverride, setDimsOverride] = useState<boolean | null>(null);
-  // THE TAPE MEASURE. `tapeOn` is the armed tool; `tape` is the segment being measured — one point
-  // once the first click lands, two once the second does, and it stays on screen after that so the
-  // number can be read, quoted down a phone and checked against the plan without holding a drag.
+  // THE TAPE MEASURE. `tapeOn` is the armed tool. A measurement is DRAGGED out — press on the empty
+  // floor (or Alt+press anywhere, an item included), pull to the other point or thing, let go — and
+  // then it STAYS: `measurements` is every one taken since the tool was armed, each with its own
+  // figure, until Escape or the tool is put down. An end set down inside a MeasureTarget is that
+  // whole thing, re-resolved every render (lib/studio/tape.ts), so a tape to a table keeps reading
+  // to the table while it is dragged, and a tape to a table since deleted goes with it.
   //
   // It answers the question the wall labels never could: how far is the stage from the first row of
   // tables, is that aisle wide enough for a wheelchair, will the dance floor fit between those two
   // columns. Every one of those is a distance between two points that are not the ends of a wall,
   // and until now the only way to get it was to draw something and delete it again.
   const [tapeOn, setTapeOn] = useState(false);
-  // `aId`/`bId` are the measure targets an end was dropped INSIDE, when it was — see MeasureTarget.
-  const [tape, setTape] = useState<{ a: Point; b: Point | null; aId?: string; bId?: string } | null>(null);
+  const [measurements, setMeasurements] = useState<TapeMeasurement[]>([]);
+  // The one being pulled out right now — written once per animation frame from the gesture's own
+  // ref (tapeGesture), never per pointermove.
+  const [tapeDraft, setTapeDraft] = useState<{ a: TapeAnchor; b: TapeAnchor } | null>(null);
+  // The live tape gesture: the fixed end, the latest raw pointer position (and whether Shift is
+  // held), and the frame that will paint it. `cancelled` is Escape mid-drag — the release then adds
+  // nothing.
+  const tapeGesture = useRef<{ a: TapeAnchor; raw: Point | null; shift: boolean; frame: number | null; cancelled: boolean } | null>(null);
   // The centre-line guides. Off by default: a hall with a crosshair through it all evening is noise,
   // and the question "is this centred" is asked in moments, not continuously.
   const [guidesOn, setGuidesOn] = useState(false);
@@ -1023,49 +1042,111 @@ export function PlanCanvas({
   // there, and a measurement that quietly rounds itself onto the nearest 15° is a measurement of
   // something other than what was asked. Shift constrains it, for the times you want to know the
   // distance straight across rather than corner to corner.
-  const snapTape = (p: Point, constrain: boolean): Point =>
+  const snapTape = (p: Point, constrain: boolean, from?: Point): Point =>
     snapPoint(p, {
       toleranceMm: SNAP_TOL_PX * mmPerPx,
       outline: [...outline, ...graphPoints],
       fixtures: fixtureRefs(),
       gridMm,
-      ...(constrain && tape?.a ? { anchor: tape.a, constrainAngle: true } : {}),
+      ...(constrain && from ? { anchor: from, constrainAngle: true } : {}),
     }).point;
 
-  // What the tape currently shows: the finished measurement, or the live one being dragged out from
-  // the first click to wherever the pointer is. Re-derived each render rather than stored, so the
-  // second point tracks the cursor without a second piece of state to keep honest.
+  // An end set down inside a measure target is that WHOLE THING, not the point pressed: the tape
+  // then runs from the nearest point of its outline — to the other end's point, or to the nearest
+  // point of the other thing's outline. So "drag from the stage to the table" reads the clear air
+  // between them, which is the measurement the tape was always being used to approximate by eye.
   //
-  // An end dropped inside a measure target is that WHOLE THING, not the point clicked: the tape then
-  // runs from the nearest point of its outline — to the other end's point, or to the nearest point
-  // of the other thing's outline. So "click the stage, click the table" reads the clear air between
-  // them, which is the measurement the tape was always being used to approximate by eye.
+  // Hit-testing (which thing is under the pointer) reads the host's LIST — at a press and a release,
+  // when nothing else is moving. Re-resolving an anchored end each render goes through the host's
+  // `measureTargetById` when it has one, which reads this render's document, so a measurement
+  // follows a dragged table on the same frame (the list is published a render late — see the prop).
+  const measureList = useCallback((): MeasureTarget[] => (typeof measureTargets === "function" ? measureTargets() : (measureTargets ?? [])), [measureTargets]);
   const targetAt = (p: Point): MeasureTarget | undefined => {
     const list = measureList();
     for (let i = list.length - 1; i >= 0; i--) if (insidePolys(p, list[i].polys)) return list[i];
     return undefined;
   };
-  const targetById = (id?: string) => (id ? measureList().find((t) => t.id === id) : undefined);
-  const hoverTarget = tapeOn && cursorRaw && !tape?.b ? targetAt(cursorRaw) : undefined;
-  // The things the tape has picked up or is hovering — only looked up while the tape is armed, so a
-  // plan with no tape out never asks its host for the outlines.
-  const targetedPolys = tapeOn ? [targetById(tape?.aId), targetById(tape?.bId), hoverTarget] : null;
-  const tapeSegment: { a: Point; b: Point; live: boolean; between: boolean } | null = (() => {
-    if (!tape) return null;
-    const live = !tape.b;
-    const bPoint = tape.b ?? (cursorRaw ? snapTape(cursorRaw, false) : null);
-    if (!bPoint) return null;
-    const A = targetById(tape.aId);
-    const B0 = live ? hoverTarget : targetById(tape.bId);
-    const B = B0 && B0.id !== A?.id ? B0 : undefined;
-    if (A && B) {
-      const g = polysGap(A.polys, B.polys);
-      return { a: g.from, b: g.to, live, between: true };
-    }
-    if (A) return { a: pointToPolys(bPoint, A.polys).to, b: bPoint, live, between: true };
-    if (B) return { a: tape.a, b: pointToPolys(tape.a, B.polys).to, live, between: true };
-    return { a: tape.a, b: bPoint, live, between: false };
-  })();
+  const targetById = (id?: string): MeasureTarget | undefined =>
+    id ? (measureTargetById ? measureTargetById(id) : measureList().find((t) => t.id === id)) : undefined;
+  const tapeLookup: TapeLookup = (id) => targetById(id)?.polys;
+  // Every measurement as it stands on this render's plan. One whose item is gone resolves to
+  // nothing and is not drawn — and comes back with the item if the deletion is undone; the stored
+  // list is swept of them when the next measurement is added (beginTape), not by a write in render.
+  const shownTapes = tapeOn
+    ? measurements.flatMap((m) => {
+        const seg = resolveTape(m, tapeLookup);
+        return seg ? [{ id: m.id, seg }] : [];
+      })
+    : [];
+  const draftSeg = tapeOn && tapeDraft ? resolveTape(tapeDraft, tapeLookup) : null;
+  // The things the draft has hold of: their outlines are drawn dashed while the tape is being
+  // pulled, so it is plain that it runs from the thing's edge and not from where the press landed.
+  const targetedPolys = tapeOn && tapeDraft ? [targetById(tapeDraft.a.targetId), targetById(tapeDraft.b.targetId)] : null;
+
+  // THE TAPE GESTURE. A press (on the empty floor; with Alt, anywhere) fixes the first end; every
+  // move carries the other; the release sets it down — on the thing under the pointer when there is
+  // one, else snapped like any other point here (Shift locks the angle). A press that never travels
+  // the drag threshold is a click and measures nothing. Window-driven like every other drag on the
+  // plan (lib/studio/gesture.ts), and the draft is painted once per animation frame off the
+  // gesture's own ref — a setState per pointermove would re-render the canvas faster than it paints.
+  const beginTape = (e: React.PointerEvent<SVGSVGElement>) => {
+    cancelFocus();
+    const raw = clientToMm(e.clientX, e.clientY);
+    const hit = targetAt(raw);
+    const a = anchorAt(hit ? raw : snapTape(raw, false), hit?.id);
+    const g = { a, raw: null as Point | null, shift: false, frame: null as number | null, cancelled: false };
+    tapeGesture.current = g;
+    const endAt = (p: Point, shift: boolean): TapeAnchor => {
+      const h = targetAt(p);
+      return anchorAt(h ? p : snapTape(p, shift, a.point), h?.id);
+    };
+    const paint = () => {
+      g.frame = null;
+      if (g.cancelled || !g.raw) return;
+      setTapeDraft({ a, b: endAt(g.raw, g.shift) });
+    };
+    startPointerGesture(e, {
+      onMove: (ev) => {
+        if (g.cancelled) return;
+        g.raw = clientToMm(ev.clientX, ev.clientY);
+        g.shift = ev.shiftKey;
+        if (g.frame === null) g.frame = requestAnimationFrame(paint);
+      },
+      onEnd: (_ev, moved) => {
+        if (g.frame !== null) cancelAnimationFrame(g.frame);
+        g.frame = null;
+        if (tapeGesture.current === g) tapeGesture.current = null;
+        setTapeDraft(null);
+        if (g.cancelled || !moved || !g.raw) return;
+        // The new one joins the list; the ones whose items are gone leave it here, at the one moment
+        // the list is written anyway. (Nothing moved during this drag, so the press render's lookup
+        // is still the plan as it is.)
+        setMeasurements((list) => addTape(pruneTape(list, tapeLookup), { id: tapeId(), a, b: endAt(g.raw!, g.shift) }));
+      },
+    });
+  };
+  // Escape mid-drag: only the draft goes. The gesture runs on to its release, which then adds nothing.
+  const cancelTapeDraft = () => {
+    const g = tapeGesture.current;
+    if (!g) return false;
+    g.cancelled = true;
+    if (g.frame !== null) cancelAnimationFrame(g.frame);
+    g.frame = null;
+    setTapeDraft(null);
+    return true;
+  };
+  // Putting the tape down takes every measurement with it — on or off, the plan is clean.
+  const toggleTape = () => {
+    cancelTapeDraft();
+    setMeasurements([]);
+    setTapeOn((on) => !on);
+  };
+  // The key handler below is installed per mode, not per render; it reads the tape through this so
+  // Escape and M see the tool as it is now, not as it was when the listener went on.
+  const tapeNow = useRef({ on: tapeOn, toggleTape });
+  useLayoutEffect(() => {
+    tapeNow.current = { on: tapeOn, toggleTape };
+  });
 
   const pending = mode === "draw" && cursorRaw ? snapDraw(cursorRaw, altHeld) : null;
   const pendingLenMm = pending && drawAnchor ? wallLengthMm(drawAnchor, pending.point) : 0;
@@ -1132,19 +1213,12 @@ export function PlanCanvas({
     if (spaceHeld || panTool) return; // the hand, or Space: a press here moves the view — never draw/select
     if (panMoved.current) return; // …nor on the click that closes a pan the user let go of space during
     if (marqueeMoved.current) { marqueeMoved.current = false; return; } // …nor on the click that ends a marquee drag
-    // An armed tape takes the click ahead of everything, in BOTH modes — "how wide is that gap"
-    // comes up mid-trace as often as it does over a finished plan, and a tool that had to be put
-    // down before the wall could be drawn is one nobody reaches for. Click one, click two, read it;
-    // a third click starts the next measurement rather than making the designer clear this one.
-    if (tapeOn) {
-      const raw = clientToMm(e.clientX, e.clientY);
-      // Inside a thing, the end IS the thing (see tapeSegment) and the raw point is kept only as a
-      // fallback; on open floor it snaps to corners and walls like every other point here.
-      const hit = targetAt(raw);
-      const p = hit ? raw : snapTape(raw, e.shiftKey);
-      setTape((t) => (t && !t.b ? { ...t, b: p, bId: hit?.id } : { a: p, b: null, aId: hit?.id }));
-      return;
-    }
+    // An armed tape owns the canvas's clicks, in BOTH modes — "how wide is that gap" comes up
+    // mid-trace as often as it does over a finished plan. A measurement is a DRAG (beginTape); a
+    // press that never travelled is a click, and with the tool held it does nothing: no stray
+    // measurement, no vertex dropped, no selection cleared. (The click that follows a real drag never
+    // gets here — the gesture swallows it.)
+    if (tapeOn) return;
     if (mode !== "draw") {
       onSelect(null);
       onSelectGraph?.(null, false); // empty canvas clears the graph selection too, not just the outline's
@@ -1239,14 +1313,13 @@ export function PlanCanvas({
       if (e.key === "Alt") { e.preventDefault(); setAltHeld(true); return; }
       if (e.key === "+" || e.key === "=") { zoomByCenter(1 / 1.2); return; }
       if (e.key === "-" || e.key === "_") { zoomByCenter(1.2); return; }
-      // Escape backs out of the tape one step at a time — first the measurement on screen, then the
-      // tool itself. Taken before the draw-mode handler below and before the host's own Escape, for
-      // the same reason a half-drawn outline claims it: while a tool is armed, Escape means "put
-      // this down", and nothing else.
-      if (tapeOn && e.key === "Escape") {
+      // Escape backs out of the tape: a measurement half-pulled is dropped and nothing else changes;
+      // otherwise every measurement on screen is cleared and the tool put down. Taken before the
+      // draw-mode handler below and before the host's own Escape, for the same reason a half-drawn
+      // outline claims it: while a tool is armed, Escape means "put this down", and nothing else.
+      if (tapeNow.current.on && e.key === "Escape") {
         e.preventDefault();
-        if (tape) setTape(null);
-        else setTapeOn(false);
+        if (!cancelTapeDraft()) tapeNow.current.toggleTape();
         return;
       }
       if (e.key === "m" || e.key === "M" || e.key === "\u05e6") {
@@ -1254,8 +1327,7 @@ export function PlanCanvas({
         // through isShortcut rather than reading e.key (see lib/keyboard.ts).
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         e.preventDefault();
-        setTapeOn((on) => !on);
-        setTape(null);
+        tapeNow.current.toggleTape();
         return;
       }
       if (mode !== "draw") return;
@@ -1325,7 +1397,6 @@ export function PlanCanvas({
   const backdropNode = useMemo(() => (typeof backdrop === "function" ? backdrop(layerCtx) : backdrop), [backdrop, layerCtx]);
   // eslint-disable-next-line react-hooks/refs
   const overlayNode = useMemo(() => (typeof overlay === "function" ? overlay(layerCtx) : overlay), [overlay, layerCtx]);
-  const measureList = useCallback((): MeasureTarget[] => (typeof measureTargets === "function" ? measureTargets() : (measureTargets ?? [])), [measureTargets]);
 
   const entryOpen = entry !== null;
   useEffect(() => {
@@ -1435,6 +1506,15 @@ export function PlanCanvas({
       // of the view, not of the palm. Without this a press on anything draggable stopped the event
       // on its way up, and the view could only be moved from the few bare patches between things.
       onPointerDownCapture={(e) => {
+        // Alt+press with the tape armed measures FROM whatever is under the pointer — taken here, in
+        // the capture phase, so an item's own press handler (which would start dragging it) never
+        // sees it. Without Alt an item's press is the item's: the tape takes only the empty floor.
+        if (tapeOn && e.button === 0 && e.altKey && !panTool && !spaceHeld) {
+          e.preventDefault();
+          e.stopPropagation();
+          beginTape(e);
+          return;
+        }
         if (!((panTool || spaceHeld) && e.button === 0) && e.button !== 1) return;
         e.preventDefault();
         e.stopPropagation();
@@ -1451,11 +1531,12 @@ export function PlanCanvas({
           cancelFocus(); // the view is the user's again the instant they grab it
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           pan.current = { x: e.clientX, y: e.clientY, moved: false, ax: e.clientX, ay: e.clientY };
-        } else if (tapeOn) {
-          // An armed tape owns the empty canvas. Without this a two-pixel wobble between press and
-          // release turns the first click into a marquee drag, which swallows the click that was
-          // meant to drop a measuring point and clears the measurement already on screen. Space and
-          // the middle button (above) still pan, and the wheel still zooms.
+        } else if (tapeOn && e.button === 0) {
+          // An armed tape owns the empty canvas: a press here pulls out a measurement — not a marquee
+          // and not a pan (Space and the middle button, above, still pan; the wheel still zooms). A
+          // press on an item never gets here (its node stops it) and drags the item as it always
+          // did; Alt+press on one is taken in the capture phase above.
+          beginTape(e);
         } else if (mode === "edit" && canMarquee) {
           // A PLAIN drag on empty canvas rubber-bands. It spent one release behind the additive
           // modifier, with a plain drag panning instead, and that trade was the wrong way round for
@@ -1527,9 +1608,9 @@ export function PlanCanvas({
           return;
         }
         if (e.altKey !== altHeld) setAltHeld(e.altKey); // the modifier can be pressed while the window was unfocused
-        // The rubber band needs the live pointer while a shape is being drawn, and so does the tape
-        // between its first click and its second — in edit mode, where nothing tracked it before.
-        if (mode === "draw" || (tapeOn && tape && !tape.b)) {
+        // The rubber band needs the live pointer while a shape is being drawn. (The tape does not:
+        // its live end rides its own gesture, see beginTape.)
+        if (mode === "draw") {
           lastClientPos.current = { x: e.clientX, y: e.clientY };
           setCursorRaw(clientToMm(e.clientX, e.clientY));
         }
@@ -1558,7 +1639,6 @@ export function PlanCanvas({
       }}
       onPointerLeave={() => {
         if (mode === "draw" && !entry) setCursorRaw(null); // keep the band alive while a length is being typed
-        else if (tapeOn) setCursorRaw(null);
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -2271,47 +2351,18 @@ export function PlanCanvas({
           );
         })}
       {/* THE TAPE. Drawn last, so it lies over the walls, the furniture and everything a host put in
-          its layers — a measurement half-hidden behind a table is not a measurement. The live half
-          (first click placed, second not yet) is dashed; a finished one is solid and stays until the
-          next measurement replaces it. */}
-      {tapeSegment && (
-        <g className="text-accent pointer-events-none">
-          <line
-            x1={tapeSegment.a.x}
-            y1={tapeSegment.a.y}
-            x2={tapeSegment.b.x}
-            y2={tapeSegment.b.y}
-            stroke="currentColor"
-            strokeWidth={1.5}
-            strokeDasharray={tapeSegment.live ? "6 4" : undefined}
-            vectorEffect="non-scaling-stroke"
-          />
-          {/* End ticks, square to the tape — the pair of marks that say where the measurement
-              actually starts and stops, rather than leaving a line whose ends are guesses. */}
-          {([tapeSegment.a, tapeSegment.b] as Point[]).map((e, i) => {
-            const len = Math.hypot(tapeSegment.b.x - tapeSegment.a.x, tapeSegment.b.y - tapeSegment.a.y) || 1;
-            const nx = (-(tapeSegment.b.y - tapeSegment.a.y) / len) * mm(6);
-            const ny = ((tapeSegment.b.x - tapeSegment.a.x) / len) * mm(6);
-            return (
-              <line
-                key={i}
-                x1={e.x - nx}
-                y1={e.y - ny}
-                x2={e.x + nx}
-                y2={e.y + ny}
-                stroke="currentColor"
-                strokeWidth={1.5}
-                vectorEffect="non-scaling-stroke"
-              />
-            );
-          })}
-        </g>
-      )}
+          its layers — a measurement half-hidden behind a table is not a measurement. Every
+          measurement taken since the tool was armed is drawn, solid; the one being pulled out now is
+          dashed. */}
+      {shownTapes.map(({ id, seg }) => (
+        <TapeLine key={id} seg={seg} tickMm={mm(6)} />
+      ))}
+      {draftSeg && <TapeLine seg={draftSeg} tickMm={mm(6)} live />}
 
-      {/* What the tape has picked up, or is about to: the outline of each thing an end belongs to,
-          so it is plain that the measurement runs from that thing's edge and not from where the
-          click happened to land. */}
-      {tapeOn && targetedPolys &&
+      {/* What the tape being pulled has hold of: the outline of each thing an end belongs to, so it
+          is plain that the measurement runs from that thing's edge and not from where the press
+          happened to land. */}
+      {targetedPolys &&
         targetedPolys
           .filter((t, i, all): t is MeasureTarget => !!t && all.findIndex((x) => x?.id === t.id) === i)
           .map((t) =>
@@ -2366,15 +2417,9 @@ export function PlanCanvas({
         })}
       </g>
 
-      {/* While the tape is armed it owns every click on the canvas, and this pane is what makes that
-          true. Without it the tool works over empty floor and nowhere else: a table, a wall, a zone
-          tint and a door all take their own clicks (and stop them propagating), so "measure from the
-          edge of that table to the wall" — the measurement anyone actually wants — would select the
-          table instead. In screen space, over the world, so it covers the view however it moves.
-
-          Clicks still reach handleCanvasClick, because they bubble to the <svg> from here exactly as
-          they would from the background. */}
-      {tapeOn && <rect x={0} y={0} width="100%" height="100%" fill="transparent" className="cursor-crosshair" />}
+      {/* No pane over the plan while the tape is armed (there was one, swallowing every press so the
+          tool worked over items too): the floor takes the tape, an item keeps its own press and
+          drag, and a measurement FROM an item is Alt+press — see onPointerDownCapture. */}
     </svg>
 
     {/* THE HUD: every HTML overlay anchored to a point on the plan. Laid out against the settled
@@ -2382,29 +2427,16 @@ export function PlanCanvas({
         transform (hudTransform), so a readout follows its anchor through a pan with no render. */}
     <div ref={hudRef} className="pointer-events-none absolute inset-0" style={{ transformOrigin: "0 0" }}>
 
-    {/* The tape's readout — metres to the centimetre, plus the angle it was taken at, over the
-        middle of its own line. An HTML pill for the same reason every other readout on this canvas
-        is one: it holds a fixed screen size and carries a scrim, so a measurement taken across a
-        dark zone tint is still legible. */}
-    {hasRect && tapeSegment && (() => {
-      const c = worldToPx({ x: (tapeSegment.a.x + tapeSegment.b.x) / 2, y: (tapeSegment.a.y + tapeSegment.b.y) / 2 });
-      const lengthMm = wallLengthMm(tapeSegment.a, tapeSegment.b);
-      // Two things touching is an answer worth reading ("צמודים"); two points on top of each other is not.
-      if (lengthMm < 1 && !tapeSegment.between) return null;
-      return (
-        <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: c.x, top: c.y }}>
-          <div className="flex items-center gap-1.5 rounded-full border border-accent bg-surface/95 px-2.5 py-1 text-xs font-semibold text-accent shadow-floating nums">
-            <span>{lengthMm < 1 ? "צמודים" : `${(lengthMm / 1000).toFixed(2)} מ׳`}</span>
-            <span className="text-muted">·</span>
-            {tapeSegment.between ? (
-              <span className="font-medium text-muted">מקצה לקצה</span>
-            ) : (
-              <span className="font-medium text-muted">{Math.round(norm360(wallAngleDeg(tapeSegment.a, tapeSegment.b)))}°</span>
-            )}
-          </div>
-        </div>
-      );
-    })()}
+    {/* The tape's readouts — metres to the centimetre, plus the angle each was taken at (or "מקצה
+        לקצה" between two things), over the middle of its own line. HTML pills for the same reason
+        every other readout on this canvas is one: a fixed screen size and a scrim, so a measurement
+        taken across a dark zone tint is still legible. A finished measurement's pill is a button —
+        a click on it takes that one measurement away. */}
+    {hasRect &&
+      shownTapes.map(({ id, seg }) => (
+        <TapePill key={id} at={worldToPx({ x: (seg.a.x + seg.b.x) / 2, y: (seg.a.y + seg.b.y) / 2 })} seg={seg} onRemove={() => setMeasurements((list) => removeTape(list, id))} />
+      ))}
+    {hasRect && draftSeg && <TapePill at={worldToPx({ x: (draftSeg.a.x + draftSeg.b.x) / 2, y: (draftSeg.a.y + draftSeg.b.y) / 2 })} seg={draftSeg} />}
 
     {/* HTML overlays rather than SVG text: they stay a fixed screen size for free and carry a real
         surface scrim, so nothing sits unbacked on the grid. Positioned with physical left/top —
@@ -2514,8 +2546,8 @@ export function PlanCanvas({
       {/* Two different questions, two buttons. The one above turns the WALLS' own labels on and off;
           this one measures between any two points you like. */}
       <IconButton
-        label={tapeOn ? "סגירת סרט המדידה · Esc" : "מדידת מרחק — לחיצה על שתי נקודות · M"}
-        onClick={() => { setTapeOn((on) => !on); setTape(null); }}
+        label={tapeOn ? "סגירת סרט המדידה · Esc" : "מדידת מרחק — גרירה מנקודה לנקודה · M"}
+        onClick={toggleTape}
         pressed={tapeOn}
       >
         <RulerDimensionLine className="h-4 w-4" strokeWidth={2} />
@@ -2552,13 +2584,13 @@ export function PlanCanvas({
       );
     })()}
     {/* What the armed tool is waiting for. It sits at the top-centre, out of the way of both the
-        inspector and the toolbar, and goes the moment the second point lands. */}
+        inspector and the toolbar. */}
     {tapeOn && (
       <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
         <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-          {tape && !tape.b
-            ? "לחצו על הנקודה או הפריט השני · Shift לזווית ישרה"
-            : "לחצו על נקודה או על פריט — בין פריטים נמדד מקצה לקצה"}
+          {tapeDraft
+            ? "שחררו על הנקודה או הפריט השני · Shift לזווית ישרה · Esc מבטל"
+            : "גררו מנקודה לנקודה למדידה · שחרור על פריט נועל אליו · Alt+גרירה מודד גם מפריט · Esc מנקה"}
         </span>
       </div>
     )}
@@ -2566,6 +2598,53 @@ export function PlanCanvas({
       <CanvasMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
     )}
     </>
+  );
+}
+
+// One measurement on the plan: its line and the two end ticks, square to it — the pair of marks
+// that say where the measurement actually starts and stops, rather than a line whose ends are
+// guesses. In world mm, inside the world group; `tickMm` is the tick's half-length at this zoom.
+function TapeLine({ seg, tickMm, live = false }: { seg: TapeSegment; tickMm: number; live?: boolean }) {
+  const dx = seg.b.x - seg.a.x;
+  const dy = seg.b.y - seg.a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = (-dy / len) * tickMm;
+  const ny = (dx / len) * tickMm;
+  return (
+    <g className="text-accent pointer-events-none">
+      <line x1={seg.a.x} y1={seg.a.y} x2={seg.b.x} y2={seg.b.y} stroke="currentColor" strokeWidth={1.5} strokeDasharray={live ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
+      {[seg.a, seg.b].map((e, i) => (
+        <line key={i} x1={e.x - nx} y1={e.y - ny} x2={e.x + nx} y2={e.y + ny} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      ))}
+    </g>
+  );
+}
+
+// A measurement's readout, centred on a container-px point in the HUD. With `onRemove` it is a
+// button that takes its measurement away; the draft's has none. Nothing to read (two free points on
+// top of each other) draws nothing — two things TOUCHING is an answer, "צמודים".
+function TapePill({ at, seg, onRemove }: { at: { x: number; y: number }; seg: TapeSegment; onRemove?: () => void }) {
+  const r = tapeReadout(seg);
+  if (!r) return null;
+  const cls = "flex items-center gap-1.5 rounded-full border border-accent bg-surface/95 px-2.5 py-1 text-xs font-semibold text-accent shadow-floating nums";
+  const body = (
+    <>
+      <span>{r.length}</span>
+      <span className="text-muted">·</span>
+      <span className="font-medium text-muted">{r.detail}</span>
+    </>
+  );
+  return (
+    <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: at.x, top: at.y }}>
+      {onRemove ? (
+        <button type="button" title="הסרת המדידה" aria-label="הסרת המדידה" onClick={onRemove} className={cls + " pointer-events-auto cursor-pointer transition-colors hover:bg-accent-tint"}>
+          {body}
+          <X className="h-3 w-3 text-muted" strokeWidth={2} />
+        </button>
+      ) : (
+        <div className={cls}>{body}</div>
+      )}
+    </div>
   );
 }
 
