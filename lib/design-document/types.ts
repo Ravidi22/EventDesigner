@@ -144,6 +144,21 @@ export interface Placement {
    *  this outline rather than the catalog's, and it counts on the quote and the packing list as the
    *  decks it is built from — never as one of `variantId`. Absent on everything else. */
   stage?: StageBuild;
+  /** How a rented flight of stairs or ramp standing ON ITS OWN climbs on this plan — a `stage-stairs`
+   *  or `stage-ramps` row dropped off the rail, not one on a stage's edge (StageStair). Its run is
+   *  `sizeMm`'s depth, re-derived whenever the rise changes (lib/studio/climb-item.ts). Absent = the
+   *  row's own height, climbing toward the top of the item as the catalog draws it. */
+  climb?: PlacementClimb;
+}
+
+/** See Placement.climb. The venue's own stairs carry the same two choices (lib/venues/climb.ts). */
+export interface PlacementClimb {
+  /** The height it climbs, mm. Absent = its catalog row's height. */
+  heightMm?: number;
+  /** Climbs toward the bottom of the item as drawn (+y) rather than the top. */
+  reversed?: boolean;
+  /** Steps, when the designer typed them. Absent = derived from the height. Stairs only. */
+  risers?: number;
 }
 
 /** A stage as the designer drew it: an outline, the side that faces the room, and which decks it may
@@ -199,6 +214,21 @@ export interface StageBuild {
    *  ONE side: an edge item on it is placed along the curve (lib/design-document/stage.ts
    *  stageSide), not on one 25cm chord of it. Absent = every corner is a corner. */
   smooth?: number[];
+  /** Platforms that stand in the stage WHOLE — a half-round, a disc, a triangle the studio owns as
+   *  one piece, which no fill can lay because it is not a rectangle. Each stands where it is in the
+   *  stage's frame, and the decks are laid round it (lib/design-document/stage.ts layStage). A stage
+   *  made of one such piece is just that piece; one merged with a rectangular stage keeps its piece
+   *  and fills the rest with decks. Absent = decks only. */
+  pieces?: StagePiece[];
+}
+
+/** One whole piece in a stage (StageBuild.pieces): the catalog variant it is, its centre and facing
+ *  in the stage's own frame, and whether it is flipped across its own width. */
+export interface StagePiece {
+  variantId: string;
+  centre: Point;
+  rotation: number;
+  mirrored?: boolean;
 }
 
 /** A stage saved to be used again — its shape, levels, edges, height, decks and finishes, and what

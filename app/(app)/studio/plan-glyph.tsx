@@ -11,6 +11,7 @@ import { ItemSymbol } from "@/components/item-symbol";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { climbRise } from "@/lib/studio/climb-item";
 
 // The thing under the pointer while an item is being dragged off the rail — the same picture that
 // lands when it is let go.
@@ -79,6 +80,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           tone={product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill}
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
+          rise={climbRise(product)}
         />
       )}
       <FootprintShape

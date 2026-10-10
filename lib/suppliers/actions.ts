@@ -35,6 +35,7 @@ import { cleanFlowers } from "@/lib/catalog/flowers";
 import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { nearestWall } from "@/lib/studio/anchor";
+import { climbKindOf } from "@/lib/studio/climb-item";
 import { deckTypeOf } from "@/lib/design-document/stage";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
@@ -404,6 +405,7 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
       return undefined;
     },
     wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
+    climbOf: (variantId) => climbKindOf(byVariant.get(variantId)),
   };
 }
 

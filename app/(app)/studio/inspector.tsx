@@ -50,6 +50,7 @@ import {
   Check,
   LayoutGrid,
   PaintRoller,
+  ArrowDownUp,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
@@ -58,7 +59,27 @@ import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
 import type { DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
-import { tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { footprintBounds } from "@/lib/studio/footprint";
+import {
+  climbAccessibleEdit,
+  climbHeightEdit,
+  climbReverseEdit,
+  climbRisersEdit,
+  itemClimbHost,
+  type ClimbEdit,
+} from "@/lib/studio/climb-item";
+import {
+  MAX_RISERS,
+  climbRisers,
+  formatRatio,
+  rampRatio,
+  rampTooSteep,
+  riserHeightMm,
+  risersForRise,
+  treadDepthMm,
+  type ClimbHost,
+} from "@/lib/venues/climb";
 import { SeatSidesPicker } from "@/components/seat-sides-picker";
 import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
 import type { ElementStyle } from "@/lib/element-style";
@@ -146,7 +167,10 @@ export interface StageEdgeRow {
 /** What the stage bar shows: its size when it is a rectangle, what it is built of, how high it and
  *  its levels stand, its flights, and the skirt and railing its open sides need. */
 export interface StagePanel {
+  /** A rectangle's size — or, `round`, the box of a stage with a curve (a disc, an oval, a
+   *  half-round), which a typed size scales whole. */
   size: { widthMm: number; depthMm: number } | null;
+  round?: boolean;
   deckCount: number;
   coverage: number;
   decks: { name: string; count: number }[];
@@ -264,6 +288,7 @@ export function Inspector({
   renderDesigns,
   onScale,
   onHang,
+  onClimb,
   onApplyToAllTables,
   onVariant,
   onSpan,
@@ -391,6 +416,9 @@ export function Inspector({
   /** How high one CEILING item hangs above the floor (Placement.hangHeightMm); null = its catalog
    *  row's default again. A rigging fact — nothing priced or packed reads it. */
   onHang?: (placementId: string, heightMm: number | null) => void;
+  /** A rented flight or ramp standing on its own: its rise, steps or direction, with the run that
+   *  follows and where it now stands (lib/studio/climb-item.ts builds the edit). */
+  onClimb?: (placementId: string, edit: ClimbEdit) => void;
   onApplyToAllTables: (placementId: string) => void;
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
@@ -1262,7 +1290,9 @@ export function Inspector({
                 {sp.coverage < 0.995
                   ? `הפלטות מכסות ${Math.floor(sp.coverage * 100)}% מהמידה הזו. `
                   : "הפלטות מכסות את המידה הזו בדיוק. "}
-                הגב נשאר במקומו והחזית זזה. בגרירה, ידית נמשכת למידות שהפלטות בונות בדיוק (Alt משחרר).
+                {sp.round
+                  ? "הצורה כולה גדלה או קטנה איתה, והמדרגות סביבה עוקבות אחרי הקשת. הגב נשאר במקומו."
+                  : "הגב נשאר במקומו והחזית זזה. בגרירה, ידית נמשכת למידות שהפלטות בונות בדיוק (Alt משחרר)."}
               </Note>
             </Popover>
           )}
@@ -1477,6 +1507,13 @@ export function Inspector({
     const stretch = r?.sizing === "stretch" && !drape;
     const size = p.sizeMm;
     const shade = shades.find((s) => s.id === p.variantId);
+    // A flight or a ramp standing on its own — never one worn on a table or hung on a wall.
+    const drawn = footprintBounds(placementFootprint(p));
+    const drawnSize = { widthMm: drawn.w, depthMm: drawn.h };
+    const climb = r && !table && !drape && onClimb ? itemClimbHost(r.product, drawnSize, p.climb) : null;
+    const editClimb = (edit: ClimbEdit | null) => {
+      if (edit && onClimb) onClimb(p.id, edit);
+    };
 
     return (
       <Bar
@@ -1543,7 +1580,17 @@ export function Inspector({
         {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
         {/* A row that stretches has its own size field above; everything else of a fixed size can
             still be drawn bigger or smaller on THIS plan — a fuller arrangement on the head table. */}
-        {!sizePanel && !stretch && !drape && !p.stage && <ScalePopover scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />}
+        {/* A climb's size is not a drawing choice: its run follows the step it covers. */}
+        {!sizePanel && !stretch && !drape && !p.stage && !climb && <ScalePopover scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />}
+        {climb && r && (
+          <ClimbPopover
+            host={climb}
+            onHeight={(mm) => editClimb(climbHeightEdit(p, r.product, drawnSize, mm))}
+            onRisers={(n) => editClimb(climbRisersEdit(p, r.product, drawnSize, n))}
+            onAccessible={() => editClimb(climbAccessibleEdit(p, r.product, drawnSize))}
+            onReverse={() => editClimb(climbReverseEdit(p, r.product, drawnSize))}
+          />
+        )}
         {p.layer === "ceiling" && !drape && onHang && (
           <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
         )}
@@ -2211,6 +2258,80 @@ function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: numbe
         </Button>
       )}
       <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
+    </Popover>
+  );
+}
+
+/** A rented flight or ramp standing on its own: the step it covers, and what follows from it — the
+ *  steps (≤18cm on 28cm treads) or the 1:12 run. The venue's own stairs ask the same questions in the
+ *  same words (components/venue-inspector.tsx ClimbFields). A ramp steeper than 1:12 is said, in alert
+ *  ink, with the one press that lays it back — never refused. */
+function ClimbPopover({
+  host,
+  onHeight,
+  onRisers,
+  onAccessible,
+  onReverse,
+}: {
+  host: ClimbHost;
+  onHeight: (mm: number) => void;
+  onRisers: (risers: number | undefined) => void;
+  onAccessible: () => void;
+  onReverse: () => void;
+}) {
+  const ramp = host.kind === "ramp";
+  const steep = ramp && rampTooSteep(host);
+  const risers = climbRisers(host);
+  const derived = risersForRise(host.heightMm);
+  const cm = (mm: number) => Math.round(mm / 10);
+  const runM = (host.depthMm / 1000).toFixed(2);
+  return (
+    <Popover
+      label={ramp ? "רמפה" : "מדרגות"}
+      icon={ramp ? Accessibility : Footprints}
+      tone={steep ? "warn" : "default"}
+      value={ramp ? ltr(formatRatio(rampRatio(host)) || "—") : ltr(`${risers}×${cm(riserHeightMm(host))}`)}
+    >
+      <PanelRow label="הפרש גובה (ס״מ)" htmlFor="climb-height">
+        <NumberField
+          id="climb-height"
+          decimals={0}
+          min={0}
+          max={600}
+          step={5}
+          commitOnBlur
+          value={cm(host.heightMm)}
+          onChange={(v) => onHeight(v * 10)}
+          className="w-20"
+        />
+      </PanelRow>
+      {!ramp && (
+        <PanelRow label="מספר מדרגות" htmlFor="climb-risers">
+          {risers !== derived && <BarButton icon={Undo2} label={`חזרה לאוטומטי (${derived})`} onClick={() => onRisers(undefined)} />}
+          <NumberField id="climb-risers" decimals={0} min={1} max={MAX_RISERS} value={risers} onChange={(n) => onRisers(n)} className="w-20" />
+        </PanelRow>
+      )}
+      {steep ? (
+        <>
+          <p className="text-xs font-semibold text-alert-ink">
+            שיפוע <span dir="ltr">{formatRatio(rampRatio(host))}</span> — תלול מ־1:12 לרמפת נגישות.
+          </p>
+          <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onAccessible}>
+            התאמה ל־1:12
+          </Button>
+        </>
+      ) : (
+        <Note>
+          {ramp
+            ? `אורך ${runM} מ׳ בשיפוע ${formatRatio(rampRatio(host)) || "—"}.`
+            : `מדרגה של ${cm(riserHeightMm(host))} ס״מ, עומק ${cm(treadDepthMm(host))} ס״מ · אורך ${runM} מ׳.`}{" "}
+          האורך נגזר מהגובה, וראש העלייה נשאר במקומו.
+        </Note>
+      )}
+      <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onReverse}>
+        <ArrowDownUp className="h-3.5 w-3.5" strokeWidth={2} />
+        היפוך כיוון העלייה
+      </Button>
     </Popover>
   );
 }

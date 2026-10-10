@@ -4,7 +4,9 @@ import { CLOTH_DROP_MM, type ChairStyle, type SymbolKind } from "@/lib/catalog/s
 
 export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
+import type { PlacementClimb } from "@/lib/design-document/types";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
+import { ClimbGlyph } from "./climb-glyph";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -41,6 +43,9 @@ const DEFAULT_TONE: Record<SymbolKind, string> = {
   chuppah: "#FBF7F1",
   bar: "#FFFFFF",
   runner: "#EFE3CF",
+  // The plan's own inset well (--color-inset): a flight is floor, not furniture.
+  stairs: "#FAF9FD",
+  ramp: "#FAF9FD",
 };
 
 export interface ItemSymbolProps {
@@ -58,9 +63,17 @@ export interface ItemSymbolProps {
   overhead?: boolean;
   /** Which chair, for a chair (symbolStyleOf). Absent = a dining chair, or a stool when round. */
   chairStyle?: ChairStyle;
+  /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
+  rise?: PlacementClimb & { heightMm: number };
+  /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
+  turnDeg?: number;
+  mirrored?: boolean;
+  /** The size of words the picture writes (a ramp's slope), in the drawing's mm: the caller's screen
+   *  or printed size. Absent = sized off the item itself, for a card or a drag image. */
+  textMm?: number;
 }
 
-function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
   if (w <= 0 || h <= 0) return null;
   const t = print ? "#ffffff" : tone || DEFAULT_TONE[kind];
@@ -113,6 +126,26 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
       break;
     case "runner":
       body = along(w, h, (L, D) => runner(L, D, c, line));
+      break;
+    case "stairs":
+    case "ramp":
+      // The venue's own stairs' drawing (components/climb-glyph.tsx), so a rented flight and a built
+      // one read the same: its edge and step lines a quiet ink, its walking line the strong one.
+      body = (
+        <ClimbGlyph
+          f={{ kind, shape: "rect", widthMm: w, depthMm: h, heightMm: rise?.heightMm ?? 0, climb: rise }}
+          fill={t}
+          stroke={print ? ink : "var(--color-muted)"}
+          strokeWidth={1}
+          lineWidth={1}
+          ink={ink}
+          textSize={textMm ?? Math.min(w * 0.24, h * 0.3)}
+          textFill={ink}
+          alertFill={print ? ink : "var(--color-alert-ink)"}
+          turnDeg={turnDeg}
+          mirrored={mirrored}
+        />
+      );
       break;
   }
   return <g className="pointer-events-none">{body}</g>;

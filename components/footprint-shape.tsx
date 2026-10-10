@@ -8,6 +8,7 @@ import { outlinePathD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { isRunner } from "@/lib/catalog/categories";
 import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
+import { climbKindOf } from "@/lib/studio/climb-item";
 
 // The one place a catalog footprint turns into SVG. Three surfaces draw the same shapes — the
 // studio canvas, the drag image that leaves the rail, and the placement map the crew is handed on
@@ -199,6 +200,12 @@ export function placementFootprint(placement: Placement): Footprint {
   if (placement.stage) return { kind: "custom", outline: placement.stage.outline };
   const product = resolve(placement.variantId)?.product;
   if (!product) return { kind: "rect", widthMm: 600, depthMm: 600 };
+  // A flight or a ramp standing on its own runs as far as the step it covers takes it, whether or
+  // not its row stretches (lib/studio/climb-item.ts) — the run is not a choice, the rise is.
+  if (placement.sizeMm && !product.resize && climbKindOf(product)) {
+    const base = sizedFootprint(product);
+    if (base.kind === "rect") return { kind: "rect", ...placement.sizeMm };
+  }
   return sizedFootprint(product, placement.sizeMm);
 }
 

@@ -9,6 +9,7 @@ import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
 import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
 import { nearestWall } from "@/lib/studio/anchor";
+import { climbKindOf } from "@/lib/studio/climb-item";
 import type { MeasureContext } from "@/lib/design-document/measure";
 import type { ItemLookup } from "./aggregate";
 import type { QuoteLookup } from "./quote";
@@ -90,5 +91,6 @@ export function measureContext(structure?: VenueStructure): MeasureContext {
       return p ? (p.variants[0]?.id ?? p.id) : undefined;
     },
     wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
+    climbOf: (variantId) => climbKindOf(resolve(variantId)?.product),
   };
 }

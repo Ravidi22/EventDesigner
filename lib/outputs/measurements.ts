@@ -57,10 +57,15 @@ export interface Leader {
   to: Point;
 }
 
-/** Something on the floor, as a closed polygon in world mm (a table without its chairs). */
+/** Something on the floor, as a closed polygon in world mm (a table without its chairs).
+ *
+ *  `fixed` is part of the BUILDING the crew works round but never places — the venue's own stairs
+ *  and ramps (lib/venues/climb.ts). It is never sized or tied to a wall; it is measured TO (the gap
+ *  from a table to the foot of a flight is the one that has to stay clear), it stops a tie and a
+ *  chain like any element, and no figure is written across it. */
 export interface Solid {
   id: string;
-  kind: "table" | "stage" | "rug" | "item";
+  kind: "table" | "stage" | "rug" | "item" | "fixed";
   polygon: Point[];
 }
 
@@ -341,6 +346,8 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
   const onFloor = (sd: Solid) => !hostOf(sd);
   const tables = input.solids.filter((s) => s.kind === "table");
   const elements = input.solids.filter((s) => s.kind !== "table");
+  // What the crew sets out — sized and tied. The building's own stairs are only measured to.
+  const placed = elements.filter((s) => s.kind !== "fixed");
   const sideRuns = (poly: Point[]) => poly.map((p, i) => [p, poly[(i + 1) % poly.length]] as [Point, Point]);
 
   if (opts.overall) {
@@ -412,7 +419,7 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
   }
 
   if (opts.sizes) {
-    for (const e of elements) {
+    for (const e of placed) {
       const mid = centroid(e.polygon);
       // A shaped stage is measured on every side — it is built side by side, and a crew checks each
       // one. A rectangle (any stage that is one) and everything else is a box: its width and its
@@ -501,7 +508,7 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
   }
 
   if (opts.ties) {
-    for (const e of elements) {
+    for (const e of placed) {
       const host = hostOf(e);
       // A tie runs to the first thing in its way — a wall, or another element standing on the same
       // floor: a stage measured "to the far wall" straight through the stage beside it says nothing.
@@ -538,7 +545,8 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
   if (opts.gaps) {
     const seen = new Set<string>();
     for (const e of elements.filter(onFloor)) {
-      for (const pool of [tables.filter(onFloor), elements.filter((x) => x.id !== e.id && onFloor(x))]) {
+      // Two of the building's own flights are the architect's business, not the crew's.
+      for (const pool of [tables.filter(onFloor), elements.filter((x) => x.id !== e.id && onFloor(x) && !(e.kind === "fixed" && x.kind === "fixed"))]) {
         let best: { s: Solid; g: ReturnType<typeof polygonGap> } | null = null;
         for (const s of pool) {
           const g = solidGap(e.polygon, s.polygon);
@@ -739,5 +747,18 @@ if (isMain(import.meta.url)) {
   const offsets = ceiling.dims.filter((d) => d.kind === "offset");
   assert(offsets.length === 1 && Math.abs(offsets[0].mm - 400) < 1, "one hung 0.40 off its table's centre says so; one dead centre says nothing");
   assert(measurements(hungInput, { offsetMm: 900 }).dims.length === 0, "the hang figures are drawn only on a sheet that asks for them");
+
+  // The venue's own flight of steps: measured TO — a table 0.80 from its foot is flagged — but
+  // never sized or tied, and a second flight beside it is not measured to it.
+  const steps = { id: "steps", kind: "fixed" as const, polygon: rect(15000, 10500, 3000, 600) };
+  const steps2 = { id: "steps2", kind: "fixed" as const, polygon: rect(15000, 11300, 3000, 600) };
+  const lobby = measurements(
+    { boundaries: [room], walls, solids: [steps, steps2, t("by", 16500, 8800)], centres: [] },
+    { sizes: true, ties: true, gaps: true, offsetMm: 900 },
+  );
+  assert(!lobby.dims.some((d) => d.kind === "size" || d.kind === "tie"), "the building's stairs are never sized or tied");
+  const toTable = lobby.dims.filter((d) => d.kind === "gap");
+  assert(toTable.length === 2 && toTable.every((d) => d.warn && Math.abs(d.mm - 800) < 1 || Math.abs(d.mm - 1600) < 1), "the gap from each flight to the table is measured, and 0.80 is flagged");
+  assert(!toTable.some((d) => Math.abs(d.mm - 200) < 1), "…but not the 0.20 between the two flights");
   console.log("measurements self-check passed");
 }

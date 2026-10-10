@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import {
+  Accessibility,
+  ArrowDownUp,
   Box,
   Grid2x2,
   Grid3x3,
@@ -72,9 +74,29 @@ import {
   stepsForRise,
   type StairsSide,
 } from "@/lib/venues/stairs";
+import {
+  MAX_RISERS,
+  climbCurved,
+  climbRisers,
+  climbRunMm,
+  formatRatio,
+  isClimb,
+  patchForHeight,
+  patchForRisers,
+  patchToAccessible,
+  patchToCurved,
+  patchToStraight,
+  rampRatio,
+  rampTooSteep,
+  riserHeightMm,
+  risersForRise,
+  treadDepthMm,
+  withRun,
+} from "@/lib/venues/climb";
+import { arcSpecOf } from "@/lib/studio/footprint";
 import { ZONE_KIND_LABEL, type Zone, type ZoneKind, type ZoneSource } from "@/lib/venues/zone";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, type AddTool } from "@/lib/venues/add-tools";
-import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
+import { ARC_SWEEP, MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { formatDimensions } from "@/lib/catalog/format";
 import { Select } from "@/components/select";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
@@ -90,7 +112,7 @@ import {
   SegmentedToggle,
 } from "@/components/plan-canvas";
 
-export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface"];
+export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface", "stairs", "ramp"];
 export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   pool: Waves,
   stage: Presentation,
@@ -99,6 +121,9 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   other: Shapes,
   plant: Sprout,
   surface: Grid2x2,
+  // The catalog's own icons for a stage's flight and a stage's ramp (lib/catalog/categories.ts).
+  stairs: Footprints,
+  ramp: Accessibility,
 };
 
 /** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one
@@ -538,11 +563,22 @@ export function VenueInspector({
   const feature = structure.features.find((f) => f.id === one.id);
   if (!feature) return null;
   const patch = (p: Parameters<typeof updateFeature>[2]) => apply((s) => updateFeature(s, feature.id, p));
+  // Stairs and a ramp are measured by what they climb, not by a free width × depth × height: their
+  // own fields (ClimbFields) replace the shape and the size below.
+  const climb = isClimb(feature.kind);
   return (
     <div className={WRAP}>
       <div className="flex items-center justify-between gap-2">
         <InspectorHeader
-          icon={feature.kind === "plant" ? PLANT_ICON[plantSpecies(feature)] : feature.kind === "surface" ? SURFACE_ICON[surfaceMaterial(feature)] : Shapes}
+          icon={
+            feature.kind === "plant"
+              ? PLANT_ICON[plantSpecies(feature)]
+              : feature.kind === "surface"
+                ? SURFACE_ICON[surfaceMaterial(feature)]
+                : climb
+                  ? FEATURE_ICON[feature.kind]
+                  : Shapes
+          }
           label={FEATURE_KIND_LABEL[feature.kind]}
         />
         {closeBtn}
@@ -576,7 +612,7 @@ export function VenueInspector({
             className="w-32"
           />
         )}
-        {feature.kind === "plant" ? (
+        {climb ? null : feature.kind === "plant" ? (
           // A plant's species IS its shape — the drawing is the palm or the hedge, and a palm
           // reshaped into a ח is nothing a garden has. Changing it brings the new species' own
           // rough size along, as placing it fresh would; the name follows only if it was still the
@@ -606,6 +642,9 @@ export function VenueInspector({
         )}
       </InspectorGroup>
       <InspectorDivider orientation="column" />
+      {climb ? (
+        <ClimbFields feature={feature} patch={patch} />
+      ) : (
       <InspectorGroup>
         <NumberField
           layout="inline"
@@ -650,6 +689,7 @@ export function VenueInspector({
           className="w-16"
         />
       </InspectorGroup>
+      )}
       <InspectorDivider orientation="column" />
       {/* Whether an EVENT may move this in its sketch. Default by kind (featureMovable): a bar and a
           stage yes, everything else no. A sketch only ever stores its own offset — this plan is
@@ -677,6 +717,153 @@ export function VenueInspector({
   );
 }
 
+// A free-standing flight or ramp (lib/venues/climb.ts). The height it climbs is the one number asked
+// first; the steps follow from it (at most 18cm each), and so does the run — at the tread the flight
+// already has, or at the slope the ramp was laid at. The run is still editable (and the handles on
+// the plan still stretch it), so the panel says what the result is rather than refusing it: the
+// riser and tread of a flight, a ramp's slope — in alert ink, with a one-click fix, when it is
+// steeper than 1:12.
+function ClimbFields({
+  feature,
+  patch,
+}: {
+  feature: StructureFeature;
+  patch: (p: Parameters<typeof updateFeature>[2]) => void;
+}) {
+  const ramp = feature.kind === "ramp";
+  const curved = climbCurved(feature);
+  const spec = curved ? arcSpecOf(feature.widthMm, feature.arc) : null;
+  const steep = ramp && rampTooSteep(feature);
+  return (
+    <>
+      {/* A ramp is straight: a slope round a curve is a different thing to walk, and to build. */}
+      {!ramp && (
+        <SegmentedToggle
+          value={curved ? "arc" : "rect"}
+          options={[
+            { value: "rect", label: "ישרות" },
+            { value: "arc", label: "מעוגלות" },
+          ]}
+          onChange={(v) => patch(v === "arc" ? patchToCurved(feature) : patchToStraight(feature))}
+          ariaLabel="צורת המדרגות"
+        />
+      )}
+      <InspectorGroup>
+        {spec ? (
+          <>
+            <NumberField
+              layout="inline"
+              label="קוטר חיצוני (מ׳)"
+              decimals={2}
+              min={0.5}
+              step={0.1}
+              commitOnBlur
+              value={feature.widthMm / 1000}
+              onChange={(m) => patch({ widthMm: Math.round(m * 1000) })}
+              className="w-20"
+            />
+            <NumberField
+              layout="inline"
+              label="קשת (°)"
+              decimals={0}
+              min={ARC_SWEEP.min}
+              max={ARC_SWEEP.max}
+              step={5}
+              commitOnBlur
+              value={spec.sweepDeg}
+              onChange={(sweepDeg) => patch({ arc: { ...spec, sweepDeg } })}
+              className="w-16"
+            />
+          </>
+        ) : (
+          <NumberField
+            layout="inline"
+            label="רוחב (מ׳)"
+            decimals={2}
+            min={0.4}
+            step={0.1}
+            commitOnBlur
+            value={feature.widthMm / 1000}
+            onChange={(m) => patch({ widthMm: Math.round(m * 1000) })}
+            className="w-20"
+          />
+        )}
+        <NumberField
+          layout="inline"
+          label={ramp ? "אורך (מ׳)" : "עומק (מ׳)"}
+          decimals={2}
+          min={0.2}
+          step={0.1}
+          commitOnBlur
+          value={climbRunMm(feature) / 1000}
+          onChange={(m) => patch(withRun(feature, m * 1000))}
+          className="w-20"
+        />
+        <NumberField
+          layout="inline"
+          label="זווית (°)"
+          decimals={0}
+          min={0}
+          max={360}
+          value={feature.rotationDeg}
+          onChange={(rotationDeg) => patch({ rotationDeg })}
+          className="w-16"
+        />
+      </InspectorGroup>
+      <InspectorGroup>
+        <NumberField
+          layout="inline"
+          label="הפרש גובה (ס״מ)"
+          decimals={0}
+          min={0}
+          step={5}
+          commitOnBlur
+          value={Math.round(feature.heightMm / 10)}
+          onChange={(cm) => patch(patchForHeight(feature, cm * 10))}
+          className="w-16"
+        />
+        {!ramp && (
+          // Typing the count the height would give anyway goes back to deriving it.
+          <NumberField
+            layout="inline"
+            label="מדרגות"
+            decimals={0}
+            min={1}
+            max={MAX_RISERS}
+            value={climbRisers(feature)}
+            onChange={(n) => patch(patchForRisers(feature, n === risersForRise(feature.heightMm) ? undefined : n))}
+            className="w-14"
+          />
+        )}
+      </InspectorGroup>
+      {ramp ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`text-xs ${steep ? "font-semibold text-alert-ink" : "text-muted"}`}>
+            שיפוע <span className="nums" dir="ltr">{formatRatio(rampRatio(feature)) || "—"}</span>
+            {steep && " · תלול מ־1:12"}
+          </span>
+          {steep && (
+            <Button variant="outline" size="sm" onClick={() => patch(patchToAccessible(feature))}>
+              התאמה ל־1:12
+            </Button>
+          )}
+        </div>
+      ) : (
+        <span className="text-xs text-muted">
+          גובה מדרגה <span className="nums">{Math.round(riserHeightMm(feature) / 10)}</span> ס״מ · עומק מדרגה{" "}
+          <span className="nums">{Math.round(treadDepthMm(feature) / 10)}</span> ס״מ
+        </span>
+      )}
+      <div>
+        <Button variant="outline" size="sm" onClick={() => patch({ climb: { ...feature.climb, reversed: !feature.climb?.reversed } })}>
+          <ArrowDownUp className="h-4 w-4" strokeWidth={2} />
+          היפוך כיוון העלייה
+        </Button>
+      </div>
+    </>
+  );
+}
+
 // Stairs onto a raised feature. One button while there are none — the count and the step height are
 // worked out from the deck's own height, so the common case is a single click and nothing to fill in
 // — and the fields to correct it once there are.
@@ -695,7 +882,9 @@ function StairsFields({
 }) {
   // Offered on anything raised enough to need them, rather than on the stage alone: a 60cm built
   // platform labelled מבנה needs steps for exactly the same reason a stage does.
-  if (feature.kind === "plant" || feature.kind === "surface" || (feature.kind !== "stage" && feature.heightMm < 300)) return null;
+  // Not on stairs or a ramp: they ARE the climb (ClimbFields), and a flight hung off a flight is not
+  // a thing anybody builds.
+  if (feature.kind === "plant" || feature.kind === "surface" || isClimb(feature.kind) || (feature.kind !== "stage" && feature.heightMm < 300)) return null;
 
   const stairs = feature.stairs;
   if (!stairs) {

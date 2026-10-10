@@ -1,6 +1,6 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
+import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
@@ -70,6 +70,10 @@ export type Action =
   // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
   // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
   | { type: "setPlacementHang"; id: string; heightMm: number | null }
+  // A free-standing flight or ramp's rise, steps or direction (Placement.climb), together with the
+  // run that follows from them and where it now stands — its head kept in place
+  // (lib/studio/climb-item.ts builds all three). One entry, because it was one number typed.
+  | { type: "setPlacementClimb"; id: string; climb: PlacementClimb; sizeMm?: { widthMm: number; depthMm: number }; position?: Point }
   // Switching a placed item to another shade of the same product (F-4.2). Not a remove+add: the
   // item keeps its id, its place on the plan and the size it was stretched to — only its colour
   // changes, which is exactly what the designer is doing when the client says "in cream instead".
@@ -387,6 +391,21 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         }),
       };
     }
+    case "setPlacementClimb":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { climb: _old, ...rest } = p;
+          void _old;
+          return {
+            ...rest,
+            ...(Object.keys(action.climb).length ? { climb: action.climb } : {}),
+            ...(action.sizeMm ? { sizeMm: action.sizeMm } : {}),
+            ...(action.position ? { position: action.position } : {}),
+          };
+        }),
+      };
     case "setPlacementVariant":
       return {
         ...doc,
@@ -1049,6 +1068,9 @@ if (isMain(import.meta.url)) {
     const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });
     assert(hung.placements[0].hangHeightMm === 3200, "a hang height is kept in whole centimetres");
     assert(!("hangHeightMm" in apply(hung, { type: "setPlacementHang", id: "a", heightMm: null }).placements[0]), "null hands it back to the catalog's height");
+    const climbed = apply(base, { type: "setPlacementClimb", id: "a", climb: { heightMm: 290 }, sizeMm: { widthMm: 1200, depthMm: 3480 }, position: { x: 5, y: 1860 } });
+    assert(climbed.placements[0].climb?.heightMm === 290 && climbed.placements[0].sizeMm?.depthMm === 3480 && climbed.placements[0].position.y === 1860, "a climb's rise, run and place land as one edit");
+    assert(!("climb" in apply(climbed, { type: "setPlacementClimb", id: "a", climb: {} }).placements[0]), "an empty climb leaves no field behind");
 
     const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
     assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");

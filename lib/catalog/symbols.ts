@@ -31,7 +31,9 @@ export type SymbolKind =
   | "arch"
   | "chuppah"
   | "bar"
-  | "runner";
+  | "runner"
+  | "stairs"
+  | "ramp";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -46,6 +48,10 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   arches: "arch",
   chuppahs: "chuppah",
   bars: "bar",
+  // A flight or a ramp standing on its own (lib/studio/climb-item.ts): its step edges and the line
+  // it is walked up, as the venue's own stairs are drawn (components/climb-glyph.tsx).
+  "stage-stairs": "stairs",
+  "stage-ramps": "ramp",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */
@@ -60,6 +66,8 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   // A runner is filed with the cloths but is drawn as itself: a strip of fabric on the table.
   const kind = isRunner(product) ? "runner" : SYMBOL_BY_CATEGORY[product.category];
   if (!kind) return null;
+  // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into.
+  if (kind === "stairs" || kind === "ramp") return footprint.kind === "rect" ? kind : null;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 

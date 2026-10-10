@@ -48,6 +48,7 @@ import { hasSurface, type Surface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, categoryHasSymbol, chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { climbRise } from "@/lib/studio/climb-item";
 
 type Curves = (EdgeCurve | null)[];
 const padCurves = (c: Curves | undefined, len: number): Curves => Array.from({ length: len }, (_, i) => c?.[i] ?? null);
@@ -1147,6 +1148,7 @@ export function AppearanceModal({
                               tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
                               overhead={preview.layer === "ceiling"}
                               chairStyle={chairStyleOf(preview)}
+                              rise={climbRise(preview)}
                             />
                           ) : (
                             <PlanContent

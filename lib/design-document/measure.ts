@@ -36,6 +36,9 @@ export interface MeasureContext {
   /** The studio's row for a stage part, for a stage that names none — one drawn before the studio
    *  had a banquette in its catalog still bills its banquette once it does. */
   stagePart?: (kind: "stairs" | "bench" | "barrier" | "backdrop" | "ramp" | "skirt" | "chair") => string | undefined;
+  /** Whether a row is a flight or a ramp (lib/studio/climb-item.ts). A ramp standing on its own and
+   *  priced by the metre bills its RUN, as a stage's ramp does. Absent = everything by its width. */
+  climbOf?: (variantId: string) => "stairs" | "ramp" | undefined;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -57,7 +60,8 @@ export function measure(p: Placement, ctx: MeasureContext): number {
 
   const size = p.sizeMm ?? ctx.footprintMm?.(p.variantId);
   if (unit === "m") {
-    const mm = spanLengthMm(p, ctx.wallLengthMm) ?? size?.widthMm;
+    const along = ctx.climbOf?.(p.variantId) === "ramp" ? size?.depthMm : size?.widthMm;
+    const mm = spanLengthMm(p, ctx.wallLengthMm) ?? along;
     // No span and no size to fall back on: count it, rather than quietly bill zero metres.
     return mm ? round2((mm / 1000) * p.quantity) : p.quantity;
   }
@@ -176,6 +180,11 @@ if (isMain(import.meta.url)) {
   assert(measure(carpet, ctx) === 7.5, "a 3×2.5m carpet bills 7.5 square metres");
   assert(measure({ ...carpet, quantity: 2 }, ctx) === 15, "two carpets, twice the area");
   assert(measure({ ...base, id: "f", variantId: "carpet", quantity: 3 }, ctx) === 3, "an unsized carpet falls back to its count");
+
+  const ramp = { ...base, id: "r", variantId: "ramp", quantity: 1, sizeMm: { widthMm: 1200, depthMm: 3480 } };
+  const byRun = { ...ctx, unitOf: () => "m" as const, climbOf: (v: string) => (v === "ramp" ? ("ramp" as const) : undefined) };
+  assert(measure(ramp, byRun) === 3.48, "a ramp on its own priced by the metre bills its 3.48m run, not its 1.2m width");
+  assert(measure(ramp, { ...ctx, unitOf: () => "unit" }) === 1, "…and priced per ramp, it is one ramp");
 
   const totals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [counted, wholeWall, carpet] }, ctx);
   assert(totals.get("candlestick") === 4 && totals.get("drape") === 14 && totals.get("carpet") === 7.5, "totals per variant");
