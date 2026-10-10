@@ -159,7 +159,7 @@ export function MeetingScreen() {
   const isCanvas = step.id === "hall" || step.id === "design" || step.id === "quote";
 
   return (
-    <div dir="rtl" className="flex h-dvh flex-col gap-3 bg-bg p-3">
+    <div dir="rtl" className="flex h-dvh flex-col gap-3 bg-bg p-3 print:block print:h-auto print:p-0">
       {/* Quiet chrome, matching the app shell's own top bar: a white floating card on the `bg`
           plane. This screen's saturated moment is the footer's single gradient CTA and nothing
           else — a violet bar across a meeting run in front of a client is the tool talking over
@@ -201,7 +201,7 @@ export function MeetingScreen() {
         </div>
       </header>
 
-      <main className={"min-h-0 flex-1 " + (isCanvas ? "overflow-hidden" : "overflow-auto")}>
+      <main className={"min-h-0 flex-1 print:block print:overflow-visible " + (isCanvas ? "overflow-hidden" : "overflow-auto")}>
         {step.id === "details" && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
         {/* Both sketches are the same document on the same canvas — a narrower set of tools each
             (StudioMode), not a second drawing. */}
@@ -276,7 +276,7 @@ export function MeetingScreen() {
 /** The drawing stages get the same white sheet the rest of the app's content sits on, clipped to
  *  the radius the chrome above and below it already uses. */
 function CanvasCard({ children }: { children: ReactNode }) {
-  return <div className="h-full overflow-hidden rounded-md bg-surface shadow-floating">{children}</div>;
+  return <div className="h-full overflow-hidden rounded-md bg-surface shadow-floating print:h-auto print:overflow-visible print:rounded-none print:shadow-none">{children}</div>;
 }
 
 function Stepper({
@@ -368,7 +368,9 @@ function FlowFooter({
 // A blank one still creates, for /meeting?new and for a browser with no active event.
 function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: (ev: EventSummary) => void }) {
   return (
-    <div className="mx-auto w-full max-w-lg py-6">
+    // max-w-3xl: the form is six two-up rows, and at the dialog's old 512px it sat as a narrow
+    // column in the middle of a wide screen.
+    <div className="mx-auto w-full max-w-3xl py-6">
       {/* No `overflow-hidden` on this card, deliberately: it clips the date popover flat. The body
           does not scroll here either — `main` is the scroller on this screen, so the form keeps its
           full height and the popovers keep their room. */}

@@ -53,6 +53,7 @@ export function DateField({
   wrapperClassName = "",
   "aria-label": ariaLabel,
   disabled,
+  align = "start",
 }: {
   label?: string;
   value: string; // ISO yyyy-mm-dd, "" = unset
@@ -68,6 +69,10 @@ export function DateField({
   wrapperClassName?: string;
   "aria-label"?: string;
   disabled?: boolean;
+  /** Which edge of the field the calendar hangs from. It is a fixed 288px, wider than a half-width
+   *  column in a narrow dialog, so a field in the END column of a two-up row opens it from its end
+   *  edge — back across the row — rather than past the frame. */
+  align?: "start" | "end";
 }) {
   const [open, setOpen] = useState(false);
   const selected = parseISODate(value);
@@ -187,7 +192,7 @@ export function DateField({
       {error && errorMessage && <p className="mt-1 text-xs text-alert">{errorMessage}</p>}
 
       {open && (
-        <div className="absolute start-0 top-[calc(100%+6px)] z-20 w-72 rounded-md border border-border bg-surface p-3 shadow-lifted">
+        <div className={`absolute ${align === "end" ? "end-0" : "start-0"} top-[calc(100%+6px)] z-20 w-72 rounded-md border border-border bg-surface p-3 shadow-lifted`}>
           <div className="flex items-center justify-between">
             <IconButton label="החודש הקודם" onClick={() => setFocusDate((d) => addMonths(d, -1))}>
               <ChevronRight className="h-4 w-4" strokeWidth={2} />

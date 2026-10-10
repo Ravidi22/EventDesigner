@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
-// Toggleable style-tag chip. Shared by the catalog filters, the product drawer, the stage fill's
-// deck picker and the event form's shade picker — one pressed-pill chip for the whole form family.
+// Toggleable style-tag chip. Shared by the catalog filters, the product drawer and the stage fill's
+// deck picker — one pressed-pill chip for the whole form family.
 export function TagToggle({
   active,
   onClick,
