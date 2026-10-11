@@ -40,11 +40,12 @@ export interface ResolvedContent {
 //      the result at true scale; a shape that quietly measured something else would be the original
 //      bug in a new costume (see MapShape in lib/catalog/types.ts).
 //
-//   2. EVERY EXTREME IS A VERTEX. Bounds are read off the points (customShapeBounds → outlineBounds)
-//      and no bezier is consulted, so an apex that lives only inside a curve is an apex nothing
-//      downstream can see — the preview would scale wrong and the seating would walk a table shorter
-//      than it looks. That is why the arcs below are cut into quarters at their apex rather than
-//      drawn as one long bow.
+//   2. EVERY EXTREME IS A VERTEX. The shapes built here are cut at their apices (an arc into
+//      quarters rather than one long bow), so their box can be read off the points alone and is
+//      exact. A HAND-DRAWN outline makes no such promise — a designer bows one side of a rectangle
+//      and the apex lives inside the curve — so customShapeBounds samples the curves it is given
+//      (sampledBounds) rather than trusting the corners: the drawer's width and depth, the saved
+//      dimensions, the centring on the plan and the seating all measure the shape that is drawn.
 //
 // K is the standard cubic approximation of a quarter arc (0.5523 × radius) — the constant every
 // circle-to-path conversion uses. Control points are offsets from their own edge's endpoints
@@ -544,7 +545,7 @@ export function footprintOutlines(f: Footprint): BuiltOutline[] {
     case "multi":
       return f.parts;
     case "custom": {
-      const b = customShapeBounds(f.outline);
+      const b = customShapeBounds(f.outline, f.edgeCurves);
       return [{ outline: f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves: f.edgeCurves }];
     }
     case "rect": {
@@ -588,8 +589,9 @@ export function flattenEdge(a: Point, b: Point, curve?: EdgeCurve | null, steps 
 }
 
 /** The box around outlines whose extremes may sit INSIDE a curve — a part turned 30° has its apex
- *  there, not at a vertex — so the curves are sampled rather than trusted to rule 2. */
-function sampledBounds(pieces: readonly BuiltOutline[]) {
+ *  there, not at a vertex, and so does a hand-drawn side bowed in the shape editor — so the curves
+ *  are sampled rather than trusted to rule 2. */
+export function sampledBounds(pieces: readonly BuiltOutline[]) {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const { outline, edgeCurves } of pieces) {
     outline.forEach((a, i) => {
@@ -599,8 +601,8 @@ function sampledBounds(pieces: readonly BuiltOutline[]) {
       }
     });
   }
-  if (!Number.isFinite(minX)) return { w: 0, h: 0, cx: 0, cy: 0 };
-  return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  if (!Number.isFinite(minX)) return { minX: 0, maxX: 0, minY: 0, maxY: 0, w: 0, h: 0, cx: 0, cy: 0 };
+  return { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
 
 /** A base footprint and the parts added beside it, as one footprint. Each part is resolved by the
@@ -643,11 +645,14 @@ export function resolveContent(product: Product): ResolvedContent {
   return { mode, icon: a?.icon, name: product.name };
 }
 
-// Bounds of a catalog item's custom shape, in the item's own local space. The min/max itself is
-// geometry.outlineBounds — this only adds the centre point the shape editor and previews recentre
-// on, and keeps the short w/h names those call sites read. Named for the catalog shape rather than
-// "outline" so it can't be confused with the canonical one in ./geometry.
-export function customShapeBounds(outline: Point[]) {
+// Bounds of a catalog item's custom shape, in the item's own local space — the box the shape editor
+// and every preview recentre on, with the short w/h names those call sites read. Given the outline's
+// curves it samples them (sampledBounds), because a bowed side's apex is not a corner: without them
+// a rectangle with one side bowed out was measured, saved and centred as if the bow were not there.
+// Without curves (or with none set) the min/max is geometry.outlineBounds over the points. Named for
+// the catalog shape rather than "outline" so it can't be confused with the canonical one in ./geometry.
+export function customShapeBounds(outline: Point[], edgeCurves?: (EdgeCurve | null)[]) {
+  if (edgeCurves?.some((c, i) => c && i < outline.length)) return sampledBounds([{ outline, edgeCurves }]);
   const { minX, maxX, minY, maxY, widthMm, heightMm } = outlineBounds(outline);
   return { minX, maxX, minY, maxY, w: widthMm, h: heightMm, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
@@ -657,7 +662,7 @@ export function footprintBounds(f: Footprint): { w: number; h: number } {
     case "circle": return { w: f.diameterMm, h: f.diameterMm };
     case "rect":
     case "ellipse": return { w: f.widthMm, h: f.depthMm };
-    case "custom": { const b = customShapeBounds(f.outline); return { w: b.w, h: b.h }; }
+    case "custom": { const b = customShapeBounds(f.outline, f.edgeCurves); return { w: b.w, h: b.h }; }
     case "multi": { const b = sampledBounds(f.parts); return { w: b.w, h: b.h }; }
   }
 }
@@ -1045,6 +1050,37 @@ if (isMain(import.meta.url)) {
   });
   const db = footprintBounds(drawn);
   assert(drawn.kind === "multi" && drawn.parts.length === 2 && Math.abs(db.w - 2400) < 1 && Math.abs(db.h - 600) < 1, `a hand-drawn part joins the item where it was put (${db.w}×${db.h})`);
+
+  // ── A hand-drawn side bowed out ───────────────────────────────────────────────────────────────
+  // A 1200×600 rectangle whose top side bows up to y = −500: the apex is inside the curve, not at a
+  // corner, so the corners alone say 600 deep and centred on y = 0 — and the drawer's fields, the
+  // saved dimensions and the centring on the plan all used to believe them. The box is what is drawn.
+  {
+    const rect: Point[] = [{ x: -600, y: -300 }, { x: 600, y: -300 }, { x: 600, y: 300 }, { x: -600, y: 300 }];
+    // A symmetric cubic from (−600,−300) to (600,−300) with both arms straight up by `a` reaches
+    // y = −300 − 0.75a at its middle; a = 800/3 puts the apex at −500.
+    const a = 800 / 3;
+    const bowed: (EdgeCurve | null)[] = [{ c1: { x: 0, y: -a }, c2: { x: 0, y: -a } }, null, null, null];
+    const corners = customShapeBounds(rect);
+    const bb = customShapeBounds(rect, bowed);
+    assert(corners.h === 600 && Math.abs(bb.h - 800) < 0.5 && Math.abs(bb.cy + 100) < 0.5, `a bowed side is measured at its apex (${bb.h} deep, centred on ${bb.cy})`);
+    assert(bb.w === 1200 && Math.abs(bb.cx) < 1e-9, "…and the straight sides still measure what they are");
+    const bowedF: Footprint = { kind: "custom", outline: rect, edgeCurves: bowed };
+    const fb = footprintBounds(bowedF);
+    assert(Math.abs(fb.w - 1200) < 0.5 && Math.abs(fb.h - 800) < 0.5, `a bowed custom footprint's box is width × depth of what is drawn (${fb.w}×${fb.h})`);
+    const cb = sampledBounds([footprintOutlines(bowedF)[0]]);
+    assert(Math.abs(cb.cx) < 1e-9 && Math.abs(cb.cy) < 1e-9, "…and it is centred on the box of what is drawn, bow included");
+    const bowedItem: Product = { ...base, appearance: { shape: "custom", content: "none", outline: rect, edgeCurves: bowed } };
+    assert(Math.abs(footprintBounds(resolveFootprint(bowedItem)).h - 800) < 0.5, "the resolver measures the bow too");
+    const stretched = footprintBounds(
+      sizedFootprint({ ...bowedItem, resize: { stepMm: 100, width: { minMm: 600, maxMm: 2400 }, depth: { minMm: 400, maxMm: 1600 } } }, { widthMm: 2400, depthMm: 1600 }),
+    );
+    assert(Math.abs(stretched.w - 2400) < 1 && Math.abs(stretched.h - 1600) < 1, `a bowed outline stretched on the plan lands on the box asked for (${stretched.w}×${stretched.h})`);
+    // The built shapes keep their promise: sampling their arcs finds nothing past a vertex.
+    const halfRound = buildShapeOutline("half-circle", 1200, 600)!;
+    const hb = customShapeBounds(halfRound.outline, halfRound.edgeCurves);
+    assert(hb.w === 1200 && hb.h === 600, "a built shape measures the same with its curves sampled");
+  }
 
   // ── sized on the plan ─────────────────────────────────────────────────────────────────────────
   {

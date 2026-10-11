@@ -13,6 +13,7 @@ import {
   wallAngleDeg,
   wallLengthMm,
 } from "./geometry";
+import { selfIntersects, squareUp } from "./stage-draw";
 import { isMain } from "../self-check";
 
 const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
@@ -96,6 +97,68 @@ function initialState(init: OutlineEditorInit): OutlineState {
 function withVertexMoved(s: OutlineState, idx: number, p: Point): OutlineState {
   const clamped = constrainVertexToLocks(s.outline, idx, p, s.lockedEdges);
   return { ...s, outline: s.outline.map((v, i) => (i === idx ? clamped : v)) };
+}
+
+// A whole side pushed along its normal: both its ends land where the gesture puts them, and the two
+// neighbouring sides lengthen or shorten to follow (the stage tool's pushSide, lib/studio/stage-draw).
+// Folded through withVertexMoved one end at a time, so a locked neighbour still clamps the end it
+// shares — the canvas works out the two points from where the press started and where the pointer
+// is, and reports them absolutely every frame, as a vertex drag does.
+function withWallMoved(s: OutlineState, edgeIdx: number, a: Point, b: Point): OutlineState {
+  const n = s.outline.length;
+  if (n < 3 || edgeIdx < 0 || edgeIdx >= n) return s;
+  const moved = withVertexMoved(withVertexMoved(s, edgeIdx, a), (edgeIdx + 1) % n, b);
+  return withOutlineReplaced(moved, moved.outline); // the neighbours changed length: re-fit their bows and doors
+}
+
+// Closing a drawn outline. The sides were held to 45° steps while drawing, but the closing side is
+// the one the designer never draws, and it comes out 2° off — so a shape whose sides are all within
+// a few degrees of square is MADE square (squareUp), and corners that fell on top of each other go.
+// An outline that crosses itself is not a shape anything can be cut from and is refused: closeRefusal
+// says why, in the words the hint pill shows, and null when the outline may close.
+export function closedOutline(outline: readonly Point[]): Point[] {
+  return squareUp(outline).filter((p, i, all) => {
+    const q = all[(i + 1) % all.length];
+    return Math.hypot(q.x - p.x, q.y - p.y) > 1;
+  });
+}
+
+export function closeRefusal(outline: readonly Point[]): string | null {
+  if (outline.length < 3) return "צורה סגורה צריכה לפחות 3 נקודות";
+  const clean = closedOutline(outline);
+  if (clean.length < 3) return "צורה סגורה צריכה לפחות 3 נקודות שאינן באותו מקום";
+  if (selfIntersects(clean)) return "הקווים חוצים זה את זה — סמנו את הפינות לפי הסדר, מסביב לצורה";
+  return null;
+}
+
+// Side indices after the outline gains or loses a corner. The sides of an outline are numbered by
+// their first corner, so a corner put on side k splits it into k and k+1 and shifts every later side
+// up by one; a corner k taken away merges sides k−1 and k into one and shifts every later side down.
+// What the indices MEAN is the caller's — the catalog uses them for the sides nobody sits at
+// (MapAppearance.blockedSides), where a side's number is also a chair's place: with stale numbers a
+// head table's open front moved round to its side. An index past the outline's own sides belongs to
+// an added part (seatSides runs base first, then each part) and just shifts with the count.
+//   • insert: a blocked side stays blocked on BOTH halves (the way a locked side's halves stay locked);
+//   • remove: the two sides that merged are gone — the merged side is new geometry nobody chose.
+export function sideIndicesAfterInsert(indices: readonly number[], edgeIdx: number): number[] {
+  const out: number[] = [];
+  for (const i of indices) {
+    if (i < edgeIdx) out.push(i);
+    else if (i === edgeIdx) out.push(i, i + 1);
+    else out.push(i + 1);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
+}
+
+export function sideIndicesAfterRemove(indices: readonly number[], vertexIdx: number, n: number): number[] {
+  if (n <= 3) return [...indices];
+  const incoming = (vertexIdx - 1 + n) % n; // the side that ENDS at the corner
+  const out: number[] = [];
+  for (const i of indices) {
+    if (i === vertexIdx || i === incoming) continue;
+    out.push(i < vertexIdx ? i : i - 1);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
 }
 
 // Swapping in a whole new outline changes wall lengths, so the two things measured *against* those
@@ -439,11 +502,20 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   // --- outline -------------------------------------------------------------------------------
   const addVertex = useCallback((p: Point) => edit((s) => ({ ...s, outline: [...s.outline, p] }), null), [edit]);
   const removeLastVertex = useCallback(() => edit((s) => (s.outline.length > 0 ? { ...s, outline: s.outline.slice(0, -1) } : s), null), [edit]);
+  // Squares the near-square (closedOutline) and refuses a self-crossing outline outright — the host
+  // asks closeRefusal first and shows its message; this is the belt under that.
   const closeOutline = useCallback(
-    () => edit((s) => (s.outline.length < 3 ? s : { ...s, mode: "edit", edgeCurves: Array(s.outline.length).fill(null) }), null),
+    () =>
+      edit((s) => {
+        if (closeRefusal(s.outline)) return s;
+        const outline = closedOutline(s.outline);
+        return { ...s, mode: "edit", outline, edgeCurves: outline.map(() => null), lockedEdges: outline.map(() => false) };
+      }, null),
     [edit],
   );
   const moveVertex = useCallback((idx: number, p: Point) => edit((s) => withVertexMoved(s, idx, p), `vertex:${idx}`), [edit]);
+  // A side pushed along its normal — one gesture, one entry, like a vertex drag.
+  const moveWall = useCallback((edgeIdx: number, a: Point, b: Point) => edit((s) => withWallMoved(s, edgeIdx, a, b), `wall:${edgeIdx}:push`), [edit]);
   // The corner is gone and every index after it has shifted — the old selection can't be remapped
   // to anything the user meant, so it goes.
   const removeVertex = useCallback((idx: number) => edit((s) => withVertexRemoved(s, idx), null, () => []), [edit]);
@@ -563,6 +635,7 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
     removeLastVertex,
     closeOutline,
     moveVertex,
+    moveWall,
     removeVertex,
     insertVertexOnWall,
     moveWallHandle,
@@ -623,6 +696,35 @@ if (isMain(import.meta.url)) {
   const guarded = withEdgeReshaped(neighborLocked, 0, { x: 1400, y: 0 });
   assert(guarded.outline[1].x === 1400 && guarded.outline[1].y === 0, "the directly-edited wall still moves its own end vertex");
   assert(guarded.outline[2].x === 1000 && guarded.outline[2].y === 1000 && guarded.outline[3].x === 0 && guarded.outline[3].y === 1000, "a locked wall two corners away survives the edit untouched, at the cost of the angle-preserving reshape");
+
+  // A side pushed: both its ends move together, the neighbours follow, nothing else shifts.
+  const pushed = withWallMoved(base, 0, { x: 0, y: -200 }, { x: 1000, y: -200 });
+  assert(pushed.outline[0].y === -200 && pushed.outline[1].y === -200, "a pushed side carries both its ends");
+  assert(pushed.outline[2].y === 1000 && pushed.outline[3].y === 1000 && pushed.outline[0].x === 0 && pushed.outline[1].x === 1000, "…and the far side stays where it was");
+  assert(Math.abs(wallLengthMm(pushed.outline[1], pushed.outline[2]) - 1200) < 1e-6, "…so the neighbouring sides lengthen by the push");
+  const pushedIntoLock = withWallMoved({ ...base, lockedEdges: [false, true, false, false] }, 0, { x: 0, y: -200 }, { x: 1000, y: -200 });
+  assert(Math.abs(wallLengthMm(pushedIntoLock.outline[1], pushedIntoLock.outline[2]) - 1000) < 1e-6, "a locked neighbour keeps its length under a push");
+  assert(withWallMoved(base, 7, { x: 0, y: 0 }, { x: 1, y: 1 }) === base, "a side the outline does not have is a no-op");
+
+  // Closing: the near-square is made square, duplicate corners go, a bow-tie is refused in words.
+  const skewed: Point[] = [{ x: 0, y: 0 }, { x: 1200, y: 0 }, { x: 1205, y: 598 }, { x: 2, y: 602 }];
+  const squared = closedOutline(skewed);
+  assert(squared[1].y === squared[0].y && squared[2].x === squared[1].x && squared[3].y === squared[2].y && squared[0].x === squared[3].x, "a drawn outline a few degrees off square closes square");
+  assert(closedOutline([...square, { x: 0, y: 1000 }]).length === 4, "a corner dropped on the last one is taken out on close");
+  assert(closeRefusal(square) === null, "a square may close");
+  assert(closeRefusal([{ x: 0, y: 0 }, { x: 1000, y: 1000 }, { x: 1000, y: 0 }, { x: 0, y: 1000 }]) !== null, "a bow-tie may not");
+  assert(closeRefusal([{ x: 0, y: 0 }, { x: 1000, y: 0 }]) !== null, "…nor two points");
+  const diamondPts: Point[] = [{ x: 0, y: 0 }, { x: 500, y: 500 }, { x: 0, y: 1000 }, { x: -500, y: 500 }];
+  assert(closedOutline(diamondPts).every((p, i) => p.x === diamondPts[i].x && p.y === diamondPts[i].y), "a meant 45° shape is left as drawn");
+
+  // Side indices when the outline gains or loses a corner: the thing the catalog's blocked sides are.
+  assert(sideIndicesAfterInsert([0, 2], 1).join(",") === "0,3", "sides after a split side shift up; before it stay");
+  assert(sideIndicesAfterInsert([1, 3], 1).join(",") === "1,2,4", "a split blocked side stays blocked on both halves");
+  assert(sideIndicesAfterInsert([5], 1).join(",") === "6", "an added part's side (past the outline's own) shifts with the count");
+  assert(sideIndicesAfterRemove([0, 1, 2, 3], 2, 4).join(",") === "0,2", "the two sides merged by a removed corner are gone and later ones shift down");
+  assert(sideIndicesAfterRemove([0, 3], 0, 4).join(",") === "", "removing corner 0 merges the last side and the first");
+  assert(sideIndicesAfterRemove([1, 2, 6], 0, 4).join(",") === "0,1,5", "…and every other side, parts included, shifts down one");
+  assert(sideIndicesAfterRemove([0, 1, 2], 1, 3).join(",") === "0,1,2", "a triangle loses no corner, so nothing shifts");
 
   // Removing a corner: the two walls it joined become one straight wall, doors on either of them
   // are dropped, and every later door follows its wall's new index.
