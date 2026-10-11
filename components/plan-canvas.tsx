@@ -41,7 +41,7 @@ import {
   polygonCentroid,
   endpointFromLengthAngle,
 } from "@/lib/studio/geometry";
-import { snapPoint, constrainAngleDeg, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
+import { snapPoint, constrainAngleDeg, gridStepMm, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
 import { insidePolys, pointToPolys, polysGap } from "@/lib/studio/proximity";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { startPointerGesture } from "@/lib/studio/gesture";
@@ -365,6 +365,7 @@ export function PlanCanvas({
   onCloseOutline,
   onCancelDraw,
   onMoveVertex,
+  onMoveWall,
   onMoveWallHandle,
   onMoveSelection,
   onRotateFixtureGroup,
@@ -375,6 +376,9 @@ export function PlanCanvas({
   onUpdateBar,
   onToggleWallLock,
   onCommit,
+  lengthUnit = "m",
+  drawAngleStepDeg = 5,
+  drawAngleFromFirstSide = false,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -424,6 +428,12 @@ export function PlanCanvas({
   onCloseOutline: () => void;
   onCancelDraw?: () => void; // Escape while drawing — the host throws the in-progress outline away
   onMoveVertex: (idx: number, p: Point) => void;
+  // A press-and-drag on a side's BODY pushes the whole side along its normal: both ends move
+  // together and the neighbouring sides follow (the stage tool's pushSide). Reported as the two
+  // ends' absolute points every frame, worked out from where the press started — so the host's
+  // undo entry is one gesture, like a vertex drag. Bowing stays on the diamond at the midpoint.
+  // Supplying this is what makes a side draggable at all; without it a side only selects.
+  onMoveWall?: (edgeIdx: number, a: Point, b: Point) => void;
   onMoveWallHandle: (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => void;
   // Fires once per pointermove during a group drag/rotate — every selected ref's next absolute
   // point (or, for rotate, position+facing), batched so the host coalesces it into one undo entry.
@@ -438,6 +448,14 @@ export function PlanCanvas({
   // End of a gesture — one drag, however many onMove calls it made. The host closes its history
   // entry here; discrete edits (a placed vertex, a deleted door) need no such marker.
   onCommit?: () => void;
+  /** What a typed or shown length is in. A hall is traced in metres; a catalog footprint is a
+   *  cm-scale thing and its editor asks and answers in centimetres (metres again from 10m up). */
+  lengthUnit?: "m" | "cm";
+  /** The angle lock while drawing: the step, and whether it is counted from the shape's FIRST side
+   *  (the stage tool's rule — a table drawn at an angle is square to itself) or from the page's own
+   *  axes (how a hall is traced). Alt frees it either way. */
+  drawAngleStepDeg?: number;
+  drawAngleFromFirstSide?: boolean;
   canUndo?: boolean; // the undo/redo pair only renders when the host offers a history
   canRedo?: boolean;
   onUndo?: () => void;
@@ -636,6 +654,14 @@ export function PlanCanvas({
   const groupRotate = useRef<{ pivot: Point; handleY: number; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
 
   const showDims = dimsOverride ?? mode === "draw";
+  // Every length this canvas shows or takes goes through these, in the host's unit (lengthUnit): a
+  // hall in metres to the centimetre, a catalog footprint in centimetres — metres again from 10m up,
+  // where "1,240 ס״מ" stops being a number anyone reads.
+  const inCm = lengthUnit === "cm";
+  const fmtLenBare = (lengthMm: number) => (inCm && lengthMm < 10000 ? `${+(lengthMm / 10).toFixed(1)}` : (lengthMm / 1000).toFixed(2));
+  const fmtLen = (lengthMm: number) => `${fmtLenBare(lengthMm)} ${inCm && lengthMm < 10000 ? "ס״מ" : "מ׳"}`;
+  const unitLabel = inCm ? "ס״מ" : "מ׳";
+  const typedToMm = (v: number) => v * (inCm ? 10 : 1000);
   // Whether a rubber-band drag has anywhere to report to. A host that takes no multi-selection gets
   // drag-to-pan on empty canvas instead of a selection box that selects nothing.
   const canMarquee = !!onSelectMany || !!onMarquee;
@@ -1013,6 +1039,10 @@ export function PlanCanvas({
       gridMm,
       anchor: drawAnchor ?? undefined,
       constrainAngle: !releaseAngle,
+      angleStepDeg: drawAngleStepDeg,
+      // Counted from the first side once there is one — the second side of a shape drawn at an
+      // angle is square to the first, not to the page. The first side itself is held to the page.
+      angleRefDeg: drawAngleFromFirstSide && outline.length >= 2 ? wallAngleDeg(outline[0], outline[1]) : 0,
     });
 
   // The tape's own snap: the same corners, walls and fixtures every other point on this canvas is
@@ -1119,7 +1149,7 @@ export function PlanCanvas({
     if (!entry || !drawAnchor) return;
     const typedLen = parseFloat(entry.length);
     const typedAngle = parseFloat(entry.angle);
-    const lengthMm = Number.isFinite(typedLen) && typedLen > 0 ? typedLen * 1000 : pendingLenMm;
+    const lengthMm = Number.isFinite(typedLen) && typedLen > 0 ? typedToMm(typedLen) : pendingLenMm;
     const angleDeg = Number.isFinite(typedAngle) ? typedAngle : pendingAngleDeg;
     setEntry(null);
     if (!(lengthMm > 0)) return;
@@ -1867,14 +1897,51 @@ export function PlanCanvas({
                 fill="none"
                 stroke="transparent"
                 strokeWidth={mm(16)}
-                className="cursor-pointer"
+                className={onMoveWall ? "cursor-move touch-none" : "cursor-pointer"}
                 onPointerEnter={() => setHoverWall(i)}
                 onPointerLeave={() => setHoverWall((h) => (h === i ? null : h))}
-                // Without this, the press bubbles past this path (it has no drag of its own) up to
-                // the svg's onPointerDown, which reads an untouched pointerdown as the start of a
-                // marquee — capturing the pointer there and leaving the wall's own click to fire
-                // (if at all) against the canvas background instead of this wall.
-                onPointerDown={(e) => e.stopPropagation()}
+                // Without this, the press bubbles past this path up to the svg's onPointerDown,
+                // which reads an untouched pointerdown as the start of a marquee — capturing the
+                // pointer there and leaving the wall's own click to fire (if at all) against the
+                // canvas background instead of this wall.
+                //
+                // With onMoveWall the press is also the start of a PUSH: the side's body dragged
+                // moves the whole side along its normal (the diamond on its middle still bows it).
+                // The two ends are worked out from where the press began, so the gesture is absolute
+                // frame to frame however the outline re-renders under it; the travel is pulled to the
+                // zoom's grid step like a vertex drag (on a square side, so the side lands ON a grid
+                // line), Alt frees it. A plain click still only selects; an additive click only toggles.
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (!onMoveWall || isAdditiveClick(e)) return;
+                  const a0 = a;
+                  const b0 = b;
+                  const start = clientToMm(e.clientX, e.clientY);
+                  const len = wallLengthMm(a0, b0) || 1;
+                  const nrm = { x: (b0.y - a0.y) / len, y: -(b0.x - a0.x) / len };
+                  const step = gridStepMm(gridMm, SNAP_TOL_PX * mmPerPx);
+                  const pull = (d: number) =>
+                    Math.abs(nrm.x) > 0.999 ? Math.round((a0.x + d) / step) * step - a0.x
+                    : Math.abs(nrm.y) > 0.999 ? Math.round((a0.y + d) / step) * step - a0.y
+                    : Math.round(d / step) * step;
+                  startPointerGesture(e, {
+                    onStart: () => {
+                      setDragWall(i);
+                      onSelect({ kind: "wall", id: String(i) });
+                    },
+                    onMove: (ev) => {
+                      const p = clientToMm(ev.clientX, ev.clientY);
+                      const raw = (p.x - start.x) * nrm.x + (p.y - start.y) * nrm.y;
+                      const d = ev.altKey ? raw : pull(raw);
+                      onMoveWall(i, { x: Math.round(a0.x + nrm.x * d), y: Math.round(a0.y + nrm.y * d) }, { x: Math.round(b0.x + nrm.x * d), y: Math.round(b0.y + nrm.y * d) });
+                    },
+                    onEnd: (_ev, moved) => {
+                      if (!moved) return;
+                      setDragWall(null);
+                      onCommit?.();
+                    },
+                  }, { thresholdPx: DRAG_THRESHOLD_PX });
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect({ kind: "wall", id: String(i) });
@@ -2239,8 +2306,8 @@ export function PlanCanvas({
         }),
       )}
 
-      {/* Measure overlay — each wall's length in metres at its midpoint. Live while drawing too;
-          the not-yet-drawn closing edge is skipped, exactly as the wall render skips it. */}
+      {/* Measure overlay — each wall's length (in the host's unit) at its midpoint. Live while
+          drawing too; the not-yet-drawn closing edge is skipped, exactly as the wall render skips it. */}
       {showDims &&
         outline.map((a, i) => {
           if (mode === "draw" && i === outline.length - 1) return null;
@@ -2249,7 +2316,7 @@ export function PlanCanvas({
           const mid = edgeMidpoint(a, b, curve);
           return (
             <text key={i} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
-              {(wallLengthMm(a, b) / 1000).toFixed(2)}
+              {fmtLenBare(wallLengthMm(a, b))}
             </text>
           );
         })}
@@ -2266,7 +2333,7 @@ export function PlanCanvas({
           const mid = edgeMidpoint(a, b, w.curve ?? null);
           return (
             <text key={w.id} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
-              {(wallLengthMm(a, b) / 1000).toFixed(2)}
+              {fmtLenBare(wallLengthMm(a, b))}
             </text>
           );
         })}
@@ -2443,7 +2510,7 @@ export function PlanCanvas({
         covers the cursor or the vertex it is about to drop. */}
     {hasRect && drawAnchor && (pending || entry) && (() => {
       const at = worldToPx(pending ? pending.point : drawAnchor);
-      const lenText = `${(pendingLenMm / 1000).toFixed(2)} מ׳`;
+      const lenText = fmtLen(pendingLenMm);
       const angText = `${Math.round(pendingAngleDeg)}°`;
       return (
         <div className="pointer-events-auto absolute" style={{ left: at.x, top: at.y, transform: "translate(12px, -50%)" }}>
@@ -2454,7 +2521,7 @@ export function PlanCanvas({
                 dir="ltr"
                 inputMode="decimal"
                 value={entry.field === "length" ? entry.length : entry.angle}
-                aria-label={entry.field === "length" ? "אורך הקטע במטרים" : "זווית הקטע במעלות"}
+                aria-label={entry.field === "length" ? (lengthUnit === "cm" ? "אורך הקטע בסנטימטרים" : "אורך הקטע במטרים") : "זווית הקטע במעלות"}
                 onChange={(e) => {
                   const raw = e.target.value;
                   if (!/^-?\d*\.?\d*$/.test(raw)) return;
@@ -2468,7 +2535,7 @@ export function PlanCanvas({
                 onBlur={() => setEntry(null)}
                 className="w-16 rounded-full bg-transparent text-center font-medium text-ink focus:outline-none nums"
               />
-              <span className="text-muted">{entry.field === "length" ? "מ׳" : "°"}</span>
+              <span className="text-muted">{entry.field === "length" ? unitLabel : "°"}</span>
               <div className="h-3.5 w-px bg-border" />
               {/* the other half of the pair, so Tab has something to aim at */}
               <span className="text-muted nums">{entry.field === "length" ? angText : lenText}</span>
@@ -3272,12 +3339,16 @@ export function SelectionInspector({
   onToggleWallLock = () => {},
   onClose,
   edgeNoun = "קיר",
+  lengthUnit = "m",
 }: {
   selected: SelectedRef[];
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
   lockedEdges?: boolean[];
   edgeNoun?: string; // what an outline edge is called — "קיר" in a hall, "צלע" for a product footprint
+  /** The unit the edge's length is asked in — the same one the canvas it sits on shows (PlanCanvas's
+   *  lengthUnit). onSetWallLength is still handed metres whichever it is. */
+  lengthUnit?: "m" | "cm";
   entrances?: Entrance[];
   stage?: Fixture | undefined;
   bars?: Fixture[];
@@ -3483,16 +3554,29 @@ export function SelectionInspector({
           >
             {locked ? <Lock className="h-4 w-4" strokeWidth={2} /> : <Unlock className="h-4 w-4" strokeWidth={2} />}
           </IconButton>
-          <NumberField
-            layout="inline"
-            label="אורך (מ׳)"
-            decimals={2}
-            min={0.001}
-            disabled={locked}
-            value={wallLengthMm(a, b) / 1000}
-            onChange={(m) => onSetWallLength(idx, m)}
-            className="w-20"
-          />
+          {lengthUnit === "cm" ? (
+            <NumberField
+              layout="inline"
+              label="אורך (ס״מ)"
+              decimals={1}
+              min={0.1}
+              disabled={locked}
+              value={wallLengthMm(a, b) / 10}
+              onChange={(cm) => onSetWallLength(idx, cm / 100)}
+              className="w-20"
+            />
+          ) : (
+            <NumberField
+              layout="inline"
+              label="אורך (מ׳)"
+              decimals={2}
+              min={0.001}
+              disabled={locked}
+              value={wallLengthMm(a, b) / 1000}
+              onChange={(m) => onSetWallLength(idx, m)}
+              className="w-20"
+            />
+          )}
         </InspectorGroup>
         <InspectorDivider />
         <InspectorGroup>

@@ -66,7 +66,9 @@ export function FootprintShape({
     );
   }
   if (footprint.kind === "custom") {
-    const b = customShapeBounds(footprint.outline);
+    // The box of what is DRAWN — a bowed side's apex counts (customShapeBounds samples the curves),
+    // so a shape with one side bowed out stands on its visual centre, not its corners'.
+    const b = customShapeBounds(footprint.outline, footprint.edgeCurves);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
     return <path d={outlinePathD(centered, footprint.edgeCurves)} {...props} />;
   }
