@@ -5,7 +5,9 @@ import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
-import { deckOf, resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchOf, deckOf, resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
+import { BenchGlyph, SofaGlyph } from "@/components/bench-glyph";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, rotatedExtent, tableAt } from "@/lib/studio/geometry";
 import { overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
@@ -2649,6 +2651,13 @@ function PlacementNode({
   const labelAt = content.mode === "none" ? { x: 0, y: 0 } : labelAnchor(footprint);
   const upright = uprightTransform(placement.rotation, placement.mirrored);
   const badge = 340;
+  // A STANDALONE BANQUETTE is set like a table (lib/design-document/bench.ts): its chairs stand along
+  // its back, a sofa side is drawn inside its strip, and — like a table — it wears its number and its
+  // `seated/seats` in the middle, upright at every angle. The strip itself is the footprint above.
+  const bench = standaloneBench(placement, benchOf);
+  const benchNumber = benchIsNumbered(placement, bench) ? placement.bench!.number! : 0;
+  const benchSeats = bench?.seats ?? 0;
+  const benchInk = selected ? "var(--color-accent)" : dark ? "var(--color-canvas)" : "var(--color-muted)";
 
   return (
     <g
@@ -2656,7 +2665,7 @@ function PlacementNode({
       transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${placement.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`${r?.label ?? "פריט"}${drag.onMove ? " — גרירה להזזה" : ""}`}
+      aria-label={`${r?.label ?? "פריט"}${bench ? `${benchNumber > 0 ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
       className={(drag.onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
     >
       <FootprintShape
@@ -2686,6 +2695,39 @@ function PlacementNode({
           mirrored={placement.mirrored}
           labelMm={ctx.mm(11)}
         />
+      )}
+      {bench && (
+        <>
+          <BenchGlyph layout={bench} />
+          {(benchNumber > 0 || benchSeats > 0) && (
+            <g transform={upright || undefined}>
+              {benchNumber > 0 && (
+                <text
+                  x={0}
+                  y={benchSeats > 0 ? TABLE_LABEL.number : 0}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill={benchInk}
+                  style={{ fontSize: TABLE_NUMBER_MM, fontWeight: 600 }}
+                  className="pointer-events-none"
+                >
+                  {benchNumber}
+                </text>
+              )}
+              {benchSeats > 0 && (
+                <CapacityLabel
+                  x={0}
+                  y={benchNumber > 0 ? TABLE_LABEL.capacity : 0}
+                  seated={placement.bench?.seated ?? 0}
+                  seats={benchSeats}
+                  size={TABLE_CAPACITY_MM}
+                  baseInk={benchInk}
+                  semantic={!dark}
+                />
+              )}
+            </g>
+          )}
+        </>
       )}
 
       {/* Upright at every angle, for the reason a table's number is (TableNode above): the caption
@@ -2869,6 +2911,8 @@ function StageMarks({
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}
+            {/* A banquette's sofa side: cushions inside the strip, backrest toward its other half. */}
+            {shape.kind === "bench" && <SofaGlyph cushions={shape.cushions} backs={shape.backs} />}
           </g>
         );
       })}

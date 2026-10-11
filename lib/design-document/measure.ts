@@ -12,6 +12,7 @@
 // fallback of the item's own count. See lib/outputs/lookup.ts for the wiring.
 import type { DesignDocumentContent, Placement } from "./types";
 import { edgeItemShape, edgeKind, skirtMm, stageAreaMm2, stageCorners, stageDeckCounts, type DeckLookup, type StagePlacement, type WallDistance } from "./stage";
+import { standaloneBench, type BenchLookup } from "./bench";
 import { isMain } from "../self-check";
 
 /** What a placement's amount is counted in, decided by the product's price unit. */
@@ -36,6 +37,10 @@ export interface MeasureContext {
   /** The studio's row for a stage part, for a stage that names none — one drawn before the studio
    *  had a banquette in its catalog still bills its banquette once it does. */
   stagePart?: (kind: "stairs" | "bench" | "barrier" | "backdrop" | "ramp" | "skirt" | "chair") => string | undefined;
+  /** Which placements are STANDALONE banquettes, and how long (lib/design-document/bench.ts): their
+   *  chairs are packed as the studio's chairs, as a stage banquette's are. Absent = none are known,
+   *  and a banquette row is simply its own metres. */
+  benchOf?: BenchLookup;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -114,13 +119,14 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
         if (kind === "ramp") add(variant, (ctx.unitOf(variant) === "m" ? round2(shape.depthMm / 1000) : 1) * p.quantity);
         else runOf(variant, shape.widthMm);
       }
-      // The chairs standing on its banquettes, as the studio's chairs — a table's chairs are packed
-      // off the table, a banquette's off the banquette.
+      // The chairs standing at its banquettes, as the studio's chairs — a table's chairs are packed
+      // off the table, a banquette's off the banquette. CHAIRS, not seats: a sofa side seats people
+      // on the banquette itself and packs nothing.
       const chairRow = ctx.stagePart?.("chair");
       if (chairRow) {
         const deckOf = ctx.deckOf;
-        const seated = (p.stage.stairs ?? []).reduce((n, it) => n + (edgeKind(it) === "bench" ? (edgeItemShape(p.stage!, it, deckOf)?.seats ?? 0) : 0), 0);
-        if (seated > 0) add(chairRow, seated * p.quantity);
+        const chairs = (p.stage.stairs ?? []).reduce((n, it) => n + (edgeKind(it) === "bench" ? (edgeItemShape(p.stage!, it, deckOf)?.chairs.length ?? 0) : 0), 0);
+        if (chairs > 0) add(chairRow, chairs * p.quantity);
       }
       // Corner pieces: one more stair module for a stair corner; a banquette corner adds its depth.
       for (const c of stageCorners(p.stage, ctx.deckOf)) {
@@ -137,6 +143,14 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
       const skirt = p.stage.skirtVariant ?? ctx.stagePart?.("skirt");
       if (skirt) runOf(skirt, skirtMm(p as StagePlacement, ctx.deckOf, ctx.wallDistance));
       continue;
+    }
+    // A STANDALONE banquette is its own metres (below, like any item priced by the metre) AND the
+    // chairs standing at it, packed as the studio's chairs exactly as a stage banquette's are. Its
+    // sofa seats pack nothing, and nothing here changes what the banquette itself is billed as.
+    const bench = standaloneBench(p, ctx.benchOf);
+    if (bench && bench.chairSeats > 0) {
+      const chairRow = ctx.stagePart?.("chair");
+      if (chairRow) add(chairRow, bench.chairSeats * p.quantity);
     }
     add(p.variantId, measure(p, ctx));
   }
@@ -278,6 +292,41 @@ if (isMain(import.meta.url)) {
     { ...stageCtx, stagePart: (k) => (k === "chair" ? "chair" : undefined) },
   );
   assert(seatedBench.get("chair") === 10, "a banquette along a 6m front packs its ten chairs");
+  const sofaBench = measureTotals(
+    {
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [
+        {
+          ...stage(["deck"]),
+          stage: {
+            ...stage(["deck"]).stage,
+            stairs: [{ id: "b", kind: "bench" as const, edge: 0, t: 0.5, widthMm: 0, full: true, bench: { back: { kind: "chairs", seats: 4 }, front: { kind: "sofa" } } }],
+            benchVariant: "bench",
+          },
+        },
+      ],
+    },
+    { ...stageCtx, unitOf: (v) => (v === "bench" ? "m" : "unit"), stagePart: (k) => (k === "chair" ? "chair" : undefined) },
+  );
+  assert(sofaBench.get("chair") === 4 && sofaBench.get("bench") === 6, "a banquette with four chairs behind and a sofa in front packs four chairs, and is still six metres of banquette");
+
+  // A STANDALONE banquette: its own metres, and its chairs as the studio's chairs — never its sofa.
+  const benchCtx: MeasureContext = {
+    unitOf: (v) => (v === "bench" ? "m" : "unit"),
+    footprintMm: (v) => (v === "bench" ? { widthMm: 3000, depthMm: 450 } : undefined),
+    stagePart: (k) => (k === "chair" ? "chair" : undefined),
+    benchOf: (p) => (p.variantId === "bench" ? (p.sizeMm ?? { widthMm: 3000, depthMm: 450 }) : null),
+  };
+  const freeBench = { ...base, id: "fb", variantId: "bench", quantity: 1 };
+  const loose = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [freeBench] }, benchCtx);
+  assert(loose.get("bench") === 3 && loose.get("chair") === 5, "a 3m banquette on the floor is three metres of banquette and five chairs");
+  const stretched = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [{ ...freeBench, sizeMm: { widthMm: 6000, depthMm: 450 } }] }, benchCtx);
+  assert(stretched.get("bench") === 6 && stretched.get("chair") === 10, "…stretched to 6m, six metres and ten chairs");
+  const sofaOnly = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [{ ...freeBench, bench: { back: { kind: "sofa" } } }] }, benchCtx);
+  assert(sofaOnly.get("bench") === 3 && sofaOnly.get("chair") === undefined, "…as a sofa, the same three metres and no chairs at all");
+  const unknown = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [freeBench] }, { ...benchCtx, benchOf: undefined });
+  assert(unknown.get("bench") === 3 && unknown.get("chair") === undefined, "with no way to tell a banquette, it is only its metres");
 
   const noCatalog = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [stage(["deck"])] }, { unitOf: () => "unit" });
   assert(noCatalog.get("deck") === 1, "with no catalog to lay it with, a stage counts as itself rather than guessing");

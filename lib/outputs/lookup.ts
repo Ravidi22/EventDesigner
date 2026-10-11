@@ -1,7 +1,7 @@
 // Wiring: adapt the catalog resolver + category registry into the injected lookups that
 // the pure aggregations (aggregate.ts, quote.ts) consume. This is the only outputs file that
 // touches the catalog graph.
-import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
+import { benchOf, deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { loadProducts } from "@/lib/catalog/storage";
 import { CATEGORIES, CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { stemsOf } from "@/lib/catalog/flowers";
@@ -83,6 +83,9 @@ export function measureContext(structure?: VenueStructure): MeasureContext {
     // A stage counts as its decks (lib/design-document/stage.ts) — laid by the same lookup the
     // studio draws them with, so the quote bills the build the designer saw.
     deckOf,
+    // …and a standalone banquette packs its chairs (lib/design-document/bench.ts), told apart by the
+    // same lookup the studio draws it with.
+    benchOf,
     stagePart: (kind) => {
       const category = ({ stairs: "stage-stairs", bench: "stage-benches", barrier: "stage-barriers", backdrop: "stage-backdrops", ramp: "stage-ramps", skirt: "stage-skirts", chair: "chairs" })[kind];
       const p = loadProducts().find((x) => x.category === category && !x.archived);

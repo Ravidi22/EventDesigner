@@ -18,7 +18,9 @@ import { stairsFlights } from "@/lib/venues/stairs";
 import { resolveStyle } from "@/lib/element-style";
 import { FootprintShape, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { arrangedStructure } from "@/lib/design-document/features";
-import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { standaloneBench } from "@/lib/design-document/bench";
+import { BenchGlyph, SofaGlyph } from "@/components/bench-glyph";
 import {
   benchInRoom,
   edgeGaps,
@@ -370,19 +372,23 @@ export function PlacementMap({
               no number, which is what "ghost" means. */}
           {sheet.tables === "full" &&
             sheet.numbers &&
-            numberedUnits(doc).map((unit) => {
+            numberedUnits(doc, benchOf).map((unit) => {
+              // A standalone banquette somebody sits at is numbered like a table, at its centre (the
+              // strip is a rectangle, whose label point IS its centre).
+              const benchAt = unit.kind === "bench" ? doc.placements.find((x) => x.id === unit.id)?.position : undefined;
               const members = doc.tables.filter((x) => unit.tableIds.includes(x.id));
-              if (members.length === 0) return null;
+              if (members.length === 0 && !benchAt) return null;
               // A lone table is numbered where the studio numbers it — the shape's own label point
               // (tableLabelPoint): the middle of the band on an arc, not the box centre out in the
               // air the ring curves round. A block keeps the middle of the block.
               const at =
-                members.length === 1
+                benchAt ??
+                (members.length === 1
                   ? tableLabelPoint(members[0])
                   : {
                       x: members.reduce((n, x) => n + x.position.x, 0) / members.length,
                       y: members.reduce((n, x) => n + x.position.y, 0) / members.length,
-                    };
+                    });
               return (
                 <text
                   key={unit.id}
@@ -450,7 +456,7 @@ export function PlacementMap({
                 label={stages.length > 1 ? `במה ${stages.indexOf(p as StagePlacement) + 1}` : undefined}
               />
             ) : (
-              <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} />
+              <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} chairs={sheet.chairs} />
             ),
           )}
 
@@ -643,6 +649,7 @@ function StageGlyph({ p, build, railing, label }: { p: StagePlacement; build: bo
                 vectorEffect="non-scaling-stroke"
               />
             )}
+            {shape.kind === "bench" && <SofaGlyph cushions={shape.cushions} backs={shape.backs} print />}
           </g>
         );
       })}
@@ -714,7 +721,8 @@ function StageSchedule({
         const shapes = (stage.stairs ?? []).map((st) => edgeItemShape(stage, st, deckOf)).filter((x) => !!x);
         const flights = shapes.filter((x) => x.kind === "stairs");
         const benchMm = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.widthMm, 0);
-        const seats = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.seats, 0);
+        const benchChairs = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.chairs.length, 0);
+        const sofaSeats = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.sofaSeats, 0);
         const barrierMm = shapes.filter((x) => x.kind === "barrier").reduce((t, x) => t + x.widthMm, 0);
         const backdropMm = shapes.filter((x) => x.kind === "backdrop").reduce((t, x) => t + x.widthMm, 0);
         const ramps = shapes.filter((x) => x.kind === "ramp");
@@ -761,7 +769,7 @@ function StageSchedule({
               {flights.length > 0
                 ? `מדרגות: ${flights.length} ${flights.length === 1 ? "גרם" : "גרמים"} — ${flights.map((f) => `${m(f.widthMm)} מ׳, ${f.risers} רומים של ${cm(f.riserMm)} ס״מ`).join("; ")}`
                 : "מדרגות: אין"}
-              {benchMm > 0 ? ` · בנקט: ${m(benchMm)} מ׳ (${seats} כיסאות)` : ""}
+              {benchMm > 0 ? ` · בנקט: ${m(benchMm)} מ׳ (${[benchChairs > 0 ? `${benchChairs} כיסאות` : null, sofaSeats > 0 ? `${sofaSeats} על ספה` : null].filter(Boolean).join(", ") || "ללא ישיבה"})` : ""}
               {barrierMm > 0 ? ` · מחסום: ${m(barrierMm)} מ׳` : ""}
               {backdropMm > 0 ? ` · קיר רקע: ${m(backdropMm)} מ׳` : ""}
               {ramps.length > 0 ? ` · רמפה: ${ramps.map((r) => `${m(r.depthMm)} מ׳ אורך`).join(", ")}` : ""}
@@ -857,7 +865,7 @@ function ChairGlyph({ seat }: { seat: Seat }) {
 /** One free-standing placement: a stage, a bar, a chandelier, a loose chair — whatever the catalog
  *  says its shape is, outlined at furniture weight. `overhead` forces it unfilled and dashed
  *  (components/footprint-shape.tsx), the one convention every surface that draws this plan shares. */
-function PlacementGlyph({ placement, x, y, overhead }: { placement: Placement; x: number; y: number; overhead?: boolean }) {
+function PlacementGlyph({ placement, x, y, overhead, chairs = true }: { placement: Placement; x: number; y: number; overhead?: boolean; chairs?: boolean }) {
   const r = resolve(placement.variantId);
   const footprint: Footprint =
     r?.sizing === "stretch"
@@ -867,6 +875,9 @@ function PlacementGlyph({ placement, x, y, overhead }: { placement: Placement; x
   // The row's own weight and dash, collapsed to ink-on-paper (TableGlyph's reason). A stage keeps the
   // sheet's furniture weight whatever deck it was built from, as it does on screen.
   const style = resolveStyle(placement.stage ? undefined : productStyle(r?.product), "monochrome", { fill: "#ffffff", stroke: INK, strokeWidth: LINE_WEIGHTS.furniture });
+  // A standalone banquette prints what sits at it — its chairs (unless the sheet hides every chair)
+  // and its sofa side — as the studio draws them (components/bench-glyph.tsx).
+  const bench = standaloneBench(placement, benchOf);
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       <FootprintShape
@@ -878,6 +889,7 @@ function PlacementGlyph({ placement, x, y, overhead }: { placement: Placement; x
         strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
+      {bench && <BenchGlyph layout={bench} print chairs={chairs} />}
     </g>
   );
 }

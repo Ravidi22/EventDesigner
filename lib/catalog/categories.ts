@@ -29,7 +29,7 @@ import {
   Shapes,
   type LucideIcon,
 } from "lucide-react";
-import type { Layer, StockKind } from "./types";
+import type { Layer, ResizeSpec, StockKind } from "./types";
 
 export interface CategoryField {
   key: string;
@@ -125,6 +125,15 @@ export interface CategoryDef {
    *  the list is what fills it. Turn it on for an arch or a chuppah the day a studio specs those by
    *  the stem; nothing else needs to change. */
   flowers?: boolean;
+  /** What a NEW product of this category starts out standing at, mm — a seed for the drawer's height
+   *  field, then the product's own. Absent = the drawer asks from zero. */
+  defaultHeightMm?: number;
+  /** How the plan may stretch a product of this category that says nothing about it itself
+   *  (Product.resize absent): a banquette is a run along a stage or a wall and is laid to the length
+   *  the room needs, and asking every studio to switch that on row by row is asking them to type what
+   *  the category already knows. The row's own `resize` wins when set — this is the default under
+   *  it, read through `resizeSpecOf` (lib/studio/footprint.ts). */
+  defaultResize?: ResizeSpec;
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -169,7 +178,23 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [] },
   // The other two ways an open stage edge is finished (StageEdgeKind): a banquette people sit on
   // along the outside of the edge, and a barrier on it. Both counted by the metre off the stage.
-  { id: "stage-benches", label: "בנקטים", group: "grp-stages", defaultLayer: "floor", icon: RectangleHorizontal, dims: "box", fields: [] },
+  //
+  // A banquette also stands FREE on the floor (Placement.bench, lib/design-document/bench.ts): a run
+  // of chairs along its back with its top as their table, or a sofa sat on facing the room, numbered
+  // like a table. No count-multiplier field, deliberately — its chairs come from the PLAN (how long
+  // it was stretched to, which sides are laid), never from a number typed on the row. Table height,
+  // and stretched along its length by default: 60cm to 12m in 10cm steps, its depth fixed.
+  {
+    id: "stage-benches",
+    label: "בנקטים",
+    group: "grp-stages",
+    defaultLayer: "floor",
+    icon: RectangleHorizontal,
+    dims: "box",
+    fields: [],
+    defaultHeightMm: 750,
+    defaultResize: { stepMm: 100, width: { minMm: 600, maxMm: 12000 } },
+  },
   { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [] },
   // A wall standing on a stage edge (a flower wall, a draped frame) by the metre; a ramp by the ramp;
   // and what covers the deck (carpet, dance floor) by the square metre of stage.

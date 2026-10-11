@@ -9,7 +9,9 @@ import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
 import { CATEGORY_BY_ID, type Anchor, type Sizing } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
 import { tableAreaMm2 } from "./geometry";
+import { catalogBox } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
+import type { BenchLookup } from "@/lib/design-document/bench";
 
 export interface Resolved {
   product: Product;
@@ -56,6 +58,17 @@ export function solidKind(product: Product): string | undefined {
 export const deckOf: DeckLookup = (variantId) => {
   const r = resolve(variantId);
   return r ? deckTypeOf(variantId, r.product) : undefined;
+};
+
+/** Which placements are STANDALONE banquettes (lib/design-document/bench.ts): a `stage-benches` row
+ *  standing free — not a stage, not perched on one, not on a table — and the box it is drawn at, the
+ *  size it was stretched to or the catalog's. The one definition every surface reads (the canvas,
+ *  the printed map, the seating readout, the packing list), so none can disagree about what is one. */
+export const benchOf: BenchLookup = (p) => {
+  if (p.stage || p.perch || p.tableId) return null;
+  const r = resolve(p.variantId);
+  if (!r || r.product.category !== "stage-benches") return null;
+  return p.sizeMm ?? catalogBox(r.product);
 };
 
 export function defaultVariantId(product: Product): string {

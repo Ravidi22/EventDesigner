@@ -1,4 +1,5 @@
 import type { DesignDocumentContent, DesignTable, Placement, Point } from "./types";
+import { benchIsNumbered, standaloneBench, type BenchLookup } from "./bench";
 import { isMain } from "../self-check";
 
 // Reading a document that has groups in it.
@@ -113,33 +114,65 @@ export function spreadSeats(
   return tables.map((t, i) => ({ id: t.id, seats: each + (i < extra ? 1 : 0) }));
 }
 
-/** One entry per NUMBERED thing on the plan: a lone table, or a whole group as the single larger
- *  table it now is. This is what the placement map labels and what the legend lists — both used to
- *  walk `doc.tables` directly, which with grouping would print the same number three times across
- *  one block and leave the crew reading a map with three table 4s on it.
+/** One numbered thing on the plan. A `table` is a lone table (its id, its one tableId); a `group` is
+ *  a block of tables with the one number they share (the group's id, every member); a `bench` is a
+ *  standalone banquette somebody sits at (the placement's id, no tables at all — `tableIds` is empty,
+ *  so a reader that walks tables simply finds none; one that must know says `kind`). */
+export interface NumberedUnit {
+  id: string;
+  number: number;
+  tableIds: string[];
+  kind: "table" | "group" | "bench";
+  /** The banquette, for a `bench` unit. */
+  placementId?: string;
+}
+
+/** One entry per NUMBERED thing on the plan: a lone table, a whole group as the single larger table
+ *  it now is, or — given a way to tell one (`benches`, lib/design-document/bench.ts) — a standalone
+ *  banquette that seats somebody and carries a number. This is what the placement map labels and
+ *  what the legend lists — both used to walk `doc.tables` directly, which with grouping would print
+ *  the same number three times across one block and leave the crew reading a map with three table 4s
+ *  on it.
  *
  *  A group nobody numbered falls back to the lowest number its members brought with them, so a
- *  document can never produce an unnumbered unit out of a set of numbered tables. */
-export function numberedUnits(
-  doc: DesignDocumentContent,
-): { id: string; number: number; tableIds: string[] }[] {
-  const units: { id: string; number: number; tableIds: string[] }[] = [];
+ *  document can never produce an unnumbered unit out of a set of numbered tables.
+ *
+ *  Without `benches` no placement is a unit: the readers that have no catalog to hand (the legend of
+ *  table dressing kits) list tables only, which for them is also the right answer — a banquette has
+ *  no dressing kit. */
+export function numberedUnits(doc: DesignDocumentContent, benches?: BenchLookup): NumberedUnit[] {
+  const units: NumberedUnit[] = [];
   for (const t of doc.tables) {
-    if (!t.groupId) units.push({ id: t.id, number: t.number, tableIds: [t.id] });
+    if (!t.groupId) units.push({ id: t.id, number: t.number, tableIds: [t.id], kind: "table" });
   }
   for (const g of doc.groups ?? []) {
     const tables = doc.tables.filter((t) => t.groupId === g.id);
     if (tables.length === 0) continue; // a group of stages is not a table and has no number
     const number = g.number ?? Math.min(...tables.map((t) => t.number));
-    units.push({ id: g.id, number, tableIds: tables.map((t) => t.id) });
+    units.push({ id: g.id, number, tableIds: tables.map((t) => t.id), kind: "group" });
+  }
+  if (benches) {
+    for (const p of doc.placements) {
+      if (benchIsNumbered(p, standaloneBench(p, benches))) units.push({ id: p.id, number: p.bench!.number!, tableIds: [], kind: "bench", placementId: p.id });
+    }
   }
   return units.sort((a, b) => a.number - b.number);
 }
 
+/** The next free number for a new table or banquette: one past the highest the plan holds, hidden
+ *  ones included (a grouped table keeps its own number underneath, and a seatless banquette keeps
+ *  the one it had) — so a number is never handed out twice. */
+export function nextTableNumber(doc: DesignDocumentContent): number {
+  let max = 0;
+  for (const t of doc.tables) max = Math.max(max, t.number);
+  for (const p of doc.placements) if (p.bench?.number !== undefined) max = Math.max(max, p.bench.number);
+  return max + 1;
+}
+
 /** One unit's new number. `kind` says which action carries it — a lone table renumbers itself, a
- *  group renumbers as a group. */
+ *  group renumbers as a group, a banquette through its placement's bench spec. */
 export interface Renumbering {
-  kind: "table" | "group";
+  kind: "table" | "group" | "bench";
   id: string;
   number: number;
 }
@@ -211,15 +244,19 @@ export const DEFAULT_NUMBERING: Required<NumberingOptions> = {
  *     a plan that is already in order produces no edit at all and the button that calls this can say
  *     so by being disabled.
  */
-export function orderedNumbering(doc: DesignDocumentContent, options: NumberingOptions = {}): Renumbering[] {
+export function orderedNumbering(doc: DesignDocumentContent, options: NumberingOptions = {}, benches?: BenchLookup): Renumbering[] {
   const { start, corner, axis, serpentine } = { ...DEFAULT_NUMBERING, ...options };
   const band = rowBandMm(doc);
-  const placed = numberedUnits(doc)
+  const placed = numberedUnits(doc, benches)
     .map((u) => {
+      // A banquette stands where its placement stands; a table or a block where its tables do.
+      if (u.kind === "bench") {
+        const p = doc.placements.find((x) => x.id === u.id);
+        return { ...u, x: p?.position.x ?? 0, y: p?.position.y ?? 0 };
+      }
       const tables = doc.tables.filter((t) => u.tableIds.includes(t.id));
       return {
         ...u,
-        kind: (doc.groups?.some((g) => g.id === u.id) ? "group" : "table") as "table" | "group",
         x: tables.reduce((n, t) => n + t.position.x, 0) / tables.length,
         y: tables.reduce((n, t) => n + t.position.y, 0) / tables.length,
       };
@@ -554,6 +591,41 @@ if (isMain(import.meta.url)) {
   // A document drawn before grouping existed reads exactly as it always did.
   const old: DesignDocumentContent = { calibration: { mmPerUnit: 1 }, tables: [t("x", 1), t("y", 2)], placements: [] };
   assert(numberedUnits(old).length === 2 && expandToGroups(old, [{ kind: "table", id: "x" }]).length === 1, "no groups, no change");
+  assert(numberedUnits(old).every((u) => u.kind === "table"), "…and every unit of it is a table");
+
+  // ── Standalone banquettes are numbered units — when something tells them apart, and someone sits.
+  {
+    const bench = (id: string, x: number, y: number, bench?: Placement["bench"]): Placement => ({
+      ...p(id),
+      variantId: "bench",
+      position: { x, y },
+      ...(bench ? { bench } : {}),
+    });
+    const benches: BenchLookup = (q) => (q.variantId === "bench" ? (q.sizeMm ?? { widthMm: 3000, depthMm: 450 }) : null);
+    const at = (id: string, number: number, x: number, y: number): DesignTable => ({ ...t(id, number), position: { x, y } });
+    const room: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [at("a", 2, 6000, 0), at("b", 3, 3000, 0)],
+      placements: [bench("head", 0, -3000, { number: 1 }), bench("quiet", 6000, 3000, { number: 9, back: { kind: "none" } }), bench("unnumbered", 0, 3000), p("stage")],
+    };
+    const units = numberedUnits(room, benches);
+    assert(units.length === 3 && units[0].kind === "bench" && units[0].id === "head" && units[0].number === 1, "a seated, numbered banquette is a unit of its own kind, first in number order");
+    assert(units[0].tableIds.length === 0 && units[0].placementId === "head", "…with no tables under it, and its placement named");
+    assert(!units.some((u) => u.id === "quiet"), "a banquette nobody sits at takes no number, whatever it holds");
+    assert(!units.some((u) => u.id === "unnumbered"), "…nor does one the designer left unnumbered");
+    assert(numberedUnits(room).length === 2 && numberedUnits(room).every((u) => u.kind === "table"), "without a way to tell a banquette, the units are the tables alone");
+    assert(nextTableNumber(room) === 10, "the next number is past every number the plan holds — the seatless banquette's 9 included");
+    assert(nextTableNumber(old) === 3 && nextTableNumber({ ...old, tables: [], placements: [] }) === 1, "…past the tables', and 1 on an empty plan");
+
+    // Renumbered with the tables, in reading order: the banquette across the top is 1, the two
+    // tables below it 2 and 3 right to left — already so, except that the plan is read as rows.
+    const plan = orderedNumbering(room, {}, benches);
+    assert(plan.length === 0, "a plan already in reading order, banquette first, needs no edit");
+    const shuffled = { ...room, placements: room.placements.map((x) => (x.id === "head" ? { ...x, bench: { number: 7 } } : x)) };
+    const fixed = orderedNumbering(shuffled, {}, benches);
+    assert(fixed.length === 1 && fixed[0].kind === "bench" && fixed[0].id === "head" && fixed[0].number === 1, "a banquette out of order is renumbered as a bench, by its placement id");
+    assert(orderedNumbering(shuffled).every((r) => r.kind !== "bench"), "…and left alone by a caller that cannot see it (whose tables then start at 1)");
+  }
 
   // A swapped block stays flush.
   {

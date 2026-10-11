@@ -33,6 +33,7 @@
     "check:proximity": "tsx lib/studio/proximity.ts",
     "check:stage-fill": "tsx lib/studio/stage-fill.ts",
     "check:stage": "tsx lib/design-document/stage.ts",
+    "check:bench": "tsx lib/design-document/bench.ts",
     "check:stage-draw": "tsx lib/studio/stage-draw.ts",
     "db:seed": "tsx lib/db/seed.ts",
     "db:reset": "tsx lib/db/reset.ts && tsx lib/db/seed.ts",

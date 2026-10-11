@@ -1,6 +1,6 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild } from "./types";
+import type { BenchSpec, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 
@@ -74,6 +74,9 @@ export type Action =
   | { type: "setPlacementStage"; id: string; stage: StageBuild; position?: Point; rotation?: number; mirrored?: boolean; scale?: number }
   // A design item put on (or taken off) a stage's banquette.
   | { type: "setPlacementPerch"; id: string; perch: { stageId: string; itemId: string } | null }
+  // A STANDALONE banquette's sides, heights, number and occupancy (Placement.bench) — the whole spec,
+  // replaced; null puts it back to the defaults. The caller merges, so one history entry is one edit.
+  | { type: "setPlacementBench"; id: string; bench: BenchSpec | null }
   // F-3.3 smart-apply, generalised: put this item on exactly these tables. The caller decides which
   // tables those are — every table of a type, every table on the plan, the ones the designer has
   // selected, the ones inside a zone. Two narrower actions (applyToTableType / applyToAllTables)
@@ -357,6 +360,16 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         exceptions,
       });
     }
+    case "setPlacementBench":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          if (action.bench) return { ...p, bench: action.bench };
+          const { bench: _plain, ...rest } = p;
+          return rest;
+        }),
+      };
     case "setPlacementPerch":
       return {
         ...doc,

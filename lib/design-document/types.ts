@@ -122,6 +122,51 @@ export interface Placement {
    *  this outline rather than the catalog's, and it counts on the quote and the packing list as the
    *  decks it is built from — never as one of `variantId`. Absent on everything else. */
   stage?: StageBuild;
+  /** A STANDALONE BANQUETTE — a `stage-benches` row standing free on the floor, not on a stage edge
+   *  and not perched on one. What this placement says about its two long sides, its heights and its
+   *  number (see BenchSpec). Read only for such a row (lib/design-document/bench.ts decides which);
+   *  absent = a banquette with chairs along its back and nothing along its front, exactly as a stage
+   *  edge banquette starts. */
+  bench?: BenchSpec;
+}
+
+/** One long side of a banquette, and who sits there:
+ *    chairs — chairs stand against it and its top is their table (a head-table banquette);
+ *    sofa   — people sit ON it, facing away from it, out into the room;
+ *    none   — nobody.
+ *  `seats` is how many, when the designer said; absent = one per SEAT_WIDTH_MM (60cm) of its length,
+ *  0 = none on that side. Shared by a stage's edge banquette (StageStair.bench) and a standalone one
+ *  (Placement.bench) so both are laid, drawn, counted and packed by one function (benchLayout). */
+export type BenchSideKind = "chairs" | "sofa" | "none";
+export interface BenchSide {
+  kind: BenchSideKind;
+  seats?: number;
+}
+
+/** What a banquette is, beyond its length: each long side, and its two heights.
+ *
+ *  `back` is the side the banquette LEANS to — on a stage edge item the stage side; on a standalone
+ *  one the −y side as drawn (before its turn). `front` is the other. Each defaults differently:
+ *  back = chairs with an automatic count, front = none, which is exactly what every banquette drawn
+ *  before this existed was.
+ *
+ *  Two heights because the two kinds of side sit at two heights: `heightMm` is the TOP for a chairs
+ *  side — table height, BENCH_TOP_MM (750) above the surface the chairs stand on (the deck, for a
+ *  stage's outer banquette; the floor, for a standalone one) — and `sofaHeightMm` is the SEAT of a
+ *  sofa side, SOFA_SEAT_MM (460) above the floor the sitters' feet rest on. `depthMm` is the strip's
+ *  depth, BENCH_DEPTH_MM when absent.
+ *
+ *  `number`/`seated` belong to a STANDALONE banquette only: with anyone seated at it, it is a numbered
+ *  unit of the plan like a table (lib/design-document/groups.ts) — the number is optional, the
+ *  designer may clear it — and `seated` is the same typed note a table's is (DesignTable.seated). */
+export interface BenchSpec {
+  back?: BenchSide;
+  front?: BenchSide;
+  heightMm?: number;
+  sofaHeightMm?: number;
+  depthMm?: number;
+  number?: number;
+  seated?: number;
 }
 
 /** A stage as the designer drew it: an outline, the side that faces the room, and which decks it may
@@ -205,12 +250,17 @@ export type StageEdgeKind = "stairs" | "bench" | "barrier" | "backdrop" | "ramp"
 export interface StageStair {
   id: string;
   kind?: StageEdgeKind;
-  /** A bench's depth from the edge, mm. Absent = BENCH_DEPTH_MM. */
+  /** A bench's two sides and heights — the NEW form, shared with a standalone banquette (BenchSpec;
+   *  its `number`/`seated` are not read here). The three fields under it are the legacy form of the
+   *  back side alone — read when `bench` says nothing about that field, never written any more
+   *  (lib/design-document/bench.ts, benchSpecOf). */
+  bench?: BenchSpec;
+  /** LEGACY — a bench's depth from the edge, mm. Absent = BENCH_DEPTH_MM. */
   depthMm?: number;
-  /** A bench's seat height, mm. Absent = BENCH_HEIGHT_MM (never above the stage it stands against). */
+  /** LEGACY — a bench's top height above the deck, mm. Absent = BENCH_TOP_MM. */
   heightMm?: number;
-  /** How many chairs stand on a bench, when the designer said. Absent = one per SEAT_WIDTH_MM; 0 =
-   *  none. They are drawn on it, counted as seats, and packed as chairs. */
+  /** LEGACY — how many chairs stand on a bench's STAGE side, when the designer said. Absent = one per
+   *  SEAT_WIDTH_MM; 0 = none. They are drawn on it, counted as seats, and packed as chairs. */
   seats?: number;
   level?: string;
   edge: number;

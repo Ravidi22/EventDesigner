@@ -121,6 +121,11 @@ export function pasteInto(
     id: remapP.get(p.id)!,
     ...(p.tableId === undefined ? {} : { tableId: remap.get(p.tableId) ?? p.tableId }),
     ...(p.perch === undefined ? {} : { perch: { ...p.perch, stageId: remapP.get(p.perch.stageId) ?? p.perch.stageId } }),
+    // A numbered banquette is numbered like a table: the next free number after the tables', and
+    // empty — the same two rules a copied table follows (above).
+    ...(p.bench === undefined
+      ? {}
+      : { bench: { ...p.bench, seated: undefined, ...(p.bench.number !== undefined && p.bench.number > 0 && !opts.keepNumbers ? { number: n++ } : {}) } }),
     // A table-layer item's `position` is an offset within its table, not a point on the plan, so it
     // must NOT take the paste delta — the renderer clusters those onto the table itself.
     position: p.tableId === undefined ? { x: p.position.x + opts.dx, y: p.position.y + opts.dy } : p.position,
@@ -291,6 +296,22 @@ if (isMain(import.meta.url)) {
   );
   assert(halfGroup.tables.length === 1 && halfGroup.placements.length === 0, "the drape is still refused");
   assert(halfGroup.groups.length === 1, "…and the group comes along for the reducer to prune");
+
+  // A numbered standalone banquette is numbered like a table on paste: the next number after the
+  // pasted tables', and empty; an unnumbered one stays unnumbered; a loaded sketch keeps its own.
+  const benchClip = {
+    tables: [table("t9", 9)],
+    placements: [
+      { ...free("b1", "bench", 0, 0), bench: { number: 5, seated: 3, front: { kind: "sofa" as const } } },
+      { ...free("b2", "bench", 0, 3000), bench: { back: { kind: "none" as const } } },
+    ],
+    groups: [],
+  };
+  const benchOut = pasteInto(benchClip, { dx: 0, dy: 0, firstNumber: 20, newId });
+  assert(benchOut.tables[0].number === 20 && benchOut.placements[0].bench?.number === 21, "a pasted banquette takes the number after the pasted tables'");
+  assert(benchOut.placements[0].bench?.seated === undefined && benchOut.placements[0].bench?.front?.kind === "sofa", "…starts empty, and keeps its sides");
+  assert(benchOut.placements[1].bench?.number === undefined, "an unnumbered banquette stays unnumbered");
+  assert(pasteInto(benchClip, { dx: 0, dy: 0, firstNumber: 20, newId, keepNumbers: true }).placements[0].bench?.number === 5, "a loaded sketch keeps its banquette numbers");
 
   // The held clip survives, and each paste steps one further than the last.
   assert(clipCount(heldClip()) === 0, "nothing is held until something is copied");
