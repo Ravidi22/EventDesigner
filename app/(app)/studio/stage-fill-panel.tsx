@@ -1,11 +1,13 @@
 "use client";
 
-import { Check, Expand, Grid2x2Plus, PenLine, Ruler, TriangleAlert, X } from "lucide-react";
+import { Check, Expand, Grid2x2Plus, PenLine, Plus, Ruler, Squircle, TriangleAlert, X } from "lucide-react";
 import type { Point } from "@/lib/studio/hall";
-import type { DeckType, FillResult } from "@/lib/studio/stage-fill";
-import type { AreaShape } from "@/lib/studio/stage-draw";
-import { Bar, BarButton, Note, ltr } from "@/components/inspector-bar";
+import { asRect, type DeckType, type FillResult } from "@/lib/studio/stage-fill";
+import type { AreaShape, RoundedAt } from "@/lib/studio/stage-draw";
+import { QUARTER_FIT_MM } from "@/lib/design-document/stage";
+import { Bar, BarButton, Note, PanelRow, ltr } from "@/components/inspector-bar";
 import { Button } from "@/components/button";
+import { NumberField } from "@/components/number-field";
 import { Popover } from "@/components/popover";
 import { TagToggle } from "@/components/tag-toggle";
 import { Segmented } from "@/components/segmented";
@@ -48,6 +50,13 @@ export type StageFillState =
       editing?: string;
       /** Decks may reach past the line where that beats a bare strip (FillOptions.exceed). */
       exceed?: boolean;
+      /** A RECTANGLE's shaping (StageBuild.roundedMm / roundedAt / bowMm): the corners rounded at
+       *  this radius, which of them, and the front bowed out by this much. `polygon` stays the plain
+       *  rectangle as drawn — the shape is derived from it every time, so changing the radius never
+       *  rounds an outline that was rounded already. Offered only while the area IS a rectangle. */
+      roundedMm?: number;
+      roundedAt?: RoundedAt;
+      bowMm?: number;
     };
 
 const cm = (mm: number) => Math.round(mm / 10);
@@ -63,6 +72,7 @@ export function StageFillPanel({
   onRedraw,
   onResize,
   onCommit,
+  onAddQuarter,
   onClose,
 }: {
   state: Extract<StageFillState, { phase: "pick" }>;
@@ -75,6 +85,9 @@ export function StageFillPanel({
   onRedraw: () => void;
   onResize: (widthMm: number, depthMm: number) => void;
   onCommit: () => void;
+  /** Put a quarter-round corner piece of this radius into the catalog (category stage-decks), for
+   *  a rounded stage whose corners would otherwise be cut decks. */
+  onAddQuarter: (radiusMm: number) => void;
   onClose: () => void;
 }) {
   const decks = layout?.decks ?? [];
@@ -82,6 +95,20 @@ export function StageFillPanel({
     .map((t) => ({ t, n: decks.filter((d) => d.typeId === t.id).length }))
     .filter((x) => x.n > 0);
   const areaM2 = (layout?.areaMm2 ?? 0) / 1e6;
+  // ROUNDED CORNERS AND A BOWED FRONT — a rectangle's, and only while the area still is one (a corner
+  // dragged out of square takes the chip away, and the shape with it).
+  const rectangle = !state.smooth?.length && asRect(state.polygon, state.front) !== null;
+  const roundedMm = rectangle ? (state.roundedMm ?? 0) : 0;
+  const bowMm = rectangle ? (state.bowMm ?? 0) : 0;
+  const roundedAt: RoundedAt = state.roundedAt ?? "all";
+  const cornerCount = roundedAt === "all" ? 4 : 2;
+  const cutCount = decks.filter((d) => d.cut).length;
+  // The quarter-round piece that would stand in each corner: one of about the corner's radius in
+  // the catalog — chosen, or there to be chosen, or missing.
+  const quarterType = roundedMm > 0 ? types.filter((t) => t.quarterMm && Math.abs(t.quarterMm - roundedMm) <= QUARTER_FIT_MM).sort((a, b) => Math.abs(a.quarterMm! - roundedMm) - Math.abs(b.quarterMm! - roundedMm))[0] : undefined;
+  const quarterChosen = !!quarterType && state.chosen.includes(quarterType.id);
+  const AT_LABEL: Record<RoundedAt, string> = { all: "כל הפינות", front: "פינות החזית", back: "פינות האחוריות" };
+  const shapeValue = [roundedMm > 0 ? `R${cm(roundedMm)} · ${AT_LABEL[roundedAt]}` : null, bowMm > 0 ? `חזית קמורה ${cm(bowMm)}` : null].filter(Boolean).join(" · ") || "ישרות";
   // A round area has no sides to read lengths off: its size is said here instead.
   const xs = state.polygon.map((q) => q.x);
   const ys = state.polygon.map((q) => q.y);
@@ -101,7 +128,7 @@ export function StageFillPanel({
     <Bar
       icon={Grid2x2Plus}
       title={state.editing ? "עריכת במה" : "מילוי במות"}
-      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
+      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, cutCount > 0 ? `${cutCount} לחיתוך` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
       onClose={onClose}
     >
       <Popover label="אילו במות" icon={Grid2x2Plus} value={`${state.chosen.length} מתוך ${types.length}`} panelClassName="w-80">
@@ -134,6 +161,69 @@ export function StageFillPanel({
           כשבעה מטרי פלטות במקום שישה ורצועה חשופה. פלטה שרובה מחוץ לקו לא מונחת.
         </Note>
       </Popover>
+
+      {/* A rectangle's corners rounded, its front bowed — derived from the plain rectangle every
+          time, so the radius can be changed back and forth. The decks are laid on the rectangle; what
+          the curves cut off is said here: cut decks, or the quarter-round piece that spares them. */}
+      {rectangle && (
+        <Popover label="פינות" icon={Squircle} value={shapeValue} panelClassName="w-80">
+          <PanelRow label="רדיוס הפינות (ס״מ)" htmlFor="stage-round">
+            <NumberField
+              id="stage-round"
+              decimals={0}
+              min={0}
+              max={2000}
+              step={10}
+              value={cm(roundedMm)}
+              onChange={(v) => onChange({ ...state, roundedMm: Math.max(0, Math.round(v * 10)) })}
+              className="w-20"
+            />
+          </PanelRow>
+          <Segmented
+            label="אילו פינות"
+            value={roundedAt}
+            options={
+              [
+                ["all", "כל הפינות"],
+                ["front", "פינות החזית"],
+                ["back", "פינות האחוריות"],
+              ] as const
+            }
+            onChange={(v) => onChange({ ...state, roundedAt: v })}
+          />
+          <PanelRow label="חזית קמורה (ס״מ)" htmlFor="stage-bow">
+            <NumberField
+              id="stage-bow"
+              decimals={0}
+              min={0}
+              max={500}
+              step={5}
+              value={cm(bowMm)}
+              onChange={(v) => onChange({ ...state, bowMm: Math.max(0, Math.round(v * 10)) })}
+              className="w-20"
+            />
+          </PanelRow>
+          {cutCount > 0 && <Note>{cutCount} פלטות לחיתוך — הצוות חותך אותן לקו, והן נספרות שלמות.</Note>}
+          {roundedMm > 0 && quarterType && quarterChosen && <Note>{quarterType.name} עומד בכל פינה מעוגלת ({cornerCount}) — בלי חיתוך שם.</Note>}
+          {roundedMm > 0 && quarterType && !quarterChosen && (
+            <Button size="sm" variant="outline" className="w-full" onClick={() => onChange({ ...state, chosen: [...state.chosen, quarterType.id] })}>
+              להשתמש ב{quarterType.name} שבקטלוג
+            </Button>
+          )}
+          {roundedMm > 0 && !quarterType && (
+            <>
+              <Note>
+                חסר בקטלוג: רבע עיגול R{cm(roundedMm)} ×{cornerCount} — בלעדיו הפלטות בפינות נחתכות לקשת.
+              </Note>
+              <Button size="sm" className="w-full" onClick={() => onAddQuarter(roundedMm)}>
+                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                הוספה לקטלוג
+              </Button>
+            </>
+          )}
+          <Note>0 = פינות ישרות, חזית ישרה. הקשתות נשמרות גם כשמשנים מידות אחר כך; המדרגות עוקבות אחריהן.</Note>
+        </Popover>
+      )}
 
       {byType.length > 0 && (
         <Popover label="מה ייכנס" value={byType.map(({ t, n }) => `${n}× ${cm(t.widthMm)}×${cm(t.depthMm)}`).join(" · ")} panelClassName="w-72">

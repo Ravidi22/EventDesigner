@@ -202,6 +202,9 @@ export interface StagePanel {
    *  half-round), which a typed size scales whole. */
   size: { widthMm: number; depthMm: number } | null;
   round?: boolean;
+  /** A rectangle with rounded corners or a bowed front (StageBuild.roundedMm / bowMm): its size is
+   *  its box, and a typed size rebuilds the same shape on the new rectangle. */
+  shaped?: boolean;
   deckCount: number;
   coverage: number;
   decks: { name: string; count: number }[];
@@ -1330,7 +1333,9 @@ export function Inspector({
                   : "הפלטות מכסות את המידה הזו בדיוק. "}
                 {sp.round
                   ? "הצורה כולה גדלה או קטנה איתה, והמדרגות סביבה עוקבות אחרי הקשת. הגב נשאר במקומו."
-                  : "הגב נשאר במקומו והחזית זזה. בגרירה, ידית נמשכת למידות שהפלטות בונות בדיוק (Alt משחרר)."}
+                  : sp.shaped
+                    ? "המידה היא של התיבה, כולל הקימור. הפינות המעוגלות והחזית הקמורה נבנות מחדש על המלבן החדש; הגב נשאר במקומו. לשינוי הרדיוס — ״עריכת הבמה״."
+                    : "הגב נשאר במקומו והחזית זזה. בגרירה, ידית נמשכת למידות שהפלטות בונות בדיוק (Alt משחרר)."}
               </Note>
             </Popover>
           )}

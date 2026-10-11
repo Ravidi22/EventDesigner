@@ -265,6 +265,17 @@ export interface StageBuild {
    *  made of one such piece is just that piece; one merged with a rectangular stage keeps its piece
    *  and fills the rest with decks. Absent = decks only. */
   pieces?: StagePiece[];
+  /** A RECTANGLE SHAPED by the fill tool (lib/studio/stage-draw.ts shapeRect): its corners rounded
+   *  off at this radius, mm — these corners (absent with a radius = every corner) — and its front
+   *  bowed out toward the room by this much at the middle, mm. The outline already carries the
+   *  result; these say what was done so a resize or the fill tool reopened can do the same to the
+   *  new rectangle (lib/design-document/stage.ts plainRect, shapedRect), and so the decks are laid
+   *  over the plain rectangle and CUT to the curves — or a quarter-round piece the studio owns is
+   *  stood in each corner. Not `corners`, which is the corner PIECES where two runs of stairs meet.
+   *  Absent = a plain outline, whatever its shape. */
+  roundedMm?: number;
+  roundedAt?: "all" | "front" | "back";
+  bowMm?: number;
 }
 
 /** One whole piece in a stage (StageBuild.pieces): the catalog variant it is, its centre and facing

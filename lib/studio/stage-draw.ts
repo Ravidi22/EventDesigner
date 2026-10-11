@@ -303,7 +303,9 @@ export function unionOutline(polys: readonly (readonly Point[])[]): Point[] | nu
 /** How a stage area is drawn: corner by corner, or as one of the round shapes. */
 export type AreaShape = "corners" | "circle" | "ellipse" | "half";
 
-const ROUND_CHORD_MM = 250;
+/** About how long each chord of a curve drawn here is — a round area's rim, a rounded corner, a
+ *  bowed front. Short enough to read as a curve, long enough to stay a few dozen points. */
+export const ROUND_CHORD_MM = 250;
 
 /** An ellipse `w` × `h` about `centre`, turned `deg`, starting at its top — every corner smooth. */
 export function ellipseArea(centre: Point, w: number, h: number, deg = 0): { outline: Point[]; smooth: number[] } {
@@ -335,6 +337,244 @@ export function halfRoundArea(a: Point, b: Point, side: 1 | -1): { outline: Poin
     return { x: Math.round(m.x - u.x * R * Math.cos(th) + n.x * R * Math.sin(th)), y: Math.round(m.y - u.y * R * Math.cos(th) + n.y * R * Math.sin(th)) };
   });
   return { outline, smooth: outline.map((_, k) => k).filter((k) => k > 0 && k < steps) };
+}
+
+// ── Rounded corners and a bowed front ─────────────────────────────────────────────────────────
+//
+// The two things a designer asks of a rectangle that the corner tool cannot draw: its corners
+// rounded off, and its front bowed out toward the room. Both come out as the same kind of outline
+// a round area does — a fine polygon with the corners ALONG each curve marked smooth — so the rim
+// is sides and arcs, and the stairs follow them (lib/design-document/stage.ts stageSide). The
+// TANGENT points, where an arc meets a straight run, are REAL corners: each straight run and each
+// arc is its own side. Were they smooth, a rectangle rounded at every corner would be one closed
+// side with no front on it.
+
+/** Which corners a rounding applies to: every one, the two bounding the front, or the others. */
+export type RoundedAt = "all" | "front" | "back";
+
+/** An outline with the corners a curve runs through, and which edge is its front. */
+export interface ShapedOutline {
+  outline: Point[];
+  smooth: number[];
+  front: number;
+}
+
+const unitV = (a: Point, b: Point): Point => {
+  const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
+};
+const roundP = (p: Point): Point => ({ x: Math.round(p.x), y: Math.round(p.y) });
+
+/** The arc about `c` of radius `r` from `from` round the SHORT way to `to`, as chords of about
+ *  ROUND_CHORD_MM: its interior points only, never the two ends. */
+function arcBetween(c: Point, r: number, from: Point, to: Point): Point[] {
+  const a0 = Math.atan2(from.y - c.y, from.x - c.x);
+  let d = Math.atan2(to.y - c.y, to.x - c.x) - a0;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  const n = Math.max(2, Math.ceil((Math.abs(d) * r) / ROUND_CHORD_MM));
+  return Array.from({ length: n - 1 }, (_, k) => {
+    const th = a0 + (d * (k + 1)) / n;
+    return { x: c.x + r * Math.cos(th), y: c.y + r * Math.sin(th) };
+  });
+}
+
+/** The two REAL corners bounding the side edge `front` is on: back from its start through any
+ *  smooth corner, on from its end. On a straight side, the edge's own two ends. */
+function frontCorners(n: number, front: number, smooth: ReadonlySet<number>): [number, number] {
+  let fs = ((front % n) + n) % n;
+  let fe = (fs + 1) % n;
+  for (let guard = 0; smooth.has(fs) && guard < n; guard++) fs = (fs - 1 + n) % n;
+  for (let guard = 0; smooth.has(fe) && guard < n; guard++) fe = (fe + 1) % n;
+  return [fs, fe];
+}
+
+/**
+ * The outline with its corners rounded off: each picked corner replaced by a fillet of `radiusMm`
+ * tangent to both its sides, cut into chords. The tangent points are real corners; the chords'
+ * corners are smooth. A radius the corner has no room for gives way: the tangent points never pass
+ * the middle of the shorter side, so two fillets on one side never cross. Corners already smooth
+ * (part of a curve) are left alone. The returned `front` names the front side's straight run — the
+ * edge leaving the front corner's tangent point.
+ */
+export function roundCorners(outline: readonly Point[], radiusMm: number, which: RoundedAt, front: number, smooth: readonly number[] = []): ShapedOutline {
+  const n = outline.length;
+  const sm = new Set(smooth);
+  if (n < 3 || radiusMm <= 0) return { outline: outline.map(roundP), smooth: [...smooth], front: ((front % n) + n) % n };
+  const [fs, fe] = frontCorners(n, front, sm);
+  const picked = (v: number) => !sm.has(v) && (which === "all" || (which === "front") === (v === fs || v === fe));
+  const out: Point[] = [];
+  const outSmooth: number[] = [];
+  const last: number[] = [];
+  const push = (p: Point, isSmooth = false) => {
+    if (isSmooth) outSmooth.push(out.length);
+    out.push(roundP(p));
+  };
+  for (let v = 0; v < n; v++) {
+    const c = outline[v];
+    const a = outline[(v - 1 + n) % n];
+    const b = outline[(v + 1) % n];
+    const La = Math.hypot(c.x - a.x, c.y - a.y);
+    const Lb = Math.hypot(b.x - c.x, b.y - c.y);
+    const u1 = unitV(a, c);
+    const u2 = unitV(c, b);
+    // The wedge between the two sides at this corner — the angle between the rays back to a and on
+    // to b — and the fillet that fits it: a tangent point t = r / tan(θ/2) along each side.
+    const theta = Math.acos(Math.max(-1, Math.min(1, -(u1.x * u2.x + u1.y * u2.y))));
+    const flat = theta < rad(2) || theta > rad(178) || La < 1 || Lb < 1;
+    const tan = Math.tan(theta / 2);
+    const t = flat ? 0 : Math.min(radiusMm / tan, Math.min(La, Lb) / 2);
+    const r = t * tan;
+    if (!picked(v) || r < 5) {
+      push(c, sm.has(v));
+      last[v] = out.length - 1;
+      continue;
+    }
+    const A = { x: c.x - u1.x * t, y: c.y - u1.y * t };
+    const B = { x: c.x + u2.x * t, y: c.y + u2.y * t };
+    const bis = unitV({ x: 0, y: 0 }, { x: -u1.x + u2.x, y: -u1.y + u2.y });
+    const F = { x: c.x + (bis.x * r) / Math.sin(theta / 2), y: c.y + (bis.y * r) / Math.sin(theta / 2) };
+    push(A);
+    for (const q of arcBetween(F, r, A, B)) push(q, true);
+    push(B);
+    last[v] = out.length - 1;
+  }
+  return { outline: out, smooth: outSmooth, front: last[((front % n) + n) % n] % out.length };
+}
+
+/**
+ * The outline with edge `front` bowed out — replaced by a circular arc through its two ends that
+ * stands `sagittaMm` proud of it at the middle, cut into chords, its corners smooth. The two ends
+ * stay the real corners they were. The returned `front` is the arc's first chord, which is still
+ * edge `front`: everything after it moves along.
+ */
+export function bowFront(outline: readonly Point[], front: number, sagittaMm: number, smooth: readonly number[] = []): ShapedOutline {
+  const n = outline.length;
+  const f = ((front % n) + n) % n;
+  const a = outline[f];
+  const b = outline[(f + 1) % n];
+  const L = a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
+  if (n < 3 || sagittaMm <= 0 || L < 1) return { outline: outline.map(roundP), smooth: [...smooth], front: f };
+  // Never a full half-circle: the arc's ends would run parallel to the sides and there would be no
+  // corner left to turn at.
+  const s = Math.min(sagittaMm, L * 0.49);
+  const R = (L * L) / 4 / (2 * s) + s / 2;
+  const sg = areaOf(outline) >= 0 ? 1 : -1;
+  const u = unitV(a, b);
+  const out = { x: sg * u.y, y: -sg * u.x };
+  const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const c = { x: m.x - out.x * (R - s), y: m.y - out.y * (R - s) };
+  const arc = arcBetween(c, R, a, b).map(roundP);
+  const k = arc.length;
+  return {
+    outline: [...outline.slice(0, f + 1).map(roundP), ...arc, ...outline.slice(f + 1).map(roundP)],
+    smooth: [...smooth.map((i) => (i > f ? i + k : i)), ...arc.map((_, j) => f + 1 + j)].sort((x, y) => x - y),
+    front: f,
+  };
+}
+
+/** What a rectangle is shaped with (StageBuild.roundedMm / roundedAt / bowMm). */
+export interface RectShape {
+  roundedMm?: number;
+  roundedAt?: RoundedAt;
+  bowMm?: number;
+}
+
+/**
+ * A rectangle `widthMm` × `depthMm`, its corners rounded and its front bowed as asked — the one
+ * shape the fill tool composes, so it is built here once: with a bow AND rounded front corners,
+ * each front fillet is struck tangent to the SIDE and to the BOW'S CIRCLE, not to the chord, so the
+ * bow runs into the corner as one line rather than meeting the fillet at a kink. The outline is
+ * CENTRED ON ITS OWN BOX (a bow pushes the box forward by the sagitta) and wound as rectOutline is,
+ * with the front as edge 0: the bow's first chord, or the straight front run. `offset` is where the
+ * new centre stands in the plain rectangle's frame — (0, −s/2) for a bow — so the caller can keep
+ * the rectangle where it was. A radius or a sagitta the rectangle has no room for is clamped; with
+ * nothing asked, the plain rectangle comes back.
+ */
+export function shapeRect(widthMm: number, depthMm: number, shape: RectShape): ShapedOutline & { offset: Point } {
+  const w = widthMm;
+  const d = depthMm;
+  const at = shape.roundedAt ?? "all";
+  let r = Math.max(0, Math.min(shape.roundedMm ?? 0, Math.min(w, d) / 2 - 1));
+  if (r < 5) r = 0;
+  let s = Math.max(0, Math.min(shape.bowMm ?? 0, w * 0.45));
+  if (s < 5) s = 0;
+  const plain: Point[] = [
+    { x: -w / 2, y: -d / 2 },
+    { x: w / 2, y: -d / 2 },
+    { x: w / 2, y: d / 2 },
+    { x: -w / 2, y: d / 2 },
+  ];
+  const finish = (o: ShapedOutline): ShapedOutline & { offset: Point } => {
+    // The front as edge 0…
+    const n = o.outline.length;
+    const f = o.front;
+    const turned = f ? [...o.outline.slice(f), ...o.outline.slice(0, f)] : o.outline;
+    const sm = f ? o.smooth.map((i) => (i - f + n) % n).sort((x, y) => x - y) : o.smooth;
+    // …centred on its box.
+    const xs = turned.map((q) => q.x);
+    const ys = turned.map((q) => q.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    return { outline: turned.map((q) => roundP({ x: q.x - cx, y: q.y - cy })), smooth: sm, front: 0, offset: roundP({ x: cx, y: cy }) };
+  };
+  const frontRounded = r > 0 && at !== "back";
+  if (!(s > 0 && frontRounded)) {
+    let o: ShapedOutline = { outline: plain, smooth: [], front: 0 };
+    if (s > 0) o = bowFront(o.outline, 0, s);
+    if (r > 0) o = roundCorners(o.outline, r, at, o.front, o.smooth);
+    return finish(o);
+  }
+  // A bow with rounded front corners. The bow's circle: through the two front corners, s proud of
+  // the front at the middle, its centre back inside the stage. Each front fillet's centre is r in
+  // from its side and R − r from the bow's centre (tangent to both from inside).
+  const R = (w * w) / 4 / (2 * s) + s / 2;
+  const C = { x: 0, y: -d / 2 + (R - s) };
+  const fx = w / 2 - r;
+  const fy = C.y - Math.sqrt(Math.max(0, (R - r) ** 2 - fx * fx));
+  // No room for it — its tangent on the side would reach the back corner (or its fillet): the front
+  // corners stay as the bow left them.
+  if (fy > d / 2 - (at === "all" ? r : 0) - 1) {
+    let o = bowFront(plain, 0, s);
+    if (at === "all") o = roundCorners(o.outline, r, "back", 0, o.smooth);
+    return finish(o);
+  }
+  const pts: Point[] = [];
+  const sm: number[] = [];
+  const push = (p: Point, isSmooth = false) => {
+    if (isSmooth) sm.push(pts.length);
+    pts.push(p);
+  };
+  const arc = (c: Point, radius: number, from: Point, to: Point) => {
+    for (const q of arcBetween(c, radius, from, to)) push(q, true);
+  };
+  const F = { x: fx, y: fy };
+  const Fl = { x: -fx, y: fy };
+  const k = R / (R - r);
+  // Where each fillet touches the bow, and where it touches its side.
+  const Tb = { x: C.x + (F.x - C.x) * k, y: C.y + (F.y - C.y) * k };
+  const Tbl = { x: C.x + (Fl.x - C.x) * k, y: C.y + (Fl.y - C.y) * k };
+  const Ts = { x: w / 2, y: fy };
+  const Tsl = { x: -w / 2, y: fy };
+  push(Tbl);
+  arc(C, R, Tbl, Tb);
+  push(Tb);
+  arc(F, r, Tb, Ts);
+  push(Ts);
+  if (at === "all") {
+    push({ x: w / 2, y: d / 2 - r });
+    arc({ x: w / 2 - r, y: d / 2 - r }, r, { x: w / 2, y: d / 2 - r }, { x: w / 2 - r, y: d / 2 });
+    push({ x: w / 2 - r, y: d / 2 });
+    push({ x: -w / 2 + r, y: d / 2 });
+    arc({ x: -w / 2 + r, y: d / 2 - r }, r, { x: -w / 2 + r, y: d / 2 }, { x: -w / 2, y: d / 2 - r });
+    push({ x: -w / 2, y: d / 2 - r });
+  } else {
+    push({ x: w / 2, y: d / 2 });
+    push({ x: -w / 2, y: d / 2 });
+  }
+  push(Tsl);
+  arc(Fl, r, Tsl, Tbl);
+  return finish({ outline: pts.map(roundP), smooth: sm, front: 0 });
 }
 
 // ── Several outlines of ANY shape, as one ─────────────────────────────────────────────────────
@@ -846,6 +1086,67 @@ if (isMain(import.meta.url)) {
     assert(half.outline.every((q) => q.y >= -1) && half.outline.some((q) => Math.abs(q.y - 2000) <= 1), "…bulging to the side asked, its apex a corner, two metres out");
     assert(halfRoundArea({ x: 0, y: 0 }, { x: 4000, y: 0 }, -1).outline.every((q) => q.y <= 1), "…or to the other side");
     assert(Math.abs(Math.abs(areaOf(half.outline)) - (Math.PI * 4e6) / 2) < 0.01 * Math.PI * 4e6, "…half a disc of area");
+  }
+
+  // ROUNDED CORNERS AND A BOWED FRONT.
+  {
+    const box6: Point[] = [
+      { x: -3000, y: -2000 },
+      { x: 3000, y: -2000 },
+      { x: 3000, y: 2000 },
+      { x: -3000, y: 2000 },
+    ];
+    const near = (a: number, b: number, tol = 1) => Math.abs(a - b) <= tol;
+    const turnAt = (o: readonly Point[], i: number) => {
+      const n = o.length;
+      const a = o[(i - 1 + n) % n];
+      const c = o[i];
+      const b = o[(i + 1) % n];
+      const u = Math.atan2(c.y - a.y, c.x - a.x);
+      const v = Math.atan2(b.y - c.y, b.x - c.x);
+      const d = Math.abs(v - u) % (2 * Math.PI);
+      return Math.min(d, 2 * Math.PI - d);
+    };
+    // Every corner rounded at 1.2m: four arcs (1885mm each — eight chords, seven smooth corners)
+    // between real tangent corners, so the rim is eight sides and the front is still a side of its own.
+    const all = roundCorners(box6, 1200, "all", 0);
+    assert(all.outline.length === 36 && all.smooth.length === 28, "a 6×4 rounded at 1.2m is four arcs of seven smooth corners, each between two real tangent corners");
+    assert(all.outline[all.front].x === -1800 && all.outline[all.front].y === -2000 && all.outline[(all.front + 1) % 36].x === 1800, "…and its front is the straight run between the two front tangent points");
+    assert(all.outline.every((q) => Math.abs(q.x) <= 3000 && Math.abs(q.y) <= 2000), "…inside the rectangle it was");
+    assert(all.smooth.every((i) => turnAt(all.outline, i) < rad(15)), "…every smooth corner turning only a chord's worth");
+    const tangent = all.outline.findIndex((q, i) => !all.smooth.includes(i) && q.x === -1800 && q.y === -2000);
+    assert(tangent >= 0 && turnAt(all.outline, tangent) < rad(8), "…and a tangent point is a real corner that barely turns");
+    assert(Math.abs(areaOf(all.outline)) < 24e6 && Math.abs(areaOf(all.outline)) > 24e6 - 4 * (1 - Math.PI / 4) * 1200 * 1200 - 60_000, "…losing only the four corners' worth of floor");
+    // A radius the corner has no room for gives way to half the shorter side.
+    const clamped = roundCorners(box6, 5000, "all", 0);
+    assert(clamped.outline.every((q) => Math.abs(q.y) <= 2000) && clamped.outline.some((q) => q.x === -1000 && q.y === -2000), "a 5m radius on a 4m-deep stage is clamped to 2m — tangent points at the middle of the short sides");
+    // Front corners only, back corners only.
+    const fr = roundCorners(box6, 600, "front", 0);
+    assert(fr.smooth.length === 6 && fr.outline.some((q) => q.x === 3000 && q.y === 2000) && fr.outline.some((q) => q.x === -3000 && q.y === 2000), "front corners only: the back corners are left square");
+    const bk = roundCorners(box6, 600, "back", 0);
+    assert(bk.outline[bk.front].x === -3000 && bk.outline[bk.front].y === -2000 && bk.outline[(bk.front + 1) % bk.outline.length].x === 3000, "back corners only: the front is the whole front edge still");
+    assert(roundCorners(box6, 0, "all", 0).outline.length === 4, "no radius, no change");
+    // A bowed front: an arc through the two front corners, 30cm proud at the middle.
+    const bowed = bowFront(box6, 0, 300);
+    assert(bowed.front === 0 && bowed.outline[0].x === -3000 && bowed.outline[0].y === -2000, "a bow keeps the front's start as a real corner and the first chord as the front");
+    assert(near(Math.min(...bowed.outline.map((q) => q.y)), -2300, 2), "…standing 30cm proud of the line at its middle");
+    assert(bowed.smooth.length === bowed.outline.length - 4 && bowed.smooth.every((i) => i >= 1 && i <= bowed.smooth.length), "…its chords' corners smooth, the four rectangle corners real");
+    assert(Math.abs(areaOf(bowed.outline)) > 24e6 + 1.1e6 && Math.abs(areaOf(bowed.outline)) < 24e6 + 1.3e6, "…adding about two thirds of 6m × 0.3m of floor");
+    assert(bowFront([...box6].reverse(), 2, 300).outline.some((q) => q.y < -2250), "…bulging outward whichever way round the corners run");
+    // The composition the fill tool uses: a rounded rectangle with a bow, as ONE line.
+    const both = shapeRect(6000, 4000, { roundedMm: 600, roundedAt: "all", bowMm: 300 });
+    assert(both.front === 0 && both.offset.x === 0 && both.offset.y === -150, "a bowed rounded rectangle has its front as edge 0 and stands 15cm forward of the plain one");
+    const bys = both.outline.map((q) => q.y);
+    assert(near(Math.min(...bys), -2150, 2) && near(Math.max(...bys), 2150, 2), "…centred on its own box, which the bow made 4.3m deep");
+    const kinks = both.outline.map((_, i) => i).filter((i) => !both.smooth.includes(i)).map((i) => turnAt(both.outline, i));
+    assert(kinks.length === 8 && kinks.every((k) => k < rad(15)), "…every real corner a tangent point turning no more than a chord does: the front fillets are struck against the bow's circle, not its chord");
+    const plainR = shapeRect(6000, 4000, { roundedMm: 1200 });
+    assert(plainR.outline.length === 36 && plainR.offset.y === 0 && plainR.front === 0, "rounding alone is roundCorners, front first");
+    const plainB = shapeRect(6000, 4000, { bowMm: 300 });
+    assert(plainB.smooth.length === bowed.smooth.length && plainB.offset.y === -150, "a bow alone is bowFront, recentred");
+    assert(shapeRect(6000, 4000, {}).outline.length === 4 && shapeRect(6000, 4000, { roundedMm: 0, bowMm: 0 }).outline.length === 4, "nothing asked, the plain rectangle");
+    const backOnly = shapeRect(6000, 4000, { roundedMm: 600, roundedAt: "back", bowMm: 300 });
+    assert(backOnly.outline[0].x === -3000 && backOnly.outline.filter((q, i) => !backOnly.smooth.includes(i)).length === 6, "a bow with the back corners rounded: the bow's two ends, and two tangent points per back corner");
   }
   console.log("stage-draw self-check passed");
 }
