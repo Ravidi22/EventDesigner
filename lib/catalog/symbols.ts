@@ -33,7 +33,8 @@ export type SymbolKind =
   | "bar"
   | "runner"
   | "stairs"
-  | "ramp";
+  | "ramp"
+  | "bench";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -52,6 +53,9 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   // it is walked up, as the venue's own stairs are drawn (components/climb-glyph.tsx).
   "stage-stairs": "stairs",
   "stage-ramps": "ramp",
+  // A banquette standing on its own (lib/design-document/bench.ts): its top, the chairs along a
+  // chairs side, the cushions of a sofa side. A stage's edge banquette is drawn by the stage itself.
+  "stage-benches": "bench",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */
@@ -66,8 +70,9 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   // A runner is filed with the cloths but is drawn as itself: a strip of fabric on the table.
   const kind = isRunner(product) ? "runner" : SYMBOL_BY_CATEGORY[product.category];
   if (!kind) return null;
-  // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into.
-  if (kind === "stairs" || kind === "ramp") return footprint.kind === "rect" ? kind : null;
+  // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into. A banquette
+  // is a strip with two long sides — the same.
+  if (kind === "stairs" || kind === "ramp" || kind === "bench") return footprint.kind === "rect" ? kind : null;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 

@@ -4,7 +4,9 @@ import { CLOTH_DROP_MM, type ChairStyle, type SymbolKind } from "@/lib/catalog/s
 
 export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
-import type { PlacementClimb } from "@/lib/design-document/types";
+import type { PlacementClimb, Point } from "@/lib/design-document/types";
+import { benchLayout, type BenchLayout } from "@/lib/design-document/bench";
+import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
 
@@ -46,6 +48,8 @@ const DEFAULT_TONE: Record<SymbolKind, string> = {
   // The plan's own inset well (--color-inset): a flight is floor, not furniture.
   stairs: "#FAF9FD",
   ramp: "#FAF9FD",
+  // A banquette's top: the same quiet upholstery a sofa is.
+  bench: "#ECE7F5",
 };
 
 export interface ItemSymbolProps {
@@ -71,9 +75,14 @@ export interface ItemSymbolProps {
   /** The size of words the picture writes (a ramp's slope), in the drawing's mm: the caller's screen
    *  or printed size. Absent = sized off the item itself, for a card or a drag image. */
   textMm?: number;
+  /** For a banquette: how it is laid on THIS plan — which side is chairs, which a sofa, how many
+   *  (lib/design-document/bench.ts). Absent = the default layout at its size (a card, a drag image):
+   *  chairs along its back. `chairs: false` leaves the chairs off (a sheet that hides every chair). */
+  bench?: BenchLayout;
+  chairs?: boolean;
 }
 
-function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
   if (w <= 0 || h <= 0) return null;
   const t = print ? "#ffffff" : tone || DEFAULT_TONE[kind];
@@ -147,8 +156,66 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
         />
       );
       break;
+    case "bench":
+      body = benchSymbol(w, h, bench ?? benchLayout(w, h), chairs, c, line);
+      break;
   }
   return <g className="pointer-events-none">{body}</g>;
+}
+
+/** A banquette standing on its own (lib/design-document/bench.ts), in its own frame — the strip is
+ *  its top; along a chairs side the same chairs a table has, pushed in against it; along a sofa side
+ *  the cushions inside the strip and the backrest line toward the other half. A stage's edge
+ *  banquette is drawn by the stage (its chairs with the stage's Chair) and borrows SofaCushions. */
+function benchSymbol(w: number, h: number, lay: BenchLayout, chairs: boolean, c: Colours, line: Line) {
+  // A table's chair — the very drawing SeatChair is (chair(), turned so +x faces what it is pulled
+  // up to), in the chair's own quiet tone, so a banquette's chairs match the tables' round the room.
+  const seatTone = c.print ? "#ffffff" : "#F4F2F9";
+  const seat: Colours = { ...c, tone: seatTone, inkOpacity: c.print ? 1 : 0.75, shade: c.print ? "#ffffff" : isDark(seatTone) ? "#ffffff" : c.ink };
+  const seatLine = { ...line, strokeOpacity: seat.inkOpacity };
+  return (
+    <>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={Math.min(40, h * 0.1)} fill={c.tone} {...line} />
+      {chairs &&
+        lay.chairs.map((s, i) => (
+          <g key={`chair-${i}`} transform={`translate(${s.x} ${s.y}) rotate(${s.facingDeg}) rotate(-90)`}>
+            {chair(CHAIR_W_MM, CHAIR_D_MM, "dining", seat, seatLine)}
+          </g>
+        ))}
+      {sofaCushions(lay.cushions, lay.backs, c, line)}
+    </>
+  );
+}
+
+function sofaCushions(cushions: Point[][], backs: [Point, Point][], c: Colours, line: Line) {
+  if (cushions.length === 0 && backs.length === 0) return null;
+  const shade = { fill: c.shade, fillOpacity: c.print ? 1 : c.shadeOpacity };
+  return (
+    <>
+      {cushions.map((q, i) => (
+        <polygon key={`c-${i}`} points={q.map((p) => `${p.x},${p.y}`).join(" ")} {...shade} {...line} strokeLinejoin="round" />
+      ))}
+      {backs.map(([a, b], i) => (
+        <line key={`b-${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} {...line} strokeWidth={c.print ? 1 : 2} strokeOpacity={1} strokeLinecap="round" />
+      ))}
+    </>
+  );
+}
+
+/** A sofa side of a STAGE's edge banquette: its cushions and backrest where the stage laid them (in
+ *  the stage's frame — EdgeItemShape.cushions/backs). Screen inks, or the sheet's ink in print. */
+export function SofaCushions({ cushions, backs, ink = "var(--color-ink-soft)", print }: { cushions: Point[][]; backs: [Point, Point][]; ink?: string; print?: boolean }) {
+  const c: Colours = {
+    tone: print ? "#ffffff" : DEFAULT_TONE.bench,
+    ink,
+    inkOpacity: print ? 1 : 0.6,
+    shade: print ? "#ffffff" : ink,
+    shadeOpacity: print ? 1 : 0.14,
+    print: !!print,
+    overhead: false,
+  };
+  const line = { stroke: ink, strokeOpacity: c.inkOpacity, strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const };
+  return <g className="pointer-events-none">{sofaCushions(cushions, backs, c, line)}</g>;
 }
 
 // ── shared ──────────────────────────────────────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 // Pure appearance resolver (no window/localStorage) — shared by the Konva map renderer
 // and the drawer preview. Absence of `appearance` is derived from `dimensions` so every
 // legacy/seed product keeps rendering (name-in-a-shape = today's behavior).
-import type { ArcSpec, MapShape, Product, RingSpec, ShapePart } from "@/lib/catalog/types";
+import type { ArcSpec, MapShape, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
 import { ARC_SWEEP, RESIZE_DEFAULT_STEP_MM, RING_GAP, usesDiameter } from "@/lib/catalog/types";
+import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import { absoluteControlPoints, outlineBounds } from "@/lib/studio/geometry";
@@ -681,11 +682,20 @@ export function catalogBox(product: Product): { widthMm: number; depthMm: number
 const shapeOfProduct = (product: Product): MapShape =>
   product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect");
 
+/** How the plan may stretch this product: the row's own say (Product.resize) when it has one, else
+ *  its category's default (CategoryDef.defaultResize — a banquette is laid to length without every
+ *  studio switching that on row by row). Undefined = a thing of one size. Every reader of `resize`
+ *  on this side of the catalog goes through here, so a category default is honoured by the handles,
+ *  the size panel and the drawing alike. */
+export function resizeSpecOf(product: Product): ResizeSpec | undefined {
+  return product.resize ?? CATEGORY_BY_ID[product.category]?.defaultResize;
+}
+
 /** Which of the box's two sides the plan may change, or null for a thing of one size. A round
  *  shape has ONE measurement: width is its diameter and depth follows it, so a round table can grow
  *  but never become an egg. */
 export function resizeAxes(product: Product): { width: boolean; depth: boolean; uniform: boolean } | null {
-  const r = product.resize;
+  const r = resizeSpecOf(product);
   if (!r || (!r.width && !r.depth)) return null;
   const uniform = usesDiameter(shapeOfProduct(product));
   if (uniform && !r.width) return null;
@@ -699,8 +709,9 @@ export function resizeAxes(product: Product): { width: boolean; depth: boolean; 
 export function clampSize(product: Product, size: { widthMm: number; depthMm: number }): { widthMm: number; depthMm: number } {
   const base = catalogBox(product);
   const axes = resizeAxes(product);
-  if (!axes || !product.resize) return base;
-  const step = Math.max(1, product.resize.stepMm || RESIZE_DEFAULT_STEP_MM);
+  const spec = resizeSpecOf(product);
+  if (!axes || !spec) return base;
+  const step = Math.max(1, spec.stepMm || RESIZE_DEFAULT_STEP_MM);
   const fit = (v: number, range: { minMm: number; maxMm: number } | undefined, fallback: number) => {
     if (!range) return fallback;
     const lo = Math.min(range.minMm, range.maxMm);
@@ -708,12 +719,12 @@ export function clampSize(product: Product, size: { widthMm: number; depthMm: nu
     const snapped = Math.round(v / step) * step;
     return Math.round(Math.min(hi, Math.max(lo, snapped || step)));
   };
-  const widthMm = axes.width ? fit(size.widthMm, product.resize.width, base.widthMm) : base.widthMm;
+  const widthMm = axes.width ? fit(size.widthMm, spec.width, base.widthMm) : base.widthMm;
   if (axes.uniform) {
     const ratio = base.widthMm ? base.depthMm / base.widthMm : 1;
     return { widthMm, depthMm: Math.round(widthMm * ratio) };
   }
-  const depthMm = axes.depth ? fit(size.depthMm, product.resize.depth, base.depthMm) : base.depthMm;
+  const depthMm = axes.depth ? fit(size.depthMm, spec.depth, base.depthMm) : base.depthMm;
   return { widthMm, depthMm };
 }
 
@@ -741,7 +752,7 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
 /** The footprint a placed item is drawn with: the catalog's, or — for one stretched on the plan —
  *  the same shape at the size it was stretched to (see the note above). */
 export function sizedFootprint(product: Product, sizeMm?: { widthMm: number; depthMm: number }): Footprint {
-  if (!sizeMm || !product.resize) return resolveFootprint(product);
+  if (!sizeMm || !resizeSpecOf(product)) return resolveFootprint(product);
   const a = product.appearance;
   const shape = shapeOfProduct(product);
   if (!a?.parts?.length && shape !== "custom") {
@@ -1091,6 +1102,30 @@ if (isMain(import.meta.url)) {
     const sofaWide = footprintBounds(sizedFootprint(sofa, { widthMm: 3000, depthMm: 900 }));
     assert(Math.round(sofaWide.w) === 3000 && Math.round(sofaWide.h) === 900, "a hand-drawn outline is scaled to the new box");
     assert(eq(scaleFootprint({ kind: "circle", diameterMm: 100 }, 2, 1), { kind: "ellipse", widthMm: 200, depthMm: 100 }), "a circle pulled one way is an ellipse");
+  }
+
+  // A category may stretch its rows by default (CategoryDef.defaultResize): a banquette that says
+  // nothing of its own is laid to length — along its length only — and one that does is its own.
+  {
+    const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const bench: Product = {
+      id: "bench",
+      name: "בנקט",
+      category: "stage-benches",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 450, heightMm: 750 },
+      categoryFields: {},
+      styleTags: [],
+      variants: [],
+      appearance: { shape: "rect", content: "none" },
+    };
+    assert(eq(resizeAxes(bench), { width: true, depth: false, uniform: false }), "a banquette row with no resize of its own stretches along its length by default");
+    assert(eq(clampSize(bench, { widthMm: 6040, depthMm: 900 }), { widthMm: 6000, depthMm: 450 }), "…in 10cm steps, its depth the catalog's");
+    assert(eq(clampSize(bench, { widthMm: 100, depthMm: 450 }), { widthMm: 600, depthMm: 450 }), "…never shorter than one seat");
+    assert(eq(sizedFootprint(bench, { widthMm: 6000, depthMm: 450 }), { kind: "rect", widthMm: 6000, depthMm: 450 }), "…and draws at the stretched length");
+    const ownBench: Product = { ...bench, resize: { stepMm: 500, width: { minMm: 1000, maxMm: 3000 } } };
+    assert(eq(clampSize(ownBench, { widthMm: 6000, depthMm: 450 }), { widthMm: 3000, depthMm: 450 }), "a row's own resize wins over its category's default");
+    assert(resizeAxes({ ...bench, category: "arches" }) === null, "a category with no default leaves a plain row a thing of one size");
   }
 
   console.log("footprint self-check passed");

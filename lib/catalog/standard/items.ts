@@ -169,9 +169,11 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
       name: "בנקט לבמה",
       category: "stage-benches",
       layer: "floor",
-      dimensions: { widthMm: 1000, depthMm: 450, heightMm: 450 },
+      // Table height: chairs stand at it and its top is their table (BENCH_TOP_MM). A sofa side's
+      // seat height is the plan's (SOFA_SEAT_MM), not the row's.
+      dimensions: { widthMm: 1000, depthMm: 450, heightMm: 750 },
       categoryFields: {},
-      spec: "ספסל נמוך לאורך שפת הבמה · מקום ישיבה ומשטח לעיצוב",
+      spec: "בנקט לאורך שפת הבמה או עומד חופשי · כיסאות לצידו או ספה עליו · משטח לעיצוב",
       priceUnit: "m",
       styleTags: [],
       visibility: "public",

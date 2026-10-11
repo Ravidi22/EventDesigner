@@ -157,9 +157,13 @@ function ResizeFields({
         }
         label="גודל גמיש על התוכנית"
         hint={
-          ready
-            ? "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
-            : "יש להשלים קודם את הצורה והמידות."
+          !ready
+            ? "יש להשלים קודם את הצורה והמידות."
+            : // The category stretches its rows by default (CategoryDef.defaultResize) — a banquette is
+              // laid to length — and the switch here is for a row that wants its own module and range.
+              !spec && CATEGORY_BY_ID[draft.category]?.defaultResize
+              ? "פריטי הקטגוריה הזו נמתחים לאורכם בסקיצה כברירת מחדל. הפעלה כאן קובעת לשורה הזו קפיצות וטווח משלה."
+              : "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
         }
       />
       {spec && (

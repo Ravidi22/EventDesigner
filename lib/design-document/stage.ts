@@ -35,6 +35,7 @@ import { asRect, defaultFront, fillWithDecks, polygonsOverlap, signedArea, type 
 import { flattenEdge, footprintBounds, footprintOutlines, resolveFootprint, sizedFootprint, type BuiltOutline } from "../studio/footprint";
 import { cleanOutline, halfRoundArea, pushSide, splitSide, stickBoxes, unionOutline, unionShapes } from "../studio/stage-draw";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
+import { BENCH_DEPTH_MM, BENCH_TOP_MM, SEAT_WIDTH_MM, SOFA_SEAT_MM, benchLayout, benchSpecOf, type BenchLayout } from "./bench";
 import { isMain } from "../self-check";
 
 /** What the fill needs to know about a deck, keyed by the variant id the stage stores. */
@@ -511,11 +512,10 @@ export function stageDeckCounts(stage: StageBuild, deckOf: DeckLookup): Map<stri
 // new stage gets them along every open side), a banquette people sit on, or a barrier. What is left
 // bare is found by edgeGaps and said out loud, with a one-click fill.
 
-/** A banquette: as deep as a seat, as high as one (but never above the stage it leans on). */
-export const BENCH_DEPTH_MM = 450;
-export const BENCH_HEIGHT_MM = 450;
-/** The room one person takes on a banquette — what its seat count is measured in. */
-export const SEAT_WIDTH_MM = 600;
+/** A banquette's depth, seat module and heights live with the banquette (./bench.ts — one layout for
+ *  a stage's edge banquette and a standalone one); re-exported for the readers that always found
+ *  them here. */
+export { BENCH_DEPTH_MM, BENCH_TOP_MM, SEAT_WIDTH_MM, SOFA_SEAT_MM } from "./bench";
 /** A barrier's drawn thickness, along the inside of its edge. */
 export const BARRIER_MM = 60;
 /** A backdrop's: a framed wall, on the edge, inside the outline. */
@@ -738,12 +738,20 @@ export interface EdgeItemShape {
   risers: number;
   riserMm: number;
   riseMm: number;
-  /** Bench: its height, and how many sit at it — and where each chair stands: BEHIND it, on the
-   *  stage, tucked under its inner edge and facing out over it into the room, as a head table's
-   *  chairs are (in the stage's frame, as a table's chairs are in its). */
+  /** Bench: its TOP (above the deck, for a chairs side), everyone who sits at it, and where each
+   *  chair stands — on the stage side BEHIND it, tucked under its inner edge and facing out over it
+   *  into the room, as a head table's chairs are; or in the room in front of it, facing it (in the
+   *  stage's frame, as a table's chairs are in its). Only chairs are packed; `seats` counts the sofa
+   *  side's sitters too, drawn as `cushions` inside the strip with a `backs` line (./bench.ts). */
   heightMm: number;
   seats: number;
   chairs: Seat[];
+  sofaSeats: number;
+  sofaHeightMm: number;
+  cushions: Point[][];
+  backs: [Point, Point][];
+  /** The banquette as laid in its own frame — which side is what. Only on a bench. */
+  bench?: BenchLayout;
 }
 export type StairShape = EdgeItemShape;
 
@@ -782,7 +790,22 @@ export function edgeItemShape(stage: StageBuild, item: StageStair, deckOf: DeckL
     return l.slice(1).map((q, i) => [l[i], q] as [Point, Point]);
   };
   const angleDeg = (Math.atan2(m.u.y, m.u.x) * 180) / Math.PI;
-  const shape = (s: { polygon: Point[]; treads?: [Point, Point][]; depth: number; reach: number; risers?: number; riserMm?: number; heightMm?: number; seats?: number; chairs?: Seat[] }): EdgeItemShape => ({
+  const shape = (s: {
+    polygon: Point[];
+    treads?: [Point, Point][];
+    depth: number;
+    reach: number;
+    risers?: number;
+    riserMm?: number;
+    heightMm?: number;
+    seats?: number;
+    chairs?: Seat[];
+    sofaSeats?: number;
+    sofaHeightMm?: number;
+    cushions?: Point[][];
+    backs?: [Point, Point][];
+    bench?: BenchLayout;
+  }): EdgeItemShape => ({
     kind,
     inner,
     polygon: s.polygon,
@@ -800,30 +823,53 @@ export function edgeItemShape(stage: StageBuild, item: StageStair, deckOf: DeckL
     heightMm: s.heightMm ?? 0,
     seats: s.seats ?? 0,
     chairs: s.chairs ?? [],
+    sofaSeats: s.sofaSeats ?? 0,
+    sofaHeightMm: s.sofaHeightMm ?? 0,
+    cushions: s.cushions ?? [],
+    backs: s.backs ?? [],
+    bench: s.bench,
   });
   if (kind === "barrier" || kind === "backdrop") {
     const thick = kind === "barrier" ? BARRIER_MM : BACKDROP_MM;
     return shape({ polygon: strip(0, -thick), depth: thick, reach: -thick });
   }
   if (kind === "bench") {
-    const depthMm = item.depthMm && item.depthMm > 0 ? item.depthMm : BENCH_DEPTH_MM;
-    // The banquette is set like a table: chairs stand beside it on the STAGE side, pushed in under
-    // its edge, facing it and the room past it. As many as were asked for (never more than fit
-    // shoulder to shoulder), else one per SEAT_WIDTH_MM; spread evenly along it. An inner one stands
-    // on the deck itself, so its chairs stand further in, behind it.
-    const most = Math.max(0, Math.floor(w / CHAIR_W_MM));
-    const seats = Math.min(most, item.seats !== undefined ? Math.max(0, Math.round(item.seats)) : Math.floor(w / SEAT_WIDTH_MM));
-    const chairY = inner ? -(depthMm + CHAIR_OFFSET_MM) : -CHAIR_OFFSET_MM;
-    const chairs: Seat[] = Array.from({ length: seats }, (_, i) => {
-      const x = -half + ((i + 0.5) * w) / seats;
-      const q = at(x, chairY);
+    // The banquette is laid in ITS OWN frame by the one function a standalone banquette uses too
+    // (./bench.ts): its back is the stage side, so chairs there stand on the STAGE, pushed in under
+    // its edge, facing it and the room past it; a sofa there is sat on facing the stage; the front
+    // side faces the room. Then carried onto the edge: the strip's centre line is half a depth out —
+    // or, for an inner banquette standing on the deck, half a depth in, its chairs further in still.
+    // On a curved side `at` follows the curve, so the cushions and the chairs bend with the rim.
+    const spec = benchSpecOf(item);
+    const depthMm = spec.depthMm && spec.depthMm > 0 ? spec.depthMm : BENCH_DEPTH_MM;
+    const lay = benchLayout(w, depthMm, spec);
+    const dir = inner ? -1 : 1;
+    // The banquette's own +y (its front, toward the room) is the side's outward normal either way;
+    // only its centre line moves — half a depth out of the edge, or half a depth in.
+    const carry = (q: Point) => at(q.x, q.y + (dir * depthMm) / 2);
+    const face = (x: number, deg: number) => {
+      // A local facing turned into the stage's: along the edge's direction and its outward normal at
+      // this point of the side (which bends with a curve).
       const n = bent ? sideFrame(side, mid + x).n : m.n;
-      return { x: q.x, y: q.y, facingDeg: (Math.atan2(n.y, n.x) * 180) / Math.PI };
+      const u = bent ? sideFrame(side, mid + x).u : m.u;
+      const r = (deg * Math.PI) / 180;
+      const d = { x: u.x * Math.cos(r) + n.x * Math.sin(r), y: u.y * Math.cos(r) + n.y * Math.sin(r) };
+      return (Math.atan2(d.y, d.x) * 180) / Math.PI;
+    };
+    const reach = dir * depthMm;
+    return shape({
+      polygon: strip(0, reach),
+      depth: depthMm,
+      reach,
+      heightMm: lay.heightMm,
+      seats: lay.seats,
+      chairs: lay.chairs.map((c) => ({ ...carry(c), facingDeg: face(c.x, c.facingDeg) })),
+      sofaSeats: lay.sofaSeats,
+      sofaHeightMm: lay.sofaHeightMm,
+      cushions: lay.cushions.map((q) => q.map(carry)),
+      backs: lay.backs.map(([a, b]) => [carry(a), carry(b)] as [Point, Point]),
+      bench: lay,
     });
-    const reach = inner ? -depthMm : depthMm;
-    // Outside, a banquette leans on the stage and is never taller than it; on the deck it is a seat.
-    const seatH = item.heightMm && item.heightMm > 0 ? item.heightMm : BENCH_HEIGHT_MM;
-    return shape({ polygon: strip(0, reach), depth: depthMm, reach, heightMm: inner ? seatH : Math.min(seatH, riseMm || BENCH_HEIGHT_MM), seats, chairs });
   }
   if (kind === "ramp") {
     if (riseMm <= 0) return null;
@@ -1382,7 +1428,8 @@ export function stageAreaMm2(stage: StageBuild, deckOf?: DeckLookup): number {
   return Math.max(0, area - sunk.reduce((s, q) => s + Math.abs(signedArea(q)), 0));
 }
 
-/** Everyone a document's banquettes seat. */
+/** Everyone a document's STAGE banquettes seat — on chairs and on a sofa side alike. (A standalone
+ *  banquette's seats are standaloneBenchSeats, ./bench.ts — it needs the catalog to be told apart.) */
 export function benchSeats(placements: readonly Placement[], deckOf: DeckLookup): number {
   let n = 0;
   for (const p of placements)
@@ -2248,6 +2295,21 @@ if (isMain(import.meta.url)) {
   assert(edgeItemShape(down.stage, { ...benches[0], seats: 99 }, deckOf)!.seats === Math.floor(fewer.widthMm / CHAIR_W_MM), "…never more than fit");
   const sideBench = edgeItemShape(down.stage, { id: "sb", kind: "bench", edge: 1, t: 0.5, widthMm: 0, full: true }, deckOf)!;
   assert(sideBench.chairs.every((c) => c.x < 3000 && Math.abs(c.facingDeg) < 1), "…on the stage side of it, facing it and the room past it");
+  assert(bench.heightMm === BENCH_TOP_MM && bench.sofaSeats === 0 && bench.cushions.length === 0, "…its top at table height above the deck, and no sofa");
+  // Two sides, each its own: a sofa on the room side of the front banquette (edge 0, along the top,
+  // y = -2000) is sat on facing the room — cushions on the outer half of the strip, backrest toward
+  // the stage — while the chairs stay on the stage behind it. Seats add up; only chairs are chairs.
+  const twoSided = edgeItemShape(down.stage, { ...benches[0], bench: { back: { kind: "chairs", seats: 6 }, front: { kind: "sofa", seats: 4 } } }, deckOf)!;
+  assert(twoSided.seats === 10 && twoSided.chairs.length === 6 && twoSided.sofaSeats === 4, "a banquette with chairs behind and a sofa in front seats both, and packs only the chairs");
+  assert(twoSided.cushions.length === 4 && twoSided.cushions.every((q) => q.every((p) => p.y <= -2000 - BENCH_DEPTH_MM / 2 + 1e-6)), "…the cushions on the room half of the strip");
+  assert(twoSided.backs.length === 1 && twoSided.backs[0].every((p) => Math.abs(p.y - (-2000 - BENCH_DEPTH_MM / 2)) <= 80 + 1e-6), "…with the backrest toward the strip's stage half");
+  assert(twoSided.sofaHeightMm === SOFA_SEAT_MM && twoSided.bench?.front.kind === "sofa", "…a sofa seat at 46cm, and the layout says which side is which");
+  const frontChairs = edgeItemShape(down.stage, { ...benches[0], bench: { back: { kind: "none" }, front: { kind: "chairs", seats: 3 } } }, deckOf)!;
+  assert(frontChairs.chairs.length === 3 && frontChairs.chairs.every((c) => c.y < -2000 - BENCH_DEPTH_MM && Math.abs(Math.abs(c.facingDeg) - 90) < 1), "chairs on the room side stand in the room, facing the banquette");
+  // The legacy form still reads: an old item's `seats` is its stage side's count, nothing in front.
+  const legacyItem = edgeItemShape(down.stage, { ...benches[0], seats: 5, heightMm: 600 }, deckOf)!;
+  assert(legacyItem.chairs.length === 5 && legacyItem.sofaSeats === 0 && legacyItem.heightMm === 600, "an edge item from before sides existed is unchanged: its seats are its back side's");
+  assert(edgeItemShape(down.stage, { ...benches[0], seats: 5, bench: { back: { kind: "sofa" } } }, deckOf)!.chairs.length === 0, "…and the new form wins where it speaks");
   const rail = edgeItemShape(down.stage, { ...benches[0], kind: "barrier" }, deckOf)!;
   const inward = rail.polygon.every((q) => Math.abs(q.x) <= 3001 && Math.abs(q.y) <= 2001);
   assert(inward, "a barrier stands on the stage, inside its edge");
@@ -2435,7 +2497,10 @@ if (isMain(import.meta.url)) {
   const bi = edgeItemShape(tall.stage, benchIn, deckOf)!;
   assert(bi.inner && bi.polygon.every((q) => q.x <= 3001 && q.x >= 3000 - BENCH_DEPTH_MM - 1), "an inner banquette stands on the deck inside its edge");
   assert(bi.chairs.length === 4 && bi.chairs.every((c) => Math.abs(c.x - (3000 - BENCH_DEPTH_MM - CHAIR_OFFSET_MM)) < 1 && Math.abs(c.facingDeg) < 1), "…its chairs further in behind it, still facing out");
-  assert(bi.heightMm === BENCH_HEIGHT_MM, "…a seat's height, not capped by the stage under it");
+  assert(bi.heightMm === BENCH_TOP_MM, "…its top at table height above the deck its chairs stand on");
+  const biSofa = edgeItemShape(tall.stage, { ...benchIn, bench: { back: { kind: "sofa" }, front: { kind: "chairs", seats: 2 } } }, deckOf)!;
+  assert(biSofa.cushions.every((q) => q.every((p) => p.x <= 3000 - BENCH_DEPTH_MM / 2 + 1e-6 && p.x >= 3000 - BENCH_DEPTH_MM - 1)), "an inner banquette's sofa side is on the inner half of its strip");
+  assert(biSofa.chairs.length === 2 && biSofa.chairs.every((c) => c.x > 3000 && Math.abs(Math.abs(c.facingDeg) - 180) < 1), "…and chairs on its room side stand off the stage, facing it");
   const withBenchIn = { ...tall, stage: { ...tall.stage, stairs: [benchIn] } };
   assert(skirtMm(withBenchIn, deckOf) === 20000, "the stage's face below an inner banquette is still skirted");
   assert(edgeGaps(withBenchIn, deckOf).reduce((t, g) => t + g.lengthMm, 0) === 20000 - 2400, "…and the banquette finishes its stretch");
