@@ -6,7 +6,8 @@ import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
-import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, rotatedExtent, tableAt } from "@/lib/studio/geometry";
@@ -23,7 +24,7 @@ import { FootprintShape, dressingSpots, sameFootprint, tableBlock, tableBlockedS
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, toTableFrame } from "@/lib/design-document/dressing";
-import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair } from "@/components/item-symbol";
+import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
@@ -1804,6 +1805,8 @@ export function CanvasStage({
                   railing={p.stage ? stageRailings?.[p.id] : undefined}
                   gaps={edgingStage?.id === p.id ? edgingGaps : undefined}
                   activeItem={edgingStage?.id === p.id ? activeEdgeItem : undefined}
+                  // A standalone banquette's number and count, in the passes that write the tables'.
+                  showLabel={showTableNumbers}
                 />
               </g>
             );
@@ -3344,10 +3347,14 @@ function PlacementNodeView({
   onOpen,
   openId,
   shape,
+  showLabel,
 }: {
   placement: Placement;
   /** Draw it with this shape rather than its catalog footprint — a runner trimmed to its table. */
   shape?: Footprint;
+  /** Write a standalone banquette's number and `seated/seats` — the passes that write the tables'
+   *  (CanvasStage.showTableNumbers); the design pass is drawn clean. */
+  showLabel?: boolean;
   x: number;
   y: number;
   selected: boolean;
@@ -3425,6 +3432,12 @@ function PlacementNodeView({
   const labelAt = content.mode === "none" ? { x: 0, y: 0 } : labelAnchor(footprint);
   const upright = uprightTransform(placement.rotation, placement.mirrored);
   const badge = 340;
+  // A STANDALONE BANQUETTE is set like a table (lib/design-document/bench.ts): the picture draws its
+  // chairs along its back and a sofa side inside its strip as THIS plan laid them, and — like a
+  // table — it wears its number and its `seated/seats` in the middle, upright at every angle.
+  const bench = symbol === "bench" ? standaloneBench(placement, benchOf) : null;
+  const benchNumber = benchIsNumbered(placement, bench) ? placement.bench!.number! : null;
+  const benchSeats = bench?.seats ?? 0;
 
   return (
     <g
@@ -3432,7 +3445,7 @@ function PlacementNodeView({
       transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${placement.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`${r?.label ?? "פריט"}${drag.onMove ? " — גרירה להזזה" : ""}`}
+      aria-label={`${r?.label ?? "פריט"}${bench ? `${benchNumber ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
       className={(drag.onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
       onDoubleClick={
         onOpen
@@ -3455,7 +3468,22 @@ function PlacementNodeView({
           turnDeg={rise ? placement.rotation : undefined}
           mirrored={rise ? placement.mirrored : undefined}
           textMm={rise ? ctx.mm(11) : undefined}
+          bench={bench ?? undefined}
         />
+      )}
+      {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
+        <g transform={upright || undefined} className="pointer-events-none">
+          <TableLabel
+            x={0}
+            y={0}
+            number={benchNumber !== null && benchNumber > 0 ? benchNumber : null}
+            seated={placement.bench?.seated ?? 0}
+            seats={benchSeats}
+            shortSideMm={Math.min(bounds.w, bounds.h)}
+            ctx={ctx}
+            ink={selected ? "var(--color-accent)" : "var(--color-muted)"}
+          />
+        </g>
       )}
       {symbol ? (
         // The picture is the item; its footprint stays as the thing that takes the pointer (an
@@ -3703,6 +3731,8 @@ function StageMarks({
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}
+            {/* A banquette's sofa side: cushions inside the strip, backrest toward its other half. */}
+            {shape.kind === "bench" && <SofaCushions cushions={shape.cushions} backs={shape.backs} />}
           </g>
         );
       })}

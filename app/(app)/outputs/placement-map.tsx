@@ -2,6 +2,7 @@ import { BackToStudio } from "./back-to-studio";
 import { Fragment } from "react";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { numberedUnits, groupSeats } from "@/lib/design-document/groups";
+import { standaloneBench } from "@/lib/design-document/bench";
 import { productName } from "@/lib/outputs/lookup";
 import {
   absoluteControlPoints,
@@ -25,12 +26,12 @@ import { PlantGlyph } from "@/components/plant-glyph";
 import { ItemSurface, SurfaceFill } from "@/components/surface-fill";
 import { FootprintShape, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
-import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair } from "@/components/item-symbol";
+import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { climbRise } from "@/lib/studio/climb-item";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
-import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import {
   benchInRoom,
   edgeGaps,
@@ -647,7 +648,7 @@ export function PlacementMap({
                   den={den}
                 />
               ) : (
-                <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} colour={colour} textMm={2.6 * den} />
+                <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} colour={colour} textMm={2.6 * den} chairs={sheet.chairs} />
               );
             }
             if (sheet.tables === "none") return null;
@@ -681,14 +682,19 @@ export function PlacementMap({
               no number, which is what "ghost" means. */}
           {sheet.tables === "full" &&
             sheet.numbers &&
-            numberedUnits(doc).map((unit) => {
+            numberedUnits(doc, benchOf).map((unit) => {
+              // A standalone banquette somebody sits at is numbered like a table, at its centre (the
+              // strip is a rectangle, whose label point IS its centre); it wears no kit letter.
+              const benchP = unit.kind === "bench" ? doc.placements.find((x) => x.id === unit.id) : undefined;
+              const bench = benchP ? standaloneBench(benchP, benchOf) : null;
               const members = doc.tables.filter((x) => unit.tableIds.includes(x.id));
-              if (members.length === 0) return null;
+              if (members.length === 0 && !bench) return null;
               // A lone table is numbered where the studio numbers it — the shape's own label point
               // (tableLabelPoint): the middle of the band on an arc, not the box centre out in the
               // air the ring curves round. A block keeps the middle of the block.
-              const at =
-                members.length === 1
+              const at = benchP
+                ? benchP.position
+                : members.length === 1
                   ? tableLabelPoint(members[0])
                   : {
                       x: members.reduce((n, x) => n + x.position.x, 0) / members.length,
@@ -697,18 +703,20 @@ export function PlacementMap({
               // As big as the table allows, between 2.4mm (still legible held at arm's length) and
               // 4mm on paper (a numeral the crew can find across the room once the sheet is taped
               // to a wall). The table's own short side is the ceiling, so a number stays inside it.
-              const short = Math.max(...members.map((x) => {
-                const b = footprintBounds(tableFootprint(x));
-                return Math.min(b.w, b.h);
-              }));
+              const short = bench
+                ? bench.depthMm
+                : Math.max(...members.map((x) => {
+                    const b = footprintBounds(tableFootprint(x));
+                    return Math.min(b.w, b.h);
+                  }));
               const size = Math.max(2.4 * den, Math.min(4 * den, short * 0.42));
               // The kit letter rides under the number in a ring — "which arrangement goes on this
               // table" answered at the table, with the detail sheet of that letter behind it.
-              const letter = letters?.get(members[0].id);
+              const letter = members[0] ? letters?.get(members[0].id) : undefined;
               // A table out of the numbering prints no number — only its kit letter, where the
               // number would have stood.
               // How many people sit at it — a block counts as the one table it is (groupSeats).
-              const people = seatCounts ? (members.length > 1 && members[0].groupId ? groupSeats(doc, members[0].groupId) : members.reduce((n, x) => n + (x.seats ?? 0), 0)) : 0;
+              const people = !seatCounts ? 0 : bench ? bench.seats : members.length > 1 && members[0].groupId ? groupSeats(doc, members[0].groupId) : members.reduce((n, x) => n + (x.seats ?? 0), 0);
               const countSize = size * 0.56;
               const lift = letter && !unit.unnumbered ? size * 0.42 : people > 0 && !unit.unnumbered ? countSize * 0.62 : 0;
               const letterAt = unit.unnumbered ? 0 : size * 0.62;
@@ -953,6 +961,8 @@ function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacem
                 vectorEffect="non-scaling-stroke"
               />
             )}
+            {/* A sofa side: its cushions inside the strip, the backrest toward the other half. */}
+            {shape.kind === "bench" && <SofaCushions cushions={shape.cushions} backs={shape.backs} ink={INK} print />}
           </g>
         );
       })}
@@ -1025,7 +1035,8 @@ export function StageSchedule({
         const shapes = (stage.stairs ?? []).map((st) => edgeItemShape(stage, st, deckOf)).filter((x) => !!x);
         const flights = shapes.filter((x) => x.kind === "stairs");
         const benchMm = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.widthMm, 0);
-        const seats = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.seats, 0);
+        const benchChairs = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.chairs.length, 0);
+        const sofaSeats = shapes.filter((x) => x.kind === "bench").reduce((t, x) => t + x.sofaSeats, 0);
         const barrierMm = shapes.filter((x) => x.kind === "barrier").reduce((t, x) => t + x.widthMm, 0);
         const backdropMm = shapes.filter((x) => x.kind === "backdrop").reduce((t, x) => t + x.widthMm, 0);
         const ramps = shapes.filter((x) => x.kind === "ramp");
@@ -1072,7 +1083,7 @@ export function StageSchedule({
               {flights.length > 0
                 ? `מדרגות: ${flights.length} ${flights.length === 1 ? "גרם" : "גרמים"} — ${flights.map((f) => `${m(f.widthMm)} מ׳, ${f.risers} רומים של ${cm(f.riserMm)} ס״מ${f.inner ? " (שקועות בבמה)" : ""}`).join("; ")}`
                 : "מדרגות: אין"}
-              {benchMm > 0 ? ` · בנקט: ${m(benchMm)} מ׳ (${seats} כיסאות)` : ""}
+              {benchMm > 0 ? ` · בנקט: ${m(benchMm)} מ׳ (${[benchChairs > 0 ? `${benchChairs} כיסאות` : null, sofaSeats > 0 ? `${sofaSeats} על ספה` : null].filter(Boolean).join(", ") || "ללא ישיבה"})` : ""}
               {barrierMm > 0 ? ` · מחסום: ${m(barrierMm)} מ׳` : ""}
               {backdropMm > 0 ? ` · קיר רקע: ${m(backdropMm)} מ׳` : ""}
               {ramps.length > 0 ? ` · רמפה: ${ramps.map((r) => `${m(r.depthMm)} מ׳ אורך`).join(", ")}` : ""}
@@ -1249,6 +1260,7 @@ export function PlacementGlyph({
   shape,
   colour = false,
   textMm,
+  chairs = true,
 }: {
   placement: Placement;
   x: number;
@@ -1259,6 +1271,8 @@ export function PlacementGlyph({
   /** The sheet's text size in room mm (`den * printed mm`), for the words a picture writes — a ramp's
    *  slope. Absent = sized off the item. */
   textMm?: number;
+  /** Whether a banquette's chairs are drawn — off on a sheet that hides every chair. */
+  chairs?: boolean;
 }) {
   const r = resolve(placement.variantId);
   const footprint: Footprint = shape ?? (
@@ -1275,6 +1289,10 @@ export function PlacementGlyph({
   // A flight or a ramp on its own: the step it covers on this plan, its slope kept upright.
   const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(r?.product, placement.climb) : undefined;
   const climbProps = rise ? { rise, turnDeg: placement.rotation, mirrored: placement.mirrored, textMm } : {};
+  // A standalone banquette as THIS plan laid it — which side is chairs, which a sofa, how many
+  // (lib/design-document/bench.ts) — drawn by the same picture the studio draws.
+  const bench = symbol === "bench" ? (standaloneBench(placement, benchOf) ?? undefined) : undefined;
+  const benchProps = symbol === "bench" ? { bench, chairs } : {};
   if (colour) {
     // The studio's PlacementNode, without the pointer: the shade picked for this placement over the
     // row's own fill, the category's picture in that shade, a material where the row has one.
@@ -1284,7 +1302,7 @@ export function PlacementGlyph({
     const dark = !!own && isDark(own);
     return (
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} />}
         {!symbol && (
           <FootprintShape
             footprint={footprint}
@@ -1304,7 +1322,7 @@ export function PlacementGlyph({
   }
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} />}
       {r?.product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={INK} opacity={0.8} />}
       <FootprintShape
         footprint={footprint}

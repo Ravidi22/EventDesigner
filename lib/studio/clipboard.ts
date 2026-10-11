@@ -135,6 +135,11 @@ export function pasteInto(
     id: remapP.get(p.id)!,
     ...(p.tableId === undefined ? {} : { tableId: remap.get(p.tableId) ?? p.tableId }),
     ...(p.perch === undefined ? {} : { perch: { ...p.perch, stageId: remapP.get(p.perch.stageId) ?? p.perch.stageId } }),
+    // A numbered standalone banquette is numbered like a table: the next free number after the
+    // tables', and empty — the same two rules a copied table follows (numberOf above).
+    ...(p.bench === undefined
+      ? {}
+      : { bench: { ...p.bench, seated: undefined, ...(p.bench.number !== undefined && p.bench.number > 0 && !opts.keepNumbers ? { number: n++ } : {}) } }),
     // A table-layer item's `position` is an offset within its table, not a point on the plan, so it
     // must NOT take the paste delta — the renderer clusters those onto the table itself.
     position: p.tableId === undefined ? { x: p.position.x + opts.dx, y: p.position.y + opts.dy } : p.position,
@@ -310,6 +315,24 @@ if (isMain(import.meta.url)) {
     const out = pasteInto({ tables: [gift, table("t9", 9)], placements: [], groups: [] }, { dx: 0, dy: 0, firstNumber: 10, newId });
     assert(out.tables[0].unnumbered === true && out.tables[0].number === 4, "a pasted unnumbered table stays unnumbered");
     assert(out.tables[1].number === 10, "…and the numbered one beside it still takes the first free number");
+  }
+
+  // A numbered standalone banquette is numbered like a table on paste: the next number after the
+  // pasted tables', and empty; an unnumbered one stays unnumbered; a loaded sketch keeps its own.
+  {
+    const benchClip = {
+      tables: [table("t9", 9)],
+      placements: [
+        { ...free("b1", "bench", 0, 0), bench: { number: 5, seated: 3, front: { kind: "sofa" as const } } },
+        { ...free("b2", "bench", 0, 3000), bench: { back: { kind: "none" as const } } },
+      ],
+      groups: [],
+    };
+    const out = pasteInto(benchClip, { dx: 0, dy: 0, firstNumber: 20, newId });
+    assert(out.tables[0].number === 20 && out.placements[0].bench?.number === 21, "a pasted banquette takes the number after the pasted tables'");
+    assert(out.placements[0].bench?.seated === undefined && out.placements[0].bench?.front?.kind === "sofa", "…starts empty, and keeps its sides");
+    assert(out.placements[1].bench?.number === undefined, "an unnumbered banquette stays unnumbered");
+    assert(pasteInto(benchClip, { dx: 0, dy: 0, firstNumber: 20, newId, keepNumbers: true }).placements[0].bench?.number === 5, "a loaded sketch keeps its banquette numbers");
   }
 
   // A group whose other member was refused (a drape) comes through as a group of one, which the

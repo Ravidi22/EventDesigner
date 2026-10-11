@@ -58,7 +58,8 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
-import type { DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
+import type { BenchSideKind, BenchSpec, DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
+import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
 import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
 import {
@@ -97,7 +98,7 @@ import { Menu, type MenuItem } from "@/components/menu";
 import { AlignMenu, type AlignPanel } from "./align-menu";
 import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
-import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { benchOf, coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
 import { SwitchRow } from "@/components/toggle";
@@ -155,14 +156,44 @@ export interface StageEdgeRow {
   autoRisers: number;
   manual: boolean;
   depthMm: number;
+  /** A banquette's TOP above the deck (a chairs side's table), and a sofa side's seat height. */
   heightMm: number;
+  sofaHeightMm: number;
+  /** Everyone seated at a banquette; of them, on chairs (packed) and on a sofa side. */
   seats: number;
-  /** A banquette's chair count when the designer set one; else the one-per-60cm default. */
-  seatsSet: boolean;
+  chairSeats: number;
+  sofaSeats: number;
+  /** One per 60cm of its length — what a side seats when nobody typed a count. */
   autoSeats: number;
+  /** Its two sides — the stage side (`back`) and the room side (`front`) — and whether each count
+   *  was typed. */
+  back: BenchSideRow;
+  front: BenchSideRow;
   /** Design items standing on it (a banquette). */
   dressed: number;
 }
+
+/** One side of a banquette as the bar shows it. */
+export interface BenchSideRow extends BenchSideLayout {
+  /** Whether the designer typed this side's count (else it is one per 60cm). */
+  set: boolean;
+}
+
+/** What the bar may change about one side of a banquette: what it is, and how many sit there
+ *  (`seats: null` = back to one per 60cm). */
+export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null };
+
+/** What the bar shows for a STANDALONE banquette (Placement.bench): how it is laid, what the
+ *  designer set, and whether it currently carries a number. */
+export interface BenchPanel {
+  layout: BenchLayout;
+  spec: BenchSpec | undefined;
+  /** Set when it takes part in the numbering — seated, and numbered. */
+  numbered: boolean;
+}
+
+/** A standalone banquette's edit: a side, a height, its number (`null` clears it) or its occupancy. */
+export type BenchPatch = { back?: BenchSidePatch; front?: BenchSidePatch; heightMm?: number; sofaHeightMm?: number; number?: number | null; seated?: number };
 
 /** What the stage bar shows: its size when it is a rectangle, what it is built of, how high it and
  *  its levels stand, its flights, and the skirt and railing its open sides need. */
@@ -328,6 +359,8 @@ export function Inspector({
   onSelectEdge,
   onRemoveStair,
   onStairChange,
+  benchPanel,
+  onBench,
   onStageSurface,
   onStageCorners,
   onStageExceed,
@@ -493,12 +526,26 @@ export function Inspector({
   onFillEdges: (kind: EdgeKindId) => void;
   onSelectEdge: (itemId: string | null) => void;
   onRemoveStair: (stairId: string) => void;
-  /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or height — or
-   *  whether it stands outside the stage or set into it (`inner`). */
+  /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or heights, one of
+   *  a banquette's two sides — or whether it stands outside the stage or set into it (`inner`). */
   onStairChange: (
     stairId: string,
-    patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null; inner?: boolean },
+    patch: {
+      kind?: EdgeKindId;
+      widthMm?: number;
+      risers?: number | null;
+      full?: boolean;
+      depthMm?: number;
+      heightMm?: number;
+      sofaHeightMm?: number;
+      back?: BenchSidePatch;
+      front?: BenchSidePatch;
+      inner?: boolean;
+    },
   ) => void;
+  /** Set when the one selected thing is a STANDALONE banquette (lib/design-document/bench.ts). */
+  benchPanel: BenchPanel | null;
+  onBench: (id: string, patch: BenchPatch) => void;
   onStageSurface: (variantId: string | null) => void;
   onStageCorners: (on: boolean) => void;
   onStageExceed: (on: boolean) => void;
@@ -609,7 +656,7 @@ export function Inspector({
                 />
               </PanelRow>
             )}
-            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc).has(group.number) && <DuplicateNumber />}
+            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number) && <DuplicateNumber />}
             <div className="mt-2">
               <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
             </div>
@@ -1086,6 +1133,7 @@ export function Inspector({
               it.inner ? (it.kind === "stairs" ? "שקועות בבמה" : "על הבמה") : null,
               it.full ? "כל הצד" : `${cmOf(it.widthMm)} ס״מ`,
               it.kind === "bench" ? `${it.seats} מקומות ישיבה` : null,
+              it.kind === "bench" && it.sofaSeats > 0 ? `${it.sofaSeats} על ספה` : null,
               it.kind === "ramp" ? `אורך ${m(it.depthMm)} מ׳` : null,
             ]
               .filter(Boolean)
@@ -1194,21 +1242,23 @@ export function Inspector({
               </Popover>
             )}
             {it.kind === "bench" && (
-              <Popover label="בנקט" icon={RectangleHorizontal} value={`${it.seats} כיסאות`}>
-                <PanelRow label="כיסאות" htmlFor="edge-s">
-                  {it.seatsSet && it.seats !== it.autoSeats && (
-                    <BarButton icon={Undo2} label={`חזרה לאחד לכל 60 ס״מ (${it.autoSeats})`} onClick={() => onStairChange(it.id, { seats: null })} />
-                  )}
-                  <NumberField
-                    id="edge-s"
-                    decimals={0}
-                    min={0}
-                    max={60}
-                    value={it.seats}
-                    onChange={(n) => onStairChange(it.id, { seats: n })}
-                    className="w-20"
-                  />
-                </PanelRow>
+              <Popover label="בנקט" icon={RectangleHorizontal} value={benchSeatsWord(it.chairSeats, it.sofaSeats)} panelClassName="w-[22rem]">
+                {/* The two long sides, each its own: the stage side (chairs stand ON the stage behind
+                    it, its top their table) and the room side. */}
+                <BenchSidesFields
+                  idPrefix="edge"
+                  back={it.back}
+                  front={it.front}
+                  backLabel="צד הבמה"
+                  frontLabel="צד האולם"
+                  autoSeats={it.autoSeats}
+                  heightMm={it.heightMm}
+                  sofaHeightMm={it.sofaHeightMm}
+                  heightNote="מעל הבמה — שולחן לכיסאות שעליה"
+                  onSide={(side, patch) => onStairChange(it.id, { [side]: patch })}
+                  onHeight={(mm) => onStairChange(it.id, { heightMm: mm })}
+                  onSofaHeight={(mm) => onStairChange(it.id, { sofaHeightMm: mm })}
+                />
                 <PanelRow label="עומק (ס״מ)" htmlFor="edge-d">
                   <NumberField
                     id="edge-d"
@@ -1218,18 +1268,6 @@ export function Inspector({
                     commitOnBlur
                     value={cmOf(it.depthMm)}
                     onChange={(cm) => onStairChange(it.id, { depthMm: cm * 10 })}
-                    className="w-20"
-                  />
-                </PanelRow>
-                <PanelRow label="גובה (ס״מ)" htmlFor="edge-h">
-                  <NumberField
-                    id="edge-h"
-                    decimals={0}
-                    min={20}
-                    max={100}
-                    commitOnBlur
-                    value={cmOf(it.heightMm)}
-                    onChange={(cm) => onStairChange(it.id, { heightMm: cm * 10 })}
                     className="w-20"
                   />
                 </PanelRow>
@@ -1515,12 +1553,16 @@ export function Inspector({
       if (edit && onClimb) onClimb(p.id, edit);
     };
 
+    const bench = benchPanel?.layout;
+    const benchNumber = benchPanel?.spec?.number;
     return (
       <Bar
-        icon={Sparkles}
-        title={r?.product.name ?? "פריט"}
+        icon={bench ? RectangleHorizontal : Sparkles}
+        title={bench ? (benchPanel?.numbered && benchNumber ? `בנקט ${benchNumber}` : "בנקט") : (r?.product.name ?? "פריט")}
         facts={[
-          LAYER_LABEL[p.layer],
+          bench ? r?.product.name : LAYER_LABEL[p.layer],
+          bench ? `${(bench.widthMm / 1000).toFixed(2)} מ׳` : null,
+          bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
           table ? tableLabel(doc, table) : null,
           drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ על הקיר` : "הקיר נמחק") : null,
         ]
@@ -1528,6 +1570,66 @@ export function Inspector({
           .join(" · ")}
         onClose={onClose}
       >
+        {/* A STANDALONE BANQUETTE is set like a table: its number (optional — clearing it leaves the
+            banquette seated but unnumbered), its two sides and their counts, and its occupancy.
+            Its row is still quoted by the metre; nothing here touches that. */}
+        {bench && benchPanel && (
+          <Popover label="מספר" icon={Hash} value={benchPanel.numbered && benchNumber ? ltr(`#${benchNumber}`) : "ללא"}>
+            <PanelRow label="מספר" htmlFor="bench-number">
+              {benchNumber !== undefined && <BarButton icon={Undo2} label="ללא מספר" onClick={() => onBench(p.id, { number: null })} />}
+              <NumberField
+                id="bench-number"
+                aria-label="מספר הבנקט"
+                decimals={0}
+                min={0}
+                value={benchNumber ?? 0}
+                onChange={(v) => onBench(p.id, { number: v })}
+                className="w-20"
+              />
+            </PanelRow>
+            {benchPanel.numbered && benchNumber !== undefined && benchNumber > 0 && duplicateNumbers(doc, benchOf).has(benchNumber) && <DuplicateNumber />}
+            <Note>
+              {bench.seats > 0
+                ? "בנקט שיושבים בו ממוספר כמו שולחן — במפת ההצבה ובמספור מחדש. בלי מספר הוא נשאר במניין המקומות בלבד."
+                : "המספר יופיע כשיהיו מקומות ישיבה בבנקט."}
+            </Note>
+          </Popover>
+        )}
+        {bench && benchPanel && (
+          <Popover label="ישיבה" icon={Armchair} value={bench.seats > 0 ? ltr(`${benchPanel.spec?.seated ?? 0}/${bench.seats}`) : "—"} panelClassName="w-[22rem]">
+            <BenchSidesFields
+              idPrefix="bench"
+              back={{ ...bench.back, set: benchPanel.spec?.back?.seats !== undefined }}
+              front={{ ...bench.front, set: benchPanel.spec?.front?.seats !== undefined }}
+              backLabel="צד אחורי"
+              frontLabel="צד קדמי"
+              autoSeats={Math.floor(bench.widthMm / SEAT_WIDTH_MM)}
+              heightMm={bench.heightMm}
+              sofaHeightMm={bench.sofaHeightMm}
+              heightNote="מהרצפה — שולחן לכיסאות שלצידו"
+              onSide={(side, patch) => onBench(p.id, { [side]: patch })}
+              onHeight={(mm) => onBench(p.id, { heightMm: mm })}
+              onSofaHeight={(mm) => onBench(p.id, { sofaHeightMm: mm })}
+            />
+            {bench.seats > 0 && (
+              <PanelRow label="תפוסה" htmlFor="bench-seated">
+                <NumberField
+                  id="bench-seated"
+                  decimals={0}
+                  min={0}
+                  value={benchPanel.spec?.seated ?? 0}
+                  onChange={(v) => onBench(p.id, { seated: v })}
+                  className="w-20"
+                />
+                <span className={"text-xs " + occupancyInk(benchPanel.spec?.seated ?? 0, bench.seats)}>מתוך {bench.seats}</span>
+              </PanelRow>
+            )}
+            <Note>
+              הצד האחורי הוא הצד העליון של הבנקט כפי שהונח. כיסאות נספרים ונארזים כמו כיסאות שולחן; ספה נספרת במקומות הישיבה בלבד.
+              אורך הבנקט נמתח בידיות שבתוכנית.
+            </Note>
+          </Popover>
+        )}
         {/* Inline, not behind a subject: how many of a thing there are is the one field on this bar
             that gets edited over and over while placing. */}
         <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="כמות">
@@ -1674,7 +1776,7 @@ export function Inspector({
             />
           </PanelRow>
         )}
-        {!t.unnumbered && t.number > 0 && duplicateNumbers(doc).has(t.number) && <DuplicateNumber />}
+        {!t.unnumbered && t.number > 0 && duplicateNumbers(doc, benchOf).has(t.number) && <DuplicateNumber />}
         <div className="mt-2">
           <UnnumberedSwitch checked={!!t.unnumbered} onChange={(off) => onTablesNumbered([t.id], !off)} />
         </div>
@@ -1864,6 +1966,81 @@ export function Inspector({
         deleteLabel="מחיקה של השולחן"
       />
     </Bar>
+  );
+}
+
+/** "6 כיסאות · 4 על ספה" — a banquette's seating in words, for a bar chip. */
+function benchSeatsWord(chairSeats: number, sofaSeats: number): string {
+  const parts = [chairSeats > 0 ? `${chairSeats} כיסאות` : null, sofaSeats > 0 ? `${sofaSeats} על ספה` : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "ללא ישיבה";
+}
+
+/** A banquette's two long sides and two heights — the one fieldset both banquettes are set with
+ *  (a stage's edge banquette and a standalone one), so the two cannot be edited differently.
+ *
+ *  Each side: what it is (chairs / sofa / none) and, unless bare, how many — typed, or one per 60cm
+ *  with a way back to that. The TOP height belongs to a chairs side (it is their table); the SEAT
+ *  height to a sofa side — each shown only while a side of its kind exists, since a height nobody
+ *  sits at is a question with no answer. */
+function BenchSidesFields({
+  idPrefix,
+  back,
+  front,
+  backLabel,
+  frontLabel,
+  autoSeats,
+  heightMm,
+  sofaHeightMm,
+  heightNote,
+  onSide,
+  onHeight,
+  onSofaHeight,
+}: {
+  idPrefix: string;
+  back: BenchSideRow;
+  front: BenchSideRow;
+  backLabel: string;
+  frontLabel: string;
+  autoSeats: number;
+  heightMm: number;
+  sofaHeightMm: number;
+  /** What the top height is measured from, in words. */
+  heightNote: string;
+  onSide: (side: "back" | "front", patch: BenchSidePatch) => void;
+  onHeight: (mm: number) => void;
+  onSofaHeight: (mm: number) => void;
+}) {
+  const cmOf = (mm: number) => Math.round(mm / 10);
+  const side = (key: "back" | "front", row: BenchSideRow, label: string) => (
+    <div className="space-y-2 rounded-md border border-inset-border bg-inset p-2.5">
+      <Segmented label={label} value={row.kind} options={BENCH_SIDE_KINDS.map((k) => [k, BENCH_SIDE_LABEL[k]] as const)} onChange={(kind) => onSide(key, { kind })} />
+      {row.kind !== "none" && (
+        <PanelRow label={row.kind === "chairs" ? "כיסאות" : "מקומות על הספה"} htmlFor={`${idPrefix}-${key}-seats`}>
+          {row.set && row.seats !== autoSeats && <BarButton icon={Undo2} label={`חזרה לאחד לכל 60 ס״מ (${autoSeats})`} onClick={() => onSide(key, { seats: null })} />}
+          <NumberField id={`${idPrefix}-${key}-seats`} decimals={0} min={0} max={60} value={row.seats} onChange={(n) => onSide(key, { seats: n })} className="w-20" />
+        </PanelRow>
+      )}
+    </div>
+  );
+  const hasChairs = back.kind === "chairs" || front.kind === "chairs";
+  const hasSofa = back.kind === "sofa" || front.kind === "sofa";
+  return (
+    <div className="space-y-2">
+      {side("back", back, backLabel)}
+      {side("front", front, frontLabel)}
+      {hasChairs && (
+        <PanelRow label="גובה המשטח (ס״מ)" htmlFor={`${idPrefix}-h`}>
+          <NumberField id={`${idPrefix}-h`} decimals={0} min={40} max={120} commitOnBlur value={cmOf(heightMm)} onChange={(cm) => onHeight(cm * 10)} className="w-20" />
+          <span className="text-xs text-muted">{heightNote}</span>
+        </PanelRow>
+      )}
+      {hasSofa && (
+        <PanelRow label="גובה מושב הספה (ס״מ)" htmlFor={`${idPrefix}-sh`}>
+          <NumberField id={`${idPrefix}-sh`} decimals={0} min={30} max={70} commitOnBlur value={cmOf(sofaHeightMm)} onChange={(cm) => onSofaHeight(cm * 10)} className="w-20" />
+          <span className="text-xs text-muted">מהרצפה שהיושבים עומדים עליה</span>
+        </PanelRow>
+      )}
+    </div>
   );
 }
 

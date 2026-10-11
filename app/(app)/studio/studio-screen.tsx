@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
+import type { BenchSpec, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
@@ -14,7 +14,8 @@ import { fromLocalFrame, tableAt, toLocalFrame } from "@/lib/studio/geometry";
 import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
+import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
+import { benchIsNumbered, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
 import { productById } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -89,7 +90,7 @@ import { TableDesignsPanel } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/studio/stage-draw";
 import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, pushTogether, settleEdgeItems, shareSide, stageSide } from "@/lib/design-document/stage";
 import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
-import { catalogBox, clampSize, footprintBounds, resizeAxes, sizedFootprint } from "@/lib/studio/footprint";
+import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
 import { dressingSpots, tableBlock, tableBox, tableFootprint } from "@/components/footprint-shape";
 import { arrange, clampToTable, toTableFrame, type ArrangeKind } from "@/lib/design-document/dressing";
 import { DressingBar } from "./dressing-bar";
@@ -103,7 +104,7 @@ import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
-import { Inspector, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
+import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
 import { Bar, BarButton } from "@/components/inspector-bar";
 import { Button } from "@/components/button";
 import { AlignCenterVertical, BringToFront, Copy, Group, Grid2x2Plus, SendToBack, Trash2, X } from "lucide-react";
@@ -475,7 +476,8 @@ export function StudioScreen({
 
   // F-3.3: auto-running table numbering, editable per table. Off the numbers the plan SHOWS — a
   // block's own number, not the hidden ones of its members, and no unnumbered table (groups.ts).
-  const nextNumber = useCallback(() => nextTableNumber(doc), [doc]);
+  // Past every number a table or a seated banquette shows, and every number a banquette holds.
+  const nextNumber = useCallback(() => nextTableNumber(doc, benchOf), [doc]);
 
   // Where a dropped item lands depends on what it is (CategoryDef.anchor), not on where the pointer
   // happened to be: a drape goes onto the nearest wall, a cloth onto the table under it, everything
@@ -589,6 +591,10 @@ export function StudioScreen({
       const plain: Placement = { ...base, position: { x, y } };
       const over = centreOver({ x, y }, hangTargetsOf(doc, arrangedStructure(plan.structure, doc)));
       act({ type: "addPlacement", placement: over ? { ...plain, position: positionHungAt(plain, over.point) } : plain });
+    } else if (product.category === "stage-benches") {
+      // A banquette on its own is set like a table (lib/design-document/bench.ts): chairs along its
+      // back, and the next table number — optional, cleared from its bar.
+      act({ type: "addPlacement", placement: { ...base, position: { x, y }, bench: { number: nextNumber() } } });
     } else {
       act({ type: "addPlacement", placement: { ...base, position: { x, y } } });
     }
@@ -1919,9 +1925,15 @@ export function StudioScreen({
           manual: !!st.risers,
           depthMm: shape.depthMm,
           heightMm: shape.heightMm,
+          sofaHeightMm: shape.sofaHeightMm,
           seats: shape.seats,
-          seatsSet: st.seats !== undefined,
+          chairSeats: shape.chairs.length,
+          sofaSeats: shape.sofaSeats,
           autoSeats: Math.floor(shape.widthMm / SEAT_WIDTH_MM),
+          // The two sides as laid (./bench.ts), and whether each count was typed — in the new form, or
+          // the legacy `seats` for the stage side.
+          back: { kind: shape.bench?.back.kind ?? "chairs", seats: shape.bench?.back.seats ?? 0, set: (st.bench?.back?.seats ?? st.seats) !== undefined },
+          front: { kind: shape.bench?.front.kind ?? "none", seats: shape.bench?.front.seats ?? 0, set: st.bench?.front?.seats !== undefined },
           dressed: doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === st.id).length,
         },
       ];
@@ -2141,7 +2153,18 @@ export function StudioScreen({
   const changeStair = useCallback(
     (
       stairId: string,
-      patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null; inner?: boolean },
+      patch: {
+        kind?: EdgeKindId;
+        widthMm?: number;
+        risers?: number | null;
+        full?: boolean;
+        depthMm?: number;
+        heightMm?: number;
+        sofaHeightMm?: number;
+        back?: BenchSidePatch;
+        front?: BenchSidePatch;
+        inner?: boolean;
+      },
     ) => {
       if (!soleStage) return;
       // Outside or set into the stage: only where it stands (a side too close to a wall has no floor
@@ -2172,20 +2195,25 @@ export function StudioScreen({
         ...s,
         stairs: (s.stairs ?? []).map((st) => {
           if (st.id !== stairId) return st;
+          // A banquette's own facts are written in the NEW form (StageStair.bench), read with the
+          // legacy fields underneath (benchSpecOf): what was typed before sides existed is its back
+          // side's, and a legacy count is carried in before a side is patched so it is not lost.
+          const benchOld = st.bench ?? {};
+          const legacyBack = benchOld.back ?? (st.seats !== undefined ? { kind: "chairs" as const, seats: st.seats } : undefined);
+          let bench: BenchSpec | undefined = st.bench;
+          if (patch.back) bench = patchBenchSide({ ...benchOld, ...(legacyBack ? { back: legacyBack } : {}) }, "back", patch.back);
+          if (patch.front) bench = patchBenchSide({ ...benchOld, ...bench, ...(legacyBack && !bench?.back ? { back: legacyBack } : {}) }, "front", patch.front);
+          if (patch.sofaHeightMm !== undefined) bench = { ...benchOld, ...bench, sofaHeightMm: Math.round(patch.sofaHeightMm) };
+          if (patch.heightMm !== undefined) bench = { ...benchOld, ...bench, heightMm: Math.round(patch.heightMm) };
+          if (patch.depthMm !== undefined) bench = { ...benchOld, ...bench, depthMm: Math.round(patch.depthMm) };
           const next = {
             ...st,
             ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
             ...(patch.widthMm !== undefined ? { widthMm: Math.max(MIN_EDGE_ITEM_MM, Math.round(patch.widthMm)) } : {}),
             ...(patch.full !== undefined ? { full: patch.full } : {}),
-            ...(patch.depthMm !== undefined ? { depthMm: Math.round(patch.depthMm) } : {}),
-            ...(patch.heightMm !== undefined ? { heightMm: Math.round(patch.heightMm) } : {}),
             ...(patch.inner !== undefined ? { inner: patch.inner || undefined } : {}),
+            ...(bench ? { bench } : {}),
           };
-          if (patch.seats === null) {
-            const { seats: _auto, ...rest } = next;
-            return rest;
-          }
-          if (patch.seats !== undefined) return { ...next, seats: Math.max(0, Math.round(patch.seats)) };
           if (patch.risers === null) {
             const { risers: _auto, ...rest } = next;
             return rest;
@@ -2406,15 +2434,15 @@ export function StudioScreen({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [armedId]);
 
-  /** Everyone the plan seats: at its tables (a group of tables as the one table it is) and on its
-   *  stages' banquettes. */
+  /** Everyone the plan seats: at its tables (a group of tables as the one table it is), and on its
+   *  banquettes — the stages' and the standalone ones, chairs and sofa seats alike. */
   const seating = useMemo(() => {
     let tables = 0;
     for (const u of numberedUnits(doc)) {
-      if (u.tableIds.length > 1) tables += groupSeats(doc, u.id);
-      else tables += doc.tables.find((t) => t.id === u.tableIds[0])?.seats ?? 0;
+      if (u.kind === "group") tables += groupSeats(doc, u.id);
+      else if (u.kind === "table") tables += doc.tables.find((t) => t.id === u.tableIds[0])?.seats ?? 0;
     }
-    return { tables, benches: benchSeats(doc.placements, deckOf) };
+    return { tables, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
   }, [doc]);
 
   /** Every bare stretch of open edge covered with `kind` — a flight or a banquette where there is
@@ -2905,16 +2933,49 @@ export function StudioScreen({
       const t = doc.tables.find((x) => x.id === sole.id);
       const product = t?.variantId ? resolve(t.variantId)?.product : undefined;
       const axes = product ? resizeAxes(product) : null;
-      if (!t || !product?.resize || !axes) return null;
-      return { size: t.sizeMm ?? catalogBox(product), catalog: catalogBox(product), axes, spec: product.resize, custom: !!t.sizeMm };
+      const spec = product ? resizeSpecOf(product) : undefined;
+      if (!t || !product || !spec || !axes) return null;
+      return { size: t.sizeMm ?? catalogBox(product), catalog: catalogBox(product), axes, spec, custom: !!t.sizeMm };
     }
     const p = doc.placements.find((x) => x.id === sole.id);
     const r = p ? resolve(p.variantId) : undefined;
     if (!p || !r || r.sizing === "stretch" || p.tableId || r.anchor !== "free") return null;
+    // The row's own resize, or its category's default (a banquette is laid to length): resizeSpecOf.
     const axes = resizeAxes(r.product);
-    if (!r.product.resize || !axes) return null;
-    return { size: p.sizeMm ?? catalogBox(r.product), catalog: catalogBox(r.product), axes, spec: r.product.resize, custom: !!p.sizeMm };
+    const spec = resizeSpecOf(r.product);
+    if (!spec || !axes) return null;
+    return { size: p.sizeMm ?? catalogBox(r.product), catalog: catalogBox(r.product), axes, spec, custom: !!p.sizeMm };
   }, [sole, doc]);
+
+  /** The one selected STANDALONE banquette (lib/design-document/bench.ts): how it is laid, what the
+   *  designer set, and whether it is in the numbering. */
+  const benchPanel = useMemo<BenchPanel | null>(() => {
+    if (sole?.kind !== "placement") return null;
+    const p = doc.placements.find((x) => x.id === sole.id);
+    if (!p) return null;
+    const layout = standaloneBench(p, benchOf);
+    if (!layout) return null;
+    return { layout, spec: p.bench, numbered: benchIsNumbered(p, layout) };
+  }, [sole, doc.placements]);
+
+  /** One edit to a standalone banquette — a side, a height, its number or its occupancy — as one
+   *  history entry: the spec is merged here and replaced whole (setPlacementBench). */
+  const changeBench = useCallback(
+    (id: string, patch: BenchPatch) => {
+      const p = doc.placements.find((x) => x.id === id);
+      if (!p) return;
+      let bench: BenchSpec = { ...p.bench };
+      if (patch.back) bench = patchBenchSide(bench, "back", patch.back);
+      if (patch.front) bench = patchBenchSide(bench, "front", patch.front);
+      if (patch.heightMm !== undefined) bench.heightMm = Math.round(patch.heightMm);
+      if (patch.sofaHeightMm !== undefined) bench.sofaHeightMm = Math.round(patch.sofaHeightMm);
+      if (patch.seated !== undefined) bench.seated = Math.max(0, Math.round(patch.seated));
+      if (patch.number === null) delete bench.number;
+      else if (patch.number !== undefined) bench.number = Math.max(0, Math.round(patch.number));
+      act({ type: "setPlacementBench", id, bench: Object.keys(bench).length ? bench : null });
+    },
+    [doc.placements, act],
+  );
 
   /** A typed size, snapped to the module and held in range; null goes back to the catalog's. It
    *  grows about the centre — the handles on the plan are for growing from one edge. */
@@ -2946,7 +3007,8 @@ export function StudioScreen({
   // Room by room: each of the event's zones numbered in turn, so a zone's own sheet of the placement
   // set reads as a run rather than every other number.
   const numberingRooms = useMemo(() => plan.zones.filter((z) => z.boundary.length >= 3).map((z) => z.boundary), [plan.zones]);
-  const renumbering = useMemo(() => orderedNumbering(doc, numbering, numberingRooms), [doc, numbering, numberingRooms]);
+  // Seated, numbered banquettes are numbered with the tables (lib/design-document/bench.ts).
+  const renumbering = useMemo(() => orderedNumbering(doc, numbering, numberingRooms, benchOf), [doc, numbering, numberingRooms]);
 
   const renumberAll = useCallback(() => {
     if (renumbering.length === 0) return;
@@ -2954,11 +3016,13 @@ export function StudioScreen({
       renumbering.map((r) =>
         r.kind === "table"
           ? { type: "renumberTable" as const, id: r.id, number: r.number }
-          : { type: "renumberGroup" as const, groupId: r.id, number: r.number },
+          : r.kind === "group"
+            ? { type: "renumberGroup" as const, groupId: r.id, number: r.number }
+            : { type: "setPlacementBench" as const, id: r.id, bench: { ...doc.placements.find((p) => p.id === r.id)?.bench, number: r.number } },
       ),
     );
     showHint(`${renumbering.length} שולחנות מוספרו מחדש`);
-  }, [renumbering, batch]);
+  }, [renumbering, batch, doc.placements]);
 
   const changeQuantity = (id: string, delta: number) => {
     const p = doc.placements.find((x) => x.id === id);
@@ -3740,6 +3804,8 @@ export function StudioScreen({
                 onSelectEdge={setActiveEdge}
                 onRemoveStair={removeStair}
                 onStairChange={changeStair}
+                benchPanel={benchPanel}
+                onBench={changeBench}
                 onStageSurface={setSurface}
                 onStageCorners={setCorners}
                 onStageExceed={setExceed}
