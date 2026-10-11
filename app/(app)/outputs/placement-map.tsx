@@ -34,10 +34,13 @@ import { deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import {
   benchInRoom,
   edgeGaps,
+  edgeItemInRoom,
   edgeItemShape,
   layStage,
   stageAreaMm2,
+  stageBox,
   stageCorners,
+  stageShapeOf,
   railingRuns,
   skirtMm,
   stageHeight,
@@ -46,6 +49,7 @@ import {
   type StagePlacement,
   type WallDistance,
 } from "@/lib/design-document/stage";
+import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
 import { uprightTransform } from "@/lib/design-document/mirror";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
@@ -317,6 +321,20 @@ export function PlacementMap({
   // crew lays the decks from.
   const wallDistance: WallDistance = (pt) => nearestWall(plan.structure, pt)?.distanceMm ?? Infinity;
   const stages = floorItems.filter((p): p is StagePlacement => !!p.stage);
+  // Stairs of two flush stages that run on into each other print as ONE run (edge-runs.ts), each
+  // stage leaving its share out of its own glyph — the same rule the studio canvas draws by.
+  const joinedRuns =
+    stages.length > 1
+      ? joinEdgeRuns(
+          stages.flatMap((p) =>
+            (p.stage.stairs ?? []).flatMap((st) => {
+              const shape = edgeItemShape(p.stage, st, deckOf);
+              return shape ? [{ stageId: p.id, itemId: st.id, shape: edgeItemInRoom(p, shape) }] : [];
+            }),
+          ),
+        )
+      : [];
+  const joinedIds = joinedItemIds(joinedRuns);
   // Design items on a banquette, spread along it as the studio draws them.
   const perchedSpots = (() => {
     const out: { p: Placement; at: { x: number; y: number } }[] = [];
@@ -645,6 +663,7 @@ export function PlacementMap({
                   label={stages.length > 1 ? `במה ${stages.indexOf(p as StagePlacement) + 1}` : undefined}
                   carries={doc.tables.some((t) => pointInPolygon(t.position, toWorld(p.stage!.outline, p.position, p.rotation, p.mirrored)))}
                   den={den}
+                  skip={joinedIds.size ? joinedIds : undefined}
                 />
               ) : (
                 <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} colour={colour} textMm={2.6 * den} />
@@ -774,6 +793,12 @@ export function PlacementMap({
               );
             })}
 
+          {/* Edge items that run on from one stage onto the next, printed once as the one run they are
+              (each stage left its share out of its own glyph above). */}
+          {joinedRuns.map((r, i) => (
+            <JoinedRunGlyph key={`run-${i}`} run={r} />
+          ))}
+
           {/* Table-layer items — clustered on their table, like the studio canvas draws them. */}
           {[...chipsByTable.entries()].flatMap(([tableId, chips]) => {
             const t = tableById.get(tableId);
@@ -841,8 +866,44 @@ export function PlacementMap({
 /** Adjustable legs under one deck — the ordinary staging deck stands on four. */
 const LEGS_PER_DECK = 4;
 
-/** A stage on the drawing, in its own frame (the same one the studio lays its decks in). */
-function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string; carries?: boolean; den: number }) {
+/** A run of stairs (a banquette, a barrier) across two stages (edge-runs.ts), in room coordinates. */
+function JoinedRunGlyph({ run }: { run: JoinedRun }) {
+  const points = run.polygon.map((q) => `${q.x},${q.y}`).join(" ");
+  if (run.kind === "barrier" || run.kind === "backdrop") {
+    return (
+      <polygon
+        points={points}
+        fill={run.kind === "backdrop" ? "url(#hatch-diagonal)" : INK}
+        stroke={INK}
+        strokeWidth={LINE_WEIGHTS.furniture * (run.kind === "backdrop" ? 2 : 1)}
+        vectorEffect="non-scaling-stroke"
+      />
+    );
+  }
+  return (
+    <g>
+      <polygon points={points} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+      {run.treads.map(([u, v], k) => (
+        <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+      ))}
+      {run.kind === "bench" && (
+        <polyline
+          points={run.midline.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
+          stroke={INK_SOFT}
+          strokeWidth={LINE_WEIGHTS.annotation}
+          strokeDasharray="2 3"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+    </g>
+  );
+}
+
+/** A stage on the drawing, in its own frame (the same one the studio lays its decks in). `skip`
+ *  names the edge items printed as part of a run with another stage's (JoinedRunGlyph) — only
+ *  their chairs are this glyph's. */
+function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string; carries?: boolean; den: number; skip?: ReadonlySet<string> }) {
   const stage = p.stage;
   const laid = build ? layStage(stage, deckOf) : null;
   const upright = uprightTransform(p.rotation, p.mirrored);
@@ -913,6 +974,15 @@ function StageGlyph({ p, build, railing, label, carries, den }: { p: StagePlacem
       {(stage.stairs ?? []).map((st) => {
         const shape = edgeItemShape(stage, st, deckOf);
         if (!shape) return null;
+        if (skip?.has(st.id)) {
+          return shape.chairs.length ? (
+            <g key={st.id}>
+              {shape.chairs.map((seat, k) => (
+                <ChairGlyph key={`chair-${k}`} seat={seat} />
+              ))}
+            </g>
+          ) : null;
+        }
         // A barrier is solid ink along the inside of its edge; a banquette a plain strip with a
         // centre line (a seat, in plan); a flight with a line across each tread.
         if (shape.kind === "barrier" || shape.kind === "backdrop") {
@@ -1009,7 +1079,9 @@ export function StageSchedule({
       {stages.map((p, i) => {
         const stage = p.stage;
         const laid = layStage(stage, deckOf);
-        const size = stageRect(stage);
+        // A rounded or bowed rectangle is sized by its box, like a plain one by its sides.
+        const size = stageRect(stage) ?? (stageShapeOf(stage) ? stageBox(stage) : null);
+        const cuts = laid.decks.filter((d) => d.cut).length;
         const baseH = stageHeight(stage, deckOf);
         const parts = [
           { id: undefined as string | undefined, label: "בסיס", heightMm: baseH },
@@ -1041,6 +1113,7 @@ export function StageSchedule({
               {stages.length > 1 ? `במה ${i + 1}` : "במה"}
               {size && <span className="nums ms-2 font-normal text-ink-soft">{`${m(size.widthMm)}×${m(size.depthMm)} מ׳`}</span>}
               <span className="nums ms-2 font-normal text-ink-soft">{laid.decks.length} פלטות</span>
+              {cuts > 0 && <span className="nums ms-2 font-normal text-ink-soft">{cuts} לחיתוך</span>}
             </p>
             <table className="mt-1.5 w-full text-sm">
               <thead>

@@ -37,6 +37,7 @@ import { constrainNext, ellipseArea, halfRoundArea, moveVertex, pushSide, remove
 import {
   benchInRoom,
   edgeGaps,
+  edgeItemInRoom,
   edgeItemShape,
   freeStretch,
   itemEdge,
@@ -44,10 +45,13 @@ import {
   stageCorners,
   itemSpan,
   layStage,
+  plainRect,
   reframeStage,
+  stageBox,
   stageDeckTypes,
   stageRect,
   stageIsRound,
+  stageShapeOf,
   toRoom,
   toStageFrame,
   itemAlong,
@@ -57,6 +61,7 @@ import {
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
+import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
 import type { StageBuild, StageStair } from "@/lib/design-document/types";
 import { signedArea } from "@/lib/studio/stage-fill";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
@@ -957,7 +962,9 @@ export function CanvasStage({
         };
         return { ref, axes: { width: true, depth: true, uniform: disc }, clamp, centre: p.position, rotation: p.rotation || 0, size: box };
       }
-      const size = stageRect(p.stage);
+      // A rounded or bowed rectangle stretches by its BOX (the host shapes the plain rectangle again
+      // at the new size); any other shape is re-drawn in the area tool.
+      const size = stageRect(p.stage) ?? (stageShapeOf(p.stage) && plainRect(p.stage) ? stageBox(p.stage) : null);
       if (!size) return null;
       const pullTo = lengthSnapper(stageDeckTypes(p.stage, deckOf));
       const snap = (mm: number, magnetMm: number) => Math.max(100, pullTo(mm, { magnetMm }));
@@ -987,6 +994,24 @@ export function CanvasStage({
         : [],
     [edgingStage, plan.structure, stageWallDistance],
   );
+
+  /** Stairs (banquettes, barriers) of DIFFERENT stages that run on into each other along one line —
+   *  two stages pushed flush and grouped — drawn as ONE run (lib/design-document/edge-runs.ts): the
+   *  runs, in room coordinates, and the items each stage then leaves out of its own drawing. Nothing
+   *  to join with one stage. */
+  const joinedRuns = useMemo(() => {
+    const stages = doc.placements.filter((p): p is StagePlacement => !!p.stage);
+    if (stages.length < 2) return [];
+    return joinEdgeRuns(
+      stages.flatMap((p) =>
+        (p.stage.stairs ?? []).flatMap((st) => {
+          const shape = edgeItemShape(p.stage, st, deckOf);
+          return shape ? [{ stageId: p.id, itemId: st.id, shape: edgeItemInRoom(p, shape) }] : [];
+        }),
+      ),
+    );
+  }, [doc.placements]);
+  const joinedIds = useMemo(() => joinedItemIds(joinedRuns), [joinedRuns]);
 
   const shapingStage = useMemo(() => {
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
@@ -1789,10 +1814,19 @@ export function CanvasStage({
                   railing={p.stage ? stageRailings?.[p.id] : undefined}
                   gaps={edgingStage?.id === p.id ? edgingGaps : undefined}
                   activeItem={edgingStage?.id === p.id ? activeEdgeItem : undefined}
+                  skipItems={p.stage && joinedIds.size ? joinedIds : undefined}
                 />
               </g>
             );
           })}
+
+          {/* Edge items that run on from one stage onto the next, drawn once as the one run they are
+              (each stage left its share out above). On the floor plane with the stages. */}
+          {joinedRuns.length > 0 && layerVisible.floor && (
+            <g {...layerAttrs("floor")}>
+              <JoinedRuns runs={joinedRuns} active={activeEdgeItem} />
+            </g>
+          )}
 
           {/* The group, drawn once over its members: the outline that says where the one larger
               table ends, while it is selected, and — in the passes that write numbers — its ONE label.
@@ -2304,21 +2338,37 @@ export function CanvasStage({
                 vectorEffect="non-scaling-stroke"
               />
               <g className="pointer-events-none">
-                {areaPreview.decks.map((d, i) => (
-                  <rect
-                    key={i}
-                    x={-d.widthMm / 2}
-                    y={-d.depthMm / 2}
-                    width={d.widthMm}
-                    height={d.depthMm}
-                    transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-                    fill="var(--color-accent-tint)"
-                    fillOpacity={0.85}
-                    stroke="var(--color-accent)"
-                    strokeWidth={1.5}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                ))}
+                {areaPreview.decks.map((d, i) =>
+                  // A deck CUT to a curve, or a whole piece (a quarter-round in a corner), is drawn as
+                  // what is left of it — a cut one hatched, so the preview says which sheets the crew
+                  // will be cutting.
+                  d.outline ? (
+                    <polygon
+                      key={i}
+                      points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+                      fill="var(--color-accent-tint)"
+                      fillOpacity={0.85}
+                      stroke="var(--color-accent)"
+                      strokeWidth={1.5}
+                      strokeDasharray={d.cut ? "6 3" : undefined}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ) : (
+                    <rect
+                      key={i}
+                      x={-d.widthMm / 2}
+                      y={-d.depthMm / 2}
+                      width={d.widthMm}
+                      height={d.depthMm}
+                      transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+                      fill="var(--color-accent-tint)"
+                      fillOpacity={0.85}
+                      stroke="var(--color-accent)"
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ),
+                )}
               </g>
               {areaPreview.polygon.map((a, i) => {
                 const b = areaPreview.polygon[(i + 1) % areaPreview.polygon.length];
@@ -3326,6 +3376,7 @@ function PlacementNodeView({
   railing,
   gaps,
   activeItem,
+  skipItems,
   onOpen,
   openId,
   shape,
@@ -3333,6 +3384,8 @@ function PlacementNodeView({
   placement: Placement;
   /** Draw it with this shape rather than its catalog footprint — a runner trimmed to its table. */
   shape?: Footprint;
+  /** A stage's edge items drawn elsewhere, as part of a run with another stage's (JoinedRuns). */
+  skipItems?: ReadonlySet<string>;
   x: number;
   y: number;
   selected: boolean;
@@ -3487,6 +3540,7 @@ function PlacementNodeView({
           railing={railing}
           gaps={gaps}
           activeItem={activeItem}
+          skip={skipItems}
           rotation={placement.rotation}
           mirrored={placement.mirrored}
           labelMm={ctx.mm(11)}
@@ -3576,12 +3630,16 @@ function StageMarks({
   labelMm,
   gaps,
   activeItem,
+  skip,
 }: {
   stage: StageBuild;
   selected: boolean;
   railing?: EdgeRun[];
   gaps?: EdgeRun[];
   activeItem?: string | null;
+  /** Items drawn as part of a run with another stage's (JoinedRuns): only their chairs, and an
+   *  invisible hit area so a click on the run is still a click on the stage, are drawn here. */
+  skip?: ReadonlySet<string>;
   rotation: number;
   mirrored?: boolean;
   /** The size of the side-length labels, in world mm (a fixed size on screen). */
@@ -3653,6 +3711,16 @@ function StageMarks({
       {(stage.stairs ?? []).map((st) => {
         const shape = edgeItemShape(stage, st, deckOf);
         if (!shape) return null;
+        if (skip?.has(st.id)) {
+          return (
+            <g key={st.id} style={{ pointerEvents: "visiblePainted" }}>
+              {shape.chairs.map((seat, k) => (
+                <Chair key={`chair-${k}`} seat={seat} />
+              ))}
+              <polygon points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill="transparent" stroke="none" />
+            </g>
+          );
+        }
         const on = st.id === activeItem;
         const stroke = on ? "var(--color-accent)" : "var(--color-ink-soft)";
         if (shape.kind === "barrier" || shape.kind === "backdrop") {
@@ -3762,6 +3830,48 @@ function StageMarks({
           vectorEffect="non-scaling-stroke"
         />
       ))}
+    </g>
+  );
+}
+
+/** Edge items of DIFFERENT stages that run on into each other along one line (lib/design-document/
+ *  edge-runs.ts), drawn once as the one run they read as: one outline, each tread one line across the
+ *  lot, nothing drawn where the stages meet. In room coordinates, over the stages, which leave their
+ *  own share out (StageMarks `skip`). In the accent while one of its items is being edited. */
+function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | null }) {
+  return (
+    <g className="pointer-events-none">
+      {runs.map((r, i) => {
+        const on = !!active && r.members.some((m) => m.itemId === active);
+        const points = r.polygon.map((q) => `${q.x},${q.y}`).join(" ");
+        if (r.kind === "barrier" || r.kind === "backdrop") {
+          return (
+            <polygon
+              key={i}
+              points={points}
+              fill={on ? "var(--color-accent)" : r.kind === "backdrop" ? "var(--color-ink)" : "var(--color-ink-soft)"}
+              fillOpacity={r.kind === "backdrop" && !on ? 0.75 : 1}
+              stroke={on ? "var(--color-accent)" : "var(--color-ink-soft)"}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        }
+        return (
+          <g key={i}>
+            <polygon
+              points={points}
+              fill={r.kind === "bench" ? "var(--color-accent-tint)" : "var(--color-surface)"}
+              stroke={on ? "var(--color-accent)" : "var(--color-border)"}
+              strokeWidth={on ? 2.5 : 1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+            {r.treads.map(([u, v], k) => (
+              <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            ))}
+          </g>
+        );
+      })}
     </g>
   );
 }

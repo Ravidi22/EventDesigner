@@ -31,9 +31,9 @@
 // Pure, no DOM, self-checked: `npm run check:stage`.
 import type { Placement, Point, StageBuild, StageEdgeKind, StageLevel, StagePiece, StageStair } from "./types";
 import type { Product } from "../catalog/types";
-import { asRect, defaultFront, fillWithDecks, polygonsOverlap, signedArea, type DeckType, type FillResult, type LaidDeck } from "../studio/stage-fill";
+import { asRect, defaultFront, families, fillWithDecks, polygonsOverlap, signedArea, STAGE_TOLERANCE_MM, type DeckType, type FillResult, type LaidDeck } from "../studio/stage-fill";
 import { flattenEdge, footprintBounds, footprintOutlines, resolveFootprint, sizedFootprint, type BuiltOutline } from "../studio/footprint";
-import { cleanOutline, halfRoundArea, pushSide, splitSide, stickBoxes, unionOutline, unionShapes } from "../studio/stage-draw";
+import { cleanOutline, halfRoundArea, pushSide, shapeRect, splitSide, stickBoxes, unionOutline, unionShapes, type RectShape, type RoundedAt } from "../studio/stage-draw";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
 import { isMain } from "../self-check";
 
@@ -52,8 +52,11 @@ export interface StageDeck extends LaidDeck {
   /** A round piece standing whole (its box is width × depth) — drawn as the ellipse it is. */
   round?: boolean;
   /** A whole piece (StageBuild.pieces) as the outline it stands on, in the stage's frame — what the
-   *  plan draws for it where a rectangle is drawn for a deck. */
+   *  plan draws for it where a rectangle is drawn for a deck; or what is LEFT of a cut deck. */
   outline?: Point[];
+  /** A deck the crew cuts to the stage's curve (a rounded corner, a bowed front): `outline` is its
+   *  remainder, and it is still counted as the whole deck it was cut from. */
+  cut?: boolean;
   /** …flipped across its own width. */
   mirrored?: boolean;
 }
@@ -80,7 +83,9 @@ export function deckTypeOf(variantId: string, product: Product): DeckType {
   if (isRoundPiece(product)) return { ...type, round: true };
   if (isShapedPiece(product)) {
     const shape = cachedPieceOutline(product);
-    if (shape) return { ...type, outline: shape.outline };
+    // A quarter-round is the corner piece of a rounded stage: its box is one radius across.
+    const quarter = shapeOf(product) === "quarter-circle" && !product.appearance?.parts?.length ? { quarterMm: Math.round(b.w) } : {};
+    if (shape) return { ...type, outline: shape.outline, ...quarter };
   }
   return type;
 }
@@ -236,6 +241,75 @@ export function stageRect(stage: Pick<StageBuild, "outline" | "front">): { width
   return axis && a.y < c.y && a.x < b.x ? { widthMm: Math.round(b.x - a.x), depthMm: Math.round(c.y - b.y) } : null;
 }
 
+// ── Rounded corners and a bowed front ─────────────────────────────────────────────────────────
+//
+// A rectangle the fill tool SHAPED (lib/studio/stage-draw.ts shapeRect) remembers what was done to
+// it — StageBuild.roundedMm / roundedAt / bowMm — because the outline alone cannot say what fillet
+// radius or what sagitta it carries, and a resize, a typed size or the fill tool reopened has to do
+// the same thing to the new rectangle. The rectangle it was made from (plainRect) is its box less
+// the bow, and the decks are laid over THAT, as on any rectangle: a rounded corner is the square
+// corner's deck CUT to the arc (StageDeck.cut), or — when the studio owns a quarter-round of about
+// that radius — a quarter-round piece standing whole in the corner; a bow is a row of strips in
+// front of the chord, cut to the curve. A cut deck is counted whole: the crew buys the sheet and cuts
+// it. Shaping is a rectangle's: an L or a round area has no plain rectangle to lay over, and a
+// shaped stage merged with another forgets its shape (mergeStages) and is laid as the curve it is.
+
+/** A corner piece is called for only where the outline turns at least this much (a tangent point
+ *  between a straight run and an arc turns a few degrees, and is no corner). */
+const CORNER_TURN_MIN = rad(15);
+/** A quarter-round piece of a radius within this of the corner's stands in it. */
+export const QUARTER_FIT_MM = 60;
+/** A cut deck keeping less of itself than this is not laid at all — the sliver it would cover is
+ *  within the fill's own tolerance, or not worth a sheet. */
+const CUT_KEEP_MIN = 0.08;
+
+export interface StageShape {
+  roundedMm: number;
+  roundedAt: RoundedAt;
+  bowMm: number;
+}
+
+/** What a stage was shaped with, when anything: a radius, which corners, a sagitta. */
+export function stageShapeOf(s: Pick<StageBuild, "roundedMm" | "roundedAt" | "bowMm">): StageShape | null {
+  const roundedMm = s.roundedMm && s.roundedMm > 0 ? s.roundedMm : 0;
+  const bowMm = s.bowMm && s.bowMm > 0 ? s.bowMm : 0;
+  return roundedMm || bowMm ? { roundedMm, roundedAt: s.roundedAt ?? "all", bowMm } : null;
+}
+
+/** The stage's box in its own frame — what a shaped or round stage reads as its size. */
+export function stageBox(stage: Pick<StageBuild, "outline">): { widthMm: number; depthMm: number } {
+  const xs = stage.outline.map((q) => q.x);
+  const ys = stage.outline.map((q) => q.y);
+  return { widthMm: Math.round(Math.max(...xs) - Math.min(...xs)), depthMm: Math.round(Math.max(...ys) - Math.min(...ys)) };
+}
+
+/** The rectangle a shaped stage was made from, in its frame, front first along the top (−y): its
+ *  box, less the bow in front of the chord. Null for a stage that carries no shape. */
+export function plainRect(stage: Pick<StageBuild, "outline" | "roundedMm" | "roundedAt" | "bowMm">): Point[] | null {
+  const shape = stageShapeOf(stage);
+  if (!shape) return null;
+  const xs = stage.outline.map((q) => q.x);
+  const ys = stage.outline.map((q) => q.y);
+  const x0 = Math.min(...xs);
+  const x1 = Math.max(...xs);
+  const y0 = Math.min(...ys) + shape.bowMm;
+  const y1 = Math.max(...ys);
+  return [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ];
+}
+
+/** A rectangle shaped as asked, as the pieces of a StageBuild: its outline centred on its own box,
+ *  the corners its curves run through, its front (edge 0), and `offset` — where its centre stands
+ *  in the plain rectangle's frame, so the caller can keep the rectangle where it was drawn. */
+export function shapedRect(widthMm: number, depthMm: number, shape: RectShape): { outline: Point[]; smooth?: number[]; front: number; offset: Point } {
+  const r = shapeRect(widthMm, depthMm, shape);
+  return { outline: r.outline, ...(r.smooth.length ? { smooth: r.smooth } : {}), front: r.front, offset: r.offset };
+}
+
 /** An area drawn in the room, turned into a stage: where it stands, which way it faces, and its
  *  outline in its own frame. The frame's x runs along the front edge and its y runs back into the
  *  stage, so a stage's rotation IS the direction its front runs — a turned stage turns its decks. */
@@ -332,7 +406,7 @@ export function layStage(stage: StageBuild, deckOf: DeckLookup): StageLayout {
   const sig = [...stage.decks, ...(stage.pieces ?? []).map((pc) => pc.variantId)]
     .map((id) => {
       const t = deckOf(id);
-      return t ? `${id}:${t.widthMm}x${t.depthMm}x${t.heightMm ?? ""}${t.round ? "r" : ""}${t.outline ? `o${t.outline.length}` : ""}` : `${id}:-`;
+      return t ? `${id}:${t.widthMm}x${t.depthMm}x${t.heightMm ?? ""}${t.round ? "r" : ""}${t.outline ? `o${t.outline.length}` : ""}${t.quarterMm ? `q${t.quarterMm}` : ""}` : `${id}:-`;
     })
     .join("|");
   const hit = laidCache.get(stage);
@@ -368,22 +442,43 @@ function layFresh(stage: StageBuild, deckOf: DeckLookup): StageLayout {
     const t = deckOf(pc.variantId);
     return t ? [{ pc, t, poly: placedPiece(pc, t) }] : [];
   });
-  const piecePolys = placed.map((x) => x.poly);
+  // A rounded or bowed RECTANGLE (StageBuild.roundedMm / bowMm): the fill works over the plain
+  // rectangle it was made from, a quarter-round piece the studio owns stands in each rounded corner
+  // like a whole piece does, and every deck is then held to the real outline (cutToOutline).
+  const plain = plainRect(stage);
+  const quarters = plain ? quarterPieces(stage, all, plain) : [];
+  const pieces = [...placed, ...quarters];
+  const piecePolys = pieces.map((x) => x.poly);
   // An inner flight is a RECESS: no deck stands where its steps go down into the stage.
   const baseRecess = recesses(stage, undefined, deckOf);
-  const base = fillWithDecks(stage.outline, types, {
-    front: stage.front,
-    obstacles: [...levels.map((l) => l.outline), ...baseRecess, ...piecePolys],
-    exceed: stage.exceed,
-    // A curve's rows are tried at several offsets from its front (FillOptions.phases).
-    phases: !!stage.smooth?.length,
-  });
+  const obstacles = [...levels.map((l) => l.outline), ...baseRecess, ...piecePolys];
+  // A curved front that is not a closed rim — a bowed front, a half-round facing out from its arc —
+  // lays its rows along its end-to-end chord, not along whichever way its first chord leans.
+  const frontSide = stageSide(stage, undefined, stage.front);
+  const axis = frontSide?.curved && !frontSide.closed ? ([frontSide.points[0], frontSide.points[frontSide.points.length - 1]] as const) : undefined;
+  const base = plain
+    ? fillWithDecks(plain, types, { front: 0, obstacles, exceed: stage.exceed })
+    : fillWithDecks(stage.outline, types, {
+        front: stage.front,
+        obstacles,
+        exceed: stage.exceed,
+        // A curve's rows are tried at several offsets from its front (FillOptions.phases).
+        phases: !!stage.smooth?.length,
+        axis,
+      });
+  const shape = stageShapeOf(stage);
+  const bow = plain && shape?.bowMm ? bowRow(plain, shape.bowMm, types, base.decks) : [];
   // The fill keeps out of an obstacle by its cells' centres; a deck that would still reach into a
   // recess is left out — nobody stands a deck over a flight of steps — and so is one that would
   // reach onto a piece: two platforms do not stand in one place.
   const clear = (holes: Point[][]) => (d: LaidDeck) => !holes.some((h) => deckOverlaps(d, h));
+  const laid = [...base.decks, ...bow].filter(clear(baseRecess)).filter(clear(piecePolys));
+  // Over a shaped rectangle every deck is held to the stage's real outline: whole where it is
+  // inside, CUT where a corner's arc or the bow's curve crosses it, gone where only a sliver would
+  // be left of it.
+  const held = plain ? laid.flatMap((d) => cutToOutline(d, stage.outline) ?? []) : laid;
   const decks: StageDeck[] = [
-    ...placed.map(({ pc, t, poly }) => ({
+    ...pieces.map(({ pc, t, poly }) => ({
       typeId: t.id,
       centre: pc.centre,
       rotation: pc.rotation || 0,
@@ -394,10 +489,7 @@ function layFresh(stage: StageBuild, deckOf: DeckLookup): StageLayout {
       ...(t.round ? { round: true } : {}),
       ...(pc.mirrored ? { mirrored: true } : {}),
     })),
-    ...base.decks
-      .filter(clear(baseRecess))
-      .filter(clear(piecePolys))
-      .map((d) => ({ ...d, heightMm: baseH })),
+    ...held.map((d) => ({ ...d, heightMm: baseH })),
   ];
   for (const l of levels) {
     const holes = recesses(stage, l.id, deckOf);
@@ -405,13 +497,18 @@ function layFresh(stage: StageBuild, deckOf: DeckLookup): StageLayout {
     decks.push(...r.decks.filter(clear(holes)).map((d) => ({ ...d, level: l.id, heightMm: l.heightMm })));
   }
   const covered = decks.reduce((s, d) => s + (d.outline ? Math.abs(signedArea(d.outline)) : d.widthMm * d.depthMm), 0);
-  // Coverage is of the floor meant to be decked — a recess is left open on purpose.
-  const decked = base.areaMm2 - baseRecess.reduce((s, q) => s + Math.abs(signedArea(q)), 0);
+  // Coverage is of the floor meant to be decked — the stage's own outline (not the plain rectangle a
+  // shaped one is laid over), and a recess is left open on purpose.
+  const areaMm2 = plain ? Math.abs(signedArea(stage.outline)) : base.areaMm2;
+  const decked = areaMm2 - baseRecess.reduce((s, q) => s + Math.abs(signedArea(q)), 0);
   return {
     ...base,
+    areaMm2,
+    rect: plain ? null : base.rect,
     decks,
     coverage: decked > 0 ? Math.min(1, covered / decked) : 0,
-    suggestions: levels.length || placed.length ? [] : base.suggestions,
+    // A stage with levels, pieces or a shape has been shaped on purpose: no sizes are suggested.
+    suggestions: levels.length || pieces.length || plain ? [] : base.suggestions,
   };
 }
 
@@ -439,7 +536,7 @@ export function stageIsOnePiece(stage: StageBuild, deckOf: DeckLookup): boolean 
   if (stage.levels?.length) return false;
   if (stage.pieces?.length) {
     const laid = layStage({ ...stage, stairs: undefined }, deckOf).decks;
-    return laid.length > 0 && laid.every((d) => !!d.outline);
+    return laid.length > 0 && laid.every((d) => !!d.outline && !d.cut);
   }
   return !!wholePiece(stage, stageDeckTypes(stage, deckOf));
 }
@@ -479,6 +576,138 @@ function recesses(stage: StageBuild, level: string | undefined, deckOf: DeckLook
     .filter((it) => it.level === level && edgeKind(it) === "stairs" && isInner(it))
     .map((it) => edgeItemShape(stage, it, deckOf)?.polygon)
     .filter((q): q is Point[] => !!q);
+}
+
+/** A laid deck's four corners, in the frame it was laid in. */
+function deckPolygon(d: LaidDeck): Point[] {
+  const t = rad(d.rotation);
+  const w = d.widthMm / 2;
+  const h = d.depthMm / 2;
+  return [
+    { x: -w, y: -h },
+    { x: w, y: -h },
+    { x: w, y: h },
+    { x: -w, y: h },
+  ].map((q) => ({ x: d.centre.x + q.x * Math.cos(t) - q.y * Math.sin(t), y: d.centre.y + q.x * Math.sin(t) + q.y * Math.cos(t) }));
+}
+
+/** `subject` clipped to the CONVEX `clip` (Sutherland–Hodgman) — what is left of a deck inside a
+ *  rounded or bowed rectangle, which is convex by construction. Either winding. */
+function clipConvex(subject: readonly Point[], clip: readonly Point[]): Point[] {
+  const sg = signedArea(clip) >= 0 ? 1 : -1;
+  let out = [...subject];
+  for (let i = 0; i < clip.length && out.length; i++) {
+    const a = clip[i];
+    const b = clip[(i + 1) % clip.length];
+    const side = (p: Point) => sg * ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x));
+    const input = out;
+    out = [];
+    for (let k = 0; k < input.length; k++) {
+      const cur = input[k];
+      const prev = input[(k - 1 + input.length) % input.length];
+      const sc = side(cur);
+      const sp = side(prev);
+      const cross = (): Point => {
+        const t = sp / (sp - sc);
+        return { x: prev.x + (cur.x - prev.x) * t, y: prev.y + (cur.y - prev.y) * t };
+      };
+      if (sc >= 0) {
+        if (sp < 0) out.push(cross());
+        out.push(cur);
+      } else if (sp >= 0) out.push(cross());
+    }
+  }
+  return out;
+}
+
+/** A deck held to the stage's outline: itself when it is inside; CUT, with what is left of it as
+ *  its outline, where a curve crosses it; nothing when only a sliver would be left (CUT_KEEP_MIN).
+ *  Measured against the outline's box as well, so a deck the fill let reach a hairline over a
+ *  straight side (its own tolerance) is not called a cut — only what a curve takes off is. */
+function cutToOutline(d: LaidDeck, outline: readonly Point[]): LaidDeck | null {
+  const poly = deckPolygon(d);
+  const full = d.widthMm * d.depthMm;
+  const kept = clipConvex(poly, outline);
+  const area = kept.length >= 3 ? Math.abs(signedArea(kept)) : 0;
+  if (area < full * CUT_KEEP_MIN) return null;
+  const xs = outline.map((q) => q.x);
+  const ys = outline.map((q) => q.y);
+  const box = [
+    { x: Math.min(...xs), y: Math.min(...ys) },
+    { x: Math.max(...xs), y: Math.min(...ys) },
+    { x: Math.max(...xs), y: Math.max(...ys) },
+    { x: Math.min(...xs), y: Math.max(...ys) },
+  ];
+  const inBox = clipConvex(poly, box);
+  const boxed = inBox.length >= 3 ? Math.abs(signedArea(inBox)) : 0;
+  if (area >= boxed - 2000) return d;
+  return { ...d, cut: true, outline: kept.map((q) => ({ x: Math.round(q.x), y: Math.round(q.y) })) };
+}
+
+/** The corners of a plain rectangle (front first, along the top) a rounding applies to, each with
+ *  the way IN from it along both sides — where its fillet's centre is, one radius along each. */
+function roundedCorners(plain: readonly Point[], at: RoundedAt): { corner: Point; inward: Point }[] {
+  const [tl, tr, br, bl] = plain;
+  const all = [
+    { corner: tl, inward: { x: 1, y: 1 } },
+    { corner: tr, inward: { x: -1, y: 1 } },
+    { corner: br, inward: { x: -1, y: -1 } },
+    { corner: bl, inward: { x: 1, y: -1 } },
+  ];
+  return at === "all" ? all : at === "front" ? all.slice(0, 2) : all.slice(2);
+}
+
+/** A quarter-round piece standing in each rounded corner, when the stage's chosen decks include
+ *  one of about the corner's radius (QUARTER_FIT_MM): its own corner — the centre its arc is struck
+ *  from — on the fillet's centre, its arc on the stage's. The piece's drawing has that corner at
+ *  (−R/2, +R/2) of its box with the arc toward (+x, −y) (lib/studio/footprint.ts quarter-circle),
+ *  so it is turned to put the arc toward the stage's corner. */
+function quarterPieces(stage: StageBuild, types: readonly DeckType[], plain: readonly Point[]): { pc: StagePiece; t: DeckType; poly: Point[] }[] {
+  const shape = stageShapeOf(stage);
+  if (!shape?.roundedMm) return [];
+  const r = shape.roundedMm;
+  const q = types
+    .filter((t) => t.quarterMm && Math.abs(t.quarterMm - r) <= QUARTER_FIT_MM)
+    .sort((a, b) => Math.abs(a.quarterMm! - r) - Math.abs(b.quarterMm! - r))[0];
+  if (!q) return [];
+  const R = q.quarterMm!;
+  return roundedCorners(plain, shape.roundedAt).map(({ corner, inward }) => {
+    const centreOfArc = { x: corner.x + inward.x * r, y: corner.y + inward.y * r };
+    const deg = (Math.atan2(-inward.y, -inward.x) * 180) / Math.PI + 45;
+    const th = rad(deg);
+    const local = { x: -R / 2, y: R / 2 };
+    const turned = { x: local.x * Math.cos(th) - local.y * Math.sin(th), y: local.x * Math.sin(th) + local.y * Math.cos(th) };
+    const pc: StagePiece = { variantId: q.id, centre: { x: Math.round(centreOfArc.x - turned.x), y: Math.round(centreOfArc.y - turned.y) }, rotation: norm360(deg) };
+    return { pc, t: q, poly: placedPiece(pc, q) };
+  });
+}
+
+/** The strips that build a BOWED front: in front of the chord, the shallowest deck of the family the
+ *  field was built from that still covers the sagitta (to the fill's tolerance), its back on the
+ *  chord and its front to be cut to the curve, laid end to end along the front and centred so the
+ *  overhang at the two ends is even — the sides, and the curve, cut them (cutToOutline). */
+function bowRow(plain: readonly Point[], sagittaMm: number, types: readonly DeckType[], laid: readonly LaidDeck[]): LaidDeck[] {
+  if (!types.length) return [];
+  const used = new Set(laid.map((d) => d.typeId));
+  const fam = families(types).find((f) => f.some((t) => used.has(t.id))) ?? types;
+  const options = fam.flatMap((t) => [
+    { t, w: t.widthMm, d: t.depthMm, turned: false },
+    ...(t.widthMm !== t.depthMm ? [{ t, w: t.depthMm, d: t.widthMm, turned: true }] : []),
+  ]);
+  const deep = options.filter((o) => o.d >= sagittaMm - STAGE_TOLERANCE_MM).sort((a, b) => a.d - b.d || b.w - a.w);
+  const pick = deep[0] ?? [...options].sort((a, b) => b.d - a.d)[0];
+  if (!pick) return [];
+  const [a, b] = plain;
+  const L = b.x - a.x;
+  const n = Math.max(1, Math.ceil(L / pick.w - 1e-6));
+  const start = (a.x + b.x) / 2 - (n * pick.w) / 2;
+  return Array.from({ length: n }, (_, i) => ({
+    typeId: pick.t.id,
+    centre: { x: Math.round(start + i * pick.w + pick.w / 2), y: Math.round(a.y - pick.d / 2) },
+    rotation: pick.turned ? 90 : 0,
+    widthMm: pick.t.widthMm,
+    depthMm: pick.t.depthMm,
+  }));
 }
 
 /** The build carried out into the room — where "פירוק לפלטות" puts each deck. */
@@ -859,6 +1088,26 @@ export function stairShape(stage: StageBuild, stair: StageStair, deckOf: DeckLoo
   return edgeKind(stair) === "stairs" ? edgeItemShape(stage, stair, deckOf) : null;
 }
 
+/** An edge item's shape carried out of its stage's frame into the room — what items of two stages
+ *  are compared and drawn together by (lib/design-document/edge-runs.ts). Its chairs are left out:
+ *  each stage draws its own. */
+export function edgeItemInRoom(p: StagePlacement, shape: EdgeItemShape): EdgeItemShape {
+  const r = (q: Point) => toRoom(p, q);
+  const base = r(shape.base);
+  const ahead = r({ x: shape.base.x + Math.cos(rad(shape.angleDeg)), y: shape.base.y + Math.sin(rad(shape.angleDeg)) });
+  return {
+    ...shape,
+    polygon: shape.polygon.map(r),
+    treads: shape.treads.map(([u, v]) => [r(u), r(v)] as [Point, Point]),
+    base,
+    foot: r(shape.foot),
+    farLine: shape.farLine.map(r),
+    midline: shape.midline.map(r),
+    angleDeg: (Math.atan2(ahead.y - base.y, ahead.x - base.x) * 180) / Math.PI,
+    chairs: [],
+  };
+}
+
 /** Whether an item may stand where it was put — or why not: its side is against a wall (stairs and
  *  benches need floor in front of them; an INNER flight needs only room at the edge to step up
  *  from), the edge is too short, a flight has nothing to climb, or the stage is one round piece
@@ -1020,7 +1269,9 @@ function needyEdges(p: StagePlacement, deckOf: DeckLookup, wallDistance?: WallDi
       const first = open.shift()!;
       open[open.length - 1][1] = side.L + first[1];
     }
-    if (open.length) out.push({ edge: side.edge, side, L: side.L, open, dropMm: baseH, front: !side.curved && side.edge === stage.front });
+    // The front is the SIDE the front edge is on — a bowed front is still the front (skirt, never a
+    // railing); a rim that goes all the way round has no front, its one chord notwithstanding.
+    if (open.length) out.push({ edge: side.edge, side, L: side.L, open, dropMm: baseH, front: !side.closed && side.edges.includes(stage.front) });
   }
   for (const l of stage.levels ?? []) {
     const drop = l.heightMm - baseH;
@@ -1108,11 +1359,29 @@ const runsOf = (e: OpenEdge, parts: [number, number][]): EdgeRun[] =>
     };
   });
 
+/** A side all the way round that bends — a round stage's rim. Open, it is finished by its skirt:
+ *  the way round a disc is not an edge anyone expects stairs along. */
+const isRim = (side: StageSide) => side.closed && side.curved;
+
+/** On a side all the way round, a bare stretch ending where the lap ends and one starting where it
+ *  starts are ONE stretch across the seam at edge 0 — one flight to fill it with, not two. */
+function joinedRound(e: OpenEdge, lo: number, hi: number, parts: [number, number][]): [number, number][] {
+  if (!e.side.closed || parts.length < 2 || lo > 1e-6 || hi < e.L - 1e-6) return parts;
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (first[0] > 1e-6 || last[1] < e.L - 1e-6) return parts;
+  return [...parts.slice(1, -1), [last[0] - e.L, first[1]]];
+}
+
 /** Every stretch of an open edge that NOTHING covers — no stairs, no banquette, no barrier. These are
- *  the edges somebody can walk off, and the stage bar asks for them to be filled. */
-export function edgeGaps(p: StagePlacement, deckOf: DeckLookup, wallDistance?: WallDistance): EdgeRun[] {
+ *  the edges somebody can walk off, and the stage bar asks for them to be filled. A ROUND stage's
+ *  rim is not among them: its default is one flight at the back and skirt round the rest, and an
+ *  open rim is normal there — `rims` asks for it anyway (fillGaps, when the designer wants more). */
+export function edgeGaps(p: StagePlacement, deckOf: DeckLookup, wallDistance?: WallDistance, opts: { rims?: boolean } = {}): EdgeRun[] {
   const any = kindIn("stairs", "bench", "barrier", "backdrop", "ramp");
-  return needyEdges(p, deckOf, wallDistance).flatMap((e) => e.open.flatMap(([lo, hi]) => runsOf(e, uncoveredIn(lo, hi, spansOn(p.stage, e, any)))));
+  return needyEdges(p, deckOf, wallDistance)
+    .filter((e) => opts.rims || !isRim(e.side))
+    .flatMap((e) => e.open.flatMap(([lo, hi]) => runsOf(e, joinedRound(e, lo, hi, uncoveredIn(lo, hi, spansOn(p.stage, e, any))))));
 }
 
 /** Every open edge with how far it drops — less the stretches a flight or a banquette stands
@@ -1143,9 +1412,10 @@ export function railingRuns(p: StagePlacement, deckOf: DeckLookup, aboveMm: numb
     .flatMap((e) => e.open.flatMap(([lo, hi]) => runsOf(e, uncoveredIn(lo, hi, spansOn(p.stage, e, covers)))));
 }
 
-/** Items that cover every gap with `kind` — the one-click "finish the edges". Ids from `newId`. */
-export function fillGaps(p: StagePlacement, deckOf: DeckLookup, kind: StageEdgeKind, newId: () => string, wallDistance?: WallDistance): StageStair[] {
-  return edgeGaps(p, deckOf, wallDistance).map((g) => {
+/** Items that cover every gap with `kind` — the one-click "finish the edges". Ids from `newId`. A
+ *  round stage's bare rim too when `rims` is asked (edgeGaps). */
+export function fillGaps(p: StagePlacement, deckOf: DeckLookup, kind: StageEdgeKind, newId: () => string, wallDistance?: WallDistance, opts: { rims?: boolean } = {}): StageStair[] {
+  return edgeGaps(p, deckOf, wallDistance, opts).map((g) => {
     const L = stageSide(p.stage, g.level, g.edge)?.L ?? g.to;
     const whole = g.from <= 1 && g.to >= L - 1;
     return {
@@ -1162,10 +1432,31 @@ export function fillGaps(p: StagePlacement, deckOf: DeckLookup, kind: StageEdgeK
 
 /** A new stage's finish: stairs along every open side — the default the studio asked for — or a
  *  barrier where there is no floor in front of the side for a flight to stand on. (Set into the
- *  stage is a choice the designer makes, not a default: a whole side recessed eats a strip of deck.) */
+ *  stage is a choice the designer makes, not a default: a whole side recessed eats a strip of deck.)
+ *  A ROUND stage — a rim all the way round with nothing on it yet — gets ONE flight, at its back,
+ *  and the rest of its rim is skirted: stairs round a whole disc is not what anyone builds. */
 export function defaultEdgeItems(p: StagePlacement, deckOf: DeckLookup, newId: () => string, wallDistance?: WallDistance): StageStair[] {
   const items = fillGaps(p, deckOf, "stairs", newId, wallDistance).filter((it) => !it.level);
-  return settleEdgeItems(p, items, deckOf, newId, wallDistance, { inner: false, otherwise: "barrier" });
+  const taken = new Set((p.stage.stairs ?? []).filter((it) => !it.level).map((it) => stageSide(p.stage, undefined, it.edge)?.edge));
+  const rims = stageSides(p.stage)
+    .filter((s) => isRim(s) && !taken.has(s.edge))
+    .flatMap((s) => backFlight(p, s, deckOf, newId, wallDistance) ?? []);
+  return settleEdgeItems(p, [...items, ...rims], deckOf, newId, wallDistance, { inner: false, otherwise: "barrier" });
+}
+
+/** One STAIR_WIDTH_MM flight on a round stage's rim, OPPOSITE its front — the point of the rim
+ *  farthest from the room — or the nearest place round from there with floor in front of it. Null
+ *  when the whole rim is against walls. */
+function backFlight(p: StagePlacement, side: StageSide, deckOf: DeckLookup, newId: () => string, wallDistance?: WallDistance): StageStair | null {
+  const k = side.edges.indexOf(p.stage.front);
+  const sFront = k >= 0 ? (side.cum[k] + side.cum[k + 1]) / 2 : 0;
+  const id = newId();
+  for (const f of [0, 1 / 8, -1 / 8, 1 / 4, -1 / 4, 3 / 8, -3 / 8]) {
+    const s = sFront + side.L / 2 + f * side.L;
+    const it: StageStair = { id, edge: side.edge, t: wrapT(s, side.L), widthMm: STAIR_WIDTH_MM };
+    if (stairFits(p, it, deckOf, wallDistance).ok) return it;
+  }
+  return null;
 }
 
 /** One item clicked onto an edge — `edge` and `t` as clicked, along THAT edge of the outline: when
@@ -1344,9 +1635,14 @@ export function stageCorners(stage: StageBuild, deckOf: DeckLookup): CornerPiece
       const a = outline[prev];
       const c = outline[v];
       const b = outline[(v + 1) % n];
-      // Outside corners only: the outline turns the way it winds.
+      // Outside corners only: the outline turns the way it winds — and turns in earnest. Where a
+      // straight run meets an arc the corner is a TANGENT point, turning only the half-chord the
+      // arc's first chord leans by; the runs on either side of it are flush, and the sliver between
+      // them is no corner piece.
       const turn = (c.x - a.x) * (b.y - c.y) - (c.y - a.y) * (b.x - c.x);
       if (turn * sg <= 0) continue;
+      const along = (c.x - a.x) * (b.x - c.x) + (c.y - a.y) * (b.y - c.y);
+      if (Math.atan2(Math.abs(turn), along) < CORNER_TURN_MIN) continue;
       const ending = runInto(stage, level, prev, true);
       const starting = runInto(stage, level, v, false);
       if (!ending || !starting) continue;
@@ -1865,8 +2161,11 @@ export function mergeStages(parts: readonly StagePlacement[]): { stage: StageBui
       };
     }),
   );
+  // A rounded or bowed rectangle merged with anything is not that rectangle any more: its shape
+  // fields go, and the merged outline is laid as the curve it is.
+  const { roundedMm: _rounded, roundedAt: _roundedAt, bowMm: _bow, ...anchorStage } = anchor.stage;
   const stage: StageBuild = {
-    ...anchor.stage,
+    ...anchorStage,
     outline,
     front: fin.front,
     decks: [...new Set(parts.flatMap((p) => p.stage.decks))],
@@ -2450,12 +2749,17 @@ if (isMain(import.meta.url)) {
   assert(rim.length === 1 && rim[0].closed && rim[0].curved && Math.abs(rim[0].L - Math.PI * 4000) < 40, "a round stage's rim is one closed side, its circumference long");
   assert(round.outline.length >= 24 && rim[0].L / round.outline.length < 300, "…drawn in chords short enough to read as a curve");
   const ring = defaultEdgeItems(disc, deckOf, nid);
-  assert(ring.length === 1 && ring[0].full === true && edgeKind(ring[0]) === "stairs", "a free-standing round stage gets stairs all the way round");
+  assert(ring.length === 1 && !ring[0].full && ring[0].widthMm === STAIR_WIDTH_MM && edgeKind(ring[0]) === "stairs", "a free-standing round stage gets ONE flight — not stairs all the way round");
   const ringShape = edgeItemShape(disc.stage, ring[0], deckOf)!;
   const rOf = (q: Point) => Math.hypot(q.x, q.y);
-  assert(ringShape.polygon.length > 40 && ringShape.polygon.every((q) => rOf(q) >= 2000 - 5 && rOf(q) <= 2000 + 840 + 5), "…following the curve, 84cm deep outside the rim");
+  assert(ringShape.base.y > 1900 && Math.abs(ringShape.base.x) < 300, "…at its back, opposite the front");
+  assert(ringShape.polygon.length > 4 && ringShape.polygon.every((q) => rOf(q) >= 2000 - 5 && rOf(q) <= 2000 + 840 + 5), "…following the curve, 84cm deep outside the rim");
   const withRing = { ...disc, stage: { ...disc.stage, stairs: ring } };
-  assert(edgeGaps(withRing, deckOf).length === 0 && skirtMm(withRing, deckOf) === 0, "…leaving nothing bare and nothing to skirt");
+  assert(edgeGaps(withRing, deckOf).length === 0 && Math.abs(skirtMm(withRing, deckOf) - (rim[0].L - STAIR_WIDTH_MM)) < 1, "…the rest of the rim skirted, and not reported bare");
+  assert(edgeGaps(disc, deckOf).length === 0 && edgeGaps(disc, deckOf, undefined, { rims: true }).length === 1, "a bare round rim is normal — not an open edge — unless asked about outright");
+  const allRound = fillGaps(withRing, deckOf, "stairs", nid, undefined, { rims: true });
+  assert(allRound.length === 1 && Math.abs(allRound[0].widthMm - (rim[0].L - STAIR_WIDTH_MM)) <= 1, "…and 'finish the edges' can still run stairs round the rest of it, as one flight across the seam");
+  assert(edgeGaps({ ...disc, stage: { ...disc.stage, stairs: [...ring, ...allRound] } }, deckOf, undefined, { rims: true }).length === 0, "…which leaves nothing of the rim bare");
   assert(stageCorners(withRing.stage, deckOf).length === 0, "…and no corner anywhere on a curve");
   assert(Math.abs(skirtMm(disc, deckOf) - rim[0].L) < 1, "a bare round stage is skirted all the way round");
   // A banquette round half of it; then a flight clicked on one of the chords of the other half.
@@ -2471,9 +2775,9 @@ if (isMain(import.meta.url)) {
   assert([-0.5, -0.25, 0, 0.25, 0.5].every((f) => Math.abs(rOf(onBench.along(f)) - (2000 + BENCH_DEPTH_MM / 2)) < 15), "…and what is dressed on it is spread along the curve");
   const chord = Math.round(round.outline.length * 0.75);
   const flight = itemAt(benchDisc, deckOf, "stairs", undefined, chord, 0.5, "f1");
-  assert(flight.edge === 0 && !!itemSpan(benchDisc.stage, flight), "a flight clicked on one chord of the rim is placed on the rim");
+  assert(flight.edge === 0 && !!itemSpan(benchDisc.stage, flight) && flight.widthMm === STAIR_WIDTH_MM, "a flight clicked on one chord of the rim is placed on the rim, a standard flight wide — never the whole bare half of a round stage");
   const both = { ...disc, stage: { ...disc.stage, stairs: [halfBench, flight] } };
-  assert(edgeGaps(both, deckOf).length === 0, "…covering the bare half, so nothing is left open");
+  assert(edgeGaps(both, deckOf).length === 0 && edgeGaps(both, deckOf, undefined, { rims: true }).length > 0, "…the rest of the rim skirted: bare only when asked about outright");
   const short: StageStair = { id: "s1", edge: 0, t: 0.5, widthMm: 1000 };
   const sp1 = sidePosition(disc.stage, undefined, chord, 0.5);
   const along1 = itemAlong(disc.stage, short, itemSidePoint(disc.stage, short, sp1.t * rim[0].L)!)!;
@@ -2485,14 +2789,12 @@ if (isMain(import.meta.url)) {
   // the rest keeps its stairs.
   const wallAbove: WallDistance = (q) => Math.abs(q.y + 2400);
   const nearWall = defaultEdgeItems(disc, deckOf, nid, wallAbove);
-  assert(nearWall.some((it) => edgeKind(it) === "stairs") && nearWall.some((it) => edgeKind(it) === "barrier"), "a round stage near a wall keeps stairs where there is floor, a barrier where there is not");
-  assert(edgeGaps({ ...disc, stage: { ...disc.stage, stairs: nearWall } }, deckOf, wallAbove).length === 0, "…and no stretch of its rim is left bare");
-  assert(nearWall.filter((it) => edgeKind(it) === "barrier").every((it) => {
-    const s = edgeItemShape(disc.stage, it, deckOf)!;
-    return s.base.y < 0;
-  }), "…the barrier on the side facing the wall");
-  const asked = settleEdgeItems(disc, ring, deckOf, nid, wallAbove, { inner: true, otherwise: "keep" });
-  assert(asked.some((it) => it.inner) && asked.some((it) => !it.inner), "…or, asked for stairs, inner ones there and outer ones elsewhere");
+  assert(nearWall.length === 1 && edgeKind(nearWall[0]) === "stairs" && !nearWall[0].inner, "a round stage near a wall still gets its one flight, where there is floor — and no barrier round the rest");
+  assert(edgeItemShape(disc.stage, nearWall[0], deckOf)!.base.y > 0, "…away from the wall");
+  assert(edgeGaps({ ...disc, stage: { ...disc.stage, stairs: nearWall } }, deckOf, wallAbove).length === 0, "…and no stretch of its rim is reported bare");
+  const fullRim: StageStair = { id: "fr", edge: 0, t: 0.5, widthMm: 0, full: true };
+  const asked = settleEdgeItems(disc, [fullRim], deckOf, nid, wallAbove, { inner: true, otherwise: "keep" });
+  assert(asked.some((it) => it.inner) && asked.some((it) => !it.inner), "…and stairs asked for all the way round go inner where the wall is and outer elsewhere");
   assert(rehomeEdgeItems(withRing, { ...withRing }, nid).length === 1, "the fill tool reopened on a round stage keeps its items where they stand");
 
   // A round PIECE the studio owns becomes a round stage built of itself.
@@ -2502,7 +2804,7 @@ if (isMain(import.meta.url)) {
   assert(piece.stage.smooth?.length === piece.stage.outline.length, "a round piece becomes a stage with a curved rim");
   const pieceDecks = layStage(piece.stage, deckOf2).decks;
   assert(pieceDecks.length === 1 && pieceDecks[0].typeId === "disc4" && pieceDecks[0].round === true, "…standing on the one round piece it is");
-  assert(stageHeight(piece.stage, deckOf2) === 400 && piece.stage.stairs?.length === 1 && edgeKind(piece.stage.stairs[0]) === "stairs", "…at its height, with stairs round its open rim");
+  assert(stageHeight(piece.stage, deckOf2) === 400 && piece.stage.stairs?.length === 1 && edgeKind(piece.stage.stairs[0]) === "stairs" && !piece.stage.stairs[0].full, "…at its height, with one flight at its back");
   assert(!stairFits(piece, { id: "x", edge: 0, t: 0.5, widthMm: 1000, inner: true }, deckOf2).ok, "…and nothing can be sunk into one solid piece");
 
   // ── Ctrl+G over stages: touching → one stage, apart → a group (mergeTouching).
@@ -2651,5 +2953,104 @@ if (isMain(import.meta.url)) {
   const outlineBefore = placedPiece(jm.stage.pieces![0], halfDeck).map((q) => toRoom(jAt, q));
   const outlineAfter = placedPiece(carriedPc[0], halfDeck).map((q) => toRoom(turnedFrame, q));
   assert(outlineBefore.every((q, i) => Math.hypot(q.x - outlineAfter[i].x, q.y - outlineAfter[i].y) < 2), "…facing the way it faced");
+
+  // ── A ROUNDED rectangle and a BOWED front — the fill tool's shapes (shapedRect), laid over the
+  // rectangle they were made from.
+  {
+    const sh = shapedRect(6000, 4000, { roundedMm: 1000 });
+    const rounded: StagePlacement = {
+      id: "rr",
+      variantId: "big",
+      layer: "floor",
+      quantity: 1,
+      scale: 1,
+      rotation: 0,
+      position: { x: 0, y: 0 },
+      stage: { outline: sh.outline, smooth: sh.smooth, front: sh.front, decks: ["big", "small"], heightMm: 600, roundedMm: 1000, roundedAt: "all" },
+    };
+    assert(stageRect(rounded.stage) === null && stageBox(rounded.stage).widthMm === 6000 && stageBox(rounded.stage).depthMm === 4000, "a rounded 6×4 is no plain rectangle, but its box still reads 6×4");
+    const pr = plainRect(rounded.stage)!;
+    assert(pr.length === 4 && pr[0].x === -3000 && pr[0].y === -2000 && pr[2].x === 3000 && pr[2].y === 2000, "…and the rectangle it was made from is its box");
+    const sides = stageSides(rounded.stage);
+    assert(sides.length === 8 && sides.filter((s) => s.curved).length === 4 && !sides.some((s) => s.closed), "its rim is eight sides — four straight runs and four arcs — none of them closed");
+    assert(sides.find((s) => s.edges.includes(rounded.stage.front))!.curved === false, "…the front being the straight run across the top");
+    const laidR = layStage(rounded.stage, deckOf);
+    const cutR = laidR.decks.filter((d) => d.cut);
+    assert(laidR.decks.length === 12 && cutR.length === 4, "with no quarter-round piece, the twelve 2×1 decks of a plain 6×4 are laid and the four corner decks are CUT");
+    assert(cutR.every((d) => d.outline && d.outline.length > 4 && Math.abs(signedArea(d.outline)) < 2e6 && Math.abs(signedArea(d.outline)) > 1.7e6), "…each keeping its outline less the corner's arc");
+    assert(Math.abs(laidR.coverage - 1) < 0.01, "…and covering the stage");
+    assert(stageDeckCounts(rounded.stage, deckOf).get("big")!.length === 12, "…the quote counting every cut deck whole");
+    // With a quarter-round piece of the corner's radius in the catalog and among the chosen decks,
+    // each corner stands on one and nothing is cut.
+    const quarterProduct = {
+      id: "qp",
+      name: "רבע עיגול R100",
+      category: "stage-decks",
+      layer: "floor",
+      dimensions: { diameterMm: 2000, heightMm: 600 },
+      categoryFields: {},
+      styleTags: [],
+      variants: [],
+      appearance: { shape: "quarter-circle", content: "none" },
+    } as unknown as Product;
+    const quarter = deckTypeOf("q100", quarterProduct);
+    assert(quarter.quarterMm === 1000 && !!quarter.outline && quarter.widthMm === 1000 && quarter.depthMm === 1000, "a quarter-round product is a quarter piece of its radius");
+    const deckOfQ: DeckLookup = (id) => (id === "q100" ? quarter : decks[id]);
+    const withQ = { ...rounded, stage: { ...rounded.stage, decks: ["big", "small", "q100"] } };
+    const laidQ = layStage(withQ.stage, deckOfQ);
+    const quarters = laidQ.decks.filter((d) => d.typeId === "q100");
+    assert(quarters.length === 4 && quarters.every((d) => d.outline && !d.cut), "with the piece in the catalog, four quarter-rounds stand in the corners");
+    assert(
+      quarters.every((d) => {
+        const c = { x: Math.sign(d.centre.x) * 2000, y: Math.sign(d.centre.y) * 1000 };
+        return d.outline!.every((q) => Math.hypot(q.x - c.x, q.y - c.y) <= 1000 + 3 && Math.abs(q.x) <= 3001 && Math.abs(q.y) <= 2001);
+      }),
+      "…each inside the stage, its arc on the stage's own corner arc",
+    );
+    assert(laidQ.decks.filter((d) => d.cut).length === 0 && laidQ.decks.filter((d) => d.typeId === "big").length === 10, "…and no deck is cut: ten whole 2×1 decks between them");
+    assert(Math.abs(laidQ.coverage - 1) < 0.01, "…covering the stage");
+    assert(layStage({ ...withQ.stage, roundedMm: 1500 }, deckOfQ).decks.filter((d) => d.typeId === "q100").length === 0, "a quarter-round half a metre off the corner's radius does not stand in it");
+    // Its edges: a flight on the front run AND one following each arc, flush at the tangent points,
+    // the same depth — one continuous run to the eye — and no corner piece anywhere.
+    const finishR = defaultEdgeItems(rounded, deckOf, nid);
+    assert(finishR.length === 8 && finishR.every((it) => edgeKind(it) === "stairs" && it.full), "a free-standing rounded stage gets a flight on each of its eight sides");
+    const arcFlights = finishR.filter((it) => stageSide(rounded.stage, undefined, it.edge)!.curved).map((it) => edgeItemShape(rounded.stage, it, deckOf)!);
+    assert(arcFlights.length === 4 && arcFlights.every((s) => s.polygon.length > 4 && s.depthMm === 840), "…the four on the arcs following them, as deep as the straight ones");
+    const frontFlight = edgeItemShape(rounded.stage, finishR.find((it) => stageSide(rounded.stage, undefined, it.edge)!.edges.includes(rounded.stage.front))!, deckOf)!;
+    assert(
+      arcFlights.filter((s) => s.polygon.some((q) => frontFlight.polygon.some((f) => Math.hypot(q.x - f.x, q.y - f.y) < 2))).length === 2,
+      "…the front's flight meeting an arc's flush at each tangent point",
+    );
+    const withFinish = { ...rounded, stage: { ...rounded.stage, stairs: finishR } };
+    assert(stageCorners(withFinish.stage, deckOf).length === 0, "…and no corner piece at a tangent point");
+    assert(edgeGaps(withFinish, deckOf).length === 0, "…nothing left bare");
+
+    // A bowed front.
+    const bw = shapedRect(6000, 4000, { bowMm: 300 });
+    const bowed: StagePlacement = { ...rounded, id: "bw", stage: { outline: bw.outline, smooth: bw.smooth, front: bw.front, decks: ["big", "small"], heightMm: 600, bowMm: 300 } };
+    assert(bw.offset.y === -150 && stageBox(bowed.stage).depthMm === 4300, "a 6×4 bowed 30cm stands 15cm forward of the rectangle and reads 4.3m deep");
+    const bpr = plainRect(bowed.stage)!;
+    assert(bpr[0].y === -1850 && bpr[2].y === 2150 && bpr[0].x === -3000, "…its plain rectangle the 4m behind the chord");
+    const bSides = stageSides(bowed.stage);
+    assert(bSides.length === 4 && bSides.find((s) => s.edges.includes(bowed.stage.front))!.curved, "its front is the bow: one curved side");
+    const laidB = layStage(bowed.stage, deckOf);
+    assert(laidB.decks.filter((d) => !d.cut).length === 12 && laidB.decks.every((d) => d.rotation === 0), "the field is the plain 6×4's twelve decks, square to the stage");
+    const bowDecks = laidB.decks.filter((d) => d.cut);
+    assert(bowDecks.length === 3 && bowDecks.every((d) => d.centre.y < -1850 && d.outline!.every((q) => q.y <= -1850 + 1 && q.y >= -2150 - 1)), "…and the bow is three cut decks in front of the chord, kept only where the curve is");
+    assert(Math.abs(laidB.coverage - 1) < 0.02, "…covering it");
+    const rails = railingRuns({ ...bowed, stage: { ...bowed.stage, heightMm: 900 } }, deckOf, 800);
+    assert(rails.length === 3 && rails.every((r) => !r.front), "a bowed front is still the front: railed on the other three sides, never on the bow");
+    assert(skirtMm(bowed, deckOf) > 20000, "…and skirted along the bow, which is longer than its chord");
+    const finishB = defaultEdgeItems(bowed, deckOf, nid);
+    assert(finishB.length === 4 && edgeItemShape(bowed.stage, finishB.find((it) => stageSide(bowed.stage, undefined, it.edge)!.curved)!, deckOf)!.polygon.length > 4, "…its stairs following the bow");
+    // Both together, and at another size: the same shape, rebuilt from the new rectangle.
+    const again = shapedRect(7320, 4000, { roundedMm: 1000, roundedAt: "all", bowMm: 300 });
+    const againStage = { outline: again.outline, smooth: again.smooth, front: again.front, decks: [] };
+    assert(stageSides(againStage).length === 8 && stageSides(againStage).find((s) => s.edges.includes(0))!.curved, "a shaped stage at a new size is the same shape — eight sides, the bow its front");
+    // Merged with another stage, the shape goes: the merged outline is laid as the curve it is.
+    const neighbour: StagePlacement = { ...place(rect(3000, -2000, 2000, 4000), 0), id: "nb" };
+    const mergedR = mergeStages([rounded, neighbour]);
+    assert(!!mergedR && mergedR.stage.roundedMm === undefined && plainRect(mergedR.stage) === null && layStage(mergedR.stage, deckOf).decks.length > 0, "a rounded stage merged with another forgets its radius and is laid as the outline it now is");
+  }
   console.log("stage self-check passed");
 }

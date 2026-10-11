@@ -87,7 +87,7 @@ import {
 import { deleteStageTemplate, deleteTableDesign, fetchStageRules, fetchStageTemplates, fetchTableDesigns, saveStageTemplate, saveTableDesign } from "@/lib/settings/actions";
 import { TableDesignsPanel } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/studio/stage-draw";
-import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, pushTogether, settleEdgeItems, shareSide, stageSide } from "@/lib/design-document/stage";
+import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide } from "@/lib/design-document/stage";
 import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, sizedFootprint } from "@/lib/studio/footprint";
 import { dressingSpots, tableBlock, tableBox, tableFootprint } from "@/components/footprint-shape";
@@ -1595,7 +1595,9 @@ export function StudioScreen({
     () =>
       catalog
         .filter((p) => STAGE_PIECE_CATEGORIES.includes(p.category) && !p.archived)
-        .filter((p) => (p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect")) === "rect" && !p.appearance?.parts?.length)
+        // Rectangles the fill lays — and quarter-rounds, which it stands in the corners of a rounded
+        // stage (lib/design-document/stage.ts quarterPieces); any other shape is a stage of its own.
+        .filter((p) => ["rect", "quarter-circle"].includes(p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect")) && !p.appearance?.parts?.length)
         // The FIRST variant, not the event's shade: a deck's id is structural — a stage stores it and
         // is laid from it — and must be the same id whatever event is open (firstVariantId).
         .map((p) => ({ name: p.name, ...deckTypeOf(firstVariantId(p), p) }))
@@ -1631,11 +1633,23 @@ export function StudioScreen({
     const curved = !!stageFill.smooth?.length;
     const clean = curved ? { outline: stageFill.polygon, front: stageFill.front } : cleanOutline(stageFill.polygon, stageFill.front);
     const at = stageFromArea(clean.outline, clean.front);
+    // A rectangle's corners rounded, its front bowed (the "פינות" chip): shaped from the PLAIN
+    // rectangle every time, in the stage's own frame, and stood where the rectangle was drawn —
+    // the shape pushes its box forward by the bow, so the placement moves by the offset. Only a
+    // rectangle is shaped: an area dragged out of square keeps its corners.
+    const shape = curved ? null : stageShapeOf(stageFill);
+    const rect = shape ? stageRect(at) : null;
+    const shaped = shape && rect ? shapedRect(rect.widthMm, rect.depthMm, shape) : null;
+    const position = shaped ? (() => {
+      const c = toRoom({ position: at.position, rotation: at.rotation }, shaped.offset);
+      return { x: Math.round(c.x), y: Math.round(c.y) };
+    })() : at.position;
     const stage: StageBuild = {
-      outline: at.outline,
-      front: at.front,
+      outline: shaped ? shaped.outline : at.outline,
+      front: shaped ? shaped.front : at.front,
       decks: stageFill.chosen,
-      ...(curved ? { smooth: [...stageFill.smooth!] } : {}),
+      ...(curved ? { smooth: [...stageFill.smooth!] } : shaped?.smooth ? { smooth: shaped.smooth } : {}),
+      ...(shaped && shape ? { ...(shape.roundedMm ? { roundedMm: shape.roundedMm, roundedAt: shape.roundedAt } : {}), ...(shape.bowMm ? { bowMm: shape.bowMm } : {}) } : {}),
       ...(stageFill.exceed ? { exceed: true } : {}),
     };
     const placement = {
@@ -1644,7 +1658,7 @@ export function StudioScreen({
       layer: "floor" as const,
       quantity: 1,
       scale: 1,
-      position: at.position,
+      position,
       rotation: at.rotation,
       stage,
     };
@@ -1653,6 +1667,9 @@ export function StudioScreen({
       placement,
       layout: { ...laid, decks: stageDecksInRoom(placement, deckOf) },
       overlaps: stageObstacles.some((o) => polygonsOverlap(o, clean.outline)),
+      /** The shaped outline where it stands in the room — what the canvas draws instead of the plain
+       *  rectangle while a shape is on. */
+      shapedOutline: shaped ? stageOutlineInRoom(placement) : null,
     };
   }, [stageFill, stageObstacles]);
   const stageLayout = stagePreview?.layout ?? null;
@@ -1804,7 +1821,8 @@ export function StudioScreen({
       // overwritten: switching it off has to leave no key behind.
       // …and so do its curve (an area redrawn round, or square) and where its whole pieces stand: each
       // carried to where it stood in the room, and kept only while it is still on the stage.
-      const { exceed: _wasExceeding, smooth: _wasSmooth, pieces: _wasPieces, ...keep } = old.stage;
+      // …and so does the shape (a radius, a bow) the "פינות" chip gave the rectangle, or took off it.
+      const { exceed: _wasExceeding, smooth: _wasSmooth, pieces: _wasPieces, roundedMm: _wasRounded, roundedAt: _wasRoundedAt, bowMm: _wasBow, ...keep } = old.stage;
       const pieces = carryPieces(old.stage.pieces, old, frame)?.filter((pc) => pointInPolygon(pc.centre, placement.stage.outline));
       const now: StagePlacement = {
         ...was,
@@ -1817,23 +1835,19 @@ export function StudioScreen({
           levels,
           ...(placement.stage.smooth?.length ? { smooth: placement.stage.smooth } : {}),
           ...(pieces?.length ? { pieces } : {}),
+          ...(placement.stage.roundedMm ? { roundedMm: placement.stage.roundedMm, roundedAt: placement.stage.roundedAt } : {}),
+          ...(placement.stage.bowMm ? { bowMm: placement.stage.bowMm } : {}),
           ...(placement.stage.exceed ? { exceed: true } : {}),
         },
       };
       // The outline may have new corners, so side numbers mean nothing now: every item goes back to
       // the side it stood on, by where it stood; what the reshape left bare gets stairs (or a barrier
-      // where stairs cannot stand), the default for any open side; runs on one side become one.
+      // where stairs cannot stand), the default for any open side — one flight at the back of a round
+      // rim left bare; runs on one side become one.
       const carried = rehomeEdgeItems(was, now, uid).filter((st) => !st.level || levels?.some((l) => l.id === st.level));
       const wd = wallDistanceFor(old.id);
       const withItems: StagePlacement = { ...now, stage: { ...now.stage, stairs: carried } };
-      const bare = settleEdgeItems(
-        withItems,
-        fillGaps(withItems, deckOf, "stairs", uid, wd).filter((it) => !it.level),
-        deckOf,
-        uid,
-        wd,
-        { inner: false, otherwise: "barrier" },
-      );
+      const bare = defaultEdgeItems(withItems, deckOf, uid, wd);
       const stairs = tidyEdgeItems({ ...now.stage, stairs: [...carried, ...bare] });
       const kept = new Set(stairs.map((st) => st.id));
       // Dressing on a banquette the reshape took away goes with it.
@@ -1940,16 +1954,10 @@ export function StudioScreen({
       corners: stage.corners !== false,
       exceed: stage.exceed === true,
       cornerCount: stageCorners(stage, deckOf).length,
-      size:
-        stageRect(stage) ??
-        (stageIsRound(stage)
-          ? (() => {
-              const xs = stage.outline.map((q) => q.x);
-              const ys = stage.outline.map((q) => q.y);
-              return { widthMm: Math.round(Math.max(...xs) - Math.min(...xs)), depthMm: Math.round(Math.max(...ys) - Math.min(...ys)) };
-            })()
-          : null),
+      // A rounded or bowed rectangle reads its box, like a round stage does.
+      size: stageRect(stage) ?? (stageIsRound(stage) || stageShapeOf(stage) ? stageBox(stage) : null),
       round: stageIsRound(stage),
+      shaped: !!stageShapeOf(stage),
       deckCount: laid.decks.length,
       coverage: laid.coverage,
       decks: [...counts.entries()].map(([id, count]) => ({ name: resolve(id)?.product.name ?? "פלטה", count })),
@@ -1978,6 +1986,19 @@ export function StudioScreen({
         act({ type: "setPlacementStage", id: soleStage.id, stage: { ...st, outline: rectOutline(size.widthMm, size.depthMm), levels }, position });
         return;
       }
+      // A rounded or bowed rectangle: the plain rectangle at the new size, shaped the same way again
+      // (the typed size is the BOX, bow included) — the back held where it stands.
+      const shape = stageShapeOf(st);
+      if (shape && plainRect(st)) {
+        const box = stageBox(st);
+        const next = shapedRect(size.widthMm, Math.max(100, size.depthMm - shape.bowMm), shape);
+        const c = toRoom(soleStage, { x: 0, y: (box.depthMm - size.depthMm) / 2 });
+        const position = { x: Math.round(c.x), y: Math.round(c.y) };
+        const levels = carryLevels(st.levels, soleStage, { ...soleStage, position });
+        const { smooth: _s, ...rest } = st;
+        act({ type: "setPlacementStage", id: soleStage.id, stage: { ...rest, outline: next.outline, front: next.front, ...(next.smooth ? { smooth: next.smooth } : {}), levels }, position });
+        return;
+      }
       // A stage with a curve — a disc, an oval, a half-round — is SCALED whole: the curve stays the
       // same curve (its corners and their smoothness), its levels scale with it, its stairs keep
       // their places along their sides, and the back stays where it stands. A whole piece is not its
@@ -2000,12 +2021,17 @@ export function StudioScreen({
     // Decks archived since the stage was drawn are not offered again; if none of its decks are left,
     // the edit starts from every deck the catalog has now.
     const still = soleStage.stage.decks.filter((id) => deckTypes.some((t) => t.id === id));
+    // A rounded or bowed rectangle reopens as the PLAIN rectangle it was made from, with its shape on
+    // the "פינות" chip — so the radius can be changed, or taken off, without rounding a rounded line.
+    const plain = plainRect(soleStage.stage);
+    const shape = stageShapeOf(soleStage.stage);
     setSelected([]);
     setStageFill({
       phase: "pick",
-      polygon: stageOutlineInRoom(soleStage).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
-      front: soleStage.stage.front,
-      ...(soleStage.stage.smooth?.length ? { smooth: soleStage.stage.smooth } : {}),
+      polygon: (plain ?? soleStage.stage.outline).map((q) => toRoom(soleStage, q)).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+      front: plain ? 0 : soleStage.stage.front,
+      ...(!plain && soleStage.stage.smooth?.length ? { smooth: soleStage.stage.smooth } : {}),
+      ...(plain && shape ? { roundedMm: shape.roundedMm, roundedAt: shape.roundedAt, bowMm: shape.bowMm } : {}),
       chosen: still.length ? still : deckTypes.map((t) => t.id),
       editing: soleStage.id,
       ...(soleStage.stage.exceed ? { exceed: true } : {}),
@@ -2424,8 +2450,9 @@ export function StudioScreen({
       if (!soleStage) return;
       const wd = wallDistanceFor(soleStage.id);
       // Asked for stairs or a banquette: outside where there is floor, set into the stage where a
-      // wall leaves none, a barrier only where neither stands.
-      const add = settleEdgeItems(soleStage, fillGaps(soleStage, deckOf, kind, uid, wd), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
+      // wall leaves none, a barrier only where neither stands. A round stage's open rim too — asked
+      // for outright, where the default left it to the skirt.
+      const add = settleEdgeItems(soleStage, fillGaps(soleStage, deckOf, kind, uid, wd, { rims: true }), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
       if (!add.length) return;
       patchStage(soleStage.id, (s) => ({ ...s, stairs: [...(s.stairs ?? []), ...add] }));
       ensureStageParts();
@@ -2534,7 +2561,7 @@ export function StudioScreen({
       const run = (k: StageEdgeKind) => shapes.filter((s) => s.kind === k).reduce((t, s) => t + s.widthMm, 0);
       const tri = (f: (s: StageBuild) => boolean) => (real.every((p) => f(p.stage)) ? true : real.every((p) => !f(p.stage)) ? false : undefined);
       const stageSize = (p: StagePlacement) => {
-        const r = stageRect(p.stage);
+        const r = stageRect(p.stage) ?? (stageShapeOf(p.stage) ? stageBox(p.stage) : null);
         return r ? `${Math.round(r.widthMm / 10) / 100}×${Math.round(r.depthMm / 10) / 100} מ׳` : null;
       };
       return {
@@ -2590,7 +2617,7 @@ export function StudioScreen({
   const fillGroupEdges = (kind: EdgeKindId) => {
     const acts = groupStagesOf().flatMap((p) => {
       const wd = wallDistanceFor(p.id);
-      const add = settleEdgeItems(p, fillGaps(p, deckOf, kind, uid, wd), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
+      const add = settleEdgeItems(p, fillGaps(p, deckOf, kind, uid, wd, { rims: true }), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
       return add.length ? [{ type: "setPlacementStage" as const, id: p.id, stage: { ...p.stage, stairs: [...(p.stage.stairs ?? []), ...add] } }] : [];
     });
     if (!acts.length) return;
@@ -3490,6 +3517,16 @@ export function StudioScreen({
                 drag({ type: "setPlacementStage", id, stage: scaleStage(was.stage, sizeMm), position });
                 return;
               }
+              // A rounded or bowed rectangle's handles stretch its BOX; the plain rectangle behind it
+              // is shaped the same way again at the new size.
+              const shape = was?.stage ? stageShapeOf(was.stage) : null;
+              if (was?.stage && shape && plainRect(was.stage)) {
+                const next = shapedRect(sizeMm.widthMm, Math.max(100, sizeMm.depthMm - shape.bowMm), shape);
+                const levels = carryLevels(was.stage.levels, was, { ...was, position });
+                const { smooth: _s, ...rest } = was.stage;
+                drag({ type: "setPlacementStage", id, stage: { ...rest, outline: next.outline, front: next.front, ...(next.smooth ? { smooth: next.smooth } : {}), levels }, position });
+                return;
+              }
               if (was?.stage) {
                 const levels = carryLevels(was.stage.levels, was, { ...was, position });
                 drag({ type: "setPlacementStage", id, stage: { ...was.stage, outline: rectOutline(sizeMm.widthMm, sizeMm.depthMm), levels }, position });
@@ -3519,11 +3556,45 @@ export function StudioScreen({
               setStageFill(null);
               setStageTool(null);
             }}
-            areaPreview={stageFill?.phase === "pick" ? { polygon: stageFill.polygon, front: stageFill.front, decks: stageLayout?.decks ?? [], curved: !!stageFill.smooth?.length } : null}
-            onPickFront={(front) => setStageFill((cur) => (cur?.phase === "pick" ? { ...cur, front } : cur))}
-            // A curve is redrawn, not dented: no grips on a round area's dozens of corners.
+            // While a rectangle is rounded or bowed the canvas shows the SHAPED outline (and the decks
+            // held to it); the state underneath stays the plain rectangle.
+            areaPreview={
+              stageFill?.phase === "pick"
+                ? {
+                    polygon: stagePreview?.shapedOutline ?? stageFill.polygon,
+                    front: stagePreview?.shapedOutline ? stagePreview.placement.stage.front : stageFill.front,
+                    decks: stageLayout?.decks ?? [],
+                    curved: !!stageFill.smooth?.length || !!stagePreview?.shapedOutline,
+                  }
+                : null
+            }
+            onPickFront={(front) =>
+              setStageFill((cur) => {
+                if (cur?.phase !== "pick") return cur;
+                // A click on the shaped outline names one of ITS edges: the plain rectangle's side
+                // nearest that edge's middle is the one meant.
+                const shown = stagePreview?.shapedOutline;
+                if (!shown) return { ...cur, front };
+                const a = shown[front];
+                const b = shown[(front + 1) % shown.length];
+                const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+                const dist = (i: number) => {
+                  const p = cur.polygon[i];
+                  const q = cur.polygon[(i + 1) % cur.polygon.length];
+                  const dx = q.x - p.x;
+                  const dy = q.y - p.y;
+                  const l2 = dx * dx + dy * dy || 1;
+                  const t = Math.max(0, Math.min(1, ((m.x - p.x) * dx + (m.y - p.y) * dy) / l2));
+                  return Math.hypot(m.x - (p.x + t * dx), m.y - (p.y + t * dy));
+                };
+                const nearest = cur.polygon.map((_, i) => i).reduce((best, i) => (dist(i) < dist(best) ? i : best), 0);
+                return { ...cur, front: nearest };
+              })
+            }
+            // A curve is redrawn, not dented: no grips on a round area's dozens of corners — nor on a
+            // shaped rectangle's; set the radius to 0 to pull its corners again.
             onAreaReshape={
-              stageFill?.phase === "pick" && stageFill.smooth?.length
+              stageFill?.phase === "pick" && (stageFill.smooth?.length || stagePreview?.shapedOutline)
                 ? undefined
                 : (polygon, front) => setStageFill((cur) => (cur?.phase === "pick" ? { ...cur, polygon, front } : cur))
             }
@@ -3602,7 +3673,9 @@ export function StudioScreen({
               <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
                 {stageFill.smooth?.length
                   ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — ״מידות״ בסרגל הבמה או הידיות"
-                  : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
+                  : stagePreview?.shapedOutline
+                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בסרגל; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
+                    : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
               </span>
             </div>
           )}
@@ -3646,6 +3719,7 @@ export function StudioScreen({
                   onRedraw={() => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape }))}
                   onResize={resizeStageArea}
                   onCommit={commitStageFill}
+                  onAddQuarter={(radiusMm) => void addQuarterPiece(radiusMm)}
                   onClose={() => setStageFill(null)}
                 />
               ) : (
@@ -3875,6 +3949,34 @@ export function StudioScreen({
       // Armed straight away: the reason it was made, mid-meeting, is to put it on the plan.
       arm(p.id);
       showHint(`${p.name} נוסף לקטלוג — לחצו על התוכנית כדי להניח`);
+    } else {
+      showHint("ההוספה לקטלוג נכשלה — נסו שוב");
+    }
+  }
+
+  /** The fill tool's "הוספה לקטלוג": a quarter-round corner piece of the rounded stage's radius, as a
+   *  stage-decks row drawn as a quarter-circle (its box one radius across, lib/studio/footprint.ts),
+   *  at the height of the decks the stage is being built from — and chosen for the stage at once,
+   *  so its corners stand on it instead of on cut decks. One row of the studio's own, through the
+   *  same action every catalog row goes through. */
+  async function addQuarterPiece(radiusMm: number) {
+    const r = Math.round(radiusMm);
+    const heightMm = stagePreview ? stageHeight(stagePreview.placement.stage, deckOf) : (deckTypes[0]?.heightMm ?? 600);
+    const p: Product = {
+      id: uid(),
+      name: `רבע עיגול R${Math.round(r / 10)}`,
+      category: "stage-decks",
+      layer: "floor",
+      dimensions: { diameterMm: r * 2, widthMm: r, depthMm: r, heightMm },
+      categoryFields: {},
+      spec: "פלטת פינה לבמה עם פינות מעוגלות",
+      styleTags: [],
+      variants: [],
+      appearance: { shape: "quarter-circle", content: "none" },
+    };
+    if (await saveProduct(p)) {
+      setStageFill((cur) => (cur?.phase === "pick" ? { ...cur, chosen: [...cur.chosen, p.id] } : cur));
+      showHint(`${p.name} נוסף לקטלוג ונבחר לבמה — אפשר לשנות לו מחיר ושם בקטלוג`);
     } else {
       showHint("ההוספה לקטלוג נכשלה — נסו שוב");
     }

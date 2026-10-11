@@ -50,6 +50,10 @@ export interface DeckType {
   /** Any other platform that is not a rectangle — a half-round, a triangle — as its outline about
    *  its own centre: also one piece, never laid by this fill, only stood whole (StageBuild.pieces). */
   outline?: Point[];
+  /** A QUARTER-ROUND piece — a corner platform — and its radius: what a stage with rounded corners
+   *  stands in each corner when the studio owns one of about the corner's radius
+   *  (lib/design-document/stage.ts quarterPieces). Carries `outline` too. */
+  quarterMm?: number;
 }
 
 export interface LaidDeck {
@@ -60,6 +64,12 @@ export interface LaidDeck {
   rotation: number;
   widthMm: number;
   depthMm: number;
+  /** A whole deck the crew CUTS to the stage's line — the corner of a rounded stage, the sliver of a
+   *  bowed front — drawn as `outline` (what is left of it) and counted as the whole deck it was. */
+  cut?: boolean;
+  /** Its shape where it is not the rectangle it was: a cut deck's remainder, a whole piece's own
+   *  outline. In the same frame as `centre`. */
+  outline?: Point[];
 }
 
 /** A rectangle that the chosen decks cover exactly, near the one drawn. */
@@ -103,6 +113,12 @@ export interface FillOptions {
    *  front is a point, and rows counted from it in whole deck depths can miss the stage entirely —
    *  a 4m disc of 244×122 sheets laid one sheet where three fit. */
   phases?: boolean;
+  /** The line the rows run ALONG, when it is not edge `front` itself: a CURVED front (a bowed stage,
+   *  a half-round facing out from its arc) is many short chords, and the first of them points the
+   *  way the curve happens to leave its end — rows laid along that are rows laid askew. Its
+   *  end-to-end chord is the line the stage is really built along. The rows still start at the
+   *  front: the grid begins at the outline's foremost point. */
+  axis?: readonly [Point, Point];
 }
 
 export const STAGE_TOLERANCE_MM = 50;
@@ -165,10 +181,11 @@ function longestEdge(poly: readonly Point[]): number {
   return best;
 }
 
-/** The frame a fill works in: x along the front edge, y running back into the stage. */
-function frameOf(polygon: readonly Point[], front: number) {
-  const a = polygon[front];
-  const b = polygon[(front + 1) % polygon.length];
+/** The frame a fill works in: x along the front edge (or the `axis` given instead of it), y running
+ *  back into the stage. */
+function frameOf(polygon: readonly Point[], front: number, axis?: readonly [Point, Point]) {
+  const a = axis ? axis[0] : polygon[front];
+  const b = axis ? axis[1] : polygon[(front + 1) % polygon.length];
   const theta = Math.atan2(b.y - a.y, b.x - a.x);
   const cos = Math.cos(theta);
   const sin = Math.sin(theta);
@@ -207,7 +224,7 @@ export function asRect(polygon: readonly Point[], front: number): { widthMm: num
  *  more, or one side EXACTLY the same length — a 244×40 strip shares no 10cm module with the 244×122
  *  sheet, but it is cut to the sheet's own 244cm to finish the depth of a row of them, which is what
  *  it is for. A 200×100 and a 122×244 share neither, and stay apart. */
-function families(types: readonly DeckType[]): DeckType[][] {
+export function families(types: readonly DeckType[]): DeckType[][] {
   const out: DeckType[][] = [];
   const sameSide = (o: DeckType, t: DeckType) =>
     [o.widthMm, o.depthMm].map(r10).some((s) => s === r10(t.widthMm) || s === r10(t.depthMm));
@@ -403,7 +420,7 @@ export function fillWithDecks(polygon: readonly Point[], types: readonly DeckTyp
   if (polygon.length < 3 || usable.length === 0 || areaMm2 <= 0) return empty;
 
   const tol = opts.toleranceMm ?? STAGE_TOLERANCE_MM;
-  const frame = frameOf(polygon, front);
+  const frame = frameOf(polygon, front, opts.axis);
   const local = polygon.map(frame.toLocal);
   const blocks = (opts.obstacles ?? []).map((ob) => ob.map(frame.toLocal));
   const bound = opts.within ? opts.within.map(frame.toLocal) : null;
@@ -699,6 +716,22 @@ if (isMain(import.meta.url)) {
   const levelOver = fillWithDecks(rect(4000, 0, 4000, 2000), [big], { within: rect(0, 0, 6000, 4000), exceed: true });
   assert(levelOver.decks.length === 2 && levelOver.decks.every((d) => d.centre.x + d.widthMm / 2 <= 6000), "a level never exceeds the stage it stands on");
   assert(fillWithDecks(rect(0, 0, 6000, 4000), [big], { exceed: true }).decks.length === 12, "an exact area is the same build either way");
+
+  // A curved front: the rows run along the curve's end-to-end chord, not along its first chord. A
+  // 6×4 whose front is bowed 30cm out: with the first chord as the axis every deck leans with it;
+  // with the chord as the axis the build is the plain rectangle's, squared to the sides.
+  {
+    const bowPts = Array.from({ length: 9 }, (_, k) => {
+      const x = -3000 + (6000 * k) / 8;
+      return { x, y: -300 * (1 - (x / 3000) ** 2) };
+    });
+    const bowed: Point[] = [...bowPts, { x: 3000, y: 4000 }, { x: -3000, y: 4000 }];
+    const askew = fillWithDecks(bowed, [big], { front: 0 });
+    assert(askew.decks.some((d) => d.rotation > 5 && d.rotation < 355), "(laid along a bow's first chord, the rows lean)");
+    const square = fillWithDecks(bowed, [big], { front: 0, axis: [bowPts[0], bowPts[8]] });
+    assert(square.decks.length >= askew.decks.length && square.decks.every((d) => d.rotation === 0), "laid along the bow's chord, the rows are square to the stage");
+    assert(square.decks.every((d) => d.centre.y - d.depthMm / 2 >= -300 - 60), "…and start at the front");
+  }
 
   const t0 = Date.now();
   fillWithDecks(rect(0, 0, 30000, 20000), [big, small, imperial]);
