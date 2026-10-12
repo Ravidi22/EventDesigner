@@ -27,6 +27,8 @@ import {
   Sofa,
   Droplets,
   Shapes,
+  Amphora,
+  TreeDeciduous,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
@@ -164,6 +166,11 @@ export const CATEGORIES: CategoryDef[] = [
   // flowers.ts) and typed only when it carries none. How many stems the supplier sells in a bunch
   // is a different question, and it stays where it lives — orderUnit.
   { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", flowers: true },
+  // The VESSEL — a vase, an urn, a footed bowl, a glass cylinder — as the studio stocks it: bought
+  // once and set again at every event, so owned. Not a centrepiece: that is what is arranged in it,
+  // used up and priced as a design, and a catalog that filed the 80cm gold vase there would count it
+  // as consumed every time it went out.
+  { id: "vases", label: "אגרטלים וכלים", group: "grp-table-design", defaultLayer: "table", icon: Amphora, dims: "round", fields: [] },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
@@ -210,6 +217,9 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "columns", label: "עמודים", group: "grp-accessories", defaultLayer: "floor", icon: Milestone, dims: "round", fields: [] },
   // Water features: a fountain is round far more often than not.
   { id: "fountains", label: "מזרקות", group: "grp-accessories", defaultLayer: "floor", icon: Droplets, dims: "round", fields: [] },
+  // Trees and standing greenery — an artificial blossom tree, an olive in a planter. Measured by its
+  // CANOPY, because that is what the plan has to keep clear of tables and what the client sees.
+  { id: "trees", label: "עצים וצמחייה", group: "grp-accessories", defaultLayer: "floor", icon: TreeDeciduous, dims: "round", fields: [] },
   // The long tail. "אחר" is the box for the thing the catalog has no name for yet — a prop, a sign,
   // a sculpture, a photo booth — so it is drawn on the plan at its measured size and counted on the
   // packing list rather than left off both for want of a category. Both shapes, because it is

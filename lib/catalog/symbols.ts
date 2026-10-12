@@ -23,6 +23,8 @@ export type SymbolKind =
   | "candlestick"
   | "flowers"
   | "centerpiece"
+  | "vase"
+  | "tree"
   | "chair"
   | "sofa"
   | "chandelier"
@@ -41,6 +43,8 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   candlesticks: "candlestick",
   "flower-arrangements": "flowers",
   centerpieces: "centerpiece",
+  vases: "vase",
+  trees: "tree",
   chairs: "chair",
   sofas: "sofa",
   chandeliers: "chandelier",

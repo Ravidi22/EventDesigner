@@ -36,6 +36,9 @@ const DEFAULT_TONE: Record<SymbolKind, string> = {
   candlestick: "#C9A24A",
   flowers: "#E8BCCE",
   centerpiece: "#E8BCCE",
+  // Glass, which most of a vase shelf is; a gold or a white one says so through its shade.
+  vase: "#EEF2F5",
+  tree: LEAF,
   chair: "#F7F6FC",
   sofa: "#ECE7F5",
   chandelier: "#C9A24A",
@@ -108,6 +111,12 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
       break;
     case "centerpiece":
       body = centerpiece(w, h, round, c, line);
+      break;
+    case "vase":
+      body = vase(w, h, round, c, line);
+      break;
+    case "tree":
+      body = tree(w, h, c, line);
       break;
     case "chair":
       body = round ? pouf(w, h, c, line) : chair(w, h, chairStyle ?? "dining", c, line);
@@ -369,6 +378,46 @@ function centerpiece(w: number, h: number, round: boolean, c: Colours, line: Lin
       <circle r={R} fill={c.print ? "#ffffff" : "#F4F1F8"} {...line} strokeOpacity={line.strokeOpacity * 0.6} />
       <circle r={R * 0.86} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.35} />
       {cluster(R * 0.78, c, line)}
+    </>
+  );
+}
+
+/** A vessel — a vase, an urn, a footed bowl: its rim, the opening inside it in the shade's darker
+ *  tone, and the foot showing faintly through. Empty, because what is arranged in it is its own item
+ *  (a centrepiece, an arrangement) and is drawn by that one. An oval bowl is an oval rim. */
+function vase(w: number, h: number, round: boolean, c: Colours, line: Line) {
+  const ring = (k: number, props: object) =>
+    round ? <ellipse rx={(w / 2) * k} ry={(h / 2) * k} {...props} /> : <rect x={(-w / 2) * k} y={(-h / 2) * k} width={w * k} height={h * k} rx={Math.min(w, h) * 0.12 * k} {...props} />;
+  return (
+    <>
+      {ring(1, { fill: c.tone, ...line })}
+      {ring(0.8, { fill: c.shade, fillOpacity: c.print ? 0 : c.shadeOpacity * 1.3, ...line, strokeOpacity: line.strokeOpacity * 0.6 })}
+      {ring(0.32, { fill: "none", ...line, strokeOpacity: line.strokeOpacity * 0.35 })}
+    </>
+  );
+}
+
+/** [radius, bearing] of each clump of a canopy, as fractions of its radius. */
+const TREE_CLUMPS: [number, number][] = [
+  [0.4, 0], [0.33, 44], [0.38, 80], [0.42, 122], [0.34, 166], [0.39, 204], [0.35, 246], [0.41, 284], [0.36, 326],
+];
+
+/** A tree from above: its canopy — a ring of overlapping clumps round a fuller middle, in the tree's
+ *  colour (white for a blossom tree, through its shade) — and the trunk at the centre. */
+function tree(w: number, h: number, c: Colours, line: Line) {
+  const rx = w / 2;
+  const ry = h / 2;
+  // Uneven on purpose — nine equal lobes read as a flower, not a tree. Each clump touches the edge.
+  const clumps = TREE_CLUMPS.map(([r, deg]) => ({ r, ...polar(1 - r, deg) }));
+  const soft = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  return (
+    <>
+      {clumps.map((p, i) => (
+        <ellipse key={i} cx={p.x * rx} cy={p.y * ry} rx={rx * p.r} ry={ry * p.r} fill={c.tone} {...soft} />
+      ))}
+      <ellipse rx={rx * 0.62} ry={ry * 0.62} fill={c.tone} />
+      <ellipse rx={rx * 0.4} ry={ry * 0.4} fill={c.shade} fillOpacity={c.print ? 0 : c.shadeOpacity} {...soft} strokeOpacity={line.strokeOpacity * 0.25} />
+      <circle r={Math.min(rx, ry) * 0.07} fill={c.print ? "#ffffff" : "#8A6A4F"} {...line} />
     </>
   );
 }
