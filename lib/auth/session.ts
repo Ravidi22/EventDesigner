@@ -22,6 +22,10 @@ import { sessions, users } from "@/lib/db/schema";
 import { SESSION_COOKIE as COOKIE } from "./cookie-name";
 
 const TTL_DAYS = 30;
+/** How long a session lasts when the person did NOT ask to be remembered. The cookie itself dies
+ *  with the browser; this is the server's own limit, for the browser that is never closed — or that
+ *  restores its session cookies on restart, which several do. */
+const UNREMEMBERED_TTL_HOURS = 24;
 
 /** Who the request is. Deliberately small: the fields every server action needs to answer "may you"
  *  and "which studio", and nothing that would go stale between sign-in and now. */
@@ -44,11 +48,16 @@ const hashToken = (token: string) => createHash("sha256").update(token).digest("
  *
  * ⚠ Only callable from a Server Action or Route Handler — a Server Component cannot set a cookie,
  * because by the time it renders the response headers are already on their way.
+ *
+ * `remember: false` is the sign-in form's unticked "זכור אותי": a cookie with no expiry, which the
+ * browser drops when it closes, over a row that lasts a day instead of a month. Everything else
+ * that starts a session — sign-up, an accepted invitation — is remembered, as it always was.
  */
-export async function createSession(userId: string): Promise<void> {
+export async function createSession(userId: string, { remember = true } = {}): Promise<void> {
   // 256 bits from the CSPRNG. base64url so it survives a cookie header without escaping.
   const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + TTL_DAYS * 24 * 60 * 60 * 1000);
+  const ttlHours = remember ? TTL_DAYS * 24 : UNREMEMBERED_TTL_HOURS;
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
 
   await db().insert(sessions).values({ userId, tokenHash: hashToken(token), expiresAt });
 
@@ -64,7 +73,8 @@ export async function createSession(userId: string): Promise<void> {
     // `secure` cookie would simply never be stored.
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    expires: expiresAt,
+    // No `expires` at all is what makes it a session cookie — not a short one.
+    ...(remember ? { expires: expiresAt } : {}),
   });
 }
 

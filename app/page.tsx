@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowLeft, Eye, Map, PackageCheck } from "lucide-react";
 import { Wordmark } from "@/components/wordmark";
 import { GlassCta } from "@/components/glass-cta";
+import { EntryMenu } from "@/components/entry-menu";
 
 const outputs = [
   {
@@ -29,15 +30,15 @@ export default function Home() {
       <section className="mesh grain relative flex min-h-[88vh] flex-col">
         <div className="mesh-scrim" />
 
-        <nav className="relative z-10 mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+        {/* z-20, one above the hero below it: the entry menu's panel hangs out of this bar and over
+            the headline, which comes later in the DOM. */}
+        <nav className="relative z-20 mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
           <Wordmark tone="on-dark" className="text-[28px]" />
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4">
             <Link href="/catalog" className="text-sm text-canvas/75 transition-colors hover:text-canvas">
               קטלוג
             </Link>
-            <Link href="/login" className="text-sm font-semibold text-canvas transition-colors hover:text-gold">
-              כניסה
-            </Link>
+            <EntryMenu />
           </div>
         </nav>
 

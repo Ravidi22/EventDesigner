@@ -65,6 +65,7 @@
     "check:runway": "tsx lib/production/runway.ts",
     "check:costs": "tsx lib/suppliers/cost-boundary.ts",
     "check:password": "tsx lib/auth/password.ts",
+    "check:google-sign-in": "tsx lib/auth/google-sign-in.ts",
     "check:access": "tsx lib/venues/access.ts",
     "check:files": "tsx lib/files/keys.ts",
     "check:sigv4": "tsx lib/files/sigv4.ts",

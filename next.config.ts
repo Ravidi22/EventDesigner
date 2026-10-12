@@ -1,6 +1,21 @@
+import { networkInterfaces } from "node:os";
 import type { NextConfig } from "next";
 
+/** This machine's own addresses, for `allowedDevOrigins` below. */
+const ownAddresses = Object.values(networkInterfaces())
+  .flat()
+  .filter((a) => a?.family === "IPv4")
+  .map((a) => a!.address);
+
 const nextConfig: NextConfig = {
+  // DEV ONLY. The dev server serves its scripts to the hostname it was started on — `localhost` —
+  // and refuses them to any other origin, so the same server opened as 127.0.0.1:3000, or from a
+  // tablet as 192.168.x.x:3000, sends the HTML and never hydrates it. Nothing says so on screen:
+  // the page looks finished and every button is dead, and the sign-in form — a real <form> —
+  // falls back to a native submit, which reloads the page and looks like a wrong password that
+  // gives no message. These are this machine's own names, not a wildcard.
+  allowedDevOrigins: ownAddresses,
+
   // A stray lockfile higher up the tree confuses Next's root inference; pin it here.
   turbopack: { root: __dirname },
 

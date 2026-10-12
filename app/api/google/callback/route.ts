@@ -9,6 +9,8 @@
 // other end of this URL is a designer who just clicked "אישור" on a Google screen; what they need is
 // to land back where they started with a line telling them what happened. `?google=` carries that.
 import { NextResponse } from "next/server";
+import { isSignInState } from "@/lib/auth/google-sign-in";
+import { completeGoogleSignIn } from "@/lib/auth/google-sign-in-callback";
 import { currentSession } from "@/lib/auth/session";
 import { googleConfig } from "@/lib/google/config";
 import { readState } from "@/lib/google/oauth";
@@ -25,6 +27,12 @@ function back(request: Request, outcome: string): NextResponse {
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
+
+  // TWO flows come home through this one URL, because it is the one redirect URI the Cloud project
+  // has registered: a calendar being connected by someone signed in, and — told apart by its
+  // state — "המשך עם Google" from the sign-in screen, by someone who is not. See
+  // lib/auth/google-sign-in.ts. Everything below this line is the calendar's.
+  if (isSignInState(params.get("state") ?? "")) return completeGoogleSignIn(request);
 
   // The designer pressed "ביטול" on Google's consent screen. Not an error — just a no.
   const denied = params.get("error");

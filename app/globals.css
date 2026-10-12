@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* A window too low for a screen's comfortable spacing — a laptop at 125% display scaling leaves
+   about 500px under the browser's own chrome. `short:` is how a screen that must fit in ONE
+   viewport (the account screens) gives up air before it gives up content. */
+@custom-variant short (@media (max-height: 760px));
+
 /* Design tokens — DESIGN.md "EvE": indigo-violet primary, a warm mesh gradient for brand
    moments, grain over every gradient, pill geometry. Light-only by design. */
 @theme {
@@ -191,6 +196,29 @@ body {
   }
 }
 
+/* The mesh, hushed: rose low on one side, periwinkle opposite, lavender between — washed almost
+   to the page, WITHOUT the dark core (nothing white is written on it) and without the amber
+   shoulder, which at this strength read as a yellow stain in the corner rather than as light. The ground behind the account screens' card, where the full mesh was
+   louder than the form standing on it. Dark ink only; still wears .grain. */
+.mesh-soft {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(160deg, #f4f1fb 0%, #ece7f8 48%, #f3edf8 100%);
+}
+.mesh-soft::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  z-index: 0;
+  background:
+    radial-gradient(36% 34% at 8% 70%, rgb(243 212 226 / 0.8) 0%, rgb(243 212 226 / 0) 64%),
+    radial-gradient(44% 42% at 34% 92%, rgb(226 208 244 / 0.8) 0%, rgb(226 208 244 / 0) 66%),
+    radial-gradient(40% 42% at 92% 12%, rgb(207 214 248 / 0.9) 0%, rgb(207 214 248 / 0) 64%),
+    radial-gradient(46% 44% at 72% 62%, rgb(217 207 245 / 0.75) 0%, rgb(217 207 245 / 0) 68%);
+  animation: float-mesh 16s ease-in-out infinite;
+}
+
 /* The mesh's core is dark enough to carry white type on its own, but the amber shoulder is not.
    This vertical scrim deepens the top and bottom bands — where copy actually lands — and leaves
    the middle alone so the core stays vivid (DESIGN.md — The Scrim Rule). Direction-agnostic:
@@ -301,6 +329,48 @@ body {
   35% {
     transform: scale(1.35);
   }
+}
+
+/* The sign-in button's arrow. At rest it leans toward where it points when the button is hovered;
+   once pressed it runs: out past the puck's edge, back in from the other side, for as long as the
+   sign-in takes. Physical X on purpose — the arrow is ArrowLeft, and it travels the way it points.
+   Collapsed by the reduced-motion block below, where "מתחברים…" carries the state alone. */
+.arrow-nudge {
+  transition: transform 260ms var(--ease-fluid);
+}
+.group:hover .arrow-nudge {
+  transform: translateX(-3px);
+}
+.arrow-run {
+  animation: arrow-run 880ms var(--ease-fluid) infinite;
+}
+@keyframes arrow-run {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  45% {
+    transform: translateX(-150%);
+    opacity: 0;
+  }
+  46% {
+    transform: translateX(150%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* A field the browser filled in stays the white every other field is. Chrome paints its own pale
+   blue over `background`, and the only thing that covers it is an inset shadow the size of the box. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--color-canvas) inset;
+  -webkit-text-fill-color: var(--color-ink);
+  caret-color: var(--color-ink);
 }
 
 /* Consistent focus ring across the surface. */

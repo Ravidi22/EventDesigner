@@ -29,8 +29,13 @@ const AUTH_PAGES = ["/login", "/signup"];
  *
  * The token in the path is not a secret this layer can leak: it goes no further than the server
  * component that resolves it, and an invalid one renders a dead-link page rather than an error.
+ *
+ *
+ * `/api/google/callback` is where Google returns a browser — including one that is signing IN,
+ * which is signed out by definition. Its calendar half checks the session itself and sends a
+ * signed-out caller away, so nothing is opened by listing it here.
  */
-const PUBLIC = [...AUTH_PAGES, "/join", "/"];
+const PUBLIC = [...AUTH_PAGES, "/join", "/api/google/callback", "/"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

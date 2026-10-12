@@ -8,7 +8,19 @@
 // browser as a generic "an error occurred", which is the right amount of detail for a bug and the
 // wrong amount for "that password is incorrect" — a person needs to be told which field to fix.
 import { and, eq, gt, sql } from "drizzle-orm";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { checkRedirectUri, googleConfig } from "@/lib/google/config";
+import { redirectUriBlocks } from "@/lib/google/types";
+import {
+  SIGN_IN_NONCE_COOKIE,
+  SIGN_IN_TTL_MS,
+  safeNext,
+  signInCookiePath,
+  signInUrl,
+  signSignInState,
+} from "./google-sign-in";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
@@ -64,6 +76,8 @@ export async function signUp(input: {
   name: string;
   email: string;
   password: string;
+  /** "זכור אותי", as on the sign-in form. Anything but a literal true is a no. */
+  remember?: boolean;
 }): Promise<AuthResult> {
   // The kind arrives from a form the person controls, so it is checked against the two values that
   // exist rather than cast — an unrecognised kind must not fall through to a default that grants
@@ -152,7 +166,7 @@ export async function signUp(input: {
     }
   }
 
-  await createSession(userId);
+  await createSession(userId, { remember: input?.remember === true });
   return { home: HOME_FOR[kind] };
 }
 
@@ -217,7 +231,12 @@ async function claimOrganization(studioName: string): Promise<string> {
   return org.id;
 }
 
-export async function signIn(input: { email: string; password: string }): Promise<AuthResult> {
+export async function signIn(input: {
+  email: string;
+  password: string;
+  /** "זכור אותי". Anything but a literal true is a no — this arrives from a form. */
+  remember?: boolean;
+}): Promise<AuthResult> {
   const email = normalizeEmail(String(input?.email ?? ""));
   const password = String(input?.password ?? "");
   if (!email || !password) return { error: "יש להזין אימייל וסיסמה" };
@@ -236,11 +255,67 @@ export async function signIn(input: { email: string; password: string }): Promis
   if (!user || !ok) return { error: "האימייל או הסיסמה שגויים", field: "password" };
 
   await pruneExpiredSessions();
-  await createSession(user.id);
+  await createSession(user.id, { remember: input?.remember === true });
   // ONE sign-in form for both kinds, on purpose. Which half of the app you belong to is a fact
   // about your account, not a thing to make you declare at the door — and a chooser on the sign-in
   // screen would be a way to ask "does this email belong to a designer?" without a password.
   return { home: HOME_FOR[user.kind] };
+}
+
+/**
+ * The same sign-in, for the form posting ITSELF — the path taken when the page's script never ran.
+ *
+ * The sign-in screen is the one screen that must work when nothing else does: with the form's
+ * onSubmit dead (a script blocked, an extension, a dev server opened under a name it will not serve
+ * its scripts to), pressing כניסה used to reload the page and say nothing, which reads as a wrong
+ * password with no message. As the form's `action`, this is what the browser does instead: it
+ * answers with a redirect either way — onward, or back to the form with `?error=` to explain.
+ */
+export async function signInFromForm(formData: FormData): Promise<void> {
+  const next = safeNext(formData.get("next"));
+  const result = await signIn({
+    email: String(formData.get("email") ?? ""),
+    password: String(formData.get("password") ?? ""),
+    remember: formData.get("remember") === "on",
+  });
+  if (result.error) {
+    const query = new URLSearchParams({ error: "credentials" });
+    if (next) query.set("next", next);
+    redirect(`/login?${query}`);
+  }
+  redirect(next ?? result.home ?? "/dashboard");
+}
+
+/**
+ * Begin "המשך עם Google": leave the nonce on this browser and hand back where to send it.
+ *
+ * An action rather than a link for the cookie's sake — the nonce has to be set by the same click
+ * that mints the state it is half of. Refused before the browser leaves when the callback cannot be
+ * reached from here, for the reason `startGoogleConnect` gives.
+ */
+export async function startGoogleSignIn(input: {
+  remember?: boolean;
+  next?: string | null;
+}): Promise<{ url: string } | { error: string }> {
+  const config = googleConfig();
+  if (!config || redirectUriBlocks(checkRedirectUri(config))) {
+    return { error: "כניסה עם Google אינה זמינה כאן. התחברו עם אימייל וסיסמה." };
+  }
+
+  const { state, nonce } = signSignInState(
+    { remember: input?.remember === true, next: safeNext(input?.next) },
+    config,
+  );
+  const store = await cookies();
+  store.set(SIGN_IN_NONCE_COOKIE, nonce, {
+    httpOnly: true,
+    // Lax, not strict: the cookie has to ride the top-level navigation BACK from Google.
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: signInCookiePath(config),
+    maxAge: SIGN_IN_TTL_MS / 1000,
+  });
+  return { url: signInUrl(state, config) };
 }
 
 /**

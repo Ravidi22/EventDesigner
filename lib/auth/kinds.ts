@@ -23,6 +23,14 @@ export const KIND_LABEL: Record<AccountKind, string> = {
   client: "בעל אירוע",
 };
 
+/** The door each kind comes in by — the landing page's entry menu, and the sign-in screen's title
+ *  when it was reached through one. ONE sign-in form still serves both (see signIn); this names the
+ *  door, it does not check who is at it. */
+export const KIND_ENTRY: Record<AccountKind, string> = {
+  studio: "כניסה לספקים",
+  client: "כניסה לבעלי אירוע",
+};
+
 export const KIND_HINT: Record<AccountKind, string> = {
   studio: "אני מעצב אירועים או ספק — הקטלוג, המתחמים והאירועים שלי מנוהלים כאן.",
   client: "יש לי אירוע קרוב — אני רוצה לראות את הסקיצה והתוכנית שהמעצב הכין.",
