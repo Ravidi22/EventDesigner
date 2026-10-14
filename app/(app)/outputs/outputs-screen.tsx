@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, Share2, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
@@ -27,6 +27,7 @@ import { sheetScale } from "./sheet-frame";
 import { SetCover, type SetEntry } from "./set-cover";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
+import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
 
 type View = "packing" | "map" | "quote";
 const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר" };
@@ -68,6 +69,10 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
   const [view, setView] = useState<View>("quote");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("auto");
+  // The booklet in colour (the venue's lawn, pool, trees) or greyed for a crew that gets photocopies.
+  // ponytail: a CSS grayscale over the whole sheet, not a separate ink drawing — add hatches if grey
+  // canopies prove too heavy on a copier.
+  const [mono, setMono] = useState(false);
   const [version, setVersion] = useState(1);
   // The studio's railing rule, for the stage sheet (settings → במות). Off until read, and off if
   // the read fails — the sheet then simply marks no railing, which is what an unset rule means.
@@ -219,11 +224,9 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
   // F-6.4: every export carries a date and a running number — and now a ROW, which also seals the
   // drawing it was made from, so a sheet in a crew's hands stays checkable against the design it
   // came from rather than merely being numbered.
-  const print = async () => {
-    if (!event) {
-      window.print();
-      return;
-    }
+  // Records the export and paints its number on the sheets before they leave — print or share.
+  const stamp = async () => {
+    if (!event) return;
     let printed = version;
     try {
       printed = await recordExport(event.id, EXPORT_OF[view]);
@@ -235,8 +238,54 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
     // Let React paint the number before the print dialog freezes the page — the sheet has to carry
     // the number that was actually recorded, not the one it was showing a moment ago.
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return () => setVersion(printed + 1);
+  };
+  const print = async () => {
+    const done = await stamp();
     window.print();
-    setVersion(printed + 1);
+    done?.();
+  };
+
+  // THE BOOKLET AS A FILE, for WhatsApp — the quote's own path (./quote-pdf.ts): every sheet
+  // photographed at its true size and bound in the browser. A share the browser refuses for a stale
+  // tap keeps the file, and the next tap shares it — as long as the set has not changed since.
+  const sheetsRef = useRef<HTMLDivElement>(null);
+  const [sharing, setSharing] = useState(false);
+  const [shareNote, setShareNote] = useState<string | null>(null);
+  const pending = useRef<{ key: string; file: File } | null>(null);
+  const setKey = JSON.stringify([entries, paper, orient, mono]);
+  const shareTitle = ["חוברת הפקה", event?.clientName?.trim()].filter(Boolean).join(" — ");
+  const share = async () => {
+    if (sharing) return;
+    setShareNote(null);
+    setSharing(true);
+    try {
+      let file = pending.current?.key === setKey ? pending.current.file : null;
+      let done: (() => void) | undefined;
+      if (!file) {
+        done = await stamp();
+        const pages = [...(sheetsRef.current?.querySelectorAll<HTMLElement>("article.sheet") ?? [])];
+        file = await buildQuotePdf(pages, quoteFileName(event?.clientName, event?.date, "חוברת הפקה"), {
+          title: shareTitle,
+          author: studioName || undefined,
+          trueSize: true,
+        });
+      }
+      const outcome = await shareFile(file, shareTitle);
+      if (outcome === "blocked") {
+        pending.current = { key: setKey, file };
+        setShareNote("ה-PDF מוכן — לחצו שוב על שיתוף");
+      } else {
+        pending.current = null;
+        if (outcome === "downloaded") setShareNote("הדפדפן לא תומך בשיתוף קבצים — ה-PDF הורד");
+      }
+      done?.();
+    } catch (e) {
+      console.error("booklet PDF failed", e);
+      setShareNote("הפקת ה-PDF נכשלה — נסו שוב");
+    } finally {
+      setSharing(false);
+    }
   };
 
   const today = new Date().toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
@@ -419,10 +468,31 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
             </Seg>
           </div>
 
+          {view === "map" && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-caption text-muted">צבע</span>
+              <Seg>
+                <SegItem active={!mono} onClick={() => setMono(false)} small>
+                  צבעוני
+                </SegItem>
+                <SegItem active={mono} onClick={() => setMono(true)} small>
+                  שחור-לבן
+                </SegItem>
+              </Seg>
+            </div>
+          )}
+
           <Button onClick={print} className="w-full">
             <Printer className="h-4 w-4" strokeWidth={2} />
             {view === "map" ? "הפקת חוברת PDF" : "הדפסה / PDF"}
           </Button>
+          {view === "map" && (
+            <Button variant="outline" onClick={share} disabled={sharing || setPages.length === 0} className="w-full">
+              <Share2 className="h-4 w-4" strokeWidth={2} />
+              {sharing ? "מכין PDF…" : "שיתוף החוברת"}
+            </Button>
+          )}
+          {view === "map" && shareNote && <p role="status" className="text-center text-caption text-muted">{shareNote}</p>}
           {view === "map" && (
             <p className="nums text-center text-caption text-muted">
               {setPages.length} {setPages.length === 1 ? "עמוד" : "עמודים"} · {sheetTotal} {sheetTotal === 1 ? "גיליון" : "גיליונות"}
@@ -437,7 +507,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
           so this IS the preview. Scrolling lives here rather than on <main>, which keeps the
           toolbar pinned while a long document runs past it. */}
         <div className="min-h-0 flex-1 overflow-auto print:overflow-visible">
-          <div className="flex flex-col items-center gap-4 p-5 print:block print:p-0">
+          <div ref={sheetsRef} className="flex flex-col items-center gap-4 p-5 print:block print:p-0">
           {/* `no-print` on purpose — this explains the sheet to whoever is producing it; it is not
               part of what a client or a crew receives. The list and the quote carry their own
               notice, because both are rendered straight from the meeting flow too, where this
@@ -470,7 +540,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
               const textPage = (key: string, body: React.ReactNode, fixed = false) => (
                 <article
                   key={key}
-                  className="sheet bg-canvas shadow-lifted"
+                  className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`}
                   style={{ ...pageOf(textOrient), width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
                 >
                   {body}
@@ -510,13 +580,13 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
                 );
               if (pg.kind === "detail")
                 return (
-                  <article key={`detail-${pg.kit.key}`} className="sheet bg-canvas shadow-lifted" style={pageOf(pg.o)}>
+                  <article key={`detail-${pg.kit.key}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
                     <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
                   </article>
                 );
               const { sheet, z } = pg;
               return (
-                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className="sheet bg-canvas shadow-lifted" style={pageOf(pg.o)}>
+                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
                   <PlacementMap
                     doc={z.doc}
                     plan={{ ...plan, zones: z.zone ? [z.zone] : plan.zones, bounds: z.bounds }}

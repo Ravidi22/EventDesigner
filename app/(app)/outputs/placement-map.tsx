@@ -578,71 +578,9 @@ export function PlacementMap({
               </g>
             );
           })}
-          {/* Fixed features (pool, built stage, bar) — outline + label, B&W-safe */}
-          {colour && groundFirst(structure.features).map((f) => <ColourFeature key={f.id} f={f} den={den} />)}
-          {!colour && structure.features.map((f) => {
-            // Stairs and a ramp print as what they are — step edges and a walking line — in the
-            // tread tone a stage's own flight prints in (below), and carry no name.
-            if (isClimb(f.kind)) {
-              return (
-                <g key={f.id} transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
-                  <g transform={`translate(${f.x} ${f.y})`}>
-                    <ClimbGlyph
-                      f={f}
-                      turnDeg={f.rotationDeg}
-                      fill="#f7f6fa"
-                      stroke={INK_SOFT}
-                      strokeWidth={LINE_WEIGHTS.feature}
-                      lineWidth={LINE_WEIGHTS.annotation}
-                      ink={INK_SOFT}
-                      textSize={2.6 * den}
-                      textFill={INK_SOFT}
-                      alertFill={INK}
-                    />
-                  </g>
-                </g>
-              );
-            }
-            // HATCHED BY KIND, because on paper a tint is not a distinction. Every feature used to
-            // fill with the same #f0eef5, so a pool and a built stage printed as the same box with
-            // different words in it — and photocopied, the tint goes to flat grey and even that
-            // much is gone. Diagonal for a stage, cross for a pool; anything else keeps the plain
-            // outline it had. The pattern is the fill, so it survives black and white and a fax.
-            const hatch = f.kind === "stage" ? "url(#hatch-diagonal)" : f.kind === "pool" ? "url(#hatch-cross)" : "#ffffff";
-            const resolved = resolveStyle(f.style, "monochrome", { fill: hatch, stroke: INK_SOFT, strokeWidth: LINE_WEIGHTS.feature });
-            const common = {
-              fill: resolved.fill,
-              stroke: resolved.stroke,
-              strokeWidth: resolved.strokeWidth,
-              strokeDasharray: resolved.dashArray.length ? resolved.dashArray.join(" ") : undefined,
-              vectorEffect: "non-scaling-stroke" as const,
-            };
-            // Stairs are floor the crew cannot put a table on, so they print with the stage rather
-            // than being screen-only chrome. World coordinates already, hence outside the rotation.
-            const flights = stairsFlights(f);
-            return (
-              <g key={f.id}>
-                {flights.map((stairs, n) => (
-                  <g key={n}>
-                    <path d={outlinePathD(stairs.outline)} fill="#f7f6fa" stroke={INK_SOFT} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
-                    {stairs.nosings.map(([p, q], i) => (
-                      <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={INK_SOFT} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
-                    ))}
-                  </g>
-                ))}
-                <g transform={`rotate(${f.rotationDeg} ${f.x} ${f.y})`}>
-                  {/* Same resolver the editor draws with (components/footprint-shape.tsx) — a ח bar
-                      printed as a solid block is the crew told to fill the floor the staff stand in. */}
-                  <g transform={`translate(${f.x} ${f.y})`}>
-                    <FootprintShape footprint={featureFootprint(f)} {...common} />
-                  </g>
-                  <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
-                    {f.label}
-                  </text>
-                </g>
-              </g>
-            );
-          })}
+          {/* Venue features in their own colours, as the quote and the studio draw them — the crew
+              sheets too: a lawn, a palm and a pool read faster in colour than as labelled outlines. */}
+          {groundFirst(structure.features).map((f) => <ColourFeature key={f.id} f={f} den={den} />)}
 
           {/* THE FLOOR, back to front (stackOrder). Tables: "full" is the studio's own shape and style;
               "ghost" flattens every table to the same faint dot pattern with no number — a rigger
@@ -1240,8 +1178,8 @@ function groundFirst(features: StructureFeature[]): StructureFeature[] {
 }
 
 /** A venue feature as the studio draws it (venue-plan.tsx, FeatureNode): a plant is its picture, a
- *  surface its material, anything else its outline in its own style with its name — never the
- *  labelled circle the crew sheets print a palm as. */
+ *  surface its material, anything else its outline in its own style with its name. Every sheet —
+ *  crew and quote — draws the venue this way. */
 function ColourFeature({ f, den }: { f: StructureFeature; den: number }) {
   const flights = stairsFlights(f);
   const style = resolveStyle(f.style, "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.feature });
@@ -1286,12 +1224,13 @@ function ColourFeature({ f, den }: { f: StructureFeature; den: number }) {
             />
           )}
         </g>
-        {f.kind !== "plant" && f.kind !== "surface" && !isClimb(f.kind) && f.label && (
-          <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
-            {f.label}
-          </text>
-        )}
       </g>
+      {/* Upright, outside the turn — a name drawn at the feature's angle reads as a mark. */}
+      {f.kind !== "plant" && f.kind !== "surface" && !isClimb(f.kind) && f.label && (
+        <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
+          {f.label}
+        </text>
+      )}
     </g>
   );
 }

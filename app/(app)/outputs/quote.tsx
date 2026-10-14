@@ -345,7 +345,8 @@ export function Quote({
       const file = readyFile ?? (await makeFile());
       setBusy(null);
       await deliver(file);
-    } catch {
+    } catch (e) {
+      console.error("quote PDF failed", e);
       // Said out loud rather than swallowed: a designer who believes a quote went out, and a
       // client who never received one, is the worst outcome this screen has.
       setNotice({ tone: "warn", text: "הפקת ה-PDF נכשלה — נסו שוב" });
