@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CalendarSearch, Camera, Check, ChevronDown, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { Venue } from "@/lib/venues/storage";
@@ -102,7 +102,7 @@ export function VenueSwitcher({
   };
   // Saves only a real change — an empty name is refused by the server (and would throw), and an
   // unchanged one is a round trip for nothing.
-  const commitRename = () => {
+  const commitRename = useCallback(() => {
     const draft = draftRef.current;
     draftRef.current = null;
     setRenamingId(null);
@@ -110,12 +110,12 @@ export function VenueSwitcher({
     const name = draft.name.trim();
     if (!name || name === draft.original) return;
     onRename(draft.id, name).catch(() => setEditError({ venueId: draft.id, message: "לא ניתן לשמור את השם" }));
-  };
+  }, [onRename]);
 
   // Closing the dropdown always drops any error from a previous attempt. Done at every
   // call site that closes the menu, not in an effect keyed on `open`: an effect that turns around
   // and calls setState the moment it sees the closed value is just this same reset one render late.
-  const closeMenu = () => {
+  const closeMenu = useCallback(() => {
     // A name still being typed is SAVED by closing, not thrown away. This used to be left to the
     // input's blur, but an outside click closes the menu on pointerdown — before the browser moves
     // focus — so the input was already gone when blur would have fired, and the new name with it.
@@ -125,7 +125,7 @@ export function VenueSwitcher({
     setOpen(false);
     setDeleteError(null);
     setEditError(null);
-  };
+  }, [commitRename]);
 
   useEffect(() => {
     if (!open) return;
@@ -141,7 +141,7 @@ export function VenueSwitcher({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [open, closeMenu]);
 
   // Clicking the avatar while editing picks the venue's picture. Uploaded straight to storage
   // (lib/files), and only the returned URL goes to the server.

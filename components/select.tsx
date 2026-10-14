@@ -88,6 +88,7 @@ export function Select({
       <button
         type="button"
         id={id}
+        role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}

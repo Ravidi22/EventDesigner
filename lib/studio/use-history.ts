@@ -34,6 +34,10 @@ export interface History<T> {
   canRedo: boolean;
 }
 
+const apply = <T,>(next: T | ((prev: T) => T), prev: T): T =>
+  typeof next === "function" ? (next as (p: T) => T)(prev) : next;
+const push = <T,>(past: T[], present: T) => [...past, present].slice(-MAX_HISTORY);
+
 export function useHistory<T>(initial: T | (() => T), opts: { keyboard?: boolean } = {}): History<T> {
   const [stack, setStack] = useState<Stack<T>>(() => ({
     past: [],
@@ -43,10 +47,6 @@ export function useHistory<T>(initial: T | (() => T), opts: { keyboard?: boolean
   // Whether a gesture is open. A ref rather than state: it is read and written within a single
   // pointermove and must not wait for a render to take effect.
   const open = useRef(false);
-
-  const apply = (next: T | ((prev: T) => T), prev: T): T =>
-    typeof next === "function" ? (next as (p: T) => T)(prev) : next;
-  const push = (past: T[], present: T) => [...past, present].slice(-MAX_HISTORY);
 
   const set = useCallback((next: T | ((prev: T) => T)) => {
     open.current = false;

@@ -402,9 +402,9 @@ function PhotoBoard({ photos }: { photos: QuotePhoto[] }) {
   return (
     <div className={`mt-3 grid gap-2 ${cols}`}>
       {photos.map((ph) => (
-        // eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx
         // A catalog photo is a product shot — a tall vase cropped to the box showed only its stem — so
         // it is shown whole on white; a gallery photo is a room and fills its box.
+        // eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx
         <img
           key={ph.id}
           src={ph.src}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -67,7 +67,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [headerSearch, setHeaderSearch] = useState("");
+  // Keyed by the page it was typed on, so a page never reads the previous page's text.
+  const [search, setSearch] = useState({ pathname: "", value: "" });
   const [creating, setCreating] = useState(false);
   // Venues come from the (app) layout's server-side read, through VenuesProvider — the switcher does
   // not fetch them, and neither does anything else that needs them. The selection itself still lives
@@ -85,13 +86,11 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
   // whatever page you land on next.
-  useEffect(() => {
-    setHeaderSearch("");
-  }, [pathname]);
+  const headerSearch = search.pathname === pathname ? search.value : "";
+  const setHeaderSearch = useCallback((value: string) => setSearch({ pathname, value }), [pathname]);
 
   const meta = TITLES.find((t) => t.test(pathname));
   const settingsActive = pathname.startsWith("/settings");
-  const isCatalog = pathname.startsWith("/catalog");
   // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
   // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
   const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/production");

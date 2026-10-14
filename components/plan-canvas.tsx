@@ -375,7 +375,6 @@ export function PlanCanvas({
   onMoveBar,
   onUpdateStage,
   onUpdateBar,
-  onToggleWallLock,
   onCommit,
   lengthUnit = "m",
   drawAngleStepDeg = 5,
@@ -1421,11 +1420,7 @@ export function PlanCanvas({
     () => ({ clientToMm, mm: (px: number) => px * mmPerPx, snap: snapHost, endSnap }),
     [clientToMm, mmPerPx, snapHost, endSnap],
   );
-  // The compiler's lint sees `snap` reach a ref (latest) and assumes a layer might call it while
-  // rendering; no layer does — it is the drag pull, called from pointer handlers.
-  // eslint-disable-next-line react-hooks/refs
   const backdropNode = useMemo(() => (typeof backdrop === "function" ? backdrop(layerCtx) : backdrop), [backdrop, layerCtx]);
-  // eslint-disable-next-line react-hooks/refs
   const overlayNode = useMemo(() => (typeof overlay === "function" ? overlay(layerCtx) : overlay), [overlay, layerCtx]);
 
   const entryOpen = entry !== null;

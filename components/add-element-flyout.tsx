@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ChevronUp, Search as SearchIcon, Shapes, type LucideIcon } from "lucide-react";
 
 // The add-element trigger and its flyout — a searchable gallery of cards instead of a flat text
@@ -63,9 +63,8 @@ export function AddElementFlyout({
   // moment of the click that opens it (a DOM read the trigger's own handler is already in a position
   // to make), not in an effect reacting to `open` — there is nowhere else `open` ever turns true.
   const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
-  useEffect(() => {
-    if (!open) setSearch("");
-  }, [open]);
+  // A closed flyout holds no search; adjusted during render rather than one effect late.
+  if (!open && search) setSearch("");
   const query = search.trim();
   const filtered = query ? items.filter((t) => t.label.includes(query)) : items;
   const TriggerIcon = triggerIcon ?? Shapes;

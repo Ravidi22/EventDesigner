@@ -84,11 +84,13 @@ export function DateField({
   const cellRefs = useRef(new Map<string, HTMLButtonElement>());
   const today = new Date();
 
-  // Re-sync the visible month to the field's own value each time the popover opens.
-  useEffect(() => {
+  // Re-sync the visible month to the field's own value each time the popover opens — adjusted
+  // during render, so the first open frame already shows the right month.
+  const [openFor, setOpenFor] = useState(open);
+  if (open !== openFor) {
+    setOpenFor(open);
     if (open) setFocusDate(selected ?? new Date());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
 
   useEffect(() => {
     if (!open) return;

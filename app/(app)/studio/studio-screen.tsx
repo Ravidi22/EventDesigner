@@ -105,9 +105,7 @@ import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
-import { Bar, BarButton } from "@/components/inspector-bar";
-import { Button } from "@/components/button";
-import { AlignCenterVertical, BringToFront, Copy, Group, Grid2x2Plus, SendToBack, Trash2, X } from "lucide-react";
+import { AlignCenterVertical, BringToFront, Copy, Group, SendToBack, Trash2, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
 // A plain import now that the canvas is the app's shared SVG one: it renders on the server like any
 // other component, so there is nothing left to defer and no "loading the studio" flash to cover.
@@ -194,6 +192,21 @@ type SpacingUnit = {
   polysAt: ItemGeometry["polysAt"];
   members: ItemGeometry[];
 };
+
+/** A stage, or a piece of one: anything from "במות" / "פלטות במה" standing free on the floor —
+ *  archived rows included, so an old platform still on a plan can still become a stage — of ANY
+ *  shape whose drawing is one piece: a rectangle, a disc, a half-round, a triangle. (Only the
+ *  rectangle and the disc used to be; a half-round set against a stage stayed a plain item, with no
+ *  stairs of its own and nothing to merge with.) Reads only the catalog, so it lives outside the
+ *  component. */
+function isStagePiece(p: Placement | undefined): p is Placement {
+  if (!p || p.tableId || p.perch) return false;
+  if (p.stage) return true;
+  const product = resolve(p.variantId)?.product;
+  if (!product || !STAGE_PIECE_CATEGORIES.includes(product.category)) return false;
+  if (isRoundPiece(product) || !isShapedPiece(product)) return true;
+  return pieceOutline(product, p.sizeMm) !== null;
+}
 
 export function StudioScreen({
   mode = "full",
@@ -1765,12 +1778,15 @@ export function StudioScreen({
   /** …and, for one stage, from the other stages too: a side pushed flush against another stage (and
    *  not merged with it) needs no stairs, no skirt, and is not an open edge. Every question asked
    *  about one stage's edges goes through this, whether the stage was drawn or laid by hand. */
-  const wallDistanceFor = (stageId: string | undefined) => {
-    const others = doc.placements
-      .filter((x) => x.stage && x.id !== stageId)
-      .map((x) => stageOutlineInRoom(x as StagePlacement));
-    return others.length ? besideNeighbours(wallDistance, others) : wallDistance;
-  };
+  const wallDistanceFor = useCallback(
+    (stageId: string | undefined) => {
+      const others = doc.placements
+        .filter((x) => x.stage && x.id !== stageId)
+        .map((x) => stageOutlineInRoom(x as StagePlacement));
+      return others.length ? besideNeighbours(wallDistance, others) : wallDistance;
+    },
+    [doc.placements, wallDistance],
+  );
 
   /** A template's own finish rows, so they win over the studio's defaults when it is placed. */
   const templateFinishes = (st: StageBuild): Partial<StageBuild> =>
@@ -1876,7 +1892,7 @@ export function StudioScreen({
       showHint(`נוספה במה — ${count} פלטות, ומדרגות בכל צד פתוח. לחיצה על מדרגות מחליפה אותן בבנקט או במחסום`);
     }
     setStageFill(null);
-  }, [stageFill, stagePreview, act, batch, doc.placements, stageParts, wallDistance, ensureStageParts, landNew]);
+  }, [stageFill, stagePreview, act, batch, doc.placements, stageParts, wallDistanceFor, ensureStageParts, landNew]);
 
   /** The one selected stage, if the selection is exactly that. */
   const soleStage = useMemo(() => {
@@ -1896,7 +1912,7 @@ export function StudioScreen({
     const out: Record<string, EdgeRun[]> = {};
     for (const p of doc.placements) if (p.stage) out[p.id] = railingRuns(p as StagePlacement, deckOf, railingAboveMm, wallDistanceFor(p.id));
     return out;
-  }, [doc.placements, railingAboveMm, wallDistance]);
+  }, [doc.placements, railingAboveMm, wallDistanceFor]);
 
   const stagePanel = useMemo<StagePanel | null>(() => {
     if (!soleStage) return null;
@@ -1981,7 +1997,7 @@ export function StudioScreen({
       stairsCounted: !!(stage.stairsVariant ?? stageParts.stairsVariant),
       skirtCounted: !!(stage.skirtVariant ?? stageParts.skirtVariant),
     };
-  }, [soleStage, railingAboveMm, stageRailings, wallDistance, activeEdge, doc.placements, stageParts, catalog]);
+  }, [soleStage, railingAboveMm, stageRailings, wallDistanceFor, activeEdge, doc.placements, stageParts, catalog]);
 
   /** A rectangular stage typed to an exact size: the back stays where it stands and the front moves
    *  toward the room — what pulling its front handle does — with no snapping at all. */
@@ -2253,7 +2269,7 @@ export function StudioScreen({
       });
       if (patch.kind) ensureStageParts();
     },
-    [soleStage, patchStage, doc.placements, batch, ensureStageParts],
+    [soleStage, patchStage, doc.placements, batch, ensureStageParts, wallDistanceFor],
   );
 
   const setSurface = useCallback(
@@ -2485,7 +2501,7 @@ export function StudioScreen({
       patchStage(soleStage.id, (s) => ({ ...s, stairs: [...(s.stairs ?? []), ...add] }));
       ensureStageParts();
     },
-    [soleStage, wallDistance, patchStage, ensureStageParts],
+    [soleStage, wallDistanceFor, patchStage, ensureStageParts],
   );
   /** A stage PIECE standing on its own — a "במה 400×300" dropped from the rail — as a stage: its box
    *  as the outline, every piece the studio has as what it may be built from (so it comes out as
@@ -2520,20 +2536,6 @@ export function StudioScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [deckTypes, stageParts, wallDistance, doc.placements],
   );
-  /** A stage, or a piece of one: anything from "במות" / "פלטות במה" standing free on the floor —
-   *  archived rows included, so an old platform still on a plan can still become a stage — of ANY
-   *  shape whose drawing is one piece: a rectangle, a disc, a half-round, a triangle. (Only the
-   *  rectangle and the disc used to be; a half-round set against a stage stayed a plain item, with no
-   *  stairs of its own and nothing to merge with.) */
-  function isStagePiece(p: Placement | undefined): p is Placement {
-    if (!p || p.tableId || p.perch) return false;
-    if (p.stage) return true;
-    const product = resolve(p.variantId)?.product;
-    if (!product || !STAGE_PIECE_CATEGORIES.includes(product.category)) return false;
-    if (isRoundPiece(product) || !isShapedPiece(product)) return true;
-    return pieceOutline(product, p.sizeMm) !== null;
-  }
-
   /** The one selected thing, when it is a stage piece that is not yet a stage. */
   const makeStage = useMemo(() => {
     if (sole?.kind !== "placement") return undefined;
@@ -2551,7 +2553,7 @@ export function StudioScreen({
       ensureStageParts();
       showHint("הפריט הוא במה עכשיו — מדרגות, גובה ומפלסים בסרגל שלה");
     };
-  }, [sole, doc.placements, isStagePiece, asStage, batch]);
+  }, [sole, doc.placements, asStage, batch, ensureStageParts]);
 
   /** The selected things that are stages, or stage pieces that can become one. */
   const selectedStages = useMemo(
@@ -2560,7 +2562,7 @@ export function StudioScreen({
         .filter((r) => r.kind === "placement")
         .map((r) => doc.placements.find((p) => p.id === r.id))
         .filter(isStagePiece),
-    [selected, doc.placements, isStagePiece],
+    [selected, doc.placements],
   );
 
   /** Several stages selected (or a group of them): the bar speaks of stages, not "items" — and sets
@@ -2937,7 +2939,7 @@ export function StudioScreen({
       setActiveEdge(stair.id);
       ensureStageParts();
     },
-    [toolStage, wallDistance, patchStage, stageTool, ensureStageParts],
+    [toolStage, wallDistanceFor, patchStage, stageTool, ensureStageParts],
   );
 
   // Escape leaves stair placing (the level drawing has the area tool's own Escape).

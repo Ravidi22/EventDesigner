@@ -53,7 +53,10 @@ export function useEvents(initial?: EventSummary[]): EventsHandle {
   useEffect(() => {
     if (initial !== undefined) return;
     let live = true;
-    load()
+    fetchEvents()
+      .then((list) => {
+        if (live) setEvents(list);
+      })
       .catch(() => {
         if (live) setError("לא ניתן לטעון את האירועים");
       })

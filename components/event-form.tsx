@@ -100,8 +100,10 @@ export function EventForm({
   );
 
   useEffect(() => {
-    void fetchVenues().then(setVenues);
-    setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
+    void fetchVenues().then((list) => {
+      setVenues(list);
+      setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
+    });
   }, [event?.venueId]);
 
   useEffect(() => {
@@ -127,11 +129,7 @@ export function EventForm({
 
   // The zones offered depend on the venue picked above, so this refetches when that changes.
   useEffect(() => {
-    if (!venueId) {
-      setZones([]);
-      setZonesFor("");
-      return;
-    }
+    if (!venueId) return;
     let live = true;
     void fetchVenuePlan(venueId).then(({ zones: list }) => {
       if (!live) return;
@@ -143,7 +141,12 @@ export function EventForm({
     };
   }, [venueId]);
 
-  useEffect(() => {
+  // The form follows the event it is handed: a different row (or a refreshed one) re-seeds every
+  // field. Adjusted during render — React's pattern for state derived from a prop — so the old
+  // values never paint for a frame. The initial values above already come from `event`.
+  const [seeded, setSeeded] = useState(event);
+  if (event !== seeded) {
+    setSeeded(event);
     if (event) {
       setClientName(event.clientName);
       setPhone(event.phone);
@@ -159,7 +162,7 @@ export function EventForm({
       setEventType(event.eventType ?? "");
       setShades(event.shades ?? []);
     }
-  }, [event]);
+  }
 
   // Changing the venue drops zones that belong to the old one — a zone id from another property
   // would resolve to nothing on this plan, and a silently empty selection is worse than a visible one.
@@ -185,7 +188,7 @@ export function EventForm({
     // event's own zones stand rather than being read as "none picked". A designer who stepped back
     // to this form for a phone number and pressed שמירה והמשך inside the fetch window used to wipe
     // every zone the event had (lib/events/zone-selection.ts).
-    const picked = zoneSelection(zoneIds, zonesFor === venueId ? zones : null, venueId, event);
+    const picked = zoneSelection(zoneIds, !venueId ? [] : zonesFor === venueId ? zones : null, venueId, event);
     const fields = {
       clientName: clientName.trim(),
       phone: phone.trim(),
@@ -325,7 +328,7 @@ export function EventForm({
             <MultiSelect
               values={zoneIds}
               onChange={setZoneIds}
-              options={zones.map((z) => ({ value: z.id, label: `${z.name} · ${ZONE_KIND_LABEL[z.kind]}` }))}
+              options={(venueId && zonesFor === venueId ? zones : []).map((z) => ({ value: z.id, label: `${z.name} · ${ZONE_KIND_LABEL[z.kind]}` }))}
               countNoun="אזורים"
               placeholder={venueId ? "בחרו אזור אחד או יותר" : "בחרו מתחם תחילה"}
               aria-label="אזורי האירוע"
