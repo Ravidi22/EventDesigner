@@ -16,6 +16,7 @@ import {
   Plus,
   Printer,
   RotateCcw,
+  Users,
 } from "lucide-react";
 import type { Runway, RunwayRow } from "@/lib/production/runway";
 import { LANE_HINT, LANE_LABEL, type LaneId } from "@/lib/production/runway";
@@ -32,6 +33,7 @@ import { PAGE_GUTTER } from "@/components/page-gutter";
 import { LoadRibbon } from "./load-ribbon";
 import { LaneFilter, type FilterId } from "./lane-filter";
 import { CollisionBand, RunwayRowCard } from "./runway-row";
+import { CrewDialog } from "./crew-dialog";
 import {
   groupByMonth,
   planCollisions,
@@ -118,6 +120,8 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
   // the last thing standing between the designer and deleting a venue.
   const [deleting, setDeleting] = useState<RunwayRow | null>(null);
   const [deletingVenue, setDeletingVenue] = useState(false);
+  // The row whose crew is being picked. One dialog, owned here, like the two confirmations.
+  const [crewFor, setCrewFor] = useState<RunwayRow | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -225,6 +229,10 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
     }
     items.push({ label: "פתיחה בסטודיו", icon: PenTool, onSelect: () => go(e.id, "/studio") });
     items.push({ label: "פלטים תפעוליים", icon: Printer, onSelect: () => go(e.id, "/outputs") });
+    // Who is on the truck — the one other typed fact on this screen (see event_crew in the schema).
+    if (!e.lostAt && !e.archived) {
+      items.push({ label: "צוות הקמה", icon: Users, onSelect: () => setCrewFor(row) });
+    }
     items.push({ label: "המשך פגישה", icon: MessagesSquare, onSelect: () => go(e.id, "/meeting") });
     if (e.lostAt) {
       items.push({ label: "החזרה לפעילות", icon: RotateCcw, onSelect: () => void run(e.id, () => reopenEvent(e.id)) });
@@ -438,6 +446,8 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
         }}
         onClose={() => setDeletingVenue(false)}
       />
+
+      {crewFor && <CrewDialog row={crewFor} onSaved={() => router.refresh()} onClose={() => setCrewFor(null)} />}
 
       <EventDialog open={creating} onClose={() => setCreating(false)} />
     </div>

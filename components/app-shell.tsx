@@ -10,6 +10,8 @@ import {
   LayoutGrid,
   Images,
   Truck,
+  Store,
+  Inbox,
   Bell,
   LogOut,
   type LucideIcon,
@@ -23,12 +25,16 @@ import { IconButton } from "@/components/icon-button";
 import { HeaderSearchProvider } from "@/components/header-search-context";
 import { EventDialog } from "@/components/event-dialog";
 import { SidePanel } from "@/components/side-panel";
+import { OrgKindProvider } from "@/components/org-kind-context";
+import { ORG_HOME, type OrgKind } from "@/lib/auth/kinds";
 
 interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
   match?: (path: string) => boolean;
+  /** Which organisations get this row. Absent = a designer's studio only. */
+  for?: readonly OrgKind[];
 }
 
 const GENERAL: NavItem[] = [
@@ -38,8 +44,11 @@ const GENERAL: NavItem[] = [
   // a wedding app reads as "the nice part"; what this tab actually says is "how long do I have".
   { href: "/production", label: "הפקה", icon: CalendarClock },
   { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
-  { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
+  { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid, for: ["studio", "supplier"] },
+  // A supplier's inbox: the orders studios sent them. A designer's orders live under ספקים ורכש.
+  { href: "/orders", label: "הזמנות", icon: Inbox, for: ["supplier"] },
   { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
+  { href: "/marketplace", label: "שוק הספקים", icon: Store },
   { href: "/gallery", label: "גלריה ומצגות", icon: Images },
 ];
 
@@ -49,6 +58,8 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
+  { test: (p) => p.startsWith("/marketplace"), title: "שוק הספקים" },
+  { test: (p) => p.startsWith("/orders"), title: "הזמנות" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ומצגות" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
@@ -60,6 +71,8 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
 export interface ShellUser {
   name: string | null;
   email: string;
+  /** A designer's studio or a supplier — which rows the sidebar has, and where the wordmark goes. */
+  orgKind: OrgKind;
 }
 
 export function AppShell({ children, user }: { children: ReactNode; user: ShellUser }) {
@@ -93,7 +106,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const settingsActive = pathname.startsWith("/settings");
   // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
   // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
-  const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/production");
+  const showHeaderActions =
+    user.orgKind === "studio" && (pathname.startsWith("/dashboard") || pathname.startsWith("/production"));
+  const nav = GENERAL.filter((item) => (item.for ?? ["studio"]).includes(user.orgKind));
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
   // local part of their own email is the thing they will recognise.
@@ -128,8 +143,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         collapsedClassName="w-[96px] px-2"
       >
         <Link
-          href="/dashboard"
-          aria-label="Eve — לוח בקרה"
+          href={ORG_HOME[user.orgKind]}
+          aria-label={user.orgKind === "supplier" ? "Eve — הזמנות" : "Eve — לוח בקרה"}
           className={
             "mb-[26px] flex flex-col items-center overflow-hidden " + (collapsed ? "px-1 py-3" : "px-2 py-5")
           }
@@ -145,6 +160,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           )}
         </Link>
 
+        {/* A supplier has no properties — the switcher would be an empty list with an "add" button
+            leading to a wall editor they have no use for. */}
+        {user.orgKind === "studio" && (
         <VenueSwitcher
           venues={venues}
           activeId={activeVenueId}
@@ -161,9 +179,10 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           onSetLogo={(id, url) => setLogo(id, url)}
           onDelete={(id) => remove(id)}
         />
+        )}
 
         <nav className="flex flex-col gap-[3px]">
-          {GENERAL.map((item) => (
+          {nav.map((item) => (
             <NavRow key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
           ))}
         </nav>
@@ -260,7 +279,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         </header>
 
         <main className="min-h-0 flex-1 overflow-auto print:block print:overflow-visible">
-          <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+          <OrgKindProvider value={user.orgKind}>
+            <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+          </OrgKindProvider>
         </main>
 
         {/* Mounted at the shell, so "אירוע חדש" is reachable from every page without each of them

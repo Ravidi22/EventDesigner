@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requireStudio } from "@/lib/auth/guard";
+import { requireDesigner } from "@/lib/auth/guard";
 import { fetchEvents } from "@/lib/events/actions";
 import { fetchAppointments } from "@/lib/appointments/actions";
 import { fetchGoogleBusy, fetchGoogleStatus } from "@/lib/google/actions";
@@ -24,7 +24,7 @@ export default async function DashboardPage() {
   // Before the reads, not alongside them: the layout's guard runs in parallel with this file and
   // therefore cannot gate it. See lib/auth/guard.ts — it is free, and it is what turns a signed-out
   // visit into a redirect rather than "not signed in" thrown out of fetchEvents.
-  await requireStudio();
+  await requireDesigner();
 
   // The Google window is computed here so the server's read and the client hook's idea of "what is
   // already loaded" are the same range — see defaultBusyWindow.

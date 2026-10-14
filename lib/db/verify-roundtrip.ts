@@ -40,7 +40,7 @@ import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import type { Zone } from "@/lib/venues/zone";
 import { fetchMembers, inviteMember, regenerateInvite, removeMember } from "@/lib/team/actions";
 import { inviteInfo, signUp } from "@/lib/auth/actions";
-import { fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
+import { confirmEvent, fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import {
   fetchAppointments,
@@ -1111,11 +1111,20 @@ async function verifySuppliers() {
   check("…and is priced separately as exposure", drawn.potential.cost >= 560, String(drawn.potential.cost));
 
   await issueQuote(eventId, { layout: DEFAULT_LAYOUT, total: 5000, discount: 0 });
+  // A sent quote is still exposure. The client's answer is what moves it into the order — the
+  // line fetchProcurement draws at `confirmedAt`, and the reason events.confirmed_at exists.
+  const quoted = await fetchProcurement("2026-09-01", "2026-09-30");
+  check("a sent quote alone does not bring it into the order", !quoted.order.find((g) => g.supplierId === supplier.id));
+  // The outputs screen stamps the send on the event when it issues (app/(app)/outputs/quote.tsx);
+  // confirmEvent refuses an event with no quote out, so the stamp comes first here as it does there.
+  await patchEvent(eventId, { quoteSentAt: Date.now() });
+  const confirmed = await confirmEvent(eventId);
+  check("the event can be confirmed once the quote is out", !confirmed.error, confirmed.error);
 
   const committed = await fetchProcurement("2026-09-01", "2026-09-30");
   const group = committed.order.find((g) => g.supplierId === supplier.id);
   const line = group?.lines.find((l) => l.variantId === flowers.id);
-  check("issuing the quote brings it into the order", !!line);
+  check("the client's confirmation brings it into the order", !!line);
   check("20 centrepieces × 7 = 140 stems", line?.quantity === 140, String(line?.quantity));
   check("the line reads in the supplier's own unit", line?.unitLabel === "גבעולים", String(line?.unitLabel));
   check("140 × ₪4 = ₪560", line?.cost === 560, String(line?.cost));

@@ -102,6 +102,26 @@ async function assertSupplierOwned(organizationId: string, supplierId: string): 
   if (!row) throw new Error("supplier not found");
 }
 
+/** Name who sells a catalog row — the "ללא ספק" group's one-click fix. `variantId` is whatever the
+ *  procurement line carries: a variant's id, or the product's own id when it has no variants. */
+export async function assignSupplier(variantId: string, supplierId: string | null): Promise<void> {
+  assertId(variantId, "variantId");
+  if (supplierId !== null) assertId(supplierId, "supplierId");
+  const organizationId = await currentOrg();
+  if (supplierId) await assertSupplierOwned(organizationId, supplierId);
+  const database = db();
+  const [variant] = await database
+    .select({ productId: productVariants.productId })
+    .from(productVariants)
+    .where(and(eq(productVariants.id, variantId), eq(productVariants.organizationId, organizationId)))
+    .limit(1);
+  const productId = variant?.productId ?? variantId;
+  await database
+    .update(products)
+    .set({ supplierId, updatedAt: new Date() })
+    .where(and(eq(products.id, productId), eq(products.organizationId, organizationId)));
+}
+
 // ── Suppliers ──────────────────────────────────────────────────────────────────────────────────
 
 /** Every supplier of this studio, with the two numbers its card shows.

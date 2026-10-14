@@ -15,6 +15,7 @@
 // bundle.
 import { currentSession } from "@/lib/auth/session";
 import type { StudioRole } from "@/lib/team/types";
+import type { OrgKind } from "@/lib/auth/kinds";
 
 /** The organization the seed creates, and the one the verification script acts as.
  *
@@ -75,6 +76,8 @@ export async function currentOrg(): Promise<string> {
  */
 export interface Actor {
   organizationId: string;
+  /** studio or supplier (lib/auth/kinds.ts). A script acts as a studio. */
+  organizationKind: OrgKind;
   /** ⚠ NULL in a command-line script — out there, nobody is signed in. Anything that writes a row
    *  naming a person (a venue grant, an invitation) must skip it rather than invent one. */
   userId: string | null;
@@ -86,12 +89,17 @@ export async function currentActor(): Promise<Actor> {
   // access it has had all along — actAsOrgForScript() predates roles and was never filtered by
   // anything — and because the alternative, a script silently seeing a subset of the venues it just
   // wrote, would make `npm run db:verify` fail in a way that says nothing about the app.
-  if (scriptOrg) return { organizationId: scriptOrg, userId: null, role: "owner" };
+  if (scriptOrg) return { organizationId: scriptOrg, organizationKind: "studio", userId: null, role: "owner" };
 
   const session = await currentSession();
   if (!session) throw new Error("not signed in");
   if (session.kind !== "studio" || !session.organizationId) {
     throw new Error("this account is not a studio account");
   }
-  return { organizationId: session.organizationId, userId: session.userId, role: session.role };
+  return {
+    organizationId: session.organizationId,
+    organizationKind: session.organizationKind ?? "studio",
+    userId: session.userId,
+    role: session.role,
+  };
 }

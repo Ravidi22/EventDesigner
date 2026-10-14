@@ -7,7 +7,7 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/button";
 import { AuthShell, Field, FormError } from "@/components/auth-shell";
 import { signUp } from "@/lib/auth/actions";
-import { KIND_HINT, KIND_LABEL, type AccountKind } from "@/lib/auth/kinds";
+import { CHOICE_HINT, CHOICE_LABEL, CHOICE_OF, type SignupChoice } from "@/lib/auth/kinds";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -22,7 +22,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // invited to look at their own event.
 export function SignupScreen() {
   const router = useRouter();
-  const [kind, setKind] = useState<AccountKind>("studio");
+  const [choice, setChoice] = useState<SignupChoice>("designer");
+  const { kind, orgKind } = CHOICE_OF[choice];
   const [studioName, setStudioName] = useState("");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -47,7 +48,7 @@ export function SignupScreen() {
 
     setBusy(true);
     try {
-      const result = await signUp({ kind, studioName, name, email, password });
+      const result = await signUp({ kind, orgKind, studioName, name, email, password });
       if (result.error) {
         if (result.field) setErrors({ [result.field]: result.error });
         else setFormError(result.error);
@@ -66,11 +67,13 @@ export function SignupScreen() {
 
   return (
     <AuthShell
-      title={kind === "studio" ? "פתיחת סטודיו" : "פתיחת חשבון"}
+      title={choice === "designer" ? "פתיחת סטודיו" : choice === "supplier" ? "פתיחת חשבון ספק" : "פתיחת חשבון"}
       lede={
-        kind === "studio"
+        choice === "designer"
           ? "חשבון אחד לעסק — האירועים, הקטלוג והמתחמים נשמרים תחתיו."
-          : "חשבון לצפייה באירוע שלכם — הסקיצה והתוכנית שהמעצב הכין."
+          : choice === "supplier"
+            ? "הקטלוג שלכם מתפרסם לכל המעצבים, וההזמנות שלהם מגיעות אליכם."
+            : "חשבון לצפייה באירוע שלכם — הסקיצה והתוכנית שהמעצב הכין."
       }
       footer={
         <>
@@ -84,7 +87,7 @@ export function SignupScreen() {
       <form onSubmit={submit} className="mt-8 flex flex-col gap-5" noValidate>
         <FormError message={formError} />
 
-        <KindChooser value={kind} onChange={setKind} />
+        <KindChooser value={choice} onChange={setChoice} />
 
         {kind === "studio" && (
           <Field
@@ -95,8 +98,12 @@ export function SignupScreen() {
             value={studioName}
             onChange={setStudioName}
             error={errors.studioName}
-            placeholder="סטודיו לעיצוב אירועים"
-            hint="מופיע על הצעות המחיר ועל הפלטים שהצוות מקבל."
+            placeholder={choice === "supplier" ? "שם העסק" : "סטודיו לעיצוב אירועים"}
+            hint={
+              choice === "supplier"
+                ? "השם שהמעצבים רואים בשוק הספקים ועל ההזמנות."
+                : "מופיע על הצעות המחיר ועל הפלטים שהצוות מקבל."
+            }
           />
         )}
         <Field
@@ -137,10 +144,10 @@ export function SignupScreen() {
           className="mt-1 w-full"
         >
           {busy
-            ? kind === "studio"
+            ? choice === "designer"
               ? "פותחים סטודיו…"
               : "פותחים חשבון…"
-            : kind === "studio"
+            : choice === "designer"
               ? "פתיחת הסטודיו"
               : "פתיחת החשבון"}
         </Button>
@@ -160,8 +167,8 @@ export function SignupScreen() {
  *  choice of two behaves like. A pair of unrelated buttons would announce as two controls where
  *  either, both or neither could be pressed.
  */
-function KindChooser({ value, onChange }: { value: AccountKind; onChange: (k: AccountKind) => void }) {
-  const kinds: AccountKind[] = ["studio", "client"];
+function KindChooser({ value, onChange }: { value: SignupChoice; onChange: (k: SignupChoice) => void }) {
+  const kinds: SignupChoice[] = ["designer", "supplier", "client"];
   return (
     <div className="flex flex-col gap-1.5">
       <span id="kind-label" className="text-sm font-medium text-ink">
@@ -190,9 +197,9 @@ function KindChooser({ value, onChange }: { value: AccountKind; onChange: (k: Ac
                   (selected ? "font-bold text-accent" : "font-semibold text-ink")
                 }
               >
-                {KIND_LABEL[k]}
+                {CHOICE_LABEL[k]}
               </span>
-              <span className="mt-1 block text-xs leading-relaxed text-muted">{KIND_HINT[k]}</span>
+              <span className="mt-1 block text-xs leading-relaxed text-muted">{CHOICE_HINT[k]}</span>
             </button>
           );
         })}

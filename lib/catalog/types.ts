@@ -360,6 +360,10 @@ export interface Product {
   appearance?: MapAppearance; // absent → derived from dimensions (see resolveFootprint)
   visibility?: Visibility; // absent = private (see Visibility) — publishing is always explicit
   archived?: boolean; // F-4.5: hidden from the catalog but still resolvable by placements
+  /** Copied from a supplier's marketplace row (lib/marketplace/): the source product and
+   *  organisation. Provenance only — this row is the studio's. Absent on everything else. */
+  sourceProductId?: string;
+  sourceOrgId?: string;
   /** Absent = a thing of one size (see ResizeSpec). */
   resize?: ResizeSpec;
   /** SAFETY DISTANCE — the clear floor this item needs around it, in mm, and the one number the

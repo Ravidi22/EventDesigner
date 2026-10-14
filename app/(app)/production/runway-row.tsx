@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Check, TriangleAlert } from "lucide-react";
-import type { Checkpoint, RunwayRow } from "@/lib/production/runway";
+import { ordersLine, type Checkpoint, type RunwayRow } from "@/lib/production/runway";
 import { formatPrice } from "@/lib/catalog/format";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Menu, type MenuItem } from "@/components/menu";
@@ -95,6 +95,16 @@ export function RunwayRowCard({
             <div className="nums mt-0.5 truncate text-[13px] text-muted">
               {zonesLabelOf(e)} · {e.guests || "—"} אורחים
             </div>
+            {/* Two quiet facts about the production itself, only when there are any: who is on the
+                truck, and what the suppliers have answered. Muted, one line, no colour — a declined
+                order speaks through `row.alert` below, not here. */}
+            {(e.crew?.length || e.orders) && (
+              <div className="nums mt-0.5 truncate text-[12px] text-muted">
+                {[e.crew?.length ? `צוות: ${e.crew.map((c) => c.name).join(", ")}` : null, ordersLine(e.orders)]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+            )}
           </div>
 
           {/* HOW MUCH. Owner-visible only, and it is a PRICE — what the client pays, off the last

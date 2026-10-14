@@ -1,13 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Boxes, PackageSearch, ShoppingCart, Truck } from "lucide-react";
-import { fetchProcurement } from "@/lib/suppliers/actions";
-import type { ProcurementReport, RentalLine, SupplierGroup } from "@/lib/suppliers/procurement";
+import { AlertTriangle, Boxes, PackageSearch, Send, ShoppingCart, Truck } from "lucide-react";
+import { assignSupplier, fetchProcurement } from "@/lib/suppliers/actions";
+import { useSupplierList } from "@/lib/suppliers/use-suppliers";
+import type { OrderLine, ProcurementReport, RentalLine, SupplierGroup } from "@/lib/suppliers/procurement";
 import { formatPrice } from "@/lib/catalog/format";
+import { Button } from "@/components/button";
 import { DateField } from "@/components/date-field";
 import { EmptyState } from "@/components/empty-state";
 import { Select } from "@/components/select";
+import { OrderDrawer, type OrderDraft } from "./order-drawer";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ── The window ─────────────────────────────────────────────────────────────────────────────────
 // Local calendar days throughout, never UTC: `toISOString().slice(0,10)` is yesterday for anyone
@@ -71,9 +76,12 @@ function SectionHeading({
 
 function GroupCard({
   group,
+  onSend,
   children,
 }: {
   group: Pick<SupplierGroup, "supplierId" | "supplierName" | "cost" | "partial">;
+  /** The one verb a sourced group has: this is the order, send it. Absent on "ללא ספק". */
+  onSend?: () => void;
   children: React.ReactNode;
 }) {
   return (
@@ -82,15 +90,39 @@ function GroupCard({
         <span className={"text-sm font-semibold " + (group.supplierId ? "text-ink" : "text-muted")}>
           {group.supplierName}
         </span>
-        <span className="flex items-baseline gap-1.5">
-          <span className="nums text-sm font-bold text-ink">{formatPrice(group.cost)}</span>
-          {/* A total assembled from lines that have no cost is a FLOOR, and saying so is the whole
-              difference between an estimate and a wrong number. */}
-          {group.partial && <span className="text-xs text-muted">ומעלה — חסרות עלויות</span>}
+        <span className="flex items-center gap-3">
+          <span className="flex items-baseline gap-1.5">
+            <span className="nums text-sm font-bold text-ink">{formatPrice(group.cost)}</span>
+            {/* A total assembled from lines that have no cost is a FLOOR, and saying so is the whole
+                difference between an estimate and a wrong number. */}
+            {group.partial && <span className="text-xs text-muted">ומעלה — חסרות עלויות</span>}
+          </span>
+          {onSend && (
+            <Button size="sm" variant="outline" onClick={onSend}>
+              <Send className="h-3.5 w-3.5" strokeWidth={2} />
+              שליחת הזמנה
+            </Button>
+          )}
         </span>
       </div>
       {children}
     </div>
+  );
+}
+
+/** The "ללא ספק" group's fix, one line at a time: name who sells it, and the forecast regroups.
+ *  A derived consumable (candles off a candlestick) has no row of its own and gets no select. */
+function SupplierPick({ line, onPick }: { line: OrderLine; onPick: (variantId: string, supplierId: string) => void }) {
+  const suppliers = useSupplierList(true);
+  if (!UUID.test(line.variantId)) return <span className="text-xs text-muted">נגזר — אין שורה בקטלוג</span>;
+  return (
+    <Select
+      aria-label={`ספק ל${line.label}`}
+      value=""
+      onChange={(v) => v && onPick(line.variantId, v)}
+      options={[{ value: "", label: "בחירת ספק…" }, ...suppliers.filter((s) => !s.archived).map((s) => ({ value: s.id, label: s.name }))]}
+      className="w-40"
+    />
   );
 }
 
@@ -102,6 +134,19 @@ export function ProcurementTab() {
   const [report, setReport] = useState<ProcurementReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after a send or a supplier pick, so the forecast is re-read against what changed.
+  const [nonce, setNonce] = useState(0);
+  const [draft, setDraft] = useState<OrderDraft | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const pick = async (variantId: string, supplierId: string) => {
+    try {
+      await assignSupplier(variantId, supplierId);
+      setNonce((n) => n + 1);
+    } catch {
+      setError("לא ניתן לשייך ספק");
+    }
+  };
 
   const setPresetAndRange = (next: Preset) => {
     setPreset(next);
@@ -130,7 +175,7 @@ export function ProcurementTab() {
     return () => {
       live = false;
     };
-  }, [range.from, range.to]);
+  }, [range.from, range.to, nonce]);
 
   const notices = useMemo(() => {
     if (!report) return [];
@@ -207,6 +252,11 @@ export function ProcurementTab() {
           {error}
         </p>
       )}
+      {notice && (
+        <p className="rounded-md border border-border bg-surface px-4 py-2.5 text-sm text-ink-soft" role="status">
+          {notice}
+        </p>
+      )}
 
       {notices.map((n) => (
         <p
@@ -246,12 +296,23 @@ export function ProcurementTab() {
                 />
                 <div className="flex flex-col gap-3">
                   {report.order.map((g) => (
-                    <GroupCard key={g.supplierId ?? "none"} group={g}>
+                    <GroupCard
+                      key={g.supplierId ?? "none"}
+                      group={g}
+                      onSend={g.supplierId ? () => setDraft({ group: g, windowFrom: range.from, windowTo: range.to }) : undefined}
+                    >
                       <table className="w-full text-sm">
                         <tbody>
                           {g.lines.map((l) => (
                             <tr key={l.variantId} className={rowClass}>
-                              <td className="px-4 py-2 text-ink">{l.label}</td>
+                              <td className="px-4 py-2 text-ink">
+                                {l.label}
+                                {!g.supplierId && (
+                                  <span className="ms-3 inline-block align-middle">
+                                    <SupplierPick line={l} onPick={pick} />
+                                  </span>
+                                )}
+                              </td>
                               <td className="nums w-40 px-4 py-2 text-start font-semibold text-ink">
                                 {l.quantity} {l.unitLabel}
                               </td>
@@ -281,7 +342,11 @@ export function ProcurementTab() {
                 />
                 <div className="flex flex-col gap-3">
                   {report.rentals.map((g) => (
-                    <GroupCard key={g.supplierId ?? "none"} group={g}>
+                    <GroupCard
+                      key={g.supplierId ?? "none"}
+                      group={g}
+                      onSend={g.supplierId ? () => setDraft({ group: g, windowFrom: range.from, windowTo: range.to }) : undefined}
+                    >
                       <table className="w-full text-sm">
                         <tbody>
                           {g.lines.map((l: RentalLine) => (
@@ -370,6 +435,17 @@ export function ProcurementTab() {
             )}
           </div>
         )
+      )}
+
+      {draft && (
+        <OrderDrawer
+          draft={draft}
+          onSent={(text) => {
+            setNotice(text);
+            setNonce((n) => n + 1);
+          }}
+          onClose={() => setDraft(null)}
+        />
       )}
     </div>
   );

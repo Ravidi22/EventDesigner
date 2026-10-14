@@ -18,7 +18,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { and, eq, gt, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { sessions, users } from "@/lib/db/schema";
+import { organizations, sessions, users } from "@/lib/db/schema";
+import type { OrgKind } from "./kinds";
 import { SESSION_COOKIE as COOKIE } from "./cookie-name";
 
 const TTL_DAYS = 30;
@@ -32,6 +33,9 @@ export interface Session {
   /** ⚠ NULL for a client — they belong to no studio. Anything scoping data by organisation must
    *  therefore treat this as a REQUIREMENT and not an optional field; see currentOrg(). */
   organizationId: string | null;
+  /** What the organisation IS — a designer's studio or a supplier (lib/auth/kinds.ts). Null for a
+   *  client, who belongs to none. Decides which screens exist, never what data a query may see. */
+  organizationKind: OrgKind | null;
   email: string;
   name: string | null;
   role: "owner" | "designer" | "crew";
@@ -89,9 +93,11 @@ export const currentSession = cache(async (): Promise<Session | null> => {
       name: users.name,
       role: users.role,
       state: users.state,
+      organizationKind: organizations.kind,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
+    .leftJoin(organizations, eq(organizations.id, users.organizationId))
     .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, new Date())))
     .limit(1);
 
@@ -104,6 +110,7 @@ export const currentSession = cache(async (): Promise<Session | null> => {
     userId: row.userId,
     kind: row.kind,
     organizationId: row.organizationId,
+    organizationKind: row.organizationId ? (row.organizationKind ?? "studio") : null,
     email: row.email,
     name: row.name,
     role: row.role,

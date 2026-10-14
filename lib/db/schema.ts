@@ -122,6 +122,14 @@ export const grantKindEnum = pgEnum("grant_kind", ["member", "guest"]);
 // They mean the same thing — invitation sent, not yet accepted — so there is one enum, and the
 // mapping layer picks the word its screen uses.
 export const inviteStateEnum = pgEnum("invite_state", ["pending", "active"]);
+/** What an organisation IS (Organization.kind). A studio designs events; a supplier publishes a
+ *  catalog that studios pull from (lib/marketplace/). Same tables, same tenant seam — the kind only
+ *  decides which screens exist and which cross-organisation read is allowed. */
+export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supplier"]);
+/** The supplier's answer to an order (Order.status, lib/orders/). Typed by the OTHER party, which
+ *  is why it is allowed on a screen that otherwise derives everything: "the supplier said yes" is
+ *  derivable from nothing, the same reasoning as events.confirmed_at. */
+export const orderStatusEnum = pgEnum("order_status", ["sent", "confirmed", "partial", "delivered", "declined"]);
 
 // ── Column helpers ─────────────────────────────────────────────────────────────────────────────
 const orgId = () => uuid("organization_id").notNull();
@@ -134,6 +142,8 @@ const updated = () => timestamp("updated_at", { withTimezone: true }).notNull().
 export const organizations = pgTable("organizations", {
   id: id(),
   name: text("name").notNull(),
+  /** studio (the default, every organisation before 2026-10) or supplier. See organizationKindEnum. */
+  kind: organizationKindEnum("kind").notNull().default("studio"),
   createdAt: created(),
 });
 
@@ -369,12 +379,20 @@ export const products = pgTable(
      *  somehow arrives without an opinion about who may see it must not become visible to strangers
      *  because of a missing field. Publishing is always an explicit act.
      *
-     *  ⚠ The column is written and read today, but NOTHING CROSSES ORGANISATIONS YET — every query
-     *  in lib/catalog/actions.ts is still scoped to one studio. That is deliberate: a cross-org read
-     *  needs decisions this flag alone does not answer (may another studio PLACE a public item, and
-     *  what happens to their design when the owner archives it?) and it needs RLS, which arrives
-     *  with auth. The flag is recorded now so the day those land, the data is already there. */
+     *  ONE cross-organisation read exists, and it is lib/marketplace/actions.ts: a SUPPLIER
+     *  organisation's public rows are what every studio browses. A studio's own public rows (the
+     *  base library) cross nothing — the marketplace query filters on organizations.kind. Nobody
+     *  ever PLACES another organisation's row: adding from the marketplace COPIES it (below), so
+     *  the owner archiving theirs changes no design. */
     visibility: visibilityEnum("visibility").notNull().default("private"),
+    /** Where a copied row came from (lib/marketplace/): the supplier's product and organisation.
+     *  Provenance only — the copy is this studio's, with its own price, drawing and variants, and
+     *  nothing ever writes into it from the source. `synced_at` is when the cost was last taken
+     *  from the source, so the drawer can say "הספק עדכן את המחיר" by comparing it to the source's
+     *  updated_at. NULL on everything that was not copied from a supplier. */
+    sourceProductId: uuid("source_product_id"),
+    sourceOrgId: uuid("source_org_id"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
 
     /** How far the plan may stretch this item, and in what module (see ResizeSpec). NULL = a thing
      *  of one size, which is most of a catalog. JSON rather than four columns because it is only
@@ -425,6 +443,8 @@ export const products = pgTable(
     index("products_org_live_idx")
       .on(t.organizationId, t.category)
       .where(sql`${t.archived} = false`),
+    // "Is this marketplace item already in my catalog" — one lookup per card on /marketplace.
+    index("products_source_idx").on(t.organizationId, t.sourceProductId),
   ],
 );
 
@@ -968,6 +988,10 @@ export const suppliers = pgTable(
      *  thing (what the studio SELLS, not what a supplier stocks). */
     supplies: text("supplies"),
     note: text("note"),
+    /** The supplier's OWN organisation, when they have an account (organizations.kind = supplier).
+     *  Set by the marketplace the first time a studio adds one of their items; an order to a linked
+     *  supplier lands in their inbox, an order to an unlinked one is shared by hand. */
+    linkedOrgId: uuid("linked_org_id").references(() => organizations.id, { onDelete: "set null" }),
     /** Archived, never deleted, for the same reason as a product: an expense must not lose who it
      *  was paid to, and a supplier who stops trading is still part of last year's costs. */
     archived: boolean("archived").notNull().default(false),
@@ -976,6 +1000,7 @@ export const suppliers = pgTable(
   },
   (t) => [
     index("suppliers_org_idx").on(t.organizationId),
+    uniqueIndex("suppliers_org_linked_key").on(t.organizationId, t.linkedOrgId),
     index("suppliers_org_live_idx")
       .on(t.organizationId, t.name)
       .where(sql`${t.archived} = false`),
@@ -1130,4 +1155,81 @@ export const googleEventLinks = pgTable(
     uniqueIndex("google_event_links_pair_key").on(t.connectionId, t.appointmentId),
     index("google_event_links_appointment_idx").on(t.appointmentId),
   ],
+);
+
+// ── Orders (lib/orders/) ─────────────────────────────────────────────────────────────────────────
+
+/** A procurement group, SENT. A snapshot of the lines at the moment the designer pressed שליחה —
+ *  the forecast keeps moving under it, and the supplier has to see what was actually asked.
+ *
+ *  Two organisations meet on this row: `organization_id` is the studio that ordered (the tenant,
+ *  as everywhere), `supplier_org_id` the supplier's own organisation when they have one. The
+ *  supplier's inbox is the one query in the app that reads rows of another tenant by THAT column,
+ *  and it reads only orders addressed to it (lib/orders/actions.ts, fetchIncomingOrders). */
+export const orders = pgTable(
+  "orders",
+  {
+    id: id(),
+    organizationId: orgId(),
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "restrict" }),
+    supplierOrgId: uuid("supplier_org_id").references(() => organizations.id, { onDelete: "set null" }),
+    /** The window the lines were reduced over. An order covers several events; an event's own
+     *  readiness is read back by date (lib/production). */
+    windowFrom: date("window_from").notNull(),
+    windowTo: date("window_to").notNull(),
+    status: orderStatusEnum("status").notNull().default("sent"),
+    note: text("note").notNull().default(""),
+    /** The supplier's reply, in their words. */
+    reply: text("reply").notNull().default(""),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("orders_org_idx").on(t.organizationId, t.sentAt),
+    index("orders_supplier_org_idx").on(t.supplierOrgId, t.sentAt),
+    index("orders_window_idx").on(t.organizationId, t.windowFrom, t.windowTo),
+  ],
+);
+
+export const orderLines = pgTable(
+  "order_lines",
+  {
+    id: id(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    /** The studio's variant — kept so readiness can match the line back to a drawing. Not a foreign
+     *  key, for the reason packing_spares has none: an un-varianted product's "variantId" is the
+     *  product's id. */
+    variantId: uuid("variant_id").notNull(),
+    description: text("description").notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3 }).notNull(),
+    unitLabel: text("unit_label").notNull(),
+    /** Per order unit, the studio's cost at the moment of sending. NULL = unknown. */
+    unitCost: numeric("unit_cost", { precision: 12, scale: 2 }),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [index("order_lines_order_idx").on(t.orderId)],
+);
+
+// ── Crew (lib/production/) ───────────────────────────────────────────────────────────────────────
+
+/** Who is on the truck. The one TYPED fact on the production runway beside confirmed_at, and it
+ *  earns it the same way: an assignment is a decision, derivable from nothing. A crew member's
+ *  runway shows only the events they are on; a collision between two events is named after the
+ *  person both of them want. */
+export const eventCrew = pgTable(
+  "event_crew",
+  {
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: orgId(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.userId] }), index("event_crew_user_idx").on(t.organizationId, t.userId)],
 );

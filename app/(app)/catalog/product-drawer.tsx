@@ -27,6 +27,10 @@ import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
 import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
 import { isPlacedAnywhere, isStandardProduct } from "@/lib/catalog/actions";
+import { acceptSourcePrice, fetchSourceStatus } from "@/lib/marketplace/actions";
+import type { SourceStatus } from "@/lib/marketplace/types";
+import { formatPrice } from "@/lib/catalog/format";
+import { useIsSupplier } from "@/components/org-kind-context";
 import { Button } from "@/components/button";
 import { Drawer } from "@/components/drawer";
 import { TagToggle } from "@/components/tag-toggle";
@@ -364,6 +368,11 @@ export function ProductDrawer({
   // was about, not a bare boolean: a drawer that goes straight from a base table to a new product
   // would otherwise carry the previous row's answer until the next one came back.
   const [libraryId, setLibraryId] = useState<string | null>(null);
+  // A supplier publishes; a designer buys. The same drawer, worded for whichever is holding it.
+  const supplierOrg = useIsSupplier();
+  // The source of a copied row (lib/marketplace/): asked of the server when the drawer opens one,
+  // keyed on the id the answer was about, like `libraryId`.
+  const [source, setSource] = useState<{ id: string; status: SourceStatus | null } | null>(null);
   // Loaded once, the first time the drawer opens — the catalog's first paint owes nothing to it.
   // Never in the meeting: the supplier list is cost-side data and nothing there would show it.
   const suppliers = useSupplierList(product !== null && internal);
@@ -387,6 +396,20 @@ export function ProductDrawer({
       current = false;
     };
   }, [productId]);
+  const sourceProductId = product?.sourceProductId;
+  useEffect(() => {
+    if (!productId || !sourceProductId) return;
+    let current = true;
+    fetchSourceStatus(productId)
+      .then((status) => {
+        if (current) setSource({ id: productId, status });
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [productId, sourceProductId]);
+  const sourceStatus = source && source.id === productId ? source.status : null;
 
   if (!product) return null;
 
@@ -861,7 +884,7 @@ export function ProductDrawer({
             </div>
           </div>
 
-          {internal && (
+          {internal && !supplierOrg && (
             <>
               {/* ── Procurement (lib/suppliers/) ─────────────────────────────────────────────────
                   Kept AFTER the price and clearly apart from it, because the two numbers on this
@@ -876,6 +899,35 @@ export function ProductDrawer({
                 מה שאתם משלמים על הפריט וכמה מהם צריך להזמין. פנימי — לא מופיע בהצעת המחיר ולא במסכי
                 הלקוח.
               </p>
+
+              {/* A row copied from the marketplace says where it came from, and the ONE thing the
+                  source may ever do to it: offer its current price. Nothing is written without the
+                  button — the cost is the designer's, like everything else on this row. */}
+              {sourceStatus && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+                  <span>
+                    {sourceStatus.gone
+                      ? `הפריט כבר לא מפורסם אצל ${sourceStatus.supplierName || "הספק"} — העותק שלכם נשאר.`
+                      : sourceStatus.updated
+                        ? `${sourceStatus.supplierName || "הספק"} עדכן את המחיר: ${formatPrice(sourceStatus.wholesalePrice)}`
+                        : `מהשוק — ${sourceStatus.supplierName || "ספק"}, מחיר ספק ${formatPrice(sourceStatus.wholesalePrice)}`}
+                  </span>
+                  {sourceStatus.updated && !sourceStatus.gone && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void acceptSourcePrice(draft.id).then(() => {
+                          patch({ costPrice: sourceStatus.wholesalePrice });
+                          setSource({ id: draft.id, status: { ...sourceStatus, updated: false } });
+                        });
+                      }}
+                    >
+                      עדכון העלות
+                    </Button>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -989,8 +1041,18 @@ export function ProductDrawer({
                 <SwitchRow
                   checked={draft.visibility === "public"}
                   onChange={(on) => patch({ visibility: on ? "public" : undefined })}
-                  label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
-                  hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
+                  label={
+                    supplierOrg
+                      ? `מפורסם בשוק הספקים — ${draft.name.trim() || "הפריט"}`
+                      : `${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`
+                  }
+                  hint={
+                    supplierOrg
+                      ? draft.visibility === "public"
+                        ? "כל מעצב ב-Eve רואה את הפריט ואת המחיר, ויכול להוסיף אותו לקטלוג שלו."
+                        : "טיוטה — רק אתם רואים את הפריט. הדליקו כדי לפרסם אותו למעצבים."
+                      : VISIBILITY_HINT[draft.visibility ?? "private"]
+                  }
                 />
               )}
             </>

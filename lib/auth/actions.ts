@@ -10,6 +10,7 @@
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
+import { ORG_HOME, isOrgKind, type OrgKind } from "./kinds";
 import { organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { hashInviteToken } from "./invite-token";
@@ -59,6 +60,9 @@ async function noSuchUserHash(): Promise<string> {
 
 export async function signUp(input: {
   kind: AccountKind;
+  /** What the organisation a studio account opens IS — a designer's studio (the default) or a
+   *  supplier (lib/auth/kinds.ts). Ignored for a client. */
+  orgKind?: OrgKind;
   /** Required for a studio; ignored for a client, who has no business to name. */
   studioName?: string;
   name: string;
@@ -69,6 +73,7 @@ export async function signUp(input: {
   // exist rather than cast — an unrecognised kind must not fall through to a default that grants
   // more than was asked for.
   const kind: AccountKind = isAccountKind(input?.kind) ? input.kind : "client";
+  const orgKind: OrgKind = isOrgKind(input?.orgKind) ? input.orgKind : "studio";
   const studioName = String(input?.studioName ?? "").trim();
   const name = String(input?.name ?? "").trim();
   const email = normalizeEmail(String(input?.email ?? ""));
@@ -107,7 +112,7 @@ export async function signUp(input: {
   const passwordHash = await hashPassword(password);
   // A client creates NO organisation. They own nothing here — an organisation for a client would be
   // an empty studio nobody works in, and a tenant boundary that means nothing is worse than none.
-  const organizationId = kind === "studio" ? await claimOrganization(studioName) : null;
+  const organizationId = kind === "studio" ? await claimOrganization(studioName, orgKind) : null;
 
   let userId: string;
   try {
@@ -144,7 +149,9 @@ export async function signUp(input: {
   // the mirror-image reason — the account is real, the session is about to be created, and refusing
   // someone their sign-up over a shelf of furniture is the wrong trade. `npm run catalog:standard`
   // is the retry, and it is idempotent.
-  if (organizationId) {
+  // A supplier gets none of it: the base tables are a DESIGNER's shelf (every hall's 1.80 round),
+  // and a supplier's catalog is what they sell, published row by row.
+  if (organizationId && orgKind === "studio") {
     try {
       await installStandardCatalog(organizationId);
     } catch (error) {
@@ -153,7 +160,19 @@ export async function signUp(input: {
   }
 
   await createSession(userId);
-  return { home: HOME_FOR[kind] };
+  return { home: kind === "studio" ? ORG_HOME[orgKind] : HOME_FOR.client };
+}
+
+/** Where this account lands after signing in: the client side, a designer's dashboard, or a
+ *  supplier's order inbox. Read from the rows rather than guessed from the account kind alone. */
+async function homeOf(userId: string): Promise<string> {
+  const [row] = await db()
+    .select({ kind: users.kind, orgKind: organizations.kind })
+    .from(users)
+    .leftJoin(organizations, eq(organizations.id, users.organizationId))
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.kind === "studio" ? ORG_HOME[row.orgKind ?? "studio"] : HOME_FOR.client;
 }
 
 /**
@@ -175,7 +194,7 @@ export async function signUp(input: {
  *   2. it has no users at all, so it has never been claimed;
  *   3. this is not production, where that row should never have been seeded in the first place.
  */
-async function claimOrganization(studioName: string): Promise<string> {
+async function claimOrganization(studioName: string, kind: OrgKind): Promise<string> {
   const database = db();
 
   if (process.env.NODE_ENV !== "production") {
@@ -192,7 +211,7 @@ async function claimOrganization(studioName: string): Promise<string> {
       if (count === 0) {
         await database
           .update(organizations)
-          .set({ name: studioName })
+          .set({ name: studioName, kind })
           .where(eq(organizations.id, SINGLE_ORG_ID));
         await database
           .insert(studioSettings)
@@ -208,7 +227,7 @@ async function claimOrganization(studioName: string): Promise<string> {
 
   const [org] = await database
     .insert(organizations)
-    .values({ name: studioName })
+    .values({ name: studioName, kind })
     .returning({ id: organizations.id });
   await database.insert(studioSettings).values({
     organizationId: org.id,
@@ -240,7 +259,7 @@ export async function signIn(input: { email: string; password: string }): Promis
   // ONE sign-in form for both kinds, on purpose. Which half of the app you belong to is a fact
   // about your account, not a thing to make you declare at the door — and a chooser on the sign-in
   // screen would be a way to ask "does this email belong to a designer?" without a password.
-  return { home: HOME_FOR[user.kind] };
+  return { home: await homeOf(user.id) };
 }
 
 /**
@@ -320,7 +339,7 @@ export async function acceptInvite(input: {
   if (!row) return { error: "קישור ההזמנה פג או כבר נוצל. בקשו מהסטודיו קישור חדש." };
 
   await createSession(row.id);
-  return { home: HOME_FOR[row.kind] };
+  return { home: await homeOf(row.id) };
 }
 
 export async function signOut(): Promise<void> {

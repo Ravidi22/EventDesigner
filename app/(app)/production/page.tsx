@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requireStudio } from "@/lib/auth/guard";
+import { requireDesigner } from "@/lib/auth/guard";
 import { fetchRunway } from "@/lib/production/actions";
 import { ProductionScreen } from "./production-screen";
 
@@ -34,7 +34,7 @@ export default async function ProductionPage({
 }) {
   // Before the read, not alongside it: the layout's guard races this file rather than gating it.
   // See lib/auth/guard.ts.
-  await requireStudio();
+  await requireDesigner();
   const params = await searchParams;
   const venueId = (Array.isArray(params.venue) ? params.venue[0] : params.venue) || undefined;
   return <ProductionScreen key={venueId ?? "all"} runway={await fetchRunway()} venueId={venueId} />;

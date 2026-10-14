@@ -1,6 +1,6 @@
 # Supplier marketplace, production, and the road to the client side
 
-Version 1 | 2026-10-14 | **Proposal — decisions open.** Companion to [2026-08-16 suppliers & procurement](2026-08-16-suppliers-procurement-design.md) (built) and [docs/roadmap.md](../../roadmap.md).
+Version 2 | 2026-10-14 | **Built, on the recommended answers** (DECIDE 1–4 as recommended; DECIDE 5: equipment readiness and crew assignment). Migration 0016. What shipped against each section is in CLAUDE.md ("A supplier is an organisation…", "Orders are a procurement group…", "The runway reads orders and crew…"). Not built: the load-in sheet, the packed checklist, an expense from a delivered order, the client side (§6). Companion to [2026-08-16 suppliers & procurement](2026-08-16-suppliers-procurement-design.md) (built) and [docs/roadmap.md](../../roadmap.md).
 
 This document takes three ideas Ravid raised on 2026-10-14 and turns them into something buildable, in the order that unblocks the client side (בעל האירוע): suppliers get accounts and publish products; designers pull those into their own catalog and send orders from procurement; the production screen learns the facts those orders create. Each section ends with the decisions only Ravid can make, marked **DECIDE**.
 

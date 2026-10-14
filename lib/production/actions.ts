@@ -41,14 +41,19 @@
 import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/db/org";
+import { revalidateProduction } from "@/lib/db/revalidate";
 import {
   designDocuments,
+  eventCrew,
   eventLikedImages,
   eventZones,
   events,
   exports,
   issuedQuotes,
+  orders,
+  users,
 } from "@/lib/db/schema";
+import { assertEventOwned } from "@/lib/events/ownership";
 import { fetchCheckpointOffsets } from "@/lib/settings/actions";
 import { ROLE_CAPABILITIES } from "@/lib/team/types";
 import { grantedVenueIds } from "@/lib/venues/granted";
@@ -106,7 +111,7 @@ export async function fetchRunway(): Promise<Runway> {
   // passing the same object to four of them is a subtlety nobody should have to hold in their head.
   const scopedEventIds = () => database.select({ id: events.id }).from(events).where(scope);
 
-  const [eventRows, zoneRows, likedRows, docRows, packingRows, quoteRows, offsets] = await Promise.all([
+  const [eventRows, zoneRows, likedRows, docRows, packingRows, quoteRows, offsets, crewRows, orderRows] = await Promise.all([
     database
       .select({
         id: events.id,
@@ -197,7 +202,39 @@ export async function fetchRunway(): Promise<Runway> {
       ),
 
     fetchCheckpointOffsets(),
+
+    // Who is on each truck — names joined here so the row and the collision band can say them.
+    database
+      .select({ eventId: eventCrew.eventId, userId: eventCrew.userId, name: users.name, email: users.email })
+      .from(eventCrew)
+      .innerJoin(users, eq(users.id, eventCrew.userId))
+      .where(and(eq(eventCrew.organizationId, organizationId), inArray(eventCrew.eventId, scopedEventIds()))),
+
+    // Every order the studio sent, with its window and the supplier's answer. Matched to events
+    // by DATE below (an order covers a window, not an event), so one read serves every row.
+    database
+      .select({ windowFrom: orders.windowFrom, windowTo: orders.windowTo, status: orders.status })
+      .from(orders)
+      .where(eq(orders.organizationId, organizationId)),
   ]);
+
+  const crewByEvent = new Map<string, { id: string; name: string }[]>();
+  for (const r of crewRows) {
+    const list = crewByEvent.get(r.eventId) ?? [];
+    list.push({ id: r.userId, name: r.name?.trim() || r.email.split("@")[0] });
+    crewByEvent.set(r.eventId, list);
+  }
+  const ordersFor = (date: string | null) => {
+    if (!date) return undefined;
+    const o = { confirmed: 0, open: 0, declined: 0 };
+    for (const r of orderRows) {
+      if (r.windowFrom > date || r.windowTo < date) continue;
+      if (r.status === "declined") o.declined++;
+      else if (r.status === "sent") o.open++;
+      else o.confirmed++;
+    }
+    return o;
+  };
 
   const zoned = new Set(zoneRows.map((r) => r.eventId));
   const liked = new Set(likedRows.map((r) => r.eventId));
@@ -210,7 +247,12 @@ export async function fetchRunway(): Promise<Runway> {
   // price that already travelled to the browser.
   const showsMoney = ROLE_CAPABILITIES[actor.role].money;
 
-  const facts: EventFacts[] = eventRows.map((e) => {
+  // A crew member's runway is the events they are on — the rest of the book is not their job, and
+  // the money column was already withheld from them above.
+  const mine = actor.role === "crew" && actor.userId ? actor.userId : null;
+  const visibleRows = mine ? eventRows.filter((e) => crewByEvent.get(e.id)?.some((c) => c.id === mine)) : eventRows;
+
+  const facts: EventFacts[] = visibleRows.map((e) => {
     const version = versionByEvent.get(e.id);
     const quote = quoteByEvent.get(e.id);
     return {
@@ -243,8 +285,39 @@ export async function fetchRunway(): Promise<Runway> {
       designChangedSinceQuote:
         quote !== undefined && version !== undefined && version > quote.documentVersion,
       quoteTotal: showsMoney && quote ? toMoney(quote.total) : undefined,
+      crew: crewByEvent.get(e.id),
+      orders: ordersFor(e.eventDate),
     };
   });
 
   return buildRunway(facts, offsets, today());
+}
+
+/**
+ * Who is on this event's truck. Replaces the list wholesale — the dialog edits it as a unit.
+ *
+ * Owner or designer only: a crew member does not assign crew. Every id is checked against the
+ * studio's own members (kind = studio, same organisation) — a foreign key proves a user EXISTS,
+ * never that they work here.
+ */
+export async function setEventCrew(eventId: string, userIds: string[]): Promise<void> {
+  const actor = await currentActor();
+  if (actor.role === "crew") throw new Error("crew cannot assign crew");
+  if (!Array.isArray(userIds) || userIds.length > 50) throw new Error("bad userIds");
+  const organizationId = actor.organizationId;
+  await assertEventOwned(organizationId, eventId);
+  const database = db();
+  const members = userIds.length
+    ? await database
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.organizationId, organizationId), eq(users.kind, "studio"), inArray(users.id, userIds)))
+    : [];
+  await database.transaction(async (tx) => {
+    await tx.delete(eventCrew).where(and(eq(eventCrew.eventId, eventId), eq(eventCrew.organizationId, organizationId)));
+    if (members.length) {
+      await tx.insert(eventCrew).values(members.map((m) => ({ eventId, userId: m.id, organizationId })));
+    }
+  });
+  revalidateProduction();
 }

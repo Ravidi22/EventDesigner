@@ -1,4 +1,4 @@
-import { requireStudio } from "@/lib/auth/guard";
+import { requireDesigner } from "@/lib/auth/guard";
 import { fetchProducts } from "@/lib/catalog/actions";
 import { EventSurface } from "@/components/event-surface";
 import { StudioScreen } from "./studio-screen";
@@ -13,7 +13,7 @@ import { StudioScreen } from "./studio-screen";
 // cannot know it without being told. See lib/events/workspace.ts.
 export default async function StudioPage() {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
-  await requireStudio();
+  await requireDesigner();
   return (
     <EventSurface active="studio">
       <StudioScreen initialProducts={await fetchProducts()} />

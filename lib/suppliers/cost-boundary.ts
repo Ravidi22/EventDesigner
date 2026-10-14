@@ -34,6 +34,7 @@ export const FORBIDDEN: { pattern: RegExp; why: string }[] = [
   // One import rule covering both spellings — `@/lib/suppliers/…` and any relative path that
   // reaches it — so a violation is reported once, with one reason.
   { pattern: /from\s+["'][^"']*\/suppliers\//, why: "imports the cost domain" },
+  { pattern: /from\s+["'][^"']*\/orders\//, why: "imports the orders (cost side)" },
   { pattern: /\bcostPrice\b/, why: "reads the studio's cost" },
   { pattern: /\bcost_price\b/, why: "reads the studio's cost column" },
   { pattern: /\bfetchEventMargin\b/, why: "reads the event's margin" },
