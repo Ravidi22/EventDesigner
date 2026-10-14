@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useMounted } from "@/lib/use-mounted";
 import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
 import { formatEventDate } from "@/lib/events/types";
@@ -55,7 +56,11 @@ export function DashboardScreen({
   // the whole list, which is what keeps a laptop and a tablet in the same meeting agreeing.
   const { events, remove: removeEvent, reload: reloadEvents } = useEvents(initialEvents);
   const { appointments, save, remove } = useAppointments(initialAppointments);
-  const [greeting, setGreeting] = useState("שלום");
+  // After mount, so the server and the first client render agree — the hour is not the same fact
+  // in both places.
+  const mounted = useMounted();
+  const hour = new Date().getHours();
+  const greeting = !mounted ? "שלום" : hour < 12 ? "בוקר טוב" : hour < 18 ? "צהריים טובים" : "ערב טוב";
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
   // The event the drawer has asked to delete. ONE dialog for the whole screen, and it is here
   // rather than inside the drawer because this is where the delete itself lives — the same split
@@ -76,13 +81,6 @@ export function DashboardScreen({
     /** Pre-attach the new meeting to this event — set when booking from an event's own drawer. */
     eventId?: string;
   } | null>(null);
-
-  // After mount, so the server and the first client render agree — the hour is not the same fact
-  // in both places.
-  useEffect(() => {
-    const h = new Date().getHours();
-    setGreeting(h < 12 ? "בוקר טוב" : h < 18 ? "צהריים טובים" : "ערב טוב");
-  }, []);
 
   // An event names its venue directly now (it occupies zones OF a venue), so scoping to the
   // sidebar's active venue is a field read — no hall→venue lookup table in between.

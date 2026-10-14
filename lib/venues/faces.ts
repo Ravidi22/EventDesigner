@@ -12,7 +12,7 @@
 // endpoints together (structure.addNode) so drawn walls do share nodes; a proper segment-
 // intersection pass is only needed if free-floating crossings ever become a real drawing style.
 import type { Point } from "@/lib/studio/hall";
-import { bulgeToCurve, polygonAreaMm2, sampleEdgePoints } from "@/lib/studio/geometry";
+import { bulgeToCurve, polygonAreaMm2, polygonCentroid, sampleEdgePoints } from "@/lib/studio/geometry";
 import { nodeMap, type VenueStructure, type Wall } from "./structure";
 import { isMain } from "../self-check";
 
@@ -124,6 +124,25 @@ export function detectFaces(structure: VenueStructure): Face[] {
   }
 
   return faces;
+}
+
+// Which side of a wall reads as "inward" for a door hung on it — the centroid of whichever
+// enclosed face that wall directly borders (its two nodes appear adjacent in the face's own
+// cycle), the graph-structure counterpart to the outline system's one whole-shape centroid: this
+// plan can have several rooms, so there is no single interior to point at. A wall with no face on
+// either side (open to nothing yet) has no interior to reference at all, so it falls back to an
+// arbitrary but consistent perpendicular offset — doorGeometry only reads the SIGN of which side
+// that point is on, and a door hung on an open wall has no "correct" side for that to disagree with.
+export function wallInteriorHint(faces: Face[], a: Point, b: Point, aId: string, bId: string): Point {
+  for (const f of faces) {
+    const n = f.nodeIds.length;
+    for (let i = 0; i < n; i++) {
+      const x = f.nodeIds[i];
+      const y = f.nodeIds[(i + 1) % n];
+      if ((x === aId && y === bId) || (x === bId && y === aId)) return polygonCentroid(f.boundary);
+    }
+  }
+  return { x: (a.x + b.x) / 2 - (b.y - a.y), y: (a.y + b.y) / 2 + (b.x - a.x) };
 }
 
 // Ray casting. Used to turn "the designer clicked here" into "…inside this room", so it has to

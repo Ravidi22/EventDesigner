@@ -18,7 +18,6 @@ import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import { resolveZones, zonesBounds, type ResolvedZone } from "@/lib/venues/zone";
 import { outlineBounds, type Bounds } from "@/lib/studio/geometry";
 import type { VenueAccessState, VenueGeometry } from "@/lib/venues/types";
-import type { Zone } from "@/lib/venues/zone";
 import type { EventSummary } from "./types";
 
 export interface EventPlan {
@@ -85,7 +84,7 @@ export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): 
 }
 
 /** The label stored on the event (EventSummary.zonesLabel) — one place builds it, so the details
- *  form and any later caller can't disagree about the separator. */
-export function labelForZones(zones: Zone[]): string {
-  return zones.map((z) => z.name).join(" · ");
-}
+ *  form and any later caller can't disagree about the separator. It moved next to the rule that
+ *  decides WHICH zones get saved (zone-selection.ts), which has a node self-check this geometry
+ *  module does not; re-exported here so the old import path still answers. */
+export { labelForZones } from "./zone-selection";

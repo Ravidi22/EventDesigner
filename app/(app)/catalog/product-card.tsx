@@ -75,7 +75,7 @@ export function ProductCard({
         />
 
         <div className="pointer-events-none relative h-14 w-14 shrink-0 overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={product.imageUrl} category={product.category} name={product.name} productId={product.id} />
+          <ProductImage product={product} />
         </div>
 
         <div className="pointer-events-none relative min-w-0 flex-1">
@@ -133,7 +133,7 @@ export function ProductCard({
 
       <div className="pointer-events-none relative flex flex-col">
         <div className="relative mb-2 aspect-[4/3] overflow-hidden rounded-md border border-border">
-          <ProductImage imageUrl={product.imageUrl} category={product.category} name={product.name} productId={product.id} />
+          <ProductImage product={product} />
           {product.variants.length > 0 && (
             <span className="absolute start-1.5 top-1.5 inline-flex items-center gap-1 rounded-pill border border-canvas/50 bg-canvas/70 px-2 py-0.5 text-xs font-medium text-ink-soft backdrop-blur-sm">
               <Palette className="h-3 w-3" strokeWidth={2} />

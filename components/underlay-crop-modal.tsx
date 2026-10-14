@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "./button";
 import { CloseButton } from "./close-button";
 
@@ -46,24 +46,22 @@ export function UnderlayCropModal({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [display, setDisplay] = useState<{ w: number; h: number; scale: number } | null>(null);
   const [rect, setRect] = useState<Rect | null>(null);
   const drag = useRef<{ id: HandleId; startX: number; startY: number; start: Rect } | null>(null);
 
   // A fresh object URL per file, revoked the moment it stops being the one on screen — otherwise
   // every crop attempt (including a cancelled one, re-opened on the same file) leaks a blob.
-  useEffect(() => {
-    if (!file) {
-      setObjectUrl(null);
-      setDisplay(null);
-      setRect(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setObjectUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+  // ponytail: a memo may run twice under StrictMode in dev and leak one blob URL until unload.
+  const objectUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(() => () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, [objectUrl]);
+  // The measured frame belongs to one file; a new one starts unmeasured (adjusted during render).
+  const [measuredFor, setMeasuredFor] = useState(file);
+  if (measuredFor !== file) {
+    setMeasuredFor(file);
+    setDisplay(null);
+    setRect(null);
+  }
 
   useEffect(() => {
     const d = dialogRef.current;
@@ -85,7 +83,7 @@ export function UnderlayCropModal({
     setRect({ x: w * 0.05, y: h * 0.05, w: w * 0.9, h: h * 0.9 });
   };
 
-  const onHandleDown = (id: HandleId) => (e: React.PointerEvent) => {
+  const onHandleDown = (id: HandleId, e: React.PointerEvent) => {
     if (!rect) return;
     e.preventDefault();
     e.stopPropagation();
@@ -213,7 +211,7 @@ export function UnderlayCropModal({
               {rect && display && (
                 <div
                   role="presentation"
-                  onPointerDown={onHandleDown("move")}
+                  onPointerDown={(e) => onHandleDown("move", e)}
                   className="absolute cursor-move border-2 border-accent"
                   style={{
                     left: rect.x,
@@ -225,7 +223,7 @@ export function UnderlayCropModal({
                   {HANDLES.map((h) => (
                     <div
                       key={h.id}
-                      onPointerDown={onHandleDown(h.id)}
+                      onPointerDown={(e) => onHandleDown(h.id, e)}
                       className={`absolute flex h-7 w-7 items-center justify-center after:block after:h-3.5 after:w-3.5 after:rounded-full after:border-2 after:border-accent after:bg-canvas ${h.cls}`}
                     />
                   ))}

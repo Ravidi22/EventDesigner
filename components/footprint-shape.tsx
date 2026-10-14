@@ -2,9 +2,14 @@ import type { DesignTable, Placement, Point } from "@/lib/design-document/types"
 import type { Product } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
 import { resolve } from "@/lib/studio/catalog-resolver";
-import { customShapeBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
+import { customShapeBounds, footprintBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
+import { blockFrame, type BlockFrame } from "@/lib/design-document/block";
+import { dressingLayout, fromTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
+import { isRunner } from "@/lib/catalog/categories";
+import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
+import { climbKindOf } from "@/lib/studio/climb-item";
 
 // The one place a catalog footprint turns into SVG. Three surfaces draw the same shapes — the
 // studio canvas, the drag image that leaves the rail, and the placement map the crew is handed on
@@ -61,7 +66,9 @@ export function FootprintShape({
     );
   }
   if (footprint.kind === "custom") {
-    const b = customShapeBounds(footprint.outline);
+    // The box of what is DRAWN — a bowed side's apex counts (customShapeBounds samples the curves),
+    // so a shape with one side bowed out stands on its visual centre, not its corners'.
+    const b = customShapeBounds(footprint.outline, footprint.edgeCurves);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
     return <path d={outlinePathD(centered, footprint.edgeCurves)} {...props} />;
   }
@@ -95,6 +102,16 @@ export function tableFootprint(table: DesignTable): Footprint {
   return { kind: "rect", widthMm: table.widthMm ?? 0, depthMm: table.depthMm ?? 0 };
 }
 
+/** A block of tables (a design group) as the one table it is: its frame and its members' shapes
+ *  where they stand, for the chairs round the lot (lib/design-document/block.ts). Every surface that
+ *  draws a block's ring reads it here — the studio canvas, the printed map, the table detail — so
+ *  none of them can seat the block differently. */
+export function tableBlock(tables: readonly DesignTable[]): BlockFrame | null {
+  return blockFrame(
+    tables.map((t) => ({ id: t.id, footprint: tableFootprint(t), position: t.position, rotation: t.rotation || 0, mirrored: t.mirrored, blockedSides: tableBlockedSides(t) })),
+  );
+}
+
 /** Where a table's number is written, in plan millimetres: the shape's own label point
  *  (lib/studio/label-anchor.ts — its centre on a rectangle or a round, the middle of the band on an
  *  arc) carried through the same flip and turn the table is drawn with, so the number on paper sits
@@ -109,6 +126,85 @@ export function tableLabelPoint(table: DesignTable): Point {
   return { x: table.position.x + x * cos - a.y * sin, y: table.position.y + x * sin + a.y * cos };
 }
 
+/** A table's own extent in its frame, for laying items out on it (lib/design-document/dressing.ts). */
+export function tableBox(table: DesignTable): TableBox {
+  const f = tableFootprint(table);
+  const b = footprintBounds(f);
+  return { widthMm: b.w, depthMm: b.h, round: f.kind === "circle" || f.kind === "ellipse" };
+}
+
+/** An item's box on a table — its footprint at its scale. */
+export function chipBox(p: Placement): ChipBox {
+  const b = footprintBounds(placementFootprint(p));
+  const s = p.scale || 1;
+  return { id: p.id, widthMm: b.w * s, depthMm: b.h * s };
+}
+
+/** Where each design item on a table stands: in the table's own frame (`local`), in the room (`at`),
+ *  and which way it faces in the room — its own turn on top of the table's, so a table turned to the
+ *  corner carries its candlesticks round with it. Every surface that draws a table's dressing (the
+ *  studio canvas, the printed map) reads it here, so none of them can lay it out differently. */
+export interface DressingSpot {
+  p: Placement;
+  /** Where it stands in the table's frame, and in the room. */
+  local: Point;
+  at: Point;
+  /** Which way it faces in the room. */
+  rotation: number;
+  /** Its box in the TABLE's frame (turn included) — what keeps it on the table top when moved. */
+  box: ChipBox;
+  /** A runner: laid by its own rule, never by an arrange action. */
+  runner: boolean;
+  /** The shape to draw it with, when that is not its catalog footprint (a runner, trimmed). */
+  footprint?: Footprint;
+}
+
+export function dressingSpots(
+  table: DesignTable,
+  chips: Placement[],
+): DressingSpot[] {
+  // A RUNNER (isRunner) is not one of the things set out on the table — it is what they are set on.
+  // It lies down the middle along the table's long side, out of the layout the others share, and it
+  // is drawn first, under them. Its length is trimmed to the table's plus the fall over each end: a
+  // 3m runner on a 1.8m round hangs down both sides, it does not float 60cm past them.
+  const box = tableBox(table);
+  const runnerOf = (p: Placement) => {
+    const product = resolve(p.variantId)?.product;
+    return product && !p.stage && isRunner(product) ? product : undefined;
+  };
+  const runners = chips.filter((p) => runnerOf(p));
+  const items = chips.filter((p) => !runnerOf(p));
+  const layout = dressingLayout(table.arranged, box, items.map((p) => ({ ...chipBox(p), position: p.position })));
+  const laid = runners.map((p) => {
+    const b = footprintBounds(placementFootprint(p));
+    const ownAlongX = b.w >= b.h;
+    const tableAlongX = box.widthMm >= box.depthMm;
+    // Turned a quarter when its long side and the table's disagree — unless the designer turned it.
+    const turn = !p.rotation && ownAlongX !== tableAlongX ? 90 : 0;
+    const reach = Math.max(box.widthMm, box.depthMm) + CLOTH_DROP_MM * 2;
+    const length = Math.min(Math.max(b.w, b.h), reach);
+    const width = Math.min(b.w, b.h);
+    const local = table.arranged && p.position ? p.position : { x: 0, y: 0 };
+    const acrossX = ownAlongX !== (turn !== 0); // its long side runs along the table's x
+    return {
+      p,
+      local,
+      at: fromTableFrame(table, local),
+      rotation: (table.rotation ?? 0) + (p.rotation ?? 0) + turn,
+      box: { id: p.id, widthMm: acrossX ? length : width, depthMm: acrossX ? width : length },
+      runner: true,
+      footprint: (ownAlongX ? { kind: "rect", widthMm: length, depthMm: width } : { kind: "rect", widthMm: width, depthMm: length }) as Footprint,
+    };
+  });
+  return [
+    ...laid,
+    ...items.map((p) => {
+      const local = layout.get(p.id) ?? { x: 0, y: 0 };
+      return { p, local, at: fromTableFrame(table, local), rotation: (table.rotation ?? 0) + (p.rotation ?? 0), box: chipBox(p), runner: false };
+    }),
+  ];
+}
+
 /** The shape a placed item is drawn with — its catalog footprint, at the size it was stretched to
  *  when its row is resizable (Product.resize). Stretch items (a carpet) are drawn by their own node
  *  from `sizeMm` directly and never come through here. */
@@ -117,6 +213,12 @@ export function placementFootprint(placement: Placement): Footprint {
   if (placement.stage) return { kind: "custom", outline: placement.stage.outline };
   const product = resolve(placement.variantId)?.product;
   if (!product) return { kind: "rect", widthMm: 600, depthMm: 600 };
+  // A flight or a ramp standing on its own runs as far as the step it covers takes it, whether or
+  // not its row stretches (lib/studio/climb-item.ts) — the run is not a choice, the rise is.
+  if (placement.sizeMm && !product.resize && climbKindOf(product)) {
+    const base = sizedFootprint(product);
+    if (base.kind === "rect") return { kind: "rect", ...placement.sizeMm };
+  }
   return sizedFootprint(product, placement.sizeMm);
 }
 
@@ -131,4 +233,49 @@ export function productStyle(product: Product | undefined, override?: ElementSty
   const merged: ElementStyle = { ...product?.appearance?.style, ...override };
   for (const k of Object.keys(merged) as (keyof ElementStyle)[]) if (merged[k] === undefined) delete merged[k];
   return Object.keys(merged).length ? merged : undefined;
+}
+
+// ── Equal drawings, for memo ─────────────────────────────────────────────────────────────────────
+//
+// The studio canvas re-renders every node on every frame of a pan or a zoom (the canvas hands its
+// layers the live zoom), and the drawings inside a node — a chair's curved back, a cloth's folds, a
+// candelabrum, a texture's filter graph — are where the elements are. Their callers rebuild the
+// footprint object each render, so React.memo's identity check never matches; these compare it by
+// value instead, which is a few numbers for a primitive and one pass over the points for an outline.
+
+const samePoints = (a: readonly Point[], b: readonly Point[]) =>
+  a === b || (a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y));
+const sameCurves = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+export function sameFootprint(a: Footprint, b: Footprint): boolean {
+  if (a === b) return true;
+  switch (a.kind) {
+    case "circle":
+      return b.kind === "circle" && a.diameterMm === b.diameterMm;
+    case "rect":
+    case "ellipse":
+      return b.kind === a.kind && a.widthMm === b.widthMm && a.depthMm === b.depthMm;
+    case "custom":
+      return b.kind === "custom" && samePoints(a.outline, b.outline) && sameCurves(a.edgeCurves, b.edgeCurves);
+    case "multi":
+      return (
+        b.kind === "multi" &&
+        a.parts.length === b.parts.length &&
+        a.parts.every((p, i) => samePoints(p.outline, b.parts[i].outline) && sameCurves(p.edgeCurves, b.parts[i].edgeCurves))
+      );
+  }
+}
+
+/** React.memo's comparison for a drawing: every prop by identity, a `footprint` by value. */
+export function sameDrawProps<P extends object>(a: P, b: P): boolean {
+  const ka = Object.keys(a) as (keyof P)[];
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) {
+    const x = a[k];
+    const y = b[k];
+    if (Object.is(x, y)) continue;
+    if (k === "footprint" && x && y && sameFootprint(x as unknown as Footprint, y as unknown as Footprint)) continue;
+    return false;
+  }
+  return true;
 }

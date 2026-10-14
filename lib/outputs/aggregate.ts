@@ -1,7 +1,7 @@
 // Pure aggregations over the design document (ADR-4): the packing list and the placement
 // legend are just reductions. Both take an injected lookup so this file has no runtime
 // dependency on the catalog/alias graph — which keeps the self-check runnable under node.
-import type { DesignDocumentContent } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { numberedUnits } from "../design-document/groups";
 import { isMain } from "../self-check";
@@ -19,6 +19,8 @@ export interface ItemInfo {
    *  (Product.flowers). The counts sum to armsMultiplier.count; the list is what the florist is
    *  phoned with, so it is carried beside the total rather than folded into it. */
   components?: { label: string; count: number }[];
+  /** The shade's own photo, else the product's — shown beside the item on the kit pages. */
+  imageUrl?: string;
 }
 
 export type ItemLookup = (variantId: string) => ItemInfo | undefined;
@@ -40,9 +42,33 @@ export interface PackGroup {
   rows: PackRow[];
 }
 
-export function packingList(doc: DesignDocumentContent, lookup: ItemLookup, ctx?: MeasureContext): PackGroup[] {
+/** The group a table's chairs land in when the studio has no chair in its catalog to count them
+ *  as — counted anyway, because a crew short of 240 chairs finds out at the door. */
+export const UNTYPED_CHAIRS = "__untyped-chairs";
+
+export function packingList(
+  doc: DesignDocumentContent,
+  lookup: ItemLookup,
+  ctx?: MeasureContext,
+  /** The chair round a table (lib/catalog/chairs.ts → chairOf). When given, every table's seats are
+   *  packed as that chair — they never were: chairs were derived from the seat count on the plan
+   *  and counted nowhere, so a 240-seat event packed none. Not part of measureTotals on purpose:
+   *  the quote reads that too, and whether a studio bills the chairs (or the venue provides them)
+   *  is a pricing question, not a packing one. */
+  chairOf?: (table: DesignTable) => string | undefined,
+): PackGroup[] {
   const measureCtx: MeasureContext = ctx ?? { unitOf: (id) => lookup(id)?.priceUnit ?? "unit" };
   const totals = measureTotals(doc, measureCtx);
+  let untyped = 0;
+  if (chairOf) {
+    for (const t of doc.tables) {
+      const seats = t.seats ?? 0;
+      if (seats <= 0) continue;
+      const chair = chairOf(t);
+      if (chair && lookup(chair)) totals.set(chair, (totals.get(chair) ?? 0) + seats);
+      else untyped += seats;
+    }
+  }
 
   const groups = new Map<string, PackGroup & { order: number }>();
   for (const [variantId, quantity] of totals) {
@@ -65,6 +91,14 @@ export function packingList(doc: DesignDocumentContent, lookup: ItemLookup, ctx?
     groups.set(info.categoryId, g);
   }
 
+  if (untyped > 0) {
+    groups.set(UNTYPED_CHAIRS, {
+      categoryId: UNTYPED_CHAIRS,
+      label: "כיסאות",
+      rows: [{ variantId: UNTYPED_CHAIRS, label: "כיסאות — אין כיסא בקטלוג", quantity: untyped, unit: "unit" }],
+      order: -1,
+    });
+  }
   return [...groups.values()]
     .sort((a, b) => a.order - b.order)
     .map(({ categoryId, label, rows }) => ({
@@ -156,6 +190,25 @@ if (isMain(import.meta.url)) {
   const flora = pl[2].rows[0];
   assert(flora.derived?.quantity === 340, "stems = 17 × 20 arrangements");
   assert(flora.breakdown?.length === 2 && flora.breakdown[0].quantity === 240 && flora.breakdown[1].quantity === 100, "…and per flower: 12×20 roses, 5×20 peonies");
+
+  // Chairs round the tables, by the chair each table names, else the default.
+  const seated: DesignDocumentContent = {
+    ...doc,
+    tables: [
+      { ...doc.tables[0], seats: 10 },
+      { ...doc.tables[1], seats: 10, chairVariantId: "arm" },
+      { ...doc.tables[2], seats: 8 },
+    ],
+  };
+  const chairLookup: ItemLookup = (id) =>
+    id === "napoleon" || id === "arm"
+      ? { productName: id, variantLabel: id, categoryId: "chairs", categoryLabel: "כיסאות", categoryOrder: 3 }
+      : lookup(id);
+  const chairs = packingList(seated, chairLookup, undefined, (t) => t.chairVariantId ?? "napoleon").find((g) => g.categoryId === "chairs")!;
+  assert(chairs.rows.find((r) => r.variantId === "napoleon")?.quantity === 18 && chairs.rows.find((r) => r.variantId === "arm")?.quantity === 10, "every table's seats are packed as its chair");
+  const none = packingList(seated, lookup, undefined, () => undefined);
+  assert(none[0].categoryId === UNTYPED_CHAIRS && none[0].rows[0].quantity === 28, "with no chair in the catalog the chairs are still counted");
+  assert(packingList(seated, lookup).every((g) => g.categoryId !== UNTYPED_CHAIRS), "without chairOf nothing changes (the quote's path)");
 
   const legend = placementLegend(doc, (id) => lookup(id)?.productName);
   const withCloth = legend.find((e) => e.items.length > 0)!;

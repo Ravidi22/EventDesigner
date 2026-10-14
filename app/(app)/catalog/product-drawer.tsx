@@ -24,6 +24,7 @@ import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierList } from "@/lib/suppliers/use-suppliers";
 import { catalogBox, footprintBounds, resolveContent, resolveFootprint, roundSizeMm } from "@/lib/studio/footprint";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
+import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
 import { isPlacedAnywhere, isStandardProduct } from "@/lib/catalog/actions";
 import { Button } from "@/components/button";
@@ -75,7 +76,8 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     name: "",
     category: c.id,
     layer: c.defaultLayer,
-    dimensions: { heightMm: 0 },
+    // A table starts at 75cm (CategoryDef.defaultHeightMm); everything else starts empty and asks.
+    dimensions: { heightMm: c.defaultHeightMm ?? 0 },
     categoryFields: {},
     styleTags: [],
     variants: [],
@@ -155,9 +157,13 @@ function ResizeFields({
         }
         label="גודל גמיש על התוכנית"
         hint={
-          ready
-            ? "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
-            : "יש להשלים קודם את הצורה והמידות."
+          !ready
+            ? "יש להשלים קודם את הצורה והמידות."
+            : // The category stretches its rows by default (CategoryDef.defaultResize) — a banquette is
+              // laid to length — and the switch here is for a row that wants its own module and range.
+              !spec && CATEGORY_BY_ID[draft.category]?.defaultResize
+              ? "פריטי הקטגוריה הזו נמתחים לאורכם בסקיצה כברירת מחדל. הפעלה כאן קובעת לשורה הזו קפיצות וטווח משלה."
+              : "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
         }
       />
       {spec && (
@@ -435,8 +441,14 @@ export function ProductDrawer({
   const changeCategory = (id: string) =>
     setDraft((d) => {
       const c = CATEGORY_BY_ID[id];
+      // A NEW product's height re-seeds with the category while it is still the old category's seed
+      // (or empty) — a fresh row starts as a table at 75cm, and turning it into a chair must not
+      // leave it 75cm tall. A saved product's height is a measurement and is never touched.
+      const seededHeight = CATEGORY_BY_ID[d.category]?.defaultHeightMm ?? 0;
+      const reseedHeight = !d.id && (d.dimensions.heightMm === 0 || d.dimensions.heightMm === seededHeight);
       return {
         ...d,
+        ...(reseedHeight ? { dimensions: { ...d.dimensions, heightMm: c.defaultHeightMm ?? 0 } } : {}),
         category: id,
         layer: c.defaultLayer,
         categoryFields: {},
@@ -740,6 +752,34 @@ export function ProductDrawer({
               יקבל הילה, ואזהרה כשמשהו מתקרב אליו יותר מזה. ריק = בלי כלל.
             </p>
           </div>
+
+          {/* How high a ceiling item hangs — the default every placed one starts from, overridden per
+              item in the studio. In categoryFields (lib/studio/hang.ts's HANG_FIELD): a rigging fact,
+              printed on the ceiling plan, and never a multiplier the quote or the order reads. */}
+          {draft.layer === "ceiling" && category.anchor !== "wall" && (
+            <div>
+              <NumberField
+                id="p-hang"
+                label="גובה תלייה מהרצפה (ס״מ)"
+                className="w-44"
+                min={0}
+                max={HANG_MAX_MM / 10}
+                hideZero
+                placeholder="—"
+                value={cmOf(Number(draft.categoryFields[HANG_FIELD]) || 0)}
+                onChange={(v) =>
+                  setDraft((d) => {
+                    const { [HANG_FIELD]: _old, ...rest } = d.categoryFields;
+                    void _old;
+                    return { ...d, categoryFields: v > 0 ? { ...rest, [HANG_FIELD]: Math.round(Math.min(v * 10, HANG_MAX_MM)) } : rest };
+                  })
+                }
+              />
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                מהרצפה עד תחתית הפריט. מודפס ליד הפריט בתוכנית התקרה, ואפשר לשנות לכל פריט בסקיצה. ריק = לא צוין.
+              </p>
+            </div>
+          )}
 
           <SectionDivider label="מפרט" />
 

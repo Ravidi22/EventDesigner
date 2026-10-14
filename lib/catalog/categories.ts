@@ -27,9 +27,11 @@ import {
   Sofa,
   Droplets,
   Shapes,
+  Amphora,
+  TreeDeciduous,
   type LucideIcon,
 } from "lucide-react";
-import type { Layer, StockKind } from "./types";
+import type { Layer, ResizeSpec, StockKind } from "./types";
 
 export interface CategoryField {
   key: string;
@@ -115,6 +117,10 @@ export interface CategoryDef {
    *  drape's height is its DROP, the one thing that still tells two rolls of curtain apart, so that
    *  category keeps asking. */
   needsHeight?: boolean;
+  /** The height a NEW product of this category starts with, in mm — a seed for the drawer like
+   *  `defaultStock`, stored on the row and editable. Absent = the drawer starts empty and asks. Only
+   *  where nearly every row agrees: an event table is 75cm (the base library's tables are too). */
+  defaultHeightMm?: number;
   /** Clicking this item on the studio's rail arms it for ONE placement rather than keeping it armed
    *  until Escape (see `placesOnce`). For the things an event has one of — a stage, a chuppah —
    *  where the click after the first is far likelier to be "now let me edit it" than "another one". */
@@ -125,6 +131,12 @@ export interface CategoryDef {
    *  the list is what fills it. Turn it on for an arch or a chuppah the day a studio specs those by
    *  the stem; nothing else needs to change. */
   flowers?: boolean;
+  /** How the plan may stretch a product of this category that says nothing about it itself
+   *  (Product.resize absent): a banquette is a run along a stage or a wall and is laid to the length
+   *  the room needs, and asking every studio to switch that on row by row is asking them to type what
+   *  the category already knows. The row's own `resize` wins when set — this is the default under
+   *  it, read through `resizeSpecOf` (lib/studio/footprint.ts). */
+  defaultResize?: ResizeSpec;
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -138,7 +150,7 @@ export function placesOnce(c: CategoryDef | undefined): boolean {
 }
 
 export const CATEGORIES: CategoryDef[] = [
-  { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
+  { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", defaultHeightMm: 750, fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
   { id: "chairs", label: "כיסאות", group: "grp-seating", defaultLayer: "floor", icon: Armchair, dims: "box", fields: [] },
   // Lounge seating — a corner of sofas and armchairs round a low table, not a place laid for dinner.
   // No seat field: a sofa is counted as one sofa on the packing list, and nothing multiplies off it.
@@ -154,11 +166,16 @@ export const CATEGORIES: CategoryDef[] = [
   // flowers.ts) and typed only when it carries none. How many stems the supplier sells in a bunch
   // is a different question, and it stays where it lives — orderUnit.
   { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", flowers: true },
+  // The VESSEL — a vase, an urn, a footed bowl, a glass cylinder — as the studio stocks it: bought
+  // once and set again at every event, so owned. Not a centrepiece: that is what is arranged in it,
+  // used up and priced as a design, and a catalog that filed the 80cm gold vase there would count it
+  // as consumed every time it went out.
+  { id: "vases", label: "אגרטלים וכלים", group: "grp-table-design", defaultLayer: "table", icon: Amphora, dims: "round", fields: [] },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
   { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [], placeOnce: true },
-  // The loose modules a stage is built from — a 200×100 deck, the 100×100 that finishes an odd row.
+  // The loose modules a stage is built from — a 244×122 sheet, the 244×80/60/40 strips that finish a row's depth.
   // The stage-fill tool (lib/studio/stage-fill.ts) builds from these AND from the studio's own
   // platforms in "stages": a studio that owns a 400×300 builds a 7×4 from it and a few decks.
   { id: "stage-decks", label: "פלטות במה", group: "grp-stages", defaultLayer: "floor", icon: Grid2x2, dims: "box", fields: [] },
@@ -169,7 +186,23 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [] },
   // The other two ways an open stage edge is finished (StageEdgeKind): a banquette people sit on
   // along the outside of the edge, and a barrier on it. Both counted by the metre off the stage.
-  { id: "stage-benches", label: "בנקטים", group: "grp-stages", defaultLayer: "floor", icon: RectangleHorizontal, dims: "box", fields: [] },
+  //
+  // A banquette also stands FREE on the floor (Placement.bench, lib/design-document/bench.ts): a run
+  // of chairs along its back with its top as their table, or a sofa sat on facing the room, numbered
+  // like a table. No count-multiplier field, deliberately — its chairs come from the PLAN (how long
+  // it was stretched to, which sides are laid), never from a number typed on the row. Table height,
+  // and stretched along its length by default: 60cm to 12m in 10cm steps, its depth fixed.
+  {
+    id: "stage-benches",
+    label: "בנקטים",
+    group: "grp-stages",
+    defaultLayer: "floor",
+    icon: RectangleHorizontal,
+    dims: "box",
+    fields: [],
+    defaultHeightMm: 750,
+    defaultResize: { stepMm: 100, width: { minMm: 600, maxMm: 12000 } },
+  },
   { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [] },
   // A wall standing on a stage edge (a flower wall, a draped frame) by the metre; a ramp by the ramp;
   // and what covers the deck (carpet, dance floor) by the square metre of stage.
@@ -184,6 +217,9 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "columns", label: "עמודים", group: "grp-accessories", defaultLayer: "floor", icon: Milestone, dims: "round", fields: [] },
   // Water features: a fountain is round far more often than not.
   { id: "fountains", label: "מזרקות", group: "grp-accessories", defaultLayer: "floor", icon: Droplets, dims: "round", fields: [] },
+  // Trees and standing greenery — an artificial blossom tree, an olive in a planter. Measured by its
+  // CANOPY, because that is what the plan has to keep clear of tables and what the client sees.
+  { id: "trees", label: "עצים וצמחייה", group: "grp-accessories", defaultLayer: "floor", icon: TreeDeciduous, dims: "round", fields: [] },
   // The long tail. "אחר" is the box for the thing the catalog has no name for yet — a prop, a sign,
   // a sculpture, a photo booth — so it is drawn on the plan at its measured size and counted on the
   // packing list rather than left off both for want of a category. Both shapes, because it is
@@ -194,6 +230,27 @@ export const CATEGORIES: CategoryDef[] = [
 export const CATEGORY_BY_ID: Record<string, CategoryDef> = Object.fromEntries(
   CATEGORIES.map((c) => [c.id, c]),
 );
+
+/** A RUNNER — a strip of fabric laid along a table, over its cloth — is filed with the cloths
+ *  (מפות), but it is not the table's cloth: a table wears one cloth AND a runner on top of it. Told
+ *  apart by its shape, which no cloth has: a strip, at most 70cm wide and at least two and a half
+ *  times as long (an organza runner is 300×40; the narrowest cloth is the table's own width plus its
+ *  drop). A row with no measurements is read by its name. Derived rather than a category of its own,
+ *  so the runners already in a catalog are runners without anyone moving them. */
+export function isRunner(p: { category: string; name: string; dimensions: { widthMm?: number; depthMm?: number } }): boolean {
+  if (p.category !== "tablecloths") return false;
+  const { widthMm: w, depthMm: d } = p.dimensions;
+  if (w && d) return Math.min(w, d) <= 700 && Math.max(w, d) >= 2.5 * Math.min(w, d);
+  return /ראנר|רנר|runner/i.test(p.name);
+}
+
+/** Where a product sits on the plan — its category's anchor, except that a runner is not the table's
+ *  cover but an item laid ON the table, so it is "free" (an item on the table's top, like a
+ *  centrepiece) and never replaces or is replaced by the cloth. */
+export function anchorOf(p: { category: string; name: string; dimensions: { widthMm?: number; depthMm?: number } }): Anchor {
+  if (isRunner(p)) return "free";
+  return CATEGORY_BY_ID[p.category]?.anchor ?? "free";
+}
 
 // The meeting draws the room in two passes (lib/meeting/steps.ts), and each one wants a different
 // half of the catalog on the rail: first the furniture that decides where people sit and look, then

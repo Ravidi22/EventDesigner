@@ -8,7 +8,6 @@ import {
   Building2,
   Check,
   Copy,
-  ChevronUp,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
   Hand,
@@ -20,7 +19,6 @@ import {
   PenLine,
   Plus,
   Ruler,
-  Search as SearchIcon,
   SendToBack,
   Shapes,
   Trash2,
@@ -255,7 +253,9 @@ export function HallsScreen() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
   const focusNonce = useRef(0);
-  const [ready, setReady] = useState(false); // storage has been read; before this, nothing is written back
+  // Which property's plan has been read. Before the open one's arrives nothing is written back.
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const ready = readyFor === venueId;
   // The zone-definition / background-plan panel, collapsible exactly like the app's own sidebar
   // (components/app-shell.tsx) — a designer mid-drawing wants the canvas at full width without
   // losing the panel entirely, the same tradeoff the main nav's own collapse toggle makes.
@@ -268,12 +268,10 @@ export function HallsScreen() {
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number; w: number } | null>(null);
   // Hover state for the region tool's closing target — the first vertex, once the boundary has
   // enough points to close. Purely cosmetic (a bigger, brighter dot), so a plain boolean is enough.
-  const [hoverCloseRegion, setHoverCloseRegion] = useState(false);
+  const [hoverCloseRegionRaw, setHoverCloseRegion] = useState(false);
   // Whichever of the several setRegion(null) call sites ends a region (Enter, a near-first-vertex
   // click, Esc, the toggle button), the hover ring shouldn't outlive it and greet the next one already lit.
-  useEffect(() => {
-    if (region === null) setHoverCloseRegion(false);
-  }, [region]);
+  const hoverCloseRegion = region !== null && hoverCloseRegionRaw;
   // 16 screen px worth of world mm at the current zoom, refreshed every render from inside the
   // canvas's backdrop (the only place a px→mm conversion is available) and read back from onPick,
   // which only ever sees mm points — this is how a click "near" the first vertex gets detected at
@@ -303,7 +301,7 @@ export function HallsScreen() {
    * switch: a write still in the air belongs to the property it was drawn on, not to the one now
    * open.
    */
-  const flush = useCallback(async () => {
+  const flush = useCallback(async function flush() {
     if (inFlight.current) return; // the running save will pick up whatever is pending when it lands
     const next = pending.current;
     if (!next?.venueId) return;
@@ -351,7 +349,6 @@ export function HallsScreen() {
     // be cleared by its own cleanup, and that is how the last edit before a venue switch was lost.
     if (pending.current) void flush();
     let live = true;
-    setReady(false); // nothing is written back while another property's plan is in flight
     void fetchVenuePlan(venueId).then(({ structure: loaded, zones: loadedZones }) => {
       if (!live) return;
       const snapshot: PlanState = { venueId, structure: loaded, zones: loadedZones };
@@ -371,7 +368,7 @@ export function HallsScreen() {
       // A property with nothing drawn on it has nothing to select or name — open on the one tool
       // that can make progress rather than on an empty grid with the wrong tool in hand.
       setMode(loaded.walls.length === 0 ? "walls" : "select");
-      setReady(true);
+      setReadyFor(venueId);
     });
     return () => {
       live = false;
@@ -820,7 +817,11 @@ export function HallsScreen() {
   const [underlayChip, setUnderlayChip] = useState(false);
   const underlayChipRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  // Re-seeded when the property or its stored underlay changes — adjusted during render (React's
+  // own pattern for state that follows a prop), so the old image never paints for a frame.
+  const [underlayFor, setUnderlayFor] = useState<{ venueId: string; underlay: PlanUnderlay | undefined } | null>(null);
+  if (underlayFor?.venueId !== venueId || underlayFor.underlay !== venue?.plan.underlay) {
+    setUnderlayFor({ venueId, underlay: venue?.plan.underlay });
     setUnderlay(venue?.plan.underlay);
     setUnderlayUnlocked(false);
     setUnderlayChip(false);
@@ -828,7 +829,7 @@ export function HallsScreen() {
     setUnderlayNote(null);
     setCropFile(null);
     setPickerOpen(false);
-  }, [venueId, venue?.plan.underlay]);
+  }
 
   // Other venues in the studio that already have a plan photo — reusing one skips a re-upload (and
   // a re-photograph) when two properties share the same source drawing. `venues` already comes from

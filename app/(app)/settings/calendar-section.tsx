@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { useMounted } from "@/lib/use-mounted";
 import { AlertTriangle, CalendarSync, Check, ExternalLink, RefreshCw } from "lucide-react";
 import {
   disconnectGoogle,
@@ -66,17 +67,23 @@ function redirectNotice(verdict: RedirectVerdict): { tone: "warn" | "bad"; text:
 
 export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus }) {
   const [status, setStatus] = useState(initialStatus);
+  // The callback route lands on /settings?google=…#calendar. The param is read in render (after
+  // mount), latched into state so it survives being stripped from the URL below, and the strip
+  // itself is the effect — so a refresh does not re-announce a connection made ten minutes ago.
+  const mounted = useMounted();
+  const fromUrl = mounted ? new URLSearchParams(window.location.search).get("google") : null;
+  const [latched, setLatched] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  if (fromUrl && fromUrl !== latched) {
+    setLatched(fromUrl);
+    setOutcome(OUTCOME[fromUrl] ?? OUTCOME.failed);
+  }
   const [syncNote, setSyncNote] = useState("");
   const [pending, startTransition] = useTransition();
 
-  // The callback route lands on /settings?google=…#calendar. Read it once and strip it, so a
-  // refresh does not re-announce a connection made ten minutes ago.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const value = params.get("google");
-    if (!value) return;
-    setOutcome(OUTCOME[value] ?? OUTCOME.failed);
+    if (!params.get("google")) return;
     params.delete("google");
     const query = params.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}#calendar`);

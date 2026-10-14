@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CircleDot,
   Crosshair,
@@ -41,9 +41,11 @@ import {
   polygonCentroid,
   endpointFromLengthAngle,
 } from "@/lib/studio/geometry";
-import { snapPoint, constrainAngleDeg, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
-import { insidePolys, pointToPolys, polysGap } from "@/lib/studio/proximity";
+import { snapPoint, constrainAngleDeg, gridStepMm, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
+import { insidePolys } from "@/lib/studio/proximity";
+import { addTape, anchorAt, pruneTape, removeTape, resolveTape, tapeId, tapeReadout, type TapeAnchor, type TapeLookup, type TapeMeasurement, type TapeSegment } from "@/lib/studio/tape";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
+import { startPointerGesture } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
@@ -63,7 +65,10 @@ export interface ContextMenuItem {
   label: string;
   icon?: LucideIcon;
   disabled?: boolean;
+  /** Does nothing itself when `children` is set — the row opens them beside the menu instead. */
   onSelect: () => void;
+  /** A submenu: "יישור ›" and its rows. One level deep. */
+  children?: ContextMenuItem[];
 }
 
 // A connected wall graph the canvas can draw and reshape alongside (or instead of) the single
@@ -239,31 +244,24 @@ function nudge(e: React.KeyboardEvent, x: number, y: number, onMove: (p: Point) 
   e.preventDefault();
 }
 
-// Where each live press started, keyed by pointerId. It can't live in the closure below: the first
-// onMove re-renders the host, which rebuilds these handlers mid-gesture — the origin has to outlive
-// that. Module scope is safe because a pointerId identifies one gesture at a time.
-const pressOrigin = new Map<number, { x: number; y: number; dragging: boolean }>();
-// Set when a gesture crosses the drag threshold, so the click event that always follows its
-// pointerup (browsers fire pointerdown → pointerup → click for one press) can skip re-running
-// selection logic. Without this, dragging an already-multi-selected item would re-fire "select just
-// me" the instant the drag ends, undoing the very group the drag just moved. Not pointerId-keyed:
-// this file only ever has one live drag-then-click sequence in flight at a time (a single pointer),
-// the same assumption pan/marquee already make with their own un-keyed refs.
-let suppressNextClick = false;
 // Set when a graph node's non-additive press has already toggled the selection (so a drag has
 // instant visual feedback — see dragHandlers). The click that follows always fires too (that's
 // dragHandlers' contract), and re-running the exact same non-additive toggle would immediately flip
-// a freshly-solo selection straight back off. Read once by that click, same un-keyed, single-gesture
-// assumption as suppressNextClick above.
+// a freshly-solo selection straight back off. Read once by that click; one press-then-click
+// sequence is in flight at a time (a single pointer), the same assumption pan/marquee make with
+// their own un-keyed refs.
 let nodePressAlreadySelected = false;
 
 // Pointer-drag in SVG user-space (mm), via getScreenCTM — robust to zoom/resize/RTL, unlike a
 // manually-tracked px-per-mm factor, and unaffected by any nested rotate() transform since it
-// always resolves through the root <svg>'s own CTM. Shared by every draggable thing on the canvas.
+// always resolves through the world group's own CTM. Shared by every draggable thing on the canvas.
 //
-// Geometry only starts moving after DRAG_THRESHOLD_PX of travel, so a click meant to select a
-// vertex can't silently nudge it by the pixel the pointer drifted under the finger. onDragChange
-// reports the crossing, for handles that have to stay mounted for the length of their own drag.
+// The gesture itself is lib/studio/gesture.ts: the press installs window listeners that carry the
+// drag however the element is re-rendered, re-keyed or re-ordered in the meantime, and the click
+// that follows a drag is swallowed before React sees it. Geometry only starts moving after
+// DRAG_THRESHOLD_PX of travel, so a click meant to select a vertex can't silently nudge it by the
+// pixel the pointer drifted under the finger. onDragChange reports the crossing, for handles that
+// have to stay mounted for the length of their own drag.
 //
 // The same crossing is what tells the host's history where one gesture ends: onCommit fires once
 // per press that actually moved something, so a drag of fifty onMove calls is one undo step. A
@@ -280,49 +278,62 @@ function dragHandlers(
   onDragChange?: (dragging: boolean) => void,
   onCommit?: () => void,
 ) {
-  const end = (e: React.PointerEvent) => {
-    const el = e.currentTarget as Element;
-    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-    if (pressOrigin.get(e.pointerId)?.dragging) {
-      onDragChange?.(false);
-      onCommit?.();
-      suppressNextClick = true;
-    }
-    pressOrigin.delete(e.pointerId);
-  };
   return {
     onPointerDown: (e: React.PointerEvent) => {
       e.stopPropagation();
-      (e.currentTarget as Element).setPointerCapture(e.pointerId);
-      pressOrigin.set(e.pointerId, { x: e.clientX, y: e.clientY, dragging: false });
       // An additive-modifier press never selects here — only the click phase toggles (see
       // onClick), so a press+drag combined with Shift/Ctrl reads as "drag", not "drag *and*
       // toggle twice".
       if (!isAdditiveClick(e)) onSelect?.({ shift: false, phase: "press" });
+      startPointerGesture(e, {
+        onStart: () => onDragChange?.(true),
+        onMove: (ev) => onMove(clientToMm(ev.clientX, ev.clientY), { alt: ev.altKey, shift: ev.shiftKey }),
+        onEnd: (_ev, moved) => {
+          if (!moved) return;
+          onDragChange?.(false);
+          onCommit?.();
+        },
+      }, { thresholdPx: DRAG_THRESHOLD_PX });
     },
-    onPointerMove: (e: React.PointerEvent) => {
-      if (e.buttons !== 1) return;
-      const origin = pressOrigin.get(e.pointerId);
-      if (!origin) return;
-      if (!origin.dragging) {
-        if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_THRESHOLD_PX) return;
-        origin.dragging = true;
-        onDragChange?.(true);
-      }
-      onMove(clientToMm(e.clientX, e.clientY), { alt: e.altKey, shift: e.shiftKey });
-    },
-    onPointerUp: end,
-    onPointerCancel: end,
     onClick: (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (suppressNextClick) {
-        suppressNextClick = false;
-        return;
-      }
       onSelect?.({ shift: isAdditiveClick(e), phase: "click" });
     },
   };
 }
+
+/** The world group's transform for a view: screen px → `translate` the world origin into the
+ *  middle of the container, `scale` by the zoom. One function, so the attribute React renders and
+ *  the one a live pan writes straight to the DOM can never disagree. */
+function worldTransform(v: { cx: number; cy: number; mmPerPx: number }, w: number, h: number): string {
+  return `translate(${w / 2 - v.cx / v.mmPerPx} ${h / 2 - v.cy / v.mmPerPx}) scale(${1 / v.mmPerPx})`;
+}
+
+/** The CSS transform that carries the HTML overlays — positioned by React against the SETTLED view
+ *  — to where the LIVE view has moved: a pure pan is a translate, a zoom in flight scales them a
+ *  little until the view settles and they are laid out again. Identity when the two agree. */
+function hudTransform(s: { cx: number; cy: number; mmPerPx: number }, l: { cx: number; cy: number; mmPerPx: number }, w: number, h: number): string {
+  if (s.cx === l.cx && s.cy === l.cy && s.mmPerPx === l.mmPerPx) return "";
+  const k = s.mmPerPx / l.mmPerPx;
+  const tx = (w / 2) * (1 - k) + (s.cx - l.cx) / l.mmPerPx;
+  const ty = (h / 2) * (1 - k) + (s.cy - l.cy) / l.mmPerPx;
+  return `translate(${tx}px, ${ty}px) scale(${k})`;
+}
+
+const sameGaps = (a?: GapGuide[], b?: GapGuide[]) =>
+  a === b ||
+  (!!a &&
+    !!b &&
+    a.length === b.length &&
+    a.every(
+      (g, i) =>
+        g.axis === b[i].axis &&
+        g.gapMm === b[i].gapMm &&
+        g.segments.length === b[i].segments.length &&
+        g.segments.every((s, j) => s.from === b[i].segments[j].from && s.to === b[i].segments[j].to && s.at === b[i].segments[j].at),
+    ));
+type Guides = { x: number | null; y: number | null; gaps?: GapGuide[] };
+const sameGuides = (a: Guides, b: Guides) => a.x === b.x && a.y === b.y && sameGaps(a.gaps, b.gaps);
 
 // THE canvas. Every plan, map and footprint surface in the app is this component with different
 // layers hung off it — the hall editor, the studio's design surface, the catalog's shape editor —
@@ -355,6 +366,7 @@ export function PlanCanvas({
   onCloseOutline,
   onCancelDraw,
   onMoveVertex,
+  onMoveWall,
   onMoveWallHandle,
   onMoveSelection,
   onRotateFixtureGroup,
@@ -363,8 +375,10 @@ export function PlanCanvas({
   onMoveBar,
   onUpdateStage,
   onUpdateBar,
-  onToggleWallLock,
   onCommit,
+  lengthUnit = "m",
+  drawAngleStepDeg = 5,
+  drawAngleFromFirstSide = false,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -392,6 +406,7 @@ export function PlanCanvas({
   gridMm = 1000,
   gridColorClassName = "text-border",
   measureTargets,
+  measureTargetById,
   centerGuides,
   toolbarExtras,
 }: {
@@ -414,6 +429,12 @@ export function PlanCanvas({
   onCloseOutline: () => void;
   onCancelDraw?: () => void; // Escape while drawing — the host throws the in-progress outline away
   onMoveVertex: (idx: number, p: Point) => void;
+  // A press-and-drag on a side's BODY pushes the whole side along its normal: both ends move
+  // together and the neighbouring sides follow (the stage tool's pushSide). Reported as the two
+  // ends' absolute points every frame, worked out from where the press started — so the host's
+  // undo entry is one gesture, like a vertex drag. Bowing stays on the diamond at the midpoint.
+  // Supplying this is what makes a side draggable at all; without it a side only selects.
+  onMoveWall?: (edgeIdx: number, a: Point, b: Point) => void;
   onMoveWallHandle: (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => void;
   // Fires once per pointermove during a group drag/rotate — every selected ref's next absolute
   // point (or, for rotate, position+facing), batched so the host coalesces it into one undo entry.
@@ -428,6 +449,14 @@ export function PlanCanvas({
   // End of a gesture — one drag, however many onMove calls it made. The host closes its history
   // entry here; discrete edits (a placed vertex, a deleted door) need no such marker.
   onCommit?: () => void;
+  /** What a typed or shown length is in. A hall is traced in metres; a catalog footprint is a
+   *  cm-scale thing and its editor asks and answers in centimetres (metres again from 10m up). */
+  lengthUnit?: "m" | "cm";
+  /** The angle lock while drawing: the step, and whether it is counted from the shape's FIRST side
+   *  (the stage tool's rule — a table drawn at an angle is square to itself) or from the page's own
+   *  axes (how a hall is traced). Alt frees it either way. */
+  drawAngleStepDeg?: number;
+  drawAngleFromFirstSide?: boolean;
   canUndo?: boolean; // the undo/redo pair only renders when the host offers a history
   canRedo?: boolean;
   onUndo?: () => void;
@@ -510,9 +539,19 @@ export function PlanCanvas({
    *  bg-canvas a colour close to text-border in value (the halls screen's light-purple canvas,
    *  say) needs a line with more contrast against it, or the grid just disappears. */
   gridColorClassName?: string;
-  /** What the tape can pick up as a whole — click inside one and the measurement runs from its
-   *  EDGE. Topmost last, like the drawing order. Omitted = the tape measures between points only. */
-  measureTargets?: MeasureTarget[];
+  /** What the tape can pick up as a whole — press or release inside one and the measurement runs
+   *  from its EDGE. Topmost last, like the drawing order. Omitted = the tape measures between points
+   *  only. A FUNCTION is read only while the tape is armed: the outlines of everything on a plan are
+   *  not cheap, and a host that hands them over lazily pays for them only when they are measured.
+   *  Used for HIT-TESTING — at a press and a release, when nothing else is moving. */
+  measureTargets?: MeasureTarget[] | (() => MeasureTarget[]);
+  /** One target by id, read off the document AS IT IS IN THIS RENDER. A measurement anchored to an
+   *  item is re-resolved every render so it follows the item while it is dragged; the list above is
+   *  published after the host's commit, which is one render behind during a drag, and a tape read
+   *  off it would lag the table by a frame. A host that can answer synchronously hands this over
+   *  (the studio: itemGeometry is cached per item object, so two lookups a frame cost nothing);
+   *  without it the list is searched. */
+  measureTargetById?: (id: string) => MeasureTarget | undefined;
   /** The centre-line guides (the crosshair button): `plan` is the area whose middle matters — the
    *  event's zones, the hall — and `items` the selection's own boxes. Supplying this is what puts the
    *  button on the canvas at all. */
@@ -522,6 +561,26 @@ export function PlanCanvas({
   toolbarExtras?: ReactNode;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  // THE CAMERA. Everything on the plan is drawn in world millimetres inside one <g> (worldRef) whose
+  // transform is the view; the <svg> itself is plain screen pixels. Pan and zoom write that one
+  // attribute straight to the DOM, frame by frame, and nothing re-renders for it: the hundreds of
+  // tables, chairs and textures a plan is made of are the same elements before and after, only
+  // transformed. The view used to be the <svg>'s viewBox held in React state, so every wheel step
+  // and every pixel of a pan re-rendered the whole scene — every host layer, every node, every
+  // texture's filter graph — which is what made a zoom on a full plan stutter and a pan lag behind
+  // the hand.
+  //
+  // `center`/`mmPerPx` below are the SETTLED view — React state, committed when a gesture ends (a
+  // pan's release, ~120ms after the last wheel tick, the end of a fly-in). Everything sized by the
+  // zoom in render — handles, labels, hit areas, the layers' `mm()` — reads the settled zoom, so a
+  // zoom in flight scales them along with the content for a few frames and the commit lays them
+  // out again at their proper screen size. That is the trade every transform-based canvas makes,
+  // and nobody sees it; what they saw before was the stutter.
+  const worldRef = useRef<SVGGElement>(null);
+  const gridRef = useRef<SVGPatternElement>(null);
+  const gridPathRef = useRef<SVGPathElement>(null);
+  const hudRef = useRef<HTMLDivElement>(null);
+  const gridId = useId();
   // Last known pointer position in CLIENT px, kept alongside cursorRaw (which is in world mm and
   // only updates on an actual pointermove): the edge-autopan loop below still needs to know where
   // the cursor is sitting on frames where the mouse itself hasn't moved — which is exactly every
@@ -532,6 +591,12 @@ export function PlanCanvas({
   const [rect, setRect] = useState({ w: 0, h: 0 });
   const [center, setCenter] = useState<Point>({ x: DEFAULT_EXTENT.w / 2, y: DEFAULT_EXTENT.h / 2 });
   const [mmPerPx, setMmPerPx] = useState(20); // world mm per screen px — the zoom level
+  // The LIVE view: where the camera actually is, this frame. Written by every pan, zoom, fit and
+  // fly-in and applied to the DOM at once (applyView); folded into the settled state above by
+  // commitView when the gesture is over.
+  const live = useRef({ cx: DEFAULT_EXTENT.w / 2, cy: DEFAULT_EXTENT.h / 2, mmPerPx: 20 });
+  const rectRef = useRef(rect);
+  const settledRef = useRef({ cx: center.x, cy: center.y, mmPerPx });
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [altHeld, setAltHeld] = useState(false); // Alt releases the angle lock (Shift is already the big-step modifier)
   const [hoverClose, setHoverClose] = useState(false);
@@ -548,21 +613,34 @@ export function PlanCanvas({
   const [rotating, setRotating] = useState<{ deg: number; locked: boolean; at: Point } | null>(null);
   // The two alignment axes, plus any run of equal gaps the drag landed on. One state, because they
   // are one answer to one question — where this thing is lining up — and they clear together.
-  const [guides, setGuides] = useState<{ x: number | null; y: number | null; gaps?: GapGuide[] }>({ x: null, y: null });
+  const [guides, setGuidesRaw] = useState<Guides>({ x: null, y: null });
+  // Only a CHANGE re-renders. A host drag asks for a snap on every pointermove, and most frames
+  // answer with the same guides as the last — handing React the same object back is what lets it
+  // bail out instead of re-rendering the canvas per frame for lines that did not move.
+  const setGuides = useCallback((next: Guides) => setGuidesRaw((prev) => (sameGuides(prev, next) ? prev : next)), []);
   // Measurements default on while drawing (that's when they're the point) and off once the shape is
   // closed — until the ruler button is pressed, after which the choice is the user's and sticks.
   const [dimsOverride, setDimsOverride] = useState<boolean | null>(null);
-  // THE TAPE MEASURE. `tapeOn` is the armed tool; `tape` is the segment being measured — one point
-  // once the first click lands, two once the second does, and it stays on screen after that so the
-  // number can be read, quoted down a phone and checked against the plan without holding a drag.
+  // THE TAPE MEASURE. `tapeOn` is the armed tool. A measurement is DRAGGED out — press on the empty
+  // floor (or Alt+press anywhere, an item included), pull to the other point or thing, let go — and
+  // then it STAYS: `measurements` is every one taken since the tool was armed, each with its own
+  // figure, until Escape or the tool is put down. An end set down inside a MeasureTarget is that
+  // whole thing, re-resolved every render (lib/studio/tape.ts), so a tape to a table keeps reading
+  // to the table while it is dragged, and a tape to a table since deleted goes with it.
   //
   // It answers the question the wall labels never could: how far is the stage from the first row of
   // tables, is that aisle wide enough for a wheelchair, will the dance floor fit between those two
   // columns. Every one of those is a distance between two points that are not the ends of a wall,
   // and until now the only way to get it was to draw something and delete it again.
   const [tapeOn, setTapeOn] = useState(false);
-  // `aId`/`bId` are the measure targets an end was dropped INSIDE, when it was — see MeasureTarget.
-  const [tape, setTape] = useState<{ a: Point; b: Point | null; aId?: string; bId?: string } | null>(null);
+  const [measurements, setMeasurements] = useState<TapeMeasurement[]>([]);
+  // The one being pulled out right now — written once per animation frame from the gesture's own
+  // ref (tapeGesture), never per pointermove.
+  const [tapeDraft, setTapeDraft] = useState<{ a: TapeAnchor; b: TapeAnchor } | null>(null);
+  // The live tape gesture: the fixed end, the latest raw pointer position (and whether Shift is
+  // held), and the frame that will paint it. `cancelled` is Escape mid-drag — the release then adds
+  // nothing.
+  const tapeGesture = useRef<{ a: TapeAnchor; raw: Point | null; shift: boolean; frame: number | null; cancelled: boolean } | null>(null);
   // The centre-line guides. Off by default: a hall with a crosshair through it all evening is noise,
   // and the question "is this centred" is asked in moments, not continuously.
   const [guidesOn, setGuidesOn] = useState(false);
@@ -594,6 +672,14 @@ export function PlanCanvas({
   const groupRotate = useRef<{ pivot: Point; handleY: number; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
 
   const showDims = dimsOverride ?? mode === "draw";
+  // Every length this canvas shows or takes goes through these, in the host's unit (lengthUnit): a
+  // hall in metres to the centimetre, a catalog footprint in centimetres — metres again from 10m up,
+  // where "1,240 ס״מ" stops being a number anyone reads.
+  const inCm = lengthUnit === "cm";
+  const fmtLenBare = (lengthMm: number) => (inCm && lengthMm < 10000 ? `${+(lengthMm / 10).toFixed(1)}` : (lengthMm / 1000).toFixed(2));
+  const fmtLen = (lengthMm: number) => `${fmtLenBare(lengthMm)} ${inCm && lengthMm < 10000 ? "ס״מ" : "מ׳"}`;
+  const unitLabel = inCm ? "ס״מ" : "מ׳";
+  const typedToMm = (v: number) => v * (inCm ? 10 : 1000);
   // Whether a rubber-band drag has anywhere to report to. A host that takes no multi-selection gets
   // drag-to-pan on empty canvas instead of a selection box that selects nothing.
   const canMarquee = !!onSelectMany || !!onMarquee;
@@ -608,33 +694,103 @@ export function PlanCanvas({
       ? { minX: -padMm, minY: -padMm, w: minExtentMm.w, h: minExtentMm.h }
       : computeViewBox(outline, stage, bars, padMm, minExtentMm, framePoints ? [...graphFramePoints, ...framePoints] : graphFramePoints);
 
-  // The viewBox is derived from center+zoom with the container's own aspect ratio, so there's no
-  // letterbox and 1 screen px == mmPerPx world units everywhere. Pan moves center; zoom changes
-  // mmPerPx about the cursor. Until we've measured the container, fall back to the fitted box.
+  // The settled view's world box — what the HTML overlays are laid out against (worldToPx) and what
+  // the viewport-spanning guide lines take their extent from. 1 screen px == mmPerPx world units
+  // everywhere. Until we've measured the container, fall back to the fitted box.
   const hasRect = rect.w > 0 && rect.h > 0;
   const vb = hasRect
     ? { minX: center.x - (rect.w * mmPerPx) / 2, minY: center.y - (rect.h * mmPerPx) / 2, w: rect.w * mmPerPx, h: rect.h * mmPerPx }
     : contentBox;
+  // A viewport either side of the settled view: what a line meant to cross the whole screen spans,
+  // so it still does while the live view is a pan or a zoom away from the settled one.
+  const span = { minX: vb.minX - vb.w, maxX: vb.minX + 2 * vb.w, minY: vb.minY - vb.h, maxY: vb.minY + 2 * vb.h };
+
+  // The view is moving: say so on the <svg> itself (no React state — a re-render per wheel step is
+  // the cost being avoided), so the costly texture filters stand down until it settles (globals.css).
+  const movingTimer = useRef<number | undefined>(undefined);
+  const markMoving = useCallback(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    if (!svg.hasAttribute("data-moving")) svg.setAttribute("data-moving", "");
+    window.clearTimeout(movingTimer.current);
+    movingTimer.current = window.setTimeout(() => svg.removeAttribute("data-moving"), 200);
+  }, []);
+  useEffect(() => () => window.clearTimeout(movingTimer.current), []);
+  // A plan OPENS moving, too: it is painted at the fallback frame, then fitted once measured, then
+  // often flown to a zone — three frames nobody looks at, and each one used to rasterise every
+  // texture's noise and every plant's filter in full. Before the first paint, so not even that one
+  // pays; the grain comes in once, ~200ms after the view has come to rest.
+  useLayoutEffect(() => {
+    markMoving();
+  }, [markMoving]);
+
+  // Put the live camera on the DOM: the world group's transform, the screen-space grid (its cell
+  // and phase follow the view so the lines stay put under the plan), and the HTML overlays' carry.
+  // No React involved — this is the whole of what a pan or a zoom frame costs.
+  const applyView = useCallback(() => {
+    const v = live.current;
+    const { w, h } = rectRef.current;
+    worldRef.current?.setAttribute("transform", worldTransform(v, w, h));
+    const grid = gridRef.current;
+    if (grid) {
+      const cell = adaptiveGridMm(v.mmPerPx) / v.mmPerPx;
+      const ox = w / 2 - v.cx / v.mmPerPx;
+      const oy = h / 2 - v.cy / v.mmPerPx;
+      grid.setAttribute("x", String(((ox % cell) + cell) % cell));
+      grid.setAttribute("y", String(((oy % cell) + cell) % cell));
+      grid.setAttribute("width", String(cell));
+      grid.setAttribute("height", String(cell));
+      gridPathRef.current?.setAttribute("d", `M ${cell} 0 L 0 0 0 ${cell}`);
+    }
+    if (hudRef.current) hudRef.current.style.transform = hudTransform(settledRef.current, v, w, h);
+    markMoving();
+  }, [markMoving]);
+  // Fold the live camera into React state. Only the settled view re-renders anything, so this is
+  // called once per GESTURE, never per frame.
+  const commitTimer = useRef<number | undefined>(undefined);
+  const commitView = useCallback(() => {
+    window.clearTimeout(commitTimer.current);
+    commitTimer.current = undefined;
+    const v = live.current;
+    const s = settledRef.current;
+    if (s.cx === v.cx && s.cy === v.cy && s.mmPerPx === v.mmPerPx) return;
+    setCenter({ x: v.cx, y: v.cy });
+    setMmPerPx(v.mmPerPx);
+  }, []);
+  /** Commit once the gesture has been quiet for `ms` — a wheel sends a tick every few milliseconds,
+   *  and the view settles when they stop. */
+  const scheduleCommit = useCallback((ms = 120) => {
+    window.clearTimeout(commitTimer.current);
+    commitTimer.current = window.setTimeout(commitView, ms);
+  }, [commitView]);
+  useEffect(() => () => window.clearTimeout(commitTimer.current), []);
+  // Settled state landed (or the container was resized): remember it for the overlay carry and
+  // re-apply, so the DOM and React agree again and the overlays snap back onto their anchors.
+  useLayoutEffect(() => {
+    rectRef.current = rect;
+    settledRef.current = { cx: center.x, cy: center.y, mmPerPx };
+    applyView();
+  }, [rect, center, mmPerPx, applyView]);
 
   const clampZoom = (m: number) => Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, m));
+  /** Move the live camera and show it, this frame. */
+  const setLive = useCallback(
+    (next: Partial<{ cx: number; cy: number; mmPerPx: number }>) => {
+      Object.assign(live.current, next);
+      applyView();
+    },
+    [applyView],
+  );
   const fitTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
     if (rw === 0 || rh === 0) return;
-    // Clamped through the same ceiling manual zoom obeys (see clampZoom below) — otherwise a plan
-    // big enough to need more than MAX_MM_PER_PX to fit lands the view beyond what a manual zoom-out
+    // Clamped through the same ceiling manual zoom obeys (see clampZoom) — otherwise a plan big
+    // enough to need more than MAX_MM_PER_PX to fit lands the view beyond what a manual zoom-out
     // can ever reach, and the first scroll or tap of "-" snaps it back down to the ceiling instead of
     // continuing outward, which reads as "zooming out doesn't work" rather than "already at the limit".
-    setMmPerPx(clampZoom(Math.max(box.w / rw, box.h / rh) * 1.06));
-    setCenter({ x: box.minX + box.w / 2, y: box.minY + box.h / 2 });
+    setLive({ mmPerPx: clampZoom(Math.max(box.w / rw, box.h / rh) * 1.06), cx: box.minX + box.w / 2, cy: box.minY + box.h / 2 });
+    commitView();
   };
 
-  // The live view, mirrored into a ref so the focus tween can read where it is starting from
-  // without re-subscribing every time the user pans a pixel. Synced from an effect rather than
-  // during render — and it stays correct for the tween because the effect that starts one is
-  // declared below this and so runs after it in the same commit.
-  const viewRef = useRef({ center, mmPerPx });
-  useEffect(() => {
-    viewRef.current = { center, mmPerPx };
-  }, [center, mmPerPx]);
   const focusAnim = useRef<number | null>(null);
   const cancelFocus = () => {
     if (focusAnim.current !== null) cancelAnimationFrame(focusAnim.current);
@@ -653,23 +809,28 @@ export function PlanCanvas({
     cancelFocus();
     if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
     const to = focusTarget(box, rw, rh);
-    setCenter({ x: to.x, y: to.y });
-    setMmPerPx(to.mmPerPx);
+    setLive({ cx: to.x, cy: to.y, mmPerPx: to.mmPerPx });
+    commitView();
   };
 
   // Eased travel to a box, rather than a cut. Any pan or zoom the user starts mid-flight cancels it
-  // — the view is theirs the moment they touch it.
+  // — the view is theirs the moment they touch it. Every frame is a live write; the settled view
+  // is committed once, when the flight lands.
   const animateTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
     cancelFocus();
     if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
-    const from = { ...viewRef.current.center, mmPerPx: viewRef.current.mmPerPx };
+    const from = { ...live.current };
     const to = focusTarget(box, rw, rh);
-    const t0 = performance.now();
+    let t0: number | null = null; // the first frame's own timestamp — the clock rAF already hands us
     const step = (now: number) => {
+      t0 ??= now;
       const k = easeOutCubic(Math.min(1, (now - t0) / FOCUS_MS));
-      setCenter({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
-      setMmPerPx(from.mmPerPx + (to.mmPerPx - from.mmPerPx) * k);
-      focusAnim.current = k < 1 ? requestAnimationFrame(step) : null;
+      setLive({ cx: from.cx + (to.x - from.cx) * k, cy: from.cy + (to.y - from.cy) * k, mmPerPx: from.mmPerPx + (to.mmPerPx - from.mmPerPx) * k });
+      if (k < 1) focusAnim.current = requestAnimationFrame(step);
+      else {
+        focusAnim.current = null;
+        commitView();
+      }
     };
     focusAnim.current = requestAnimationFrame(step);
   };
@@ -692,42 +853,37 @@ export function PlanCanvas({
   useEffect(() => {
     if (!didInit.current && rect.w > 0 && rect.h > 0) {
       didInit.current = true;
+      rectRef.current = rect;
       fitTo(contentBox, rect.w, rect.h);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rect.w, rect.h]);
 
   const mm = (px: number) => px * mmPerPx; // screen px → world mm, for markers that stay a fixed screen size
-  // The grid pattern's own interval — see adaptiveGridMm. Independent of gridMm, which still drives
-  // snapping untouched.
-  const displayGridMm = adaptiveGridMm(mmPerPx);
 
-  const clientToMm = (clientX: number, clientY: number): Point => {
-    const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const loc = pt.matrixTransform(ctm.inverse());
-    return { x: loc.x, y: loc.y };
-  };
+  // Through the WORLD group's own CTM, which already carries the live camera — so a point read
+  // mid-pan is right this frame, not after the next render. Made ONCE (it closes over nothing but
+  // the element refs, which never change), so the layer context built on it keeps one identity.
+  const [clientToMm] = useState(
+    () =>
+      (clientX: number, clientY: number): Point => {
+        const ctm = worldRef.current?.getScreenCTM();
+        if (!ctm) return { x: 0, y: 0 };
+        const loc = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+        return { x: loc.x, y: loc.y };
+      },
+  );
   const mmToClient = (p: Point): { x: number; y: number } => {
-    const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
-    const ctm = svg.getScreenCTM();
+    const ctm = worldRef.current?.getScreenCTM();
     if (!ctm) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = p.x;
-    pt.y = p.y;
-    const screen = pt.matrixTransform(ctm);
+    const screen = new DOMPoint(p.x, p.y).matrixTransform(ctm);
     return { x: screen.x, y: screen.y };
   };
 
   const zoomByCenter = (factor: number) => {
     cancelFocus();
-    setMmPerPx((m) => clampZoom(m * factor));
+    setLive({ mmPerPx: clampZoom(live.current.mmPerPx * factor) });
+    commitView();
   };
   const zoomAround = (clientX: number, clientY: number, factor: number) => {
     cancelFocus();
@@ -735,15 +891,19 @@ export function PlanCanvas({
     if (!svg) return;
     const r = svg.getBoundingClientRect();
     const world = clientToMm(clientX, clientY);
-    const next = clampZoom(mmPerPx * factor);
+    const next = clampZoom(live.current.mmPerPx * factor);
     const sx = clientX - (r.left + r.width / 2); // cursor offset from viewport centre, px
     const sy = clientY - (r.top + r.height / 2);
-    setCenter({ x: world.x - sx * next, y: world.y - sy * next }); // keep the cursor's world point put
-    setMmPerPx(next);
+    setLive({ cx: world.x - sx * next, cy: world.y - sy * next, mmPerPx: next }); // keep the cursor's world point put
+  };
+  /** Slide the live camera by a screen delta. */
+  const panBy = (dxPx: number, dyPx: number) => {
+    const v = live.current;
+    setLive({ cx: v.cx + dxPx * v.mmPerPx, cy: v.cy + dyPx * v.mmPerPx });
   };
 
-  // World mm → container px. The viewBox matches the container's aspect ratio exactly (see vb), so
-  // this is a plain affine map — no CTM needed, which lets the HTML overlays position during render.
+  // World mm → container px against the SETTLED view. The overlays are positioned by this during
+  // render and carried to the live view by hudTransform in between commits.
   const worldToPx = (p: Point) => ({ x: (p.x - vb.minX) / mmPerPx, y: (p.y - vb.minY) / mmPerPx });
 
   const fixtureRefs = (excludeId?: string): Point[] =>
@@ -857,6 +1017,13 @@ export function PlanCanvas({
   const graphPoints: Point[] = graph ? graph.nodes.map((n) => ({ x: n.x, y: n.y })) : [];
   const graphNodeAt = (id: string) => graph?.nodes.find((n) => n.id === id) ?? null;
 
+  // What a HOST's snap reads, as of the latest render — behind a ref so the snap handed to the
+  // layers (layerCtx.snap) keeps one identity across renders and still sees the current plan. Read
+  // only when a host gesture calls it, never during render.
+  const latest = useRef({ outline, graph, stage, bars, gridMm, mmPerPx });
+  useLayoutEffect(() => {
+    latest.current = { outline, graph, stage, bars, gridMm, mmPerPx };
+  });
   const snapDrag = (p: Point, opts?: { fixtureId?: string; vertexIdx?: number; graphNodeId?: string }): Point => {
     const r = snapPoint(p, {
       toleranceMm: SNAP_TOL_PX * mmPerPx,
@@ -890,6 +1057,10 @@ export function PlanCanvas({
       gridMm,
       anchor: drawAnchor ?? undefined,
       constrainAngle: !releaseAngle,
+      angleStepDeg: drawAngleStepDeg,
+      // Counted from the first side once there is one — the second side of a shape drawn at an
+      // angle is square to the first, not to the page. The first side itself is held to the page.
+      angleRefDeg: drawAngleFromFirstSide && outline.length >= 2 ? wallAngleDeg(outline[0], outline[1]) : 0,
     });
 
   // The tape's own snap: the same corners, walls and fixtures every other point on this canvas is
@@ -900,46 +1071,111 @@ export function PlanCanvas({
   // there, and a measurement that quietly rounds itself onto the nearest 15° is a measurement of
   // something other than what was asked. Shift constrains it, for the times you want to know the
   // distance straight across rather than corner to corner.
-  const snapTape = (p: Point, constrain: boolean): Point =>
+  const snapTape = (p: Point, constrain: boolean, from?: Point): Point =>
     snapPoint(p, {
       toleranceMm: SNAP_TOL_PX * mmPerPx,
       outline: [...outline, ...graphPoints],
       fixtures: fixtureRefs(),
       gridMm,
-      ...(constrain && tape?.a ? { anchor: tape.a, constrainAngle: true } : {}),
+      ...(constrain && from ? { anchor: from, constrainAngle: true } : {}),
     }).point;
 
-  // What the tape currently shows: the finished measurement, or the live one being dragged out from
-  // the first click to wherever the pointer is. Re-derived each render rather than stored, so the
-  // second point tracks the cursor without a second piece of state to keep honest.
+  // An end set down inside a measure target is that WHOLE THING, not the point pressed: the tape
+  // then runs from the nearest point of its outline — to the other end's point, or to the nearest
+  // point of the other thing's outline. So "drag from the stage to the table" reads the clear air
+  // between them, which is the measurement the tape was always being used to approximate by eye.
   //
-  // An end dropped inside a measure target is that WHOLE THING, not the point clicked: the tape then
-  // runs from the nearest point of its outline — to the other end's point, or to the nearest point
-  // of the other thing's outline. So "click the stage, click the table" reads the clear air between
-  // them, which is the measurement the tape was always being used to approximate by eye.
+  // Hit-testing (which thing is under the pointer) reads the host's LIST — at a press and a release,
+  // when nothing else is moving. Re-resolving an anchored end each render goes through the host's
+  // `measureTargetById` when it has one, which reads this render's document, so a measurement
+  // follows a dragged table on the same frame (the list is published a render late — see the prop).
+  const measureList = useCallback((): MeasureTarget[] => (typeof measureTargets === "function" ? measureTargets() : (measureTargets ?? [])), [measureTargets]);
   const targetAt = (p: Point): MeasureTarget | undefined => {
-    const list = measureTargets ?? [];
+    const list = measureList();
     for (let i = list.length - 1; i >= 0; i--) if (insidePolys(p, list[i].polys)) return list[i];
     return undefined;
   };
-  const targetById = (id?: string) => (id ? measureTargets?.find((t) => t.id === id) : undefined);
-  const hoverTarget = tapeOn && cursorRaw && !tape?.b ? targetAt(cursorRaw) : undefined;
-  const tapeSegment: { a: Point; b: Point; live: boolean; between: boolean } | null = (() => {
-    if (!tape) return null;
-    const live = !tape.b;
-    const bPoint = tape.b ?? (cursorRaw ? snapTape(cursorRaw, false) : null);
-    if (!bPoint) return null;
-    const A = targetById(tape.aId);
-    const B0 = live ? hoverTarget : targetById(tape.bId);
-    const B = B0 && B0.id !== A?.id ? B0 : undefined;
-    if (A && B) {
-      const g = polysGap(A.polys, B.polys);
-      return { a: g.from, b: g.to, live, between: true };
-    }
-    if (A) return { a: pointToPolys(bPoint, A.polys).to, b: bPoint, live, between: true };
-    if (B) return { a: tape.a, b: pointToPolys(tape.a, B.polys).to, live, between: true };
-    return { a: tape.a, b: bPoint, live, between: false };
-  })();
+  const targetById = (id?: string): MeasureTarget | undefined =>
+    id ? (measureTargetById ? measureTargetById(id) : measureList().find((t) => t.id === id)) : undefined;
+  const tapeLookup: TapeLookup = (id) => targetById(id)?.polys;
+  // Every measurement as it stands on this render's plan. One whose item is gone resolves to
+  // nothing and is not drawn — and comes back with the item if the deletion is undone; the stored
+  // list is swept of them when the next measurement is added (beginTape), not by a write in render.
+  const shownTapes = tapeOn
+    ? measurements.flatMap((m) => {
+        const seg = resolveTape(m, tapeLookup);
+        return seg ? [{ id: m.id, seg }] : [];
+      })
+    : [];
+  const draftSeg = tapeOn && tapeDraft ? resolveTape(tapeDraft, tapeLookup) : null;
+  // The things the draft has hold of: their outlines are drawn dashed while the tape is being
+  // pulled, so it is plain that it runs from the thing's edge and not from where the press landed.
+  const targetedPolys = tapeOn && tapeDraft ? [targetById(tapeDraft.a.targetId), targetById(tapeDraft.b.targetId)] : null;
+
+  // THE TAPE GESTURE. A press (on the empty floor; with Alt, anywhere) fixes the first end; every
+  // move carries the other; the release sets it down — on the thing under the pointer when there is
+  // one, else snapped like any other point here (Shift locks the angle). A press that never travels
+  // the drag threshold is a click and measures nothing. Window-driven like every other drag on the
+  // plan (lib/studio/gesture.ts), and the draft is painted once per animation frame off the
+  // gesture's own ref — a setState per pointermove would re-render the canvas faster than it paints.
+  const beginTape = (e: React.PointerEvent<SVGSVGElement>) => {
+    cancelFocus();
+    const raw = clientToMm(e.clientX, e.clientY);
+    const hit = targetAt(raw);
+    const a = anchorAt(hit ? raw : snapTape(raw, false), hit?.id);
+    const g = { a, raw: null as Point | null, shift: false, frame: null as number | null, cancelled: false };
+    tapeGesture.current = g;
+    const endAt = (p: Point, shift: boolean): TapeAnchor => {
+      const h = targetAt(p);
+      return anchorAt(h ? p : snapTape(p, shift, a.point), h?.id);
+    };
+    const paint = () => {
+      g.frame = null;
+      if (g.cancelled || !g.raw) return;
+      setTapeDraft({ a, b: endAt(g.raw, g.shift) });
+    };
+    startPointerGesture(e, {
+      onMove: (ev) => {
+        if (g.cancelled) return;
+        g.raw = clientToMm(ev.clientX, ev.clientY);
+        g.shift = ev.shiftKey;
+        if (g.frame === null) g.frame = requestAnimationFrame(paint);
+      },
+      onEnd: (_ev, moved) => {
+        if (g.frame !== null) cancelAnimationFrame(g.frame);
+        g.frame = null;
+        if (tapeGesture.current === g) tapeGesture.current = null;
+        setTapeDraft(null);
+        if (g.cancelled || !moved || !g.raw) return;
+        // The new one joins the list; the ones whose items are gone leave it here, at the one moment
+        // the list is written anyway. (Nothing moved during this drag, so the press render's lookup
+        // is still the plan as it is.)
+        setMeasurements((list) => addTape(pruneTape(list, tapeLookup), { id: tapeId(), a, b: endAt(g.raw!, g.shift) }));
+      },
+    });
+  };
+  // Escape mid-drag: only the draft goes. The gesture runs on to its release, which then adds nothing.
+  const cancelTapeDraft = () => {
+    const g = tapeGesture.current;
+    if (!g) return false;
+    g.cancelled = true;
+    if (g.frame !== null) cancelAnimationFrame(g.frame);
+    g.frame = null;
+    setTapeDraft(null);
+    return true;
+  };
+  // Putting the tape down takes every measurement with it — on or off, the plan is clean.
+  const toggleTape = () => {
+    cancelTapeDraft();
+    setMeasurements([]);
+    setTapeOn((on) => !on);
+  };
+  // The key handler below is installed per mode, not per render; it reads the tape through this so
+  // Escape and M see the tool as it is now, not as it was when the listener went on.
+  const tapeNow = useRef({ on: tapeOn, toggleTape });
+  useLayoutEffect(() => {
+    tapeNow.current = { on: tapeOn, toggleTape };
+  });
 
   const pending = mode === "draw" && cursorRaw ? snapDraw(cursorRaw, altHeld) : null;
   const pendingLenMm = pending && drawAnchor ? wallLengthMm(drawAnchor, pending.point) : 0;
@@ -973,8 +1209,8 @@ export function PlanCanvas({
         const dx = pos.x - r.left < EDGE_PX ? -push(pos.x - r.left) : r.right - pos.x < EDGE_PX ? push(r.right - pos.x) : 0;
         const dy = pos.y - r.top < EDGE_PX ? -push(pos.y - r.top) : r.bottom - pos.y < EDGE_PX ? push(r.bottom - pos.y) : 0;
         if (dx || dy) {
-          const { mmPerPx: mpp } = viewRef.current;
-          setCenter((c) => ({ x: c.x + dx * mpp, y: c.y + dy * mpp }));
+          panBy(dx, dy);
+          scheduleCommit();
           setCursorRaw(clientToMm(pos.x, pos.y));
         }
       }
@@ -985,6 +1221,7 @@ export function PlanCanvas({
       if (autopanFrame.current !== null) cancelAnimationFrame(autopanFrame.current);
       autopanFrame.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawGestureActive]);
 
   // Commits the typed segment: exact length along the typed (or currently inferred) direction.
@@ -992,7 +1229,7 @@ export function PlanCanvas({
     if (!entry || !drawAnchor) return;
     const typedLen = parseFloat(entry.length);
     const typedAngle = parseFloat(entry.angle);
-    const lengthMm = Number.isFinite(typedLen) && typedLen > 0 ? typedLen * 1000 : pendingLenMm;
+    const lengthMm = Number.isFinite(typedLen) && typedLen > 0 ? typedToMm(typedLen) : pendingLenMm;
     const angleDeg = Number.isFinite(typedAngle) ? typedAngle : pendingAngleDeg;
     setEntry(null);
     if (!(lengthMm > 0)) return;
@@ -1005,19 +1242,12 @@ export function PlanCanvas({
     if (spaceHeld || panTool) return; // the hand, or Space: a press here moves the view — never draw/select
     if (panMoved.current) return; // …nor on the click that closes a pan the user let go of space during
     if (marqueeMoved.current) { marqueeMoved.current = false; return; } // …nor on the click that ends a marquee drag
-    // An armed tape takes the click ahead of everything, in BOTH modes — "how wide is that gap"
-    // comes up mid-trace as often as it does over a finished plan, and a tool that had to be put
-    // down before the wall could be drawn is one nobody reaches for. Click one, click two, read it;
-    // a third click starts the next measurement rather than making the designer clear this one.
-    if (tapeOn) {
-      const raw = clientToMm(e.clientX, e.clientY);
-      // Inside a thing, the end IS the thing (see tapeSegment) and the raw point is kept only as a
-      // fallback; on open floor it snaps to corners and walls like every other point here.
-      const hit = targetAt(raw);
-      const p = hit ? raw : snapTape(raw, e.shiftKey);
-      setTape((t) => (t && !t.b ? { ...t, b: p, bId: hit?.id } : { a: p, b: null, aId: hit?.id }));
-      return;
-    }
+    // An armed tape owns the canvas's clicks, in BOTH modes — "how wide is that gap" comes up
+    // mid-trace as often as it does over a finished plan. A measurement is a DRAG (beginTape); a
+    // press that never travelled is a click, and with the tool held it does nothing: no stray
+    // measurement, no vertex dropped, no selection cleared. (The click that follows a real drag never
+    // gets here — the gesture swallows it.)
+    if (tapeOn) return;
     if (mode !== "draw") {
       onSelect(null);
       onSelectGraph?.(null, false); // empty canvas clears the graph selection too, not just the outline's
@@ -1037,16 +1267,51 @@ export function PlanCanvas({
     onAddVertex(snapDraw(clientToMm(e.clientX, e.clientY), e.altKey).point);
   };
 
+  // Wheel steps arrive far faster than frames (a trackpad sends one every few milliseconds), and
+  // each one used to set the view — a full render of every table, chair and texture on the plan per
+  // step. They are gathered here and applied once per frame: the zooms multiplied, about the latest
+  // cursor; the pans summed.
+  const wheelAcc = useRef({ zoom: 1, x: 0, y: 0, dx: 0, dy: 0, frame: null as number | null });
+  const flushWheel = useRef<() => void>(() => {});
+  useEffect(() => {
+    flushWheel.current = () => {
+      const w = wheelAcc.current;
+      w.frame = null;
+      if (w.zoom !== 1) zoomAround(w.x, w.y, w.zoom);
+      if (w.dx || w.dy) panBy(w.dx, w.dy);
+      w.zoom = 1;
+      w.dx = 0;
+      w.dy = 0;
+      // The settled view follows once the wheel has been quiet for a moment: one re-render per
+      // scroll, not one per tick.
+      scheduleCommit();
+    };
+  });
+  useEffect(() => () => {
+    if (wheelAcc.current.frame !== null) cancelAnimationFrame(wheelAcc.current.frame);
+  }, []);
+
   // Wheel-zoom (non-passive so we can preventDefault the page scroll) + space-to-pan modifier key.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
+    const queue = () => {
+      const w = wheelAcc.current;
+      if (w.frame === null) w.frame = requestAnimationFrame(() => flushWheel.current());
+    };
+    const queueZoom = (clientX: number, clientY: number, factor: number) => {
+      const w = wheelAcc.current;
+      w.zoom *= factor;
+      w.x = clientX;
+      w.y = clientY;
+      queue();
+    };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       // A pinch on a trackpad arrives as a wheel with ctrlKey set (every browser), and Ctrl+wheel on
       // a mouse means zoom everywhere — both zoom, in proportion to how far the fingers moved.
       if (e.ctrlKey || e.metaKey) {
-        zoomAround(e.clientX, e.clientY, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01))));
+        queueZoom(e.clientX, e.clientY, Math.exp(Math.max(-0.5, Math.min(0.5, e.deltaY * 0.01))));
         return;
       }
       // A two-finger swipe on a trackpad MOVES the view, the way every map and design tool does; a
@@ -1057,17 +1322,16 @@ export function PlanCanvas({
       if (trackpad || e.shiftKey) {
         cancelFocus();
         const px = e.deltaMode === 1 ? 16 : 1; // lines → pixels, for the odd wheel that reports lines
-        const dx = (e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX) * px;
-        const dy = (e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY) * px;
-        setCenter((c) => ({ x: c.x + dx * mmPerPx, y: c.y + dy * mmPerPx }));
+        wheelAcc.current.dx += (e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX) * px;
+        wheelAcc.current.dy += (e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY) * px;
+        queue();
         return;
       }
-      zoomAround(e.clientX, e.clientY, e.deltaY > 0 ? 1.1 : 1 / 1.1);
+      queueZoom(e.clientX, e.clientY, e.deltaY > 0 ? 1.1 : 1 / 1.1);
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mmPerPx]);
+  }, []);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -1078,14 +1342,13 @@ export function PlanCanvas({
       if (e.key === "Alt") { e.preventDefault(); setAltHeld(true); return; }
       if (e.key === "+" || e.key === "=") { zoomByCenter(1 / 1.2); return; }
       if (e.key === "-" || e.key === "_") { zoomByCenter(1.2); return; }
-      // Escape backs out of the tape one step at a time — first the measurement on screen, then the
-      // tool itself. Taken before the draw-mode handler below and before the host's own Escape, for
-      // the same reason a half-drawn outline claims it: while a tool is armed, Escape means "put
-      // this down", and nothing else.
-      if (tapeOn && e.key === "Escape") {
+      // Escape backs out of the tape: a measurement half-pulled is dropped and nothing else changes;
+      // otherwise every measurement on screen is cleared and the tool put down. Taken before the
+      // draw-mode handler below and before the host's own Escape, for the same reason a half-drawn
+      // outline claims it: while a tool is armed, Escape means "put this down", and nothing else.
+      if (tapeNow.current.on && e.key === "Escape") {
         e.preventDefault();
-        if (tape) setTape(null);
-        else setTapeOn(false);
+        if (!cancelTapeDraft()) tapeNow.current.toggleTape();
         return;
       }
       if (e.key === "m" || e.key === "M" || e.key === "\u05e6") {
@@ -1093,8 +1356,7 @@ export function PlanCanvas({
         // through isShortcut rather than reading e.key (see lib/keyboard.ts).
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         e.preventDefault();
-        setTapeOn((on) => !on);
-        setTape(null);
+        tapeNow.current.toggleTape();
         return;
       }
       if (mode !== "draw") return;
@@ -1127,30 +1389,39 @@ export function PlanCanvas({
   // Alignment for host-drawn content. Same references and the same tolerance a dragged corner gets
   // — the graph's nodes and the outline — plus whatever the layer knows about that the canvas
   // doesn't. No angle lock: these are objects being placed, not a wall being drawn from an anchor.
-  const snapCtx = (opts?: HostSnapOptions) => ({
-    toleranceMm: SNAP_TOL_PX * mmPerPx,
-    outline: [...outline, ...graphPoints, ...(opts?.refs ?? [])],
-    fixtures: fixtureRefs(),
-    gridMm,
-    // The boxes go over WHOLE — centre and both edges alike — rather than being flattened to their
-    // centres on the way in. Handing over the extent is what buys the two rules a point cannot
-    // express: an edge to line up with or butt against, and the air between two things
-    // (lib/studio/snap.ts). `self` is the moving item's own extent, the other half of both.
-    boxes: opts?.boxes,
-    self: opts?.self,
-  });
-  const snapHost = (p: Point, opts?: HostSnapOptions): Point => {
+  // Reads the plan through `latest`, so one function serves every render.
+  const snapCtx = useCallback((opts?: HostSnapOptions) => {
+    const cur = latest.current;
+    return {
+      toleranceMm: SNAP_TOL_PX * cur.mmPerPx,
+      outline: [...cur.outline, ...(cur.graph ? cur.graph.nodes.map((n) => ({ x: n.x, y: n.y })) : []), ...(opts?.refs ?? [])],
+      fixtures: [cur.stage, ...cur.bars].filter((f): f is Fixture => !!f).map((f) => ({ x: f.x, y: f.y })),
+      gridMm: cur.gridMm,
+      // The boxes go over WHOLE — centre and both edges alike — rather than being flattened to their
+      // centres on the way in. Handing over the extent is what buys the two rules a point cannot
+      // express: an edge to line up with or butt against, and the air between two things
+      // (lib/studio/snap.ts). `self` is the moving item's own extent, the other half of both.
+      boxes: opts?.boxes,
+      self: opts?.self,
+    };
+  }, []);
+  const snapHost = useCallback((p: Point, opts?: HostSnapOptions): Point => {
     const r = snapPoint(p, snapCtx(opts));
     setGuides({ ...r.guides, gaps: r.gaps });
     return r.point;
-  };
+  }, [snapCtx, setGuides]);
+  const endSnap = useCallback(() => setGuides({ x: null, y: null }), [setGuides]);
 
-  const layerCtx: CanvasLayerContext = {
-    clientToMm,
-    mm,
-    snap: snapHost,
-    endSnap: () => setGuides({ x: null, y: null }),
-  };
+  // ONE context per zoom level. The layers are functions of it, memoised below: a pan changes
+  // nothing they can see, so none of them re-render; a settled zoom changes `mm` and they render
+  // once. Before this, the context was rebuilt — and every layer re-run — on every render of the
+  // canvas, which a drag made happen per frame (each snap lit a guide line).
+  const layerCtx = useMemo<CanvasLayerContext>(
+    () => ({ clientToMm, mm: (px: number) => px * mmPerPx, snap: snapHost, endSnap }),
+    [clientToMm, mmPerPx, snapHost, endSnap],
+  );
+  const backdropNode = useMemo(() => (typeof backdrop === "function" ? backdrop(layerCtx) : backdrop), [backdrop, layerCtx]);
+  const overlayNode = useMemo(() => (typeof overlay === "function" ? overlay(layerCtx) : overlay), [overlay, layerCtx]);
 
   const entryOpen = entry !== null;
   useEffect(() => {
@@ -1199,19 +1470,20 @@ export function PlanCanvas({
     // The outline is the host's state, so a committed point only reaches us as a prop — following it
     // has to happen from an effect.
     if (drawn.w > viewW || drawn.h > viewH) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       fitTo(contentBox, rect.w, rect.h);
       return;
     }
     const m = EDGE_MARGIN_PX * mmPerPx;
-    setCenter((c) => {
-      let { x, y } = c;
-      if (p.x < c.x - viewW / 2 + m) x += p.x - (c.x - viewW / 2 + m);
-      else if (p.x > c.x + viewW / 2 - m) x += p.x - (c.x + viewW / 2 - m);
-      if (p.y < c.y - viewH / 2 + m) y += p.y - (c.y - viewH / 2 + m);
-      else if (p.y > c.y + viewH / 2 - m) y += p.y - (c.y + viewH / 2 - m);
-      return x === c.x && y === c.y ? c : { x, y };
-    });
+    const c = { x: live.current.cx, y: live.current.cy };
+    let { x, y } = c;
+    if (p.x < c.x - viewW / 2 + m) x += p.x - (c.x - viewW / 2 + m);
+    else if (p.x > c.x + viewW / 2 - m) x += p.x - (c.x + viewW / 2 - m);
+    if (p.y < c.y - viewH / 2 + m) y += p.y - (c.y - viewH / 2 + m);
+    else if (p.y > c.y + viewH / 2 - m) y += p.y - (c.y + viewH / 2 - m);
+    if (x !== c.x || y !== c.y) {
+      setLive({ cx: x, cy: y });
+      commitView();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, outline.length]);
 
@@ -1224,9 +1496,12 @@ export function PlanCanvas({
     <>
     <svg
       ref={svgRef}
-      viewBox={`${vb.minX} ${vb.minY} ${vb.w} ${vb.h}`}
-      preserveAspectRatio="xMidYMid meet"
       tabIndex={-1}
+      // A move with the button down is a drag of something — a node, a handle, the view — and the
+      // plan is in motion for it: the grain filters stand down exactly as they do for a pan.
+      onPointerMoveCapture={(e) => {
+        if (e.buttons & 1) markMoving();
+      }}
       className={
         // select-none on the root, not on each <text>: it inherits, so it also covers whatever a
         // host draws into backdrop/overlay. A drawing surface has nothing worth text-selecting, and
@@ -1256,6 +1531,15 @@ export function PlanCanvas({
       // of the view, not of the palm. Without this a press on anything draggable stopped the event
       // on its way up, and the view could only be moved from the few bare patches between things.
       onPointerDownCapture={(e) => {
+        // Alt+press with the tape armed measures FROM whatever is under the pointer — taken here, in
+        // the capture phase, so an item's own press handler (which would start dragging it) never
+        // sees it. Without Alt an item's press is the item's: the tape takes only the empty floor.
+        if (tapeOn && e.button === 0 && e.altKey && !panTool && !spaceHeld) {
+          e.preventDefault();
+          e.stopPropagation();
+          beginTape(e);
+          return;
+        }
         if (!((panTool || spaceHeld) && e.button === 0) && e.button !== 1) return;
         e.preventDefault();
         e.stopPropagation();
@@ -1272,11 +1556,12 @@ export function PlanCanvas({
           cancelFocus(); // the view is the user's again the instant they grab it
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           pan.current = { x: e.clientX, y: e.clientY, moved: false, ax: e.clientX, ay: e.clientY };
-        } else if (tapeOn) {
-          // An armed tape owns the empty canvas. Without this a two-pixel wobble between press and
-          // release turns the first click into a marquee drag, which swallows the click that was
-          // meant to drop a measuring point and clears the measurement already on screen. Space and
-          // the middle button (above) still pan, and the wheel still zooms.
+        } else if (tapeOn && e.button === 0) {
+          // An armed tape owns the empty canvas: a press here pulls out a measurement — not a marquee
+          // and not a pan (Space and the middle button, above, still pan; the wheel still zooms). A
+          // press on an item never gets here (its node stops it) and drags the item as it always
+          // did; Alt+press on one is taken in the capture phase above.
+          beginTape(e);
         } else if (mode === "edit" && canMarquee) {
           // A PLAIN drag on empty canvas rubber-bands. It spent one release behind the additive
           // modifier, with a plain drag panning instead, and that trade was the wrong way round for
@@ -1324,7 +1609,7 @@ export function PlanCanvas({
           const dx = e.clientX - p.x;
           const dy = e.clientY - p.y;
           pan.current = { ...p, x: e.clientX, y: e.clientY, moved: true };
-          setCenter((c) => ({ x: c.x - dx * mmPerPx, y: c.y - dy * mmPerPx }));
+          panBy(-dx, -dy); // the live camera only — nothing re-renders until the hand lets go
           return;
         }
         if (marquee.current) {
@@ -1348,9 +1633,9 @@ export function PlanCanvas({
           return;
         }
         if (e.altKey !== altHeld) setAltHeld(e.altKey); // the modifier can be pressed while the window was unfocused
-        // The rubber band needs the live pointer while a shape is being drawn, and so does the tape
-        // between its first click and its second — in edit mode, where nothing tracked it before.
-        if (mode === "draw" || (tapeOn && tape && !tape.b)) {
+        // The rubber band needs the live pointer while a shape is being drawn. (The tape does not:
+        // its live end rides its own gesture, see beginTape.)
+        if (mode === "draw") {
           lastClientPos.current = { x: e.clientX, y: e.clientY };
           setCursorRaw(clientToMm(e.clientX, e.clientY));
         }
@@ -1360,6 +1645,7 @@ export function PlanCanvas({
           const el = e.currentTarget as Element;
           if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId); // a deferred pan may never have taken one
           panMoved.current = pan.current.moved;
+          if (pan.current.moved) commitView(); // the pan is over: settle the view, once
         } else if (marquee.current) {
           const el = e.currentTarget as Element;
           if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId); // only taken if it became a drag
@@ -1378,7 +1664,6 @@ export function PlanCanvas({
       }}
       onPointerLeave={() => {
         if (mode === "draw" && !entry) setCursorRaw(null); // keep the band alive while a length is being typed
-        else if (tapeOn) setCursorRaw(null);
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -1412,15 +1697,24 @@ export function PlanCanvas({
       }
     >
       <defs>
-        <pattern id="plan-canvas-grid" width={displayGridMm} height={displayGridMm} patternUnits="userSpaceOnUse">
-          <path d={`M ${displayGridMm} 0 L 0 0 0 ${displayGridMm}`} fill="none" className={gridColorClassName} stroke="currentColor" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        {/* The grid lives in SCREEN space: its cell (adaptiveGridMm, a 1-2-5 step that keeps the
+            squares a comfortable size at every zoom) and its phase are written by applyView along
+            with the camera, so the lines move under the plan without anything re-rendering. */}
+        <pattern id={gridId} ref={gridRef} patternUnits="userSpaceOnUse" x={0} y={0} width={64} height={64}>
+          <path ref={gridPathRef} d="M 64 0 L 0 0 0 64" fill="none" className={gridColorClassName} stroke="currentColor" strokeWidth={1} />
         </pattern>
       </defs>
-      <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#plan-canvas-grid)" />
+      <rect x={0} y={0} width="100%" height="100%" fill={`url(#${gridId})`} />
+
+      {/* THE WORLD. Everything from here to the closing </g> is in plan millimetres; the transform
+          is the camera (see `live`). Rendered from the SETTLED view: a re-render mid-gesture sees the
+          same prop as the last one and leaves the DOM — where applyView has the live value — alone,
+          and a commit renders exactly what applyView already wrote. */}
+      <g ref={worldRef} transform={worldTransform({ cx: center.x, cy: center.y, mmPerPx }, rect.w, rect.h)}>
 
       {/* Host-supplied world-space layers (the venue plan's zone tints and fixed features), under
           everything the canvas draws itself. */}
-      {typeof backdrop === "function" ? backdrop(layerCtx) : backdrop}
+      {backdropNode}
 
       {/* The wall graph. Drawn after the backdrop and before the outline, so a wall shared by two
           tinted zones is one stroke lying over both — the visual form of it being stored once. */}
@@ -1489,7 +1783,7 @@ export function PlanCanvas({
       })}
 
       {/* Above the walls, below the handles — door gaps overpainting the wall they cut. */}
-      {typeof overlay === "function" ? overlay(layerCtx) : overlay}
+      {overlayNode}
 
       {/* A graph wall's bow handle: the diamond on its middle. Same rule as the outline's — a wall
           only surfaces its curve handle once it is live (hovered, selected, or holding the drag),
@@ -1678,14 +1972,51 @@ export function PlanCanvas({
                 fill="none"
                 stroke="transparent"
                 strokeWidth={mm(16)}
-                className="cursor-pointer"
+                className={onMoveWall ? "cursor-move touch-none" : "cursor-pointer"}
                 onPointerEnter={() => setHoverWall(i)}
                 onPointerLeave={() => setHoverWall((h) => (h === i ? null : h))}
-                // Without this, the press bubbles past this path (it has no drag of its own) up to
-                // the svg's onPointerDown, which reads an untouched pointerdown as the start of a
-                // marquee — capturing the pointer there and leaving the wall's own click to fire
-                // (if at all) against the canvas background instead of this wall.
-                onPointerDown={(e) => e.stopPropagation()}
+                // Without this, the press bubbles past this path up to the svg's onPointerDown,
+                // which reads an untouched pointerdown as the start of a marquee — capturing the
+                // pointer there and leaving the wall's own click to fire (if at all) against the
+                // canvas background instead of this wall.
+                //
+                // With onMoveWall the press is also the start of a PUSH: the side's body dragged
+                // moves the whole side along its normal (the diamond on its middle still bows it).
+                // The two ends are worked out from where the press began, so the gesture is absolute
+                // frame to frame however the outline re-renders under it; the travel is pulled to the
+                // zoom's grid step like a vertex drag (on a square side, so the side lands ON a grid
+                // line), Alt frees it. A plain click still only selects; an additive click only toggles.
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (!onMoveWall || isAdditiveClick(e)) return;
+                  const a0 = a;
+                  const b0 = b;
+                  const start = clientToMm(e.clientX, e.clientY);
+                  const len = wallLengthMm(a0, b0) || 1;
+                  const nrm = { x: (b0.y - a0.y) / len, y: -(b0.x - a0.x) / len };
+                  const step = gridStepMm(gridMm, SNAP_TOL_PX * mmPerPx);
+                  const pull = (d: number) =>
+                    Math.abs(nrm.x) > 0.999 ? Math.round((a0.x + d) / step) * step - a0.x
+                    : Math.abs(nrm.y) > 0.999 ? Math.round((a0.y + d) / step) * step - a0.y
+                    : Math.round(d / step) * step;
+                  startPointerGesture(e, {
+                    onStart: () => {
+                      setDragWall(i);
+                      onSelect({ kind: "wall", id: String(i) });
+                    },
+                    onMove: (ev) => {
+                      const p = clientToMm(ev.clientX, ev.clientY);
+                      const raw = (p.x - start.x) * nrm.x + (p.y - start.y) * nrm.y;
+                      const d = ev.altKey ? raw : pull(raw);
+                      onMoveWall(i, { x: Math.round(a0.x + nrm.x * d), y: Math.round(a0.y + nrm.y * d) }, { x: Math.round(b0.x + nrm.x * d), y: Math.round(b0.y + nrm.y * d) });
+                    },
+                    onEnd: (_ev, moved) => {
+                      if (!moved) return;
+                      setDragWall(null);
+                      onCommit?.();
+                    },
+                  }, { thresholdPx: DRAG_THRESHOLD_PX });
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect({ kind: "wall", id: String(i) });
@@ -2007,12 +2338,13 @@ export function PlanCanvas({
       )}
 
       {/* Smart-alignment guides — the accent lines that appear when a drag, or the pending wall,
-          lines up with an existing edge/vertex/centre */}
+          lines up with an existing edge/vertex/centre. Drawn a viewport past the settled view on
+          either side, so they still reach the edge of the screen while the view is being moved. */}
       {shownGuides.x !== null && (
-        <line x1={shownGuides.x} y1={vb.minY} x2={shownGuides.x} y2={vb.minY + vb.h} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+        <line x1={shownGuides.x} y1={span.minY} x2={shownGuides.x} y2={span.maxY} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
       )}
       {shownGuides.y !== null && (
-        <line x1={vb.minX} y1={shownGuides.y} x2={vb.minX + vb.w} y2={shownGuides.y} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+        <line x1={span.minX} y1={shownGuides.y} x2={span.maxX} y2={shownGuides.y} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
       )}
 
       {/* Equal-gap markers — a bar with an end tick drawn INSIDE each matching gap, so the two (or
@@ -2049,8 +2381,8 @@ export function PlanCanvas({
         }),
       )}
 
-      {/* Measure overlay — each wall's length in metres at its midpoint. Live while drawing too;
-          the not-yet-drawn closing edge is skipped, exactly as the wall render skips it. */}
+      {/* Measure overlay — each wall's length (in the host's unit) at its midpoint. Live while
+          drawing too; the not-yet-drawn closing edge is skipped, exactly as the wall render skips it. */}
       {showDims &&
         outline.map((a, i) => {
           if (mode === "draw" && i === outline.length - 1) return null;
@@ -2059,7 +2391,7 @@ export function PlanCanvas({
           const mid = edgeMidpoint(a, b, curve);
           return (
             <text key={i} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
-              {(wallLengthMm(a, b) / 1000).toFixed(2)}
+              {fmtLenBare(wallLengthMm(a, b))}
             </text>
           );
         })}
@@ -2076,65 +2408,24 @@ export function PlanCanvas({
           const mid = edgeMidpoint(a, b, w.curve ?? null);
           return (
             <text key={w.id} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
-              {(wallLengthMm(a, b) / 1000).toFixed(2)}
+              {fmtLenBare(wallLengthMm(a, b))}
             </text>
           );
         })}
-      {/* While the tape is armed it owns every click on the canvas, and this pane is what makes that
-          true. Without it the tool works over empty floor and nowhere else: a table, a wall, a zone
-          tint and a door all take their own clicks (and stop them propagating), so "measure from the
-          edge of that table to the wall" — the measurement anyone actually wants — would select the
-          table instead. Covers the viewBox, so it moves and scales with the view for free.
-
-          Clicks still reach handleCanvasClick, because they bubble to the <svg> from here exactly as
-          they would from the background. */}
-      {tapeOn && (
-        <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="transparent" className="cursor-crosshair" />
-      )}
-
       {/* THE TAPE. Drawn last, so it lies over the walls, the furniture and everything a host put in
-          its layers — a measurement half-hidden behind a table is not a measurement. The live half
-          (first click placed, second not yet) is dashed; a finished one is solid and stays until the
-          next measurement replaces it. */}
-      {tapeSegment && (
-        <g className="text-accent pointer-events-none">
-          <line
-            x1={tapeSegment.a.x}
-            y1={tapeSegment.a.y}
-            x2={tapeSegment.b.x}
-            y2={tapeSegment.b.y}
-            stroke="currentColor"
-            strokeWidth={1.5}
-            strokeDasharray={tapeSegment.live ? "6 4" : undefined}
-            vectorEffect="non-scaling-stroke"
-          />
-          {/* End ticks, square to the tape — the pair of marks that say where the measurement
-              actually starts and stops, rather than leaving a line whose ends are guesses. */}
-          {([tapeSegment.a, tapeSegment.b] as Point[]).map((e, i) => {
-            const len = Math.hypot(tapeSegment.b.x - tapeSegment.a.x, tapeSegment.b.y - tapeSegment.a.y) || 1;
-            const nx = (-(tapeSegment.b.y - tapeSegment.a.y) / len) * mm(6);
-            const ny = ((tapeSegment.b.x - tapeSegment.a.x) / len) * mm(6);
-            return (
-              <line
-                key={i}
-                x1={e.x - nx}
-                y1={e.y - ny}
-                x2={e.x + nx}
-                y2={e.y + ny}
-                stroke="currentColor"
-                strokeWidth={1.5}
-                vectorEffect="non-scaling-stroke"
-              />
-            );
-          })}
-        </g>
-      )}
+          its layers — a measurement half-hidden behind a table is not a measurement. Every
+          measurement taken since the tool was armed is drawn, solid; the one being pulled out now is
+          dashed. */}
+      {shownTapes.map(({ id, seg }) => (
+        <TapeLine key={id} seg={seg} tickMm={mm(6)} />
+      ))}
+      {draftSeg && <TapeLine seg={draftSeg} tickMm={mm(6)} live />}
 
-      {/* What the tape has picked up, or is about to: the outline of each thing an end belongs to,
-          so it is plain that the measurement runs from that thing's edge and not from where the
-          click happened to land. */}
-      {tapeOn &&
-        [targetById(tape?.aId), targetById(tape?.bId), hoverTarget]
+      {/* What the tape being pulled has hold of: the outline of each thing an end belongs to, so it
+          is plain that the measurement runs from that thing's edge and not from where the press
+          happened to land. */}
+      {targetedPolys &&
+        targetedPolys
           .filter((t, i, all): t is MeasureTarget => !!t && all.findIndex((x) => x?.id === t.id) === i)
           .map((t) =>
             t.polys.map((poly, j) => (
@@ -2164,10 +2455,10 @@ export function PlanCanvas({
         return (
           <g className="text-accent pointer-events-none">
             {xs.map((x, i) => (
-              <line key={`gx${i}`} x1={x} y1={vb.minY} x2={x} y2={vb.minY + vb.h} stroke="currentColor" strokeOpacity={i === 1 ? 0.7 : 0.25} strokeWidth={1} strokeDasharray={i === 1 ? "12 4 2 4" : "3 5"} vectorEffect="non-scaling-stroke" />
+              <line key={`gx${i}`} x1={x} y1={span.minY} x2={x} y2={span.maxY} stroke="currentColor" strokeOpacity={i === 1 ? 0.7 : 0.25} strokeWidth={1} strokeDasharray={i === 1 ? "12 4 2 4" : "3 5"} vectorEffect="non-scaling-stroke" />
             ))}
             {ys.map((y, i) => (
-              <line key={`gy${i}`} x1={vb.minX} y1={y} x2={vb.minX + vb.w} y2={y} stroke="currentColor" strokeOpacity={i === 1 ? 0.7 : 0.25} strokeWidth={1} strokeDasharray={i === 1 ? "12 4 2 4" : "3 5"} vectorEffect="non-scaling-stroke" />
+              <line key={`gy${i}`} x1={span.minX} y1={y} x2={span.maxX} y2={y} stroke="currentColor" strokeOpacity={i === 1 ? 0.7 : 0.25} strokeWidth={1} strokeDasharray={i === 1 ? "12 4 2 4" : "3 5"} vectorEffect="non-scaling-stroke" />
             ))}
             <rect x={b.minX} y={b.minY} width={b.maxX - b.minX} height={b.maxY - b.minY} fill="none" stroke="currentColor" strokeOpacity={0.35} strokeWidth={1} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />
             <circle cx={xs[1]} cy={ys[1]} r={mm(5)} fill="none" stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
@@ -2180,37 +2471,34 @@ export function PlanCanvas({
           const cy = (b.minY + b.maxY) / 2;
           return (
             <g key={`gi${i}`} className="text-ink-soft pointer-events-none">
-              <line x1={cx} y1={vb.minY} x2={cx} y2={vb.minY + vb.h} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
-              <line x1={vb.minX} y1={cy} x2={vb.minX + vb.w} y2={cy} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+              <line x1={cx} y1={span.minY} x2={cx} y2={span.maxY} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+              <line x1={span.minX} y1={cy} x2={span.maxX} y2={cy} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
               <path d={`M ${cx - mm(5)} ${cy} L ${cx + mm(5)} ${cy} M ${cx} ${cy - mm(5)} L ${cx} ${cy + mm(5)}`} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
             </g>
           );
         })}
+      </g>
+
+      {/* No pane over the plan while the tape is armed (there was one, swallowing every press so the
+          tool worked over items too): the floor takes the tape, an item keeps its own press and
+          drag, and a measurement FROM an item is Alt+press — see onPointerDownCapture. */}
     </svg>
 
-    {/* The tape's readout — metres to the centimetre, plus the angle it was taken at, over the
-        middle of its own line. An HTML pill for the same reason every other readout on this canvas
-        is one: it holds a fixed screen size and carries a scrim, so a measurement taken across a
-        dark zone tint is still legible. */}
-    {hasRect && tapeSegment && (() => {
-      const c = worldToPx({ x: (tapeSegment.a.x + tapeSegment.b.x) / 2, y: (tapeSegment.a.y + tapeSegment.b.y) / 2 });
-      const lengthMm = wallLengthMm(tapeSegment.a, tapeSegment.b);
-      // Two things touching is an answer worth reading ("צמודים"); two points on top of each other is not.
-      if (lengthMm < 1 && !tapeSegment.between) return null;
-      return (
-        <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: c.x, top: c.y }}>
-          <div className="flex items-center gap-1.5 rounded-full border border-accent bg-surface/95 px-2.5 py-1 text-xs font-semibold text-accent shadow-floating nums">
-            <span>{lengthMm < 1 ? "צמודים" : `${(lengthMm / 1000).toFixed(2)} מ׳`}</span>
-            <span className="text-muted">·</span>
-            {tapeSegment.between ? (
-              <span className="font-medium text-muted">מקצה לקצה</span>
-            ) : (
-              <span className="font-medium text-muted">{Math.round(norm360(wallAngleDeg(tapeSegment.a, tapeSegment.b)))}°</span>
-            )}
-          </div>
-        </div>
-      );
-    })()}
+    {/* THE HUD: every HTML overlay anchored to a point on the plan. Laid out against the settled
+        view; between commits applyView carries the whole layer to the live view with one CSS
+        transform (hudTransform), so a readout follows its anchor through a pan with no render. */}
+    <div ref={hudRef} className="pointer-events-none absolute inset-0" style={{ transformOrigin: "0 0" }}>
+
+    {/* The tape's readouts — metres to the centimetre, plus the angle each was taken at (or "מקצה
+        לקצה" between two things), over the middle of its own line. HTML pills for the same reason
+        every other readout on this canvas is one: a fixed screen size and a scrim, so a measurement
+        taken across a dark zone tint is still legible. A finished measurement's pill is a button —
+        a click on it takes that one measurement away. */}
+    {hasRect &&
+      shownTapes.map(({ id, seg }) => (
+        <TapePill key={id} at={worldToPx({ x: (seg.a.x + seg.b.x) / 2, y: (seg.a.y + seg.b.y) / 2 })} seg={seg} onRemove={() => setMeasurements((list) => removeTape(list, id))} />
+      ))}
+    {hasRect && draftSeg && <TapePill at={worldToPx({ x: (draftSeg.a.x + draftSeg.b.x) / 2, y: (draftSeg.a.y + draftSeg.b.y) / 2 })} seg={draftSeg} />}
 
     {/* HTML overlays rather than SVG text: they stay a fixed screen size for free and carry a real
         surface scrim, so nothing sits unbacked on the grid. Positioned with physical left/top —
@@ -2249,10 +2537,10 @@ export function PlanCanvas({
         covers the cursor or the vertex it is about to drop. */}
     {hasRect && drawAnchor && (pending || entry) && (() => {
       const at = worldToPx(pending ? pending.point : drawAnchor);
-      const lenText = `${(pendingLenMm / 1000).toFixed(2)} מ׳`;
+      const lenText = fmtLen(pendingLenMm);
       const angText = `${Math.round(pendingAngleDeg)}°`;
       return (
-        <div className="absolute" style={{ left: at.x, top: at.y, transform: "translate(12px, -50%)" }}>
+        <div className="pointer-events-auto absolute" style={{ left: at.x, top: at.y, transform: "translate(12px, -50%)" }}>
           {entry ? (
             <div className="flex items-center gap-1.5 rounded-full border border-accent bg-surface px-2.5 py-1 text-xs shadow-floating">
               <input
@@ -2260,7 +2548,7 @@ export function PlanCanvas({
                 dir="ltr"
                 inputMode="decimal"
                 value={entry.field === "length" ? entry.length : entry.angle}
-                aria-label={entry.field === "length" ? "אורך הקטע במטרים" : "זווית הקטע במעלות"}
+                aria-label={entry.field === "length" ? (lengthUnit === "cm" ? "אורך הקטע בסנטימטרים" : "אורך הקטע במטרים") : "זווית הקטע במעלות"}
                 onChange={(e) => {
                   const raw = e.target.value;
                   if (!/^-?\d*\.?\d*$/.test(raw)) return;
@@ -2274,7 +2562,7 @@ export function PlanCanvas({
                 onBlur={() => setEntry(null)}
                 className="w-16 rounded-full bg-transparent text-center font-medium text-ink focus:outline-none nums"
               />
-              <span className="text-muted">{entry.field === "length" ? "מ׳" : "°"}</span>
+              <span className="text-muted">{entry.field === "length" ? unitLabel : "°"}</span>
               <div className="h-3.5 w-px bg-border" />
               {/* the other half of the pair, so Tab has something to aim at */}
               <span className="text-muted nums">{entry.field === "length" ? angText : lenText}</span>
@@ -2289,6 +2577,8 @@ export function PlanCanvas({
         </div>
       );
     })()}
+
+    </div>
 
     <div className="absolute top-4 end-4 flex items-center gap-0.5 rounded-md border border-border bg-surface p-1 shadow-floating">
       {onUndo && onRedo && (
@@ -2318,8 +2608,8 @@ export function PlanCanvas({
       {/* Two different questions, two buttons. The one above turns the WALLS' own labels on and off;
           this one measures between any two points you like. */}
       <IconButton
-        label={tapeOn ? "סגירת סרט המדידה · Esc" : "מדידת מרחק — לחיצה על שתי נקודות · M"}
-        onClick={() => { setTapeOn((on) => !on); setTape(null); }}
+        label={tapeOn ? "סגירת סרט המדידה · Esc" : "מדידת מרחק — גרירה מנקודה לנקודה · M"}
+        onClick={toggleTape}
         pressed={tapeOn}
       >
         <RulerDimensionLine className="h-4 w-4" strokeWidth={2} />
@@ -2356,13 +2646,13 @@ export function PlanCanvas({
       );
     })()}
     {/* What the armed tool is waiting for. It sits at the top-centre, out of the way of both the
-        inspector and the toolbar, and goes the moment the second point lands. */}
+        inspector and the toolbar. */}
     {tapeOn && (
       <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
         <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-          {tape && !tape.b
-            ? "לחצו על הנקודה או הפריט השני · Shift לזווית ישרה"
-            : "לחצו על נקודה או על פריט — בין פריטים נמדד מקצה לקצה"}
+          {tapeDraft
+            ? "שחררו על הנקודה או הפריט השני · Shift לזווית ישרה · Esc מבטל"
+            : "גררו מנקודה לנקודה למדידה · שחרור על פריט נועל אליו · Alt+גרירה מודד גם מפריט · Esc מנקה"}
         </span>
       </div>
     )}
@@ -2373,21 +2663,143 @@ export function PlanCanvas({
   );
 }
 
+// One measurement on the plan: its line and the two end ticks, square to it — the pair of marks
+// that say where the measurement actually starts and stops, rather than a line whose ends are
+// guesses. In world mm, inside the world group; `tickMm` is the tick's half-length at this zoom.
+function TapeLine({ seg, tickMm, live = false }: { seg: TapeSegment; tickMm: number; live?: boolean }) {
+  const dx = seg.b.x - seg.a.x;
+  const dy = seg.b.y - seg.a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = (-dy / len) * tickMm;
+  const ny = (dx / len) * tickMm;
+  return (
+    <g className="text-accent pointer-events-none">
+      <line x1={seg.a.x} y1={seg.a.y} x2={seg.b.x} y2={seg.b.y} stroke="currentColor" strokeWidth={1.5} strokeDasharray={live ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
+      {[seg.a, seg.b].map((e, i) => (
+        <line key={i} x1={e.x - nx} y1={e.y - ny} x2={e.x + nx} y2={e.y + ny} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      ))}
+    </g>
+  );
+}
+
+// A measurement's readout, centred on a container-px point in the HUD. With `onRemove` it is a
+// button that takes its measurement away; the draft's has none. Nothing to read (two free points on
+// top of each other) draws nothing — two things TOUCHING is an answer, "צמודים".
+function TapePill({ at, seg, onRemove }: { at: { x: number; y: number }; seg: TapeSegment; onRemove?: () => void }) {
+  const r = tapeReadout(seg);
+  if (!r) return null;
+  const cls = "flex items-center gap-1.5 rounded-full border border-accent bg-surface/95 px-2.5 py-1 text-xs font-semibold text-accent shadow-floating nums";
+  const body = (
+    <>
+      <span>{r.length}</span>
+      <span className="text-muted">·</span>
+      <span className="font-medium text-muted">{r.detail}</span>
+    </>
+  );
+  return (
+    <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: at.x, top: at.y }}>
+      {onRemove ? (
+        <button type="button" title="הסרת המדידה" aria-label="הסרת המדידה" onClick={onRemove} className={cls + " pointer-events-auto cursor-pointer transition-colors hover:bg-accent-tint"}>
+          {body}
+          <X className="h-3 w-3 text-muted" strokeWidth={2} />
+        </button>
+      ) : (
+        <div className={cls}>{body}</div>
+      )}
+    </div>
+  );
+}
+
 // Generic right-click menu, fixed-positioned at the pointer; a full-screen backdrop closes it on any
-// outside click or right-click. Items are supplied by the host (see contextMenuItems).
+// outside click or right-click. Items are supplied by the host (see contextMenuItems). A row with
+// `children` opens them in a second panel beside it — on hover or on a click — on whichever side of
+// the menu has the room. Both panels are kept inside the window.
 function CanvasMenu({ x, y, items, onClose }: { x: number; y: number; items: ContextMenuItem[]; onClose: () => void }) {
   const cls = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink transition-colors hover:bg-bg disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent";
+  const panel = useRef<HTMLDivElement>(null);
+  const sub = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  // Where each panel actually goes, once it has been measured — a menu opened near the bottom or the
+  // edge of the window would otherwise hang off it.
+  const [at, setAt] = useState({ top: y, left: x });
+  const [subAt, setSubAt] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    const r = panel.current?.getBoundingClientRect();
+    if (!r) return;
+    setAt({ top: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)), left: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) });
+  }, [x, y, items]);
+  // A closed submenu is not drawn, so where it last stood does not matter: it is measured again,
+  // before it is painted, the next time a row opens it.
+  useLayoutEffect(() => {
+    if (open === null) return;
+    const row = panel.current?.querySelector<HTMLElement>(`[data-row="${open}"]`)?.getBoundingClientRect();
+    const box = panel.current?.getBoundingClientRect();
+    const s = sub.current?.getBoundingClientRect();
+    if (!row || !box || !s) return;
+    // The inline END of an RTL menu is its left, where the row's ‹ points — the other side only when
+    // the window has no room there.
+    const left = box.left - 4 - s.width >= 8;
+    setSubAt({
+      top: Math.max(8, Math.min(row.top - 4, window.innerHeight - s.height - 8)),
+      left: left ? box.left - 4 - s.width : Math.min(box.right + 4, window.innerWidth - s.width - 8),
+    });
+  }, [open, at]);
+  const kids = open !== null ? items[open]?.children : undefined;
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div role="menu" className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-surface py-1 shadow-floating" style={{ top: y, left: x }}>
-        {items.map((it, i) => (
-          <button key={i} type="button" role="menuitem" className={cls} disabled={it.disabled} onClick={() => { it.onSelect(); onClose(); }}>
-            {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
-            {it.label}
-          </button>
-        ))}
+      <div ref={panel} role="menu" className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-surface py-1 shadow-floating" style={at}>
+        {items.map((it, i) =>
+          it.children ? (
+            <button
+              key={i}
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={open === i}
+              data-row={i}
+              className={`${cls} ${open === i ? "bg-bg" : ""}`}
+              disabled={it.disabled}
+              onMouseEnter={() => setOpen(i)}
+              onClick={() => setOpen((cur) => (cur === i ? null : i))}
+            >
+              {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
+              <span className="flex-1 text-start">{it.label}</span>
+              <span aria-hidden className="text-muted">‹</span>
+            </button>
+          ) : (
+            <button
+              key={i}
+              type="button"
+              role="menuitem"
+              data-row={i}
+              className={cls}
+              disabled={it.disabled}
+              onMouseEnter={() => setOpen(null)}
+              onClick={() => { it.onSelect(); onClose(); }}
+            >
+              {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
+              {it.label}
+            </button>
+          ),
+        )}
       </div>
+      {kids && (
+        <div
+          ref={sub}
+          role="menu"
+          className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-surface py-1 shadow-floating"
+          // Measured before it is placed: invisible for the one layout pass that finds its size.
+          style={subAt ?? { top: 0, left: 0, visibility: "hidden" }}
+        >
+          {kids.map((it, k) => (
+            <button key={k} type="button" role="menuitem" className={cls} disabled={it.disabled} onClick={() => { it.onSelect(); onClose(); }}>
+              {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
     </>
   );
 }
@@ -3001,12 +3413,16 @@ export function SelectionInspector({
   onToggleWallLock = () => {},
   onClose,
   edgeNoun = "קיר",
+  lengthUnit = "m",
 }: {
   selected: SelectedRef[];
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
   lockedEdges?: boolean[];
   edgeNoun?: string; // what an outline edge is called — "קיר" in a hall, "צלע" for a product footprint
+  /** The unit the edge's length is asked in — the same one the canvas it sits on shows (PlanCanvas's
+   *  lengthUnit). onSetWallLength is still handed metres whichever it is. */
+  lengthUnit?: "m" | "cm";
   entrances?: Entrance[];
   stage?: Fixture | undefined;
   bars?: Fixture[];
@@ -3212,16 +3628,29 @@ export function SelectionInspector({
           >
             {locked ? <Lock className="h-4 w-4" strokeWidth={2} /> : <Unlock className="h-4 w-4" strokeWidth={2} />}
           </IconButton>
-          <NumberField
-            layout="inline"
-            label="אורך (מ׳)"
-            decimals={2}
-            min={0.001}
-            disabled={locked}
-            value={wallLengthMm(a, b) / 1000}
-            onChange={(m) => onSetWallLength(idx, m)}
-            className="w-20"
-          />
+          {lengthUnit === "cm" ? (
+            <NumberField
+              layout="inline"
+              label="אורך (ס״מ)"
+              decimals={1}
+              min={0.1}
+              disabled={locked}
+              value={wallLengthMm(a, b) / 10}
+              onChange={(cm) => onSetWallLength(idx, cm / 100)}
+              className="w-20"
+            />
+          ) : (
+            <NumberField
+              layout="inline"
+              label="אורך (מ׳)"
+              decimals={2}
+              min={0.001}
+              disabled={locked}
+              value={wallLengthMm(a, b) / 1000}
+              onChange={(m) => onSetWallLength(idx, m)}
+              className="w-20"
+            />
+          )}
         </InspectorGroup>
         <InspectorDivider />
         <InspectorGroup>

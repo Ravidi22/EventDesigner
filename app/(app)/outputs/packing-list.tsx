@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
-import { packingList } from "@/lib/outputs/aggregate";
+import { BackToStudio } from "./back-to-studio";
+import { packingList, UNTYPED_CHAIRS } from "@/lib/outputs/aggregate";
 import { itemLookup, measureContext } from "@/lib/outputs/lookup";
 import { activeEvent } from "@/lib/events/storage";
 import { eventPlan } from "@/lib/events/plan";
@@ -18,7 +19,8 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 
 // F-6.3: manual spares per row, persisted with the event — so the "no manual fixes" success
 // metric covers reserves too, instead of pen-on-paper additions.
-export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; eventId: string | null }) {
+/** `meeting`: see Quote — the empty state points back into the flow rather than out to /studio. */
+export function PackingList({ doc, eventId, meeting = false }: { doc: DesignDocumentContent; eventId: string | null; meeting?: boolean }) {
   const [spares, setSpares] = useState<Spares>({});
   // Same reason as the quote: a drape's metres come from the wall it hangs on, which lives at the
   // venue rather than in the document the crew's list is aggregated from — so the same unreachable
@@ -102,7 +104,8 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
     );
   };
 
-  const groups = packingList(doc, itemLookup, measureContext(structure));
+  const chairDefault = defaultChair();
+  const groups = packingList(doc, itemLookup, measureContext(structure), (t) => chairOf(t, chairDefault));
   // Countable rows only: metres of drape and square metres of carpet are not "items", and adding
   // them into one headline number would make it mean nothing.
   const total = groups.reduce(
@@ -114,9 +117,7 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
     return (
       <div className="mx-auto max-w-md py-20 text-center">
         <p className="text-sm text-ink-soft">עדיין אין פריטים בעיצוב.</p>
-        <Link href="/studio" className="mt-3 inline-block text-sm font-medium text-accent hover:text-accent-hover">
-          חזרה לסטודיו →
-        </Link>
+        <BackToStudio meeting={meeting} className="mt-3 inline-block text-sm" />
       </div>
     );
   }
@@ -168,6 +169,9 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                     </td>
                     <td className="nums py-2 text-ink">{formatAmount(r.quantity, r.unit)}</td>
                     <td className="py-2">
+                      {/* No spares on the untyped chairs row: a spare is stored against a catalog
+                          variant, and this row has none until the studio adds a chair. */}
+                      {r.variantId !== UNTYPED_CHAIRS && (
                       <NumberField
                         size="sm"
                         decimals={0}
@@ -179,6 +183,7 @@ export function PackingList({ doc, eventId }: { doc: DesignDocumentContent; even
                         aria-label={`רזרבה עבור ${r.label}`}
                         className="w-14 print:border-transparent"
                       />
+                      )}
                     </td>
                     <td className="nums py-2 font-semibold text-ink">{formatAmount(round1(r.quantity + spare), r.unit)}</td>
                     <td className="py-2 text-center">

@@ -1,6 +1,6 @@
 // Filling an area of the plan with stage decks — "draw where the stage goes, get the decks".
 //
-// A stage is built from the decks the studio owns (200×100, 100×100, 122×244…), and working out how
+// A stage is built from the decks the studio owns (244×122 and its strips, 200×100…), and working out how
 // many of which to lay across a 7.5×4m area is arithmetic nobody should do by hand at a meeting. The
 // designer draws the area, says which side faces the room, and this lays the decks.
 //
@@ -11,7 +11,8 @@
 //      the BACK, against the wall or the backdrop, never along the edge everyone looks at. A row
 //      that leaves slack at its ends is centred, so a gap is two equal ones and not one lopsided one.
 //   2. The decks are split into FAMILIES — decks that share a module of 10cm or more (200×100 and
-//      100×100 do; 200×100 and 122×244 share 2cm and do not). One stage is built from one family:
+//      100×100 do; 200×100 and 122×244 share 2cm and do not), or a side of exactly the same length
+//      (the 244×40/60/80 strips that finish a row of 244×122 sheets). One stage is built from one family:
 //      a crew does not clamp a metric deck to an imperial one. Each family is tried, and each deck
 //      on its own, and the layout that covers most with fewest decks wins — which also rescues the
 //      cases where largest-first picks the wrong big deck.
@@ -43,6 +44,16 @@ export interface DeckType {
   depthMm: number;
   /** Two decks of different heights are not one platform. Absent = no opinion. */
   heightMm?: number;
+  /** A round (or oval) platform: one piece, never laid by this fill — a round stage built of
+   *  exactly that piece stands on it whole (lib/design-document/stage.ts layStage). */
+  round?: boolean;
+  /** Any other platform that is not a rectangle — a half-round, a triangle — as its outline about
+   *  its own centre: also one piece, never laid by this fill, only stood whole (StageBuild.pieces). */
+  outline?: Point[];
+  /** A QUARTER-ROUND piece — a corner platform — and its radius: what a stage with rounded corners
+   *  stands in each corner when the studio owns one of about the corner's radius
+   *  (lib/design-document/stage.ts quarterPieces). Carries `outline` too. */
+  quarterMm?: number;
 }
 
 export interface LaidDeck {
@@ -53,6 +64,12 @@ export interface LaidDeck {
   rotation: number;
   widthMm: number;
   depthMm: number;
+  /** A whole deck the crew CUTS to the stage's line — the corner of a rounded stage, the sliver of a
+   *  bowed front — drawn as `outline` (what is left of it) and counted as the whole deck it was. */
+  cut?: boolean;
+  /** Its shape where it is not the rectangle it was: a cut deck's remainder, a whole piece's own
+   *  outline. In the same frame as `centre`. */
+  outline?: Point[];
 }
 
 /** A rectangle that the chosen decks cover exactly, near the one drawn. */
@@ -91,6 +108,17 @@ export interface FillOptions {
   /** Let a deck reach past the drawn line where that beats the bare strip it would otherwise leave
    *  — see point 5 in the header. Never past `within`: a level stays on its stage. */
   exceed?: boolean;
+  /** The outline is a CURVE (a disc, a half-round): try the rows at several offsets from its front
+   *  and keep the one that covers most. A straight front lays its first row ON the front; a curve's
+   *  front is a point, and rows counted from it in whole deck depths can miss the stage entirely —
+   *  a 4m disc of 244×122 sheets laid one sheet where three fit. */
+  phases?: boolean;
+  /** The line the rows run ALONG, when it is not edge `front` itself: a CURVED front (a bowed stage,
+   *  a half-round facing out from its arc) is many short chords, and the first of them points the
+   *  way the curve happens to leave its end — rows laid along that are rows laid askew. Its
+   *  end-to-end chord is the line the stage is really built along. The rows still start at the
+   *  front: the grid begins at the outline's foremost point. */
+  axis?: readonly [Point, Point];
 }
 
 export const STAGE_TOLERANCE_MM = 50;
@@ -153,10 +181,11 @@ function longestEdge(poly: readonly Point[]): number {
   return best;
 }
 
-/** The frame a fill works in: x along the front edge, y running back into the stage. */
-function frameOf(polygon: readonly Point[], front: number) {
-  const a = polygon[front];
-  const b = polygon[(front + 1) % polygon.length];
+/** The frame a fill works in: x along the front edge (or the `axis` given instead of it), y running
+ *  back into the stage. */
+function frameOf(polygon: readonly Point[], front: number, axis?: readonly [Point, Point]) {
+  const a = axis ? axis[0] : polygon[front];
+  const b = axis ? axis[1] : polygon[(front + 1) % polygon.length];
   const theta = Math.atan2(b.y - a.y, b.x - a.x);
   const cos = Math.cos(theta);
   const sin = Math.sin(theta);
@@ -191,15 +220,20 @@ export function asRect(polygon: readonly Point[], front: number): { widthMm: num
   return { widthMm: e(front), depthMm: e(front + 1) };
 }
 
-/** Decks that can be one platform: same height, and a shared module of FAMILY_MODULE_MM or more. */
-function families(types: readonly DeckType[]): DeckType[][] {
+/** Decks that can be one platform: same height, and either a shared module of FAMILY_MODULE_MM or
+ *  more, or one side EXACTLY the same length — a 244×40 strip shares no 10cm module with the 244×122
+ *  sheet, but it is cut to the sheet's own 244cm to finish the depth of a row of them, which is what
+ *  it is for. A 200×100 and a 122×244 share neither, and stay apart. */
+export function families(types: readonly DeckType[]): DeckType[][] {
   const out: DeckType[][] = [];
+  const sameSide = (o: DeckType, t: DeckType) =>
+    [o.widthMm, o.depthMm].map(r10).some((s) => s === r10(t.widthMm) || s === r10(t.depthMm));
   for (const t of types) {
     const home = out.find((f) =>
       f.every(
         (o) =>
           (o.heightMm ?? 0) === (t.heightMm ?? 0) &&
-          [o.widthMm, o.depthMm, t.widthMm, t.depthMm].map(r10).reduce((g, d) => gcd(g, d)) >= FAMILY_MODULE_MM,
+          ([o.widthMm, o.depthMm, t.widthMm, t.depthMm].map(r10).reduce((g, d) => gcd(g, d)) >= FAMILY_MODULE_MM || sameSide(o, t)),
       ),
     );
     if (home) home.push(t);
@@ -223,10 +257,12 @@ function lay(
   frame: ReturnType<typeof frameOf>,
   bound: readonly Point[] | null = null,
   exceed = false,
+  /** Where the grid starts, back from the outline's own corner — see FillOptions.phases. */
+  offset: Point = { x: 0, y: 0 },
 ): Laid {
-  const minX = Math.min(...local.map((p) => p.x));
+  const minX = Math.min(...local.map((p) => p.x)) - offset.x;
   const maxX = Math.max(...local.map((p) => p.x));
-  const minY = Math.min(...local.map((p) => p.y));
+  const minY = Math.min(...local.map((p) => p.y)) - offset.y;
   const maxY = Math.max(...local.map((p) => p.y));
   // How far past the line a deck may reach when exceeding: half the largest deck, which is where a
   // deck would be exactly as much outside as in. The grid is extended that far at the far ends
@@ -309,7 +345,7 @@ function lay(
   if (boxes.length > 0 && blocks.length === 0) {
     const lo = Math.min(...boxes.map((b) => b.x));
     const hi = Math.max(...boxes.map((b) => b.x + b.w));
-    const shift = (maxX - hi - (lo - minX)) / 2;
+    const shift = (maxX - hi - (lo - (minX + offset.x))) / 2;
     if (Math.abs(shift) > 1) {
       const ok = boxes.every((b) => footprintOk(b.x + shift, b.y, b.w, b.d));
       if (ok) for (const b of boxes) b.x += shift;
@@ -348,6 +384,7 @@ function best(
   areaMm2: number,
   bound: readonly Point[] | null = null,
   exceed = false,
+  phases = false,
 ): Laid {
   const fams = families(types);
   const candidates = [...fams, ...types.filter(() => types.length > 1).map((t) => [t])].filter(
@@ -356,13 +393,20 @@ function best(
   let winner: Laid = { decks: [], covered: 0, turned: 0 };
   let winnerKey = [-1, 0, 0];
   for (const c of candidates) {
-    const l = lay(local, blocks, c, tol, frame, bound, exceed);
-    const key = [Math.round((Math.min(1, l.covered / areaMm2) * 200)), -l.decks.length, -l.turned];
-    const better = key[0] !== winnerKey[0] ? key[0] > winnerKey[0] : key[1] !== winnerKey[1] ? key[1] > winnerKey[1] : key[2] > winnerKey[2];
-    if (better) {
-      winner = l;
-      winnerKey = key;
-    }
+    // A curve tries its rows at a few offsets within one grid step, when the step is coarse (a family
+    // of one deck size steps a whole deck at a time); a fine step already finds every row.
+    const step = Math.max(10, c.flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]).reduce((g, d) => gcd(g, d)));
+    const k = phases && step >= 200 ? Math.min(6, Math.floor(step / 100)) : 1;
+    for (let oy = 0; oy < k; oy++)
+      for (let ox = 0; ox < k; ox++) {
+        const l = lay(local, blocks, c, tol, frame, bound, exceed, { x: (ox * step) / k, y: (oy * step) / k });
+        const key = [Math.round((Math.min(1, l.covered / areaMm2) * 200)), -l.decks.length, -l.turned];
+        const better = key[0] !== winnerKey[0] ? key[0] > winnerKey[0] : key[1] !== winnerKey[1] ? key[1] > winnerKey[1] : key[2] > winnerKey[2];
+        if (better) {
+          winner = l;
+          winnerKey = key;
+        }
+      }
   }
   return winner;
 }
@@ -376,11 +420,11 @@ export function fillWithDecks(polygon: readonly Point[], types: readonly DeckTyp
   if (polygon.length < 3 || usable.length === 0 || areaMm2 <= 0) return empty;
 
   const tol = opts.toleranceMm ?? STAGE_TOLERANCE_MM;
-  const frame = frameOf(polygon, front);
+  const frame = frameOf(polygon, front, opts.axis);
   const local = polygon.map(frame.toLocal);
   const blocks = (opts.obstacles ?? []).map((ob) => ob.map(frame.toLocal));
   const bound = opts.within ? opts.within.map(frame.toLocal) : null;
-  const laid = best(local, blocks, usable, tol, frame, areaMm2, bound, !!opts.exceed);
+  const laid = best(local, blocks, usable, tol, frame, areaMm2, bound, !!opts.exceed, !!opts.phases);
   const coverage = Math.min(1, laid.covered / areaMm2);
   const rect = asRect(polygon, front);
 
@@ -641,6 +685,24 @@ if (isMain(import.meta.url)) {
   const sheet16 = fillWithDecks(rect(0, 0, 4880, 9760), [{ id: "s", widthMm: 2440, depthMm: 1220 }]);
   assert(sheet16.decks.length === 16 && sheet16.coverage > 0.999, "a 4.88×9.76 is exactly sixteen 244×122 sheets");
 
+  // The base library's decks: the 244×122 sheet and the 80/60/40 strips cut to its length. They
+  // share no 10cm module, but one side exactly — one platform, the strips finishing the depth.
+  const sheet = { id: "122", widthMm: 2440, depthMm: 1220, heightMm: 600 };
+  const s80 = { id: "80", widthMm: 2440, depthMm: 800, heightMm: 600 };
+  const s60 = { id: "60", widthMm: 2440, depthMm: 600, heightMm: 600 };
+  const s40 = { id: "40", widthMm: 2440, depthMm: 400, heightMm: 600 };
+  const base244 = [sheet, s80, s60, s40];
+  const deep304 = fillWithDecks(rect(0, 0, 4880, 3040), base244, { front: 0 });
+  assert(deep304.coverage > 0.999, "a 4.88×3.04 stage is covered exactly by sheets and strips");
+  assert(count(deep304, "122") === 4 && count(deep304, "60") === 2, "…four sheets in two rows, and a 60cm strip behind each pair");
+  assert(deep304.decks.every((d) => d.rotation === 0), "…every one long side along the front");
+  const deep284 = fillWithDecks(rect(0, 0, 7320, 2840), base244, { front: 0 });
+  assert(deep284.coverage > 0.999 && count(deep284, "122") === 6 && count(deep284, "40") === 3, "a 7.32×2.84 is six sheets and three 40cm strips");
+  assert(count(fillWithDecks(rect(0, 0, 4880, 2440), base244), "122") === 4, "a depth the sheets divide uses no strips");
+  assert(lengthSnapper(base244)(3045, { magnetMm: 60 }) === 3040 && lengthSnapper(base244)(2845, { magnetMm: 60 }) === 2840, "the strips' depths are lengths the drawing pulls to");
+  const strips = fillWithDecks(rect(0, 0, 6000, 4000), [big, small, sheet, s40]);
+  assert(strips.decks.every((d) => d.typeId === "2x1" || d.typeId === "1x1") || strips.decks.every((d) => d.typeId === "122" || d.typeId === "40"), "a sheet and a metric deck are still never one platform");
+
   // Exceeding the line: a 6.90m front gets a seventh metre of deck 10cm over the line; a 6.30m
   // front does not get one 70cm over it; and a level never reaches past its stage.
   const strip = fillWithDecks(rect(0, 0, 6900, 1000), [big, small], { front: 0 });
@@ -655,8 +717,27 @@ if (isMain(import.meta.url)) {
   assert(levelOver.decks.length === 2 && levelOver.decks.every((d) => d.centre.x + d.widthMm / 2 <= 6000), "a level never exceeds the stage it stands on");
   assert(fillWithDecks(rect(0, 0, 6000, 4000), [big], { exceed: true }).decks.length === 12, "an exact area is the same build either way");
 
+  // A curved front: the rows run along the curve's end-to-end chord, not along its first chord. A
+  // 6×4 whose front is bowed 30cm out: with the first chord as the axis every deck leans with it;
+  // with the chord as the axis the build is the plain rectangle's, squared to the sides.
+  {
+    const bowPts = Array.from({ length: 9 }, (_, k) => {
+      const x = -3000 + (6000 * k) / 8;
+      return { x, y: -300 * (1 - (x / 3000) ** 2) };
+    });
+    const bowed: Point[] = [...bowPts, { x: 3000, y: 4000 }, { x: -3000, y: 4000 }];
+    const askew = fillWithDecks(bowed, [big], { front: 0 });
+    assert(askew.decks.some((d) => d.rotation > 5 && d.rotation < 355), "(laid along a bow's first chord, the rows lean)");
+    const square = fillWithDecks(bowed, [big], { front: 0, axis: [bowPts[0], bowPts[8]] });
+    assert(square.decks.length >= askew.decks.length && square.decks.every((d) => d.rotation === 0), "laid along the bow's chord, the rows are square to the stage");
+    assert(square.decks.every((d) => d.centre.y - d.depthMm / 2 >= -300 - 60), "…and start at the front");
+  }
+
   const t0 = Date.now();
   fillWithDecks(rect(0, 0, 30000, 20000), [big, small, imperial]);
   assert(Date.now() - t0 < 1500, "a ballroom-sized area answers inside a second and a half");
+  const t1 = Date.now();
+  fillWithDecks(rect(0, 0, 30000, 20000), base244);
+  assert(Date.now() - t1 < 1500, "…and so does one built from the 244 sheet and its strips (a 2cm grid)");
   console.log("stage-fill self-check passed");
 }

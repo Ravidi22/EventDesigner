@@ -25,6 +25,7 @@ import {
   wallLengthMm,
 } from "@/lib/studio/geometry";
 import { defaultStairs, normalizeStairs, type FeatureStairs } from "./stairs";
+import type { FeatureClimb } from "./climb";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -64,7 +65,11 @@ export interface StructureEntrance {
 // is a grey diagram of the property, and the planting is most of what makes a courtyard read as the
 // place the client walked through. A plant is a feature like the others: real size, draggable, and
 // in the way of a table exactly as much as a bar is.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "plant" | "surface";
+//
+// Stairs and a ramp are where the FLOOR changes height — the steps down from a lobby, a ramp at a
+// side door — and stand on the plan by themselves (./climb.ts), unlike the flight hung off a raised
+// feature (`stairs`, below), which needs a deck to climb onto.
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "plant" | "surface" | "stairs" | "ramp";
 
 /** What a `surface` feature is laid in — the ground under everything else: a lawn, a paved court, a
  *  timber deck. Drawn as a real-scale texture (components/surface-fill.tsx), always beneath the
@@ -140,6 +145,22 @@ export interface StructureFeature {
   plant?: PlantSpecies;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
+  /** iff `kind` is "stairs" or "ramp": which way it climbs, and risers when they were typed. The
+   *  height it climbs is `heightMm`; everything else is derived from it (./climb.ts). */
+  climb?: FeatureClimb;
+  /** May an EVENT move this in its sketch ("ניתן להזזה בסקיצה")? Absent = the kind's default — see
+   *  featureMovable. Only ever an offset in that event's document (lib/design-document/features.ts);
+   *  the property's own position is never written from a sketch. */
+  movable?: boolean;
+}
+
+/** Whether a sketch may pick this feature up and move or turn it. The venue says so per feature at
+ *  /halls; a feature saved before the switch existed answers by its kind: a bar and a stage are the
+ *  things a venue rolls about between events, a column, a door's surround, the pool, the planting
+ *  and the floor itself are not. A feature that is not movable is drawn in the sketch but takes no
+ *  clicks — it is the room, like a wall. */
+export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
+  return f.movable ?? (f.kind === "bar" || f.kind === "stage");
 }
 
 /** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
@@ -160,6 +181,8 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   other: "אחר",
   plant: "צמחייה",
   surface: "משטח",
+  stairs: "מדרגות",
+  ramp: "רמפה",
 };
 
 export interface VenueStructure {
@@ -502,6 +525,10 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   other: { widthMm: 2000, depthMm: 2000, heightMm: 1000, shape: "rect" },
   plant: { widthMm: 1200, depthMm: 1200, heightMm: 1000, shape: "circle" },
   surface: { widthMm: 4000, depthMm: 3000, heightMm: 0, shape: "rect" },
+  // An entrance flight: 45cm in three risers on two 28cm treads (./climb.ts), and the ramp beside
+  // it climbing the same 45cm at 1:12.
+  stairs: { widthMm: 3000, depthMm: 560, heightMm: 450, shape: "rect" },
+  ramp: { widthMm: 1500, depthMm: 5400, heightMm: 450, shape: "rect" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot

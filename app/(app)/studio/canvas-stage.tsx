@@ -1,15 +1,18 @@
 "use client";
 
-import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
-import { seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
-import { deckOf, resolve, tableUtilization, type Resolved } from "@/lib/studio/catalog-resolver";
+import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { blockSeats } from "@/lib/design-document/block";
+import { benchOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
+import { catalogVersion } from "@/lib/catalog/storage";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, rotatedExtent, tableAt } from "@/lib/studio/geometry";
-import { overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
-import { featureFootprint, type VenueStructure } from "@/lib/venues/structure";
+import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
+import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
@@ -17,29 +20,49 @@ import { zoneBounds } from "@/lib/venues/zone";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
-import { FootprintShape, tableBlockedSides, tableFootprint, placementFootprint, productStyle } from "@/components/footprint-shape";
+import { FootprintShape, dressingSpots, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
+import { startPointerGesture } from "@/lib/studio/gesture";
+import { tableAreaMm2 } from "@/lib/studio/geometry";
+import { clampToTable, toTableFrame } from "@/lib/design-document/dressing";
+import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { ItemSurface } from "@/components/surface-fill";
+import { anySurface } from "@/lib/catalog/textures";
+import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
 import { Grid2x2Plus, ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LaidDeck, type LengthSnap } from "@/lib/studio/stage-fill";
-import { constrainNext, moveVertex, pushSide, removeVertex, selfIntersects, splitSide, squareUp } from "@/lib/studio/stage-draw";
+import { constrainNext, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
 import {
   benchInRoom,
   edgeGaps,
+  edgeItemInRoom,
   edgeItemShape,
+  freeStretch,
   itemEdge,
+  MIN_EDGE_ITEM_MM,
   stageCorners,
   itemSpan,
   layStage,
+  plainRect,
   reframeStage,
+  stageBox,
   stageDeckTypes,
   stageRect,
+  stageIsRound,
+  stageShapeOf,
   toRoom,
   toStageFrame,
+  itemAlong,
+  itemSidePoint,
+  stageSide,
+  stageSides,
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
+import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
 import type { StageBuild, StageStair } from "@/lib/design-document/types";
 import { signedArea } from "@/lib/studio/stage-fill";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
@@ -52,6 +75,9 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { floorStack, type StackKind } from "@/lib/design-document/stacking";
+import { centreOver, wallRuns } from "@/lib/studio/hang";
+import { hangPointOf, hangTargetsCache, positionHungAt } from "./hang-targets";
+import { HangTies } from "./hang-ties";
 
 // The studio's design surface — the app's one canvas (components/plan-canvas.tsx) with the design
 // document drawn into its layers.
@@ -83,6 +109,66 @@ import { floorStack, type StackKind } from "@/lib/design-document/stacking";
 // (or the middle button) and rubber-bands on a plain drag, which is the one this screen wanted.
 /** The three kinds of thing on this surface that can be picked up. `feature` is the venue's own —
  *  see the note at the top of this file about what moving one does and does not mean. */
+// ── Per-item caches ────────────────────────────────────────────────────────────────────────────
+//
+// A drag writes the document every frame, and the document is what every derived list below is
+// memoised on — so each frame used to lay out every table's dressing, seat every table's chairs and
+// outline every item again, for one table that moved. These remember the answer PER ITEM, keyed on
+// the item object itself (a reducer copies only what changed, so an untouched table keeps its
+// identity across the frame) and on the catalog's version (the same table seats differently once
+// its row has loaded).
+
+const EMPTY_CHIPS: Placement[] = [];
+const sameItems = <T,>(a: readonly T[], b: readonly T[]) => a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
+const spotsCache = new WeakMap<DesignTable, { version: number; chips: Placement[]; spots: DressingSpot[] }>();
+function cachedSpots(t: DesignTable, chips: Placement[]): DressingSpot[] {
+  const hit = spotsCache.get(t);
+  if (hit && hit.version === catalogVersion && sameItems(hit.chips, chips)) return hit.spots;
+  const spots = dressingSpots(t, chips);
+  spotsCache.set(t, { version: catalogVersion, chips, spots });
+  return spots;
+}
+const seatsCache = new WeakMap<DesignTable, { version: number; seats: Seat[] }>();
+function cachedSeats(t: DesignTable): Seat[] {
+  const hit = seatsCache.get(t);
+  if (hit && hit.version === catalogVersion) return hit.seats;
+  const seats = seatsAround(tableFootprint(t), t.seats ?? 0, undefined, tableBlockedSides(t));
+  seatsCache.set(t, { version: catalogVersion, seats });
+  return seats;
+}
+/** The placement as it faces on its table — the same object back for the same turn, so a memoised
+ *  node on a turned table is not handed a fresh copy every frame. */
+const turnedCache = new WeakMap<Placement, { rotation: number; p: Placement }>();
+function turned(p: Placement, rotation: number): Placement {
+  if (rotation === p.rotation) return p;
+  const hit = turnedCache.get(p);
+  if (hit && hit.rotation === rotation) return hit.p;
+  const next = { ...p, rotation };
+  turnedCache.set(p, { rotation, p: next });
+  return next;
+}
+
+/** A memo that is only PAID FOR when read: the factory runs on the first call after its deps
+ *  changed, never on render. For the tape's outlines of everything on the plan — asked for while
+ *  the tape is armed, and not on every frame of a drag that happens to change the document. */
+function useLazyMemo<T>(factory: () => T, deps: readonly unknown[]): () => T {
+  // The latest factory and deps are published after each commit; the getter reads them when it is
+  // called, compares the deps with the ones it last computed for, and recomputes only on a change.
+  const latest = useRef({ factory, deps });
+  useLayoutEffect(() => {
+    latest.current = { factory, deps };
+  });
+  const cache = useRef<{ deps: readonly unknown[]; value: T } | null>(null);
+  return useCallback(() => {
+    const { factory: make, deps: now } = latest.current;
+    const hit = cache.current;
+    if (hit && hit.deps.length === now.length && hit.deps.every((d, i) => Object.is(d, now[i]))) return hit.value;
+    const value = make();
+    cache.current = { deps: now, value };
+    return value;
+  }, []);
+}
+
 export type SelectionKind = "table" | "placement" | "feature";
 export interface SelectionRef {
   kind: SelectionKind;
@@ -123,6 +209,7 @@ export function CanvasStage({
   onMoveMany,
   onRotateMany,
   onEndDrag,
+  alignKeyBox,
   onResizePlacement,
   onSpanPlacement,
   onDropProduct,
@@ -134,6 +221,7 @@ export function CanvasStage({
   stageFillActive,
   onStageFill,
   drawArea,
+  areaShape = "corners",
   onArea,
   onCancelArea,
   onAreaRefused,
@@ -156,6 +244,11 @@ export function CanvasStage({
   stairPick,
   onPickStair,
   onContextMenu,
+  dressingTableId,
+  onFocusTable,
+  onExitDressing,
+  onArrangeDressing,
+  showTableNumbers = false,
 }: {
   doc: DesignDocumentContent;
   plan: EventPlan;
@@ -190,6 +283,9 @@ export function CanvasStage({
    *  `moved` is what the gesture actually carried (a drag's cargo, a rotate's members), for the
    *  host to settle what now stands on what; absent for a gesture that moved nothing in particular. */
   onEndDrag: (moved?: SelectionRef[]) => void;
+  /** The KEY of a multi-selection — what יישור lines the others up with (lib/studio/align.ts) —
+   *  as its turned box. Marked on the plan so the designer can see which one stays put. */
+  alignKeyBox?: SnapBox | null;
   /** A carpet stretched by its corner: the new size, and the centre it moved to (the opposite
    *  corner stays put, which is what dragging one corner means). */
   onResizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
@@ -214,15 +310,20 @@ export function CanvasStage({
   onStageFill: () => void;
   /** Drawing the area: every click on the plan is a corner, whatever is under it. */
   drawArea: boolean;
-  onArea: (polygon: Point[]) => void;
+  /** …or, for a round stage, a centre and a size (a disc), a box (an oval), or a chord and a side (a
+   *  half-round). Absent = corners. */
+  areaShape?: AreaShape;
+  /** The area drawn — with the corners a curve runs through, when it was drawn round. */
+  onArea: (polygon: Point[], smooth?: number[]) => void;
   onCancelArea: () => void;
   /** An outline that could not be a stage (it crosses itself) — the screen says so. */
   onAreaRefused?: (message: string) => void;
   /** The angle the area tool squares its sides to — a level is square to its stage. Absent = square
    *  to the wall nearest the first corner (a stage along an angled wall is square to THAT wall). */
   areaRefDeg?: number;
-  /** The drawn area and the decks it would get — a preview, drawn over everything, taking no clicks. */
-  areaPreview: { polygon: Point[]; front: number; decks: LaidDeck[] } | null;
+  /** The drawn area and the decks it would get — a preview, drawn over everything, taking no clicks.
+   *  `curved`: a round area, whose dozens of chords are no sides to label. */
+  areaPreview: { polygon: Point[]; front: number; decks: LaidDeck[]; curved?: boolean } | null;
   /** A click on one of the preview's edges: that edge is the stage's front now. */
   onPickFront: (edge: number) => void;
   /** The preview's outline re-shaped by its grips (corners dragged, sides pushed, split, removed). */
@@ -251,7 +352,9 @@ export function CanvasStage({
   activeEdgeItem?: string | null;
   onEdgeItemSelect?: (stageId: string, itemId: string | null) => void;
   /** An edge item slid along its side or resized by its grips. */
-  onEdgeItemChange?: (stageId: string, item: StageStair) => void;
+  /** `from`: the stage's items when the gesture began — a resize trims its neighbours against them
+   *  (shareSide); a slide passes nothing and trims nothing. */
+  onEdgeItemChange?: (stageId: string, item: StageStair, from?: StageStair[]) => void;
   /** Placing a flight of stairs: the sides it may stand against, in room coordinates. A click on one
    *  reports which side and how far along it. */
   stairPick?: { level?: string; edge: number; a: Point; b: Point }[] | null;
@@ -259,6 +362,19 @@ export function CanvasStage({
   /** The right-click menu for a set of things: the thing under the pointer (selected first, when
    *  it was not), or the whole selection when it was one of them or the click landed on floor. */
   onContextMenu?: (refs: SelectionRef[]) => ContextMenuItem[];
+  /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
+   *  items on it free to be dragged about its top. Null = the whole plan, as usual. */
+  dressingTableId?: string | null;
+  /** A double-click on a table (or on an item on it): dress THAT table. */
+  onFocusTable?: (tableId: string) => void;
+  /** A click on the room around the table being dressed — back to the plan. */
+  onExitDressing?: () => void;
+  /** Items dragged on the table being dressed: where every item on it now stands, in the table's own
+   *  frame — one frame of a gesture, closed by onEndDrag. */
+  onArrangeDressing?: (tableId: string, positions: { id: string; position: Point }[]) => void;
+  /** Write each table's number and its `seated/seats` on it (a block's once, on the block) — the
+   *  hall pass and the full studio. The design pass draws the room clean: one switch for both lines. */
+  showTableNumbers?: boolean;
 }) {
   // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
   // off the gesture: dragging a table (or a stage, a rug — anything standing on the floor) holds
@@ -322,19 +438,50 @@ export function CanvasStage({
     setFocus({ minX, minY, maxX, maxY, nonce: nonce.current, immediate: first });
   }, [minX, minY, maxX, maxY, widthMm, heightMm]);
 
+  // Dressing a table: travel in close enough that the table fills the view with its chairs round
+  // it, and back out to the event when it is let go — the same two moves a designer makes by hand,
+  // made for them, so a candlestick 25cm across is something the pointer can actually take hold of.
+  const dressingTable = dressingTableId ? doc.tables.find((t) => t.id === dressingTableId) : undefined;
+  const wasDressing = useRef(false);
+  useEffect(() => {
+    const t = dressingTableId ? doc.tables.find((x) => x.id === dressingTableId) : undefined;
+    if (!t) {
+      if (!wasDressing.current) return;
+      wasDressing.current = false;
+      if (!widthMm && !heightMm) return;
+      nonce.current += 1;
+      setFocus({ minX, minY, maxX, maxY, nonce: nonce.current });
+      return;
+    }
+    wasDressing.current = true;
+    const b = tableBox(t);
+    const reach = Math.max(b.widthMm, b.depthMm) / 2 + 900; // the chairs, and a little room round them
+    nonce.current += 1;
+    setFocus({ minX: t.position.x - reach, minY: t.position.y - reach, maxX: t.position.x + reach, maxY: t.position.y + reach, nonce: nonce.current });
+    // Only when the table being dressed changes — not every time the document does, or every drag
+    // on the table would re-frame it under the pointer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dressingTableId]);
+
   // The property as THIS event has arranged it. Every reference to the venue's geometry below goes
   // through this rather than through plan.structure, so a bar the designer pushed across the room is
   // drawn where they put it — and a drape still measures itself against the WALL, which nothing here
   // can move. Identity-stable when the event arranged nothing, which is most events.
   const structure = useMemo(() => arrangedStructure(plan.structure, doc), [plan.structure, doc]);
 
-  const eventZoneIds = plan.zones.map((r) => r.zone.id);
   // Three bands rather than two, once the eye is pointed somewhere: the zone being worked in, the
   // event's other zones, and the property around them. Held back by opacity, never hidden — placing
   // just outside a zone stays possible, and the designer still needs to see what the חופה opens on.
-  const focusedZones = focused ? [focused] : [];
-  const eventZones = plan.zones.filter((r) => r.zone.id !== focusZoneId);
-  const otherZones = plan.all.filter((r) => r.zone.id !== focusZoneId && !eventZoneIds.includes(r.zone.id));
+  // Identity-stable lists, so the memoised ZoneRegions drawing each band skips a render that only
+  // moved a table.
+  const { focusedZones, eventZones, otherZones } = useMemo(
+    () => ({
+      focusedZones: focused ? [focused] : [],
+      eventZones: plan.zones.filter((r) => r.zone.id !== focusZoneId),
+      otherZones: plan.all.filter((r) => r.zone.id !== focusZoneId && !plan.zones.some((z) => z.zone.id === r.zone.id)),
+    }),
+    [plan, focused, focusZoneId],
+  );
 
   // Sort the placements by what they ARE before drawing any of them: a drape hangs on a wall, a
   // cloth is a table's surface, a carpet is a rectangle on the floor, and everything else is an
@@ -385,11 +532,8 @@ export function CanvasStage({
       const stage = doc.placements.find((x) => x.id === stageId);
       const bench = stage?.stage ? benchInRoom(stage as StagePlacement, itemId, deckOf) : null;
       if (!bench) continue;
-      const u = { x: Math.cos((bench.angle * Math.PI) / 180), y: Math.sin((bench.angle * Math.PI) / 180) };
-      list.forEach((p, i) => {
-        const f = (i + 0.5) / list.length - 0.5;
-        out.push({ p, at: { x: bench.centre.x + u.x * f * bench.lengthMm, y: bench.centre.y + u.y * f * bench.lengthMm } });
-      });
+      // Spread along it — round a curved one too.
+      list.forEach((p, i) => out.push({ p, at: bench.along((i + 0.5) / list.length - 0.5) }));
     }
     return out;
   }, [sorted.perched, doc.placements]);
@@ -413,10 +557,30 @@ export function CanvasStage({
   // to front" can put a table over a rug or an object under a table. A plan nobody has restacked
   // comes out of here in exactly the order the three separate passes used to draw it in.
   const stack = useMemo(() => floorStack(doc, classify), [doc, classify]);
+  // Where each table's items stand — laid out once per change of the plan, not once per frame of a
+  // pan or a zoom (the layer below re-renders on every one).
+  const spotsByTable = useMemo(
+    () => new Map(doc.tables.map((t) => [t.id, cachedSpots(t, sorted.chipsByTable.get(t.id) ?? EMPTY_CHIPS)])),
+    [doc.tables, sorted],
+  );
 
   /** The lookups the merged pass needs: a table or placement by id, without walking a list per entry. */
   const tableById = useMemo(() => new Map(doc.tables.map((t) => [t.id, t])), [doc.tables]);
   const placementById = useMemo(() => new Map(doc.placements.map((p) => [p.id, p])), [doc.placements]);
+  /** How much of each table's top its items take (catalog-resolver's tableUtilization, summed in
+   *  ONE pass over the placements rather than one pass per table per render). >1 is overflow. */
+  const usedByTable = useMemo(() => {
+    const used = new Map<string, number>();
+    for (const p of doc.placements) {
+      if (p.layer !== "table" || !p.tableId) continue;
+      used.set(p.tableId, (used.get(p.tableId) ?? 0) + (resolve(p.variantId)?.footprintMm2 ?? 0) * p.quantity);
+    }
+    return used;
+  }, [doc.placements]);
+  const utilOf = (t: DesignTable) => {
+    const area = tableAreaMm2(t);
+    return area === 0 ? 0 : (usedByTable.get(t.id) ?? 0) / area;
+  };
 
   // Everything with a free position of its own, boxed — the list a rubber-band catches from, the one
   // a group drag carries, and the one a drag aligns itself against. The two ANCHORED kinds are on
@@ -484,8 +648,15 @@ export function CanvasStage({
    *  that is visible but not the one being worked in, which is the whole of what activating one
    *  buys: lay the tables, switch to רצפה, and a band round three stages standing on top of them
    *  takes the three stages. */
+  // A venue feature is on it only when /halls lets it move in a sketch (featureMovable) — a column
+  // or the hall's own floor is something to line up WITH (it stays on `alignTo`), never cargo.
   const movable = useMemo(
-    () => boxesOn((p) => layerVisible[p] && isLive(p)),
+    () =>
+      boxesOn((p) => layerVisible[p] && isLive(p)).filter((m) => {
+        if (m.ref.kind !== "feature") return true;
+        const f = structure.features.find((x) => x.id === m.ref.id);
+        return !!f && featureMovable(f);
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boxesOn, layerVisible, activeLayer, autoPlane],
   );
@@ -497,6 +668,28 @@ export function CanvasStage({
    *  with them is the whole point. A HIDDEN plane is on neither list: an item nobody can see is not
    *  an alignment the designer could have meant. */
   const alignTo = useMemo(() => boxesOn((p) => layerVisible[p]), [boxesOn, layerVisible]);
+
+  // THE ONE CEILING ITEM selected (or being carried — a press selects it): measured live off the
+  // walls and off what it hangs over (HangTies), and pulled to that thing's middle as it is dragged
+  // across it (lib/studio/hang.ts). Only worked out while there is one, so a plan with nothing
+  // overhead selected pays nothing for it.
+  const hangSubject = useMemo(() => {
+    if (selection.length !== 1 || selection[0].kind !== "placement" || !layerVisible.ceiling) return null;
+    const p = placementById.get(selection[0].id);
+    return p && sorted.ceiling.includes(p) ? p : null;
+  }, [selection, placementById, sorted.ceiling, layerVisible.ceiling]);
+  // What it could hang over — remembered against what THAT reads (hang-targets.ts hangTargetsCache:
+  // the tables, the floor's rows, the venue), not against `doc`: every frame of the item's own drag
+  // writes the document, and nothing on the floor has moved.
+  const [targetsOf] = useState(hangTargetsCache);
+  const hangTargets = useMemo(() => (hangSubject ? targetsOf(doc, plan.structure, structure) : []), [hangSubject, targetsOf, doc, plan.structure, structure]);
+  // The zone outlines are walls here too — a lawn has no walls, and its edge is what a rigger
+  // measures to — exactly as measurements() adds the sheet's `boundaries` for the printed ceiling
+  // plan, so the sketch's live figure and the printed one are the same figure.
+  const hangWalls = useMemo(
+    () => (hangSubject ? [...wallRuns(plan.structure), ...plan.zones.filter((z) => z.boundary.length >= 3).flatMap((z) => z.boundary.map((q, i) => [q, z.boundary[(i + 1) % z.boundary.length]] as [Point, Point]))] : []),
+    [hangSubject, plan.structure, plan.zones],
+  );
 
   // ── The area tool ────────────────────────────────────────────────────────────────────────────
   // Corners so far, and where the next one would land. Local: nothing outside this canvas cares
@@ -532,16 +725,18 @@ export function CanvasStage({
     },
     [onArea, onAreaRefused],
   );
+  /** The round shape the pointer is drawing (areaShape other than corners), and its size in words. */
+  const [roundDraft, setRoundDraft] = useState<{ outline: Point[]; smooth: number[]; label: string } | null>(null);
   // Leaving the tool by any door (the button, a finished area, Escape) starts the next one clean —
-  // adjusted during render when the prop flips, rather than in an effect a frame later.
-  const [wasDrawing, setWasDrawing] = useState(drawArea);
-  if (wasDrawing !== drawArea) {
-    setWasDrawing(drawArea);
-    if (!drawArea) {
-      setAreaPts([]);
-      setAreaCursor(null);
-      setAreaTyped("");
-    }
+  // and so does changing the shape half way. Adjusted during render when the prop flips, rather than
+  // in an effect a frame later.
+  const [wasDrawing, setWasDrawing] = useState(`${drawArea}|${areaShape}`);
+  if (wasDrawing !== `${drawArea}|${areaShape}`) {
+    setWasDrawing(`${drawArea}|${areaShape}`);
+    setAreaPts([]);
+    setAreaCursor(null);
+    setAreaTyped("");
+    setRoundDraft(null);
   }
   /** Where the next corner goes, from the pointer: the first corner snaps to walls and items like
    *  any drag; every later one is held to 45° steps from the FIRST side and whole 10cm
@@ -578,7 +773,75 @@ export function CanvasStage({
     const a = (Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x) * 180) / Math.PI;
     return ((a % 90) + 90) % 90;
   };
-  const areaPointer = useRef<{ x: number; y: number; alt: boolean } | null>(null);
+  const areaPointer = useRef<{ x: number; y: number; alt: boolean; shift?: boolean } | null>(null);
+
+  /** The half-round's side when nothing says otherwise: away from the nearest wall — a half-round
+   *  is drawn along a wall, and bulges into the room. */
+  const awayFromWall = (a: Point, b: Point): 1 | -1 => {
+    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const R = L / 2;
+    const at = (s: number) => nearestWall(plan.structure, { x: m.x - (s * (b.y - a.y) * R) / L, y: m.y + (s * (b.x - a.x) * R) / L })?.distanceMm ?? Infinity;
+    return at(1) >= at(-1) ? 1 : -1;
+  };
+  /** Where the round tool is, with the pointer here (or a size typed): the point a click would add,
+   *  and the shape it would make. A DISC: its centre, then its size (a typed number is its diameter
+   *  in cm). An OVAL: one corner of its box, then the other, square to the nearest wall (Shift for a
+   *  circle). A HALF-ROUND: its chord drawn like a side (45° steps, lengths the decks build, a typed
+   *  length), then which side it bulges to — the side the pointer is on. Whole 10cm, unless Alt. */
+  const roundAt = (ctx: CanvasLayerContext, clientX: number, clientY: number, free: boolean, square: boolean, typedMm?: number) => {
+    const raw = ctx.clientToMm(clientX, clientY);
+    const tenth = (v: number) => (free ? Math.round(v) : Math.max(100, Math.round(v / 100) * 100));
+    const m2 = (mm: number) => `${(mm / 1000).toFixed(2)} מ׳`;
+    const [a, b] = areaPts;
+    if (!a) {
+      const s = ctx.snap(raw, { boxes: alignTo.map((x) => x.box) });
+      return { point: { x: Math.round(s.x), y: Math.round(s.y) }, shape: null };
+    }
+    if (areaShape === "circle") {
+      const d = typedMm ?? tenth(2 * Math.hypot(raw.x - a.x, raw.y - a.y));
+      return { point: null, shape: { ...ellipseArea(a, d, d), label: `קוטר ${m2(d)}` } };
+    }
+    if (areaShape === "ellipse") {
+      const ref = firstSideRef(a);
+      const t = (-ref * Math.PI) / 180;
+      const dx = (raw.x - a.x) * Math.cos(t) - (raw.y - a.y) * Math.sin(t);
+      const dy = (raw.x - a.x) * Math.sin(t) + (raw.y - a.y) * Math.cos(t);
+      let w = tenth(Math.abs(dx));
+      let h = tenth(Math.abs(dy));
+      if (square) w = h = Math.max(w, h);
+      const lx = ((dx < 0 ? -1 : 1) * w) / 2;
+      const ly = ((dy < 0 ? -1 : 1) * h) / 2;
+      const r = (ref * Math.PI) / 180;
+      const centre = { x: a.x + lx * Math.cos(r) - ly * Math.sin(r), y: a.y + lx * Math.sin(r) + ly * Math.cos(r) };
+      return { point: null, shape: { ...ellipseArea(centre, w, h, ref), label: w === h ? `קוטר ${m2(w)}` : `${m2(w)} × ${m2(h)}` } };
+    }
+    if (!b) {
+      const end = nextCorner(ctx, clientX, clientY, free, typedMm);
+      const L = Math.hypot(end.x - a.x, end.y - a.y);
+      return { point: end, shape: L < 100 ? null : { ...halfRoundArea(a, end, awayFromWall(a, end)), label: `קוטר ${m2(L)}` } };
+    }
+    const cross = (b.x - a.x) * (raw.y - a.y) - (b.y - a.y) * (raw.x - a.x);
+    const side: 1 | -1 = Math.abs(cross) < 1 ? awayFromWall(a, b) : cross > 0 ? 1 : -1;
+    return { point: null, shape: { ...halfRoundArea(a, b, side), label: `קוטר ${m2(Math.hypot(b.x - a.x, b.y - a.y))}` } };
+  };
+  /** A click (or Enter) of the round tool: the next point, or the shape it finishes. */
+  const roundStep = (ctx: CanvasLayerContext, clientX: number, clientY: number, free: boolean, square: boolean, typedMm?: number) => {
+    const r = roundAt(ctx, clientX, clientY, free, square, typedMm);
+    setAreaTyped("");
+    const finishing = areaShape === "half" ? areaPts.length === 2 : areaPts.length === 1;
+    if (finishing) {
+      if (!r.shape) return;
+      ctx.endSnap();
+      setAreaPts([]);
+      setRoundDraft(null);
+      onArea(r.shape.outline.map((q) => ({ x: Math.round(q.x), y: Math.round(q.y) })), r.shape.smooth);
+      return;
+    }
+    // The chord's second end must be somewhere: a half-round of nothing is not drawn.
+    if (r.point && (areaShape !== "half" || areaPts.length === 0 || r.shape)) setAreaPts((cur) => [...cur, r.point!]);
+  };
+
   // Taken in the CAPTURE phase and stopped there: the studio's own window listener would otherwise
   // read the same Backspace as "delete the selection" and Escape as "deselect".
   useEffect(() => {
@@ -586,6 +849,10 @@ export function CanvasStage({
     const onKey = (e: KeyboardEvent) => {
       if (/^[0-9.]$/.test(e.key) && areaPts.length > 0) {
         setAreaTyped((t) => (t.length < 6 ? t + e.key : t));
+      } else if (e.key === "Enter" && areaShape !== "corners") {
+        const cm = parseFloat(areaTyped);
+        const at = areaPointer.current;
+        if (at && areaCtx.current) roundStep(areaCtx.current, at.x, at.y, at.alt, !!at.shift, areaTyped && cm > 0 ? cm * 10 : undefined);
       } else if (e.key === "Enter") {
         const cm = parseFloat(areaTyped);
         const at = areaPointer.current;
@@ -602,21 +869,26 @@ export function CanvasStage({
         }
       } else if (e.key === "Backspace" || e.key === "Delete") {
         if (areaTyped) setAreaTyped((t) => t.slice(0, -1));
-        else setAreaPts((p) => p.slice(0, -1));
+        else {
+          setAreaPts((p) => p.slice(0, -1));
+          setRoundDraft(null);
+        }
       } else return;
       e.preventDefault();
       e.stopPropagation();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-    // nextCorner reads areaPts, which is in the list.
+    // nextCorner and roundStep read areaPts, which is in the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawArea, areaPts, areaTyped, finishArea, onCancelArea]);
+  }, [drawArea, areaShape, areaPts, areaTyped, finishArea, onCancelArea]);
 
   /** What the tape can pick up whole — everything on a visible plane that has a place of its own on
    *  the floor, as the outline it is drawn with (./plan-geometry.ts). A drape is on it though it is
    *  in no drag list: "how far is the candle table from the curtain" is exactly what gets measured. */
-  const measureTargets = useMemo<MeasureTarget[]>(() => {
+  // LAZY: worked out when the tape first asks after a change, not on every frame of a drag — the
+  // outline of every item on the plan is the dearest thing on this screen to recompute.
+  const measureTargets = useLazyMemo<MeasureTarget[]>(() => {
     // Bottom to top, the way they are drawn — the tape takes the TOPMOST outline under the click, so
     // a table standing on a rug is the table, and a rug is only picked where nothing stands on it.
     const carpetIds = new Set(sorted.carpets.map((p) => p.id));
@@ -632,6 +904,20 @@ export function CanvasStage({
     }
     return out;
   }, [alignTo, layerVisible.ceiling, sorted.drapes, sorted.carpets, doc, structure, plan.structure]);
+  /** One target by id, off THIS render's document — what a measurement anchored to a table is
+   *  re-resolved against on every frame of the table's drag (the lazy list above is published after
+   *  the commit, one render behind during one). itemGeometry is cached per item object, so this is
+   *  two map lookups a frame and one outline for the thing that moved. Visibility is not consulted:
+   *  a measurement to an item on a plane since hidden keeps following the item. */
+  const measureTargetById = useCallback(
+    (id: string): MeasureTarget | undefined => {
+      const i = id.indexOf(":");
+      if (i < 0) return undefined;
+      const g = itemGeometry(doc, structure, plan.structure, { kind: id.slice(0, i) as SelectionKind, id: id.slice(i + 1) });
+      return g ? { id, polys: g.polysAt(g.centre) } : undefined;
+    },
+    [doc, structure, plan.structure],
+  );
 
   /** The selection's own boxes, for the centre-line guides — one crosshair per selected thing. */
   const guideItems = useMemo(
@@ -672,10 +958,29 @@ export function CanvasStage({
     const p = doc.placements.find((x) => x.id === ref.id);
     // A STAGE that is a rectangle stretches like any resizable item, in whole modules of the decks it
     // is built from — so a pull from its front grows it by a row of decks, not by 37cm. An L or a T
-    // has no box to pull; it is re-drawn in the area tool instead.
+    // has no box to pull; it is re-drawn in the area tool instead. (One stage picked out of its
+    // group is the selection on purpose — the host collapses to it on a click — so it gets its
+    // handles like any other.)
     if (p?.stage) {
-      const size = stageRect(p.stage);
-      if (!size || p.groupId) return null;
+      // A round stage — a disc, an oval, a half-round — is scaled whole by its box (scaleStage), in
+      // whole 10cm; a disc stays a disc whichever grip is pulled.
+      if (stageIsRound(p.stage)) {
+        const xs = p.stage.outline.map((q) => q.x);
+        const ys = p.stage.outline.map((q) => q.y);
+        const box = { widthMm: Math.round(Math.max(...xs) - Math.min(...xs)), depthMm: Math.round(Math.max(...ys) - Math.min(...ys)) };
+        const disc = Math.abs(box.widthMm - box.depthMm) < 2;
+        const tenth = (mm: number, magnetMm: number) => Math.max(500, magnetMm ? Math.round(mm / 100) * 100 : Math.round(mm));
+        const clamp = (s: { widthMm: number; depthMm: number }, magnetMm = 0) => {
+          if (!disc) return { widthMm: tenth(s.widthMm, magnetMm), depthMm: tenth(s.depthMm, magnetMm) };
+          const v = tenth(Math.abs(s.widthMm - box.widthMm) >= Math.abs(s.depthMm - box.depthMm) ? s.widthMm : s.depthMm, magnetMm);
+          return { widthMm: v, depthMm: v };
+        };
+        return { ref, axes: { width: true, depth: true, uniform: disc }, clamp, centre: p.position, rotation: p.rotation || 0, size: box };
+      }
+      // A rounded or bowed rectangle stretches by its BOX (the host shapes the plain rectangle again
+      // at the new size); any other shape is re-drawn in the area tool.
+      const size = stageRect(p.stage) ?? (stageShapeOf(p.stage) && plainRect(p.stage) ? stageBox(p.stage) : null);
+      if (!size) return null;
       const pullTo = lengthSnapper(stageDeckTypes(p.stage, deckOf));
       const snap = (mm: number, magnetMm: number) => Math.max(100, pullTo(mm, { magnetMm }));
       const clamp = (s: { widthMm: number; depthMm: number }, magnetMm = 0) => ({ widthMm: snap(s.widthMm, magnetMm), depthMm: snap(s.depthMm, magnetMm) });
@@ -705,10 +1010,29 @@ export function CanvasStage({
     [edgingStage, plan.structure, stageWallDistance],
   );
 
+  /** Stairs (banquettes, barriers) of DIFFERENT stages that run on into each other along one line —
+   *  two stages pushed flush and grouped — drawn as ONE run (lib/design-document/edge-runs.ts): the
+   *  runs, in room coordinates, and the items each stage then leaves out of its own drawing. Nothing
+   *  to join with one stage. */
+  const joinedRuns = useMemo(() => {
+    const stages = doc.placements.filter((p): p is StagePlacement => !!p.stage);
+    if (stages.length < 2) return [];
+    return joinEdgeRuns(
+      stages.flatMap((p) =>
+        (p.stage.stairs ?? []).flatMap((st) => {
+          const shape = edgeItemShape(p.stage, st, deckOf);
+          return shape ? [{ stageId: p.id, itemId: st.id, shape: edgeItemInRoom(p, shape) }] : [];
+        }),
+      ),
+    );
+  }, [doc.placements]);
+  const joinedIds = useMemo(() => joinedItemIds(joinedRuns), [joinedRuns]);
+
   const shapingStage = useMemo(() => {
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
     const p = doc.placements.find((x) => x.id === selection[0].id);
-    return p?.stage && !stageRect(p.stage) && !p.groupId ? (p as StagePlacement) : null;
+    // Not a round stage: its rim is dozens of chords, and a grip on each would only dent the curve.
+    return p?.stage && !stageRect(p.stage) && !p.stage.smooth?.length ? (p as StagePlacement) : null;
   }, [selection, doc]);
   /** The stage as it stood when a drag of its corner or side began. */
   const shapingFrom = useRef<StagePlacement | null>(null);
@@ -723,38 +1047,28 @@ export function CanvasStage({
 
   const isSel = (kind: SelectionKind, id: string) => selection.some((r) => r.kind === kind && r.id === id);
 
-  // A group of tables read as the ONE larger table the designer said it is: the box its members
-  // occupy between them, the number they share, and the chairs that go round the outside of the lot.
-  //
-  // The BOX, not a true union of the outlines. Grouping is how a designer says "these four are one
-  // table now", and what they have done to make that true is pushed them into a block — for which
-  // the bounding box IS the union. Computing a real polygon union would buy fidelity for the
-  // L-shaped arrangement nobody groups, at the cost of the one geometry routine in this app that
-  // could go quietly wrong.
+  // A group of tables read as the ONE larger table the designer said it is: its frame (its first
+  // member's facing), the box its members occupy between them in that frame, the number they share,
+  // and the chairs that go round the outside of the lot — round the members' REAL shapes where they
+  // stand (lib/design-document/block.ts), the seams between them left empty, their blocked sides
+  // kept, the whole ring turning with the block.
   const tableGroups = useMemo(() => {
     return (doc.groups ?? [])
       .map((g) => {
         const tables = doc.tables.filter((t) => t.groupId === g.id);
-        if (tables.length === 0) return null; // a group of stages is not a table and carries no number
-        const xs: number[] = [];
-        const ys: number[] = [];
-        for (const t of tables) {
-          const b = footprintBounds(tableFootprint(t));
-          for (const [sx, sy] of CORNERS) {
-            // Through the table's own rotation, so a group holding a turned table is boxed round
-            // where that table actually is rather than where its unrotated bounds would be.
-            const c = fromLocalFrame({ x: (sx * b.w) / 2, y: (sy * b.h) / 2 }, t.position, t.rotation || 0);
-            xs.push(c.x);
-            ys.push(c.y);
-          }
-        }
-        const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const block = tableBlock(tables);
+        if (!block) return null; // a group of stages is not a table and carries no number
+        // The number it SHOWS (numberedUnits' rule): the group's, else its lowest numbered member's;
+        // none at all when every table in it is out of the numbering.
+        const numbered = tables.filter((t) => !t.unnumbered);
         return {
           id: g.id,
-          number: g.number ?? Math.min(...tables.map((t) => t.number)),
-          centre: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-          widthMm: maxX - minX,
-          depthMm: maxY - minY,
+          number: numbered.length === 0 ? null : (g.number ?? Math.min(...numbered.map((t) => t.number))),
+          centre: block.centre,
+          rotation: block.rotation,
+          widthMm: block.widthMm,
+          depthMm: block.depthMm,
+          block,
           seats: groupSeats(doc, g.id),
           seated: groupSeated(doc, g.id),
           selected: tables.some((t) => isSel("table", t.id)),
@@ -779,7 +1093,9 @@ export function CanvasStage({
         // Flipped with its table: the chairs are drawn in the table's own frame, so a mirrored ח
         // seats the side it is actually open on.
         transform: `translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}${t.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`,
-        seats: seatsAround(tableFootprint(t), t.seats, undefined, tableBlockedSides(t)),
+        // Remembered per table: a moved table is a new object and seats itself again; the rest keep
+        // their rings, and the memoised SeatRing drawing them skips the frame.
+        seats: cachedSeats(t),
         forTable: true,
       });
     }
@@ -787,8 +1103,9 @@ export function CanvasStage({
       if (!g.seats) continue;
       rings.push({
         key: g.id,
-        transform: `translate(${g.centre.x} ${g.centre.y})`,
-        seats: seatsAround({ kind: "rect", widthMm: g.widthMm, depthMm: g.depthMm }, g.seats),
+        // In the block's own frame, so the ring turns with the block.
+        transform: `translate(${g.centre.x} ${g.centre.y})${g.rotation ? ` rotate(${g.rotation})` : ""}`,
+        seats: blockSeats(g.block, g.seats),
         forTable: false,
       });
     }
@@ -886,16 +1203,41 @@ export function CanvasStage({
   /** The delta that keeps this gesture's movers out of everything solid, given where the drag has
    *  taken them. Zero when nothing being dragged is solid, or nothing is in the way — which is the
    *  usual frame, and costs one empty loop. */
-  const clearOf = (target: Point): Point => {
+  const clearOf = (target: Point, reachMm: number): Point => {
     const s = solids.current;
-    if (!s || s.movers.length === 0) return { x: 0, y: 0 };
+    if (!s || s.movers.length === 0 || freeDrag.current) return { x: 0, y: 0 };
     const dx = target.x - s.origin.x;
     const dy = target.y - s.origin.y;
-    return pushApart(
+    // A MAGNET, not a wall (collide.ts nudgeApart): held flush only while the overlap is a few
+    // pixels deep, so a drag is never trapped behind the thing it brushed past.
+    return nudgeApart(
       s.movers.map((m) => ({ ...m, x: m.x + dx, y: m.y + dy })),
       s.obstacles,
+      reachMm,
       s.ignore,
     );
+  };
+
+  /** Alt held during a drag: no snap, no magnet — the item goes exactly where the pointer is. Read
+   *  off every pointer move (capture phase, so it is current before any node's own handler runs);
+   *  the feature layer's drag hands over no event of its own to read it from. */
+  const freeDrag = useRef(false);
+  useEffect(() => {
+    const read = (e: PointerEvent) => {
+      freeDrag.current = e.altKey;
+    };
+    window.addEventListener("pointermove", read, true);
+    window.addEventListener("pointerdown", read, true);
+    return () => {
+      window.removeEventListener("pointermove", read, true);
+      window.removeEventListener("pointerdown", read, true);
+    };
+  }, []);
+  /** The canvas's snap, unless Alt says otherwise — then the guides go out and the point is kept. */
+  const snapUnlessFree = (ctx: CanvasLayerContext, p: Point, opts: Parameters<CanvasLayerContext["snap"]>[1]): Point => {
+    if (!freeDrag.current) return ctx.snap(p, opts);
+    ctx.endSnap();
+    return { x: Math.round(p.x), y: Math.round(p.y) };
   };
 
   /** Everything a drag in progress is moving right now — the pressed item alone on a solo drag, or
@@ -908,7 +1250,7 @@ export function CanvasStage({
 
   /** The move handler for one item: the group's shared delta when it is part of a live
    *  multi-selection, otherwise its own snapped move. */
-  const moveFor = (ref: SelectionRef, ctx: CanvasLayerContext) => (p: Point) => {
+  const moveFor = (ref: SelectionRef, ctx: CanvasLayerContext) => (p: Point, mods?: { alt: boolean }) => {
     // The first frame of a gesture: from here on the planes the gesture cannot be about are held
     // back (see autoPlane) and what it carries is painted on top (see `lifted`). `solids` is set on
     // this same first frame below, so it is the marker.
@@ -935,13 +1277,13 @@ export function CanvasStage({
       // off the others. The rest of the selection is dropped from the references, or the block would
       // align to itself and never move at all.
       const moved = { x: box.x + (p.x - start.x), y: box.y + (p.y - start.y) };
-      const snapped = ctx.snap(moved, {
+      const snapped = snapUnlessFree(ctx, moved, {
         boxes: alignTo.filter((m) => !isSel(m.ref.kind, m.ref.id)).map((m) => m.box),
         self: { widthMm: box.widthMm, depthMm: box.depthMm },
       });
-      // …and then out of anything solid it has been pushed into. The snap already offers flush; this
-      // is what stops the drag going through it.
-      const clear = clearOf(snapped);
+      // …and then held flush against anything solid it has only just touched. The snap already
+      // offers flush; this keeps it there for the last few pixels without trapping the drag.
+      const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
       const dx = snapped.x - box.x + clear.x;
       const dy = snapped.y - box.y + clear.y;
       onMoveMany(
@@ -957,20 +1299,28 @@ export function CanvasStage({
     // itself excluded, or it would align to where it already is and could never be pulled off. Its
     // own extent goes along too: that is what lets the gap either side of it be measured.
     const self = alignTo.find((m) => sameRef(m.ref, ref))?.box;
-    const snapped = ctx.snap(p, {
+    const snapped = snapUnlessFree(ctx, p, {
       boxes: alignTo.filter((m) => !sameRef(m.ref, ref)).map((m) => m.box),
       self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
     });
-    // Two things cannot stand in the same place. The snap above has already offered the edge of
-    // whatever is nearby; this is what stops the drag from carrying on THROUGH it and leaving one
-    // deck on top of another — a plan the crew cannot build. Same-kind only, and an overlap that
-    // was already there when the drag began is left alone (lib/studio/collide.ts).
-    // `self` is this item's box as it stood when the gesture began: beginSolids runs on the first
-    // move frame only (??=), before any of this drag's writes have landed.
+    // Two of a kind touching are held FLUSH rather than one sliding a pixel into the other — but
+    // only within a few pixels (nudgeApart): push on and the item follows the pointer, overlap and
+    // all. Same-kind only, and an overlap that was already there when the drag began is left alone
+    // (lib/studio/collide.ts). `self` is this item's box as it stood when the gesture began:
+    // beginSolids runs on the first move frame only (??=), before any of this drag's writes landed.
     solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : snapped);
-    const clear = clearOf(snapped);
-    const at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
+    const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
+    let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
+    // A ceiling item crossing a table or an element is pulled to its middle when its hang point
+    // comes within a few pixels of it; Alt lets go, as it does every other pull.
+    if (hangSubject && ref.kind === "placement" && ref.id === hangSubject.id && !mods?.alt && !freeDrag.current) {
+      const over = centreOver(hangPointOf({ ...hangSubject, position: p }), hangTargets, ctx.mm(14));
+      if (over) {
+        at = positionHungAt(hangSubject, over.point);
+        ctx.endSnap();
+      }
+    }
 
     if (ref.kind === "table") onMoveTable(ref.id, at);
     else if (ref.kind === "feature") onMoveFeature(ref.id, at);
@@ -998,7 +1348,7 @@ export function CanvasStage({
   const rotateGesture = useRef<{
     pivot: Point;
     startDeg: number;
-    snapshot: { ref: SelectionRef; origin: Point; rotation: number }[];
+    snapshot: { ref: SelectionRef; origin: Point; rotation: number; own: Point }[];
   } | null>(null);
 
   /** Everything in the selection that HAS a facing — see the note where the handle is drawn. */
@@ -1052,23 +1402,39 @@ export function CanvasStage({
     // note on RotateHandle's onRotate): a block already sitting at 7° turns by exactly 90° and is
     // still the block it was, rather than being sheared square to the grid the instant it is
     // touched.
-    rotateGesture.current ??= {
-      pivot: rotatable.pivot,
-      startDeg: mods.raw,
-      snapshot: rotatableRefs.map((ref) => {
-        const box = movable.find((m) => sameRef(m.ref, ref))!.box;
-        return { ref, origin: { x: box.x, y: box.y }, rotation: facingOf(ref) };
-      }),
-    };
+    rotateGesture.current ??= (() => {
+      // A GROUP is one unit of "each": a block turned about itself turns about the block's middle,
+      // never each member about its own spot (which pulls a head table of two apart at the seam).
+      const unitOf = (ref: SelectionRef) => (ref.kind === "table" ? tableById.get(ref.id)?.groupId : ref.kind === "placement" ? placementById.get(ref.id)?.groupId : undefined);
+      const unitBoxes = new Map<string, SnapBox[]>();
+      for (const ref of rotatableRefs) {
+        const u = unitOf(ref);
+        const box = movable.find((m) => sameRef(m.ref, ref))?.box;
+        if (u && box) unitBoxes.set(u, [...(unitBoxes.get(u) ?? []), box]);
+      }
+      const unitPivot = new Map([...unitBoxes].map(([u, boxes]) => [u, (({ x, y }) => ({ x, y }))(unionBox(boxes))]));
+      return {
+        pivot: rotatable.pivot,
+        startDeg: mods.raw,
+        snapshot: rotatableRefs.map((ref) => {
+          const box = movable.find((m) => sameRef(m.ref, ref))!.box;
+          const origin = { x: box.x, y: box.y };
+          const u = unitOf(ref);
+          return { ref, origin, rotation: facingOf(ref), own: (u && unitPivot.get(u)) || origin };
+        }),
+      };
+    })();
     const { pivot, startDeg, snapshot } = rotateGesture.current;
     const delta = mods.alt ? mods.raw - startDeg : constrainAngleDeg(mods.raw - startDeg);
     onRotateMany(
       snapshot.map((sn) => {
-        // EACH ABOUT ITSELF: the position is the one it started at, untouched. A room of tables
-        // turned a quarter turn is a room of tables each facing a new way — not a room whose
-        // tables have all been swept round the middle of the hall onto somebody else's spot.
-        // Same delta, same one undo, and the only difference is whether anything moves.
-        const moved = spin === "each" ? sn.origin : fromLocalFrame(toLocalFrame(sn.origin, pivot, 0), pivot, delta);
+        // EACH ABOUT ITSELF: a loose item's position is the one it started at, untouched, and a
+        // block's members swing about the block's own middle. A room of tables turned a quarter
+        // turn is a room of tables each facing a new way — not a room whose tables have all been
+        // swept round the middle of the hall onto somebody else's spot. Same delta, same one undo,
+        // and the only difference is what each thing turns about.
+        const about = spin === "each" ? sn.own : pivot;
+        const moved = fromLocalFrame(toLocalFrame(sn.origin, about, 0), about, delta);
         return {
           kind: sn.ref.kind,
           id: sn.ref.id,
@@ -1103,12 +1469,76 @@ export function CanvasStage({
     }
   };
 
-  const nodeProps = (ref: SelectionRef, ctx: CanvasLayerContext, movableItem = true) => ({
-    onPress: pressFor(ref),
-    onClick: clickFor(ref),
-    onContext: contextFor(ref),
-    ...(movableItem ? { onMove: moveFor(ref, ctx), onEnd: endDrag(ctx) } : {}),
+  // THE NODES' HANDLERS NEVER CHANGE IDENTITY. Every node on the plan is memoised, and a prop that
+  // is a fresh closure each render would undo that — so each node is handed ONE DragProps object for
+  // its lifetime (nodeProps, below), whose methods read this render's closures through `hostRef` at
+  // call time. A node that skipped a render still drives the current gesture, and a frame of a drag
+  // re-renders the thing being dragged and nothing else.
+  const ctxRef = useRef<CanvasLayerContext | null>(null);
+  const hostNow = {
+    press: pressFor,
+    click: clickFor,
+    context: contextFor,
+    move: (ref: SelectionRef, p: Point, mods?: { alt: boolean }) => {
+      const c = ctxRef.current;
+      if (c) moveFor(ref, c)(p, mods);
+    },
+    end: () => {
+      const c = ctxRef.current;
+      if (c) endDrag(c)();
+    },
+    /** An arrow-key step. Discrete, so it closes its own history entry immediately. */
+    nudge: (ref: SelectionRef, pos: Point) => {
+      if (ref.kind === "table") onMoveTable(ref.id, pos);
+      else if (ref.kind === "feature") onMoveFeature(ref.id, pos);
+      else onMovePlacement(ref.id, pos);
+      onEndDrag();
+    },
+    endGesture: (moved?: SelectionRef[]) => onEndDrag(moved),
+    focusTable: (id: string) => onFocusTable?.(id),
+    resizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => onResizePlacement(id, sizeMm, position),
+    selectPlacement: (id: string, additive: boolean) => onSelect({ kind: "placement", id }, additive),
+    spanPlacement: (id: string, span: WallSpan) => onSpanPlacement(id, span),
+  };
+  const hostRef = useRef(hostNow);
+  useLayoutEffect(() => {
+    hostRef.current = hostNow;
   });
+  /** The host's own callbacks with one identity each, for the node props that are not a drag. */
+  const stable = useMemo(
+    () => ({
+      endGesture: (moved?: SelectionRef[]) => hostRef.current.endGesture(moved),
+      focusTable: (id: string) => hostRef.current.focusTable(id),
+      resizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => hostRef.current.resizePlacement(id, sizeMm, position),
+      selectPlacement: (id: string, additive: boolean) => hostRef.current.selectPlacement(id, additive),
+      spanPlacement: (id: string, span: WallSpan) => hostRef.current.spanPlacement(id, span),
+    }),
+    [],
+  );
+  // Present only when the host takes a double-click — the nodes read its presence as the affordance.
+  const focusTable = onFocusTable ? stable.focusTable : undefined;
+  const dragCache = useRef(new Map<string, DragProps>());
+  const nodeProps = (ref: SelectionRef, movableItem = true): DragProps => {
+    const key = `${ref.kind}:${ref.id}:${movableItem ? "m" : "s"}`;
+    let d = dragCache.current.get(key);
+    if (!d) {
+      const r: SelectionRef = { kind: ref.kind, id: ref.id };
+      d = {
+        onPress: (additive) => hostRef.current.press(r)(additive),
+        onClick: (additive) => hostRef.current.click(r)(additive),
+        onContext: () => hostRef.current.context(r)(),
+        ...(movableItem
+          ? {
+              onMove: (p: Point, mods?: { alt: boolean }) => hostRef.current.move(r, p, mods),
+              onEnd: () => hostRef.current.end(),
+              onNudge: (pos: Point) => hostRef.current.nudge(r, pos),
+            }
+          : {}),
+      };
+      dragCache.current.set(key, d);
+    }
+    return d;
+  };
 
   const liftedKeys = new Set(lifted);
 
@@ -1136,6 +1566,7 @@ export function CanvasStage({
       graph={plan.structure}
       focus={focus}
       measureTargets={measureTargets}
+      measureTargetById={measureTargetById}
       // The middle that matters is the event's — the zones it is held in, or the one the eye is on —
       // not the whole property's: a stage centred on the ballroom is what the designer is checking,
       // and the property's centre may be in the car park.
@@ -1207,6 +1638,8 @@ export function CanvasStage({
       }}
       backdrop={(ctx) => {
         const { mm } = ctx;
+        // The context the stable node handlers drive their gestures through (see hostRef).
+        ctxRef.current = ctx;
         // The zoom, reported up during render the way the hall editor reports its own close radius.
         // The rail is a sibling of this canvas and has no other way to learn the scale it is
         // dragging at; a ref write costs nothing and nothing re-renders on it.
@@ -1240,7 +1673,13 @@ export function CanvasStage({
                 selectedIds={selection.filter((r) => r.kind === "feature").map((r) => r.id)}
                 onSelect={(id, additive) => onSelect({ kind: "feature", id }, additive)}
                 onMove={(id, pos) => moveFor({ kind: "feature", id }, ctx)(pos)}
-                onCommit={onEndDrag}
+                // endDrag, NOT onEndDrag: the gesture's frozen state (groupDrag, solids, the lifted
+                // cargo, the gesture plane) has to be cleared here exactly as a table's drag clears
+                // it. Handing the end straight to the host left all of it behind, so the NEXT drag
+                // anywhere reused this one's snapshot — a later group drag moved the bar and table
+                // from before, untouched, and a single drag was pushed off phantom boxes.
+                onCommit={endDrag(ctx)}
+                interactive={featureMovable}
                 clientToMm={ctx.clientToMm}
               />
             </g>
@@ -1251,6 +1690,35 @@ export function CanvasStage({
       overlay={(ctx) => (
         <>
           <StructureDoors structure={plan.structure} />
+
+          {/* The alignment KEY of a multi-selection: the one יישור lines the rest up with, and the
+              one that stays put. A dashed frame a little outside its box and the word on it — drawn
+              only while several things are selected, which is the only time there is a key. */}
+          {alignKeyBox && selection.length > 1 && (
+            <g className="pointer-events-none" aria-hidden>
+              <rect
+                x={alignKeyBox.x - alignKeyBox.widthMm / 2 - ctx.mm(6)}
+                y={alignKeyBox.y - alignKeyBox.depthMm / 2 - ctx.mm(6)}
+                width={alignKeyBox.widthMm + ctx.mm(12)}
+                height={alignKeyBox.depthMm + ctx.mm(12)}
+                rx={ctx.mm(4)}
+                fill="none"
+                stroke="var(--color-accent)"
+                strokeWidth={1.5}
+                strokeDasharray="6 3"
+                vectorEffect="non-scaling-stroke"
+              />
+              <text
+                x={alignKeyBox.x}
+                y={alignKeyBox.y - alignKeyBox.depthMm / 2 - ctx.mm(10)}
+                textAnchor="middle"
+                fill="var(--color-accent-deep)"
+                style={{ fontSize: ctx.mm(11), fontWeight: 600 }}
+              >
+                מפתח ליישור
+              </text>
+            </g>
+          )}
 
           {/* SAFETY DISTANCES, under everything they belong to. A halo is the item's own outline
               grown by its rule (a round-joined stroke twice the distance wide, which is exactly the
@@ -1314,37 +1782,24 @@ export function CanvasStage({
               const groupRing = t.groupId && firstOfGroup.get(t.groupId) === t.id ? groupRingById.get(t.groupId) : undefined;
               return (
                 <g key={`t-${t.id}`} {...layerAttrs("tables")}>
-                  {groupRing && (
-                    <g transform={groupRing.transform} className="pointer-events-none">
-                      {groupRing.seats.map((seat, i) => (
-                        <Chair key={i} seat={seat} />
-                      ))}
-                    </g>
-                  )}
-                  {ring && (
-                    <g transform={ring.transform} className="pointer-events-none">
-                      {ring.seats.map((seat, i) => (
-                        <Chair key={i} seat={seat} />
-                      ))}
-                    </g>
-                  )}
+                  {groupRing && <SeatRing transform={groupRing.transform} seats={groupRing.seats} />}
+                  {ring && <SeatRing transform={ring.transform} seats={ring.seats} />}
                   <TableNode
                     table={t}
                     selected={isSel("table", t.id)}
-                    util={tableUtilization(doc, t)}
+                    util={utilOf(t)}
                     // The cloth IS the table's surface — a table wears one, so it is drawn as the
                     // table's own fill rather than as an object sitting on top of it, and is
                     // selected from the table's inspector. (catalog-resolver gives tablecloths zero
                     // footprint for the same reason: a cover consumes no room on the table it covers.)
                     cloth={sorted.coverByTable.get(t.id)}
-                    // A grouped table draws no number of its own — its group draws the one they share.
-                    showNumber={!t.groupId}
                     ctx={ctx}
-                    drag={nodeProps({ kind: "table", id: t.id }, ctx)}
-                    onNudge={(pos) => {
-                      onMoveTable(t.id, pos);
-                      onEndDrag();
-                    }}
+                    drag={nodeProps({ kind: "table", id: t.id })}
+                    onOpen={focusTable}
+                    // A grouped table draws neither a number nor a count of its own — its block draws
+                    // the one of each they share.
+                    number={showTableNumbers && !t.groupId && !t.unnumbered && t.number > 0 ? t.number : null}
+                    showSeats={showTableNumbers && !t.groupId}
                   />
                 </g>
               );
@@ -1358,9 +1813,9 @@ export function CanvasStage({
                   placement={p}
                   selected={isSel("placement", p.id)}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
-                  onResize={(sizeMm, position) => onResizePlacement(p.id, sizeMm, position)}
-                  onEndResize={onEndDrag}
+                  drag={nodeProps({ kind: "placement", id: p.id })}
+                  onResize={stable.resizePlacement}
+                  onEndResize={stable.endGesture}
                 />
               </g>
             ) : (
@@ -1371,61 +1826,63 @@ export function CanvasStage({
                   y={p.position.y}
                   selected={isSel("placement", p.id)}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
+                  drag={nodeProps({ kind: "placement", id: p.id })}
                   railing={p.stage ? stageRailings?.[p.id] : undefined}
                   gaps={edgingStage?.id === p.id ? edgingGaps : undefined}
                   activeItem={edgingStage?.id === p.id ? activeEdgeItem : undefined}
+                  // A standalone banquette's number and count, in the passes that write the tables'.
+                  showLabel={showTableNumbers}
+                  skipItems={p.stage && joinedIds.size ? joinedIds : undefined}
                 />
               </g>
             );
           })}
 
+          {/* Edge items that run on from one stage onto the next, drawn once as the one run they are
+              (each stage left its share out above). On the floor plane with the stages. */}
+          {joinedRuns.length > 0 && layerVisible.floor && (
+            <g {...layerAttrs("floor")}>
+              <JoinedRuns runs={joinedRuns} active={activeEdgeItem} />
+            </g>
+          )}
+
           {/* The group, drawn once over its members: the outline that says where the one larger
-              table ends, and the single number it carries instead of each table carrying its own.
-              It traces tables, so it dims and hides with them rather than floating over them at
-              full contrast. (The block's CHAIRS are drawn in the stack, under its first table.) */}
+              table ends, while it is selected, and — in the passes that write numbers — its ONE label.
+              (The block's CHAIRS are drawn in the stack, under its first table.) */}
           {layerVisible.tables && tableGroups.map((g) => (
             <g key={`group-${g.id}`} className="pointer-events-none" {...layerAttrs("tables")}>
+              {/* The block's ONE number over its ONE occupancy — what its tables hold between them
+                  (groupSeated): nobody seated at a block of four thinks of themselves as being at the
+                  second table of it. Haloed, because the middle of a block is exactly where two of its
+                  tables meet and a seam would run through the digits. */}
+              {showTableNumbers && (
+                <TableLabel
+                  x={g.centre.x}
+                  y={g.centre.y}
+                  number={g.number !== null && g.number > 0 ? g.number : null}
+                  seated={g.seated}
+                  seats={g.seats}
+                  shortSideMm={Math.min(g.widthMm, g.depthMm)}
+                  ctx={ctx}
+                  ink={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
+                  halo
+                />
+              )}
               {/* Only while the block is selected. At rest a block of tables reads as the one table it
                   is — a dashed box round it all evening ran straight through its own chairs. */}
               {g.selected && (
-              <rect
-                x={g.centre.x - g.widthMm / 2 - GROUP_PAD_MM}
-                y={g.centre.y - g.depthMm / 2 - GROUP_PAD_MM}
-                width={g.widthMm + GROUP_PAD_MM * 2}
-                height={g.depthMm + GROUP_PAD_MM * 2}
-                rx={GROUP_PAD_MM}
-                fill="none"
-                stroke={g.selected ? "var(--color-accent)" : "var(--color-ink-soft)"}
-                strokeOpacity={g.selected ? 1 : 0.35}
-                strokeWidth={g.selected ? 2 : 1}
-                strokeDasharray="10 7"
-                vectorEffect="non-scaling-stroke"
-              />
-              )}
-              {g.number > 0 && (
-                <text
-                  x={g.centre.x}
-                  y={g.centre.y + (g.seats > 0 ? GROUP_LABEL.number : 0)}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
-                  style={{ fontSize: GROUP_NUMBER_MM, fontWeight: 700, ...HALO }}
-                >
-                  {g.number}
-                </text>
-              )}
-              {/* One block, one occupancy — what its tables hold between them. Nobody seated at a
-                  block of four thinks of themselves as being at the second table of it. */}
-              {g.seats > 0 && (
-                <CapacityLabel
-                  x={g.centre.x}
-                  y={g.centre.y + (g.number > 0 ? GROUP_LABEL.capacity : 0)}
-                  seated={g.seated}
-                  seats={g.seats}
-                  size={GROUP_CAPACITY_MM}
-                  baseInk={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
-                  halo
+                <rect
+                  transform={`translate(${g.centre.x} ${g.centre.y})${g.rotation ? ` rotate(${g.rotation})` : ""}`}
+                  x={-g.widthMm / 2 - GROUP_PAD_MM}
+                  y={-g.depthMm / 2 - GROUP_PAD_MM}
+                  width={g.widthMm + GROUP_PAD_MM * 2}
+                  height={g.depthMm + GROUP_PAD_MM * 2}
+                  rx={GROUP_PAD_MM}
+                  fill="none"
+                  stroke="var(--color-accent)"
+                  strokeWidth={2}
+                  strokeDasharray="10 7"
+                  vectorEffect="non-scaling-stroke"
                 />
               )}
             </g>
@@ -1439,16 +1896,22 @@ export function CanvasStage({
             {layerVisible.table &&
               layerVisible.tables &&
               doc.tables.map((t) => {
-                const chips = sorted.chipsByTable.get(t.id) ?? [];
-                return chips.map((p, i) => (
+                // The table being dressed draws its items over the scrim, below — not twice.
+                if (t.id === dressingTableId) return null;
+                // Where each stands on its table (lib/design-document/dressing.ts): as the designer
+                // arranged it, or laid out automatically — and turned with the table.
+                return (spotsByTable.get(t.id) ?? []).map(({ p, at, rotation, footprint }) => (
                   <PlacementNode
                     key={p.id}
-                    placement={p}
-                    x={t.position.x}
-                    y={t.position.y + (i - (chips.length - 1) / 2) * 840}
+                    shape={footprint}
+                    placement={turned(p, rotation)}
+                    x={at.x}
+                    y={at.y}
                     selected={isSel("placement", p.id)}
                     ctx={ctx}
-                    drag={nodeProps({ kind: "placement", id: p.id }, ctx, false)}
+                    drag={nodeProps({ kind: "placement", id: p.id }, false)}
+                    onOpen={focusTable}
+                    openId={t.id}
                   />
                 ));
               })}
@@ -1463,10 +1926,31 @@ export function CanvasStage({
                   y={at.y}
                   selected={isSel("placement", p.id)}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, ctx, false)}
+                  drag={nodeProps({ kind: "placement", id: p.id }, false)}
                 />
               ))}
           </g>
+
+          {dressingTable && (
+            <DressingOverlay
+              table={dressingTable}
+              chips={sorted.chipsByTable.get(dressingTable.id) ?? []}
+              cloth={sorted.coverByTable.get(dressingTable.id)}
+              ring={seatRingByTable.get(dressingTable.id)}
+              util={utilOf(dressingTable)}
+              ctx={ctx}
+              isSelected={(id) => isSel("placement", id)}
+              selectedIds={selection.filter((r) => r.kind === "placement").map((r) => r.id)}
+              tableDrag={nodeProps({ kind: "table", id: dressingTable.id }, false)}
+              chipDrag={(id) => nodeProps({ kind: "placement", id }, false)}
+              onArrange={(positions) => onArrangeDressing?.(dressingTable.id, positions)}
+              onEnd={() => {
+                ctx.endSnap();
+                onEndDrag();
+              }}
+              onExit={() => onExitDressing?.()}
+            />
+          )}
 
           {/* ONE rotate handle for whatever is selected, rather than a knob on every node. A table
               turned on its own and six turned together are the same gesture about a different
@@ -1508,7 +1992,7 @@ export function CanvasStage({
               ctx={ctx}
               active={activeEdgeItem ?? null}
               onSelect={(itemId) => onEdgeItemSelect(edgingStage.id, itemId)}
-              onChange={(item) => onEdgeItemChange(edgingStage.id, item)}
+              onChange={(item, from) => onEdgeItemChange(edgingStage.id, item, from)}
               onEnd={onEndDrag}
             />
           )}
@@ -1572,9 +2056,9 @@ export function CanvasStage({
                   structure={plan.structure}
                   selected={isSel("placement", p.id)}
                   ctx={ctx}
-                  onSelect={(additive) => onSelect({ kind: "placement", id: p.id }, additive)}
-                  onSpan={(span) => onSpanPlacement(p.id, span)}
-                  onEndSpan={onEndDrag}
+                  onSelect={stable.selectPlacement}
+                  onSpan={stable.spanPlacement}
+                  onEndSpan={stable.endGesture}
                 />
               ))}
 
@@ -1590,10 +2074,18 @@ export function CanvasStage({
                   y={p.position.y}
                   selected={isSel("placement", p.id)}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, ctx)}
+                  drag={nodeProps({ kind: "placement", id: p.id })}
                   overhead
                 />
               ))}
+
+            {/* The selected ceiling item, measured: off the walls, and off the middle of what it
+                hangs over (hang-ties.tsx). */}
+            {hangSubject &&
+              (() => {
+                const at = hangPointOf(hangSubject);
+                return <HangTies at={at} walls={hangWalls} over={centreOver(at, hangTargets)?.point ?? null} mm={ctx.mm} />;
+              })()}
           </g>
 
           {/* THE AREA TOOL. A pane over the whole plan while corners are being placed — every click
@@ -1648,11 +2140,79 @@ export function CanvasStage({
               })}
               clear={clearedDrop}
               onPlace={onPlaceArmed}
+              dressingTableId={dressingTableId}
               onDisarm={onDisarm}
             />
           )}
 
           {drawArea &&
+            areaShape !== "corners" &&
+            (() => {
+              areaCtx.current = ctx;
+              const font = ctx.mm(11);
+              const track = (e: React.PointerEvent | React.MouseEvent) => {
+                areaPointer.current = { x: e.clientX, y: e.clientY, alt: e.altKey, shift: e.shiftKey };
+              };
+              const shape = roundDraft;
+              const xs = shape?.outline.map((q) => q.x) ?? [];
+              const ys = shape?.outline.map((q) => q.y) ?? [];
+              const mid = shape ? { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 } : null;
+              const text = areaTyped ? `${areaTyped} ס״מ` : (shape?.label ?? "");
+              const w = font * (text.length * 0.62 + 1.2);
+              return (
+                <g>
+                  <rect
+                    x={-1e7}
+                    y={-1e7}
+                    width={2e7}
+                    height={2e7}
+                    fill="transparent"
+                    className="cursor-crosshair"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onPointerMove={(e) => {
+                      track(e);
+                      const r = roundAt(ctx, e.clientX, e.clientY, e.altKey, e.shiftKey, areaTyped && parseFloat(areaTyped) > 0 && areaShape !== "ellipse" ? parseFloat(areaTyped) * 10 : undefined);
+                      setRoundDraft(r.shape);
+                      setAreaCursor(r.point);
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      track(e);
+                      roundStep(ctx, e.clientX, e.clientY, e.altKey, e.shiftKey);
+                    }}
+                  />
+                  {shape && (
+                    <polygon
+                      points={shape.outline.map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill="var(--color-accent)"
+                      fillOpacity={0.08}
+                      stroke="var(--color-accent)"
+                      strokeWidth={2}
+                      strokeDasharray="6 4"
+                      vectorEffect="non-scaling-stroke"
+                      className="pointer-events-none"
+                    />
+                  )}
+                  {areaShape === "half" && areaPts.length === 1 && areaCursor && !shape && (
+                    <line x1={areaPts[0].x} y1={areaPts[0].y} x2={areaCursor.x} y2={areaCursor.y} stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" className="pointer-events-none" />
+                  )}
+                  {areaPts.map((p, i) => (
+                    <circle key={i} cx={p.x} cy={p.y} r={ctx.mm(4)} fill="var(--color-canvas)" stroke="var(--color-accent)" strokeWidth={2} vectorEffect="non-scaling-stroke" className="pointer-events-none" />
+                  ))}
+                  {mid && text && (
+                    <g className="pointer-events-none" transform={`translate(${mid.x} ${mid.y})`}>
+                      <rect x={-w / 2} y={-font * 0.85} width={w} height={font * 1.7} rx={font * 0.85} fill="var(--color-accent)" stroke="var(--color-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                      <text textAnchor="middle" dominantBaseline="central" fill="var(--color-canvas)" style={{ fontSize: font, fontWeight: 600 }} className="nums">
+                        {text}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            })()}
+
+          {drawArea &&
+            areaShape === "corners" &&
             (() => {
               areaCtx.current = ctx;
               const pts = areaCursor ? [...areaPts, areaCursor] : areaPts;
@@ -1796,26 +2356,42 @@ export function CanvasStage({
                 vectorEffect="non-scaling-stroke"
               />
               <g className="pointer-events-none">
-                {areaPreview.decks.map((d, i) => (
-                  <rect
-                    key={i}
-                    x={-d.widthMm / 2}
-                    y={-d.depthMm / 2}
-                    width={d.widthMm}
-                    height={d.depthMm}
-                    transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-                    fill="var(--color-accent-tint)"
-                    fillOpacity={0.85}
-                    stroke="var(--color-accent)"
-                    strokeWidth={1.5}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                ))}
+                {areaPreview.decks.map((d, i) =>
+                  // A deck CUT to a curve, or a whole piece (a quarter-round in a corner), is drawn as
+                  // what is left of it — a cut one hatched, so the preview says which sheets the crew
+                  // will be cutting.
+                  d.outline ? (
+                    <polygon
+                      key={i}
+                      points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+                      fill="var(--color-accent-tint)"
+                      fillOpacity={0.85}
+                      stroke="var(--color-accent)"
+                      strokeWidth={1.5}
+                      strokeDasharray={d.cut ? "6 3" : undefined}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ) : (
+                    <rect
+                      key={i}
+                      x={-d.widthMm / 2}
+                      y={-d.depthMm / 2}
+                      width={d.widthMm}
+                      height={d.depthMm}
+                      transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+                      fill="var(--color-accent-tint)"
+                      fillOpacity={0.85}
+                      stroke="var(--color-accent)"
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ),
+                )}
               </g>
               {areaPreview.polygon.map((a, i) => {
                 const b = areaPreview.polygon[(i + 1) % areaPreview.polygon.length];
                 const L = Math.hypot(b.x - a.x, b.y - a.y);
-                if (L < 1) return null;
+                if (L < 1 || areaPreview.curved) return null;
                 const font = ctx.mm(11);
                 const sgn = signedArea(areaPreview.polygon) >= 0 ? 1 : -1;
                 const at = { x: (a.x + b.x) / 2 + ((sgn * (b.y - a.y)) / L) * font * 1.5, y: (a.y + b.y) / 2 + ((-sgn * (b.x - a.x)) / L) * font * 1.5 };
@@ -1956,7 +2532,7 @@ function swatchOf(r: Resolved | undefined, fallback = "var(--color-surface)"): s
 // this thing needs (its other dimension is the wall's, and its height is the product's).
 const DRAPE_MM = 220; // drawn thickness of the band, in plan millimetres
 
-function DrapeNode({
+const DrapeNode = memo(function DrapeNode({
   placement,
   structure,
   selected,
@@ -1969,8 +2545,8 @@ function DrapeNode({
   structure: VenueStructure;
   selected: boolean;
   ctx: CanvasLayerContext;
-  onSelect: (additive: boolean) => void;
-  onSpan: (span: WallSpan) => void;
+  onSelect: (id: string, additive: boolean) => void;
+  onSpan: (id: string, span: WallSpan) => void;
   /** The end of one slide along the wall — the host closes its history entry here. */
   onEndSpan: () => void;
 }) {
@@ -1987,20 +2563,18 @@ function DrapeNode({
   const dragEnd = (which: "from" | "to") => ({
     onPointerDown: (e: React.PointerEvent) => {
       e.stopPropagation();
-      (e.currentTarget as Element).setPointerCapture(e.pointerId);
-      onSelect(false);
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      if (e.buttons !== 1) return;
-      const wall = wallSegment(structure, span.wallId);
-      if (!wall) return;
-      const t = pointToT(wall, ctx.clientToMm(e.clientX, e.clientY));
-      onSpan(which === "from" ? { ...span, from: t } : { ...span, to: t });
-    },
-    onPointerUp: (e: React.PointerEvent) => {
-      const el = e.currentTarget as Element;
-      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-      onEndSpan();
+      onSelect(placement.id, false);
+      startPointerGesture(e, {
+        onMove: (ev) => {
+          const wall = wallSegment(structure, span.wallId);
+          if (!wall) return;
+          const t = pointToT(wall, ctx.clientToMm(ev.clientX, ev.clientY));
+          onSpan(placement.id, which === "from" ? { ...span, from: t } : { ...span, to: t });
+        },
+        onEnd: (_ev, moved) => {
+          if (moved) onEndSpan();
+        },
+      });
     },
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
   });
@@ -2023,9 +2597,13 @@ function DrapeNode({
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
-          onSelect(isAdditiveClick(e));
+          onSelect(placement.id, isAdditiveClick(e));
         }}
       />
+      {/* Its pleats — the fabric gathered on the rail — so a drape reads as cloth, not as paint. */}
+      <g transform={`translate(${(from.x + to.x) / 2} ${(from.y + to.y) / 2}) rotate(${(Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI})`}>
+        <DrapePleats lengthMm={resolved.lengthMm} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} />
+      </g>
       {/* The selection outline is a second stroke rather than a colour change: a drape's whole
           point is the colour it is, and highlighting must not repaint it. */}
       <line
@@ -2066,7 +2644,7 @@ function DrapeNode({
               e.preventDefault();
               const at = which === "from" ? span.from : span.to;
               const next = Math.max(0, Math.min(1, at + step));
-              onSpan(which === "from" ? { ...span, from: next } : { ...span, to: next });
+              onSpan(placement.id, which === "from" ? { ...span, from: next } : { ...span, to: next });
               onEndSpan();
             }}
             {...dragEnd(which)}
@@ -2074,12 +2652,12 @@ function DrapeNode({
         ))}
     </g>
   );
-}
+});
 
 // A carpet laid on the floor: a rectangle in its own colour, sized on the plan rather than in the
 // catalog. Dragging a corner stretches it, keeping the opposite corner where it is — which is what
 // grabbing a corner of a rug means, and why the resize reports a new centre alongside a new size.
-function CarpetNode({
+const CarpetNode = memo(function CarpetNode({
   placement,
   selected,
   ctx,
@@ -2091,7 +2669,7 @@ function CarpetNode({
   selected: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
-  onResize: (sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
+  onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
   onEndResize: () => void;
 }) {
   const r = resolve(placement.variantId);
@@ -2130,6 +2708,20 @@ function CarpetNode({
         aria-label={`${r?.label ?? "שטיח"} — ${(size.widthMm / 1000).toFixed(1)}×${(size.depthMm / 1000).toFixed(1)} מטר`}
         className="cursor-move touch-none focus:outline-none"
       />
+      {/* A lawn runner, a sisal mat, a printed rug: what it is woven of (or the designer's own
+          picture of it), tinted by its shade. Over the rect (which keeps the pointer), under the
+          border and the handles. */}
+      {anySurface(r?.product.appearance) && (
+        <g transform={`translate(${x} ${y})`} className="pointer-events-none">
+          <ItemSurface appearance={r?.product.appearance} footprint={{ kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
+        </g>
+      )}
+      {/* A rug's border and fringe — the two things that make a rectangle on the floor a rug. */}
+      {r?.product.category === "rugs" && (
+        <g transform={`translate(${x} ${y})`}>
+          <RugPattern w={size.widthMm} h={size.depthMm} />
+        </g>
+      )}
       {selected &&
         CORNERS.map(([sx, sy]) => {
           const corner = { x: x + sx * halfW, y: y + sy * halfD };
@@ -2150,25 +2742,25 @@ function CarpetNode({
               aria-label="פינה — גרירה לשינוי הגודל"
               onPointerDown={(e) => {
                 e.stopPropagation();
-                (e.currentTarget as Element).setPointerCapture(e.pointerId);
                 drag.onPress(false);
-              }}
-              onPointerMove={(e) => {
-                if (e.buttons !== 1) return;
-                // Work in the carpet's own frame so a rotated one still stretches along its edges
-                // rather than along the world axes.
-                const world = ctx.clientToMm(e.clientX, e.clientY);
-                const local = toLocalFrame(world, { x, y }, rot);
-                const fixed = { x: -sx * halfW, y: -sy * halfD }; // the opposite corner, held still
-                const widthMm = Math.max(MIN_CARPET_MM, Math.abs(local.x - fixed.x));
-                const depthMm = Math.max(MIN_CARPET_MM, Math.abs(local.y - fixed.y));
-                const centreLocal = { x: fixed.x + (sx * widthMm) / 2, y: fixed.y + (sy * depthMm) / 2 };
-                onResize({ widthMm: Math.round(widthMm), depthMm: Math.round(depthMm) }, fromLocalFrame(centreLocal, { x, y }, rot));
-              }}
-              onPointerUp={(e) => {
-                const el = e.currentTarget as Element;
-                if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-                onEndResize();
+                // The frame the gesture began in: the opposite corner is held where it WAS, whatever
+                // the rug's centre becomes as it is stretched.
+                const centre = { x, y };
+                const fixed = { x: -sx * halfW, y: -sy * halfD };
+                startPointerGesture(e, {
+                  onMove: (ev) => {
+                    // Work in the carpet's own frame so a rotated one still stretches along its edges
+                    // rather than along the world axes.
+                    const local = toLocalFrame(ctx.clientToMm(ev.clientX, ev.clientY), centre, rot);
+                    const widthMm = Math.max(MIN_CARPET_MM, Math.abs(local.x - fixed.x));
+                    const depthMm = Math.max(MIN_CARPET_MM, Math.abs(local.y - fixed.y));
+                    const centreLocal = { x: fixed.x + (sx * widthMm) / 2, y: fixed.y + (sy * depthMm) / 2 };
+                    onResize(placement.id, { widthMm: Math.round(widthMm), depthMm: Math.round(depthMm) }, fromLocalFrame(centreLocal, centre, rot));
+                  },
+                  onEnd: (_ev, moved) => {
+                    if (moved) onEndResize();
+                  },
+                });
               }}
               onClick={(e) => e.stopPropagation()}
             />
@@ -2176,7 +2768,7 @@ function CarpetNode({
         })}
     </g>
   );
-}
+});
 
 /** One chair, seen from above, drawn in the seat's own frame: after its rotation the +x axis points
  *  at the table, so the backrest goes at the far end and the seat runs in under the edge.
@@ -2188,76 +2780,57 @@ function CarpetNode({
  *  Sized in world millimetres, so chairs shrink with the plan like the tables they belong to; only
  *  the hairline holds a constant screen width, which is what keeps a room of 400 legible zoomed out. */
 function Chair({ seat }: { seat: Seat }) {
-  const halfD = CHAIR_D_MM / 2;
-  const halfW = CHAIR_W_MM / 2;
   return (
     <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
-      <rect
-        x={-halfD}
-        y={-halfW}
-        width={CHAIR_D_MM}
-        height={CHAIR_W_MM}
-        rx={95}
-        fill="var(--color-tray)"
-        stroke="var(--color-muted)"
-        strokeOpacity={0.4}
-        strokeWidth={1}
-        vectorEffect="non-scaling-stroke"
-      />
-      <rect
-        x={-halfD}
-        y={-halfW}
-        width={CHAIR_BACK_MM}
-        height={CHAIR_W_MM}
-        rx={CHAIR_BACK_MM / 2}
-        fill="var(--color-muted)"
-        fillOpacity={0.5}
-      />
+      <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
     </g>
   );
 }
 
+/** A table's (or a block's) ring of chairs, in the frame it is drawn in. Memoised on its two plain
+ *  props: the seats are cached per table (cachedSeats), so a ring whose table did not move is the
+ *  same `seats` array and the same transform string, and a drag frame skips every ring but one. */
+const SeatRing = memo(function SeatRing({ transform, seats }: { transform: string; seats: Seat[] }) {
+  return (
+    <g transform={transform} className="pointer-events-none">
+      {seats.map((seat, i) => (
+        <Chair key={i} seat={seat} />
+      ))}
+    </g>
+  );
+});
+
 /** How far a group's dashed outline stands off the tables inside it. */
 const GROUP_PAD_MM = 260;
 
-// Type sizes, in plan millimetres — fixed rather than scaled to the table, so that every number in
-// the room is the same size and the plan can be read at a glance instead of table by table.
-const TABLE_NUMBER_MM = 520;
-const TABLE_CAPACITY_MM = 300;
-const GROUP_NUMBER_MM = 640;
-const GROUP_CAPACITY_MM = 340;
-
-/** Where the two lines of a table's label sit: the NUMBER over the CAPACITY, centred together on
- *  the middle of the table.
- *
- *  As one label, not as a number at dead centre with a second line hung off the bottom of it. Hung,
- *  the pair reads bottom-heavy — and on anything shallow (a block of two 180×120s is only 1200 deep)
- *  the capacity ends up sitting on the table's own edge. Centring the PAIR keeps the promise the
- *  number was given when it moved to the middle: one label, in one place, on every shape.
- *
- *  0.78em is about the height of a line of digits, which is what has to be centred — not the em box,
- *  most of which is the descender space digits never use. */
+/** A table number's size, in plan mm: true scale (TABLE_NUMBER_MM, no more than half the table's
+ *  short side) while that reads at between 11 and 26 screen pixels — so it never shrinks to a speck
+ *  zoomed out, nor fills the screen zoomed in on one table. */
+const TABLE_NUMBER_MM = 450;
+function numberSizeMm(ctx: CanvasLayerContext, shortSideMm: number): number {
+  const scale = Math.min(TABLE_NUMBER_MM, shortSideMm > 0 ? shortSideMm * 0.5 : TABLE_NUMBER_MM);
+  return Math.max(ctx.mm(11), Math.min(scale, ctx.mm(26)));
+}
+/** A knocked-out ring of the plan's surface under a block's label, so the seam between two of its
+ *  tables stops at the digits instead of running through them. */
+const NUMBER_HALO = { paintOrder: "stroke" as const, stroke: "var(--color-surface)", strokeLinejoin: "round" as const };
+/** The halo for a label of this size — scaled with the glyphs, so it is a ring and not a blob. */
+const haloFor = (sizeMm: number) => ({ ...NUMBER_HALO, strokeWidth: sizeMm * 0.16 });
+/** The seat count's size under a number: a step smaller than it (CAPACITY_STEP), but never under 9
+ *  screen pixels — a number held at its 11px floor would otherwise carry a count nobody can read.
+ *  Always the smaller of the two, since its floor is below the number's. */
+const CAPACITY_STEP = 0.6;
+function capacitySizeMm(ctx: CanvasLayerContext, numberMm: number): number {
+  return Math.max(ctx.mm(9), numberMm * CAPACITY_STEP);
+}
+/** Where the two lines of a table's label sit: the NUMBER over the COUNT, centred together on the
+ *  label's point. 0.78em is about the height of a line of digits, which is what has to be centred —
+ *  not the em box, most of which is the descender space digits never use. */
 const LINE = 0.78;
-const labelStack = (numberSize: number, capacitySize: number) => ({
-  number: -(capacitySize * LINE) / 2,
-  capacity: (numberSize * LINE) / 2,
+const labelStack = (numberMm: number, capacityMm: number) => ({
+  number: -(capacityMm * LINE) / 2,
+  capacity: (numberMm * LINE) / 2,
 });
-const TABLE_LABEL = labelStack(TABLE_NUMBER_MM, TABLE_CAPACITY_MM);
-const GROUP_LABEL = labelStack(GROUP_NUMBER_MM, GROUP_CAPACITY_MM);
-
-/** A knocked-out ring of the table's own surface colour, drawn UNDER the glyphs (paint-order) so a
- *  line running behind the text stops at it.
- *
- *  A block's label is centred on the block, and the centre of a block is exactly where the two
- *  tables meet — so the one place the number is guaranteed to land is on top of a seam. Cartography
- *  has solved this for a century: halo the type, don't move it. Only the group needs it; a lone
- *  table has nothing drawn through its middle but a centrepiece the designer put there. */
-const HALO = {
-  paintOrder: "stroke" as const,
-  stroke: "var(--color-surface)",
-  strokeWidth: 70,
-  strokeLinejoin: "round" as const,
-};
 
 const CORNERS = [
   [-1, -1],
@@ -2342,90 +2915,83 @@ export interface DragProps {
   onClick: (additive: boolean) => void;
   /** A right-click. The canvas's own handler opens the menu on the same event; this says what for. */
   onContext?: () => void;
-  onMove?: (p: Point) => void;
+  /** `mods.alt`: Alt is held — every pull lets go (a ceiling item's pull to a table's middle). */
+  onMove?: (p: Point, mods?: { alt: boolean }) => void;
   onEnd?: () => void;
+  /** An arrow-key step. Discrete — the host closes its history entry at once. */
+  onNudge?: (pos: Point) => void;
 }
 
-// Where each live drag started, keyed by pointerId. Module scope rather than a closure: the first
-// onMove re-renders the host, which rebuilds these handlers mid-gesture, so the origin has to
-// outlive that. Same shape and same 4px threshold as venue-plan.tsx's feature drag — a click that
-// drifts a pixel under the finger must select, not nudge.
-const dragOrigin = new Map<number, { cx: number; cy: number; ox: number; oy: number; moved: boolean }>();
-const DRAG_THRESHOLD_PX = 4;
-// Set when a gesture crossed the threshold, so the click that always follows its pointerup can skip
-// the selection logic. Without it, dragging a group would re-fire "select just me" the instant the
-// drag ended, undoing the very group the drag just moved. Not pointerId-keyed — one drag-then-click
-// sequence is in flight at a time, the same assumption PlanCanvas's own handlers make.
-let suppressNextClick = false;
+/** How deep (in screen px) a dragged item may overlap one of its own kind and still be held flush
+ *  against it — past this it lets go and follows the pointer (collide.ts nudgeApart). A little more
+ *  than the snap's own 6px pull, so a flush snap and the hold that keeps it agree. */
+const NUDGE_REACH_PX = 8;
 
+// A node's drag: the press takes the gesture (lib/studio/gesture.ts — window listeners, so the node
+// may be re-ordered to paint on top, re-rendered or re-keyed mid-drag and the drag goes on), and
+// every move is measured off the gesture's OWN origin, not off the last position: repeated relative
+// nudges drift, and the grab point would slide out from under the pointer. The click that follows a
+// drag is swallowed by the gesture itself; a press that never moved still clicks, which is the one
+// signal for "select just this".
 function draggable(at: Point, ctx: CanvasLayerContext, h: DragProps) {
-  const end = (e: React.PointerEvent) => {
-    const el = e.currentTarget as Element;
-    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-    if (dragOrigin.get(e.pointerId)?.moved) {
-      suppressNextClick = true;
-      h.onEnd?.();
-    }
-    dragOrigin.delete(e.pointerId);
-  };
   return {
     onPointerDown: (e: React.PointerEvent) => {
       e.stopPropagation();
-      (e.currentTarget as Element).setPointerCapture(e.pointerId);
-      dragOrigin.set(e.pointerId, { cx: e.clientX, cy: e.clientY, ox: at.x, oy: at.y, moved: false });
       h.onPress(isAdditiveClick(e));
+      if (!h.onMove) return;
+      const origin = { cx: e.clientX, cy: e.clientY, ox: at.x, oy: at.y };
+      startPointerGesture(e, {
+        onMove: (ev) => {
+          const from = ctx.clientToMm(origin.cx, origin.cy);
+          const to = ctx.clientToMm(ev.clientX, ev.clientY);
+          h.onMove?.({ x: Math.round(origin.ox + to.x - from.x), y: Math.round(origin.oy + to.y - from.y) }, { alt: ev.altKey });
+        },
+        onEnd: (_ev, moved) => {
+          if (moved) h.onEnd?.();
+        },
+      });
     },
-    onPointerMove: (e: React.PointerEvent) => {
-      const origin = dragOrigin.get(e.pointerId);
-      if (!origin || !h.onMove || e.buttons !== 1) return;
-      if (!origin.moved) {
-        if (Math.hypot(e.clientX - origin.cx, e.clientY - origin.cy) < DRAG_THRESHOLD_PX) return;
-        origin.moved = true;
-      }
-      // Off the gesture's own origin each frame, not off the last position — repeated relative
-      // nudges drift, and the grab point would slide out from under the pointer.
-      const from = ctx.clientToMm(origin.cx, origin.cy);
-      const to = ctx.clientToMm(e.clientX, e.clientY);
-      h.onMove({ x: Math.round(origin.ox + to.x - from.x), y: Math.round(origin.oy + to.y - from.y) });
-    },
-    onPointerUp: end,
-    onPointerCancel: end,
     // Not stopped: the canvas's own contextmenu handler is what opens the menu.
     onContextMenu: () => h.onContext?.(),
     // Always stopped: a click that reached the canvas would be read as "empty canvas" and clear the
     // selection the press just made.
     onClick: (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (suppressNextClick) {
-        suppressNextClick = false;
-        return;
-      }
       h.onClick(isAdditiveClick(e));
     },
   };
 }
 
-function TableNode({
+// MEMOISED, like every node on the plan: its props are the table object (a new one only when THIS
+// table changed), plain values, and handlers with one identity for the table's lifetime (nodeProps,
+// `stable`) — so a frame of a drag re-renders the table being dragged and no other.
+const TableNode = memo(function TableNode({
   table,
   selected,
   util,
   cloth,
-  showNumber,
   ctx,
   drag,
-  onNudge,
+  onOpen,
+  number = null,
+  showSeats = false,
 }: {
   table: DesignTable;
   selected: boolean;
   util: number;
-  /** The cover this table wears, if any — drawn as the table's own fill. */
+  /** The cover this table wears, if any — drawn as fabric round and over the table (ClothDrape). */
   cloth?: Placement;
-  /** False for a table inside a group: the group draws the one number they share. */
-  showNumber: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
-  /** An arrow-key step. Discrete, so it closes its own history entry immediately. */
-  onNudge: (pos: Point) => void;
+  /** Double-click: dress this table (its focus mode). Given the table's id. */
+  onOpen?: (tableId: string) => void;
+  /** The number to write on it, or null for none (a block's member, an unnumbered table, the head
+   *  table, the design pass). */
+  number?: number | null;
+  /** Write its `seated/seats` under the number — centred alone on a head table or an unnumbered
+   *  one, which have the count without the number. The same passes as the number; a block's member
+   *  leaves it to the block. */
+  showSeats?: boolean;
 }) {
   const overflow = util > 1;
   const clothColour = cloth ? (resolve(cloth.variantId)?.swatch ?? "var(--color-accent-tint)") : undefined;
@@ -2443,22 +3009,24 @@ function TableNode({
     // problem to notice, not a colour choice, and it has to stay legible whatever is on the table.
     fill: overflow ? "var(--color-warn-tint)" : (clothColour ?? style.fill),
     fillOpacity: overflow || !clothColour ? style.fillOpacity : 1,
-    stroke: selected ? "var(--color-accent)" : overflow ? "var(--color-warn)" : style.stroke,
-    strokeWidth: selected ? 4 : style.strokeWidth,
+    // Under a cloth the table's own edge is only a crease in the fabric — still there, so the
+    // tabletop reads, but quiet. Selection and overflow keep their full weight.
+    stroke: selected ? "var(--color-accent)" : overflow ? "var(--color-warn)" : clothColour ? "var(--color-ink)" : style.stroke,
+    strokeOpacity: selected || overflow || !clothColour ? style.strokeOpacity : 0.22,
+    strokeWidth: selected ? 4 : clothColour && !overflow ? 1 : style.strokeWidth,
     strokeDasharray: style.dashArray.length ? style.dashArray.join(" ") : undefined,
     vectorEffect: "non-scaling-stroke" as const,
   };
   const footprint = tableFootprint(table);
-  const labelAt = labelAnchor(footprint);
-  const upright = uprightTransform(table.rotation, table.mirrored);
   const seats = table.seats ?? 0;
-  // The number has to stay readable on whatever colour the cloth is, so it goes dark on a light
-  // cloth and light on a dark one rather than trusting one fixed grey.
-  const numberInk = selected
-    ? "var(--color-accent)"
-    : clothColour && isDark(clothColour)
-      ? "var(--color-canvas)"
-      : "var(--color-muted)";
+  // A label when there is a number to write, or a seat count the pass shows (a head table and an
+  // unnumbered one have the count without the number).
+  const labelled = number !== null || (showSeats && seats > 0);
+  const labelAt = labelled ? labelAnchor(footprint) : { x: 0, y: 0 };
+  const upright = uprightTransform(table.rotation, table.mirrored);
+  const darkCloth = !!clothColour && isDark(clothColour);
+  const tableProduct = table.variantId ? resolve(table.variantId)?.product : undefined;
+  const tableSurface = clothColour || overflow ? undefined : anySurface(tableProduct?.appearance) ? tableProduct?.appearance : undefined;
 
   return (
     <g
@@ -2466,9 +3034,19 @@ function TableNode({
       transform={`translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`שולחן ${table.number || ""}${seats > 0 ? ` — ${table.seated ?? 0} מתוך ${seats} מקומות` : ""} — גרירה להזזה`}
+      aria-label={`${table.unnumbered ? "שולחן ללא מספר" : `שולחן ${table.number || "ראש"}`}${seats > 0 ? ` — ${table.seated ?? 0} מתוך ${seats} מקומות` : ""} — גרירה להזזה${onOpen ? " · לחיצה כפולה לעיצוב השולחן" : ""}`}
       className="cursor-move touch-none focus:outline-none"
+      onDoubleClick={
+        onOpen
+          ? (e) => {
+              e.stopPropagation();
+              onOpen(table.id);
+            }
+          : undefined
+      }
       onKeyDown={(e) => {
+        const onNudge = drag.onNudge;
+        if (!onNudge) return;
         const step = e.shiftKey ? 500 : 100;
         if (e.key === "ArrowLeft") onNudge({ x: table.position.x - step, y: table.position.y });
         else if (e.key === "ArrowRight") onNudge({ x: table.position.x + step, y: table.position.y });
@@ -2478,60 +3056,125 @@ function TableNode({
         e.preventDefault();
       }}
     >
+      {clothColour && !overflow && <ClothDrape footprint={footprint} colour={clothColour} />}
       <FootprintShape footprint={footprint} {...shape} />
-      {/* The label rides the table's POSITION and not its angle. Turning a table turns the table:
-          the number is not printed on the cloth, it is how a crew and a client find one table in a
-          room of forty, and a 6 that comes out as a 9 at 180° is worse than one that is merely hard
-          to read. The counter-turn is about the label's own point — the shape's visual centre
-          (labelAnchor): (0,0) on a rectangle or a round, but the middle of the band on an arc, whose
-          box centre is in the air the ring curves round — which the parent <g> has already carried
-          into place with the table, so the pair sits ON the table at every angle and only stops
-          leaning. The chairs are NOT counter-turned: a chair is a thing in the room and it faces the
-          edge it is pulled up to. Same split the printed map already makes, where the numbers are
-          drawn outside the rotated group (app/(app)/outputs/placement-map.tsx). */}
-      <g transform={`translate(${labelAt.x} ${labelAt.y})${upright ? ` ${upright}` : ""}`}>
-        {showNumber && table.number > 0 && (
-          <text
+      {/* Bare (no cloth, no overflow warning) a table shows what it is made of — a farm table's
+          planks, a marble top, each of its shapes in its own — over its fill, and its edge drawn
+          again on top so the selection still reads. */}
+      {tableSurface && (
+        <>
+          <g className="pointer-events-none">
+            <ItemSurface appearance={tableSurface} footprint={footprint} color={table.style?.fill ?? tableSurface.style?.fill} seed={table.id} />
+          </g>
+          <FootprintShape footprint={footprint} {...shape} fill="none" className="pointer-events-none" />
+        </>
+      )}
+      {/* The LABEL, when the pass asks for it (the hall pass and the full studio — never the design
+          pass, which is drawn clean): the number over the `seated/seats`, stacked as ONE label
+          (TableLabel), either alone dead centre. At the shape's visual centre (labelAnchor — the
+          middle of the band on an arc) and UPRIGHT whatever way the table turns or flips: a 6 that
+          reads as a 9 at 180° is worse than none. Sized in plan mm but held between a legible and a
+          quiet size on screen (numberSizeMm), in the muted ink — light on a dark cloth, where the
+          count also gives up its full/over colours (neither reads on it; the bar still says which) —
+          accent while selected. */}
+      {labelled && (
+        <g transform={`translate(${labelAt.x} ${labelAt.y})${upright ? ` ${upright}` : ""}`} className="pointer-events-none">
+          <TableLabel
             x={0}
-            // Centred on every shape. A round table used to carry its number up near the top edge, out
-            // of the way of whatever stands in the middle of it — but the number is how the crew finds
-            // the table, and having it in one place on a round and another on a rectangle means
-            // reading the plan twice. A centrepiece drawn over it is the lesser problem.
-            //
-            // It lifts by half a line when a capacity hangs under it, so that the PAIR is what sits in
-            // the middle. Alone, it is still dead centre.
-            y={seats > 0 ? TABLE_LABEL.number : 0}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill={numberInk}
-            style={{ fontSize: TABLE_NUMBER_MM, fontWeight: 600 }}
-            className="pointer-events-none"
-          >
-            {table.number}
-          </text>
-        )}
-        {/* Under the number, and dead centre in its place on a head table, which has seats but no
-            number. A table inside a group draws neither — the group draws the one of each they
-            share (showNumber). */}
-        {showNumber && seats > 0 && (
-          <CapacityLabel
-            x={0}
-            y={table.number > 0 ? TABLE_LABEL.capacity : 0}
+            y={0}
+            number={number}
             seated={table.seated ?? 0}
-            seats={seats}
-            size={TABLE_CAPACITY_MM}
-            baseInk={numberInk}
-            // On a dark cloth the alert and success inks are both unreadable, and a capacity nobody
-            // can read reports nothing at all. Legibility wins; the inspector still says which it is.
-            semantic={!(clothColour && isDark(clothColour))}
+            seats={showSeats ? seats : 0}
+            shortSideMm={Math.min(footprintBounds(footprint).w, footprintBounds(footprint).h)}
+            ctx={ctx}
+            ink={selected ? "var(--color-accent)" : darkCloth ? "var(--color-canvas)" : "var(--color-muted)"}
+            semantic={!darkCloth}
           />
-        )}
-      </g>
+        </g>
+      )}
     </g>
+  );
+});
+
+/** A table's label — its NUMBER over its `seated/seats` — centred together as ONE label on the point
+ *  it is given: the shape's visual centre (labelAnchor) for a table, the block's centre for a group.
+ *  Either line alone sits dead centre: a head table or an unnumbered one has a count but no number,
+ *  a table with no seats has a number but no count; nothing to write draws nothing.
+ *
+ *  Stacked as one label, not as a number at dead centre with a second line hung off the bottom of
+ *  it. Hung, the pair reads bottom-heavy — and on anything shallow (a block of two 180×120s is only
+ *  1200 deep) the count ends up sitting on the table's own edge. The number is sized by numberSizeMm
+ *  (true scale, held legible on screen) and the count a step under it (capacitySizeMm); both wear
+ *  the halo when asked (a block — see NUMBER_HALO). Plain props, so a memoised caller stays cheap. */
+function TableLabel({
+  x,
+  y,
+  number,
+  seated,
+  seats,
+  shortSideMm,
+  ctx,
+  ink,
+  semantic = true,
+  halo = false,
+}: {
+  x: number;
+  y: number;
+  /** The number to write, or null for none. */
+  number: number | null;
+  seated: number;
+  /** 0 writes no count. */
+  seats: number;
+  /** The short side of what the label sits on — the number never takes more than half of it. */
+  shortSideMm: number;
+  ctx: CanvasLayerContext;
+  /** The number's ink, and the count's when it has nothing to say (CapacityLabel). */
+  ink: string;
+  /** Whether the count takes its full/over colours — off on a dark cloth, where neither reads. */
+  semantic?: boolean;
+  /** Knock the surface out from around the glyphs — a block, whose centre is a seam. */
+  halo?: boolean;
+}) {
+  const numberMm = numberSizeMm(ctx, shortSideMm);
+  const capacityMm = capacitySizeMm(ctx, numberMm);
+  const stack = labelStack(numberMm, capacityMm);
+  const showNumber = number !== null;
+  const showCapacity = seats > 0;
+  return (
+    <>
+      {showNumber && (
+        <text
+          x={x}
+          // Lifted by half a count line when one hangs under it, so that the PAIR is what sits in the
+          // middle. Alone, it is still dead centre.
+          y={y + (showCapacity ? stack.number : 0)}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill={ink}
+          style={{ fontSize: numberMm, fontWeight: 600, ...(halo ? haloFor(numberMm) : {}) }}
+        >
+          {number}
+        </text>
+      )}
+      {showCapacity && (
+        <CapacityLabel
+          x={x}
+          y={y + (showNumber ? stack.capacity : 0)}
+          seated={seated}
+          seats={seats}
+          size={capacityMm}
+          baseInk={ink}
+          semantic={semantic}
+          halo={halo}
+        />
+      )}
+    </>
   );
 }
 
-/** `4/12` — how many of a table's chairs are spoken for, out of how many it has.
+/** `4/12` — how many of a table's chairs are spoken for, out of how many it has. `0/12` on purpose:
+ *  the designer reads it as "people at this table / places", and a 0 says nobody has been seated
+ *  yet, which a bare 12 would not.
  *
  *  Written LEFT TO RIGHT explicitly. This page is RTL, and in an RTL paragraph the slash between two
  *  numbers is a neutral character that takes the paragraph's direction: `0/12` comes out reading
@@ -2557,7 +3200,7 @@ function CapacityLabel({
   size: number;
   baseInk: string;
   semantic?: boolean;
-  /** Knock the table surface out from around the glyphs — see HALO. */
+  /** Knock the surface out from around the glyphs — see NUMBER_HALO. */
   halo?: boolean;
 }) {
   const ink =
@@ -2573,7 +3216,7 @@ function CapacityLabel({
       textAnchor="middle"
       dominantBaseline="central"
       fill={ink}
-      style={{ fontSize: size, fontWeight: 600, direction: "ltr", ...(halo ? HALO : {}) }}
+      style={{ fontSize: size, fontWeight: 600, direction: "ltr", ...(halo ? haloFor(size) : {}) }}
       className="pointer-events-none nums"
     >
       {`${seated}/${seats}`}
@@ -2581,7 +3224,166 @@ function CapacityLabel({
   );
 }
 
-function PlacementNode({
+/** THE TABLE BEING DRESSED — its focus mode. The room is held back behind a scrim (a click on it
+ *  goes back to the plan) and the table is drawn again above it, with its chairs, its two centre
+ *  lines, and its items free to be dragged about its top.
+ *
+ *  A drag here moves items IN THE TABLE'S OWN FRAME (lib/design-document/dressing.ts): the pointer's
+ *  room point is carried into the frame, clamped to the table top, and pulled onto a centre line
+ *  within a few pixels of it — which is how a pair of candlesticks ends up exactly symmetric without
+ *  typing a number. Several selected items move together by the one delta. Every frame sends EVERY
+ *  item's place, so the first drag on an automatically laid-out table freezes the others where they
+ *  were drawn instead of letting them jump. */
+function DressingOverlay({
+  table,
+  chips,
+  cloth,
+  ring,
+  util,
+  ctx,
+  isSelected,
+  selectedIds,
+  tableDrag,
+  chipDrag,
+  onArrange,
+  onEnd,
+  onExit,
+}: {
+  table: DesignTable;
+  chips: Placement[];
+  cloth?: Placement;
+  ring?: { transform: string; seats: Seat[] };
+  util: number;
+  ctx: CanvasLayerContext;
+  isSelected: (placementId: string) => boolean;
+  selectedIds: string[];
+  tableDrag: DragProps;
+  chipDrag: (placementId: string) => DragProps;
+  onArrange: (positions: { id: string; position: Point }[]) => void;
+  onEnd: () => void;
+  onExit: () => void;
+}) {
+  const gesture = useRef<{ pressed: string; origins: Map<string, Point>; moving: Set<string> } | null>(null);
+  /** The lines the held item has just snapped to, in the table's frame — drawn while it is held. */
+  const [snapped, setSnapped] = useState<{ x?: number; y?: number } | null>(null);
+  const spots = dressingSpots(table, chips);
+  const box = tableBox(table);
+  const sizes = new Map(spots.map((sp) => [sp.p.id, sp.box]));
+  const transform = `translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`;
+  const snapMm = ctx.mm(8);
+
+  const moveFrom = (pressed: string) => (world: Point) => {
+    if (!gesture.current) {
+      const picked = selectedIds.filter((id) => sizes.has(id));
+      gesture.current = {
+        pressed,
+        origins: new Map(spots.map((s) => [s.p.id, s.local])),
+        moving: new Set(picked.includes(pressed) ? picked : [pressed]),
+      };
+    }
+    const g = gesture.current;
+    const o = g.origins.get(pressed) ?? { x: 0, y: 0 };
+    const local = toTableFrame(table, world);
+    let dx = local.x - o.x;
+    let dy = local.y - o.y;
+    // The item being held is pulled, within a few pixels, onto a line worth being on: the table's
+    // centre lines, in line with another item, or MIRRORED across the centre from another item —
+    // which is how a pair of candlesticks ends up exactly symmetric without typing a number.
+    const still = [...g.origins].filter(([id]) => !g.moving.has(id)).map(([, at]) => at);
+    const nearest = (v: number, options: number[]) => {
+      let best: number | undefined;
+      for (const c of options) if (Math.abs(v - c) < snapMm && (best === undefined || Math.abs(v - c) < Math.abs(v - best))) best = c;
+      return best;
+    };
+    const sx = nearest(o.x + dx, [0, ...still.flatMap((a) => [a.x, -a.x])]);
+    const sy = nearest(o.y + dy, [0, ...still.flatMap((a) => [a.y, -a.y])]);
+    if (sx !== undefined) dx = sx - o.x;
+    if (sy !== undefined) dy = sy - o.y;
+    setSnapped(sx === undefined && sy === undefined ? null : { x: sx, y: sy });
+    onArrange(
+      [...g.origins].map(([id, at]) => ({
+        id,
+        position: g.moving.has(id) ? clampToTable(box, sizes.get(id) ?? { widthMm: 0, depthMm: 0 }, { x: at.x + dx, y: at.y + dy }) : at,
+      })),
+    );
+  };
+
+  const guide = { stroke: "var(--color-accent)", strokeOpacity: 0.4, strokeWidth: 1, strokeDasharray: "4 4", vectorEffect: "non-scaling-stroke" as const };
+  return (
+    <g>
+      {/* The room, held back. Pan (Space, the middle button) is taken before this sees the press. */}
+      <rect
+        x={-1e7}
+        y={-1e7}
+        width={2e7}
+        height={2e7}
+        fill="var(--color-canvas)"
+        fillOpacity={0.8}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onExit();
+        }}
+        aria-hidden
+      />
+      {ring && <SeatRing transform={ring.transform} seats={ring.seats} />}
+      <TableNode table={table} selected={false} util={util} cloth={cloth} ctx={ctx} drag={tableDrag} />
+      <g transform={transform} className="pointer-events-none">
+        <line x1={-box.widthMm / 2} y1={0} x2={box.widthMm / 2} y2={0} {...guide} />
+        <line x1={0} y1={-box.depthMm / 2} x2={0} y2={box.depthMm / 2} {...guide} />
+        {/* What the held item snapped to, solid, for as long as it is held. */}
+        {snapped?.x !== undefined && (
+          <line x1={snapped.x} y1={-box.depthMm / 2} x2={snapped.x} y2={box.depthMm / 2} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        )}
+        {snapped?.y !== undefined && (
+          <line x1={-box.widthMm / 2} y1={snapped.y} x2={box.widthMm / 2} y2={snapped.y} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        )}
+      </g>
+      {spots.map(({ p, at, rotation, footprint }) => {
+        const d = chipDrag(p.id);
+        return (
+          <PlacementNode
+            key={p.id}
+            shape={footprint}
+            placement={rotation === p.rotation ? p : { ...p, rotation }}
+            x={at.x}
+            y={at.y}
+            selected={isSelected(p.id)}
+            ctx={ctx}
+            drag={{
+              ...d,
+              onMove: moveFrom(p.id),
+              onEnd: () => {
+                gesture.current = null;
+                setSnapped(null);
+                onEnd();
+              },
+            }}
+          />
+        );
+      })}
+    </g>
+  );
+}
+
+/** React.memo's comparison for a node: every prop by identity, a `shape` by value — the trimmed
+ *  footprint of a runner is rebuilt per layout, and two equal ones must not re-render the node. */
+function samePlacementProps<P extends object>(a: P, b: P): boolean {
+  const ka = Object.keys(a) as (keyof P)[];
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) {
+    const x = a[k];
+    const y = b[k];
+    if (Object.is(x, y)) continue;
+    if (k === "shape" && x && y && sameFootprint(x as unknown as Footprint, y as unknown as Footprint)) continue;
+    return false;
+  }
+  return true;
+}
+
+const PlacementNode = memo(PlacementNodeView, samePlacementProps);
+
+function PlacementNodeView({
   placement,
   x,
   y,
@@ -2592,13 +3394,29 @@ function PlacementNode({
   railing,
   gaps,
   activeItem,
+  skipItems,
+  onOpen,
+  openId,
+  shape,
+  showLabel,
 }: {
   placement: Placement;
+  /** Draw it with this shape rather than its catalog footprint — a runner trimmed to its table. */
+  shape?: Footprint;
+  /** Write a standalone banquette's number and `seated/seats` — the passes that write the tables'
+   *  (CanvasStage.showTableNumbers); the design pass is drawn clean. */
+  showLabel?: boolean;
+  /** A stage's edge items drawn elsewhere, as part of a run with another stage's (JoinedRuns). */
+  skipItems?: ReadonlySet<string>;
   x: number;
   y: number;
   selected: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
+  /** Double-click — on an item on a table, dress that table. Given `openId`. */
+  onOpen?: (id: string) => void;
+  /** What a double-click opens — the table this item stands on. */
+  openId?: string;
   overhead?: boolean;
   railing?: EdgeRun[];
   gaps?: EdgeRun[];
@@ -2625,16 +3443,34 @@ function PlacementNode({
   // cloth): dark ink on a light fill, light on a dark one. An overhead item is never filled.
   const dark = !overhead && !!own && fillOpacity > 0.5 && isDark(own);
   // At the size it was stretched to, when its row is resizable (Product.resize).
-  const footprint: Footprint = placementFootprint(placement);
+  const footprint: Footprint = shape ?? placementFootprint(placement);
   // A stage writes nothing inside itself — its outline, front and stairs already say what it is,
   // and a word across the middle sat on top of the levels and the seams.
-  const content = placement.stage
+  // Its category's picture — a candelabrum, a bunch of flowers, a sofa — rather than its outline with
+  // a word in it (lib/catalog/symbols.ts). The picture says what it is, so nothing is written inside.
+  const symbol = placement.stage ? null : symbolOf(product, footprint);
+  // A flight or a ramp on its own draws its steps from the step it covers on THIS plan, and writes
+  // its slope at a screen size — passed to it alone, since a zoom-sized prop re-draws every frame.
+  const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(product, placement.climb) : undefined;
+  // What it is made of (MapAppearance.texture) — timber, marble, a lawn — as its fill. A picture is
+  // its own fill, and an overhead item is never filled at all.
+  const surfaced = !symbol && !overhead && anySurface(product?.appearance);
+  const content = placement.stage || symbol
     ? { mode: "none" as const }
     : product
       ? resolveContent(product)
       : { mode: "name" as const, name: r?.label ?? "פריט" };
   const bounds = footprintBounds(footprint);
   const scale = placement.scale || 1;
+  const edge = {
+    stroke: selected ? "var(--color-accent)" : style.stroke,
+    strokeOpacity: selected ? 1 : style.strokeOpacity,
+    // A stage is large: the 4px a small item is selected with reads as a heavy frame round a
+    // platform, so it keeps its resting weight and says "selected" in colour alone.
+    strokeWidth: selected && !placement.stage ? 4 : style.strokeWidth,
+    strokeDasharray: style.dashArray.length ? style.dashArray.join(" ") : undefined,
+    vectorEffect: "non-scaling-stroke" as const,
+  };
   const label = content.mode === "name" ? content.name : "";
   // No ellipsis in SVG text: size the type to the footprint the way Konva did, then clip the string
   // to what that box can hold rather than letting it run out past the shape's edge.
@@ -2649,6 +3485,12 @@ function PlacementNode({
   const labelAt = content.mode === "none" ? { x: 0, y: 0 } : labelAnchor(footprint);
   const upright = uprightTransform(placement.rotation, placement.mirrored);
   const badge = 340;
+  // A STANDALONE BANQUETTE is set like a table (lib/design-document/bench.ts): the picture draws its
+  // chairs along its back and a sofa side inside its strip as THIS plan laid them, and — like a
+  // table — it wears its number and its `seated/seats` in the middle, upright at every angle.
+  const bench = symbol === "bench" ? standaloneBench(placement, benchOf) : null;
+  const benchNumber = benchIsNumbered(placement, bench) ? placement.bench!.number! : null;
+  const benchSeats = bench?.seats ?? 0;
 
   return (
     <g
@@ -2656,9 +3498,62 @@ function PlacementNode({
       transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${placement.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`${r?.label ?? "פריט"}${drag.onMove ? " — גרירה להזזה" : ""}`}
+      aria-label={`${r?.label ?? "פריט"}${bench ? `${benchNumber ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
       className={(drag.onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
+      onDoubleClick={
+        onOpen
+          ? (e) => {
+              e.stopPropagation();
+              onOpen(openId ?? placement.id);
+            }
+          : undefined
+      }
     >
+      {symbol && product && (
+        <ItemSymbol
+          kind={symbol}
+          footprint={footprint}
+          count={symbolCount(product, symbol)}
+          tone={own}
+          overhead={overhead}
+          chairStyle={chairStyleOf(product)}
+          rise={rise}
+          turnDeg={rise ? placement.rotation : undefined}
+          mirrored={rise ? placement.mirrored : undefined}
+          textMm={rise ? ctx.mm(11) : undefined}
+          bench={bench ?? undefined}
+        />
+      )}
+      {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
+        <g transform={upright || undefined} className="pointer-events-none">
+          <TableLabel
+            x={0}
+            y={0}
+            number={benchNumber !== null && benchNumber > 0 ? benchNumber : null}
+            seated={placement.bench?.seated ?? 0}
+            seats={benchSeats}
+            shortSideMm={Math.min(bounds.w, bounds.h)}
+            ctx={ctx}
+            ink={selected ? "var(--color-accent)" : "var(--color-muted)"}
+          />
+        </g>
+      )}
+      {symbol ? (
+        // The picture is the item; its footprint stays as the thing that takes the pointer (an
+        // invisible fill) and, once selected, as the accent outline that says how much room it takes.
+        <FootprintShape
+          footprint={footprint}
+          overhead={overhead}
+          fill="#ffffff"
+          fillOpacity={0}
+          stroke={selected ? "var(--color-accent)" : overhead ? style.stroke : "none"}
+          strokeOpacity={selected ? 1 : style.strokeOpacity}
+          strokeWidth={selected ? 2 : 1}
+          strokeDasharray={selected && !overhead ? "5 3" : undefined}
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : (
+      <>
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
@@ -2667,14 +3562,20 @@ function PlacementNode({
         // every call site.
         fill={fill}
         fillOpacity={fillOpacity}
-        stroke={selected ? "var(--color-accent)" : style.stroke}
-        strokeOpacity={selected ? 1 : style.strokeOpacity}
-        // A stage is large: the 4px a small item is selected with reads as a heavy frame round a
-        // platform, so it keeps its resting weight and says "selected" in colour alone.
-        strokeWidth={selected && !placement.stage ? 4 : style.strokeWidth}
-        strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
-        vectorEffect="non-scaling-stroke"
+        {...edge}
       />
+      {/* What each of its shapes is made of (a material, or a picture of the designer's own), over
+          the fill, and the edge again on top of it so a selected item still says so. */}
+      {surfaced && (
+        <>
+          <g className="pointer-events-none">
+            <ItemSurface appearance={product?.appearance} footprint={footprint} color={own} seed={placement.id} />
+          </g>
+          <FootprintShape footprint={footprint} fill="none" {...edge} className="pointer-events-none" />
+        </>
+      )}
+      </>
+      )}
       {placement.stage && (
         <StageMarks
           stage={placement.stage}
@@ -2682,6 +3583,7 @@ function PlacementNode({
           railing={railing}
           gaps={gaps}
           activeItem={activeItem}
+          skip={skipItems}
           rotation={placement.rotation}
           mirrored={placement.mirrored}
           labelMm={ctx.mm(11)}
@@ -2771,12 +3673,16 @@ function StageMarks({
   labelMm,
   gaps,
   activeItem,
+  skip,
 }: {
   stage: StageBuild;
   selected: boolean;
   railing?: EdgeRun[];
   gaps?: EdgeRun[];
   activeItem?: string | null;
+  /** Items drawn as part of a run with another stage's (JoinedRuns): only their chairs, and an
+   *  invisible hit area so a click on the run is still a click on the stage, are drawn here. */
+  skip?: ReadonlySet<string>;
   rotation: number;
   mirrored?: boolean;
   /** The size of the side-length labels, in world mm (a fixed size on screen). */
@@ -2812,28 +3718,52 @@ function StageMarks({
           </g>
         );
       })}
-      {decks.map((d, i) => (
-        <rect
-          key={i}
-          x={-d.widthMm / 2}
-          y={-d.depthMm / 2}
-          width={d.widthMm}
-          height={d.depthMm}
-          transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-          fill="none"
-          stroke="var(--color-accent)"
-          strokeOpacity={0.55}
-          strokeWidth={1}
-          strokeDasharray="4 3"
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
+      {decks.map((d, i) =>
+        // A piece standing whole is its own shape — a half-round apron, a disc — not a box.
+        d.outline ? (
+          <polygon
+            key={i}
+            points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeOpacity={0.55}
+            strokeWidth={1}
+            strokeDasharray="4 3"
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : d.round ? null : (
+          <rect
+            key={i}
+            x={-d.widthMm / 2}
+            y={-d.depthMm / 2}
+            width={d.widthMm}
+            height={d.depthMm}
+            transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeOpacity={0.55}
+            strokeWidth={1}
+            strokeDasharray="4 3"
+            vectorEffect="non-scaling-stroke"
+          />
+        ),
+      )}
       {/* Stairs, banquettes and barriers are part of the stage on the floor — drawn always: a flight
           with a line across each tread, a banquette as a seat-coloured strip, a barrier as a heavy
           line along the inside of its edge. The one being edited is in the accent. */}
       {(stage.stairs ?? []).map((st) => {
         const shape = edgeItemShape(stage, st, deckOf);
         if (!shape) return null;
+        if (skip?.has(st.id)) {
+          return (
+            <g key={st.id} style={{ pointerEvents: "visiblePainted" }}>
+              {shape.chairs.map((seat, k) => (
+                <Chair key={`chair-${k}`} seat={seat} />
+              ))}
+              <polygon points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill="transparent" stroke="none" />
+            </g>
+          );
+        }
         const on = st.id === activeItem;
         const stroke = on ? "var(--color-accent)" : "var(--color-ink-soft)";
         if (shape.kind === "barrier" || shape.kind === "backdrop") {
@@ -2869,6 +3799,8 @@ function StageMarks({
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}
+            {/* A banquette's sofa side: cushions inside the strip, backrest toward its other half. */}
+            {shape.kind === "bench" && <SofaCushions cushions={shape.cushions} backs={shape.backs} />}
           </g>
         );
       })}
@@ -2891,12 +3823,10 @@ function StageMarks({
       {/* What nothing covers yet — an edge somebody can walk off. Only while the stage is selected,
           where the bar offers to finish it. */}
       {(gaps ?? []).map((g, i) => (
-        <line
+        <polyline
           key={`gap-${i}`}
-          x1={g.a.x}
-          y1={g.a.y}
-          x2={g.b.x}
-          y2={g.b.y}
+          points={g.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
           stroke="var(--color-alert)"
           strokeWidth={3}
           strokeDasharray="5 4"
@@ -2909,7 +3839,8 @@ function StageMarks({
         stage.outline.map((a, i) => {
           const b = stage.outline[(i + 1) % stage.outline.length];
           const L = Math.hypot(b.x - a.x, b.y - a.y);
-          if (L < 1) return null;
+          // A chord of a curved rim is not a side anyone measures.
+          if (L < 1 || (stage.smooth?.length && stageSides(stage).some((s) => s.curved && s.edges.includes(i)))) return null;
           const s = signedArea(stage.outline) >= 0 ? 1 : -1;
           const out = { x: (s * (b.y - a.y)) / L, y: (-s * (b.x - a.x)) / L };
           const at = { x: (a.x + b.x) / 2 + out.x * labelMm * 1.4, y: (a.y + b.y) / 2 + out.y * labelMm * 1.4 };
@@ -2933,12 +3864,10 @@ function StageMarks({
         })}
       {/* A railing the studio's rule asks for: a heavy dotted line along the side that needs it. */}
       {(railing ?? []).map((r, i) => (
-        <line
+        <polyline
           key={`rail-${i}`}
-          x1={r.a.x}
-          y1={r.a.y}
-          x2={r.b.x}
-          y2={r.b.y}
+          points={r.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
           stroke="var(--color-alert)"
           strokeWidth={4}
           strokeDasharray="2 5"
@@ -2950,11 +3879,60 @@ function StageMarks({
   );
 }
 
+/** Edge items of DIFFERENT stages that run on into each other along one line (lib/design-document/
+ *  edge-runs.ts), drawn once as the one run they read as: one outline, each tread one line across the
+ *  lot, nothing drawn where the stages meet. In room coordinates, over the stages, which leave their
+ *  own share out (StageMarks `skip`). In the accent while one of its items is being edited. */
+function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | null }) {
+  return (
+    <g className="pointer-events-none">
+      {runs.map((r, i) => {
+        const on = !!active && r.members.some((m) => m.itemId === active);
+        const points = r.polygon.map((q) => `${q.x},${q.y}`).join(" ");
+        if (r.kind === "barrier" || r.kind === "backdrop") {
+          return (
+            <polygon
+              key={i}
+              points={points}
+              fill={on ? "var(--color-accent)" : r.kind === "backdrop" ? "var(--color-ink)" : "var(--color-ink-soft)"}
+              fillOpacity={r.kind === "backdrop" && !on ? 0.75 : 1}
+              stroke={on ? "var(--color-accent)" : "var(--color-ink-soft)"}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        }
+        return (
+          <g key={i}>
+            <polygon
+              points={points}
+              fill={r.kind === "bench" ? "var(--color-accent-tint)" : "var(--color-surface)"}
+              stroke={on ? "var(--color-accent)" : "var(--color-border)"}
+              strokeWidth={on ? 2.5 : 1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+            {r.treads.map(([u, v], k) => (
+              <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            ))}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
 /** The stairs, banquettes and barriers of the selected stage, as things to take hold of. A click
  *  selects one (the bar then edits it); a drag on it slides it along its side; the selected one has a
  *  grip at each end for its width and, a banquette, one on its outer side for its depth. Everything
  *  snaps to the side's ends and middle — a flight is nearly always centred or into a corner — and
- *  otherwise to 5cm. Worked out against the item as it was when the drag began. */
+ *  otherwise to 5cm. Worked out against the item as it was when the drag began.
+ *
+ *  A press on the body can never resize: the grips stand a few screen px PAST the item's ends (and
+ *  past a banquette's foot), clear of the body's own hit area, drawn as the canvas's other pucks are
+ *  and painted after every body so no neighbour covers them. A gesture has to travel DRAG_PX first,
+ *  as every drag on this canvas does, so a click on a grip or on the body only selects and opens no
+ *  undo entry. A round stage's closed rim has no corners: an item on it slides round, across the
+ *  seam at edge 0, and its `t` wraps (itemSpan already reads it so). */
 function EdgeItemHandles({
   p,
   ctx,
@@ -2967,80 +3945,128 @@ function EdgeItemHandles({
   ctx: CanvasLayerContext;
   active: string | null;
   onSelect: (itemId: string | null) => void;
-  onChange: (item: StageStair) => void;
+  /** `from` is the stage's items as they stood when the press began — a grip pushed into a neighbour
+   *  trims it against THAT, so pulling back gives the neighbour back (lib/design-document/stage.ts
+   *  shareSide). Absent on a slide, which never trims. */
+  onChange: (item: StageStair, from?: StageStair[]) => void;
   onEnd: () => void;
 }) {
-  const start = useRef<{ item: StageStair; grab: number; from: number; to: number } | null>(null);
+  const start = useRef<{ item: StageStair; grab: number; from: number; to: number; at: Point; moved: boolean; free: { from: number; to: number } | null; items: StageStair[]; last?: number } | null>(null);
+  /** The width or depth under the pointer, on a pill beside the grip, while one is being dragged. */
+  const [readout, setReadout] = useState<{ at: Point; text: string } | null>(null);
   const SNAP = 150;
-  /** A point under the pointer, as mm along an item's edge (and out from it). */
-  const along = (item: StageStair, clientX: number, clientY: number) => {
-    const e = itemEdge(p.stage, item);
-    if (!e) return null;
-    const q = toStageFrame(p, ctx.clientToMm(clientX, clientY));
-    const L = Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y) || 1;
-    const u = { x: (e.b.x - e.a.x) / L, y: (e.b.y - e.a.y) / L };
-    const sg = signedArea(e.outline) >= 0 ? 1 : -1;
-    const out = { x: sg * u.y, y: -sg * u.x };
-    return { s: (q.x - e.a.x) * u.x + (q.y - e.a.y) * u.y, o: (q.x - e.a.x) * out.x + (q.y - e.a.y) * out.y, L };
-  };
+  /** Pointer travel before a press is a drag — the canvas's own DRAG_THRESHOLD_PX. */
+  const DRAG_PX = 4;
+  /** A grip's centre stands GAP_PX past the item and its hit circle reaches HIT_PX: GAP_PX ≥ HIT_PX
+   *  is what keeps a press anywhere on the body off the grip. */
+  const GAP_PX = 10;
+  const HIT_PX = 9;
+  /** A point under the pointer, as mm along an item's side (and out from it) — round a curve too. */
+  const along = (item: StageStair, clientX: number, clientY: number) => itemAlong(p.stage, item, toStageFrame(p, ctx.clientToMm(clientX, clientY)));
   const snapEnd = (v: number, L: number) => (v < SNAP ? 0 : v > L - SNAP ? L : Math.abs(v - L / 2) < SNAP ? L / 2 : Math.round(v / 50) * 50);
-  const write = (item: StageStair, from: number, to: number, L: number) => {
-    const full = from <= 1 && to >= L - 1;
-    onChange({ ...item, t: (from + to) / 2 / L, widthMm: Math.round(to - from), full: full || undefined });
+  /** A position on a closed rim, read on the turn nearest `ref` — a pointer just past the seam is
+   *  L+10 to a grip at L−100, not 10. */
+  const unwrap = (s: number, ref: number, L: number) => s + L * Math.round((ref - s) / L);
+  const write = (item: StageStair, from: number, to: number, L: number, closed: boolean, base?: StageStair[]) => {
+    const mid = (from + to) / 2;
+    const full = closed ? to - from >= L - 1 : from <= 1 && to >= L - 1;
+    onChange({ ...item, t: (closed ? ((mid % L) + L) % L : mid) / L, widthMm: Math.round(to - from), full: full || undefined }, base);
   };
-  const s5 = ctx.mm(5);
-  const release = (e: React.PointerEvent) => {
-    const el = e.currentTarget as Element;
-    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-    if (start.current) onEnd();
+  /** Has this press travelled far enough to be a drag (and stays one once it has). */
+  const armed = (st: NonNullable<typeof start.current>, ev: { clientX: number; clientY: number }) => {
+    if (!st.moved && Math.hypot(ev.clientX - st.at.x, ev.clientY - st.at.y) >= DRAG_PX) st.moved = true;
+    return st.moved;
+  };
+  const unit = (a: Point, b: Point): Point => {
+    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
+  };
+  const past = (q: Point, d: Point, k: number): Point => ({ x: q.x + d.x * k, y: q.y + d.y * k });
+  const cm = (mm: number) => `${Math.round(mm / 10)} ס״מ`;
+  const release = () => {
+    const st = start.current;
     start.current = null;
+    setReadout(null);
+    // One undo entry per press that moved something — a click opened none.
+    if (st?.moved) onEnd();
   };
+  /** A grip taking hold; and what each frame of its drag reads — the gesture, once past the
+   *  threshold, and the pointer along the item's side. Up here, not in the grips' block below: the
+   *  ref is only ever touched from a handler. */
+  const hold = (st: NonNullable<typeof start.current>) => {
+    start.current = st;
+  };
+  const pull = (ev: { clientX: number; clientY: number }) => {
+    const st = start.current;
+    if (!st || !armed(st, ev)) return null;
+    const a = along(st.item, ev.clientX, ev.clientY);
+    return a && { st, a };
+  };
+  const items = p.stage.stairs ?? [];
   return (
     <g>
-      {(p.stage.stairs ?? []).map((item) => {
+      {items.map((item) => {
         const shape = edgeItemShape(p.stage, item, deckOf);
         const span = itemSpan(p.stage, item);
         const e = itemEdge(p.stage, item);
         if (!shape || !span || !e) return null;
         const room = shape.polygon.map((q) => toRoom(p, q));
-        const on = item.id === active;
-        const u = { x: (e.b.x - e.a.x) / span.L, y: (e.b.y - e.a.y) / span.L };
-        const edgePt = (v: number) => toRoom(p, { x: e.a.x + u.x * v, y: e.a.y + u.y * v });
+        const closed = !!stageSide(p.stage, item.level, item.edge)?.closed;
+        const edgePt = (v: number) => toRoom(p, itemSidePoint(p.stage, item, v) ?? e.a);
+        // Its stretch of the edge, as a line to hold it by (following a curved side).
+        const held = Array.from({ length: 17 }, (_, k) => edgePt(span.from + ((span.to - span.from) * k) / 16));
+        const slide = (ev: { clientX: number; clientY: number }) => {
+          const st = start.current;
+          if (!st || !armed(st, ev)) return;
+          const a = along(st.item, ev.clientX, ev.clientY);
+          if (!a) return;
+          const w = st.to - st.from;
+          let from = st.from + a.s - st.grab;
+          // Round a closed rim the pointer crosses the seam: read this frame's position on the lap
+          // nearest the last one, so a slide may go on round as far as it likes.
+          if (closed) {
+            from = unwrap(from, st.last ?? st.from, a.L);
+            st.last = from;
+          }
+          if (!closed) {
+            // Held between the corners, and pulled to them and to the middle. A closed rim has
+            // neither — the item goes round, and `write` wraps it.
+            from = Math.max(0, Math.min(a.L - w, from));
+            if (from < SNAP) from = 0;
+            else if (a.L - (from + w) < SNAP) from = a.L - w;
+            else if (Math.abs(from + w / 2 - a.L / 2) < SNAP) from = a.L / 2 - w / 2;
+          }
+          // …and held between its NEIGHBOURS on the side: a slide stops against the next item and
+          // is pulled flush to it, never through it (freeStretch, read when the press began).
+          if (st.free) {
+            from = Math.max(st.free.from, Math.min(st.free.to - w, from));
+            if (from - st.free.from < SNAP) from = st.free.from;
+            else if (st.free.to - (from + w) < SNAP) from = st.free.to - w;
+          }
+          write(st.item, from, from + w, a.L, closed);
+        };
+        const press = (ev: React.PointerEvent) => {
+          ev.stopPropagation();
+          onSelect(item.id);
+          const a = along(item, ev.clientX, ev.clientY);
+          const free = freeStretch(p.stage, item);
+          if (a) start.current = { item, grab: a.s, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false, free: free && (free.to - free.from < Infinity) ? { from: free.from, to: free.to } : null, items: p.stage.stairs ?? [] };
+          startPointerGesture(ev, { onMove: slide, onEnd: release });
+        };
         return (
           <g key={item.id}>
             {/* The item itself: click to edit, drag to slide along its side. A barrier is too thin to
                 hit, so it is held by a fat invisible line instead of its outline. */}
             {shape.kind === "barrier" || shape.kind === "backdrop" ? (
-              <line
-                x1={edgePt(span.from).x}
-                y1={edgePt(span.from).y}
-                x2={edgePt(span.to).x}
-                y2={edgePt(span.to).y}
+              <polyline
+                points={held.map((q) => `${q.x},${q.y}`).join(" ")}
+                fill="none"
                 stroke="transparent"
                 strokeWidth={16}
                 vectorEffect="non-scaling-stroke"
                 style={{ pointerEvents: "stroke" }}
                 className="cursor-move touch-none"
-                onPointerDown={(ev) => {
-                  ev.stopPropagation();
-                  onSelect(item.id);
-                  const a = along(item, ev.clientX, ev.clientY);
-                  if (a) start.current = { item, grab: a.s, from: span.from, to: span.to };
-                  (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
-                }}
-                onPointerMove={(ev) => {
-                  const st = start.current;
-                  if (ev.buttons !== 1 || !st) return;
-                  const a = along(st.item, ev.clientX, ev.clientY);
-                  if (!a) return;
-                  const w = st.to - st.from;
-                  let from = Math.max(0, Math.min(a.L - w, st.from + a.s - st.grab));
-                  if (from < SNAP) from = 0;
-                  else if (a.L - (from + w) < SNAP) from = a.L - w;
-                  else if (Math.abs(from + w / 2 - a.L / 2) < SNAP) from = a.L / 2 - w / 2;
-                  write(st.item, from, from + w, a.L);
-                }}
-                onPointerUp={release}
+                onPointerDown={press}
                 onClick={(ev) => ev.stopPropagation()}
               />
             ) : (
@@ -3048,96 +4074,125 @@ function EdgeItemHandles({
                 points={room.map((q) => `${q.x},${q.y}`).join(" ")}
                 fill="transparent"
                 className="cursor-move touch-none"
-                onPointerDown={(ev) => {
-                  ev.stopPropagation();
-                  onSelect(item.id);
-                  const a = along(item, ev.clientX, ev.clientY);
-                  if (a) start.current = { item, grab: a.s, from: span.from, to: span.to };
-                  (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
-                }}
-                onPointerMove={(ev) => {
-                  const st = start.current;
-                  if (ev.buttons !== 1 || !st) return;
-                  const a = along(st.item, ev.clientX, ev.clientY);
-                  if (!a) return;
-                  const w = st.to - st.from;
-                  let from = Math.max(0, Math.min(a.L - w, st.from + a.s - st.grab));
-                  if (from < SNAP) from = 0;
-                  else if (a.L - (from + w) < SNAP) from = a.L - w;
-                  else if (Math.abs(from + w / 2 - a.L / 2) < SNAP) from = a.L / 2 - w / 2;
-                  write(st.item, from, from + w, a.L);
-                }}
-                onPointerUp={release}
+                onPointerDown={press}
                 onClick={(ev) => ev.stopPropagation()}
               />
-            )}
-            {on && (
-              <>
-                <EdgeGrip
-                  at={edgePt(span.from)}
-                  r={s5}
-                  label="קצה — גרירה לשינוי הרוחב"
-                  cursor="cursor-ew-resize"
-                  onBegin={() => (start.current = { item, grab: 0, from: span.from, to: span.to })}
-                  onRelease={release}
-                  onDrag={(ev) => {
-                    if (!start.current) return;
-                    const st = start.current!;
-                    const a = along(st.item, ev.clientX, ev.clientY);
-                    if (!a) return;
-                    const from = Math.min(st.to - 300, Math.max(0, snapEnd(a.s, a.L)));
-                    write(st.item, from, st.to, a.L);
-                  }}
-                />
-                <EdgeGrip
-                  at={edgePt(span.to)}
-                  r={s5}
-                  label="קצה — גרירה לשינוי הרוחב"
-                  cursor="cursor-ew-resize"
-                  onBegin={() => (start.current = { item, grab: 0, from: span.from, to: span.to })}
-                  onRelease={release}
-                  onDrag={(ev) => {
-                    if (!start.current) return;
-                    const st = start.current!;
-                    const a = along(st.item, ev.clientX, ev.clientY);
-                    if (!a) return;
-                    const to = Math.max(st.from + 300, Math.min(a.L, snapEnd(a.s, a.L)));
-                    write(st.item, st.from, to, a.L);
-                  }}
-                />
-                {shape.kind === "bench" && (
-                  <EdgeGrip
-                    at={toRoom(p, {
-                      x: (shape.polygon[2].x + shape.polygon[3].x) / 2,
-                      y: (shape.polygon[2].y + shape.polygon[3].y) / 2,
-                    })}
-                    r={s5}
-                    label="עומק הבנקט — גרירה"
-                    cursor="cursor-ns-resize"
-                    onBegin={() => (start.current = { item, grab: 0, from: span.from, to: span.to })}
-                    onRelease={release}
-                    onDrag={(ev) => {
-                      if (!start.current) return;
-                      const st = start.current!;
-                      const a = along(st.item, ev.clientX, ev.clientY);
-                      if (!a) return;
-                      onChange({ ...st.item, depthMm: Math.max(250, Math.min(1500, Math.round(a.o / 50) * 50)) });
-                    }}
-                  />
-                )}
-              </>
             )}
           </g>
         );
       })}
+      {/* The active item's grips — after every body, so no neighbour covers them. A map, not an
+          IIFE: a function called in render may not touch the ref the handlers below write. */}
+      {items
+        .filter((item) => item.id === active)
+        .map((item) => {
+          const shape = edgeItemShape(p.stage, item, deckOf);
+          const span = itemSpan(p.stage, item);
+          const e = itemEdge(p.stage, item);
+          if (!shape || !span || !e) return null;
+          const closed = !!stageSide(p.stage, item.level, item.edge)?.closed;
+          const edgePt = (v: number) => toRoom(p, itemSidePoint(p.stage, item, v) ?? e.a);
+          const gap = ctx.mm(GAP_PX);
+          const hit = ctx.mm(HIT_PX);
+          const r = ctx.mm(6);
+          const fromPt = edgePt(span.from);
+          const toPt = edgePt(span.to);
+          // Out past each end along the side (its tangent there, on a curve) — and past a
+          // banquette's foot, out from the edge the way the item stands.
+          const fromDir = unit(edgePt(span.from + 20), fromPt);
+          const toDir = unit(edgePt(span.to - 20), toPt);
+          const base = toRoom(p, shape.base);
+          const foot = toRoom(p, shape.foot);
+          const outDir = unit(base, foot);
+          // The readout stands across the edge from the body, on the side nothing of it is on.
+          const beside = (q: Point) => past(q, outDir, -ctx.mm(20));
+          // What a grip takes hold of.
+          const grabbed = (ev: React.PointerEvent) => ({ item, grab: 0, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false, free: null, items: p.stage.stairs ?? [] });
+          return (
+            <g key={item.id}>
+              <EdgeGrip
+                at={past(fromPt, fromDir, gap)}
+                r={r}
+                hit={hit}
+                label="קצה — גרירה לשינוי הרוחב"
+                cursor="cursor-ew-resize"
+                onBegin={(ev) => hold(grabbed(ev))}
+                onRelease={release}
+                onDrag={(ev) => {
+                  const got = pull(ev);
+                  if (!got) return;
+                  const { st, a } = got;
+                  const s = closed ? unwrap(a.s, st.from, a.L) : a.s;
+                  const from = Math.min(st.to - MIN_EDGE_ITEM_MM, closed ? Math.max(st.to - a.L, Math.round(s / 50) * 50) : Math.max(0, snapEnd(s, a.L)));
+                  write(st.item, from, st.to, a.L, closed, st.items);
+                  setReadout({ at: beside(edgePt(from)), text: cm(st.to - from) });
+                }}
+              />
+              <EdgeGrip
+                at={past(toPt, toDir, gap)}
+                r={r}
+                hit={hit}
+                label="קצה — גרירה לשינוי הרוחב"
+                cursor="cursor-ew-resize"
+                onBegin={(ev) => hold(grabbed(ev))}
+                onRelease={release}
+                onDrag={(ev) => {
+                  const got = pull(ev);
+                  if (!got) return;
+                  const { st, a } = got;
+                  const s = closed ? unwrap(a.s, st.to, a.L) : a.s;
+                  const to = Math.max(st.from + MIN_EDGE_ITEM_MM, closed ? Math.min(st.from + a.L, Math.round(s / 50) * 50) : Math.min(a.L, snapEnd(s, a.L)));
+                  write(st.item, st.from, to, a.L, closed, st.items);
+                  setReadout({ at: beside(edgePt(to)), text: cm(to - st.from) });
+                }}
+              />
+              {shape.kind === "bench" && (
+                <EdgeGrip
+                  at={past(foot, outDir, gap)}
+                  r={r}
+                  hit={hit}
+                  label="עומק הבנקט — גרירה"
+                  cursor="cursor-ns-resize"
+                  onBegin={(ev) => hold(grabbed(ev))}
+                  onRelease={release}
+                  onDrag={(ev) => {
+                    const got = pull(ev);
+                    if (!got) return;
+                    const { st, a } = got;
+                    // Out from the edge — or, an inner banquette, in from it.
+                    const depth = Math.max(250, Math.min(1500, Math.round((shape.inner ? -a.o : a.o) / 50) * 50));
+                    onChange({ ...st.item, depthMm: depth });
+                    setReadout({ at: past(base, outDir, depth + ctx.mm(20)), text: cm(depth) });
+                  }}
+                />
+              )}
+            </g>
+          );
+        })}
+      {readout &&
+        (() => {
+          // The area tool's pill: the one number the designer is dragging TO.
+          const font = ctx.mm(11);
+          const w = font * (readout.text.length * 0.62 + 1.2);
+          return (
+            <g className="pointer-events-none" transform={`translate(${readout.at.x} ${readout.at.y})`}>
+              <rect x={-w / 2} y={-font * 0.85} width={w} height={font * 1.7} rx={font * 0.85} fill="var(--color-accent)" stroke="var(--color-canvas)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              <text textAnchor="middle" dominantBaseline="central" fill="var(--color-canvas)" style={{ fontSize: font, fontWeight: 600 }} className="nums">
+                {readout.text}
+              </text>
+            </g>
+          );
+        })()}
     </g>
   );
 }
 
-/** One round grip of an edge item: captures the pointer, reports the drag, lets go. */
+/** One round grip of an edge item: a puck in accent with a white ring, under a wider invisible circle
+ *  that takes the pointer — captures it, reports the drag, lets go. */
 function EdgeGrip({
   at,
   r,
+  hit,
   label,
   cursor,
   onBegin,
@@ -3146,34 +4201,33 @@ function EdgeGrip({
 }: {
   at: Point;
   r: number;
+  hit: number;
   label: string;
   cursor: string;
-  onBegin: () => void;
-  onDrag: (e: React.PointerEvent) => void;
-  onRelease: (e: React.PointerEvent) => void;
+  onBegin: (e: React.PointerEvent) => void;
+  onDrag: (e: PointerEvent) => void;
+  onRelease: () => void;
 }) {
   return (
-    <circle
-      cx={at.x}
-      cy={at.y}
-      r={r}
-      fill="var(--color-canvas)"
-      stroke="var(--color-accent)"
-      strokeWidth={2.5}
-      vectorEffect="non-scaling-stroke"
-      className={cursor + " touch-none focus:outline-none"}
-      role="button"
-      tabIndex={0}
-      aria-label={label}
-      onPointerDown={(e) => {
-        e.stopPropagation();
-        onBegin();
-        (e.currentTarget as Element).setPointerCapture(e.pointerId);
-      }}
-      onPointerMove={(e) => e.buttons === 1 && onDrag(e)}
-      onPointerUp={onRelease}
-      onClick={(e) => e.stopPropagation()}
-    />
+    <g>
+      <circle cx={at.x} cy={at.y} r={r} fill="var(--color-accent)" stroke="var(--color-canvas)" strokeWidth={2} vectorEffect="non-scaling-stroke" className="pointer-events-none" />
+      <circle
+        cx={at.x}
+        cy={at.y}
+        r={hit}
+        fill="transparent"
+        className={cursor + " touch-none focus:outline-none"}
+        role="button"
+        tabIndex={0}
+        aria-label={label}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          onBegin(e);
+          startPointerGesture(e, { onMove: onDrag, onEnd: onRelease });
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+    </g>
   );
 }
 
@@ -3217,7 +4271,7 @@ function OutlineHandles({
 }) {
   const start = useRef<{ outline: Point[]; fromRoom: (q: Point) => Point } | null>(null);
   const s = ctx.mm(5);
-  const pull = (e: React.PointerEvent) => (snap && !e.altKey ? (mm: number) => snap(mm, ctx.mm(8)) : (mm: number) => Math.max(10, Math.round(mm / 10) * 10));
+  const pull = (e: { altKey: boolean }) => (snap && !e.altKey ? (mm: number) => snap(mm, ctx.mm(8)) : (mm: number) => Math.max(10, Math.round(mm / 10) * 10));
   const take = (next: Point[]) => {
     const short = next.some((v, k) => {
       const w = next[(k + 1) % next.length];
@@ -3226,17 +4280,20 @@ function OutlineHandles({
     });
     if (!short && !selfIntersects(next)) onChange(next);
   };
-  const grab = (e: React.PointerEvent) => {
+  /** A grip taking hold: the outline as it stands is the frame every move of this gesture is read
+   *  in, and `onMove` is what each move does with the pointer. */
+  const grab = (e: React.PointerEvent, onMove: (ev: PointerEvent, was: NonNullable<typeof start.current>) => void) => {
     e.stopPropagation();
-    start.current = { outline, fromRoom };
+    const was = { outline, fromRoom };
+    start.current = was;
     onBegin?.();
-    (e.currentTarget as Element).setPointerCapture(e.pointerId);
-  };
-  const release = (e: React.PointerEvent) => {
-    const el = e.currentTarget as Element;
-    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-    start.current = null;
-    onEnd?.();
+    startPointerGesture(e, {
+      onMove: (ev) => onMove(ev, was),
+      onEnd: () => {
+        start.current = null;
+        onEnd?.();
+      },
+    });
   };
   return (
     <g>
@@ -3265,21 +4322,19 @@ function OutlineHandles({
             role="button"
             tabIndex={0}
             aria-label={onSplit ? "צד הבמה — גרירה פנימה או החוצה, לחיצה כפולה מפצלת אותו" : "צד הבמה — גרירה להזזת הצד פנימה או החוצה"}
-            onPointerDown={grab}
-            onPointerMove={(e) => {
-              const was = start.current;
-              if (e.buttons !== 1 || !was) return;
-              const base = was.outline;
-              const ea = base[i];
-              const eb = base[(i + 1) % base.length];
-              const len = Math.hypot(eb.x - ea.x, eb.y - ea.y) || 1;
-              const sgn = signedArea(base) >= 0 ? 1 : -1;
-              const n = { x: (sgn * (eb.y - ea.y)) / len, y: (-sgn * (eb.x - ea.x)) / len };
-              const q = was.fromRoom(ctx.clientToMm(e.clientX, e.clientY));
-              const d = (q.x - (ea.x + eb.x) / 2) * n.x + (q.y - (ea.y + eb.y) / 2) * n.y;
-              take(pushSide(base, i, Math.round(d / 10) * 10, pull(e)));
-            }}
-            onPointerUp={release}
+            onPointerDown={(e) =>
+              grab(e, (ev, was) => {
+                const base = was.outline;
+                const ea = base[i];
+                const eb = base[(i + 1) % base.length];
+                const len = Math.hypot(eb.x - ea.x, eb.y - ea.y) || 1;
+                const sgn = signedArea(base) >= 0 ? 1 : -1;
+                const n = { x: (sgn * (eb.y - ea.y)) / len, y: (-sgn * (eb.x - ea.x)) / len };
+                const q = was.fromRoom(ctx.clientToMm(ev.clientX, ev.clientY));
+                const d = (q.x - (ea.x + eb.x) / 2) * n.x + (q.y - (ea.y + eb.y) / 2) * n.y;
+                take(pushSide(base, i, Math.round(d / 10) * 10, pull(ev)));
+              })
+            }
             onDoubleClick={(e) => {
               e.stopPropagation();
               onSplit?.(i);
@@ -3304,14 +4359,12 @@ function OutlineHandles({
             role="button"
             tabIndex={0}
             aria-label={onRemove ? "פינת הבמה — גרירה מזיזה אותה (Shift שומר על זוויות ישרות), לחיצה כפולה מוחקת אותה" : "פינת הבמה — גרירה מזיזה אותה (Shift שומר על זוויות ישרות)"}
-            onPointerDown={grab}
-            onPointerMove={(e) => {
-              const was = start.current;
-              if (e.buttons !== 1 || !was) return;
-              const q = was.fromRoom(ctx.clientToMm(e.clientX, e.clientY));
-              take(moveVertex(was.outline, i, q, refDeg, pull(e), e.shiftKey));
-            }}
-            onPointerUp={release}
+            onPointerDown={(e) =>
+              grab(e, (ev, was) => {
+                const q = was.fromRoom(ctx.clientToMm(ev.clientX, ev.clientY));
+                take(moveVertex(was.outline, i, q, refDeg, pull(ev), ev.shiftKey));
+              })
+            }
             onDoubleClick={(e) => {
               e.stopPropagation();
               onRemove?.(i);
@@ -3386,32 +4439,30 @@ function ResizeHandles({
             aria-label={`${sx !== 0 && sy === 0 ? "רוחב" : sx === 0 ? "עומק" : "פינה"} — גרירה לשינוי הגודל`}
             onPointerDown={(e) => {
               e.stopPropagation();
-              (e.currentTarget as Element).setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              if (e.buttons !== 1) return;
-              const local = toLocalFrame(ctx.clientToMm(e.clientX, e.clientY), centre, rotation);
-              // The edge (or corner) opposite the grip, held still.
-              const fixed = { x: -sx * halfW, y: -sy * halfD };
-              const raw = {
-                widthMm: sx !== 0 ? Math.abs(local.x - fixed.x) : size.widthMm,
-                depthMm: sy !== 0 ? Math.abs(local.y - fixed.y) : size.depthMm,
-              };
-              const next = clamp(raw, e.altKey ? 0 : ctx.mm(8));
-              if (next.widthMm === size.widthMm && next.depthMm === size.depthMm) return;
-              // A round shape grows about the axis it was not pulled on — its depth follows its width,
-              // and there is no edge on that side to hold still.
-              const centreLocal = {
-                x: sx !== 0 ? fixed.x + (sx * next.widthMm) / 2 : 0,
-                y: sy !== 0 ? fixed.y + (sy * next.depthMm) / 2 : 0,
-              };
-              const c = fromLocalFrame(centreLocal, centre, rotation);
-              onResize(next, { x: Math.round(c.x), y: Math.round(c.y) });
-            }}
-            onPointerUp={(e) => {
-              const el = e.currentTarget as Element;
-              if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-              onEnd();
+              // The item's frame as the gesture began: the opposite edge is held where it WAS, so a
+              // centre moving under the pointer frame by frame cannot walk the fixed edge along.
+              const from = { centre, rotation, size, halfW, halfD };
+              startPointerGesture(e, {
+                onMove: (ev) => {
+                  const local = toLocalFrame(ctx.clientToMm(ev.clientX, ev.clientY), from.centre, from.rotation);
+                  // The edge (or corner) opposite the grip, held still.
+                  const fixed = { x: -sx * from.halfW, y: -sy * from.halfD };
+                  const raw = {
+                    widthMm: sx !== 0 ? Math.abs(local.x - fixed.x) : from.size.widthMm,
+                    depthMm: sy !== 0 ? Math.abs(local.y - fixed.y) : from.size.depthMm,
+                  };
+                  const next = clamp(raw, ev.altKey ? 0 : ctx.mm(8));
+                  // A round shape grows about the axis it was not pulled on — its depth follows its
+                  // width, and there is no edge on that side to hold still.
+                  const centreLocal = {
+                    x: sx !== 0 ? fixed.x + (sx * next.widthMm) / 2 : 0,
+                    y: sy !== 0 ? fixed.y + (sy * next.depthMm) / 2 : 0,
+                  };
+                  const c = fromLocalFrame(centreLocal, from.centre, from.rotation);
+                  onResize(next, { x: Math.round(c.x), y: Math.round(c.y) });
+                },
+                onEnd: () => onEnd(),
+              });
             }}
             onClick={(e) => e.stopPropagation()}
           />
@@ -3444,6 +4495,7 @@ function ArmedPane({
   clear,
   onPlace,
   onDisarm,
+  dressingTableId,
 }: {
   product: Product;
   ctx: CanvasLayerContext;
@@ -3455,6 +4507,8 @@ function ArmedPane({
   clear: (p: Point, item: CarriedItem) => Point;
   onPlace: (at: Point, keep: boolean) => void;
   onDisarm?: () => void;
+  /** The table being dressed, if any — it takes items where they are put. */
+  dressingTableId?: string | null;
 }) {
   const item = carriedOf(product);
   const onWall = CATEGORY_BY_ID[product.category]?.anchor === "wall";
@@ -3531,7 +4585,9 @@ function ArmedPane({
               vectorEffect="non-scaling-stroke"
             />
           </g>
-          {ghost(table.position)}
+          {/* A table dressed by hand takes the item where it is let go (the studio's dropProduct); one
+              laid out automatically finds it a place, so the ghost waits at its centre. */}
+          {ghost(table.arranged || table.id === dressingTableId ? at : table.position)}
         </>
       )}
       {at && onTable && !table && ghost(at, true)}

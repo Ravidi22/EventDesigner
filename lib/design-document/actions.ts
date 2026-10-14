@@ -1,14 +1,21 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild } from "./types";
+import type { BenchSpec, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
+import { freeNumbers, numberedUnits } from "./groups";
+
+/** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
+const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
 
 export type Action =
   | { type: "addTable"; table: DesignTable }
   | { type: "moveTable"; id: string; position: DesignTable["position"] }
   | { type: "removeTable"; id: string }
   | { type: "renumberTable"; id: string; number: number }
+  // Take these tables out of the numbering (DesignTable.unnumbered), or put them back — a block by
+  // all its tables at once. Back in, each takes a number nobody else shows (freeNumbers).
+  | { type: "setTablesNumbered"; tableIds: string[]; numbered: boolean }
   | { type: "styleTable"; id: string; style: ElementStyle | undefined }
   // How many chairs go round this one table. Seeded from the catalog row when it was dropped, and
   // editable after: a head table seats what the family is, not what the product says.
@@ -19,6 +26,9 @@ export type Action =
   | { type: "setTableSeated"; id: string; seated: number }
   /** null = back to the catalog row's sides (see DesignTable.blockedSides). */
   | { type: "setTableBlockedSides"; id: string; sides: number[] | null }
+  // Which chair goes round these tables — one action for a whole selection, one undo. null = back
+  // to the studio's default chair (DesignTable.chairVariantId).
+  | { type: "setTableChair"; ids: string[]; variantId: string | null }
   | { type: "addPlacement"; placement: Placement }
   | { type: "movePlacement"; id: string; position: Placement["position"] }
   // A whole selection dragged at once. ONE action rather than N, because N of them is N history
@@ -53,6 +63,17 @@ export type Action =
   // into its outline — replaced by the new row's. `position` when a block is re-closed around it.
   | { type: "retypeTable"; id: string; table: RetypedTable; position?: Point }
   | { type: "setPlacementQuantity"; id: string; quantity: number }
+  // How big THIS one is drawn — a fuller arrangement on the head table, a smaller one on a cocktail
+  // round. A drawing size, not a different product: the quote, the packing list and the order count
+  // it as the row it is. Held to 30%–300%; 1 = the catalog's size.
+  | { type: "setPlacementScale"; id: string; scale: number }
+  // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
+  // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
+  | { type: "setPlacementHang"; id: string; heightMm: number | null }
+  // A free-standing flight or ramp's rise, steps or direction (Placement.climb), together with the
+  // run that follows from them and where it now stands — its head kept in place
+  // (lib/studio/climb-item.ts builds all three). One entry, because it was one number typed.
+  | { type: "setPlacementClimb"; id: string; climb: PlacementClimb; sizeMm?: { widthMm: number; depthMm: number }; position?: Point }
   // Switching a placed item to another shade of the same product (F-4.2). Not a remove+add: the
   // item keeps its id, its place on the plan and the size it was stretched to — only its colour
   // changes, which is exactly what the designer is doing when the client says "in cream instead".
@@ -74,6 +95,9 @@ export type Action =
   | { type: "setPlacementStage"; id: string; stage: StageBuild; position?: Point; rotation?: number; mirrored?: boolean; scale?: number }
   // A design item put on (or taken off) a stage's banquette.
   | { type: "setPlacementPerch"; id: string; perch: { stageId: string; itemId: string } | null }
+  // A STANDALONE banquette's sides, heights, number and occupancy (Placement.bench) — the whole spec,
+  // replaced; null puts it back to the defaults. The caller merges, so one history entry is one edit.
+  | { type: "setPlacementBench"; id: string; bench: BenchSpec | null }
   // F-3.3 smart-apply, generalised: put this item on exactly these tables. The caller decides which
   // tables those are — every table of a type, every table on the plan, the ones the designer has
   // selected, the ones inside a zone. Two narrower actions (applyToTableType / applyToAllTables)
@@ -90,6 +114,16 @@ export type Action =
   // exceptions: an explicit "make these match that one" outranks a divergence recorded weeks ago,
   // and silently honouring the old one would read as the button being broken.
   | { type: "copyDressing"; fromTableId: string; toTableIds: string[]; mode: "add" | "replace"; replaces?: string[] }
+  // Where the items on one table stand, in its own frame (lib/design-document/dressing.ts) — a drag in
+  // the table's focus mode, or an arrange action. Writing any of them marks the table ARRANGED: from
+  // then on it is drawn as placed rather than laid out automatically. The caller sends every item on
+  // the table, so freezing the automatic layout and moving one item are the same single action.
+  | { type: "arrangeDressing"; tableId: string; positions: { id: string; position: Point }[] }
+  // A saved table design (TableDesign) put on these tables — "add" or "replace", exactly as
+  // copyDressing, with the design's own items standing in for a source table's.
+  | { type: "dressTables"; tableIds: string[]; design: Pick<TableDesign, "items" | "arranged">; mode: "add" | "replace"; replaces?: string[] }
+  // Back to the automatic layout: the table forgets it was arranged, and its items' offsets go.
+  | { type: "resetDressing"; tableId: string }
   // Several things become one: selecting any of them selects all, dragging any drags all, and a set
   // of tables carries a single number as though it were the one larger table it now is.
   | { type: "group"; groupId: string; refs: { kind: "table" | "placement"; id: string }[]; number?: number }
@@ -240,6 +274,19 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         ...doc,
         tables: doc.tables.map((t) => (t.id === action.id ? { ...t, seated: Math.max(0, Math.round(action.seated)) } : t)),
       };
+    case "setTableChair": {
+      const ids = new Set(action.ids);
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (!ids.has(t.id)) return t;
+          if (action.variantId) return { ...t, chairVariantId: action.variantId };
+          const { chairVariantId: _, ...rest } = t;
+          void _;
+          return rest;
+        }),
+      };
+    }
     case "setTableBlockedSides":
       return {
         ...doc,
@@ -252,11 +299,47 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           return { ...t, blockedSides: [...new Set(action.sides)].filter((i) => Number.isInteger(i) && i >= 0).sort((a, b) => a - b) };
         }),
       };
-    case "renumberTable":
+    case "renumberTable": {
+      // A whole, non-negative number. The inspector's field formats to no decimals but PARSES them,
+      // so "2.5" typed into it was stored as table 2.5 and printed that way on the placement map.
+      const number = tableNo(action.number);
+      if (number === null) return doc;
       return {
         ...doc,
-        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number: action.number } : t)),
+        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number } : t)),
       };
+    }
+    case "setTablesNumbered": {
+      const ids = new Set(action.tableIds);
+      if (!doc.tables.some((t) => ids.has(t.id) && !!t.unnumbered === action.numbered)) return doc;
+      const flagged: DesignDocumentContent = {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (!ids.has(t.id)) return t;
+          if (!action.numbered) return { ...t, unnumbered: true };
+          const { unnumbered: _out, ...rest } = t;
+          return rest;
+        }),
+      };
+      if (!action.numbered) return flagged;
+      // Back into the numbering: a returning table keeps its number unless another table has taken
+      // it meanwhile — two table 4s is the one outcome this must never produce.
+      const lone = flagged.tables.filter((t) => ids.has(t.id) && !t.groupId).map((t) => t.id);
+      const renum = freeNumbers(flagged, lone);
+      let next: DesignDocumentContent = renum.size
+        ? { ...flagged, tables: flagged.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) }
+        : flagged;
+      // …and a returning BLOCK is numbered as the block it is.
+      for (const gid of new Set(flagged.tables.filter((t) => ids.has(t.id) && t.groupId).map((t) => t.groupId!))) {
+        const units = numberedUnits(next).filter((u) => !u.unnumbered);
+        const mine = units.find((u) => u.id === gid);
+        const taken = units.filter((u) => u.id !== gid).map((u) => u.number);
+        if (!mine || mine.number === 0 || !taken.includes(mine.number)) continue;
+        const number = taken.reduce((m, n) => Math.max(m, n), 0) + 1;
+        next = { ...next, groups: (next.groups ?? []).map((g) => (g.id === gid ? { ...g, number } : g)) };
+      }
+      return next;
+    }
     case "styleTable":
       return {
         ...doc,
@@ -290,6 +373,41 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         placements: doc.placements.map((p) =>
           p.id === action.id ? { ...p, quantity: action.quantity } : p,
         ),
+      };
+    case "setPlacementScale": {
+      const scale = Math.round(Math.min(3, Math.max(0.3, action.scale)) * 100) / 100;
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => (p.id === action.id ? { ...p, scale } : p)),
+      };
+    }
+    case "setPlacementHang": {
+      // Whole centimetres, inside a room; 0 or null clears it back to the row's default.
+      const h = action.heightMm === null ? 0 : Math.round(Math.min(30000, Math.max(0, action.heightMm)) / 10) * 10;
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { hangHeightMm: _old, ...rest } = p;
+          void _old;
+          return h > 0 ? { ...rest, hangHeightMm: h } : rest;
+        }),
+      };
+    }
+    case "setPlacementClimb":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { climb: _old, ...rest } = p;
+          void _old;
+          return {
+            ...rest,
+            ...(Object.keys(action.climb).length ? { climb: action.climb } : {}),
+            ...(action.sizeMm ? { sizeMm: action.sizeMm } : {}),
+            ...(action.position ? { position: action.position } : {}),
+          };
+        }),
       };
     case "setPlacementVariant":
       return {
@@ -357,6 +475,16 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         exceptions,
       });
     }
+    case "setPlacementBench":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          if (action.bench) return { ...p, bench: action.bench };
+          const { bench: _plain, ...rest } = p;
+          return rest;
+        }),
+      };
     case "setPlacementPerch":
       return {
         ...doc,
@@ -375,61 +503,40 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
     case "copyDressing": {
       const source = doc.placements.filter((p) => p.layer === "table" && p.tableId === action.fromTableId);
       const targets = action.toTableIds.filter((id) => id !== action.fromTableId && doc.tables.some((t) => t.id === id));
-      if (source.length === 0 || targets.length === 0) return doc;
-      const targetSet = new Set(targets);
+      const fromArranged = doc.tables.find((t) => t.id === action.fromTableId)?.arranged;
+      return wearDressing(doc, source, fromArranged, targets, action.mode, action.replaces);
+    }
 
-      // In replace mode the targets are stripped first, so what they end up with is exactly the
-      // source's set rather than the union of the two.
-      const kept =
-        action.mode === "replace"
-          ? doc.placements.filter((p) => !(p.layer === "table" && p.tableId && targetSet.has(p.tableId)))
-          : doc.placements;
+    case "dressTables": {
+      // A saved design worn by tables: the same rules as copying one table onto others, with no
+      // table on the plan to copy from.
+      const targets = action.tableIds.filter((id) => doc.tables.some((t) => t.id === id));
+      const source = action.design.items.map((it) => ({ ...it, layer: "table" as const }));
+      return wearDressing(doc, source, action.design.arranged, targets, action.mode, action.replaces);
+    }
 
-      // A TABLE WEARS ONE CLOTH. `replaces` names the shades of the source's own cover, so a
-      // target already wearing gold is RECOLOURED to cream rather than handed a second cloth — the
-      // same rule spreadOverTables applies, and it matters for the same reason. Only one cover is
-      // ever drawn (coverByTable is keyed on tableId, so the second is invisible), but the packing
-      // list and the quote sum EVERY placement: a second cloth tells the crew to bring one that
-      // does not exist and charges the client for it.
-      const swap = new Set(action.replaces ?? []);
-      const cover = source.find((x) => swap.has(x.variantId));
-      const covered = new Set<string>(); // targets whose own cover answered for the source's
-      let recoloured = 0;
-      const based = !cover
-        ? kept
-        : kept.map((p) => {
-            if (p.layer !== "table" || !p.tableId || !targetSet.has(p.tableId) || !swap.has(p.variantId)) return p;
-            covered.add(p.tableId);
-            if (p.variantId === cover.variantId) return p;
-            recoloured++;
-            return { ...p, variantId: cover.variantId };
-          });
+    case "arrangeDressing": {
+      const table = doc.tables.find((t) => t.id === action.tableId);
+      if (!table) return doc;
+      const at = new Map(action.positions.map((m) => [m.id, m.position]));
+      return {
+        ...doc,
+        tables: table.arranged ? doc.tables : doc.tables.map((t) => (t.id === action.tableId ? { ...t, arranged: true } : t)),
+        placements: doc.placements.map((p) =>
+          p.tableId === action.tableId && at.has(p.id) ? { ...p, position: { x: Math.round(at.get(p.id)!.x), y: Math.round(at.get(p.id)!.y) } } : p,
+        ),
+      };
+    }
 
-      const added: Placement[] = [];
-      for (const tableId of targets) {
-        for (const s of source) {
-          // Its cover is already on that table, in the source's shade — recoloured just above.
-          if (s === cover && covered.has(tableId)) continue;
-          const has = based.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
-          const excepted =
-            action.mode === "add" &&
-            doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
-          if (has || excepted) continue;
-          // groupId goes too. A group means "select one and you have selected all of them, drag one
-          // and they all move" — copying the source's membership onto twenty-three copies would
-          // make every one of them move when the original is nudged, which is not what "make these
-          // match that one" asks for.
-          const { id: _old, tableId: _t, groupId: _g, ...rest } = s;
-          added.push({ ...rest, id: crypto.randomUUID(), tableId });
-        }
-      }
-      if (added.length === 0 && recoloured === 0 && kept === doc.placements) return doc;
-
-      const exceptions =
-        action.mode === "replace"
-          ? doc.exceptions?.filter((e) => !targetSet.has(e.tableId))
-          : doc.exceptions;
-      return { ...doc, placements: [...based, ...added], exceptions };
+    case "resetDressing": {
+      const table = doc.tables.find((t) => t.id === action.tableId);
+      if (!table?.arranged) return doc;
+      const { arranged: _auto, ...rest } = table;
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => (t.id === action.tableId ? rest : t)),
+        placements: doc.placements.map((p) => (p.tableId === action.tableId ? { ...p, position: { x: 0, y: 0 } } : p)),
+      };
     }
 
     case "group": {
@@ -451,19 +558,26 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
     case "ungroup": {
       if (!doc.groups?.some((g) => g.id === action.groupId)) return doc;
       const clear = <T extends { groupId?: string }>(x: T): T => (x.groupId === action.groupId ? { ...x, groupId: undefined } : x);
-      return {
+      const released: DesignDocumentContent = {
         ...doc,
         tables: doc.tables.map(clear),
         placements: doc.placements.map(clear),
         groups: doc.groups.filter((g) => g.id !== action.groupId),
       };
+      // Each table comes back with the number it had underneath — unless the room was renumbered
+      // round the block meanwhile and another table now shows it. Without this, a block of 1 and 2
+      // renumbered to 1 beside a table renumbered to 2 came apart as two table 2s.
+      const renum = freeNumbers(released, doc.tables.filter((t) => t.groupId === action.groupId).map((t) => t.id));
+      return renum.size ? { ...released, tables: released.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) } : released;
     }
 
     case "renumberGroup": {
       if (!doc.groups?.some((g) => g.id === action.groupId)) return doc;
+      const number = tableNo(action.number);
+      if (number === null) return doc;
       return {
         ...doc,
-        groups: doc.groups.map((g) => (g.id === action.groupId ? { ...g, number: action.number } : g)),
+        groups: doc.groups.map((g) => (g.id === action.groupId ? { ...g, number } : g)),
       };
     }
 
@@ -560,6 +674,86 @@ function pruneGroups(doc: DesignDocumentContent): DesignDocumentContent {
     placements: doc.placements.map(clear),
     groups: doc.groups.filter((g) => keep.has(g.id)),
   };
+}
+
+/** The body of copyDressing and dressTables: these tables put on this dressing. `source` is the
+ *  items as they stand on the table they come from (or in the saved design); `fromArranged` is
+ *  whether that table was arranged by hand, which a replace carries onto every target. */
+function wearDressing(
+  doc: DesignDocumentContent,
+  source: Omit<Placement, "id" | "tableId">[],
+  fromArranged: boolean | undefined,
+  targets: string[],
+  mode: "add" | "replace",
+  replaces?: string[],
+): DesignDocumentContent {
+  if (source.length === 0 || targets.length === 0) return doc;
+  const targetSet = new Set(targets);
+
+  // In replace mode the targets are stripped first, so what they end up with is exactly the
+  // source's set rather than the union of the two.
+  const kept =
+    mode === "replace"
+      ? doc.placements.filter((p) => !(p.layer === "table" && p.tableId && targetSet.has(p.tableId)))
+      : doc.placements;
+
+  // A TABLE WEARS ONE CLOTH. `replaces` names the shades of the source's own cover, so a
+  // target already wearing gold is RECOLOURED to cream rather than handed a second cloth — the
+  // same rule spreadOverTables applies, and it matters for the same reason. Only one cover is
+  // ever drawn (coverByTable is keyed on tableId, so the second is invisible), but the packing
+  // list and the quote sum EVERY placement: a second cloth tells the crew to bring one that
+  // does not exist and charges the client for it.
+  const swap = new Set(replaces ?? []);
+  const cover = source.find((x) => swap.has(x.variantId));
+  const covered = new Set<string>(); // targets whose own cover answered for the source's
+  let recoloured = 0;
+  const based = !cover
+    ? kept
+    : kept.map((p) => {
+        if (p.layer !== "table" || !p.tableId || !targetSet.has(p.tableId) || !swap.has(p.variantId)) return p;
+        covered.add(p.tableId);
+        if (p.variantId === cover.variantId) return p;
+        recoloured++;
+        return { ...p, variantId: cover.variantId };
+      });
+
+  const added: Placement[] = [];
+  for (const tableId of targets) {
+    for (const s of source) {
+      // Its cover is already on that table, in the source's shade — recoloured just above.
+      if (s === cover && covered.has(tableId)) continue;
+      const has = based.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
+      const excepted =
+        mode === "add" &&
+        doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
+      if (has || excepted) continue;
+      // groupId goes too. A group means "select one and you have selected all of them, drag one
+      // and they all move" — copying the source's membership onto twenty-three copies would
+      // make every one of them move when the original is nudged, which is not what "make these
+      // match that one" asks for.
+      const { id: _old, tableId: _t, groupId: _g, ...rest } = s as Placement;
+      added.push({ ...rest, id: crypto.randomUUID(), tableId });
+    }
+  }
+  if (added.length === 0 && recoloured === 0 && kept === doc.placements) return doc;
+
+  const exceptions =
+    mode === "replace"
+      ? doc.exceptions?.filter((e) => !targetSet.has(e.tableId))
+      : doc.exceptions;
+  // "Make these match that one" means the arrangement too: a target in replace mode is laid out
+  // the way the source is — by hand where the source was arranged (the copies carry its
+  // offsets), automatically where it was not.
+  const tables =
+    mode !== "replace"
+      ? doc.tables
+      : doc.tables.map((t) => {
+          if (!targetSet.has(t.id) || !!t.arranged === !!fromArranged) return t;
+          if (fromArranged) return { ...t, arranged: true };
+          const { arranged: _auto, ...rest } = t;
+          return rest;
+        });
+  return { ...doc, tables, placements: [...based, ...added], exceptions };
 }
 
 /** The group a thing belongs to, or undefined. The one lookup every renderer needs. */
@@ -860,6 +1054,50 @@ if (isMain(import.meta.url)) {
     assert((forced.present.exceptions ?? []).length === 0, "…and clears it, so it cannot come back");
   }
 
+  // ── where things stand on a table ─────────────────────────────────────────────────────────────
+  {
+    const t = (id: string): DesignTable => ({ id, type: "מלבן", number: 1, position: { x: 0, y: 0 }, rotation: 0, widthMm: 2400, depthMm: 1000 });
+    const item = (id: string, tableId: string, variantId: string): Placement => ({ id, variantId, layer: "table", tableId, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 });
+    const base: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [t("t1"), t("t2")],
+      placements: [item("a", "t1", "candle"), item("b", "t1", "flowers")],
+    };
+    const arranged = apply(base, { type: "arrangeDressing", tableId: "t1", positions: [{ id: "a", position: { x: -700, y: 0 } }, { id: "b", position: { x: 0.4, y: 0 } }] });
+    assert(arranged.tables[0].arranged === true, "arranging a table marks it arranged");
+    assert(arranged.placements[0].position.x === -700 && arranged.placements[1].position.x === 0, "…and stores where each item stands, to the millimetre");
+    assert(apply(base, { type: "arrangeDressing", tableId: "gone", positions: [] }) === base, "arranging a missing table is not an edit");
+    assert(apply(base, { type: "arrangeDressing", tableId: "t2", positions: [{ id: "a", position: { x: 9, y: 9 } }] }).placements[0].position.x === 0, "an item on another table is not moved");
+
+    const design = { arranged: true, items: [{ variantId: "candle", quantity: 2, position: { x: 600, y: 0 }, rotation: 0, scale: 1 }] };
+    const worn = apply(base, { type: "dressTables", tableIds: ["t1", "t2", "gone"], design, mode: "replace" });
+    assert(worn.placements.filter((p) => p.variantId === "candle").length === 2 && !worn.placements.some((p) => p.variantId === "flowers"), "a saved design replaces what each table wore");
+    assert(worn.tables.every((t) => t.arranged) && worn.placements.every((p) => p.position.x === 600 && p.quantity === 2), "…standing where it was saved, as many as it was");
+    const added = apply(base, { type: "dressTables", tableIds: ["t1"], design, mode: "add" });
+    assert(added === base, "add gives a table only what it lacks — t1 already has its candle");
+
+    const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
+    assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
+    const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });
+    assert(hung.placements[0].hangHeightMm === 3200, "a hang height is kept in whole centimetres");
+    assert(!("hangHeightMm" in apply(hung, { type: "setPlacementHang", id: "a", heightMm: null }).placements[0]), "null hands it back to the catalog's height");
+    const climbed = apply(base, { type: "setPlacementClimb", id: "a", climb: { heightMm: 290 }, sizeMm: { widthMm: 1200, depthMm: 3480 }, position: { x: 5, y: 1860 } });
+    assert(climbed.placements[0].climb?.heightMm === 290 && climbed.placements[0].sizeMm?.depthMm === 3480 && climbed.placements[0].position.y === 1860, "a climb's rise, run and place land as one edit");
+    assert(!("climb" in apply(climbed, { type: "setPlacementClimb", id: "a", climb: {} }).placements[0]), "an empty climb leaves no field behind");
+
+    const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
+    assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");
+    assert(apply(base, { type: "resetDressing", tableId: "t1" }) === base, "resetting an unarranged table is not an edit");
+
+    const copied = apply(arranged, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(copied.tables[1].arranged === true, "replace carries the arrangement");
+    assert(copied.placements.find((p) => p.tableId === "t2" && p.variantId === "candle")?.position.x === -700, "…and each item's place on it");
+    const auto = apply(copied, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(auto.tables[1].arranged === true, "re-copying an arranged table keeps the target arranged");
+    const fromAuto = apply({ ...copied, tables: [t("t1"), copied.tables[1]] }, { type: "copyDressing", fromTableId: "t1", toTableIds: ["t2"], mode: "replace" });
+    assert(!("arranged" in fromAuto.tables[1]), "copying from an automatic table makes the target automatic too");
+  }
+
   // ── grouping ──────────────────────────────────────────────────────────────────────────────────
   {
     const tbl = (id: string, number: number): DesignTable => ({ id, type: "עגול 180", number, position: { x: 0, y: 0 }, rotation: 0, diameterMm: 1800, seats: 12 });
@@ -897,6 +1135,46 @@ if (isMain(import.meta.url)) {
     assert(ungrouped.tables.every((t) => t.groupId === undefined), "…and releases every member");
     assert(ungrouped.tables.map((t) => t.number).join(",") === "3,7,9", "…leaving the numbers they always had");
 
+    // BUG (was): a block of 1 and 2, renumbered to 1 with a table beside it renumbered to 2, came
+    // apart as two table 2s — the member's hidden 2 was handed back as though nothing had changed.
+    {
+      const pair = apply(
+        { calibration: { mmPerUnit: 1 }, tables: [tbl("p", 1), tbl("q", 2), tbl("r", 3)], placements: [] },
+        { type: "group", groupId: "b", refs: [{ kind: "table", id: "p" }, { kind: "table", id: "q" }], number: 1 },
+      );
+      const room = apply(pair, { type: "renumberTable", id: "r", number: 2 });
+      const apart = apply(room, { type: "ungroup", groupId: "b" });
+      const nums = apart.tables.map((t) => t.number);
+      assert(new Set(nums).size === 3, `an ungrouped block never duplicates a number the room now shows (${nums.join(",")})`);
+      assert(apart.tables.find((t) => t.id === "p")?.number === 1, "…a member whose own number is still free keeps it");
+      assert(apart.tables.find((t) => t.id === "q")?.number === 3, "…and one whose number was taken goes to the end");
+    }
+
+    // BUG (was): the number field parses decimals and minus signs; the reducer stored them.
+    assert(apply(before, { type: "renumberTable", id: "a", number: 2.6 }).tables[0].number === 3, "a table number is whole");
+    assert(apply(before, { type: "renumberTable", id: "a", number: -4 }).tables[0].number === 0, "…and never negative");
+    assert(apply(before, { type: "renumberTable", id: "a", number: NaN }) === before, "…and nothing usable is no edit");
+    assert(apply(g.present, { type: "renumberGroup", groupId: "g1", number: 4.4 }).groups?.[0].number === 4, "a block's number is whole too");
+
+    // Out of the numbering, and back.
+    {
+      const off = apply(before, { type: "setTablesNumbered", tableIds: ["b"], numbered: false });
+      assert(off.tables.find((t) => t.id === "b")?.unnumbered === true, "a table can be taken out of the numbering");
+      assert(off.tables.find((t) => t.id === "b")?.number === 7, "…keeping its number underneath");
+      assert(apply(off, { type: "setTablesNumbered", tableIds: ["b"], numbered: false }) === off, "…and doing it again is no edit");
+      const taken = apply(off, { type: "renumberTable", id: "c", number: 7 });
+      const back = apply(taken, { type: "setTablesNumbered", tableIds: ["b"], numbered: true });
+      const b = back.tables.find((t) => t.id === "b")!;
+      assert(!("unnumbered" in b), "back in, the flag goes rather than reading false");
+      assert(b.number === 8, "…and a number another table took meanwhile is not handed back: it goes to the end");
+      const free = apply(off, { type: "setTablesNumbered", tableIds: ["b"], numbered: true });
+      assert(free.tables.find((t) => t.id === "b")?.number === 7, "…while one still free is kept");
+      const block = apply(g.present, { type: "setTablesNumbered", tableIds: ["a", "b"], numbered: false });
+      const blockTaken = apply(block, { type: "renumberTable", id: "c", number: 12 });
+      const blockBack = apply(blockTaken, { type: "setTablesNumbered", tableIds: ["a", "b"], numbered: true });
+      assert(blockBack.groups?.[0].number === 13, "a block coming back into the numbering takes a number nobody shows");
+    }
+
     // Tables and placements group together — a stage deck and the tables beside it are one thing if
     // the designer says so.
     const mixed = apply(before, { type: "group", groupId: "g3", refs: [{ kind: "table", id: "a" }, { kind: "placement", id: "deck" }] });
@@ -904,7 +1182,24 @@ if (isMain(import.meta.url)) {
     assert(groupOf(mixed, "g3")?.number === undefined, "a group nobody numbered carries no number");
     assert(groupOf(mixed, undefined) === undefined, "an ungrouped thing has no group");
 
+    // Ctrl+G over a group of stages (studio-screen groupStages): the ones that touched were merged
+    // — the folded-in member removed — and what was left re-grouped under a new id, in one entry.
+    // The old group goes with its member; the survivors belong to the new one and to nothing else.
+    const deckAt = (id: string, x: number): Placement => ({ id, variantId: "stage", layer: "floor", quantity: 1, position: { x, y: 0 }, rotation: 0, scale: 1 });
+    let regrouped: DesignDocumentContent = { calibration: { mmPerUnit: 9 }, tables: [], placements: [deckAt("p", 0), deckAt("q", 2000), deckAt("r", 9000)] };
+    regrouped = apply(regrouped, { type: "group", groupId: "old", refs: ["p", "q", "r"].map((id) => ({ kind: "placement" as const, id })) });
+    regrouped = apply(regrouped, { type: "removePlacement", id: "q" });
+    regrouped = apply(regrouped, { type: "group", groupId: "new", refs: [{ kind: "placement", id: "p" }, { kind: "placement", id: "r" }] });
+    assert(regrouped.groups?.length === 1 && regrouped.groups[0].id === "new", "a stage group whose touching members merged is re-grouped under a new id, the old one gone");
+    assert(regrouped.placements.length === 2 && regrouped.placements.every((p) => p.groupId === "new"), "…and every survivor belongs to it alone");
+    // All of them merged into one: a group of one is no group, so the lone stage stands free.
+    const allOne = apply(apply(regrouped, { type: "removePlacement", id: "r" }), { type: "setPlacementStage", id: "p", stage: { outline: [{ x: -1000, y: -500 }, { x: 1000, y: -500 }, { x: 1000, y: 500 }, { x: -1000, y: 500 }], front: 0, decks: ["stage"] } });
+    assert(!allOne.groups?.length && allOne.placements[0].groupId === undefined && !!allOne.placements[0].stage, "…and when every member merged into one, that stage is in no group");
+
     // Occupancy: never negative, and never silently trimmed to the seat count either.
+    const chaired = apply(before, { type: "setTableChair", ids: ["a"], variantId: "napoleon" });
+    assert(chaired.tables[0].chairVariantId === "napoleon", "a table takes the chair it was given");
+    assert(!("chairVariantId" in apply(chaired, { type: "setTableChair", ids: ["a"], variantId: null }).tables[0]), "null puts it back on the studio's default");
     const filled = apply(before, { type: "setTableSeated", id: "a", seated: 9 });
     assert(filled.tables[0].seated === 9, "a table remembers how many of its chairs are taken");
     assert(apply(before, { type: "setTableSeated", id: "a", seated: -2 }).tables[0].seated === 0, "…never a negative number of people");

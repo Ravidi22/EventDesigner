@@ -458,7 +458,11 @@ body {
   .no-print {
     display: none !important;
   }
+  /* Block, not the screen's flex column: a printed page has no viewport, and every frame an output
+     sits in (the app shell, EventSurface, the meeting's closing stage) must let the document flow
+     onto as many pages as it has. One of them left at h-dvh + overflow-hidden prints page one only. */
   body {
+    display: block;
     background: #fff;
     color: #000;
   }
@@ -493,6 +497,25 @@ body {
   .sheet:last-of-type {
     break-after: auto;
   }
+  /* The quote is its own A4 pages (app/(app)/outputs/quote-document.tsx), the same boxes its PDF
+     is built from, printed at `@page { margin: 0 }` — each box carries its own margin. One box per
+     sheet of paper, never split, no break after the last. */
+  .quote-page {
+    box-shadow: none !important;
+    margin: 0 !important;
+    break-inside: avoid;
+    break-after: page;
+  }
+  .quote-page:last-of-type {
+    break-after: auto;
+  }
+  /* …except a TEXT page of the plan set (cover, kit and stage schedules). The set prints at
+     `@page { margin: 0 }` because the drawing sheets frame themselves, so on these pages the
+     sheet's own padding IS the margin — strip it and the text runs to the paper's edge. Must
+     match MARGIN_MM in outputs-screen.tsx. */
+  .sheet.sheet-text {
+    padding: 16mm !important;
+  }
   @page {
     margin: 16mm;
   }
@@ -508,4 +531,14 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* A plan in motion (PlanCanvas sets data-moving through a pan, a zoom, a fit or a focus flight, and
+   from before its first paint; it clears ~200ms after the view comes to rest) drops every costly
+   filter on the plan: the textures' noise and the plants' canopy/shadow filters (feTurbulence,
+   feDisplacementMap, feGaussianBlur — one graph per plant, 149 of them in a landscaped courtyard).
+   A moving view re-rasterises the whole <svg> every frame. The laid pattern (planks, slabs) and the
+   plants' leaf clumps stay; the grain and the shadows come back once, when the view settles. */
+svg[data-moving] .plan-grain {
+  filter: none;
 }

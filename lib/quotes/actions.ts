@@ -22,10 +22,10 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
-import { issuedQuotes } from "@/lib/db/schema";
+import { issuedQuotes, quoteDrafts } from "@/lib/db/schema";
 import { assertEventOwned } from "@/lib/events/ownership";
 import { sealDocument } from "@/lib/studio/actions";
-import type { DiscountType } from "@/lib/outputs/quote";
+import { normalizeLayout, type QuoteLayout } from "./layout";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -33,22 +33,13 @@ function assertId(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || !UUID.test(value)) throw new Error(`${field} must be a uuid`);
 }
 
-function assertIdList(value: unknown, field: string): asserts value is string[] {
-  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
-  for (const v of value) assertId(v, `${field}[]`);
-}
-
 /** A quote as the screen holds it. `documentVersion` is what replaced the serialised snapshot. */
 export interface IssuedQuote {
   issuedAt: number;
   /** The design-document version this quote was produced from, sealed and unchangeable. */
   documentVersion: number;
-  discountType: DiscountType;
-  discountValue: number;
-  /** Rows hidden before showing the client (F-7.1). */
-  hiddenVariantIds: string[];
-  /** Categories collapsed to a single line (F-7.1). */
-  mergedCategoryIds: string[];
+  /** What the client was shown (lib/quotes/layout.ts). Null on a quote issued before layouts. */
+  layout: QuoteLayout | null;
   total: number;
 }
 
@@ -56,11 +47,12 @@ export interface IssuedQuote {
  *  quote is issued, decided here, because a quote that could name its own version is a quote that
  *  could claim to match a design it was not made from. */
 export interface QuoteInput {
-  discountType: DiscountType;
-  discountValue: number;
-  hiddenVariantIds: string[];
-  mergedCategoryIds: string[];
+  layout: QuoteLayout;
+  /** What the client pays, as the sheet printed it. */
   total: number;
+  /** The catalog sum minus the agreed price — kept in the old discount column so a report over
+   *  issued quotes can still read it. Never below zero there. */
+  discount: number;
 }
 
 /** Postgres `numeric` arrives as a string — arbitrary precision, so the driver will not narrow it
@@ -91,12 +83,41 @@ export async function fetchIssuedQuote(eventId: string): Promise<IssuedQuote | n
   return {
     issuedAt: row.issuedAt.getTime(),
     documentVersion: row.documentVersion,
-    discountType: row.discountType,
-    discountValue: toNumber(row.discountValue),
-    hiddenVariantIds: row.hiddenVariantIds,
-    mergedCategoryIds: row.mergedCategoryIds,
+    layout: row.layout ? normalizeLayout(row.layout) : null,
     total: toNumber(row.total),
   };
+}
+
+/** The quote being worked on — the designer's choices so far. Null when none were ever made; the
+ *  screen then starts from the issued quote's layout, else the defaults. */
+export async function fetchQuoteDraft(eventId: string): Promise<QuoteLayout | null> {
+  assertId(eventId, "eventId");
+  const organizationId = await currentOrg();
+  const [row] = await db()
+    .select({ layout: quoteDrafts.layout })
+    .from(quoteDrafts)
+    .where(and(eq(quoteDrafts.eventId, eventId), eq(quoteDrafts.organizationId, organizationId)))
+    .limit(1);
+  return row ? normalizeLayout(row.layout) : null;
+}
+
+/**
+ * Store the designer's choices. ⚠ Callers debounce — a note is typed one character at a time.
+ * Never touches issued_quotes: a draft is not a quote that went out (see the table's note).
+ */
+export async function saveQuoteDraft(eventId: string, layout: QuoteLayout): Promise<void> {
+  assertId(eventId, "eventId");
+  const organizationId = await currentOrg();
+  await assertEventOwned(organizationId, eventId);
+  const clean = normalizeLayout(layout);
+  await db()
+    .insert(quoteDrafts)
+    .values({ eventId, organizationId, layout: clean })
+    .onConflictDoUpdate({
+      target: quoteDrafts.eventId,
+      setWhere: eq(quoteDrafts.organizationId, organizationId),
+      set: { layout: clean, updatedAt: new Date() },
+    });
 }
 
 /**
@@ -110,15 +131,9 @@ export async function fetchIssuedQuote(eventId: string): Promise<IssuedQuote | n
 export async function issueQuote(eventId: string, input: QuoteInput): Promise<IssuedQuote> {
   assertId(eventId, "eventId");
   if (!input || typeof input !== "object") throw new Error("quote must be an object");
-  if (input.discountType !== "amount" && input.discountType !== "percent") {
-    throw new Error("discountType must be amount or percent");
-  }
-  assertMoney(input.discountValue, "discountValue");
   assertMoney(input.total, "total");
-  assertIdList(input.hiddenVariantIds, "hiddenVariantIds");
-  // Category ids are the app's own slugs ("tablecloths"), not uuids — see lib/catalog/categories.ts.
-  if (!Array.isArray(input.mergedCategoryIds)) throw new Error("mergedCategoryIds must be an array");
-  const mergedCategoryIds = input.mergedCategoryIds.map((c) => String(c).slice(0, 64));
+  assertMoney(input.discount, "discount");
+  const layout = normalizeLayout(input.layout);
 
   const organizationId = await currentOrg();
   await assertEventOwned(organizationId, eventId);
@@ -127,10 +142,12 @@ export async function issueQuote(eventId: string, input: QuoteInput): Promise<Is
   const values = {
     designDocumentId: sealed.id,
     documentVersion: sealed.version,
-    discountType: input.discountType,
-    discountValue: String(input.discountValue),
-    hiddenVariantIds: input.hiddenVariantIds,
-    mergedCategoryIds,
+    discountType: "amount" as const,
+    discountValue: String(Math.max(0, input.discount)),
+    // The old hide/merge columns. Hidden lines live in the layout now, keyed by section.
+    hiddenVariantIds: [],
+    mergedCategoryIds: [],
+    layout,
     total: String(input.total),
     issuedAt: new Date(),
   };

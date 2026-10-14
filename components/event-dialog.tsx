@@ -41,7 +41,7 @@ export function EventDialog({ open, onClose }: { open: boolean; onClose: () => v
       // `max-h-none` clears the UA's own cap so the form's is the only one. No `overflow-hidden`:
       // the body already scrolls, and a second clip is one more edge for the date popover to die
       // against.
-      className="modal m-auto max-h-none w-[92vw] max-w-lg rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
+      className="modal m-auto max-h-none w-[92vw] max-w-2xl rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
     >
       {/* Mounted only while open, so every opening starts on a blank form — the dialog element
           itself stays put for showModal(), but its contents do not survive a close. */}

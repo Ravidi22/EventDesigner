@@ -50,7 +50,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { DesignDocumentContent, StageTemplate } from "@/lib/design-document/types";
+import type { DesignDocumentContent, StageTemplate, TableDesign } from "@/lib/design-document/types";
 import type { FlowerLine, MapAppearance, ResizeSpec } from "@/lib/catalog/types";
 import type { VenuePlan } from "@/lib/venues/types";
 import type { VenueStructure } from "@/lib/venues/structure";
@@ -58,6 +58,7 @@ import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
 import type { ElementStyle } from "@/lib/element-style";
 import type { MeetingStepId } from "@/lib/meeting/steps";
 import type { CheckpointOffsets } from "@/lib/production/runway";
+import type { QuoteLayout } from "@/lib/quotes/layout";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -233,6 +234,16 @@ export const studioSettings = pgTable("studio_settings", {
    *  Instagram handle — the one field a client's accountant looks for first. */
   businessNumber: text("business_number").notNull().default(""),
   email: text("email").notNull().default(""),
+  /** The studio's Instagram handle, printed on the quote's letterhead beside the phone and email. */
+  instagram: text("instagram").notNull().default(""),
+  /** Whether catalog prices and the quote's typed price already INCLUDE VAT (the quote then prints
+   *  the VAT inside the total) or exclude it (the quote adds it on top). Israeli studios quoting
+   *  private clients quote VAT-inclusive, hence the default. */
+  pricesIncludeVat: boolean("prices_include_vat").notNull().default(true),
+  /** The studio's signature as an uploaded image, printed over the studio's line on the quote. */
+  signatureUrl: text("signature_url"),
+  /** Print בס״ד at the top of every page of the quote. */
+  showBsd: boolean("show_bsd").notNull().default(false),
   /** How long an issued quote holds its price. Without it the price is open forever. */
   quoteValidityDays: integer("quote_validity_days").notNull().default(14),
   /** Payment schedule, cancellation, what is excluded — free text, one line per clause, printed
@@ -263,6 +274,10 @@ export const studioSettings = pgTable("studio_settings", {
    *  levels and edges, its finishes, placed again from the stage tool. jsonb for the reason
    *  checkpointOffsets is: a short list rewritten whole and never queried into. Null = none saved. */
   stageTemplates: jsonb("stage_templates").$type<StageTemplate[]>(),
+  /** The studio's saved table designs (TableDesign[], lib/design-document/types.ts) — a table's
+   *  whole dressing under a name, put on any table of any event in one press. jsonb for the reason
+   *  stageTemplates is. Null = none saved. */
+  tableDesigns: jsonb("table_designs").$type<TableDesign[]>(),
   updatedAt: updated(),
 });
 
@@ -553,6 +568,13 @@ export const events = pgTable(
      *  two events whose dates differ by two days can still want the same chuppah and the same pair
      *  of hands at the same hour, and comparing `event_date` alone would call that clear. */
     setupDate: date("setup_date"),
+    /** גווני האירוע — variant NAMES from the studio's catalog, in the designer's order of
+     *  preference. An item placed for this event wears the first of them it stocks
+     *  (lib/catalog/shades.ts). Names, not variant ids: one shade spans every product that has it. */
+    shades: text("shades").array().notNull().default([]),
+    /** סוג האירוע — חתונה, בר מצווה… (EVENT_TYPES, lib/events/types.ts). Free text so a studio's
+     *  own word survives; "" = not said. Printed on the quote's cover and title. */
+    eventType: text("event_type").notNull().default(""),
     archived: boolean("archived").notNull().default(false),
     createdAt: created(),
   },
@@ -900,6 +922,9 @@ export const issuedQuotes = pgTable(
     hiddenVariantIds: uuid("hidden_variant_ids").array().notNull().default([]),
     mergedCategoryIds: text("merged_category_ids").array().notNull().default([]),
     total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+    /** The designer's choices the client was shown (QuoteLayout, lib/quotes/layout.ts) — price mode,
+     *  typed price, gifts, titles, notes, photos, order. Null on quotes issued before it existed. */
+    layout: jsonb("layout").$type<QuoteLayout>(),
     issuedAt: created(),
   },
   (t) => [
@@ -907,6 +932,19 @@ export const issuedQuotes = pgTable(
     index("issued_quotes_document_idx").on(t.designDocumentId),
   ],
 );
+
+/** The quote being WORKED ON (QuoteLayout, lib/quotes/layout.ts), one per event, autosaved from the
+ *  quote screen. Apart from issued_quotes on purpose: a row there means a quote went to the client,
+ *  and procurement and the runway read it as such — a draft must never look like one. Issuing copies
+ *  this layout into the issued row. */
+export const quoteDrafts = pgTable("quote_drafts", {
+  eventId: uuid("event_id")
+    .primaryKey()
+    .references(() => events.id, { onDelete: "cascade" }),
+  organizationId: orgId(),
+  layout: jsonb("layout").$type<QuoteLayout>().notNull(),
+  updatedAt: updated(),
+});
 
 // ── Suppliers and what they cost ───────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock } from "lucide-react";
+import { Lock, MapPinOff } from "lucide-react";
 
 // "This event is booked into a property nobody shared with you."
 //
@@ -39,6 +39,29 @@ export function VenueAccessNotice({ tone = "plan", className = "" }: { tone?: To
       <div className="min-w-0">
         <p className="font-semibold text-ink">אין לכם גישה למתחם הזה</p>
         <p className="mt-1">{BODY[tone]}</p>
+      </div>
+    </div>
+  );
+}
+
+/** "This event has no property yet." — the OTHER way a blank plane happens, and the common one on
+ *  a first meeting: the event was opened before anyone decided where the wedding will be, and the
+ *  hall-sketch stage then drew nothing, with nothing to say why. The sketch is drawn on the venue's
+ *  walls, so the fix is one stage back, in the event's details. Same frame as the access notice so
+ *  the two read as one kind of thing wherever either appears. */
+export function VenueUnsetNotice({ className = "" }: { className?: string }) {
+  return (
+    <div
+      role="status"
+      className={
+        "flex max-w-md gap-3 rounded-md border border-border bg-surface px-4 py-3.5 text-[13px] leading-relaxed text-ink-soft shadow-floating " +
+        className
+      }
+    >
+      <MapPinOff className="mt-0.5 h-4 w-4 shrink-0 text-muted" strokeWidth={1.8} aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-semibold text-ink">לא נבחר מתחם לאירוע</p>
+        <p className="mt-1">הסקיצה מצוירת על תוכנית המתחם. בחרו מתחם ואזורים בפרטי האירוע — עד אז הדף ריק.</p>
       </div>
     </div>
   );

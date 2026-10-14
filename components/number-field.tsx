@@ -120,6 +120,13 @@ export function NumberField({
     }
   };
 
+  // A width the caller set wins over the stacked layout's own `w-full`. It never did: the two are
+  // one property, and Tailwind settles a conflict by stylesheet order, where `.w-full` comes after
+  // every `.w-NN` — so a `className="w-20"` field in an inspector popover rendered as a full-width
+  // box, sized itself to the browser's default input width (~20 characters), and squeezed the label
+  // beside it down to nothing.
+  const sized = /(?:^|\s)(?:[\w-]+:)*w-/.test(className);
+
   const input = (
     <input
       id={id}
@@ -145,7 +152,7 @@ export function NumberField({
       }}
       onBlur={commit}
       onKeyDown={onKeyDown}
-      className={`${sizeBase[size]} nums text-end placeholder:text-faint ${layout === "stack" ? "w-full px-2.5" : size === "sm" ? "px-1.5" : "px-2"} ${
+      className={`${sizeBase[size]} nums text-end placeholder:text-faint ${layout === "stack" ? `${sized ? "" : "w-full "}px-2.5` : size === "sm" ? "px-1.5" : "px-2"} ${
         error ? "border-alert hover:border-alert" : ""
       } ${className}`}
     />

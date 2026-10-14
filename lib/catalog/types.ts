@@ -2,6 +2,7 @@
 // same shapes come from mapping Drizzle rows (lib/db/schema.ts) — swap happens here only.
 import type { Layer, Point } from "../design-document/types";
 import type { EdgeCurve } from "../studio/hall";
+import type { Texture, TextureImage } from "./textures";
 import type { ElementStyle } from "../element-style";
 
 export type { Layer };
@@ -151,11 +152,15 @@ export const RING_GAP = { min: 600, default: 900 } as const;
  *
  *  `x`/`y` place the part's centre relative to the BASE shape's centre, in mm, and `rotation` turns
  *  it about its own centre. Its size is read exactly the way a base shape's is: a diameter for the
- *  diameter shapes (usesDiameter), a width and a depth for everything else. No "custom" part — a
- *  hand-drawn outline belongs to the base, where the outline editor is. */
+ *  diameter shapes (usesDiameter), a width and a depth for everything else, and for a "custom" part
+ *  its own outline (width × depth are then only that outline's box). */
 export interface ShapePart {
   id: string;
-  shape: Exclude<MapShape, "custom">;
+  shape: MapShape;
+  /** A hand-drawn outline, iff `shape === "custom"` — drawn in the appearance editor like the base
+   *  shape's own, and recentred on its box (its centre is `x`/`y`, like any part's). */
+  outline?: Point[];
+  edgeCurves?: (EdgeCurve | null)[];
   widthMm?: number;
   depthMm?: number;
   diameterMm?: number;
@@ -164,6 +169,10 @@ export interface ShapePart {
   x: number;
   y: number;
   rotation: number;
+  /** This shape's own surface — a layer of its own, never inherited from the base or another part
+   *  (see surfaceLayers, lib/catalog/textures.ts). Absent = the item's flat fill. */
+  texture?: Texture;
+  textureImage?: TextureImage;
 }
 
 // Map appearance (studio 2D plan). Footprint is always drawn at true scale; `content`
@@ -178,6 +187,22 @@ export interface MapAppearance {
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
   content: "icon" | "name" | "none";
   icon?: string; // Lucide name, iff content === "icon"
+  /** Drawn as its CATEGORY's picture (lib/catalog/symbols.ts — a candelabrum, a bunch of flowers, a
+   *  chair) rather than as its outline with `content` inside. Absent = yes, for every category that
+   *  has a picture; false = this row opts out and draws its outline and content as chosen. Ignored
+   *  on a category with no picture, and on a footprint that is not a circle, ellipse or rectangle. */
+  symbol?: boolean;
+  /** Which version of its category's picture — for a chair, its style (ChairStyle in
+   *  lib/catalog/symbols.ts: Chiavari, cross-back, ghost…). Absent = the category's default. */
+  symbolStyle?: string;
+  /** What its base shape is made of, drawn as that shape's fill (lib/catalog/textures.ts — timber,
+   *  marble, the venue floor materials). Tinted by the shade/fill when there is one. Absent = a flat
+   *  fill, as before. Each added part has its own (ShapePart.texture). Ignored where the item is
+   *  drawn as its category's picture (`symbol`). */
+  texture?: Texture;
+  /** A picture of the designer's own as the surface (lib/catalog/textures.ts), winning over
+   *  `texture`. Like `texture`, it surfaces the BASE shape; each part carries its own. */
+  textureImage?: TextureImage;
   style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
   arc?: ArcSpec; // iff shape === "arc"; absent = a half ring (ARC_SWEEP.default) with a default band
   ring?: RingSpec; // iff shape is a hollow curved one (RingShape, lib/studio/footprint.ts); absent = defaults (ringSpecOf)

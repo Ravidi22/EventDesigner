@@ -59,6 +59,9 @@ function item(
   };
 }
 
+/** A chair drawn in one style (ChairStyle, lib/catalog/symbols.ts) — a rectangle; its picture does the rest. */
+const chair = (style: string): Product["appearance"] => ({ shape: "rect", content: "none", symbolStyle: style });
+
 // A cloth and a rug have no height of their own — they take the height of whatever they cover,
 // which is what `needsHeight: false` says in the drawer. The column is NOT NULL, so that is a 0.
 const DRAPED = 0;
@@ -161,7 +164,55 @@ export const DESIGN_ITEMS: DesignItem[] = [
     { name: "שקוף", swatch: GLASS },
     { name: "לבן", swatch: WHITE },
     { name: "שחור", swatch: BLACK },
-  ], { styleTags: ["קלאסי"], stockKind: "rented" }),
+  ], { styleTags: ["קלאסי"], stockKind: "rented", appearance: chair("chiavari") }),
+
+  // Each chair names its STYLE — what it looks like from above (ChairStyle, lib/catalog/symbols.ts).
+  item("chair-crossback", "כיסא קרוס־בק עץ", "chairs", { widthMm: 450, depthMm: 450, heightMm: 900 }, [
+    { name: "עץ טבעי", swatch: "#A8794C" },
+    { name: "עץ כהה", swatch: "#5A3E2B" },
+    { name: "לבן מושחר", swatch: "#E8E1D6" },
+  ], { styleTags: ["כפרי"], stockKind: "rented", appearance: chair("crossback") }),
+
+  item("chair-ghost", "כיסא גוסט שקוף", "chairs", { widthMm: 450, depthMm: 500, heightMm: 900 }, [
+    { name: "שקוף", swatch: GLASS },
+    { name: "עשן", swatch: "#9A9DA3" },
+  ], { styleTags: ["מודרני"], stockKind: "rented", appearance: chair("ghost") }),
+
+  item("chair-velvet", "כיסא קטיפה", "chairs", { widthMm: 480, depthMm: 520, heightMm: 950 }, [
+    { name: "ורוד עתיק", swatch: "#D9A5A8" },
+    { name: "ירוק בקבוק", swatch: "#2F4F3E" },
+    { name: "כחול לילה", swatch: "#232B4A" },
+    { name: "בז׳", swatch: "#D8C7B0" },
+  ], { styleTags: ["זוהר", "רומנטי"], stockKind: "rented" }),
+
+  item("chair-folding", "כיסא מתקפל", "chairs", { widthMm: 440, depthMm: 440, heightMm: 800 }, [
+    { name: "לבן", swatch: WHITE },
+    { name: "שחור", swatch: BLACK },
+    { name: "עץ", swatch: "#B98A5E" },
+  ], { styleTags: ["כפרי"], stockKind: "rented", appearance: chair("folding") }),
+
+  item("chair-armchair-velvet", "כורסת קטיפה", "chairs", { widthMm: 750, depthMm: 750, heightMm: 800 }, [
+    { name: "ורוד עתיק", swatch: "#D9A5A8" },
+    { name: "ירוק בקבוק", swatch: "#2F4F3E" },
+    { name: "שמנת", swatch: CREAM },
+  ], { styleTags: ["זוהר"], stockKind: "rented", appearance: chair("armchair") }),
+
+  item("chair-bar-stool", "שרפרף בר", "chairs", { diameterMm: 400, heightMm: 750 }, [
+    { name: "שחור", swatch: BLACK },
+    { name: "זהב", swatch: GOLD },
+    { name: "לבן", swatch: WHITE },
+  ], { styleTags: ["מודרני"], stockKind: "rented", appearance: { shape: "circle", content: "none", symbolStyle: "stool" } }),
+
+  item("bench-wood-180", "ספסל עץ 180", "chairs", { widthMm: 1800, depthMm: 400, heightMm: 450 }, [
+    { name: "עץ טבעי", swatch: "#B98A5E" },
+    { name: "לבן", swatch: WHITE },
+  ], { styleTags: ["כפרי"], stockKind: "rented", appearance: chair("bench") }),
+
+  item("sofa-three-seat", "ספה תלת־מושבית", "sofas", { widthMm: 2100, depthMm: 900, heightMm: 800 }, [
+    { name: "שמנת", swatch: CREAM },
+    { name: "אפור", swatch: "#8E9299" },
+    { name: "ירוק בקבוק", swatch: "#2F4F3E" },
+  ], { styleTags: ["מודרני"], stockKind: "rented", appearance: { shape: "rect", content: "none" } }),
 
   item("rug-runner", "שטיח מעבר", "rugs", { widthMm: 1200, depthMm: 6000, heightMm: DRAPED }, [
     { name: "שנהב", swatch: CREAM },

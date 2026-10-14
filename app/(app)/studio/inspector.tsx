@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Minus,
   Plus,
@@ -48,6 +48,9 @@ import {
   BookmarkPlus,
   Replace,
   Check,
+  LayoutGrid,
+  PaintRoller,
+  ArrowDownUp,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
@@ -55,8 +58,29 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
-import type { DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
-import { tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import type { BenchSideKind, BenchSpec, DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
+import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
+import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { footprintBounds } from "@/lib/studio/footprint";
+import {
+  climbAccessibleEdit,
+  climbHeightEdit,
+  climbReverseEdit,
+  climbRisersEdit,
+  itemClimbHost,
+  type ClimbEdit,
+} from "@/lib/studio/climb-item";
+import {
+  MAX_RISERS,
+  climbRisers,
+  formatRatio,
+  rampRatio,
+  rampTooSteep,
+  riserHeightMm,
+  risersForRise,
+  treadDepthMm,
+  type ClimbHost,
+} from "@/lib/venues/climb";
 import { SeatSidesPicker } from "@/components/seat-sides-picker";
 import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
 import type { ElementStyle } from "@/lib/element-style";
@@ -71,10 +95,16 @@ import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Menu, type MenuItem } from "@/components/menu";
+import { AlignMenu, type AlignPanel } from "./align-menu";
 import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
-import { coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { benchOf, coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
+import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
+import { SwitchRow } from "@/components/toggle";
 import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
+import { ArrowDownToLine } from "lucide-react";
+import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
 import type { Selection, SpinMode } from "./canvas-stage";
 
 // The studio's object inspector: ONE BAR along the bottom of the canvas, not a panel down its side.
@@ -113,6 +143,10 @@ const EDGE_KINDS: EdgeKindId[] = ["stairs", "bench", "barrier", "backdrop", "ram
 export interface StageEdgeRow {
   id: string;
   kind: EdgeKindId;
+  /** Set into the stage (StageStair.inner), and whether it could stand outside / inside where it is. */
+  inner: boolean;
+  outerFits: boolean;
+  innerFits: boolean;
   /** Which side: "בחזית", "בצד", "מאחור", "אל המפלס". */
   side: string;
   widthMm: number;
@@ -122,19 +156,55 @@ export interface StageEdgeRow {
   autoRisers: number;
   manual: boolean;
   depthMm: number;
+  /** A banquette's TOP above the deck (a chairs side's table), and a sofa side's seat height. */
   heightMm: number;
+  sofaHeightMm: number;
+  /** Everyone seated at a banquette; of them, on chairs (packed) and on a sofa side. */
   seats: number;
-  /** A banquette's chair count when the designer set one; else the one-per-60cm default. */
-  seatsSet: boolean;
+  chairSeats: number;
+  sofaSeats: number;
+  /** One per 60cm of its length — what a side seats when nobody typed a count. */
   autoSeats: number;
+  /** Its two sides — the stage side (`back`) and the room side (`front`) — and whether each count
+   *  was typed. */
+  back: BenchSideRow;
+  front: BenchSideRow;
   /** Design items standing on it (a banquette). */
   dressed: number;
 }
 
+/** One side of a banquette as the bar shows it. */
+export interface BenchSideRow extends BenchSideLayout {
+  /** Whether the designer typed this side's count (else it is one per 60cm). */
+  set: boolean;
+}
+
+/** What the bar may change about one side of a banquette: what it is, and how many sit there
+ *  (`seats: null` = back to one per 60cm). */
+export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null };
+
+/** What the bar shows for a STANDALONE banquette (Placement.bench): how it is laid, what the
+ *  designer set, and whether it currently carries a number. */
+export interface BenchPanel {
+  layout: BenchLayout;
+  spec: BenchSpec | undefined;
+  /** Set when it takes part in the numbering — seated, and numbered. */
+  numbered: boolean;
+}
+
+/** A standalone banquette's edit: a side, a height, its number (`null` clears it) or its occupancy. */
+export type BenchPatch = { back?: BenchSidePatch; front?: BenchSidePatch; heightMm?: number; sofaHeightMm?: number; number?: number | null; seated?: number };
+
 /** What the stage bar shows: its size when it is a rectangle, what it is built of, how high it and
  *  its levels stand, its flights, and the skirt and railing its open sides need. */
 export interface StagePanel {
+  /** A rectangle's size — or, `round`, the box of a stage with a curve (a disc, an oval, a
+   *  half-round), which a typed size scales whole. */
   size: { widthMm: number; depthMm: number } | null;
+  round?: boolean;
+  /** A rectangle with rounded corners or a bowed front (StageBuild.roundedMm / bowMm): its size is
+   *  its box, and a typed size rebuilds the same shape on the new rectangle. */
+  shaped?: boolean;
   deckCount: number;
   coverage: number;
   decks: { name: string; count: number }[];
@@ -167,6 +237,56 @@ export interface StagePanel {
   skirtCounted: boolean;
 }
 
+/** What the bar for several stages (a group of them, or a handful selected) shows. */
+export interface StageGroupPanel {
+  count: number;
+  grouped: boolean;
+  /** How many are stages already, and how many are pieces that are not yet. */
+  stages: number;
+  pieces: number;
+  /** Their height when they share one; null when they differ. */
+  heightMm: number | null;
+  /** Bare open edge over all of them, and skirt — sides pushed against each other are neither. */
+  gapsMm: number;
+  skirtMm: number;
+  /** Their surface when they share one (null = bare decks); undefined when they differ. */
+  surface: string | null | undefined;
+  surfaceOptions: { value: string; label: string }[];
+  areaMm2: number;
+  /** The rest of a stage's bar, over the whole group (set when `grouped`): what the lot is built of,
+   *  how big it stands, its edges and railing, and the switches every member shares. */
+  whole?: {
+    /** The group's box, in the first stage's frame. */
+    size: { widthMm: number; depthMm: number };
+    deckCount: number;
+    /** Decked floor over outlined floor, across the group. */
+    coverage: number;
+    decks: { name: string; count: number }[];
+    /** Runs of each kind over every member, and how many flights and ramps. */
+    stairsMm: number;
+    flights: number;
+    benchMm: number;
+    benchSeats: number;
+    barrierMm: number;
+    backdropMm: number;
+    ramps: number;
+    /** Corner pieces: on everywhere (true), off everywhere (false), or mixed (undefined). */
+    corners: boolean | undefined;
+    cornerCount: number;
+    /** Decks may exceed the line: all / none / mixed. */
+    exceed: boolean | undefined;
+    railingMm: number | null;
+    railingAboveMm: number | null;
+    stairsCounted: boolean;
+    skirtCounted: boolean;
+    benchCounted: boolean;
+    barrierCounted: boolean;
+    /** Every stage in the group, to pick one out for its own bar (levels, a flight, the outline) —
+     *  its size as a Latin figure the bar wraps LTR, null for a shaped one. */
+    members: { id: string; label: string; size: string | null }[];
+  };
+}
+
 export function Inspector({
   selection,
   selectedCount,
@@ -180,6 +300,8 @@ export function Inspector({
   onRestack,
   selectedTables,
   onSeatsForSelection,
+  onChairForSelection,
+  onChair,
   group,
   onGroup,
   onUngroup,
@@ -194,7 +316,13 @@ export function Inspector({
   onClose,
   onQuantity,
   onDelete,
-  onSmartApply,
+  onDressTable,
+  onTablesNumbered,
+  renderPattern,
+  renderDesigns,
+  onScale,
+  onHang,
+  onClimb,
   onApplyToAllTables,
   onVariant,
   onSpan,
@@ -212,6 +340,7 @@ export function Inspector({
   onSelectSimilar,
   canDistribute,
   onDistribute,
+  align,
   dressCandidateCount,
   onCopyDressing,
   onMirror,
@@ -233,11 +362,22 @@ export function Inspector({
   onSelectEdge,
   onRemoveStair,
   onStairChange,
+  benchPanel,
+  onBench,
   onStageSurface,
   onStageCorners,
   onStageExceed,
   onSaveTemplate,
   stageGroup,
+  onGroupStageHeight,
+  onGroupFillEdges,
+  onGroupStageSurface,
+  onGroupStageCorners,
+  onGroupStageExceed,
+  onGroupSaveTemplate,
+  onGroupExplode,
+  onPickStage,
+  onBackToGroup,
   onStickStages,
   onMergeStages,
   onMakeStage,
@@ -271,8 +411,12 @@ export function Inspector({
   /** How many TABLES are selected — what the bulk seat control applies to. */
   selectedTables: number;
   onSeatsForSelection: (seats: number) => void;
+  /** One chair over every selected table; null = the studio's default. */
+  onChairForSelection?: (variantId: string | null) => void;
+  /** This table's chair; null = the studio's default (DesignTable.chairVariantId). */
+  onChair?: (id: string, variantId: string | null) => void;
   /** Set when the selection is EXACTLY one group — its whole membership and nothing else. */
-  group: { id: string; number?: number; tables: number; items: number; seats: number; seated: number } | null;
+  group: { id: string; number?: number; tables: number; items: number; seats: number; seated: number; tableIds: string[]; unnumbered: boolean } | null;
   onGroup: () => void;
   onUngroup: () => void;
   onRenumberGroup: (groupId: string, number: number) => void;
@@ -292,7 +436,25 @@ export function Inspector({
   onClose: () => void;
   onQuantity: (id: string, delta: number) => void;
   onDelete: () => void;
-  onSmartApply: () => void;
+  /** Open a table's focus mode — where the items on it are moved about and arranged. Absent in the
+   *  hall pass, where a table is laid out, not dressed: the bar then offers no roller. */
+  onDressTable?: (tableId: string) => void;
+  /** Take tables out of the numbering (DesignTable.unnumbered), or put them back — a block by all of
+   *  its tables. */
+  onTablesNumbered: (tableIds: string[], numbered: boolean) => void;
+  /** The "which tables" panel (TablePatternPicker), bound to a source table and — when one item is
+   *  being applied rather than the table's whole dressing — that item. */
+  renderPattern: (sourceTableId: string, placementId?: string) => ReactNode;
+  /** The saved table designs panel (TableDesignsPanel), bound to a table. */
+  renderDesigns: (tableId: string) => ReactNode;
+  /** How big one placed item is DRAWN (Placement.scale) — not what it costs or how many there are. */
+  onScale: (placementId: string, scale: number) => void;
+  /** How high one CEILING item hangs above the floor (Placement.hangHeightMm); null = its catalog
+   *  row's default again. A rigging fact — nothing priced or packed reads it. */
+  onHang?: (placementId: string, heightMm: number | null) => void;
+  /** A rented flight or ramp standing on its own: its rise, steps or direction, with the run that
+   *  follows and where it now stands (lib/studio/climb-item.ts builds the edit). */
+  onClimb?: (placementId: string, edit: ClimbEdit) => void;
   onApplyToAllTables: (placementId: string) => void;
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
@@ -327,6 +489,8 @@ export function Inspector({
    *  distributeEvenly, so the command never offers to do less than it says. */
   canDistribute: boolean;
   onDistribute: () => void;
+  /** יישור by one of the selected (align-menu.tsx) — null when the selection cannot be aligned. */
+  align: AlignPanel | null;
   /** How many of the currently selected tables a copied table's dressing would actually land on
    *  (the source table itself, if it happens to be among them, is excluded) — 0 hides the control
    *  and is also the reducer's own no-op case, so this only ever offers something that does
@@ -365,19 +529,49 @@ export function Inspector({
   onFillEdges: (kind: EdgeKindId) => void;
   onSelectEdge: (itemId: string | null) => void;
   onRemoveStair: (stairId: string) => void;
-  /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or height. */
+  /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or heights, one of
+   *  a banquette's two sides — or whether it stands outside the stage or set into it (`inner`). */
   onStairChange: (
     stairId: string,
-    patch: { kind?: EdgeKindId; widthMm?: number; risers?: number | null; full?: boolean; depthMm?: number; heightMm?: number; seats?: number | null },
+    patch: {
+      kind?: EdgeKindId;
+      widthMm?: number;
+      risers?: number | null;
+      full?: boolean;
+      depthMm?: number;
+      heightMm?: number;
+      sofaHeightMm?: number;
+      back?: BenchSidePatch;
+      front?: BenchSidePatch;
+      inner?: boolean;
+    },
   ) => void;
+  /** Set when the one selected thing is a STANDALONE banquette (lib/design-document/bench.ts). */
+  benchPanel: BenchPanel | null;
+  onBench: (id: string, patch: BenchPatch) => void;
   onStageSurface: (variantId: string | null) => void;
   onStageCorners: (on: boolean) => void;
   onStageExceed: (on: boolean) => void;
   /** Save the selected stage as a named template. */
   onSaveTemplate: (name: string) => void;
   /** Set when the selection is a group (or a handful) made only of stages — the bar then speaks of
-   *  stages, and offers to make them one. */
-  stageGroup: { count: number; grouped: boolean } | null;
+   *  stages, offers to make them one, and sets what a stage's bar sets on every one of them. */
+  stageGroup: StageGroupPanel | null;
+  /** …each over every stage in it: one height, every bare edge finished, one surface. */
+  onGroupStageHeight?: (heightMm: number) => void;
+  onGroupFillEdges?: (kind: EdgeKindId) => void;
+  onGroupStageSurface?: (variantId: string | null) => void;
+  /** …and, for a GROUP of stages (stageGroup.grouped), the rest of a stage's bar over all of them:
+   *  corners and exceed on every member, every member saved as a template (one each — a template
+   *  is one outline), every member taken apart into its decks, one member picked out for its own
+   *  bar (levels, a flight on a side, the outline, מידות). */
+  onGroupStageCorners?: (on: boolean) => void;
+  onGroupStageExceed?: (on: boolean) => void;
+  onGroupSaveTemplate?: (name: string) => void;
+  onGroupExplode?: () => void;
+  onPickStage?: (id: string) => void;
+  /** Set on a stage's own bar when it was picked out of its group: the group back as the selection. */
+  onBackToGroup?: () => void;
   /** Set when two or more stages are selected: close the gaps between them / make them one stage. */
   onStickStages?: () => void;
   onMergeStages?: () => void;
@@ -403,11 +597,12 @@ export function Inspector({
 
   // A GROUP — the designer pushed these together and said they are one thing. For tables that means
   // one number for the lot, so the number field here edits the group and not any table inside it.
-  if (group) {
+  // (A group made only of stages is a STAGE group — its own bar, below, with the stage tools.)
+  if (group && !(selectedCount > 1 && stageGroup)) {
     return (
       <Bar
         icon={Group}
-        title={group.tables > 0 && group.number ? `שולחן ${group.number}` : "קבוצה"}
+        title={group.tables > 0 ? (group.unnumbered ? "שולחן ללא מספר" : group.number ? `שולחן ${group.number}` : "קבוצה") : "קבוצה"}
         facts={countLine([
           [group.tables, "שולחן אחד", "שולחנות"],
           [group.items, "פריט אחד", "פריטים"],
@@ -450,17 +645,24 @@ export function Inspector({
         )}
 
         {group.tables > 0 && (
-          <Popover label="מספר שולחן" icon={Hash} value={ltr(`#${group.number ?? 0}`)}>
-            <PanelRow>
-              <NumberField
-                id="group-number"
-                aria-label="מספר שולחן"
-                decimals={0}
-                value={group.number ?? 0}
-                onChange={(v) => onRenumberGroup(group.id, v)}
-                className="w-20"
-              />
-            </PanelRow>
+          <Popover label="מספר שולחן" icon={Hash} value={group.unnumbered ? "ללא" : ltr(`#${group.number ?? 0}`)}>
+            {!group.unnumbered && (
+              <PanelRow>
+                <NumberField
+                  id="group-number"
+                  aria-label="מספר שולחן"
+                  decimals={0}
+                  min={0}
+                  value={group.number ?? 0}
+                  onChange={(v) => onRenumberGroup(group.id, v)}
+                  className="w-20"
+                />
+              </PanelRow>
+            )}
+            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number) && <DuplicateNumber />}
+            <div className="mt-2">
+              <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
+            </div>
             <Note>השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו.</Note>
           </Popover>
         )}
@@ -491,11 +693,19 @@ export function Inspector({
   // to be one platform, so the bar says so and leads with making them one: only a single stage has
   // stairs on every edge, levels, a surface and one build.
   if (selectedCount > 1 && stageGroup) {
+    const gm = (mm: number) => String(Math.round(mm / 10) / 100);
+    const sg = stageGroup;
     return (
       <Bar
         icon={Grid2x2}
-        title={stageGroup.grouped ? "במה מקובצת" : "במות"}
-        facts={`${stageGroup.count} חלקים · איחוד לבמה אחת נותן מדרגות, מפלסים ומשטח`}
+        title={sg.grouped ? "במה מקובצת" : "במות"}
+        facts={[
+          `${sg.count} חלקים`,
+          sg.heightMm ? `${Math.round(sg.heightMm / 10)} ס״מ` : sg.stages > 1 ? "גבהים שונים" : null,
+          sg.gapsMm > 0 ? `${gm(sg.gapsMm)} מ׳ שפה פתוחה` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         onClose={onClose}
       >
         {onMergeStages && (
@@ -505,8 +715,200 @@ export function Inspector({
           </Button>
         )}
         {onStickStages && <BarButton icon={Magnet} label="הצמדה — סגירת הרווחים ויישור" onClick={onStickStages} />}
+        <AlignMenu align={align} />
+        {/* What a stage's own bar sets, set on every stage of the group at once. Levels and single
+            edge items stay with one stage (select it, or merge first): a riser belongs to the
+            platform it stands on. */}
+        {sg.stages > 0 && onGroupStageHeight && (
+          <Popover label="גובה" icon={MoveVertical} value={sg.heightMm ? `${Math.round(sg.heightMm / 10)} ס״מ` : "שונים"} panelClassName="w-72">
+            <PanelRow label="כל הבמות" htmlFor="group-stage-height">
+              <NumberField
+                id="group-stage-height"
+                decimals={0}
+                min={10}
+                max={300}
+                value={sg.heightMm ? Math.round(sg.heightMm / 10) : 0}
+                hideZero
+                placeholder="—"
+                onChange={(cm) => cm > 0 && onGroupStageHeight(cm * 10)}
+                className="w-20"
+              />
+              <span className="text-xs text-muted">ס״מ</span>
+            </PanelRow>
+            <Note>{sg.pieces > 0 ? `${sg.pieces} חלקים עדיין אינם במה — הגובה נקבע לבמות שבקבוצה. ` : ""}במות שעומדות זו לצד זו באותו גובה הן משטח אחד.</Note>
+          </Popover>
+        )}
+        {sg.stages > 0 && onGroupFillEdges && (
+          <Popover
+            label="קצוות"
+            icon={Footprints}
+            tone={sg.gapsMm > 0 ? "warn" : "default"}
+            value={sg.gapsMm > 0 ? `${gm(sg.gapsMm)} מ׳ פתוחים` : sg.whole?.flights ? `${sg.whole.flights} מדרגות` : "סגור"}
+            panelClassName="w-80"
+          >
+            {/* A group's edges, counted over every member — what the single stage's bar lists. */}
+            {sg.whole && (sg.whole.flights > 0 || sg.whole.benchMm > 0 || sg.whole.barrierMm > 0 || sg.whole.backdropMm > 0 || sg.whole.ramps > 0) && (
+              <ul className="mb-2 space-y-1 text-sm">
+                {sg.whole.flights > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">מדרגות{sg.whole.stairsCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums text-muted">{`${sg.whole.flights} · ${gm(sg.whole.stairsMm)} מ׳`}</span>
+                  </li>
+                )}
+                {sg.whole.benchMm > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">בנקט{sg.whole.benchCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums text-muted">{`${gm(sg.whole.benchMm)} מ׳ · ${sg.whole.benchSeats} מקומות`}</span>
+                  </li>
+                )}
+                {sg.whole.barrierMm > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">מחסום{sg.whole.barrierCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums text-muted">{`${gm(sg.whole.barrierMm)} מ׳`}</span>
+                  </li>
+                )}
+                {sg.whole.backdropMm > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">קיר רקע</span>
+                    <span className="nums text-muted">{`${gm(sg.whole.backdropMm)} מ׳`}</span>
+                  </li>
+                )}
+                {sg.whole.ramps > 0 && (
+                  <li className="flex justify-between gap-3">
+                    <span className="text-ink">רמפה</span>
+                    <span className="nums text-muted">{sg.whole.ramps}</span>
+                  </li>
+                )}
+              </ul>
+            )}
+            {sg.whole && onGroupStageCorners && (sg.whole.cornerCount > 0 || sg.whole.corners !== true) && (
+              <div className="mb-2">
+                <Segmented
+                  label={`פינות בין שתי ריצות — בכל הבמות${sg.whole.corners === undefined ? " (כרגע שונות)" : ""}`}
+                  value={sg.whole.corners === false ? "off" : "on"}
+                  options={[
+                    ["on", "פינה מלאה"],
+                    ["off", "פתוחה"],
+                  ] as const}
+                  onChange={(v) => onGroupStageCorners(v === "on")}
+                />
+              </div>
+            )}
+            {sg.gapsMm > 0 ? (
+              <div className="space-y-1.5">
+                <p className="text-xs text-alert-ink">{gm(sg.gapsMm)} מ׳ של שפה פתוחה בבמות שבקבוצה.</p>
+                <div className="flex gap-1">
+                  {(["stairs", "bench", "barrier"] as const).map((k) => (
+                    <Button key={k} size="sm" variant="outline" className="flex-1" onClick={() => onGroupFillEdges(k)}>
+                      {EDGE_KIND_LABEL[k]}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-ink">כל הצדדים הפתוחים סגורים.</p>
+            )}
+            {sg.skirtMm > 0 && <p className="mt-2 text-xs text-muted">{`חצאית: ${gm(sg.skirtMm)} מ׳`}</p>}
+            <Note>צדדים שצמודים לבמה אחרת אינם פתוחים. מדרגות או בנקט בודדים מוסיפים בבחירת במה אחת.</Note>
+          </Popover>
+        )}
+        {sg.stages > 0 && onGroupStageSurface && (
+          <Popover
+            label="משטח"
+            icon={Layers2}
+            value={sg.surface === undefined ? "שונים" : sg.surface ? (sg.surfaceOptions.find((o) => o.value === sg.surface)?.label ?? "—") : "פלטות חשופות"}
+          >
+            <Select
+              aria-label="מה מכסה את הבמות"
+              value={sg.surface ?? ""}
+              options={[{ value: "", label: "ללא — פלטות חשופות" }, ...sg.surfaceOptions]}
+              onChange={(v) => onGroupStageSurface(v || null)}
+            />
+            <Note>{`אותו משטח על כל הבמות בקבוצה (${gm(sg.areaMm2 / 1000)} מ״ר).`}</Note>
+          </Popover>
+        )}
+        {/* A GROUP of stages carries the rest of a stage's bar, over all of them: how big the lot
+            stands, what it is built of (with the exceed switch on every member), its railing, a
+            template per member, every member taken apart — and one member picked out for the tools
+            that belong to ONE stage: levels, a flight on a side, the outline, exact מידות. A click
+            on a member of the selected group does the same. */}
+        {sg.whole && (
+          <Popover label="מידות" icon={Ruler} value={ltr(`${gm(sg.whole.size.widthMm)}×${gm(sg.whole.size.depthMm)} מ׳`)} panelClassName="w-72">
+            <Note>
+              {`הקבוצה כולה תופסת ${gm(sg.whole.size.widthMm)}×${gm(sg.whole.size.depthMm)} מ׳ — ${sg.count} חלקים. `}
+              מידה מדויקת לבמה אחת, מפלסים, מדרגות בצד ועריכת הצורה — בלחיצה על אותה במה בתוך הקבוצה, או ב״במה בודדת״ כאן.
+            </Note>
+          </Popover>
+        )}
+        {sg.whole && (
+          <Popover label="בנויה מ" icon={Blocks} value={`${sg.whole.deckCount} פלטות`} panelClassName="w-72">
+            {sg.whole.decks.length > 0 ? (
+              <ul className="space-y-1 text-xs">
+                {sg.whole.decks.map((d) => (
+                  <li key={d.name} className="flex justify-between gap-3">
+                    <span className="text-ink">{d.name}</span>
+                    <span className="nums font-semibold text-ink">×{d.count}</span>
+                  </li>
+                ))}
+                {sg.skirtMm > 0 && (
+                  <li className="flex justify-between gap-3 border-t border-border-soft pt-1">
+                    <span className="text-ink">חצאית{sg.whole.skirtCounted ? "" : " (אין בקטלוג)"}</span>
+                    <span className="nums font-semibold text-ink">{ltr(`${gm(sg.skirtMm)} מ׳`)}</span>
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <Note>אף פלטה לא נכנסת — אולי הפלטות שנבחרו נמחקו מהקטלוג.</Note>
+            )}
+            {onGroupStageExceed && (
+              <div className="mt-2">
+                <Segmented
+                  label={`פלטה שעוברת את הקו — בכל הבמות${sg.whole.exceed === undefined ? " (כרגע שונות)" : ""}`}
+                  value={sg.whole.exceed === true ? "on" : "off"}
+                  options={[
+                    ["off", "בתוך הקו"],
+                    ["on", "מותר לחרוג"],
+                  ] as const}
+                  onChange={(v) => onGroupStageExceed(v === "on")}
+                />
+              </div>
+            )}
+            <Note>
+              {sg.whole.coverage < 0.995 ? `הפלטות מכסות ${Math.floor(sg.whole.coverage * 100)}% מהרצפה המסומנת. ` : ""}
+              כל במה בקבוצה מחושבת מהפלטות שלה; הצעת המחיר ורשימת הציוד סופרות את כולן, את המדרגות ואת מטרי החצאית.
+            </Note>
+          </Popover>
+        )}
+        {sg.whole && sg.whole.railingMm !== null && sg.whole.railingMm > 0 && (
+          <Popover label="מעקה" icon={Fence} tone="warn" value={ltr(`${gm(sg.whole.railingMm)} מ׳`)} panelClassName="w-72">
+            <Note>
+              לפי הכלל שנקבע בהגדרות (מעל {Math.round((sg.whole.railingAboveMm ?? 0) / 10)} ס״מ), צריך מעקה בצדדים הפתוחים
+              של הבמות בקבוצה, המסומנים בקו מנוקד. החזית לא מסומנת לעולם.
+            </Note>
+          </Popover>
+        )}
+        {sg.whole && onPickStage && (
+          <Popover label="במה בודדת" icon={Grid2x2} value={`${sg.whole.members.length} במות`} panelClassName="w-72">
+            <div className="space-y-1">
+              {sg.whole.members.map((mbr) => (
+                <Button key={mbr.id} size="sm" variant="outline" className="w-full" onClick={() => onPickStage(mbr.id)}>
+                  {mbr.label}
+                  {mbr.size ? <> · {ltr(mbr.size)}</> : null}
+                </Button>
+              ))}
+            </div>
+            <Note>בחירת במה אחת מתוך הקבוצה — לסרגל שלה: מפלסים, מדרגות בצד, עריכת הצורה ומידות. ״חזרה לקבוצה״ בסרגל שלה, או Esc.</Note>
+          </Popover>
+        )}
+        {sg.whole && onGroupSaveTemplate && (
+          <SaveTemplatePopover
+            onSave={onGroupSaveTemplate}
+            note={`תבנית היא במה אחת: כל אחת מ־${sg.whole.members.length} הבמות בקבוצה נשמרת כתבנית משלה, בשם הזה וממוספרת. במה מתבנית מוצבת מכלי ״מילוי במות״.`}
+          />
+        )}
         <Rotation value={facing} onChange={onFace} />
         <MirrorMenu onMirror={onMirror} />
+        {sg.whole && onGroupExplode && <BarButton icon={Blocks} label="פירוק כל הבמות לפלטות נפרדות" onClick={onGroupExplode} />}
         {stageGroup.grouped ? (
           <BarButton icon={Ungroup} label="פירוק הקבוצה" onClick={onUngroup} />
         ) : (
@@ -552,6 +954,18 @@ export function Inspector({
               />
               <span className="text-xs text-muted">כסאות ל־{selectedTables} שולחנות</span>
             </PanelRow>
+            {/* Which chair, over the lot — the head table's armchairs set in one go. Writes only,
+                like the count above: the selection may hold several chairs between them. */}
+            {onChairForSelection && chairOptions().length > 0 && (
+              <PanelRow label="כיסא" stack>
+                <Select
+                  aria-label="סוג הכיסא לשולחנות שנבחרו"
+                  value=""
+                  options={[{ value: "", label: "—" }, { value: "__default", label: "ברירת המחדל של הסטודיו" }, ...chairOptions()]}
+                  onChange={(v) => v && onChairForSelection(v === "__default" ? null : v)}
+                />
+              </PanelRow>
+            )}
           </Popover>
         )}
 
@@ -562,6 +976,7 @@ export function Inspector({
 
         {/* "1.5m between them" — typed, rather than nudged until the tape agrees. */}
         {spacing && <SpacingPopover key={spacing.key} spacing={spacing} onSpace={onSpace} />}
+        <AlignMenu align={align} />
 
         {/* Each turns about its OWN centre here, which is how a scattered handful is squared to the
             room. */}
@@ -617,8 +1032,7 @@ export function Inspector({
             />
             <Button
               size="sm"
-              variant="ghost"
-              className="mt-2 w-full"
+              className="mt-3 w-full"
               onClick={() => (dressMode === "replace" ? setConfirmingReplace(true) : onCopyDressing("add"))}
             >
               <Copy className="h-3.5 w-3.5" strokeWidth={2} />
@@ -719,8 +1133,10 @@ export function Inspector({
             title={EDGE_KIND_LABEL[it.kind]}
             facts={[
               it.side,
+              it.inner ? (it.kind === "stairs" ? "שקועות בבמה" : "על הבמה") : null,
               it.full ? "כל הצד" : `${cmOf(it.widthMm)} ס״מ`,
               it.kind === "bench" ? `${it.seats} מקומות ישיבה` : null,
+              it.kind === "bench" && it.sofaSeats > 0 ? `${it.sofaSeats} על ספה` : null,
               it.kind === "ramp" ? `אורך ${m(it.depthMm)} מ׳` : null,
             ]
               .filter(Boolean)
@@ -728,6 +1144,37 @@ export function Inspector({
             onClose={onClose}
           >
             <BarButton icon={ArrowRight} label="חזרה לבמה" onClick={() => onSelectEdge(null)} />
+            {(it.kind === "stairs" || it.kind === "bench") && (
+              <Popover label="מיקום" icon={Layers2} value={it.inner ? "פנימי" : "חיצוני"} tone={!it.inner && !it.outerFits ? "warn" : "default"}>
+                {it.outerFits && it.innerFits ? (
+                  <Segmented
+                    label={it.kind === "stairs" ? "איפה המדרגות" : "איפה הבנקט"}
+                    value={it.inner ? "inner" : "outer"}
+                    options={[
+                      ["outer", "מחוץ לבמה"],
+                      ["inner", it.kind === "stairs" ? "שקועות בבמה" : "על הבמה"],
+                    ] as const}
+                    onChange={(v) => onStairChange(it.id, { inner: v === "inner" })}
+                  />
+                ) : !it.outerFits && it.innerFits ? (
+                  <>
+                    <p className="text-sm text-ink">{it.inner ? "פנימי — " : ""}הצד קרוב לקיר: אין מקום {it.kind === "stairs" ? "לגרם המדרגות" : "לבנקט"} מחוץ לבמה, רק בתוכה.</p>
+                    {!it.inner && (
+                      <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => onStairChange(it.id, { inner: true })}>
+                        {it.kind === "stairs" ? "להעביר לתוך הבמה" : "להעמיד על הבמה"}
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-ink">{it.inner ? "בתוך הבמה." : "מחוץ לבמה."} {it.innerFits || it.inner ? "" : it.kind === "stairs" ? "אי אפשר לשקוע מדרגות בצד הזה." : ""}</p>
+                )}
+                <Note>
+                  {it.kind === "stairs"
+                    ? "מדרגות פנימיות שקועות בתוך קו הבמה — עולים מהרצפה בשפה, והפלטות מונחות סביבן. זו הדרך היחידה למדרגות בצד שקרוב לקיר."
+                    : "בנקט פנימי עומד על הבמה לאורך השפה, והכיסאות שלו מאחוריו, פונים החוצה."}
+                </Note>
+              </Popover>
+            )}
             <Popover label="סוג" icon={Grid2x2} value={EDGE_KIND_LABEL[it.kind]} panelClassName="w-[22rem]">
               <Segmented
                 label="מה עומד בצד הזה"
@@ -798,21 +1245,23 @@ export function Inspector({
               </Popover>
             )}
             {it.kind === "bench" && (
-              <Popover label="בנקט" icon={RectangleHorizontal} value={`${it.seats} כיסאות`}>
-                <PanelRow label="כיסאות" htmlFor="edge-s">
-                  {it.seatsSet && it.seats !== it.autoSeats && (
-                    <BarButton icon={Undo2} label={`חזרה לאחד לכל 60 ס״מ (${it.autoSeats})`} onClick={() => onStairChange(it.id, { seats: null })} />
-                  )}
-                  <NumberField
-                    id="edge-s"
-                    decimals={0}
-                    min={0}
-                    max={60}
-                    value={it.seats}
-                    onChange={(n) => onStairChange(it.id, { seats: n })}
-                    className="w-20"
-                  />
-                </PanelRow>
+              <Popover label="בנקט" icon={RectangleHorizontal} value={benchSeatsWord(it.chairSeats, it.sofaSeats)} panelClassName="w-[22rem]">
+                {/* The two long sides, each its own: the stage side (chairs stand ON the stage behind
+                    it, its top their table) and the room side. */}
+                <BenchSidesFields
+                  idPrefix="edge"
+                  back={it.back}
+                  front={it.front}
+                  backLabel="צד הבמה"
+                  frontLabel="צד האולם"
+                  autoSeats={it.autoSeats}
+                  heightMm={it.heightMm}
+                  sofaHeightMm={it.sofaHeightMm}
+                  heightNote="מעל הבמה — שולחן לכיסאות שעליה"
+                  onSide={(side, patch) => onStairChange(it.id, { [side]: patch })}
+                  onHeight={(mm) => onStairChange(it.id, { heightMm: mm })}
+                  onSofaHeight={(mm) => onStairChange(it.id, { sofaHeightMm: mm })}
+                />
                 <PanelRow label="עומק (ס״מ)" htmlFor="edge-d">
                   <NumberField
                     id="edge-d"
@@ -822,18 +1271,6 @@ export function Inspector({
                     commitOnBlur
                     value={cmOf(it.depthMm)}
                     onChange={(cm) => onStairChange(it.id, { depthMm: cm * 10 })}
-                    className="w-20"
-                  />
-                </PanelRow>
-                <PanelRow label="גובה (ס״מ)" htmlFor="edge-h">
-                  <NumberField
-                    id="edge-h"
-                    decimals={0}
-                    min={20}
-                    max={100}
-                    commitOnBlur
-                    value={cmOf(it.heightMm)}
-                    onChange={(cm) => onStairChange(it.id, { heightMm: cm * 10 })}
                     className="w-20"
                   />
                 </PanelRow>
@@ -862,6 +1299,8 @@ export function Inspector({
             .join(" · ")}
           onClose={onClose}
         >
+          {/* One stage picked out of its group: its own bar, with the group a click away. */}
+          {onBackToGroup && <BarButton icon={Group} label="חזרה לקבוצת הבמות · Esc" onClick={onBackToGroup} />}
           {sp.size && (
             <Popover label="מידות" icon={Ruler} value={ltr(`${m(sp.size.widthMm)}×${m(sp.size.depthMm)} מ׳`)} panelClassName="w-72">
               <PanelRow label="חזית (ס״מ)" htmlFor="stage-w">
@@ -892,7 +1331,11 @@ export function Inspector({
                 {sp.coverage < 0.995
                   ? `הפלטות מכסות ${Math.floor(sp.coverage * 100)}% מהמידה הזו. `
                   : "הפלטות מכסות את המידה הזו בדיוק. "}
-                הגב נשאר במקומו והחזית זזה. בגרירה, ידית נמשכת למידות שהפלטות בונות בדיוק (Alt משחרר).
+                {sp.round
+                  ? "הצורה כולה גדלה או קטנה איתה, והמדרגות סביבה עוקבות אחרי הקשת. הגב נשאר במקומו."
+                  : sp.shaped
+                    ? "המידה היא של התיבה, כולל הקימור. הפינות המעוגלות והחזית הקמורה נבנות מחדש על המלבן החדש; הגב נשאר במקומו. לשינוי הרדיוס — ״עריכת הבמה״."
+                    : "הגב נשאר במקומו והחזית זזה. בגרירה, ידית נמשכת למידות שהפלטות בונות בדיוק (Alt משחרר)."}
               </Note>
             </Popover>
           )}
@@ -964,7 +1407,7 @@ export function Inspector({
                 <BarButton icon={Trash2} label={`הסרת מפלס ${i + 1}`} onClick={() => onRemoveLevel(l.id)} />
               </PanelRow>
             ))}
-            <Button size="sm" variant="ghost" className="mt-1 w-full" onClick={onAddLevel}>
+            <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onAddLevel}>
               <Plus className="h-3.5 w-3.5" strokeWidth={2} />
               הוספת מפלס מוגבה
             </Button>
@@ -983,6 +1426,7 @@ export function Inspector({
               <Popover
                 label="קצוות"
                 icon={Footprints}
+                panelClassName="w-80"
                 tone={open ? "warn" : "default"}
                 value={open ? `${m(sp.gapsMm)} מ׳ פתוחים` : flights > 0 ? `${flights} מדרגות` : "סגור"}
               >
@@ -1036,7 +1480,7 @@ export function Inspector({
                     <p className="text-xs text-alert-ink">{m(sp.gapsMm)} מ׳ של שפה פתוחה — מסומנים באדום בתוכנית.</p>
                     <div className="flex gap-1">
                       {(["stairs", "bench", "barrier"] as const).map((k) => (
-                        <Button key={k} size="sm" variant="ghost" className="flex-1" onClick={() => onFillEdges(k)}>
+                        <Button key={k} size="sm" variant="outline" className="flex-1" onClick={() => onFillEdges(k)}>
                           {EDGE_KIND_LABEL[k]}
                         </Button>
                       ))}
@@ -1044,10 +1488,10 @@ export function Inspector({
                   </div>
                 )}
                 <div className="mt-2 border-t border-border-soft pt-2">
-                  <span className="text-xs text-muted">הוספה — ואז לחיצה על צד הבמה</span>
-                  <div className="mt-1 grid grid-cols-3 gap-1">
+                  <span className="mb-1 block text-xs font-medium text-ink-soft">הוספה — ואז לחיצה על צד הבמה</span>
+                  <div className="grid grid-cols-2 gap-1">
                     {EDGE_KINDS.map((k) => (
-                      <Button key={k} size="sm" variant="ghost" onClick={() => onAddEdge(k)}>
+                      <Button key={k} size="sm" variant="outline" onClick={() => onAddEdge(k)}>
                         <Plus className="h-3.5 w-3.5" strokeWidth={2} />
                         {EDGE_KIND_LABEL[k]}
                       </Button>
@@ -1106,20 +1550,91 @@ export function Inspector({
     const stretch = r?.sizing === "stretch" && !drape;
     const size = p.sizeMm;
     const shade = shades.find((s) => s.id === p.variantId);
+    // A flight or a ramp standing on its own — never one worn on a table or hung on a wall.
+    const drawn = footprintBounds(placementFootprint(p));
+    const drawnSize = { widthMm: drawn.w, depthMm: drawn.h };
+    const climb = r && !table && !drape && onClimb ? itemClimbHost(r.product, drawnSize, p.climb) : null;
+    const editClimb = (edit: ClimbEdit | null) => {
+      if (edit && onClimb) onClimb(p.id, edit);
+    };
 
+    const bench = benchPanel?.layout;
+    const benchNumber = benchPanel?.spec?.number;
     return (
       <Bar
-        icon={Sparkles}
-        title={r?.product.name ?? "פריט"}
+        icon={bench ? RectangleHorizontal : Sparkles}
+        title={bench ? (benchPanel?.numbered && benchNumber ? `בנקט ${benchNumber}` : "בנקט") : (r?.product.name ?? "פריט")}
         facts={[
-          LAYER_LABEL[p.layer],
-          table ? `שולחן ${table.number}` : null,
+          bench ? r?.product.name : LAYER_LABEL[p.layer],
+          bench ? `${(bench.widthMm / 1000).toFixed(2)} מ׳` : null,
+          bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
+          table ? tableLabel(doc, table) : null,
           drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ על הקיר` : "הקיר נמחק") : null,
         ]
           .filter(Boolean)
           .join(" · ")}
         onClose={onClose}
       >
+        {/* A STANDALONE BANQUETTE is set like a table: its number (optional — clearing it leaves the
+            banquette seated but unnumbered), its two sides and their counts, and its occupancy.
+            Its row is still quoted by the metre; nothing here touches that. */}
+        {bench && benchPanel && (
+          <Popover label="מספר" icon={Hash} value={benchPanel.numbered && benchNumber ? ltr(`#${benchNumber}`) : "ללא"}>
+            <PanelRow label="מספר" htmlFor="bench-number">
+              {benchNumber !== undefined && <BarButton icon={Undo2} label="ללא מספר" onClick={() => onBench(p.id, { number: null })} />}
+              <NumberField
+                id="bench-number"
+                aria-label="מספר הבנקט"
+                decimals={0}
+                min={0}
+                value={benchNumber ?? 0}
+                onChange={(v) => onBench(p.id, { number: v })}
+                className="w-20"
+              />
+            </PanelRow>
+            {benchPanel.numbered && benchNumber !== undefined && benchNumber > 0 && duplicateNumbers(doc, benchOf).has(benchNumber) && <DuplicateNumber />}
+            <Note>
+              {bench.seats > 0
+                ? "בנקט שיושבים בו ממוספר כמו שולחן — במפת ההצבה ובמספור מחדש. בלי מספר הוא נשאר במניין המקומות בלבד."
+                : "המספר יופיע כשיהיו מקומות ישיבה בבנקט."}
+            </Note>
+          </Popover>
+        )}
+        {bench && benchPanel && (
+          <Popover label="ישיבה" icon={Armchair} value={bench.seats > 0 ? ltr(`${benchPanel.spec?.seated ?? 0}/${bench.seats}`) : "—"} panelClassName="w-[22rem]">
+            <BenchSidesFields
+              idPrefix="bench"
+              back={{ ...bench.back, set: benchPanel.spec?.back?.seats !== undefined }}
+              front={{ ...bench.front, set: benchPanel.spec?.front?.seats !== undefined }}
+              backLabel="צד אחורי"
+              frontLabel="צד קדמי"
+              autoSeats={Math.floor(bench.widthMm / SEAT_WIDTH_MM)}
+              heightMm={bench.heightMm}
+              sofaHeightMm={bench.sofaHeightMm}
+              heightNote="מהרצפה — שולחן לכיסאות שלצידו"
+              onSide={(side, patch) => onBench(p.id, { [side]: patch })}
+              onHeight={(mm) => onBench(p.id, { heightMm: mm })}
+              onSofaHeight={(mm) => onBench(p.id, { sofaHeightMm: mm })}
+            />
+            {bench.seats > 0 && (
+              <PanelRow label="תפוסה" htmlFor="bench-seated">
+                <NumberField
+                  id="bench-seated"
+                  decimals={0}
+                  min={0}
+                  value={benchPanel.spec?.seated ?? 0}
+                  onChange={(v) => onBench(p.id, { seated: v })}
+                  className="w-20"
+                />
+                <span className={"text-xs " + occupancyInk(benchPanel.spec?.seated ?? 0, bench.seats)}>מתוך {bench.seats}</span>
+              </PanelRow>
+            )}
+            <Note>
+              הצד האחורי הוא הצד העליון של הבנקט כפי שהונח. כיסאות נספרים ונארזים כמו כיסאות שולחן; ספה נספרת במקומות הישיבה בלבד.
+              אורך הבנקט נמתח בידיות שבתוכנית.
+            </Note>
+          </Popover>
+        )}
         {/* Inline, not behind a subject: how many of a thing there are is the one field on this bar
             that gets edited over and over while placing. */}
         <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="כמות">
@@ -1170,6 +1685,22 @@ export function Inspector({
         )}
 
         {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
+        {/* A row that stretches has its own size field above; everything else of a fixed size can
+            still be drawn bigger or smaller on THIS plan — a fuller arrangement on the head table. */}
+        {/* A climb's size is not a drawing choice: its run follows the step it covers. */}
+        {!sizePanel && !stretch && !drape && !p.stage && !climb && <ScalePopover scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />}
+        {climb && r && (
+          <ClimbPopover
+            host={climb}
+            onHeight={(mm) => editClimb(climbHeightEdit(p, r.product, drawnSize, mm))}
+            onRisers={(n) => editClimb(climbRisersEdit(p, r.product, drawnSize, n))}
+            onAccessible={() => editClimb(climbAccessibleEdit(p, r.product, drawnSize))}
+            onReverse={() => editClimb(climbReverseEdit(p, r.product, drawnSize))}
+          />
+        )}
+        {p.layer === "ceiling" && !drape && onHang && (
+          <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
+        )}
         <BreachPopover breaches={breaches} />
 
         {/* A drape covers its whole wall by default; this puts it back after it was shortened. */}
@@ -1177,7 +1708,7 @@ export function Inspector({
           <Popover label="על הקיר" icon={Maximize2} value={run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳` : "—"}>
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
               className="w-full"
               disabled={!run || (drape.from === 0 && drape.to === 1)}
               onClick={() => onSpan(p.id, { ...drape, ...WHOLE_WALL })}
@@ -1194,12 +1725,14 @@ export function Inspector({
         <StackMenu show={canRestack} onRestack={onRestack} />
         <SelectionMenu items={selectItems} />
 
+        {/* On a table: put it on others in a pattern, and move it about its own table. */}
         {table && (
-          <Menu
-            label="עוד פעולות לפריט"
-            side="top"
-            items={[{ label: `החל על כל שולחנות ${table.type}`, icon: Copy, onSelect: onSmartApply }]}
-          />
+          <>
+            <Popover label="החלת הפריט על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+              {renderPattern(table.id, p.id)}
+            </Popover>
+            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />}
+          </>
         )}
         {onMakeStage && <BarButton icon={Grid2x2} label="הפיכה לבמה — מדרגות, גובה ומפלסים" onClick={onMakeStage} />}
         <Actions
@@ -1229,23 +1762,30 @@ export function Inspector({
   return (
     <Bar
       icon={TableIcon}
-      title={t.number > 0 ? `שולחן ${t.number}` : "שולחן ראש"}
+      title={tableLabel(doc, t)}
       facts={[t.type, `${count} פריטים`].join(" · ")}
       onClose={onClose}
     >
       {/* F-3.3: auto-running numbering, editable per table */}
-      <Popover label="מספר שולחן" icon={Hash} value={ltr(`#${t.number}`)}>
-        <PanelRow>
-          <NumberField
-            id="table-number"
-            aria-label="מספר שולחן"
-            decimals={0}
-            value={t.number}
-            onChange={(v) => onRenumber(t.id, v)}
-            className="w-20"
-          />
-        </PanelRow>
-        <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד.</Note>
+      <Popover label="מספר שולחן" icon={Hash} value={t.unnumbered ? "ללא" : ltr(`#${t.number}`)}>
+        {!t.unnumbered && (
+          <PanelRow>
+            <NumberField
+              id="table-number"
+              aria-label="מספר שולחן"
+              decimals={0}
+              min={0}
+              value={t.number}
+              onChange={(v) => onRenumber(t.id, v)}
+              className="w-20"
+            />
+          </PanelRow>
+        )}
+        {!t.unnumbered && t.number > 0 && duplicateNumbers(doc, benchOf).has(t.number) && <DuplicateNumber />}
+        <div className="mt-2">
+          <UnnumberedSwitch checked={!!t.unnumbered} onChange={(off) => onTablesNumbered([t.id], !off)} />
+        </div>
+        <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש.</Note>
       </Popover>
 
       {swap?.kind === "tables" && <SwapPopover swap={swap} onSwap={onSwap} label="סוג שולחן" />}
@@ -1265,6 +1805,25 @@ export function Inspector({
             className="w-20"
           />
         </PanelRow>
+        {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only
+            names a table's chair where it differs; this is where it is made to differ. */}
+        {seats > 0 && onChair && chairOptions().length > 0 && (
+          <PanelRow label="כיסא" stack>
+            <Select
+              aria-label="סוג הכיסא"
+              value={t.chairVariantId ?? ""}
+              options={[
+                { value: "", label: `ברירת מחדל${(() => {
+                  const d = defaultChair();
+                  const name = d ? chairOptions().find((o) => o.value === d)?.label : undefined;
+                  return name ? ` — ${name}` : "";
+                })()}` },
+                ...chairOptions(),
+              ]}
+              onChange={(v) => onChair(t.id, v || null)}
+            />
+          </PanelRow>
+        )}
         {seats > 0 && (
           <PanelRow label="תפוסה" htmlFor="table-seated">
             <NumberField
@@ -1361,7 +1920,7 @@ export function Inspector({
               label="גוון המפה"
             />
           )}
-          <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => onApplyToAllTables(cloth.id)}>
+          <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(cloth.id)}>
             <Copy className="h-3.5 w-3.5" strokeWidth={2} />
             על כל השולחנות
           </Button>
@@ -1369,6 +1928,17 @@ export function Inspector({
             <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
             הסרת המפה
           </Button>
+        </Popover>
+      )}
+
+      {/* Dressing: the table's focus mode, and its whole dressing onto others in a pattern. */}
+      {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />}
+      <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
+        {renderDesigns(t.id)}
+      </Popover>
+      {count > 0 && (
+        <Popover label="החלת עיצוב השולחן על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+          {renderPattern(t.id)}
         </Popover>
       )}
 
@@ -1401,6 +1971,81 @@ export function Inspector({
         deleteLabel="מחיקה של השולחן"
       />
     </Bar>
+  );
+}
+
+/** "6 כיסאות · 4 על ספה" — a banquette's seating in words, for a bar chip. */
+function benchSeatsWord(chairSeats: number, sofaSeats: number): string {
+  const parts = [chairSeats > 0 ? `${chairSeats} כיסאות` : null, sofaSeats > 0 ? `${sofaSeats} על ספה` : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "ללא ישיבה";
+}
+
+/** A banquette's two long sides and two heights — the one fieldset both banquettes are set with
+ *  (a stage's edge banquette and a standalone one), so the two cannot be edited differently.
+ *
+ *  Each side: what it is (chairs / sofa / none) and, unless bare, how many — typed, or one per 60cm
+ *  with a way back to that. The TOP height belongs to a chairs side (it is their table); the SEAT
+ *  height to a sofa side — each shown only while a side of its kind exists, since a height nobody
+ *  sits at is a question with no answer. */
+function BenchSidesFields({
+  idPrefix,
+  back,
+  front,
+  backLabel,
+  frontLabel,
+  autoSeats,
+  heightMm,
+  sofaHeightMm,
+  heightNote,
+  onSide,
+  onHeight,
+  onSofaHeight,
+}: {
+  idPrefix: string;
+  back: BenchSideRow;
+  front: BenchSideRow;
+  backLabel: string;
+  frontLabel: string;
+  autoSeats: number;
+  heightMm: number;
+  sofaHeightMm: number;
+  /** What the top height is measured from, in words. */
+  heightNote: string;
+  onSide: (side: "back" | "front", patch: BenchSidePatch) => void;
+  onHeight: (mm: number) => void;
+  onSofaHeight: (mm: number) => void;
+}) {
+  const cmOf = (mm: number) => Math.round(mm / 10);
+  const side = (key: "back" | "front", row: BenchSideRow, label: string) => (
+    <div className="space-y-2 rounded-md border border-inset-border bg-inset p-2.5">
+      <Segmented label={label} value={row.kind} options={BENCH_SIDE_KINDS.map((k) => [k, BENCH_SIDE_LABEL[k]] as const)} onChange={(kind) => onSide(key, { kind })} />
+      {row.kind !== "none" && (
+        <PanelRow label={row.kind === "chairs" ? "כיסאות" : "מקומות על הספה"} htmlFor={`${idPrefix}-${key}-seats`}>
+          {row.set && row.seats !== autoSeats && <BarButton icon={Undo2} label={`חזרה לאחד לכל 60 ס״מ (${autoSeats})`} onClick={() => onSide(key, { seats: null })} />}
+          <NumberField id={`${idPrefix}-${key}-seats`} decimals={0} min={0} max={60} value={row.seats} onChange={(n) => onSide(key, { seats: n })} className="w-20" />
+        </PanelRow>
+      )}
+    </div>
+  );
+  const hasChairs = back.kind === "chairs" || front.kind === "chairs";
+  const hasSofa = back.kind === "sofa" || front.kind === "sofa";
+  return (
+    <div className="space-y-2">
+      {side("back", back, backLabel)}
+      {side("front", front, frontLabel)}
+      {hasChairs && (
+        <PanelRow label="גובה המשטח (ס״מ)" htmlFor={`${idPrefix}-h`}>
+          <NumberField id={`${idPrefix}-h`} decimals={0} min={40} max={120} commitOnBlur value={cmOf(heightMm)} onChange={(cm) => onHeight(cm * 10)} className="w-20" />
+          <span className="text-xs text-muted">{heightNote}</span>
+        </PanelRow>
+      )}
+      {hasSofa && (
+        <PanelRow label="גובה מושב הספה (ס״מ)" htmlFor={`${idPrefix}-sh`}>
+          <NumberField id={`${idPrefix}-sh`} decimals={0} min={30} max={70} commitOnBlur value={cmOf(sofaHeightMm)} onChange={(cm) => onSofaHeight(cm * 10)} className="w-20" />
+          <span className="text-xs text-muted">מהרצפה שהיושבים עומדים עליה</span>
+        </PanelRow>
+      )}
+    </div>
   );
 }
 
@@ -1510,7 +2155,7 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
                         }
                       >
                         <span className="h-9 w-9 shrink-0 overflow-hidden rounded-sm border border-border">
-                          <ProductImage imageUrl={p.imageUrl} category={p.category} name={p.name} productId={p.id} />
+                          <ProductImage product={p} />
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className={"block truncate text-sm font-medium " + (on ? "text-accent" : "text-ink")}>{p.name}</span>
@@ -1557,7 +2202,7 @@ function MirrorMenu({ onMirror }: { onMirror?: (axis: MirrorAxis) => void }) {
 /** The size of a stretchable item, in the module it is built in. Commits on blur — a stage built in
  *  1m decks would otherwise snap to 1m the moment the "4" of "450" was typed. */
 /** "Save this stage as a template": a name, and the button. */
-function SaveTemplatePopover({ onSave }: { onSave: (name: string) => void }) {
+function SaveTemplatePopover({ onSave, note }: { onSave: (name: string) => void; note?: string }) {
   const [name, setName] = useState("");
   return (
     <Popover label="תבנית" icon={BookmarkPlus} value="שמירה">
@@ -1574,7 +2219,7 @@ function SaveTemplatePopover({ onSave }: { onSave: (name: string) => void }) {
         <BookmarkPlus className="h-3.5 w-3.5" strokeWidth={2} />
         שמירה כתבנית
       </Button>
-      <Note>הצורה, המפלסים, הקצוות, המשטח והעיצוב על הבנקטים נשמרים. במה מתבנית מוצבת מכלי ״מילוי במות״.</Note>
+      <Note>{note ?? "הצורה, המפלסים, הקצוות, המשטח והעיצוב על הבנקטים נשמרים. במה מתבנית מוצבת מכלי ״מילוי במות״."}</Note>
     </Popover>
   );
 }
@@ -1622,7 +2267,7 @@ function SizePopover({ panel, onSize }: { panel: SizePanel; onSize: (size: { wid
         {axes.depth && spec.depth ? ` · עומק ${range(spec.depth)}` : ""}. אפשר גם למתוח בידיות שעל התוכנית.
       </Note>
       {custom && (
-        <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => onSize(null)}>
+        <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onSize(null)}>
           <Undo2 className="h-3.5 w-3.5" strokeWidth={2} />
           חזרה לגודל הקטלוג ({axes.uniform ? `⌀${cm(catalog.widthMm)}` : `${cm(catalog.widthMm)}×${cm(catalog.depthMm)}`})
         </Button>
@@ -1653,6 +2298,28 @@ function BreachPopover({ breaches }: { breaches: { other: string; distance: numb
 }
 
 /** Set the air between the selected things. The first one picked stays put. */
+/** "ללא מספור" — a table (or a block) the numbering passes by: a cocktail table, the gift table. */
+function UnnumberedSwitch({ checked, onChange }: { checked: boolean; onChange: (unnumbered: boolean) => void }) {
+  return (
+    <SwitchRow
+      checked={checked}
+      onChange={onChange}
+      label="ללא מספור"
+      hint="שולחן שלא נכנס לספירה — אין לו מספר על התוכנית ועל המפה, והמספור מדלג עליו. הוא עדיין נספר בהצעת המחיר ובליקוט."
+    />
+  );
+}
+
+/** Another unit on the plan shows the same number — two table 4s the crew cannot tell apart. */
+function DuplicateNumber() {
+  return (
+    <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn-ink">
+      <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+      יש שולחן נוסף עם המספר הזה
+    </p>
+  );
+}
+
 function SpacingPopover({ spacing, onSpace }: { spacing: Spacing; onSpace: (gapMm: number, mode: "x" | "y" | "direct") => void }) {
   const [mode, setMode] = useState<"x" | "y" | "direct">(spacing.axis);
   const current = mode === "direct" ? spacing.direct : spacing[mode];
@@ -1679,7 +2346,7 @@ function SpacingPopover({ spacing, onSpace }: { spacing: Spacing; onSpace: (gapM
       <Note>
         {spacing.first} נשאר במקומו
         {spacing.count === 2 ? " והשני זז." : " והשאר מסתדרים בשורה ממנו."}{" "}
-        {mode === "direct" ? "נמדד מקצה לקצה, לאורך הקו בין המרכזים." : "נמדד בין קצוות הפריטים, לאורך הציר."}
+        {mode === "direct" ? "נמדד מקצה לקצה, לאורך הקו בין המרכזים." : "נמדד בין קצוות הפריטים, לאורך הציר."} שולחן נמדד מקצה השולחן עצמו — בלי הכיסאות.
       </Note>
     </Popover>
   );
@@ -1746,4 +2413,138 @@ function occupancyInk(seated: number, seats: number): string {
   if (seated > seats) return "text-alert-ink font-semibold";
   if (seated === seats) return "text-success-ink font-semibold";
   return "text-muted";
+}
+
+/** How high one ceiling item hangs above the floor — its own height on this plan, or its catalog
+ *  row's when it has none (lib/studio/hang.ts). Printed beside it on the ceiling plan. */
+function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: number; onHang: (mm: number | null) => void }) {
+  const shown = own ?? fallback;
+  return (
+    <Popover label="גובה תלייה" icon={ArrowDownToLine} value={shown ? ltr(`${(shown / 1000).toFixed(2)} מ׳`) : "לא צוין"}>
+      <PanelRow label="מהרצפה (ס״מ)" htmlFor="placement-hang">
+        <NumberField
+          id="placement-hang"
+          decimals={0}
+          min={0}
+          max={HANG_MAX_MM / 10}
+          hideZero
+          placeholder={fallback ? String(Math.round(fallback / 10)) : "—"}
+          value={own ? Math.round(own / 10) : 0}
+          onChange={(v) => onHang(v > 0 ? v * 10 : null)}
+          className="w-20"
+        />
+      </PanelRow>
+      {own !== undefined && (
+        <Button size="sm" variant="outline" className="w-full" onClick={() => onHang(null)}>
+          {fallback ? `חזרה לגובה מהקטלוג (${(fallback / 1000).toFixed(2)} מ׳)` : "ניקוי הגובה"}
+        </Button>
+      )}
+      <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
+    </Popover>
+  );
+}
+
+/** A rented flight or ramp standing on its own: the step it covers, and what follows from it — the
+ *  steps (≤18cm on 28cm treads) or the 1:12 run. The venue's own stairs ask the same questions in the
+ *  same words (components/venue-inspector.tsx ClimbFields). A ramp steeper than 1:12 is said, in alert
+ *  ink, with the one press that lays it back — never refused. */
+function ClimbPopover({
+  host,
+  onHeight,
+  onRisers,
+  onAccessible,
+  onReverse,
+}: {
+  host: ClimbHost;
+  onHeight: (mm: number) => void;
+  onRisers: (risers: number | undefined) => void;
+  onAccessible: () => void;
+  onReverse: () => void;
+}) {
+  const ramp = host.kind === "ramp";
+  const steep = ramp && rampTooSteep(host);
+  const risers = climbRisers(host);
+  const derived = risersForRise(host.heightMm);
+  const cm = (mm: number) => Math.round(mm / 10);
+  const runM = (host.depthMm / 1000).toFixed(2);
+  return (
+    <Popover
+      label={ramp ? "רמפה" : "מדרגות"}
+      icon={ramp ? Accessibility : Footprints}
+      tone={steep ? "warn" : "default"}
+      value={ramp ? ltr(formatRatio(rampRatio(host)) || "—") : ltr(`${risers}×${cm(riserHeightMm(host))}`)}
+    >
+      <PanelRow label="הפרש גובה (ס״מ)" htmlFor="climb-height">
+        <NumberField
+          id="climb-height"
+          decimals={0}
+          min={0}
+          max={600}
+          step={5}
+          commitOnBlur
+          value={cm(host.heightMm)}
+          onChange={(v) => onHeight(v * 10)}
+          className="w-20"
+        />
+      </PanelRow>
+      {!ramp && (
+        <PanelRow label="מספר מדרגות" htmlFor="climb-risers">
+          {risers !== derived && <BarButton icon={Undo2} label={`חזרה לאוטומטי (${derived})`} onClick={() => onRisers(undefined)} />}
+          <NumberField id="climb-risers" decimals={0} min={1} max={MAX_RISERS} value={risers} onChange={(n) => onRisers(n)} className="w-20" />
+        </PanelRow>
+      )}
+      {steep ? (
+        <>
+          <p className="text-xs font-semibold text-alert-ink">
+            שיפוע <span dir="ltr">{formatRatio(rampRatio(host))}</span> — תלול מ־1:12 לרמפת נגישות.
+          </p>
+          <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onAccessible}>
+            התאמה ל־1:12
+          </Button>
+        </>
+      ) : (
+        <Note>
+          {ramp
+            ? `אורך ${runM} מ׳ בשיפוע ${formatRatio(rampRatio(host)) || "—"}.`
+            : `מדרגה של ${cm(riserHeightMm(host))} ס״מ, עומק ${cm(treadDepthMm(host))} ס״מ · אורך ${runM} מ׳.`}{" "}
+          האורך נגזר מהגובה, וראש העלייה נשאר במקומו.
+        </Note>
+      )}
+      <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onReverse}>
+        <ArrowDownUp className="h-3.5 w-3.5" strokeWidth={2} />
+        היפוך כיוון העלייה
+      </Button>
+    </Popover>
+  );
+}
+
+/** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
+ *  the quote, the packing list and the order still count it as the row it is. */
+function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
+  const pct = Math.round(scale * 100);
+  return (
+    <Popover label="גודל על התוכנית" icon={Scaling} value={ltr(`${pct}%`)}>
+      <div className="grid grid-cols-4 gap-1" role="group" aria-label="גדלים מוכנים">
+        {[75, 100, 125, 150].map((v) => (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={pct === v}
+            onClick={() => onScale(v / 100)}
+            className={
+              "nums rounded-sm py-1 text-xs font-semibold transition-colors " +
+              (pct === v ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
+            }
+          >
+            {ltr(`${v}%`)}
+          </button>
+        ))}
+      </div>
+      <PanelRow label="אחוז" htmlFor="placement-scale">
+        <NumberField id="placement-scale" decimals={0} min={30} max={300} value={pct} onChange={(v) => onScale(v / 100)} className="w-20" />
+        <span className="text-xs text-muted">%</span>
+      </PanelRow>
+      <Note>גודל הציור בלבד — המחיר, הכמות ורשימת הציוד לא משתנים.</Note>
+    </Popover>
+  );
 }

@@ -1,22 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Check, ChevronRight, LogOut } from "lucide-react";
 import { type EventSummary, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { activeEvent } from "@/lib/events/storage";
 import { reachStep } from "@/lib/events/actions";
-import { DEFAULT_FLOW, STEP_BY_ID, type MeetingStepId } from "@/lib/meeting/steps";
+import { DEFAULT_FLOW, STEP_BY_ID, resumeIndex, type MeetingStepId } from "@/lib/meeting/steps";
 import { fetchMeetingFlow } from "@/lib/settings/actions";
 import { Button } from "@/components/button";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EventForm } from "@/components/event-form";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
 import { OutputsScreen } from "@/app/(app)/outputs/outputs-screen";
 
 // The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every stage autosaves,
-// exiting mid-flow is always safe, and an existing event re-enters at its furthest stage.
+// exiting mid-flow is always safe, and an existing event re-enters at the stage in the URL
+// (?stage=<id>), else at its furthest stage.
 //
 // The stages themselves are not written here — they come from the studio's configured flow
 // (Settings → מצב פגישה, lib/meeting/*). This screen only knows how to render each stage id and how
@@ -36,18 +38,82 @@ import { OutputsScreen } from "@/app/(app)/outputs/outputs-screen";
 export function MeetingScreen() {
   const router = useRouter();
   const params = useSearchParams();
+  // ⚠ DERIVE PRIMITIVES FROM `params`, NEVER DEPEND ON THE OBJECT. In dev, useSearchParams() hands
+  // back a NEW object whenever the router's tree changes — and every server action that calls
+  // revalidatePath (reachStep on each "continue", the details save, a quote's stamp, a catalog
+  // write from the rail) re-renders this page and replaces the tree, URL unchanged. The load effect
+  // below used to depend on `params` itself, so each of those re-ran it and re-set the stage to
+  // `event.step` — the meeting jumped to the furthest stage (the one with the check marks) instead
+  // of staying where the designer was.
+  const isNew = params.get("new") !== null;
+  // The stage the designer is ON lives in the URL (?stage=<id>), so it survives a reload, a remount
+  // and a re-render alike. Read once, when the screen opens; after that `view` is the truth and the
+  // URL follows it (go(), below). `event.step` stays what it always was — the furthest reached,
+  // for the check marks, and where a meeting opened without ?stage resumes.
+  const stageAtOpen = useRef(params.get("stage"));
   const [flow, setFlow] = useState<MeetingStepId[]>(DEFAULT_FLOW);
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [view, setView] = useState(0);
   const [ready, setReady] = useState(false);
+  // The event this screen already holds, for the load effect to ask "do I need to read at all?".
+  const held = useRef<EventSummary | null>(null);
+  useEffect(() => {
+    held.current = event;
+  }, [event]);
+  // `view`, readable from callbacks that must not re-create on every stage change.
+  const viewRef = useRef(0);
+  // Where the designer stepped BACK to the details stage from, so its "שמירה והמשך" returns them
+  // there. Fixing the couple's phone number from the design sketch used to march the meeting back
+  // through the hall sketch — the stage after details — as if the event had just been opened.
+  const cameFrom = useRef<number | null>(null);
+  // The drawing stages' autosave, as the studio reports it (StudioScreen.onSaveState). Only "error"
+  // is acted on: leaving a stage with an edit that failed to save asks first — the unmount flush
+  // retries once, and if that fails too the edit is gone with nobody told, in front of the client.
+  const [sketchSave, setSketchSave] = useState<"saving" | "saved" | "error">("saved");
+  // The move being held back by that question, until it is answered.
+  const [leaving, setLeaving] = useState<(() => void) | null>(null);
+
+  /** Move to stage `i`, and write it into the URL. replaceState rather than router.replace: the
+   *  native call is synced into useSearchParams without a server round trip (Next's own history
+   *  integration), and a stage change is not a navigation — nothing on the server depends on it. */
+  const go = useCallback(
+    (i: number) => {
+      const from = viewRef.current;
+      cameFrom.current = i === 0 && from > 0 ? from : null;
+      viewRef.current = i;
+      setView(i);
+      // A new stage starts clean: the studio that reported the error is being unmounted, and its
+      // last retry runs on its own from here — see the flush-on-unmount note in studio-screen.
+      setSketchSave("saved");
+      const id = flow[Math.min(Math.max(i, 0), flow.length - 1)];
+      if (id) window.history.replaceState(null, "", `/meeting?stage=${id}`);
+    },
+    [flow],
+  );
+
+  /** Run `action` now — or, when the stage being left has an edit the autosave could not land,
+   *  after the designer has said so. Every way out of a stage goes through here: the footer, the
+   *  stepper, and יציאה. */
+  const guarded = useCallback(
+    (action: () => void) => {
+      if (sketchSave === "error") setLeaving(() => action);
+      else action();
+    },
+    [sketchSave],
+  );
 
   // The flow is read here rather than from the (app) layout's context: /meeting sits outside that
   // group, and resuming has to land on the right stage on the first paint — which needs the list
   // and the event in the same pass, since the stage to resume at is `event.step` clamped to the
   // flow's length. Fetched together, for that reason.
+  //
+  // Runs on mount, and again only when ?new appears (a blank form wanted). `?new` going AWAY is this
+  // screen's own doing — advanceFor drops it once the event exists — and must not reload what it
+  // has just created. The same guard keeps a dev Fast Refresh, which re-runs every effect whatever
+  // its dependencies, from re-resolving the stage.
   useEffect(() => {
+    if (!isNew && held.current) return;
     let live = true;
-    const isNew = params.get("new") !== null;
     // `ready` gates the first paint deliberately: a meeting that flickered through the details form
     // on its way to the stage the designer left off at would do it in front of the client.
     void Promise.all([fetchMeetingFlow(), isNew ? Promise.resolve(null) : activeEvent()])
@@ -55,7 +121,9 @@ export function MeetingScreen() {
         if (!live) return;
         setFlow(saved);
         setEvent(ev);
-        setView(ev ? Math.min(ev.step, saved.length - 1) : 0);
+        const at = ev ? resumeIndex(saved, ev.step, stageAtOpen.current) : 0;
+        viewRef.current = at;
+        setView(at);
       })
       .finally(() => {
         if (live) setReady(true);
@@ -63,19 +131,19 @@ export function MeetingScreen() {
     return () => {
       live = false;
     };
-  }, [params]);
+  }, [isNew]);
 
   const advance = useCallback(
     (next: number) => {
       // The stage moves NOW and the record catches up: the designer clicked "continue" with a client
       // watching, and a stage that waits on a round trip to change is a stage that looks broken.
-      setView(next);
+      go(next);
       if (event) {
         setEvent({ ...event, step: Math.max(event.step, next) });
         void reachStep(event.id, next);
       }
     },
-    [event],
+    [event, go],
   );
 
   if (!ready) return null;
@@ -91,7 +159,7 @@ export function MeetingScreen() {
   const isCanvas = step.id === "hall" || step.id === "design" || step.id === "quote";
 
   return (
-    <div dir="rtl" className="flex h-dvh flex-col gap-3 bg-bg p-3">
+    <div dir="rtl" className="flex h-dvh flex-col gap-3 bg-bg p-3 print:block print:h-auto print:p-0">
       {/* Quiet chrome, matching the app shell's own top bar: a white floating card on the `bg`
           plane. This screen's saturated moment is the footer's single gradient CTA and nothing
           else — a violet bar across a meeting run in front of a client is the tool talking over
@@ -108,7 +176,7 @@ export function MeetingScreen() {
           )}
         </div>
 
-        <Stepper flow={flow} current={at} furthest={furthest} onJump={setView} />
+        <Stepper flow={flow} current={at} furthest={furthest} onJump={(i) => guarded(() => go(i))} />
 
         {/* Below md the rail is hidden. Without this the meeting would show no progress at all on
             a tablet — which is exactly the device it gets run on in front of a client. */}
@@ -119,6 +187,12 @@ export function MeetingScreen() {
         <div className="flex flex-1 justify-end">
           <Link
             href="/dashboard"
+            onClick={(e) => {
+              // Same question as the footer asks, for the one exit that is a plain link.
+              if (sketchSave !== "error") return;
+              e.preventDefault();
+              setLeaving(() => () => router.push("/dashboard"));
+            }}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover"
           >
             <LogOut className="h-4 w-4" strokeWidth={2} />
@@ -127,19 +201,19 @@ export function MeetingScreen() {
         </div>
       </header>
 
-      <main className={"min-h-0 flex-1 " + (isCanvas ? "overflow-hidden" : "overflow-auto")}>
+      <main className={"min-h-0 flex-1 print:block print:overflow-visible " + (isCanvas ? "overflow-hidden" : "overflow-auto")}>
         {step.id === "details" && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
         {/* Both sketches are the same document on the same canvas — a narrower set of tools each
             (StudioMode), not a second drawing. */}
         {step.id === "hall" && (
           <CanvasCard>
-            <StudioScreen mode="hall" />
+            <StudioScreen mode="hall" onSaveState={setSketchSave} />
           </CanvasCard>
         )}
         {step.id === "gallery" && <MeetingGalleryScreen />}
         {step.id === "design" && (
           <CanvasCard>
-            <StudioScreen mode="design" />
+            <StudioScreen mode="design" onSaveState={setSketchSave} />
           </CanvasCard>
         )}
         {/* F-1.9 closes the meeting, and it closes it on the SAME screen /outputs is — one component
@@ -152,7 +226,7 @@ export function MeetingScreen() {
             with two different shapes. */}
         {step.id === "quote" && event && (
           <CanvasCard>
-            <OutputsScreen />
+            <OutputsScreen frame="meeting" />
           </CanvasCard>
         )}
       </main>
@@ -162,28 +236,47 @@ export function MeetingScreen() {
         <FlowFooter
           backLabel={prevStep?.label ?? null}
           nextLabel={nextStep ? `השלב הבא: ${nextStep.label}` : null}
-          onBack={() => setView(at - 1)}
-          onContinue={() => advance(at + 1)}
-          onFinish={() => router.push("/dashboard")}
+          onBack={() => guarded(() => go(at - 1))}
+          onContinue={() => guarded(() => advance(at + 1))}
+          onFinish={() => guarded(() => router.push("/dashboard"))}
         />
       )}
+
+      {/* The drawing's last edit did not reach the server (the toolbar says "לא נשמר · נסה שוב").
+          Staying is the safe answer and so the filled one; going on is spelled out as what it is. */}
+      <ConfirmDialog
+        open={leaving !== null}
+        title="הסקיצה לא נשמרה"
+        body="השינוי האחרון לא הגיע לשרת. אפשר להישאר ולנסות שוב מסרגל הכלים — או להמשיך, והשינוי עלול ללכת לאיבוד."
+        confirmLabel="להמשיך בכל זאת"
+        onConfirm={() => {
+          const action = leaving;
+          setLeaving(null);
+          action?.();
+        }}
+        onClose={() => setLeaving(null)}
+      />
     </div>
   );
 
-  // A freshly created event opens on whatever the studio put after the details stage.
+  // A freshly created event opens on whatever the studio put after the details stage. An existing
+  // one whose details were fixed mid-meeting goes back to the stage it was fixed FROM (cameFrom) —
+  // it has already reached it, so the stepper would allow the jump anyway.
   function advanceFor(ev: EventSummary) {
-    const next = Math.min(1, flow.length - 1);
+    const next = Math.min(cameFrom.current ?? 1, flow.length - 1);
     setEvent({ ...ev, step: Math.max(ev.step, next) });
-    setView(next);
+    // go() also drops ?new — the URL becomes ?stage=<next> — so a refresh resumes the event, not
+    // the blank form. It used to be router.replace("/meeting"), a server round trip that, through
+    // the load effect's old `params` dependency, re-read the event — racing the reachStep below.
+    go(next);
     void reachStep(ev.id, next);
-    router.replace("/meeting"); // drop ?new so a refresh resumes the event, not the blank form
   }
 }
 
 /** The drawing stages get the same white sheet the rest of the app's content sits on, clipped to
  *  the radius the chrome above and below it already uses. */
 function CanvasCard({ children }: { children: ReactNode }) {
-  return <div className="h-full overflow-hidden rounded-md bg-surface shadow-floating">{children}</div>;
+  return <div className="h-full overflow-hidden rounded-md bg-surface shadow-floating print:h-auto print:overflow-visible print:rounded-none print:shadow-none">{children}</div>;
 }
 
 function Stepper({
@@ -275,7 +368,9 @@ function FlowFooter({
 // A blank one still creates, for /meeting?new and for a browser with no active event.
 function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: (ev: EventSummary) => void }) {
   return (
-    <div className="mx-auto w-full max-w-lg py-6">
+    // max-w-3xl: the form is six two-up rows, and at the dialog's old 512px it sat as a narrow
+    // column in the middle of a wide screen.
+    <div className="mx-auto w-full max-w-3xl py-6">
       {/* No `overflow-hidden` on this card, deliberately: it clips the date popover flat. The body
           does not scroll here either — `main` is the scroller on this screen, so the form keeps its
           full height and the popovers keep their room. */}

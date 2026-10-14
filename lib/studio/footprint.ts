@@ -1,8 +1,9 @@
 // Pure appearance resolver (no window/localStorage) — shared by the Konva map renderer
 // and the drawer preview. Absence of `appearance` is derived from `dimensions` so every
 // legacy/seed product keeps rendering (name-in-a-shape = today's behavior).
-import type { ArcSpec, MapShape, Product, RingSpec, ShapePart } from "@/lib/catalog/types";
+import type { ArcSpec, MapShape, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
 import { ARC_SWEEP, RESIZE_DEFAULT_STEP_MM, RING_GAP, usesDiameter } from "@/lib/catalog/types";
+import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import { absoluteControlPoints, outlineBounds } from "@/lib/studio/geometry";
@@ -40,11 +41,12 @@ export interface ResolvedContent {
 //      the result at true scale; a shape that quietly measured something else would be the original
 //      bug in a new costume (see MapShape in lib/catalog/types.ts).
 //
-//   2. EVERY EXTREME IS A VERTEX. Bounds are read off the points (customShapeBounds → outlineBounds)
-//      and no bezier is consulted, so an apex that lives only inside a curve is an apex nothing
-//      downstream can see — the preview would scale wrong and the seating would walk a table shorter
-//      than it looks. That is why the arcs below are cut into quarters at their apex rather than
-//      drawn as one long bow.
+//   2. EVERY EXTREME IS A VERTEX. The shapes built here are cut at their apices (an arc into
+//      quarters rather than one long bow), so their box can be read off the points alone and is
+//      exact. A HAND-DRAWN outline makes no such promise — a designer bows one side of a rectangle
+//      and the apex lives inside the curve — so customShapeBounds samples the curves it is given
+//      (sampledBounds) rather than trusting the corners: the drawer's width and depth, the saved
+//      dimensions, the centring on the plan and the seating all measure the shape that is drawn.
 //
 // K is the standard cubic approximation of a quarter arc (0.5523 × radius) — the constant every
 // circle-to-path conversion uses. Control points are offsets from their own edge's endpoints
@@ -544,7 +546,7 @@ export function footprintOutlines(f: Footprint): BuiltOutline[] {
     case "multi":
       return f.parts;
     case "custom": {
-      const b = customShapeBounds(f.outline);
+      const b = customShapeBounds(f.outline, f.edgeCurves);
       return [{ outline: f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves: f.edgeCurves }];
     }
     case "rect": {
@@ -588,8 +590,9 @@ export function flattenEdge(a: Point, b: Point, curve?: EdgeCurve | null, steps 
 }
 
 /** The box around outlines whose extremes may sit INSIDE a curve — a part turned 30° has its apex
- *  there, not at a vertex — so the curves are sampled rather than trusted to rule 2. */
-function sampledBounds(pieces: readonly BuiltOutline[]) {
+ *  there, not at a vertex, and so does a hand-drawn side bowed in the shape editor — so the curves
+ *  are sampled rather than trusted to rule 2. */
+export function sampledBounds(pieces: readonly BuiltOutline[]) {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const { outline, edgeCurves } of pieces) {
     outline.forEach((a, i) => {
@@ -599,31 +602,36 @@ function sampledBounds(pieces: readonly BuiltOutline[]) {
       }
     });
   }
-  if (!Number.isFinite(minX)) return { w: 0, h: 0, cx: 0, cy: 0 };
-  return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  if (!Number.isFinite(minX)) return { minX: 0, maxX: 0, minY: 0, maxY: 0, w: 0, h: 0, cx: 0, cy: 0 };
+  return { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
 
 /** A base footprint and the parts added beside it, as one footprint. Each part is resolved by the
  *  same rule a base shape is (shapeFootprint), turned about its own centre, moved to its offset from
  *  the base's centre — and then the whole lot is re-centred on its own box, because every footprint
  *  is drawn centred on the point its item stands on. */
+/** One part as an outline in the BASE shape's frame — resolved like a base shape, turned about its
+ *  own centre and moved to its offset. What the composite is built of, and what the appearance
+ *  editor hands its outline editor when a part is redrawn by hand. */
+export function placedPartOutline(part: ShapePart): BuiltOutline {
+  const t = ((part.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(t);
+  const sin = Math.sin(t);
+  const turn = (v: Point): Point => ({ x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos });
+  const o = footprintOutlines(shapeFootprint(part.shape, part))[0];
+  return {
+    outline: o.outline.map((v) => {
+      const q = turn(v);
+      return { x: q.x + (part.x || 0), y: q.y + (part.y || 0) };
+    }),
+    ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null)) } : {}),
+  };
+}
+
 export function composeFootprint(base: Footprint, parts: readonly ShapePart[]): Footprint {
-  const pieces: BuiltOutline[] = [...footprintOutlines(base)];
-  for (const part of parts) {
-    const t = ((part.rotation || 0) * Math.PI) / 180;
-    const cos = Math.cos(t);
-    const sin = Math.sin(t);
-    const turn = (v: Point): Point => ({ x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos });
-    for (const o of footprintOutlines(shapeFootprint(part.shape, part))) {
-      pieces.push({
-        outline: o.outline.map((v) => {
-          const q = turn(v);
-          return { x: q.x + (part.x || 0), y: q.y + (part.y || 0) };
-        }),
-        ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null)) } : {}),
-      });
-    }
-  }
+  // One piece per shape, in order — the base, then each part. ItemSurface (components/surface-fill)
+  // reads a part's own texture by that index.
+  const pieces: BuiltOutline[] = [...footprintOutlines(base).slice(0, 1), ...parts.map(placedPartOutline)];
   const b = sampledBounds(pieces);
   return {
     kind: "multi",
@@ -638,11 +646,14 @@ export function resolveContent(product: Product): ResolvedContent {
   return { mode, icon: a?.icon, name: product.name };
 }
 
-// Bounds of a catalog item's custom shape, in the item's own local space. The min/max itself is
-// geometry.outlineBounds — this only adds the centre point the shape editor and previews recentre
-// on, and keeps the short w/h names those call sites read. Named for the catalog shape rather than
-// "outline" so it can't be confused with the canonical one in ./geometry.
-export function customShapeBounds(outline: Point[]) {
+// Bounds of a catalog item's custom shape, in the item's own local space — the box the shape editor
+// and every preview recentre on, with the short w/h names those call sites read. Given the outline's
+// curves it samples them (sampledBounds), because a bowed side's apex is not a corner: without them
+// a rectangle with one side bowed out was measured, saved and centred as if the bow were not there.
+// Without curves (or with none set) the min/max is geometry.outlineBounds over the points. Named for
+// the catalog shape rather than "outline" so it can't be confused with the canonical one in ./geometry.
+export function customShapeBounds(outline: Point[], edgeCurves?: (EdgeCurve | null)[]) {
+  if (edgeCurves?.some((c, i) => c && i < outline.length)) return sampledBounds([{ outline, edgeCurves }]);
   const { minX, maxX, minY, maxY, widthMm, heightMm } = outlineBounds(outline);
   return { minX, maxX, minY, maxY, w: widthMm, h: heightMm, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
@@ -652,7 +663,7 @@ export function footprintBounds(f: Footprint): { w: number; h: number } {
     case "circle": return { w: f.diameterMm, h: f.diameterMm };
     case "rect":
     case "ellipse": return { w: f.widthMm, h: f.depthMm };
-    case "custom": { const b = customShapeBounds(f.outline); return { w: b.w, h: b.h }; }
+    case "custom": { const b = customShapeBounds(f.outline, f.edgeCurves); return { w: b.w, h: b.h }; }
     case "multi": { const b = sampledBounds(f.parts); return { w: b.w, h: b.h }; }
   }
 }
@@ -676,11 +687,20 @@ export function catalogBox(product: Product): { widthMm: number; depthMm: number
 const shapeOfProduct = (product: Product): MapShape =>
   product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect");
 
+/** How the plan may stretch this product: the row's own say (Product.resize) when it has one, else
+ *  its category's default (CategoryDef.defaultResize — a banquette is laid to length without every
+ *  studio switching that on row by row). Undefined = a thing of one size. Every reader of `resize`
+ *  on this side of the catalog goes through here, so a category default is honoured by the handles,
+ *  the size panel and the drawing alike. */
+export function resizeSpecOf(product: Product): ResizeSpec | undefined {
+  return product.resize ?? CATEGORY_BY_ID[product.category]?.defaultResize;
+}
+
 /** Which of the box's two sides the plan may change, or null for a thing of one size. A round
  *  shape has ONE measurement: width is its diameter and depth follows it, so a round table can grow
  *  but never become an egg. */
 export function resizeAxes(product: Product): { width: boolean; depth: boolean; uniform: boolean } | null {
-  const r = product.resize;
+  const r = resizeSpecOf(product);
   if (!r || (!r.width && !r.depth)) return null;
   const uniform = usesDiameter(shapeOfProduct(product));
   if (uniform && !r.width) return null;
@@ -694,8 +714,9 @@ export function resizeAxes(product: Product): { width: boolean; depth: boolean; 
 export function clampSize(product: Product, size: { widthMm: number; depthMm: number }): { widthMm: number; depthMm: number } {
   const base = catalogBox(product);
   const axes = resizeAxes(product);
-  if (!axes || !product.resize) return base;
-  const step = Math.max(1, product.resize.stepMm || RESIZE_DEFAULT_STEP_MM);
+  const spec = resizeSpecOf(product);
+  if (!axes || !spec) return base;
+  const step = Math.max(1, spec.stepMm || RESIZE_DEFAULT_STEP_MM);
   const fit = (v: number, range: { minMm: number; maxMm: number } | undefined, fallback: number) => {
     if (!range) return fallback;
     const lo = Math.min(range.minMm, range.maxMm);
@@ -703,12 +724,12 @@ export function clampSize(product: Product, size: { widthMm: number; depthMm: nu
     const snapped = Math.round(v / step) * step;
     return Math.round(Math.min(hi, Math.max(lo, snapped || step)));
   };
-  const widthMm = axes.width ? fit(size.widthMm, product.resize.width, base.widthMm) : base.widthMm;
+  const widthMm = axes.width ? fit(size.widthMm, spec.width, base.widthMm) : base.widthMm;
   if (axes.uniform) {
     const ratio = base.widthMm ? base.depthMm / base.widthMm : 1;
     return { widthMm, depthMm: Math.round(widthMm * ratio) };
   }
-  const depthMm = axes.depth ? fit(size.depthMm, product.resize.depth, base.depthMm) : base.depthMm;
+  const depthMm = axes.depth ? fit(size.depthMm, spec.depth, base.depthMm) : base.depthMm;
   return { widthMm, depthMm };
 }
 
@@ -736,7 +757,7 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
 /** The footprint a placed item is drawn with: the catalog's, or — for one stretched on the plan —
  *  the same shape at the size it was stretched to (see the note above). */
 export function sizedFootprint(product: Product, sizeMm?: { widthMm: number; depthMm: number }): Footprint {
-  if (!sizeMm || !product.resize) return resolveFootprint(product);
+  if (!sizeMm || !resizeSpecOf(product)) return resolveFootprint(product);
   const a = product.appearance;
   const shape = shapeOfProduct(product);
   if (!a?.parts?.length && shape !== "custom") {
@@ -1029,6 +1050,48 @@ if (isMain(import.meta.url)) {
   });
   assert(Math.abs(footprintBounds(turned).h - 1000) < 1e-6, "a part turned 90° stands across the base, not along it");
   assert(eq(resolveFootprint({ ...combo, appearance: { shape: "rect", content: "none", parts: [] } }), { kind: "rect", widthMm: 2000, depthMm: 600 }), "no parts, no composite");
+  // A hand-drawn part: its outline wherever it was drawn, recentred on its box, which sits at x/y.
+  const drawn = resolveFootprint({
+    ...combo,
+    appearance: {
+      shape: "rect",
+      content: "none",
+      parts: [{ id: "d", shape: "custom", outline: [{ x: 5000, y: 5000 }, { x: 5400, y: 5000 }, { x: 5000, y: 5300 }], x: 1200, y: 0, rotation: 0 }],
+    },
+  });
+  const db = footprintBounds(drawn);
+  assert(drawn.kind === "multi" && drawn.parts.length === 2 && Math.abs(db.w - 2400) < 1 && Math.abs(db.h - 600) < 1, `a hand-drawn part joins the item where it was put (${db.w}×${db.h})`);
+
+  // ── A hand-drawn side bowed out ───────────────────────────────────────────────────────────────
+  // A 1200×600 rectangle whose top side bows up to y = −500: the apex is inside the curve, not at a
+  // corner, so the corners alone say 600 deep and centred on y = 0 — and the drawer's fields, the
+  // saved dimensions and the centring on the plan all used to believe them. The box is what is drawn.
+  {
+    const rect: Point[] = [{ x: -600, y: -300 }, { x: 600, y: -300 }, { x: 600, y: 300 }, { x: -600, y: 300 }];
+    // A symmetric cubic from (−600,−300) to (600,−300) with both arms straight up by `a` reaches
+    // y = −300 − 0.75a at its middle; a = 800/3 puts the apex at −500.
+    const a = 800 / 3;
+    const bowed: (EdgeCurve | null)[] = [{ c1: { x: 0, y: -a }, c2: { x: 0, y: -a } }, null, null, null];
+    const corners = customShapeBounds(rect);
+    const bb = customShapeBounds(rect, bowed);
+    assert(corners.h === 600 && Math.abs(bb.h - 800) < 0.5 && Math.abs(bb.cy + 100) < 0.5, `a bowed side is measured at its apex (${bb.h} deep, centred on ${bb.cy})`);
+    assert(bb.w === 1200 && Math.abs(bb.cx) < 1e-9, "…and the straight sides still measure what they are");
+    const bowedF: Footprint = { kind: "custom", outline: rect, edgeCurves: bowed };
+    const fb = footprintBounds(bowedF);
+    assert(Math.abs(fb.w - 1200) < 0.5 && Math.abs(fb.h - 800) < 0.5, `a bowed custom footprint's box is width × depth of what is drawn (${fb.w}×${fb.h})`);
+    const cb = sampledBounds([footprintOutlines(bowedF)[0]]);
+    assert(Math.abs(cb.cx) < 1e-9 && Math.abs(cb.cy) < 1e-9, "…and it is centred on the box of what is drawn, bow included");
+    const bowedItem: Product = { ...base, appearance: { shape: "custom", content: "none", outline: rect, edgeCurves: bowed } };
+    assert(Math.abs(footprintBounds(resolveFootprint(bowedItem)).h - 800) < 0.5, "the resolver measures the bow too");
+    const stretched = footprintBounds(
+      sizedFootprint({ ...bowedItem, resize: { stepMm: 100, width: { minMm: 600, maxMm: 2400 }, depth: { minMm: 400, maxMm: 1600 } } }, { widthMm: 2400, depthMm: 1600 }),
+    );
+    assert(Math.abs(stretched.w - 2400) < 1 && Math.abs(stretched.h - 1600) < 1, `a bowed outline stretched on the plan lands on the box asked for (${stretched.w}×${stretched.h})`);
+    // The built shapes keep their promise: sampling their arcs finds nothing past a vertex.
+    const halfRound = buildShapeOutline("half-circle", 1200, 600)!;
+    const hb = customShapeBounds(halfRound.outline, halfRound.edgeCurves);
+    assert(hb.w === 1200 && hb.h === 600, "a built shape measures the same with its curves sampled");
+  }
 
   // ── sized on the plan ─────────────────────────────────────────────────────────────────────────
   {
@@ -1075,6 +1138,30 @@ if (isMain(import.meta.url)) {
     const sofaWide = footprintBounds(sizedFootprint(sofa, { widthMm: 3000, depthMm: 900 }));
     assert(Math.round(sofaWide.w) === 3000 && Math.round(sofaWide.h) === 900, "a hand-drawn outline is scaled to the new box");
     assert(eq(scaleFootprint({ kind: "circle", diameterMm: 100 }, 2, 1), { kind: "ellipse", widthMm: 200, depthMm: 100 }), "a circle pulled one way is an ellipse");
+  }
+
+  // A category may stretch its rows by default (CategoryDef.defaultResize): a banquette that says
+  // nothing of its own is laid to length — along its length only — and one that does is its own.
+  {
+    const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const bench: Product = {
+      id: "bench",
+      name: "בנקט",
+      category: "stage-benches",
+      layer: "floor",
+      dimensions: { widthMm: 1000, depthMm: 450, heightMm: 750 },
+      categoryFields: {},
+      styleTags: [],
+      variants: [],
+      appearance: { shape: "rect", content: "none" },
+    };
+    assert(eq(resizeAxes(bench), { width: true, depth: false, uniform: false }), "a banquette row with no resize of its own stretches along its length by default");
+    assert(eq(clampSize(bench, { widthMm: 6040, depthMm: 900 }), { widthMm: 6000, depthMm: 450 }), "…in 10cm steps, its depth the catalog's");
+    assert(eq(clampSize(bench, { widthMm: 100, depthMm: 450 }), { widthMm: 600, depthMm: 450 }), "…never shorter than one seat");
+    assert(eq(sizedFootprint(bench, { widthMm: 6000, depthMm: 450 }), { kind: "rect", widthMm: 6000, depthMm: 450 }), "…and draws at the stretched length");
+    const ownBench: Product = { ...bench, resize: { stepMm: 500, width: { minMm: 1000, maxMm: 3000 } } };
+    assert(eq(clampSize(ownBench, { widthMm: 6000, depthMm: 450 }), { widthMm: 3000, depthMm: 450 }), "a row's own resize wins over its category's default");
+    assert(resizeAxes({ ...bench, category: "arches" }) === null, "a category with no default leaves a plain row a thing of one size");
   }
 
   console.log("footprint self-check passed");
