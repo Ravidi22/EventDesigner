@@ -22,7 +22,12 @@ import { ChevronsLeft } from "lucide-react";
  *  - **A panel that only collapses at `lg` must not carry the collapsed geometry below it.** The
  *    toggle is hidden on a narrow viewport, so a state entered on a wide one becomes unreachable —
  *    which is how the zone panel ended up with no padding and no way to get it back after a resize.
- *    `desktopOnly` gates the whole mechanism, geometry included, on one breakpoint. */
+ *    `desktopOnly` gates the whole mechanism, geometry included, on one breakpoint.
+ *  - **The card is the component's, not the caller's.** White surface, `rounded-md`,
+ *    `shadow-floating` — the shell the puck straddles IS the visible card. The zone panel once
+ *    passed its own `bg-bg` + padding around a lighter inner card: the shell was invisible on the
+ *    app plane, the card it held stood 16px short of the canvas beside it, and the puck floated in
+ *    the gap instead of sitting on an edge. Callers pass size, padding and placement only. */
 export function SidePanel({
   collapsed,
   onToggle,
@@ -44,8 +49,9 @@ export function SidePanel({
   /** Which of the panel's own edges the puck straddles. "end" for a panel everything else sits
    *  after (the main nav); "start" for one tucked against the far side of the screen. */
   edge?: "start" | "end";
-  /** Shell classes that hold in both states — background, radius, shadow, height, grid placement.
-   *  Padding belongs here too when `desktopOnly`, so the narrow viewport keeps it. */
+  /** Shell classes that hold in both states — padding, height, grid placement. Never a background,
+   *  radius or shadow: the card look is this component's own (see above). Padding belongs here
+   *  when `desktopOnly`, so the narrow viewport keeps it. */
   className?: string;
   expandedClassName?: string;
   collapsedClassName?: string;
@@ -73,7 +79,7 @@ export function SidePanel({
   return (
     <aside
       className={
-        "group/panel relative flex flex-col transition-[width] duration-200 ease-fluid " +
+        "group/panel relative flex flex-col rounded-md bg-surface shadow-floating transition-[width] duration-200 ease-fluid " +
         className +
         " " +
         (collapsed ? collapsedClassName : expandedClassName)

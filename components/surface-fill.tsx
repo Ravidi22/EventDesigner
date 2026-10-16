@@ -28,6 +28,7 @@ export const SURFACE_BASE: Record<Texture, string> = {
   soil: "#6f4d34",
   tile: "#2b2a2e",
   plain: "#b9b6b1",
+  water: "#9fcbe0",
 };
 
 /** One band of noise laid over the base: a turbulence, turned into a tint whose opacity follows one
@@ -93,6 +94,13 @@ const GRAINS: Record<Texture, Grain[]> = {
     { freq: "0.00012", octaves: 1, rgb: [1, 1, 1], gain: 0.22, bias: -0.06, channel: 0 },
   ],
   plain: [], // a flat colour — no grain, and so no filter at all (see below)
+  water: [
+    // The depth: a slow, broad darkening, metres across — where the floor of the pool falls away.
+    { freq: "0.0004", octaves: 2, rgb: [0.05, 0.2, 0.35], gain: 0.9, bias: -0.4, channel: 0 },
+    // Caustics: the net of light the surface throws on the water — a fine noise, its bright peaks
+    // only (band-passed), thin and wandering like marble's veins but white.
+    { freq: "0.006 0.004", octaves: 2, rgb: [1, 1, 1], gain: 1, bias: 0, channel: 1, band: "0 0 0 0 0 0 0 0 0 0 0 0 0.45 0.6 0.45 0 0 0 0 0 0" },
+  ],
 };
 
 function mix(hex: string, toward: string, t: number): string {
@@ -181,6 +189,29 @@ function LaidPattern({ id, material, base, w, d }: { id: string; material: Textu
       </pattern>
     );
   }
+  if (material === "water") {
+    // Ripples: a wind-blown surface, read in plan — rows of soft crests ~45cm apart, each a short
+    // sine wave, every row shifted so the crests never line up. White at a low opacity, so they
+    // ride on whatever the water is tinted; the base and its grain are what say "water".
+    const crest = (y: number, x: number) => (
+      <path
+        d={`M ${x} ${y} q 120 -70 240 0 t 240 0 t 240 0 t 240 0`}
+        fill="none"
+        stroke="#ffffff"
+        strokeOpacity={0.35}
+        strokeWidth={14}
+        strokeLinecap="round"
+      />
+    );
+    return (
+      <pattern id={id} patternUnits="userSpaceOnUse" x={at.x} y={at.y} width={1920} height={1800}>
+        {crest(150, -60)}
+        {crest(600, 420)}
+        {crest(1050, 180)}
+        {crest(1500, 660)}
+      </pattern>
+    );
+  }
   if (material === "grass") {
     // The mower's stripes: two-metre bands, alternately a shade lighter.
     return (
@@ -217,7 +248,7 @@ function SurfaceFillView({
   const uid = `sf${useId().replace(/[^a-zA-Z0-9_-]/g, "")}x${seed}`;
   const base = color ?? SURFACE_BASE[material];
   const grains = GRAINS[material];
-  const hasPattern = material === "paving" || material === "deck" || material === "grass" || material === "tile" || material === "wood";
+  const hasPattern = material === "paving" || material === "deck" || material === "grass" || material === "tile" || material === "wood" || material === "water";
   return (
     <g opacity={opacity}>
       <defs>

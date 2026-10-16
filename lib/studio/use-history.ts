@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isTypingTarget } from "@/lib/keyboard";
+import { isShortcut, isTypingTarget } from "@/lib/keyboard";
 
 // A generic snapshot undo stack, for state that isn't an outline.
 //
@@ -97,11 +97,12 @@ export function useHistory<T>(initial: T | (() => T), opts: { keyboard?: boolean
     if (!keyboard) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || isTypingTarget()) return;
-      const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) {
+      // By the physical key (lib/keyboard.ts isShortcut): on a Hebrew layout Ctrl+Z arrived as
+      // Ctrl+"ז" and undo silently stopped working the moment the designer typed a client's name.
+      if (isShortcut(e, "z") && !e.shiftKey) {
         e.preventDefault();
         undo();
-      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+      } else if (isShortcut(e, "y") || (isShortcut(e, "z") && e.shiftKey)) {
         e.preventDefault();
         redo();
       }

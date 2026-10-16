@@ -10,6 +10,7 @@ import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
 import { FlowerDrawing } from "./flower-symbol";
+import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
 import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
 import { outlinePathD } from "@/lib/studio/geometry";
@@ -652,9 +653,20 @@ function fountain(w: number, h: number, round: boolean, c: Colours, line: Line) 
   const water = c.print ? "#ffffff" : c.tone === DEFAULT_TONE.fountain ? WATER : c.tone;
   const ripple = { fill: "none", stroke: c.print ? c.ink : "#ffffff", strokeOpacity: c.print ? 0.5 : 0.9, strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const };
   const R = Math.min(w, h) / 2;
+  // The basin holds the same water the venue's pool is drawn in (components/surface-fill.tsx) — a
+  // flat blue disc beside a textured pool read as a lid. The item's own tone tints it; the printed
+  // sheet keeps the flat white basin. One seed for every fountain: its ripples are not a signature.
+  const basin: Footprint = round ? { kind: "ellipse", widthMm: w, depthMm: h } : { kind: "rect", widthMm: w, depthMm: h };
   return (
     <>
-      {round ? <ellipse rx={w / 2} ry={h / 2} fill={water} {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill={water} {...line} />}
+      {c.print ? (
+        round ? <ellipse rx={w / 2} ry={h / 2} fill={water} {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill={water} {...line} />
+      ) : (
+        <>
+          <SurfaceFill material="water" footprint={basin} w={w} d={h} id="fountain" color={c.tone === DEFAULT_TONE.fountain ? undefined : c.tone} />
+          {round ? <ellipse rx={w / 2} ry={h / 2} fill="none" {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill="none" {...line} />}
+        </>
+      )}
       {round ? <ellipse rx={w / 2 - R * 0.08} ry={h / 2 - R * 0.08} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} /> : <rect x={-w / 2 + R * 0.08} y={-h / 2 + R * 0.08} width={w - R * 0.16} height={h - R * 0.16} rx={R * 0.1} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} />}
       <circle r={R * 0.68} {...ripple} strokeDasharray="5 4" />
       <circle r={R * 0.42} fill={c.print ? "#ffffff" : WATER_DEEP} {...line} />

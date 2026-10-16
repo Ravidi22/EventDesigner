@@ -48,12 +48,31 @@ export function toggleSelection(current: PlanSelection[], ref: PlanSelection | n
   return at >= 0 && current.length === 1 ? [] : [ref];
 }
 
-/** A marquee release. Shift adds to what was already selected instead of replacing it. */
-export function mergeSelection(current: PlanSelection[], hits: PlanSelection[], additive: boolean): PlanSelection[] {
-  if (!additive) return hits;
+/** What a finished rubber-band does to the selection: replaces it, ADDS its catch (Shift), or
+ *  TOGGLES each thing it caught (Ctrl/⌘) — the one gesture that can take things OUT of a selection
+ *  in bulk. `true`/`false` are kept for the callers that only ever knew Shift. */
+export type MergeMode = "replace" | "add" | "toggle";
+
+export function mergeSelection(current: PlanSelection[], hits: PlanSelection[], mode: boolean | MergeMode): PlanSelection[] {
+  const how: MergeMode = mode === true ? "add" : mode === false ? "replace" : mode;
+  if (how === "replace") return hits;
   const merged = [...current];
-  for (const h of hits) if (!merged.some((s) => same(s, h))) merged.push(h);
+  for (const h of hits) {
+    const at = merged.findIndex((s) => same(s, h));
+    if (at < 0) merged.push(h);
+    else if (how === "toggle") merged.splice(at, 1);
+  }
   return merged;
+}
+
+/** A feature's box as it stands, turned — the extent a band has to touch. */
+function featureBounds(f: VenueStructure["features"][number]): SelectionBox {
+  const rad = ((f.rotationDeg ?? 0) * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rad));
+  const sn = Math.abs(Math.sin(rad));
+  const w = f.widthMm * c + f.depthMm * sn;
+  const d = f.widthMm * sn + f.depthMm * c;
+  return { minX: f.x - w / 2, minY: f.y - d / 2, maxX: f.x + w / 2, maxY: f.y + d / 2 };
 }
 
 /** Everything inside a marquee box, across every layer of the plan at once — the graph the canvas
@@ -73,7 +92,13 @@ export function hitsInBox(structure: VenueStructure, zones: ResolvedZone[], box:
     if (pts && inside(pts.a) && inside(pts.b)) hits.push({ kind: "wall", id: w.id });
   }
 
-  for (const f of structure.features) if (inside(f)) hits.push({ kind: "feature", id: f.id });
+  // A feature counts when the box TOUCHES it, as the sketch's band takes its tables — a band
+  // drawn across a row of planters should not have to reach every one's middle. (A node is a
+  // point; a wall still wants both ends, or the band over one room grabs the next room's walls.)
+  for (const f of structure.features) {
+    const b = featureBounds(f);
+    if (b.maxX >= box.minX && b.minX <= box.maxX && b.maxY >= box.minY && b.minY <= box.maxY) hits.push({ kind: "feature", id: f.id });
+  }
 
   for (const e of structure.entrances) {
     const w = structure.walls.find((x) => x.id === e.wallId);
@@ -121,6 +146,8 @@ if (isMain(import.meta.url)) {
   assert(ids(mergeSelection([wallA], [wallB], true)) === "wall:a,wall:b", "a shift-marquee adds to what was selected");
   assert(ids(mergeSelection([wallA], [wallA, wallB], true)) === "wall:a,wall:b", "…without duplicating what was already in");
   assert(ids(mergeSelection([wallA], [wallB], false)) === "wall:b", "a plain marquee replaces");
+  assert(ids(mergeSelection([wallA, wallB], [wallB, nodeA], "toggle")) === "node:a,wall:a", "a Ctrl-marquee toggles: what it caught that was selected goes out, the rest comes in");
+  assert(ids(mergeSelection([wallA], [wallB], "add")) === "wall:a,wall:b" && ids(mergeSelection([wallA], [wallB], "replace")) === "wall:b", "the named modes match the two booleans");
 
   // --- marquee hit-testing ----------------------------------------------------------------------
   // A 4×4m room, with a second room sharing its east wall, one door and one feature:
@@ -183,6 +210,13 @@ if (isMain(import.meta.url)) {
   assert(ids(left.filter((h) => h.kind === "zone")) === "zone:z-left", "only the zone whose centre is in the box");
   assert(ids(left.filter((h) => h.kind === "feature")) === "feature:f1", "the feature inside comes along");
   assert(ids(left.filter((h) => h.kind === "door")) === "door:d1", "the door on the shared wall is in the box");
+
+  // A feature is caught by a band that only TOUCHES it: f1 spans x 1500–2500, y 1750–2250.
+  assert(ids(hitsInBox(s, zones, { minX: 2400, minY: 2100, maxX: 3000, maxY: 2600 }).filter((h) => h.kind === "feature")) === "feature:f1", "a band over a feature's corner takes it");
+  assert(hitsInBox(s, zones, { minX: 2600, minY: 2100, maxX: 3000, maxY: 2600 }).every((h) => h.kind !== "feature"), "…a band beside it does not");
+  // Turned 90°, the same bar is 500 wide and 1000 deep, so its box reaches further in y.
+  const turned: VenueStructure = { ...s, features: [{ ...s.features[0], rotationDeg: 90 }] };
+  assert(ids(hitsInBox(turned, zones, { minX: 1900, minY: 2400, maxX: 2100, maxY: 2600 }).filter((h) => h.kind === "feature")) === "feature:f1", "the band reads the feature's turned extent");
 
   // A box in the empty middle of nothing takes nothing.
   assert(hitsInBox(s, zones, { minX: 20000, minY: 20000, maxX: 21000, maxY: 21000 }).length === 0, "an empty box selects nothing");

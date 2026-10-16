@@ -6,14 +6,17 @@ import { startPointerGesture } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
 import { usesDiameter } from "@/lib/catalog/types";
 import { isAdditiveClick } from "@/lib/keyboard";
-import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
 import { FootprintShape } from "@/components/footprint-shape";
 import { PlantGlyph } from "@/components/plant-glyph";
 import { SurfaceFill } from "@/components/surface-fill";
 import { ClimbGlyph } from "@/components/climb-glyph";
+import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
+import { NO_DECKS } from "@/lib/venues/stage-edges";
+import type { StageEdgeKind, StageStair } from "@/lib/design-document/types";
+import type { WallDistance } from "@/lib/design-document/stage";
 import { isClimb } from "@/lib/venues/climb";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
-import { stairsFlights } from "@/lib/venues/stairs";
 import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
@@ -467,9 +470,14 @@ export function StructureFeatures({
   selectedIds,
   onSelect: onSelectAny,
   onMove: onMoveAny,
-  onMoveStairs,
   onResize,
   onRotate,
+  activeEdgeItem,
+  onSelectEdgeItem,
+  onEdgeItemChange,
+  edgePick,
+  onPickEdge,
+  wallDistance,
   onCommit,
   clientToMm,
   onContextMenu: onContextMenuAny,
@@ -480,20 +488,27 @@ export function StructureFeatures({
   selectedIds?: string[];
   onSelect?: (id: string, additive: boolean) => void;
   /** Absent = features are fixed in place for this mode (drawing walls, naming zones). */
-  onMove?: (id: string, p: { x: number; y: number }) => void;
-  /** Dragging a flight of stairs — reported as the raw world point it was dropped on, since which
-   *  edge of the deck that means (and how far along it) is the model's call, not the layer's.
-   *  See lib/venues/stairs.ts's stairsPlacementAt. */
-  onMoveStairs?: (id: string, p: { x: number; y: number }) => void;
+  onMove?: (id: string, p: { x: number; y: number }, free?: boolean) => void;
   /** Dragging a resize handle. Absent = a selected feature shows no handles at all (mid-draw, or
    *  any mode that doesn't edit the built plan) — same "supplying it is what turns the affordance
-   *  on" rule as onMove/onMoveStairs. */
+   *  on" rule as onMove. */
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void;
   /** Dragging the rotate knob. Same opt-in rule as the three above: a host that does not supply it
    *  gets a selected feature with no knob on it, which is what /halls' draw mode and every
    *  read-only surface want. A bar built across the corner of a room is at 30° and there was no way
    *  to put it there but to type the number into the side panel. */
   onRotate?: (id: string, rotationDeg: number) => void;
+  /** THE STAGE'S EDGES — the sketch's own stairs and ramps (components/stage-edge-handles.tsx,
+   *  lib/venues/stage-edges.ts). The active item on a selected stage, and the host's handlers for
+   *  picking one, sliding or resizing it (`from` = the items as they stood when the press began),
+   *  and clicking a new one onto a side while `edgePick` names the stage and the kind. */
+  activeEdgeItem?: { featureId: string; itemId: string } | null;
+  onSelectEdgeItem?: (featureId: string, itemId: string | null) => void;
+  onEdgeItemChange?: (featureId: string, item: StageStair, from?: StageStair[]) => void;
+  edgePick?: { featureId: string; kind: StageEdgeKind } | null;
+  onPickEdge?: (featureId: string, edge: number, t: number) => void;
+  /** How far a point is from the nearest wall — what shows a stage's bare edges honestly. */
+  wallDistance?: WallDistance;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
   /** A right-click landed on this feature. Reported, not handled: the event still bubbles on to the
@@ -512,7 +527,7 @@ export function StructureFeatures({
   // The callbacks are read through a ref so a node that skipped a render still calls the host's
   // CURRENT handler; whether each is supplied at all (which switches affordances on) is passed as
   // the presence of the stable wrapper, so it still re-renders when that changes.
-  const handlers = { onSelect: onSelectAny, onMove: onMoveAny, onMoveStairs, onResize, onRotate, onCommit, clientToMm, onContextMenu: onContextMenuAny };
+  const handlers = { onSelect: onSelectAny, onMove: onMoveAny, onResize, onRotate, onCommit, clientToMm, onContextMenu: onContextMenuAny };
   const live = useRef(handlers);
   useLayoutEffect(() => {
     live.current = handlers;
@@ -520,8 +535,7 @@ export function StructureFeatures({
   const stable = useMemo<FeatureHandlers>(
     () => ({
       onSelect: (id, additive) => live.current.onSelect?.(id, additive),
-      onMove: (id, p) => live.current.onMove?.(id, p),
-      onMoveStairs: (id, p) => live.current.onMoveStairs?.(id, p),
+      onMove: (id, p, free) => live.current.onMove?.(id, p, free),
       onResize: (id, patch) => live.current.onResize?.(id, patch),
       onRotate: (id, deg) => live.current.onRotate?.(id, deg),
       onCommit: () => live.current.onCommit?.(),
@@ -531,6 +545,11 @@ export function StructureFeatures({
     [],
   );
   const labelPx = mm(FEATURE_LABEL_PX);
+  // The one selected stage whose edge items take the pointer (its grips are drawn after every
+  // feature, so no neighbour covers them), and the stage whose sides are lit for a new item.
+  const edging = selectedIds?.length === 1 && onEdgeItemChange && onSelectEdgeItem && clientToMm ? structure.features.find((f) => f.id === selectedIds[0] && !f.locked) : undefined;
+  const edgingP = edging && featureEdgeItems(edging).length > 0 ? featurePlacement(edging) : null;
+  const picking = edgePick && onPickEdge && clientToMm ? structure.features.find((f) => f.id === edgePick.featureId) : undefined;
   return (
     <>
       {groundFirst(structure.features).map((f) => {
@@ -548,30 +567,52 @@ export function StructureFeatures({
             mm={selected ? mm : undefined}
             onSelect={onSelect && stable.onSelect}
             onMove={onMove && stable.onMove}
-            onMoveStairs={onMoveStairs && stable.onMoveStairs}
             onResize={onResize && stable.onResize}
             onRotate={onRotate && stable.onRotate}
+            activeEdgeItem={activeEdgeItem?.featureId === f.id ? activeEdgeItem.itemId : null}
+            wallDistance={selected ? wallDistance : undefined}
             onCommit={onCommit && stable.onCommit}
             clientToMm={clientToMm && stable.clientToMm}
             onContextMenu={onContextMenu && stable.onContextMenu}
           />
         );
       })}
+      {edging && edgingP && onEdgeItemChange && onSelectEdgeItem && clientToMm && (
+        <EdgeItemHandles
+          p={edgingP}
+          deckOf={NO_DECKS}
+          clientToMm={clientToMm}
+          mm={mm}
+          active={activeEdgeItem?.featureId === edging.id ? activeEdgeItem.itemId : null}
+          onSelect={(itemId) => onSelectEdgeItem(edging.id, itemId)}
+          onChange={(item, from) => onEdgeItemChange(edging.id, item, from)}
+          onEnd={() => onCommit?.()}
+        />
+      )}
+      {picking && edgePick && onPickEdge && clientToMm && (
+        <EdgePickLines
+          lines={stagePickLines(featurePlacement(picking))}
+          clientToMm={clientToMm}
+          onPick={(_level, edge, t) => onPickEdge(picking.id, edge, t)}
+          title={edgePick.kind === "ramp" ? "להציב כאן רמפה" : "להציב כאן מדרגות"}
+        />
+      )}
     </>
   );
 }
 
 /** Whether a feature writes anything sized by the zoom: its name — except a plant, a surface and a
- *  flight of stairs, which are their drawings — or a ramp's slope, which it writes whatever its name. */
+ *  flight of stairs, which are their drawings — or a ramp's slope (its own, or a ramp on its edge),
+ *  which it writes whatever its name. */
 function wantsLabel(f: StructureFeature): boolean {
   if (f.kind === "ramp") return true;
+  if (featureEdgeItems(f).some((it) => it.kind === "ramp")) return true;
   return f.kind !== "plant" && f.kind !== "surface" && f.kind !== "stairs" && !!f.label;
 }
 
 type FeatureHandlers = {
   onSelect?: (id: string, additive: boolean) => void;
-  onMove?: (id: string, p: { x: number; y: number }) => void;
-  onMoveStairs?: (id: string, p: { x: number; y: number }) => void;
+  onMove?: (id: string, p: { x: number; y: number }, free?: boolean) => void;
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void;
   onRotate?: (id: string, rotationDeg: number) => void;
   onCommit?: () => void;
@@ -590,14 +631,28 @@ const FeatureNode = memo(function FeatureNode({
   labelPx,
   mm = unscaled,
   onSelect,
-  onMove,
-  onMoveStairs,
-  onResize,
-  onRotate,
+  onMove: onMoveProp,
+  onResize: onResizeProp,
+  onRotate: onRotateProp,
+  activeEdgeItem,
+  wallDistance,
   onCommit,
   clientToMm,
   onContextMenu,
-}: FeatureHandlers & { f: StructureFeature; selected: boolean; labelPx?: number; mm?: (px: number) => number }) {
+}: FeatureHandlers & { f: StructureFeature; selected: boolean; labelPx?: number; mm?: (px: number) => number; activeEdgeItem?: string | null; wallDistance?: WallDistance }) {
+        // A locked feature (StructureFeature.locked) keeps its click and its right-click — that is how
+        // it gets unlocked — and loses every gesture that would change it. The GROUND does one more
+        // thing: a surface moves only once it is already selected. It is the biggest thing on the
+        // plan and under everything else, so a press that missed a table by a pixel used to pick up
+        // the whole lawn; now that press selects it, and the next one moves it.
+        const locked = !!f.locked;
+        const onMove = locked || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
+        const onResize = locked ? undefined : onResizeProp;
+        const onRotate = locked ? undefined : onRotateProp;
+        // The stage's edges (its flights and ramps), as the sketch draws a stage's: in the feature's
+        // own frame, inside its turned group — null for anything with none.
+        const edgeItems = featureEdgeItems(f);
+        const stageP = edgeItems.length > 0 ? featurePlacement(f) : null;
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",
           stroke: selected ? "var(--color-accent)" : "var(--color-muted)",
@@ -612,49 +667,13 @@ const FeatureNode = memo(function FeatureNode({
           strokeDasharray: (f.style?.dash ? style.dashArray.join(" ") : "4 3") || undefined,
           vectorEffect: "non-scaling-stroke" as const,
         };
-        const drag = draggable(f, onMove, onCommit, clientToMm);
-        // The flight comes back already in world millimetres, rotation and all, so it is drawn
-        // OUTSIDE the feature's rotated group — inside it, the group's own transform would turn a
-        // stage's stairs a second time.
-        const flights = stairsFlights(f);
-        const stairsDrag = draggableStairs(f, onMoveStairs, onCommit, clientToMm);
+        const drag = draggable(f, onMove, onCommit, clientToMm, selected, onSelect);
         return (
           <g key={f.id}>
-            {flights.map((stairs, n) => (
-              <g
-                key={n}
-                {...stairsDrag}
-                onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
-                className={onMoveStairs ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
-                aria-label={`${f.label} — מדרגות`}
-              >
-                <path
-                  d={outlinePathD(stairs.outline)}
-                  fill={selected ? "var(--color-accent-wash)" : (f.stairs?.fill ?? "var(--color-inset)")}
-                  stroke={selected ? "var(--color-accent)" : "var(--color-muted)"}
-                  strokeWidth={selected ? 2.5 : 1.25}
-                  vectorEffect="non-scaling-stroke"
-                />
-                {/* One line per step edge. With the footprint's own two ends, the count of lines is
-                    the count of risers — which is how a plan says "four steps" without a label. */}
-                {stairs.nosings.map(([p, q], i) => (
-                  <line
-                    key={i}
-                    x1={p.x}
-                    y1={p.y}
-                    x2={q.x}
-                    y2={q.y}
-                    stroke={selected ? "var(--color-accent)" : "var(--color-muted)"}
-                    strokeWidth={1}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                ))}
-              </g>
-            ))}
             <g
               transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}
               {...drag}
-              onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(f.id, isAdditiveClick(e)); } : undefined}
+              onClick={onSelect ? (e) => { e.stopPropagation(); if (pressSelected.delete(f.id)) return; onSelect(f.id, isAdditiveClick(e)); } : undefined}
               onContextMenu={onContextMenu ? () => onContextMenu(f.id) : undefined}
               className={onMove ? "cursor-move touch-none" : onSelect ? "cursor-pointer" : "pointer-events-none"}
             >
@@ -703,6 +722,23 @@ const FeatureNode = memo(function FeatureNode({
                       vectorEffect="non-scaling-stroke"
                     />
                   </>
+                ) : f.kind === "pool" ? (
+                  <>
+                    {/* Water, at real scale (components/surface-fill.tsx) — the pool used to be a
+                        white outline with its name in it, next to a lawn drawn blade by blade. The
+                        designer's own fill tints the water; the outline on top is the coping, in the
+                        feature's own stroke, so a selected pool still lights up like the others. */}
+                    <SurfaceFill
+                      material="water"
+                      footprint={featureFootprint(f)}
+                      w={f.widthMm}
+                      d={f.depthMm}
+                      id={f.id}
+                      color={f.style?.fill}
+                      opacity={f.style?.fillOpacity}
+                    />
+                    <FootprintShape footprint={featureFootprint(f)} {...common} fill="none" />
+                  </>
                 ) : isClimb(f.kind) ? (
                   // Stairs or a ramp: the step edges and the walking line say what it is, so it
                   // carries no name — only a ramp's slope. The same tread-coloured well and muted
@@ -722,7 +758,27 @@ const FeatureNode = memo(function FeatureNode({
                 ) : (
                   <FootprintShape footprint={featureFootprint(f)} {...common} />
                 )}
+                {stageP && (
+                  <EdgeItemsDrawing
+                    stage={stageP.stage}
+                    deckOf={NO_DECKS}
+                    rotation={f.rotationDeg ?? 0}
+                    labelMm={labelPx}
+                    activeItem={activeEdgeItem}
+                    gaps={selected && wallDistance ? stageGaps(stageP, NO_DECKS, wallDistance) : undefined}
+                  />
+                )}
               </g>
+              {/* The padlock on a locked feature, once it is selected and someone is looking for
+                  the handles that are not there. Drawn, not an icon component: this is inside the
+                  plan's SVG, sized by the zoom like a handle. */}
+              {selected && locked && mm !== unscaled && (
+                <g className="pointer-events-none" transform={`translate(${f.x} ${f.y - (usesDiameter(f.shape) ? f.widthMm : f.depthMm) / 2 - mm(16)})`}>
+                  <circle r={mm(11)} fill="#ffffff" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                  <rect x={-mm(4.5)} y={-mm(1)} width={mm(9)} height={mm(6.5)} rx={mm(1.2)} fill="var(--color-accent)" />
+                  <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                </g>
+              )}
               {f.kind !== "plant" && f.kind !== "surface" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
@@ -879,49 +935,43 @@ function ResizeHandle({
 // click still can't nudge. A feature drags this way rather than through PlanCanvas's dragHandlers:
 // that helper carries the canvas's whole selection protocol, which a host-drawn layer has no
 // business in.
+// The PRESS selects, as it does in the sketch — so a drag on an unselected feature moves that one
+// feature alone, and the designer sees what they have hold of before it moves. The click that
+// follows a plain press is then told to stand down (it would read the press's own selection as
+// "click the one selected thing" and clear it); the click after a real drag is swallowed by the
+// gesture itself, so the flag is dropped at the end of a drag too.
+const pressSelected = new Set<string>();
+
 function draggable(
   f: StructureFeature,
-  onMove?: (id: string, p: { x: number; y: number }) => void,
+  onMove?: (id: string, p: { x: number; y: number }, free?: boolean) => void,
   onCommit?: () => void,
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+  selected = false,
+  onSelect?: (id: string, additive: boolean) => void,
 ) {
   if (!onMove || !clientToMm) return {};
   return {
     onPointerDown: (e: React.PointerEvent) => {
       e.stopPropagation();
+      if (e.button !== 0) return;
+      if (onSelect && !selected && !isAdditiveClick(e)) {
+        onSelect(f.id, false);
+        pressSelected.add(f.id);
+      }
       const origin = { x: e.clientX, y: e.clientY, fx: f.x, fy: f.y };
       startPointerGesture(e, {
         onMove: (ev) => {
           const from = clientToMm(origin.x, origin.y);
           const to = clientToMm(ev.clientX, ev.clientY);
-          onMove(f.id, { x: Math.round(origin.fx + to.x - from.x), y: Math.round(origin.fy + to.y - from.y) });
+          // Alt frees the drag of every pull the host would otherwise give it (the sketch's rule).
+          onMove(f.id, { x: Math.round(origin.fx + to.x - from.x), y: Math.round(origin.fy + to.y - from.y) }, ev.altKey);
         },
         onEnd: (_ev, moved) => {
-          if (moved) onCommit?.();
-        },
-      });
-    },
-  };
-}
-
-// Dragging a flight of stairs. Unlike a feature, this reports where the pointer *is* rather than how
-// far it has travelled: a flight has only two degrees of freedom (which edge, how far along it), so
-// the honest gesture is "put them here" — the model then lands them on the nearest edge rather than
-// letting a raw delta walk them off the deck.
-function draggableStairs(
-  f: StructureFeature,
-  onMoveStairs?: (id: string, p: { x: number; y: number }) => void,
-  onCommit?: () => void,
-  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
-) {
-  if (!onMoveStairs || !clientToMm) return {};
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      e.stopPropagation();
-      startPointerGesture(e, {
-        onMove: (ev) => onMoveStairs(f.id, clientToMm(ev.clientX, ev.clientY)),
-        onEnd: (_ev, moved) => {
-          if (moved) onCommit?.();
+          if (moved) {
+            onCommit?.();
+            pressSelected.delete(f.id);
+          }
         },
       });
     },

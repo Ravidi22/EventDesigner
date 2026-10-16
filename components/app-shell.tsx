@@ -138,7 +138,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         collapsed={collapsed}
         onToggle={() => setCollapsed((c) => !c)}
         label="סרגל הצד"
-        className="no-print shrink-0 rounded-md bg-surface py-6 shadow-floating"
+        className="no-print shrink-0 py-6"
         expandedClassName="w-[258px] px-4"
         collapsedClassName="w-[96px] px-2"
       >

@@ -182,7 +182,14 @@ function flattenCurves(b: BuiltOutline): { outline: Point[]; smooth: number[] } 
  *  drawing with the curves cut into chords — several added shapes as their union. At `sizeMm` when
  *  the piece was stretched on the plan. Null when the drawing is not one piece. */
 export function pieceOutline(product: Product, sizeMm?: { widthMm: number; depthMm: number }): { outline: Point[]; smooth: number[] } | null {
-  const fp = sizedFootprint(product, sizeMm);
+  return footprintStageOutline(sizedFootprint(product, sizeMm));
+}
+
+/** Any footprint as a stage outline in its own frame — a rectangle's four corners, a disc's or an
+ *  oval's roundOutline, any other shape with its curves cut into chords — centred on its box. What a
+ *  VENUE's built stage reads its StageBuild off (lib/venues/structure.ts featureStage), so its edge
+ *  items are the sketch's. Null when the drawing is not one piece. */
+export function footprintStageOutline(fp: Footprint): { outline: Point[]; smooth: number[] } | null {
   if (fp.kind === "rect") return { outline: rectOutline(Math.round(fp.widthMm), Math.round(fp.depthMm)), smooth: [] };
   if (fp.kind === "circle") return roundOutline(fp.diameterMm, fp.diameterMm);
   if (fp.kind === "ellipse") return roundOutline(fp.widthMm, fp.depthMm);

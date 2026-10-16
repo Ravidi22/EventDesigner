@@ -24,6 +24,8 @@
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",
     "check:climb": "tsx lib/venues/climb.ts",
+    "check:stairs": "tsx lib/venues/stairs.ts",
+    "check:stage-edges": "tsx lib/venues/stage-edges.ts",
     "check:climb-item": "tsx lib/studio/climb-item.ts",
     "check:selection": "tsx lib/venues/selection.ts",
     "check:add-tools": "tsx lib/venues/add-tools.ts",

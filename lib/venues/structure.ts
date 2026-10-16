@@ -23,8 +23,11 @@ import {
   setBulgeDepth,
   wallAngleDeg,
   wallLengthMm,
+  toLocalFrame,
 } from "@/lib/studio/geometry";
-import { defaultStairs, normalizeStairs, type FeatureStairs } from "./stairs";
+import { stairsFlights, type FeatureStairs } from "./stairs";
+import { footprintStageOutline, rectOutline, rehomeEdgeItems, sidePosition, tidyEdgeItems, type StagePlacement } from "../design-document/stage";
+import type { StageBuild, StageStair } from "../design-document/types";
 import type { FeatureClimb } from "./climb";
 import { isMain } from "../self-check";
 
@@ -74,13 +77,16 @@ export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "pl
 /** What a `surface` feature is laid in — the ground under everything else: a lawn, a paved court, a
  *  timber deck. Drawn as a real-scale texture (components/surface-fill.tsx), always beneath the
  *  other features, and never in the way of a table: you set a table ON a floor. */
-export type SurfaceMaterial = "grass" | "paving" | "deck" | "gravel" | "sand" | "soil" | "tile" | "plain";
+export type SurfaceMaterial = "grass" | "paving" | "deck" | "gravel" | "sand" | "soil" | "tile" | "plain" | "water";
 
 // The two indoor ones. `tile` is a hall's own floor — large polished tiles, whose joints and sheen
 // are LIGHTER than the tile, so it still reads as a floor when painted black (every outdoor
 // material darkens its joints, and on black that is nothing at all). `plain` has no texture
 // whatsoever: a flat colour, for the floor that really is one.
-export const SURFACE_MATERIALS: SurfaceMaterial[] = ["grass", "paving", "deck", "gravel", "sand", "soil", "tile", "plain"];
+// `water` is the one the pool is drawn in (the user asked why the water had no texture when the
+// lawn did, 2026-10-16), and a ground material of its own for the pond or the sea a garden venue
+// runs down to — ripples and the light on them, at real scale like the rest.
+export const SURFACE_MATERIALS: SurfaceMaterial[] = ["grass", "paving", "deck", "gravel", "sand", "soil", "tile", "plain", "water"];
 
 export const SURFACE_MATERIAL_LABEL: Record<SurfaceMaterial, string> = {
   tile: "אריחים",
@@ -91,6 +97,7 @@ export const SURFACE_MATERIAL_LABEL: Record<SurfaceMaterial, string> = {
   gravel: "חצץ",
   sand: "חול",
   soil: "אדמה",
+  water: "מים",
 };
 
 /** Which plant a `plant` feature is — what its top-down drawing looks like (components/plant-glyph.tsx). */
@@ -137,10 +144,15 @@ export interface StructureFeature {
   /** Per-element look (fill/stroke/dash). Absent = the renderer's own default, so features saved
    *  before styling existed draw exactly as they always did. See lib/element-style.ts. */
   style?: ElementStyle;
-  /** Steps up onto a raised feature — the stage, in practice. Part of the feature rather than a
-   *  feature of its own: the flight turns and travels with the deck, and its risers are derived
-   *  from that deck's height. See ./stairs.ts. */
+  /** LEGACY — the one flight a stage used to carry (./stairs.ts). Read into `edgeItems` by
+   *  featureStage; written back by nothing, and dropped on the first edit. */
   stairs?: FeatureStairs;
+  /** A raised feature's flights of stairs and ramps — the SKETCH'S own edge items (StageStair,
+   *  lib/design-document/types.ts) on the stage this feature reads as (featureStage), in its own
+   *  frame: edge indexes into that outline, `t` along the side. Every rule about them is the
+   *  sketch's (lib/design-document/stage.ts), driven from lib/venues/stage-edges.ts. Absent = read
+   *  off `stairs` the first time. */
+  edgeItems?: StageStair[];
   /** iff `kind === "plant"`. Absent on a plant reads as a shrub — see plantSpecies. */
   plant?: PlantSpecies;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
@@ -152,6 +164,12 @@ export interface StructureFeature {
    *  featureMovable. Only ever an offset in that event's document (lib/design-document/features.ts);
    *  the property's own position is never written from a sketch. */
   movable?: boolean;
+  /** Pinned in the hall editor itself: it still selects (so it can be unlocked, restyled, renamed)
+   *  but takes no drag, no resize or rotate handle, no stairs drag, and the Delete key passes over
+   *  it. For the lawn the whole plan stands on and the pool nobody will ever move — the things a
+   *  press meant for a table beside them kept picking up. Nothing to do with `movable`, which is
+   *  about an EVENT's sketch. */
+  locked?: boolean;
 }
 
 /** Whether a sketch may pick this feature up and move or turn it. The venue says so per feature at
@@ -482,11 +500,16 @@ export function updateFeature(s: VenueStructure, id: string, patch: Partial<Omit
     features: s.features.map((f) => {
       if (f.id !== id) return f;
       const next = { ...f, ...patch };
-      // Any edit to the deck is also an edit to what its stairs are allowed to be: narrow a stage
-      // and a flight wider than its new edge has to come in with it, or it hangs in mid-air off a
-      // stage that no longer reaches it. Re-checked here, once, rather than at each of the callers
-      // that can resize a feature.
-      return next.stairs ? { ...next, stairs: normalizeStairs(next, next.stairs) } : next;
+      // The edge items ride with the geometry (the sketch's own rehomeEdgeItems): a resized rectangle
+      // keeps its flights on their sides, full ones stretched with them; a reshaped stage keeps
+      // those that still have a side. The legacy one-flight field is read into the new form on the
+      // first edit of any kind, and dropped.
+      if ("edgeItems" in patch) return dropLegacyStairs(next);
+      const touched = GEOMETRY_KEYS.some((k) => k in patch);
+      if (!touched && !f.stairs) return next;
+      const was = featurePlacement(f);
+      const items = touched ? tidyEdgeItems({ ...featurePlacement(next).stage, stairs: rehomeEdgeItems(was, featurePlacement(next), () => crypto.randomUUID()) }) : was.stage.stairs ?? [];
+      return dropLegacyStairs({ ...next, edgeItems: items });
     }),
   };
 }
@@ -494,21 +517,84 @@ export function updateFeature(s: VenueStructure, id: string, patch: Partial<Omit
 // --- stairs ----------------------------------------------------------------
 
 /** Gives a feature its first flight of stairs, sized to the deck it climbs (see ./stairs.ts). */
-export function addStairs(s: VenueStructure, featureId: string): VenueStructure {
-  const feature = s.features.find((f) => f.id === featureId);
-  if (!feature || feature.stairs) return s;
-  return updateFeature(s, featureId, { stairs: defaultStairs(feature) });
+/** The feature's shape, size and height that make it a stage to the sketch's stage module. */
+type StageSource = Pick<StructureFeature, "x" | "y" | "rotationDeg" | "shape" | "widthMm" | "depthMm" | "heightMm" | "outline" | "edgeCurves" | "arc" | "ring" | "edgeItems" | "stairs"> & { id?: string };
+
+const GEOMETRY_KEYS: (keyof StructureFeature)[] = ["shape", "widthMm", "depthMm", "outline", "edgeCurves", "arc", "ring"];
+
+function dropLegacyStairs<T extends { stairs?: FeatureStairs }>(f: T): T {
+  if (!("stairs" in f)) return f;
+  const { stairs: _legacy, ...rest } = f;
+  return rest as T;
 }
 
-export function removeStairs(s: VenueStructure, featureId: string): VenueStructure {
-  return updateFeature(s, featureId, { stairs: undefined });
+/** The edge of an outline whose middle lies furthest toward +y — the FRONT of a venue stage: the
+ *  side that faces the room as the plan is drawn, and the side the legacy one-flight model called
+ *  "front". (The sketch's own rectangles put the front at −y; nothing here depends on that.) */
+function frontEdge(outline: readonly Point[]): number {
+  let best = 0;
+  let y = -Infinity;
+  outline.forEach((a, i) => {
+    const b = outline[(i + 1) % outline.length];
+    const mid = (a.y + b.y) / 2;
+    if (mid > y) {
+      y = mid;
+      best = i;
+    }
+  });
+  return best;
 }
 
-/** Patches a flight — count, tread, width, which edge it hangs off — keeping it on its deck. */
-export function updateStairs(s: VenueStructure, featureId: string, patch: Partial<FeatureStairs>): VenueStructure {
-  const feature = s.features.find((f) => f.id === featureId);
-  if (!feature?.stairs) return s;
-  return updateFeature(s, featureId, { stairs: normalizeStairs(feature, { ...feature.stairs, ...patch }) });
+/** A raised feature AS THE SKETCH'S STAGE (StageBuild): its outline in its own frame (a round one a
+ *  smooth rim), its front, its own height, and its edge items — the sketch's flights and ramps,
+ *  read off `edgeItems`, or off the legacy one-flight field when that is all it has. Built of no
+ *  decks: a built stage is built. Everything about its edges goes through lib/design-document/
+ *  stage.ts on this object, which is what makes the venue's stairs the sketch's stairs. */
+export function featureStage(f: StageSource): StageBuild {
+  const shape = footprintStageOutline(featureFootprint(f)) ?? { outline: rectOutline(f.widthMm, f.depthMm), smooth: [] };
+  const base: StageBuild = {
+    outline: shape.outline,
+    ...(shape.smooth.length ? { smooth: shape.smooth } : {}),
+    front: frontEdge(shape.outline),
+    decks: [],
+    heightMm: Math.max(1, Math.round(f.heightMm)),
+  };
+  return { ...base, stairs: f.edgeItems ?? legacyEdgeItems(f, base) };
+}
+
+/** The feature's edge items — the stored ones, or the legacy flight read as one (or two, for a pair). */
+export function featureEdgeItems(f: StageSource): StageStair[] {
+  return featureStage(f).stairs ?? [];
+}
+
+/** The feature as a placed stage — position, facing and its StageBuild — for the sketch's stage
+ *  functions, which take a StagePlacement. A cast: they read nothing of a Placement but its frame. */
+export function featurePlacement(f: StageSource): StagePlacement {
+  return { id: f.id ?? "feature", position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0, stage: featureStage(f) } as unknown as StagePlacement;
+}
+
+/** The legacy flight (and its twin) as edge items on `stage`: each hung on the side its deck edge
+ *  lay nearest, at the point along it where its middle was, keeping its width and its step count. */
+function legacyEdgeItems(f: StageSource, stage: StageBuild): StageStair[] {
+  if (!f.stairs) return [];
+  const n = stage.outline.length;
+  return stairsFlights({ x: f.x, y: f.y, widthMm: f.widthMm, depthMm: f.depthMm, heightMm: f.heightMm, rotationDeg: f.rotationDeg ?? 0, stairs: f.stairs }).map((flight, k) => {
+    const [a, b] = flight.outline;
+    const m = toLocalFrame({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, { x: f.x, y: f.y }, f.rotationDeg ?? 0);
+    let best = { edge: 0, t: 0.5, d: Infinity };
+    for (let i = 0; i < n; i++) {
+      const p = stage.outline[i];
+      const q = stage.outline[(i + 1) % n];
+      const dx = q.x - p.x;
+      const dy = q.y - p.y;
+      const l2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((m.x - p.x) * dx + (m.y - p.y) * dy) / l2));
+      const d = Math.hypot(m.x - (p.x + t * dx), m.y - (p.y + t * dy));
+      if (d < best.d) best = { edge: i, t, d };
+    }
+    const pos = sidePosition(stage, undefined, best.edge, best.t);
+    return { id: `legacy-${k + 1}`, edge: pos.edge, t: pos.t, widthMm: f.stairs!.widthMm, risers: Math.max(1, Math.round(f.stairs!.steps)) };
+  });
 }
 
 export function removeFeature(s: VenueStructure, id: string): VenueStructure {
@@ -844,20 +930,14 @@ if (isMain(import.meta.url)) {
   assert(moveWallControlPoint(base, "w-shared", "c1", { x: 3000, y: 1000 }) === base, "a straight wall has no control point to move");
   assert(bulgeWall(base, "no-such-wall", { x: 0, y: 0 }) === base, "an unknown wall id is a no-op");
 
-  // --- stairs -----------------------------------------------------------------------------------
+  // --- stairs: the sketch's edge items (lib/venues/stage-edges.ts holds the behaviour) ------------
   const { structure: withStage, featureId: stageId } = addFeature(base, newFeature("stage", { x: 2500, y: 2000 }));
   const stageOf = (s: VenueStructure) => s.features.find((f) => f.id === stageId)!;
-  assert(!stageOf(withStage).stairs, "a stage arrives without stairs — they are added deliberately");
-  const stepped = addStairs(withStage, stageId);
-  const flight = stageOf(stepped).stairs!;
-  assert(flight.steps === 4 && flight.side === "front", "a 60cm stage gets four steps on its front edge");
-  assert(addStairs(stepped, stageId) === stepped, "adding stairs to a stage that has them changes nothing");
-  assert(updateStairs(stepped, stageId, { steps: 3 }).features.find((f) => f.id === stageId)!.stairs!.steps === 3, "the step count is editable");
-  // The deck and its flight cannot disagree: shrinking the stage takes the stairs in with it.
-  const shrunkStage = updateFeature(stepped, stageId, { widthMm: 900 });
-  assert(stageOf(shrunkStage).stairs!.widthMm === 900, "narrowing a stage narrows the flight hanging off it");
-  assert(!stageOf(removeStairs(stepped, stageId)).stairs, "stairs can be taken off again");
-  assert(updateStairs(withStage, stageId, { steps: 2 }) === withStage, "a stage without stairs has no flight to patch");
+  assert(featureEdgeItems(stageOf(withStage)).length === 0, "a stage arrives bare — the hall editor adds the default flights with the walls in view");
+  const asStage = featureStage(stageOf(withStage));
+  assert(asStage.outline.length === 4 && asStage.front === 2 && asStage.heightMm === 600 && asStage.decks.length === 0, "a 6×3 stage reads as the sketch's rectangle, its front the +y side, at its own height, built of no decks");
+  const roundStage = featureStage({ ...stageOf(withStage), shape: "circle", widthMm: 4000, depthMm: 4000 });
+  assert(roundStage.outline.length >= 24 && roundStage.smooth?.length === roundStage.outline.length, "a round stage is a smooth rim — one side all the way round");
 
   // A duplicate is a new feature, offset, carrying everything the original did.
   {

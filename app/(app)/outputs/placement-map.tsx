@@ -16,7 +16,7 @@ import {
 import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature } from "@/lib/venues/structure";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
-import { stairsFlights } from "@/lib/venues/stairs";
+import { featureEdgeShapes } from "@/lib/venues/stage-edges";
 import { isClimb } from "@/lib/venues/climb";
 import { ClimbGlyph, WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { footprintPolygons } from "@/lib/studio/proximity";
@@ -1233,24 +1233,32 @@ function groundFirst(features: StructureFeature[]): StructureFeature[] {
 
 /** A venue feature as the studio draws it (venue-plan.tsx, FeatureNode): a plant is its picture, a
  *  surface its material, anything else its outline in its own style with its name. Every sheet —
- *  crew and quote — draws the venue this way. */
-function ColourFeature({ f, den }: { f: StructureFeature; den: number }) {
-  const flights = stairsFlights(f);
+ *  crew and quote — draws the venue this way.
+ *
+ *  `mono` (the B&W booklet) flattens it instead of greying its colours: the ground one pale tone, a
+ *  plant its canopy's outline, a stage and a pool the hatches the key names, any other fixture one
+ *  light grey whatever it is painted — so the furniture is what the eye finds, not a dark lawn. */
+function ColourFeature({ f, den, mono = false }: { f: StructureFeature; den: number; mono?: boolean }) {
+  // The stage's flights and ramps — the sketch's own edge items, in the room (lib/venues/stage-edges.ts).
+  const edges = featureEdgeShapes(f);
   const style = resolveStyle(f.style, "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.feature });
   return (
     <g>
-      {flights.map((stairs, n) => (
-        <g key={n}>
-          <path d={outlinePathD(stairs.outline)} fill={f.stairs?.fill ?? "#f7f6fa"} stroke={MUTED} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
-          {stairs.nosings.map(([p, q], i) => (
+      {edges.map(({ item, shape }) => (
+        <g key={item.id}>
+          <polygon points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill="#f7f6fa" stroke={MUTED} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
+          {shape.treads.map(([p, q], i) => (
             <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
           ))}
+          {shape.climb && <WalkingLine arrow={shape.climb.arrow} slope={shape.climb.slope} ink={INK_SOFT} lineWidth={LINE_WEIGHTS.annotation} fill="#f7f6fa" textSize={slopeSize(shape.widthMm, shape.depthMm, den)} textFill={INK_SOFT} alertFill={INK} turnDeg={f.rotationDeg} />}
         </g>
       ))}
       <g transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}>
         <g transform={`translate(${f.x} ${f.y})`}>
-          {f.kind === "surface" ? (
-            <SurfaceFill material={surfaceMaterial(f)} footprint={featureFootprint(f)} w={f.widthMm} d={f.depthMm} id={`q-${f.id}`} color={f.style?.fill} opacity={f.style?.fillOpacity} />
+          {f.kind === "surface" || f.kind === "pool" ? (
+            // The pool is water (the same texture the screen draws it in); the booklet's mono look
+            // above hatches it instead, as its key says.
+            <SurfaceFill material={f.kind === "pool" ? "water" : surfaceMaterial(f)} footprint={featureFootprint(f)} w={f.widthMm} d={f.depthMm} id={`q-${f.id}`} color={f.style?.fill} opacity={f.style?.fillOpacity} />
           ) : isClimb(f.kind) ? (
             <ClimbGlyph
               f={f}
