@@ -25,6 +25,8 @@ import { startPointerGesture } from "@/lib/studio/gesture";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
+import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
@@ -41,11 +43,7 @@ import {
   edgeGaps,
   edgeItemInRoom,
   edgeItemShape,
-  freeStretch,
-  itemEdge,
-  MIN_EDGE_ITEM_MM,
   stageCorners,
-  itemSpan,
   layStage,
   plainRect,
   reframeStage,
@@ -56,9 +54,6 @@ import {
   stageShapeOf,
   toRoom,
   toStageFrame,
-  itemAlong,
-  itemSidePoint,
-  stageSide,
   stageSides,
   type EdgeRun,
   type StagePlacement,
@@ -2047,7 +2042,9 @@ export function CanvasStage({
           {edgingStage && onEdgeItemSelect && onEdgeItemChange && (
             <EdgeItemHandles
               p={edgingStage}
-              ctx={ctx}
+              deckOf={deckOf}
+              clientToMm={ctx.clientToMm}
+              mm={ctx.mm}
               active={activeEdgeItem ?? null}
               onSelect={(itemId) => onEdgeItemSelect(edgingStage.id, itemId)}
               onChange={(item, from) => onEdgeItemChange(edgingStage.id, item, from)}
@@ -3868,6 +3865,7 @@ function StageMarks({
         }
         const on = st.id === activeItem;
         const stroke = on ? "var(--color-accent)" : "var(--color-ink-soft)";
+        const fill = shape.kind === "bench" ? "var(--color-accent-tint)" : "var(--color-surface)";
         if (shape.kind === "barrier" || shape.kind === "backdrop") {
           // On the edge: a barrier a thin rail, a backdrop a solid wall.
           return (
@@ -3891,9 +3889,8 @@ function StageMarks({
             ))}
             <polygon
               points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")}
-              fill={shape.kind === "bench" ? "var(--color-accent-tint)" : "var(--color-surface)"}
+              fill={fill}
               fillOpacity={1}
-              strokeDasharray={shape.kind === "ramp" ? "8 4" : undefined}
               stroke={on ? "var(--color-accent)" : "var(--color-border)"}
               strokeWidth={on ? 2.5 : 1.5}
               vectorEffect="non-scaling-stroke"
@@ -3901,6 +3898,26 @@ function StageMarks({
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}
+            {/* A flight's or a ramp's walking line — the dot at the foot, the arrowhead onto the deck,
+                a ramp's slope on it — the same picture a flight from the catalog is drawn with
+                (components/climb-glyph.tsx), in the stage's frame; the stage's own turn and flip are
+                handed over so the slope reads upright. The slope at the same fixed screen size the
+                catalog's ramp writes its own (PlacementNode's ctx.mm(11)), unless the ramp has no
+                room for it, and not at all once it would be too small to read. */}
+            {shape.climb && (
+              <WalkingLine
+                arrow={shape.climb.arrow}
+                slope={shape.climb.slope}
+                ink={stroke}
+                lineWidth={1}
+                fill={fill}
+                textSize={Math.min(labelMm, slopeTextSize(shape.widthMm, shape.depthMm)) >= labelMm * 0.6 ? Math.min(labelMm, slopeTextSize(shape.widthMm, shape.depthMm)) : undefined}
+                textFill={stroke}
+                alertFill="var(--color-alert-ink)"
+                turnDeg={rotation}
+                mirrored={mirrored}
+              />
+            )}
             {/* A banquette's sofa side: cushions inside the strip, backrest toward its other half. */}
             {shape.kind === "bench" && <SofaCushions cushions={shape.cushions} backs={shape.backs} />}
           </g>
@@ -4016,6 +4033,8 @@ function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | nul
             {r.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}
+            {/* One walking line up the whole run (stairs carry no slope, so nothing is written). */}
+            {r.arrow && <WalkingLine arrow={r.arrow} ink={on ? "var(--color-accent)" : "var(--color-ink-soft)"} lineWidth={1} fill="var(--color-surface)" textFill="var(--color-ink-soft)" alertFill="var(--color-alert-ink)" />}
           </g>
         );
       })}
@@ -4035,304 +4054,6 @@ function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | nul
  *  as every drag on this canvas does, so a click on a grip or on the body only selects and opens no
  *  undo entry. A round stage's closed rim has no corners: an item on it slides round, across the
  *  seam at edge 0, and its `t` wraps (itemSpan already reads it so). */
-function EdgeItemHandles({
-  p,
-  ctx,
-  active,
-  onSelect,
-  onChange,
-  onEnd,
-}: {
-  p: StagePlacement;
-  ctx: CanvasLayerContext;
-  active: string | null;
-  onSelect: (itemId: string | null) => void;
-  /** `from` is the stage's items as they stood when the press began — a grip pushed into a neighbour
-   *  trims it against THAT, so pulling back gives the neighbour back (lib/design-document/stage.ts
-   *  shareSide). Absent on a slide, which never trims. */
-  onChange: (item: StageStair, from?: StageStair[]) => void;
-  onEnd: () => void;
-}) {
-  const start = useRef<{ item: StageStair; grab: number; from: number; to: number; at: Point; moved: boolean; free: { from: number; to: number } | null; items: StageStair[]; last?: number } | null>(null);
-  /** The width or depth under the pointer, on a pill beside the grip, while one is being dragged. */
-  const [readout, setReadout] = useState<{ at: Point; text: string } | null>(null);
-  const SNAP = 150;
-  /** Pointer travel before a press is a drag — the canvas's own DRAG_THRESHOLD_PX. */
-  const DRAG_PX = 4;
-  /** A grip's centre stands GAP_PX past the item and its hit circle reaches HIT_PX: GAP_PX ≥ HIT_PX
-   *  is what keeps a press anywhere on the body off the grip. */
-  const GAP_PX = 10;
-  const HIT_PX = 9;
-  /** A point under the pointer, as mm along an item's side (and out from it) — round a curve too. */
-  const along = (item: StageStair, clientX: number, clientY: number) => itemAlong(p.stage, item, toStageFrame(p, ctx.clientToMm(clientX, clientY)));
-  const snapEnd = (v: number, L: number) => (v < SNAP ? 0 : v > L - SNAP ? L : Math.abs(v - L / 2) < SNAP ? L / 2 : Math.round(v / 50) * 50);
-  /** A position on a closed rim, read on the turn nearest `ref` — a pointer just past the seam is
-   *  L+10 to a grip at L−100, not 10. */
-  const unwrap = (s: number, ref: number, L: number) => s + L * Math.round((ref - s) / L);
-  const write = (item: StageStair, from: number, to: number, L: number, closed: boolean, base?: StageStair[]) => {
-    const mid = (from + to) / 2;
-    const full = closed ? to - from >= L - 1 : from <= 1 && to >= L - 1;
-    onChange({ ...item, t: (closed ? ((mid % L) + L) % L : mid) / L, widthMm: Math.round(to - from), full: full || undefined }, base);
-  };
-  /** Has this press travelled far enough to be a drag (and stays one once it has). */
-  const armed = (st: NonNullable<typeof start.current>, ev: { clientX: number; clientY: number }) => {
-    if (!st.moved && Math.hypot(ev.clientX - st.at.x, ev.clientY - st.at.y) >= DRAG_PX) st.moved = true;
-    return st.moved;
-  };
-  const unit = (a: Point, b: Point): Point => {
-    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
-  };
-  const past = (q: Point, d: Point, k: number): Point => ({ x: q.x + d.x * k, y: q.y + d.y * k });
-  const cm = (mm: number) => `${Math.round(mm / 10)} ס״מ`;
-  const release = () => {
-    const st = start.current;
-    start.current = null;
-    setReadout(null);
-    // One undo entry per press that moved something — a click opened none.
-    if (st?.moved) onEnd();
-  };
-  /** A grip taking hold; and what each frame of its drag reads — the gesture, once past the
-   *  threshold, and the pointer along the item's side. Up here, not in the grips' block below: the
-   *  ref is only ever touched from a handler. */
-  const hold = (st: NonNullable<typeof start.current>) => {
-    start.current = st;
-  };
-  const pull = (ev: { clientX: number; clientY: number }) => {
-    const st = start.current;
-    if (!st || !armed(st, ev)) return null;
-    const a = along(st.item, ev.clientX, ev.clientY);
-    return a && { st, a };
-  };
-  const items = p.stage.stairs ?? [];
-  return (
-    <g>
-      {items.map((item) => {
-        const shape = edgeItemShape(p.stage, item, deckOf);
-        const span = itemSpan(p.stage, item);
-        const e = itemEdge(p.stage, item);
-        if (!shape || !span || !e) return null;
-        const room = shape.polygon.map((q) => toRoom(p, q));
-        const closed = !!stageSide(p.stage, item.level, item.edge)?.closed;
-        const edgePt = (v: number) => toRoom(p, itemSidePoint(p.stage, item, v) ?? e.a);
-        // Its stretch of the edge, as a line to hold it by (following a curved side).
-        const held = Array.from({ length: 17 }, (_, k) => edgePt(span.from + ((span.to - span.from) * k) / 16));
-        const slide = (ev: { clientX: number; clientY: number }) => {
-          const st = start.current;
-          if (!st || !armed(st, ev)) return;
-          const a = along(st.item, ev.clientX, ev.clientY);
-          if (!a) return;
-          const w = st.to - st.from;
-          let from = st.from + a.s - st.grab;
-          // Round a closed rim the pointer crosses the seam: read this frame's position on the lap
-          // nearest the last one, so a slide may go on round as far as it likes.
-          if (closed) {
-            from = unwrap(from, st.last ?? st.from, a.L);
-            st.last = from;
-          }
-          if (!closed) {
-            // Held between the corners, and pulled to them and to the middle. A closed rim has
-            // neither — the item goes round, and `write` wraps it.
-            from = Math.max(0, Math.min(a.L - w, from));
-            if (from < SNAP) from = 0;
-            else if (a.L - (from + w) < SNAP) from = a.L - w;
-            else if (Math.abs(from + w / 2 - a.L / 2) < SNAP) from = a.L / 2 - w / 2;
-          }
-          // …and held between its NEIGHBOURS on the side: a slide stops against the next item and
-          // is pulled flush to it, never through it (freeStretch, read when the press began).
-          if (st.free) {
-            from = Math.max(st.free.from, Math.min(st.free.to - w, from));
-            if (from - st.free.from < SNAP) from = st.free.from;
-            else if (st.free.to - (from + w) < SNAP) from = st.free.to - w;
-          }
-          write(st.item, from, from + w, a.L, closed);
-        };
-        const press = (ev: React.PointerEvent) => {
-          ev.stopPropagation();
-          onSelect(item.id);
-          const a = along(item, ev.clientX, ev.clientY);
-          const free = freeStretch(p.stage, item);
-          if (a) start.current = { item, grab: a.s, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false, free: free && (free.to - free.from < Infinity) ? { from: free.from, to: free.to } : null, items: p.stage.stairs ?? [] };
-          startPointerGesture(ev, { onMove: slide, onEnd: release });
-        };
-        return (
-          <g key={item.id}>
-            {/* The item itself: click to edit, drag to slide along its side. A barrier is too thin to
-                hit, so it is held by a fat invisible line instead of its outline. */}
-            {shape.kind === "barrier" || shape.kind === "backdrop" ? (
-              <polyline
-                points={held.map((q) => `${q.x},${q.y}`).join(" ")}
-                fill="none"
-                stroke="transparent"
-                strokeWidth={16}
-                vectorEffect="non-scaling-stroke"
-                style={{ pointerEvents: "stroke" }}
-                className="cursor-move touch-none"
-                onPointerDown={press}
-                onClick={(ev) => ev.stopPropagation()}
-              />
-            ) : (
-              <polygon
-                points={room.map((q) => `${q.x},${q.y}`).join(" ")}
-                fill="transparent"
-                className="cursor-move touch-none"
-                onPointerDown={press}
-                onClick={(ev) => ev.stopPropagation()}
-              />
-            )}
-          </g>
-        );
-      })}
-      {/* The active item's grips — after every body, so no neighbour covers them. A map, not an
-          IIFE: a function called in render may not touch the ref the handlers below write. */}
-      {items
-        .filter((item) => item.id === active)
-        .map((item) => {
-          const shape = edgeItemShape(p.stage, item, deckOf);
-          const span = itemSpan(p.stage, item);
-          const e = itemEdge(p.stage, item);
-          if (!shape || !span || !e) return null;
-          const closed = !!stageSide(p.stage, item.level, item.edge)?.closed;
-          const edgePt = (v: number) => toRoom(p, itemSidePoint(p.stage, item, v) ?? e.a);
-          const gap = ctx.mm(GAP_PX);
-          const hit = ctx.mm(HIT_PX);
-          const r = ctx.mm(6);
-          const fromPt = edgePt(span.from);
-          const toPt = edgePt(span.to);
-          // Out past each end along the side (its tangent there, on a curve) — and past a
-          // banquette's foot, out from the edge the way the item stands.
-          const fromDir = unit(edgePt(span.from + 20), fromPt);
-          const toDir = unit(edgePt(span.to - 20), toPt);
-          const base = toRoom(p, shape.base);
-          const foot = toRoom(p, shape.foot);
-          const outDir = unit(base, foot);
-          // The readout stands across the edge from the body, on the side nothing of it is on.
-          const beside = (q: Point) => past(q, outDir, -ctx.mm(20));
-          // What a grip takes hold of.
-          const grabbed = (ev: React.PointerEvent) => ({ item, grab: 0, from: span.from, to: span.to, at: { x: ev.clientX, y: ev.clientY }, moved: false, free: null, items: p.stage.stairs ?? [] });
-          return (
-            <g key={item.id}>
-              <EdgeGrip
-                at={past(fromPt, fromDir, gap)}
-                r={r}
-                hit={hit}
-                label="קצה — גרירה לשינוי הרוחב"
-                cursor="cursor-ew-resize"
-                onBegin={(ev) => hold(grabbed(ev))}
-                onRelease={release}
-                onDrag={(ev) => {
-                  const got = pull(ev);
-                  if (!got) return;
-                  const { st, a } = got;
-                  const s = closed ? unwrap(a.s, st.from, a.L) : a.s;
-                  const from = Math.min(st.to - MIN_EDGE_ITEM_MM, closed ? Math.max(st.to - a.L, Math.round(s / 50) * 50) : Math.max(0, snapEnd(s, a.L)));
-                  write(st.item, from, st.to, a.L, closed, st.items);
-                  setReadout({ at: beside(edgePt(from)), text: cm(st.to - from) });
-                }}
-              />
-              <EdgeGrip
-                at={past(toPt, toDir, gap)}
-                r={r}
-                hit={hit}
-                label="קצה — גרירה לשינוי הרוחב"
-                cursor="cursor-ew-resize"
-                onBegin={(ev) => hold(grabbed(ev))}
-                onRelease={release}
-                onDrag={(ev) => {
-                  const got = pull(ev);
-                  if (!got) return;
-                  const { st, a } = got;
-                  const s = closed ? unwrap(a.s, st.to, a.L) : a.s;
-                  const to = Math.max(st.from + MIN_EDGE_ITEM_MM, closed ? Math.min(st.from + a.L, Math.round(s / 50) * 50) : Math.min(a.L, snapEnd(s, a.L)));
-                  write(st.item, st.from, to, a.L, closed, st.items);
-                  setReadout({ at: beside(edgePt(to)), text: cm(to - st.from) });
-                }}
-              />
-              {shape.kind === "bench" && (
-                <EdgeGrip
-                  at={past(foot, outDir, gap)}
-                  r={r}
-                  hit={hit}
-                  label="עומק הבנקט — גרירה"
-                  cursor="cursor-ns-resize"
-                  onBegin={(ev) => hold(grabbed(ev))}
-                  onRelease={release}
-                  onDrag={(ev) => {
-                    const got = pull(ev);
-                    if (!got) return;
-                    const { st, a } = got;
-                    // Out from the edge — or, an inner banquette, in from it.
-                    const depth = Math.max(250, Math.min(1500, Math.round((shape.inner ? -a.o : a.o) / 50) * 50));
-                    onChange({ ...st.item, depthMm: depth });
-                    setReadout({ at: past(base, outDir, depth + ctx.mm(20)), text: cm(depth) });
-                  }}
-                />
-              )}
-            </g>
-          );
-        })}
-      {readout &&
-        (() => {
-          // The area tool's pill: the one number the designer is dragging TO.
-          const font = ctx.mm(11);
-          const w = font * (readout.text.length * 0.62 + 1.2);
-          return (
-            <g className="pointer-events-none" transform={`translate(${readout.at.x} ${readout.at.y})`}>
-              <rect x={-w / 2} y={-font * 0.85} width={w} height={font * 1.7} rx={font * 0.85} fill="var(--color-accent)" stroke="var(--color-canvas)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-              <text textAnchor="middle" dominantBaseline="central" fill="var(--color-canvas)" style={{ fontSize: font, fontWeight: 600 }} className="nums">
-                {readout.text}
-              </text>
-            </g>
-          );
-        })()}
-    </g>
-  );
-}
-
-/** One round grip of an edge item: a puck in accent with a white ring, under a wider invisible circle
- *  that takes the pointer — captures it, reports the drag, lets go. */
-function EdgeGrip({
-  at,
-  r,
-  hit,
-  label,
-  cursor,
-  onBegin,
-  onDrag,
-  onRelease,
-}: {
-  at: Point;
-  r: number;
-  hit: number;
-  label: string;
-  cursor: string;
-  onBegin: (e: React.PointerEvent) => void;
-  onDrag: (e: PointerEvent) => void;
-  onRelease: () => void;
-}) {
-  return (
-    <g>
-      <circle cx={at.x} cy={at.y} r={r} fill="var(--color-accent)" stroke="var(--color-canvas)" strokeWidth={2} vectorEffect="non-scaling-stroke" className="pointer-events-none" />
-      <circle
-        cx={at.x}
-        cy={at.y}
-        r={hit}
-        fill="transparent"
-        className={cursor + " touch-none focus:outline-none"}
-        role="button"
-        tabIndex={0}
-        aria-label={label}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          onBegin(e);
-          startPointerGesture(e, { onMove: onDrag, onEnd: onRelease });
-        }}
-        onClick={(e) => e.stopPropagation()}
-      />
-    </g>
-  );
-}
-
 /** The corners and sides of an outline, as grips — what editing a stage's SHAPE is. A corner drags
  *  where it is put and nothing else moves (Shift makes the square sides meeting it follow, so they
  *  stay square); a side pushes straight out or in. Lengths are pulled to what the decks build (`snap`, a magnet a few pixels wide) and are

@@ -167,17 +167,39 @@ export function patchToStraight(f: ClimbHost) {
   return { shape: "rect" as const, widthMm: Math.round(chord), depthMm: Math.round(spec.bandMm), arc: undefined };
 }
 
+/** The walking line of a climb — a dot at the foot, an arrowhead at the head — that says which way
+ *  is UP. */
+export interface ClimbArrow {
+  from: Point;
+  to: Point;
+  head: Point[];
+  dotR: number;
+}
+
+/** A ramp's slope, written ON its walking line and along it — "1:12" — as a plan writes one. */
+export interface ClimbSlope {
+  at: Point;
+  angleDeg: number;
+  text: string;
+  tooSteep: boolean;
+}
+
 /** What a renderer draws on top of the footprint, in the feature's own frame. */
 export interface ClimbDrawing {
   /** One SVG path per step edge INSIDE the footprint — its two ends are the outline's own. */
   treads: string[];
   /** The walking line, from the foot to the head of the climb. */
-  arrow: { from: Point; to: Point; head: Point[]; dotR: number };
+  arrow: ClimbArrow;
   /** A ramp's slope, written ON its walking line and along it — "1:12" — as a plan writes one. */
-  slope?: { at: Point; angleDeg: number; text: string; tooSteep: boolean };
+  slope?: ClimbSlope;
 }
 
-function arrowAlong(from: Point, to: Point, size: number): ClimbDrawing["arrow"] {
+/** The walking line and the slope alone — what a STAGE's flights and ramps carry (lib/design-document/
+ *  stage.ts EdgeItemShape.climb), drawn by the same picture as a free-standing one: the stage lays
+ *  the steps itself, and borrows only the arrow. */
+export type ClimbMark = Pick<ClimbDrawing, "arrow" | "slope">;
+
+function arrowAlong(from: Point, to: Point, size: number): ClimbArrow {
   const L = Math.hypot(to.x - from.x, to.y - from.y) || 1;
   const u = { x: (to.x - from.x) / L, y: (to.y - from.y) / L };
   const n = { x: -u.y, y: u.x };
@@ -247,13 +269,30 @@ export function climbDrawing(f: ClimbHost): ClimbDrawing {
     across = w;
   }
 
-  const run = Math.hypot(top.x - foot.x, top.y - foot.y);
-  const arrow = arrowAlong(foot, top, clamp(Math.min(run * 0.35, across * 0.22), 80, 450));
+  const arrow = walkingLine(foot, top, across);
   if (!ramp || f.heightMm <= 0) return { treads, arrow };
-  // At the middle of the walking line, running with it.
+  return { treads, arrow, slope: slopeOn(foot, top, climbRunMm(f), f.heightMm) };
+}
+
+/** How far in from either end of a run the walking line starts and stops — so its dot and its
+ *  arrowhead stand clear of the outline. */
+export const walkingPadMm = (runMm: number): number => Math.min(runMm * 0.12, 150);
+
+/** The walking line from the foot of a climb to its head, sized to the run it covers and the width
+ *  across it (`across`) — never so big that the arrowhead swallows a short flight, never so small on
+ *  a long ramp that it reads as a hair. */
+export function walkingLine(foot: Point, top: Point, across: number): ClimbArrow {
+  const run = Math.hypot(top.x - foot.x, top.y - foot.y);
+  return arrowAlong(foot, top, clamp(Math.min(run * 0.35, across * 0.22), 80, 450));
+}
+
+/** A ramp's slope at the middle of its walking line, running with it: 1:N for `runMm` over
+ *  `riseMm`, flagged when steeper than 1:12 (with a centimetre of slack, as rampTooSteep allows). */
+export function slopeOn(foot: Point, top: Point, runMm: number, riseMm: number): ClimbSlope {
   const mid = { x: (foot.x + top.x) / 2, y: (foot.y + top.y) / 2 };
   const angleDeg = (Math.atan2(top.y - foot.y, top.x - foot.x) * 180) / Math.PI;
-  return { treads, arrow, slope: { at: mid, angleDeg, text: formatRatio(rampRatio(f)), tooSteep: rampTooSteep(f) } };
+  const ratio = riseMm > 0 ? runMm / riseMm : Infinity;
+  return { at: mid, angleDeg, text: formatRatio(ratio), tooSteep: riseMm > 0 && runMm + 10 < riseMm * RAMP_SLOPE };
 }
 
 // ponytail: self-check. Run: npm run check:climb
@@ -304,6 +343,15 @@ if (isMain(import.meta.url)) {
   const rampDrawn = climbDrawing(ramp);
   assert(rampDrawn.treads.length === 0 && rampDrawn.slope?.text === "1:12", "a ramp has no step edges, and says its slope");
   assert(climbDrawing(short).slope?.tooSteep === true, "…and says when it is too steep");
+  // The walking line on its own — what a stage's flights borrow: from the foot to the head, the
+  // arrowhead at the head, sized to the run and never past 45cm; the slope at its middle, along it.
+  const borrowed = walkingLine({ x: 0, y: 1000 }, { x: 0, y: 0 }, 1200);
+  assert(borrowed.from.y === 1000 && borrowed.head[0].y === 0 && borrowed.to.y > 0 && borrowed.to.y < 1000, "the walking line runs foot to head, its arrowhead at the head");
+  assert(walkingLine({ x: 0, y: 9000 }, { x: 0, y: 0 }, 9000).head[0].y - walkingLine({ x: 0, y: 9000 }, { x: 0, y: 0 }, 9000).to.y === -450, "…its head at most 45cm long");
+  const written = slopeOn({ x: 0, y: 7200 }, { x: 0, y: 0 }, 7200, 600);
+  assert(written.text === "1:12" && !written.tooSteep && near(written.at.y, 3600) && near(written.angleDeg, -90), "the slope sits at the middle of the line, along it, and reads 1:12 for 7.2m over 60cm");
+  assert(slopeOn({ x: 0, y: 3600 }, { x: 0, y: 0 }, 3600, 600).tooSteep, "…and is flagged when steeper");
+  assert(walkingPadMm(560) === Math.min(560 * 0.12, 150) && walkingPadMm(7200) === 150, "the line stands in from the ends by 12% of the run, at most 15cm");
 
   // A curved flight: the band is the run, its step edges are arcs of the ring, its arrow crosses the
   // band at the top of the sweep.

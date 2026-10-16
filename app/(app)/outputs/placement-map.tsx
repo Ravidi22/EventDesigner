@@ -18,7 +18,7 @@ import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, t
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { stairsFlights } from "@/lib/venues/stairs";
 import { isClimb } from "@/lib/venues/climb";
-import { ClimbGlyph } from "@/components/climb-glyph";
+import { ClimbGlyph, WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { anySurface } from "@/lib/catalog/textures";
@@ -816,6 +816,13 @@ export function PlacementMap({
 /** Adjustable legs under one deck — the ordinary staging deck stands on four. */
 const LEGS_PER_DECK = 4;
 
+/** The size a stage ramp's slope is printed at: the sheet's 2.6 printed mm, or what the ramp has
+ *  room for, and nothing at all under 1.5 printed mm — a figure that cannot be read is a smudge. */
+function slopeSize(widthMm: number, depthMm: number, den: number): number | undefined {
+  const size = Math.min(2.6 * den, slopeTextSize(widthMm, depthMm));
+  return size >= 1.5 * den ? size : undefined;
+}
+
 /** A run of stairs (a banquette, a barrier) across two stages (edge-runs.ts), in room coordinates. */
 function JoinedRunGlyph({ run }: { run: JoinedRun }) {
   const points = run.polygon.map((q) => `${q.x},${q.y}`).join(" ");
@@ -836,6 +843,8 @@ function JoinedRunGlyph({ run }: { run: JoinedRun }) {
       {run.treads.map(([u, v], k) => (
         <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
       ))}
+      {/* One walking line up the whole run, as the venue's own stairs print theirs. */}
+      {run.arrow && <WalkingLine arrow={run.arrow} ink={INK} lineWidth={LINE_WEIGHTS.annotation} fill="#ffffff" textFill={INK} alertFill={INK} />}
       {run.kind === "bench" && (
         <polyline
           points={run.midline.map((q) => `${q.x},${q.y}`).join(" ")}
@@ -986,6 +995,23 @@ function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: Stage
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
             ))}
+            {/* A flight's or a ramp's walking line and a ramp's slope, as the venue's own stairs
+                print theirs (components/climb-glyph.tsx) — the slope at the sheet's text size, or
+                smaller where the ramp has no room for it, and left off where it would not read. */}
+            {shape.climb && (
+              <WalkingLine
+                arrow={shape.climb.arrow}
+                slope={shape.climb.slope}
+                ink={INK}
+                lineWidth={LINE_WEIGHTS.annotation}
+                fill="#ffffff"
+                textSize={slopeSize(shape.widthMm, shape.depthMm, den)}
+                textFill={INK}
+                alertFill={INK}
+                turnDeg={p.rotation}
+                mirrored={p.mirrored}
+              />
+            )}
             {shape.kind === "bench" && (
               <polyline
                 points={shape.midline.map((q) => `${q.x},${q.y}`).join(" ")}

@@ -17,6 +17,7 @@
 // Pure, no DOM, self-checked: `npm run check:edge-runs`.
 import type { Point, StageEdgeKind } from "./types";
 import type { EdgeItemShape } from "./stage";
+import { walkingLine, walkingPadMm, type ClimbArrow } from "../venues/climb";
 import { isMain } from "../self-check";
 
 /** One edge item as the room sees it. */
@@ -35,6 +36,9 @@ export interface JoinedRun {
   polygon: Point[];
   /** A flight's treads, each one line across the whole run. */
   treads: [Point, Point][];
+  /** A flight's walking line, ONE for the run, up its middle — the dot at the foot on the floor,
+   *  the arrowhead where it reaches the deck (stage.ts EdgeItemShape.climb). */
+  arrow?: ClimbArrow;
   /** Down its middle, end to end. */
   midline: Point[];
   members: { stageId: string; itemId: string }[];
@@ -111,11 +115,18 @@ export function joinEdgeRuns(items: readonly EdgeRunMember[]): JoinedRun[] {
     const depth = Math.hypot(ref.v.x, ref.v.y) || 1;
     // Each tread, by how far across the item it lies, drawn once across the whole run.
     const offsets = [...new Set(ref.m.shape.treads.map(([a]) => Math.round(((a.x - ref.p0.x) * ref.v.x + (a.y - ref.p0.y) * ref.v.y) / depth)))].sort((a, b) => a - b);
+    // One walking line up the middle of the whole run: `v` points from the edge to the far side, so
+    // an outer flight is climbed from the far side (the floor) to the edge, a recessed one from the
+    // edge (the floor) to the far side (the deck).
+    const pad = walkingPadMm(depth) / depth;
+    const mid = (lo + hi) / 2;
+    const [foot, top] = ref.m.shape.inner ? [at(mid, pad), at(mid, 1 - pad)] : [at(mid, 1 - pad), at(mid, pad)];
     out.push({
       kind: ref.m.shape.kind,
       inner: ref.m.shape.inner,
       polygon: [at(lo), at(hi), at(hi, 1), at(lo, 1)],
       treads: offsets.map((o) => [at(lo, o / depth), at(hi, o / depth)] as [Point, Point]),
+      ...(ref.m.shape.kind === "stairs" ? { arrow: walkingLine(foot, top, hi - lo) } : {}),
       midline: [at(lo, 0.5), at(hi, 0.5)],
       members: group.map((l) => ({ stageId: l.m.stageId, itemId: l.m.itemId })),
     });
@@ -180,6 +191,9 @@ if (isMain(import.meta.url)) {
   assert(one[0].treads.length === 2 && one[0].treads.every(([a, b]) => near(a, { x: 0, y: a.y }) && near(b, { x: 4880, y: b.y })) && one[0].treads.map(([a]) => Math.round(a.y)).join() === "280,560", "…each tread one line across both, at the same depths");
   assert(joinedItemIds(one).has("a1") && joinedItemIds(one).has("b1"), "…and both items are the run's");
   assert(one[0].midline.length === 2 && near(one[0].midline[0], { x: 0, y: 420 }), "…its middle line end to end");
+  assert(one[0].arrow !== undefined && near(one[0].arrow.from, { x: 2440, y: 840 - 100.8 }) && near(one[0].arrow.head[0], { x: 2440, y: 100.8 }), "…and ONE walking line up the middle of the run, from the floor to the edge");
+  const sunkRun = joinEdgeRuns([flight("A", "s1", { x: 0, y: 0 }, 2440, 0, 840, "stairs", true), flight("B", "s2", { x: 2440, y: 0 }, 2440, 0, 840, "stairs", true)]);
+  assert(sunkRun.length === 1 && sunkRun[0].arrow !== undefined && near(sunkRun[0].arrow.from, { x: 2440, y: 100.8 }) && near(sunkRun[0].arrow.head[0], { x: 2440, y: 840 - 100.8 }), "a recessed run is climbed from the edge in");
   // A gap, a lean, a different depth, the other side, the same stage: not joined.
   assert(joinEdgeRuns([left, flight("B", "b2", { x: 2440 + 100, y: 0 }, 2440, 0)]).length === 0, "ten centimetres apart they are two flights");
   assert(joinEdgeRuns([left, flight("B", "b3", { x: 2440, y: 0 }, 2440, 5)]).length === 0, "…and so are two 5° out of line");
@@ -200,7 +214,7 @@ if (isMain(import.meta.url)) {
   assert(three.length === 1 && three[0].members.length === 3 && near(three[0].polygon[1], { x: 7320, y: 0 }), "three in a row are one run of three");
   // Barriers join too — a thin strip, no treads; a ramp never.
   const rails = joinEdgeRuns([flight("A", "r1", { x: 0, y: 0 }, 2000, 0, 60, "barrier"), flight("B", "r2", { x: 2000, y: 0 }, 2000, 0, 60, "barrier")]);
-  assert(rails.length === 1 && rails[0].treads.length === 0 && rails[0].kind === "barrier", "two barriers end to end are one rail");
+  assert(rails.length === 1 && rails[0].treads.length === 0 && rails[0].kind === "barrier" && !rails[0].arrow, "two barriers end to end are one rail, with no walking line");
   assert(joinEdgeRuns([flight("A", "p1", { x: 0, y: 0 }, 1200, 0, 7200, "ramp"), flight("B", "p2", { x: 1200, y: 0 }, 1200, 0, 7200, "ramp")]).length === 0, "ramps are never joined");
   // Items standing through each other (a stage dragged over another) are not one run either.
   assert(joinEdgeRuns([left, flight("B", "b8", { x: 1000, y: 0 }, 2440, 0)]).length === 0, "two flights overlapping along the line are not a run");

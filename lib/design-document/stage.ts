@@ -37,6 +37,7 @@ import { flattenEdge, footprintBounds, footprintOutlines, resolveFootprint, size
 import { cleanOutline, halfRoundArea, pushSide, shapeRect, splitSide, stickBoxes, unionOutline, unionShapes, type RectShape, type RoundedAt } from "../studio/stage-draw";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
 import { BENCH_DEPTH_MM, BENCH_TOP_MM, SEAT_WIDTH_MM, SOFA_SEAT_MM, benchLayout, benchSpecOf, type BenchLayout } from "./bench";
+import { slopeOn, walkingLine, walkingPadMm, type ClimbMark } from "../venues/climb";
 import { isMain } from "../self-check";
 
 /** What the fill needs to know about a deck, keyed by the variant id the stage stores. */
@@ -847,6 +848,12 @@ export interface EdgeItemShape {
   polygon: Point[];
   /** Lines across it — a flight's treads. */
   treads: [Point, Point][];
+  /** Stairs and a ramp: the walking line up it — a dot at the foot, an arrowhead where it reaches
+   *  the deck — and a ramp's slope written on it; the picture a free-standing flight from the
+   *  catalog is drawn with (lib/venues/climb.ts, components/climb-glyph.tsx WalkingLine), so a
+   *  stage's own steps read the same as a rented flight standing beside it. Up the middle of the
+   *  item, standing in from both ends. */
+  climb?: ClimbMark;
   /** Its middle ON the edge, and straight across from it at its far side — what stands against a
    *  wall and what reaches the floor. */
   base: Point;
@@ -920,6 +927,7 @@ export function edgeItemShape(stage: StageBuild, item: StageStair, deckOf: DeckL
   const shape = (s: {
     polygon: Point[];
     treads?: [Point, Point][];
+    climb?: ClimbMark;
     depth: number;
     reach: number;
     risers?: number;
@@ -937,6 +945,7 @@ export function edgeItemShape(stage: StageBuild, item: StageStair, deckOf: DeckL
     inner,
     polygon: s.polygon,
     treads: s.treads ?? [],
+    climb: s.climb,
     base: at(0, 0),
     foot: at(0, s.reach),
     farLine: line(s.reach),
@@ -998,20 +1007,23 @@ export function edgeItemShape(stage: StageBuild, item: StageStair, deckOf: DeckL
       bench: lay,
     });
   }
+  // The walking line up a flight or a ramp, from its foot on the floor to where it reaches the deck,
+  // standing in from both ends (lib/venues/climb.ts — the catalog's own flight draws the same line).
+  // Up the item's middle: on a curved side `at(0, y)` runs along the normal there, so it is straight.
+  const walk = (floorY: number, deckY: number, depthMm: number): { foot: Point; top: Point } => {
+    const pad = walkingPadMm(depthMm);
+    const toDeck = Math.sign(deckY - floorY);
+    return { foot: at(0, floorY + toDeck * pad), top: at(0, deckY - toDeck * pad) };
+  };
   if (kind === "ramp") {
     if (riseMm <= 0) return null;
     const depthMm = Math.max(1000, Math.round(riseMm * RAMP_SLOPE));
-    // An arrow up the ramp, foot to stage — what a ramp is drawn with on a plan.
-    const tip = at(0, 0);
-    const foot = at(0, depthMm);
-    const head = Math.min(half, 400);
+    // The arrow up the ramp, foot to stage, with its slope written on it — what a ramp is drawn
+    // with on a plan.
+    const { foot, top } = walk(depthMm, 0, depthMm);
     return shape({
       polygon: strip(0, depthMm),
-      treads: [
-        [foot, tip],
-        [tip, at(-head * 0.6, head)],
-        [tip, at(head * 0.6, head)],
-      ],
+      climb: { arrow: walkingLine(foot, top, w), slope: slopeOn(foot, top, depthMm, riseMm) },
       depth: depthMm,
       reach: depthMm,
     });
@@ -1024,12 +1036,32 @@ export function edgeItemShape(stage: StageBuild, item: StageStair, deckOf: DeckL
   const dir = inner ? -1 : 1;
   const lines: [Point, Point][] = [];
   for (let k = 1; k < treads; k++) lines.push(...segs(dir * k * TREAD_MM));
-  return shape({ polygon: strip(0, dir * depthMm), treads: lines, depth: depthMm, reach: dir * depthMm, risers, riserMm: Math.round(riseMm / risers) });
+  // An outer flight is climbed from the floor at its far side up to the edge; an inner one from the
+  // floor at the edge up onto the deck at its far side.
+  const { foot, top } = inner ? walk(0, -depthMm, depthMm) : walk(depthMm, 0, depthMm);
+  return shape({
+    polygon: strip(0, dir * depthMm),
+    treads: lines,
+    climb: { arrow: walkingLine(foot, top, w) },
+    depth: depthMm,
+    reach: dir * depthMm,
+    risers,
+    riserMm: Math.round(riseMm / risers),
+  });
 }
 
 /** A flight's shape — null for anything that is not stairs. */
 export function stairShape(stage: StageBuild, stair: StageStair, deckOf: DeckLookup): EdgeItemShape | null {
   return edgeKind(stair) === "stairs" ? edgeItemShape(stage, stair, deckOf) : null;
+}
+
+/** A walking line and its slope carried through a point map: the slope's angle is re-read off the
+ *  carried line (foot to head), so a flipped stage's reads as the room sees it. */
+function carryClimb(climb: ClimbMark, r: (q: Point) => Point): ClimbMark {
+  const arrow = { ...climb.arrow, from: r(climb.arrow.from), to: r(climb.arrow.to), head: climb.arrow.head.map(r) };
+  const head = arrow.head[0] ?? arrow.to;
+  const angleDeg = (Math.atan2(head.y - arrow.from.y, head.x - arrow.from.x) * 180) / Math.PI;
+  return { arrow, slope: climb.slope && { ...climb.slope, at: r(climb.slope.at), angleDeg } };
 }
 
 /** An edge item's shape carried out of its stage's frame into the room — what items of two stages
@@ -1043,6 +1075,7 @@ export function edgeItemInRoom(p: StagePlacement, shape: EdgeItemShape): EdgeIte
     ...shape,
     polygon: shape.polygon.map(r),
     treads: shape.treads.map(([u, v]) => [r(u), r(v)] as [Point, Point]),
+    climb: shape.climb && carryClimb(shape.climb, r),
     base,
     foot: r(shape.foot),
     farLine: shape.farLine.map(r),
@@ -2440,6 +2473,12 @@ if (isMain(import.meta.url)) {
   assert(shape.risers === 4 && shape.riserMm === 150 && shape.depthMm === 840, "60cm is four risers of 15cm — three treads, 84cm deep");
   assert(shape.polygon.every((q) => q.x >= 3000 - 1), "a flight on the right-hand side stands outside it");
   assert(shape.treads.length === 2, "…with a line across it between each tread");
+  // Its walking line: from the floor at its far side up to the edge, the arrowhead at the edge,
+  // standing in from both ends — the catalog's own flight is drawn with the same one.
+  const walkUp = shape.climb!;
+  assert(walkUp.arrow.from.x > shape.foot.x - 1 - 150 && walkUp.arrow.from.x < shape.foot.x && Math.abs(walkUp.arrow.from.y - shape.foot.y) < 1, "a flight's walking line starts at its foot on the floor, just in from the end");
+  assert(walkUp.arrow.head[0].x > shape.base.x && walkUp.arrow.head[0].x < walkUp.arrow.from.x && Math.abs(walkUp.arrow.head[0].x - shape.base.x - Math.min(840 * 0.12, 150)) < 1, "…and its arrowhead points at the deck, just out from the edge");
+  assert(walkUp.arrow.head.length === 3 && walkUp.arrow.dotR > 0 && !walkUp.slope, "…a filled head, a dot at the foot, and no slope on stairs");
   const riserStair = stairShape(band.stage, { id: "r", level: "riser", edge: 0, t: 0.5, widthMm: 1000 }, deckOf)!;
   assert(riserStair.riseMm === 400 && riserStair.polygon.every((q) => q.y <= 1), "a flight onto the riser climbs the difference, out from its front onto the base");
   const cornered = stairShape(down.stage, { ...stair, t: 0.99 }, deckOf)!;
@@ -2544,6 +2583,15 @@ if (isMain(import.meta.url)) {
   // ── Ramps, backdrops, corners, area.
   const ramp = edgeItemShape({ ...down.stage, heightMm: 600 }, { id: "r", kind: "ramp", edge: 1, t: 0.5, widthMm: 1200 }, deckOf)!;
   assert(ramp.depthMm === 7200, "a ramp onto a 60cm stage runs 7.2m — one in twelve");
+  assert(ramp.treads.length === 0 && ramp.climb?.slope?.text === "1:12" && !ramp.climb.slope.tooSteep, "…drawn with no step edges and its slope written on it");
+  assert(ramp.climb!.arrow.from.x > ramp.climb!.arrow.head[0].x && Math.abs(ramp.climb!.arrow.head[0].x - ramp.base.x - 150) < 1 && Math.abs(ramp.climb!.slope!.at.x - (ramp.base.x + 3600)) < 1, "…its walking line up to the edge, the slope at its middle");
+  assert(Math.abs(((ramp.climb!.slope!.angleDeg % 360) + 360) % 360 - 180) < 1, "…running with the line (toward −x, onto the right-hand side)");
+  assert(!edgeItemShape(down.stage, { id: "b", kind: "bench", edge: 1, t: 0.5, widthMm: 2000 }, deckOf)!.climb && !edgeItemShape(down.stage, { id: "br", kind: "barrier", edge: 1, t: 0.5, widthMm: 2000 }, deckOf)!.climb, "a banquette and a barrier climb nothing");
+  const rampInRoom = edgeItemInRoom({ ...down, rotation: 90 }, ramp);
+  const turnOf = (deg: number) => ((deg % 360) + 360) % 360;
+  assert(turnOf(rampInRoom.climb!.slope!.angleDeg - ramp.climb!.slope!.angleDeg - 90) < 1e-6 && Math.abs(Math.hypot(rampInRoom.climb!.arrow.head[0].x - rampInRoom.base.x, rampInRoom.climb!.arrow.head[0].y - rampInRoom.base.y) - 150) < 1, "carried into the room, the walking line and the slope turn with the stage");
+  const rampMirrored = edgeItemInRoom({ ...down, rotation: 0, mirrored: true }, ramp);
+  assert(turnOf(rampMirrored.climb!.slope!.angleDeg) < 1e-6 && rampMirrored.climb!.arrow.from.x < rampMirrored.climb!.arrow.head[0].x, "…and a flipped stage's ramp climbs the other way, its slope read off the flipped line");
   const wall = edgeItemShape(down.stage, { id: "w", kind: "backdrop", edge: 2, t: 0.5, widthMm: 0, full: true }, deckOf)!;
   assert(wall.polygon.every((q) => Math.abs(q.y) <= 2001), "a backdrop stands on the stage, on its edge");
   assert(
@@ -2665,6 +2713,11 @@ if (isMain(import.meta.url)) {
   const wallRight: WallDistance = (q) => Math.abs(q.x - 6500);
   const sunk: StageStair = { id: "in", edge: 1, t: 0.5, widthMm: 1000, inner: true };
   const sunkShape = edgeItemShape(tall.stage, sunk, deckOf)!;
+  assert(
+    Math.abs(Math.hypot(sunkShape.climb!.arrow.from.x - sunkShape.base.x, sunkShape.climb!.arrow.from.y - sunkShape.base.y) - Math.min(sunkShape.depthMm * 0.12, 150)) < 1 &&
+      Math.hypot(sunkShape.climb!.arrow.head[0].x - sunkShape.foot.x, sunkShape.climb!.arrow.head[0].y - sunkShape.foot.y) < Math.hypot(sunkShape.climb!.arrow.from.x - sunkShape.foot.x, sunkShape.climb!.arrow.from.y - sunkShape.foot.y),
+    "a recessed flight is climbed the other way: from the floor at the edge up onto the deck inside",
+  );
   assert(sunkShape.inner && sunkShape.depthMm === 840 && sunkShape.polygon.every((q) => q.x <= 3001 && q.x >= 3000 - 841), "an inner flight is the same flight, sunk into the stage behind its edge");
   assert(sunkShape.treads.length === 2 && sunkShape.treads.every(([u]) => u.x < 3000), "…its treads inside the outline");
   const withSunk = { ...tall, stage: { ...tall.stage, stairs: [sunk] } };
