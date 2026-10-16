@@ -11,6 +11,8 @@ import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
 import { FlowerDrawing } from "./flower-symbol";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
+import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
+import { outlinePathD } from "@/lib/studio/geometry";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -96,8 +98,11 @@ export interface ItemSymbolProps {
 
 function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
-  if (w <= 0 || h <= 0) return null;
-  const t = print ? "#ffffff" : tone || DEFAULT_TONE[kind];
+  // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
+  // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
+  const shaped = kind === "bar" && (footprint.kind === "custom" || footprint.kind === "multi");
+  if (!shaped && (w <= 0 || h <= 0)) return null;
+  const t = print ? tone || "#ffffff" : tone || DEFAULT_TONE[kind];
   const c: Colours = {
     tone: t,
     ink,
@@ -160,7 +165,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = chuppah(w, h, round, c, line, ink, detail);
       break;
     case "bar":
-      body = round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
+      body = shaped ? shapedBar(footprint, c, line) : round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
       break;
     case "runner":
       body = along(w, h, (L, D) => runner(L, D, c, line));
@@ -750,9 +755,9 @@ function roundBar(w: number, h: number, c: Colours, line: Line) {
 /** A bar: the counter guests lean on along its front, the aisle the bartender works in, and the back
  *  bar with its bottles along the back edge. */
 function bar(L: number, D: number, c: Colours, line: Line) {
-  const top = Math.min(D * 0.4, 600);
-  const back = Math.min(D * 0.2, 400);
-  const bottles = Math.max(0, Math.floor((L - back) / 260));
+  const top = counterTopMm(D);
+  const back = counterShelfMm(D);
+  const bottles = Math.max(0, Math.floor((L - back) / BOTTLE_PITCH_MM));
   return (
     <>
       <rect x={-L / 2} y={-D / 2} width={L} height={D} fill={c.tone} {...line} />
@@ -763,10 +768,43 @@ function bar(L: number, D: number, c: Colours, line: Line) {
           key={i}
           cx={-L / 2 + back / 2 + ((i + 0.5) * (L - back)) / bottles}
           cy={-D / 2 + back / 2}
-          r={Math.min(back * 0.28, 45)}
+          r={bottleRadiusMm(back)}
           fill="#ffffff"
           {...line}
         />
+      ))}
+    </>
+  );
+}
+
+/** A bar of any other shape — a ח, an oval ring, a horseshoe, an arc, an outline drawn by hand — in
+ *  the straight bar's own strips, laid along its band (lib/catalog/bar-draw.ts says which edge is
+ *  which): the counter top along the guests' side, the bartender's shelf and its bottles along the
+ *  side that faces in, and the shapes added to it drawn as back bars with their bottles. */
+function shapedBar(f: Footprint, c: Colours, line: Line) {
+  const d = barDrawing(f);
+  const strip = (s: Strip, key: string, opacity: number) => (
+    <path
+      key={key}
+      d={s.map((ring) => `M ${ring.map((p) => `${p.x} ${p.y}`).join(" L ")} Z`).join(" ")}
+      fillRule="evenodd"
+      fill={c.print ? "#ffffff" : c.ink}
+      fillOpacity={c.print ? 1 : opacity}
+      {...line}
+      strokeOpacity={line.strokeOpacity * 0.7}
+      strokeLinejoin="round"
+    />
+  );
+  return (
+    <>
+      <FootprintShape footprint={f} fill={c.tone} {...line} />
+      {d.front.map((s, i) => strip(s, `f${i}`, 0.1))}
+      {d.shelf.map((s, i) => strip(s, `s${i}`, 0.18))}
+      {d.backs.map((p, i) => (
+        <path key={`b${i}`} d={outlinePathD(p.outline, p.edgeCurves)} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.18} {...line} strokeOpacity={line.strokeOpacity * 0.7} />
+      ))}
+      {d.bottles.map((b, i) => (
+        <circle key={`o${i}`} cx={b.x} cy={b.y} r={b.r} fill="#ffffff" {...line} />
       ))}
     </>
   );

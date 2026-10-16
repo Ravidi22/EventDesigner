@@ -12,9 +12,10 @@
 // stored but the designer's one opt-out (MapAppearance.symbol === false), which brings back the
 // outline + name/icon they chose — for the item the category's picture gets wrong.
 //
-// Only a PRIMITIVE footprint (circle, ellipse, rectangle) is drawn this way. A ח-shaped bar or a
-// hand-drawn outline is its own picture already, and a symbol laid into its bounding box would draw
-// a sofa across the hole in the middle of it.
+// Only a PRIMITIVE footprint (circle, ellipse, rectangle) is drawn this way — a symbol laid into
+// the bounding box of a hand-drawn outline would draw a sofa across the hole in the middle of it.
+// The one exception is a BAR: a ח, an oval ring, a horseshoe or an arc is what a bar in a hall
+// mostly is, so its picture is laid along its band rather than into its box (lib/catalog/bar-draw.ts).
 import type { Product } from "./types";
 import { isRunner } from "./categories";
 import type { Footprint } from "@/lib/studio/footprint";
@@ -82,6 +83,7 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into. A banquette
   // is a strip with two long sides — the same.
   if (kind === "stairs" || kind === "ramp" || kind === "bench") return footprint.kind === "rect" ? kind : null;
+  if (kind === "bar") return kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 
