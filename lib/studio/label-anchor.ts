@@ -49,7 +49,7 @@ export function labelAnchor(f: Footprint): Point {
 }
 
 /** An outline with its bowed edges sampled into a plain polygon, each vertex once. */
-function flatRing(o: BuiltOutline): Point[] {
+export function flatRing(o: BuiltOutline): Point[] {
   const pts: Point[] = [];
   o.outline.forEach((a, i) => {
     const seg = flattenEdge(a, o.outline[(i + 1) % o.outline.length], o.edgeCurves?.[i]);
@@ -65,7 +65,7 @@ interface Box {
   h: number;
 }
 
-function pole(ring: Point[]): Point {
+export function pole(ring: Point[]): Point {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of ring) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -147,7 +147,7 @@ function polish(ring: Point[], c: Point, minDepth: number, from: Point, span: nu
 /** The deepest point on the line through `p` along `n`, within ±r — the band's mid-line, where the
  *  depth across a band peaks. Depth is concave across a band, so bisecting on its slope finds the
  *  peak. */
-function ridge(ring: Point[], p: Point, n: Point, r: number): Point {
+export function ridge(ring: Point[], p: Point, n: Point, r: number): Point {
   let lo = -r;
   let hi = r;
   for (let k = 0; k < 24; k++) {
@@ -161,7 +161,7 @@ function ridge(ring: Point[], p: Point, n: Point, r: number): Point {
 }
 
 /** The point of the ring nearest (x, y). */
-function nearestEdgePoint(x: number, y: number, ring: Point[]): Point {
+export function nearestEdgePoint(x: number, y: number, ring: Point[]): Point {
   let best: Point = ring[0];
   let bestSq = Infinity;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -249,7 +249,7 @@ function nearestAsDeep(ring: Point[], box: Box, c: Point, minDepth: number, from
 }
 
 /** Distance from the nearest edge — positive inside the ring, negative outside. */
-function signedDistance(x: number, y: number, ring: Point[]): number {
+export function signedDistance(x: number, y: number, ring: Point[]): number {
   let inside = false;
   let minSq = Infinity;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {

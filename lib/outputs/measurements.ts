@@ -592,10 +592,19 @@ export function measurements(input: MeasureInput, opts: MeasureOptions): { dims:
   if (opts.hangs) {
     // From the HANG POINT, square to the walls — nothing on the floor is in the way of a ceiling —
     // and, over a table or an element, how far off its centre. Hung dead centre, the offset is none
-    // and the drawing (the item over the ghosted table) already says so.
+    // and the drawing (the item over the ghosted table) already says so. The same figure twice is
+    // one figure: two items hung from one point (a copy dropped on an original) share their ties,
+    // and two labels on one line read as a number the sheet is unsure of.
+    const said = new Set<string>();
+    const once = (d: Dim) => {
+      const key = `${d.kind}|${Math.round(d.a.x)},${Math.round(d.a.y)}|${Math.round(d.b.x)},${Math.round(d.b.y)}`;
+      if (said.has(key)) return;
+      said.add(key);
+      dims.push(d);
+    };
     for (const h of input.hung ?? []) {
-      for (const t of wallTies(h.at, walls)) dims.push({ kind: "tie", a: t.a, b: t.b, offset: { x: 0, y: 0 }, mm: t.mm });
-      if (h.over) for (const t of centreOffset(h.at, h.over)) dims.push({ kind: "offset", a: t.a, b: t.b, offset: { x: 0, y: 0 }, mm: t.mm });
+      for (const t of wallTies(h.at, walls)) once({ kind: "tie", a: t.a, b: t.b, offset: { x: 0, y: 0 }, mm: t.mm });
+      if (h.over) for (const t of centreOffset(h.at, h.over)) once({ kind: "offset", a: t.a, b: t.b, offset: { x: 0, y: 0 }, mm: t.mm });
     }
   }
 
@@ -747,6 +756,8 @@ if (isMain(import.meta.url)) {
   const offsets = ceiling.dims.filter((d) => d.kind === "offset");
   assert(offsets.length === 1 && Math.abs(offsets[0].mm - 400) < 1, "one hung 0.40 off its table's centre says so; one dead centre says nothing");
   assert(measurements(hungInput, { offsetMm: 900 }).dims.length === 0, "the hang figures are drawn only on a sheet that asks for them");
+  const twice = measurements({ ...hungInput, hung: [...hungInput.hung!, { ...hungInput.hung![0], id: "copy" }] }, { hangs: true, offsetMm: 900 });
+  assert(twice.dims.filter((d) => d.kind === "tie").length === ceiling.dims.filter((d) => d.kind === "tie").length, "two items hung from one point share their ties — each figure once");
 
   // The venue's own flight of steps: measured TO — a table 0.80 from its foot is flagged — but
   // never sized or tied, and a second flight beside it is not measured to it.

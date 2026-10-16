@@ -23,7 +23,7 @@ import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { FootprintShape, dressingSpots, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
-import { clampToTable, toTableFrame } from "@/lib/design-document/dressing";
+import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
@@ -76,9 +76,9 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { floorStack, type StackKind } from "@/lib/design-document/stacking";
-import { centreOver, wallRuns } from "@/lib/studio/hang";
-import { hangPointOf, hangTargetsCache, positionHungAt } from "./hang-targets";
-import { HangTies } from "./hang-ties";
+import { targetUnder, wallRuns } from "@/lib/studio/hang";
+import { hangCentreOf, hangPointOf, hangTargetsCache, overKeyOf, positionHungAt } from "./hang-targets";
+import { HangAxes, HangTies, type HangAxisGuide } from "./hang-ties";
 
 // The studio's design surface — the app's one canvas (components/plan-canvas.tsx) with the design
 // document drawn into its layers.
@@ -691,6 +691,46 @@ export function CanvasStage({
     () => (hangSubject ? [...wallRuns(plan.structure), ...plan.zones.filter((z) => z.boundary.length >= 3).flatMap((z) => z.boundary.map((q, i) => [q, z.boundary[(i + 1) % z.boundary.length]] as [Point, Point]))] : []),
     [hangSubject, plan.structure, plan.zones],
   );
+
+  /** The axes the carried ceiling item is being held on, while it is — drawn by HangAxes. Set only
+   *  when the answer changes (a frame of a drag along one axis is the same guide as the last), so a
+   *  drag is not a re-render of this per frame. */
+  const [hangGuide, setHangGuideRaw] = useState<HangAxisGuide | null>(null);
+  const setHangGuide = useCallback((next: HangAxisGuide | null) => {
+    setHangGuideRaw((prev) => {
+      if (prev === next) return prev;
+      if (!prev || !next) return next;
+      const same =
+        prev.position.x === next.position.x && prev.position.y === next.position.y && (prev.rotation ?? 0) === (next.rotation ?? 0) && !!prev.mirrored === !!next.mirrored &&
+        prev.widthMm === next.widthMm && prev.depthMm === next.depthMm && prev.x === next.x && prev.y === next.y;
+      return same ? prev : next;
+    });
+  }, []);
+  /** The frame a ceiling item is pulled onto the axes of: the table under its hang point (a block's
+   *  frame when the table is grouped), the table it is LINKED to while that table is being dressed
+   *  (so a pendant can be slid out past the rim and still held on the table's axis), or, over a
+   *  stage, a bar or the venue's own furniture, that thing's box about its middle. */
+  const hangFrameAt = (p: Placement, hang: Point): Omit<HangAxisGuide, "x" | "y"> | null => {
+    const frameOf = (key: string): Omit<HangAxisGuide, "x" | "y"> | null => {
+      if (key.startsWith("table:")) {
+        const t = doc.tables.find((x) => x.id === key.slice("table:".length));
+        if (!t) return null;
+        const b = tableBox(t);
+        return { position: t.position, rotation: t.rotation ?? 0, mirrored: t.mirrored, widthMm: b.widthMm, depthMm: b.depthMm };
+      }
+      if (key.startsWith("group:")) {
+        const blk = tableBlock(doc.tables.filter((x) => x.groupId === key.slice("group:".length)));
+        return blk ? { position: blk.centre, rotation: blk.rotation, widthMm: blk.widthMm, depthMm: blk.depthMm } : null;
+      }
+      const t = hangTargets.find((x) => x.key === key);
+      if (!t) return null;
+      const b = polysBox(t.polys);
+      return { position: t.centre, rotation: 0, widthMm: b.maxX - b.minX, depthMm: b.maxY - b.minY };
+    };
+    if (dressingTableId && p.over === dressingTableId) return frameOf(overKeyOf(doc, dressingTableId));
+    const under = targetUnder(hang, hangTargets);
+    return under ? frameOf(under.key) : null;
+  };
 
   // ── The area tool ────────────────────────────────────────────────────────────────────────────
   // Corners so far, and where the next one would land. Local: nothing outside this canvas cares
@@ -1313,14 +1353,30 @@ export function CanvasStage({
     const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
     let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
-    // A ceiling item crossing a table or an element is pulled to its middle when its hang point
-    // comes within a few pixels of it; Alt lets go, as it does every other pull.
-    if (hangSubject && ref.kind === "placement" && ref.id === hangSubject.id && !mods?.alt && !freeDrag.current) {
-      const over = centreOver(hangPointOf({ ...hangSubject, position: p }), hangTargets, ctx.mm(14));
-      if (over) {
-        at = positionHungAt(hangSubject, over.point);
-        ctx.endSnap();
+    // A ceiling item carried over a table is held on the table's AXES: its hang point pulls onto
+    // the table's centre line along, or across, or both — the middle — when it comes within a few
+    // pixels of one, and the line it is on is drawn (HangAxes). Being on the long axis is what a
+    // pendant slid along a head table wants; the middle is one place on it, not the only one. Alt
+    // lets go, as it does every other pull.
+    if (hangSubject && ref.kind === "placement" && ref.id === hangSubject.id) {
+      let guide: HangAxisGuide | null = null;
+      if (!mods?.alt && !freeDrag.current) {
+        const hang = hangPointOf({ ...hangSubject, position: p });
+        const frame = hangFrameAt(hangSubject, hang);
+        if (frame) {
+          const reach = ctx.mm(14);
+          const asTable = { position: frame.position, rotation: frame.rotation ?? 0, mirrored: frame.mirrored };
+          const local = toTableFrame(asTable, hang);
+          const onX = Math.abs(local.x) <= reach;
+          const onY = Math.abs(local.y) <= reach;
+          if (onX || onY) {
+            at = positionHungAt(hangSubject, fromTableFrame(asTable, { x: onX ? 0 : local.x, y: onY ? 0 : local.y }));
+            ctx.endSnap();
+            guide = { ...frame, x: onX, y: onY };
+          }
+        }
       }
+      setHangGuide(guide);
     }
 
     if (ref.kind === "table") onMoveTable(ref.id, at);
@@ -1337,6 +1393,7 @@ export function CanvasStage({
     draggingRefs.current = [];
     setGesturePlane(null);
     setLifted([]);
+    setHangGuide(null);
     ctx.endSnap();
     onEndDrag(moved);
   };
@@ -2067,26 +2124,35 @@ export function CanvasStage({
                 there can be in front of it, so it is drawn after everything, outside the floor stack.
                 See lib/design-document/stacking.ts. */}
             {layerVisible.ceiling &&
-              sorted.ceiling.map((p) => (
-                <PlacementNode
-                  key={p.id}
-                  placement={p}
-                  x={p.position.x}
-                  y={p.position.y}
-                  selected={isSel("placement", p.id)}
-                  ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id })}
-                  overhead
-                />
-              ))}
+              sorted.ceiling.map((p) => {
+                // Dressing a table: what hangs over THAT table stays in front of the scrim and in
+                // hand; the rest of the room's ceiling is held back with the room.
+                const held = !!dressingTableId && p.over !== dressingTableId;
+                return (
+                  <g key={p.id} {...(held ? { opacity: 0.25, style: { pointerEvents: "none" as const } } : {})}>
+                    <PlacementNode
+                      placement={p}
+                      x={p.position.x}
+                      y={p.position.y}
+                      selected={isSel("placement", p.id)}
+                      ctx={ctx}
+                      drag={nodeProps({ kind: "placement", id: p.id })}
+                      overhead
+                      // A double-click on a chandelier opens the table it hangs over, as one on a
+                      // centrepiece opens the table it stands on.
+                      onOpen={p.over ? focusTable : undefined}
+                      openId={p.over}
+                    />
+                  </g>
+                );
+              })}
+
+            {/* The axis the carried ceiling item is held on, while it is. */}
+            {hangGuide && <HangAxes guide={hangGuide} mm={ctx.mm} />}
 
             {/* The selected ceiling item, measured: off the walls, and off the middle of what it
-                hangs over (hang-ties.tsx). */}
-            {hangSubject &&
-              (() => {
-                const at = hangPointOf(hangSubject);
-                return <HangTies at={at} walls={hangWalls} over={centreOver(at, hangTargets)?.point ?? null} mm={ctx.mm} />;
-              })()}
+                hangs over — the table it is linked to, else what is under it (hang-ties.tsx). */}
+            {hangSubject && <HangTies at={hangPointOf(hangSubject)} walls={hangWalls} over={hangCentreOf(hangSubject, doc, hangTargets)} mm={ctx.mm} />}
           </g>
 
           {/* THE AREA TOOL. A pane over the whole plan while corners are being placed — every click
@@ -3510,6 +3576,19 @@ function PlacementNodeView({
           : undefined
       }
     >
+      {/* OVERHEAD: a halo under the drawing, and the hang point. The convention draws a ceiling
+          item unfilled (FootprintShape `overhead`) — which also meant it took the pointer on its
+          hairlines alone, so a chandelier could not be picked up once placed, and that it vanished
+          into whatever table it hung over. The halo is a translucent disc of the plan's own surface
+          colour with a soft edge: the item reads as floating above the table, the footprint is a
+          thing a finger can take hold of, and the dashed outline is still the outline. The dot is
+          the HANG POINT — the shape's visual centre, where the rigger's mark goes (lib/studio/hang.ts). */}
+      {overhead && !placement.stage && (
+        <>
+          <FootprintShape footprint={footprint} fill="var(--color-surface)" fillOpacity={0.62} stroke="var(--color-ink)" strokeOpacity={0.09} strokeWidth={7} vectorEffect="non-scaling-stroke" />
+          <circle cx={labelAnchor(footprint).x} cy={labelAnchor(footprint).y} r={ctx.mm(2.6)} fill={selected ? "var(--color-accent)" : "var(--color-ink-soft)"} className="pointer-events-none" />
+        </>
+      )}
       {symbol && product && (
         <ItemSymbol
           kind={symbol}

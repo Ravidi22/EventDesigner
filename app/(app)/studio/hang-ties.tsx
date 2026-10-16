@@ -10,6 +10,35 @@ import type { Point } from "@/lib/design-document/types";
 import { centreOffset, wallTies, type HangTie } from "@/lib/studio/hang";
 import { placeLabels } from "@/lib/outputs/labels";
 
+/** The two axes of what a ceiling item is being pulled onto, drawn through its middle while the
+ *  drag holds the hang point on one of them — the table's own centre lines, in the table's frame,
+ *  so a turned table shows turned guides. Solid where the plan's alignment guides are dashed: this
+ *  is "on the table's axis", the same thing the dressing overlay's centre lines say. */
+export interface HangAxisGuide {
+  position: Point;
+  rotation?: number;
+  mirrored?: boolean;
+  widthMm: number;
+  depthMm: number;
+  /** On the across line (x = 0 in the frame) / the along line (y = 0). */
+  x: boolean;
+  y: boolean;
+}
+
+export function HangAxes({ guide, mm }: { guide: HangAxisGuide; mm: (px: number) => number }) {
+  const ext = mm(36);
+  const w = guide.widthMm / 2 + ext;
+  const d = guide.depthMm / 2 + ext;
+  const transform = `translate(${guide.position.x} ${guide.position.y})${guide.rotation ? ` rotate(${guide.rotation})` : ""}${guide.mirrored ? " scale(-1 1)" : ""}`;
+  return (
+    <g className="pointer-events-none text-accent" transform={transform} stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke">
+      {guide.x && <line x1={0} y1={-d} x2={0} y2={d} vectorEffect="non-scaling-stroke" />}
+      {guide.y && <line x1={-w} y1={0} x2={w} y2={0} vectorEffect="non-scaling-stroke" />}
+      {guide.x && guide.y && <circle r={mm(4)} fill="none" vectorEffect="non-scaling-stroke" />}
+    </g>
+  );
+}
+
 export function HangTies({ at, walls, over, mm }: { at: Point; walls: [Point, Point][]; over: Point | null; mm: (px: number) => number }) {
   const ties = wallTies(at, walls);
   const legs = over ? centreOffset(at, over) : [];

@@ -7,6 +7,7 @@ import { blockFrame, type BlockFrame } from "@/lib/design-document/block";
 import { dressingLayout, fromTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
+import { footprintSpine } from "@/lib/studio/spine";
 import { isRunner } from "@/lib/catalog/categories";
 import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
 import { climbKindOf } from "@/lib/studio/climb-item";
@@ -130,7 +131,10 @@ export function tableLabelPoint(table: DesignTable): Point {
 export function tableBox(table: DesignTable): TableBox {
   const f = tableFootprint(table);
   const b = footprintBounds(f);
-  return { widthMm: b.w, depthMm: b.h, round: f.kind === "circle" || f.kind === "ellipse" };
+  const round = f.kind === "circle" || f.kind === "ellipse";
+  // The line its items are laid along (lib/studio/spine.ts) — only a SHAPED table needs one; a
+  // rectangle's or a round's is its axis, which the layout already assumes.
+  return { widthMm: b.w, depthMm: b.h, round, ...(f.kind === "custom" || f.kind === "multi" ? { spine: footprintSpine(f) } : {}) };
 }
 
 /** An item's box on a table — its footprint at its scale. */

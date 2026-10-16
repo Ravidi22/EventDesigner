@@ -25,6 +25,15 @@ export interface PatternGroup {
   variantId?: string;
 }
 
+/** The tables as the patterns read them: where each stands, its number, its type and its size. */
+export function patternTablesOf(tables: readonly DesignTable[]): PatternTable[] {
+  return tables.map((t) => {
+    const b = tableBox(t);
+    // A table out of the numbering alternates after the numbered ones, by where it stands.
+    return { id: t.id, position: t.position, number: t.unnumbered ? Number.MAX_SAFE_INTEGER : t.number, type: t.type, sizeMm: Math.max(b.widthMm, b.depthMm) };
+  });
+}
+
 export function TablePatternPicker({
   tables,
   sourceId,
@@ -53,15 +62,7 @@ export function TablePatternPicker({
   const [second, setSecond] = useState(() => item?.shades.find((sh) => sh.id !== item.variantId)?.id ?? "");
   const [split, setSplit] = useState<Split>("checker");
 
-  const rows: PatternTable[] = useMemo(
-    () =>
-      tables.map((t) => {
-        const b = tableBox(t);
-        // A table out of the numbering alternates after the numbered ones, by where it stands.
-        return { id: t.id, position: t.position, number: t.unnumbered ? Number.MAX_SAFE_INTEGER : t.number, type: t.type, sizeMm: Math.max(b.widthMm, b.depthMm) };
-      }),
-    [tables],
-  );
+  const rows: PatternTable[] = useMemo(() => patternTablesOf(tables), [tables]);
   const halves = PATTERN_HALVES[pattern];
   const picked = useMemo(
     () => new Set(patternTables(rows, pattern, { sourceId, selectedIds: selectedTableIds, invert: halves && invert })),

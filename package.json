@@ -15,6 +15,8 @@
     "check:footprint": "tsx lib/studio/footprint.ts",
     "check:label-anchor": "tsx lib/studio/label-anchor.ts",
     "check:hang": "tsx lib/studio/hang.ts",
+    "check:spine": "tsx lib/studio/spine.ts",
+    "check:hang-over": "tsx lib/studio/hang-over.ts",
     "check:geometry": "tsx lib/studio/geometry.ts",
     "check:collide": "tsx lib/studio/collide.ts",
     "check:align": "tsx lib/studio/align.ts",

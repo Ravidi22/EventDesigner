@@ -78,6 +78,16 @@ function bands(tables: PatternTable[], coord: (t: PatternTable) => number): Map<
   return out;
 }
 
+/** The tables standing in the same ROW (or column) as `sourceId`, in order along it — the line a
+ *  run of pendants is strung along (the studio's "פיזור לאורך השורה"). The rows are the same
+ *  clusters the row/column patterns read, so what the picker lights as a row is a row here too. */
+export function tableLine(tables: PatternTable[], sourceId: string, axis: "row" | "column"): PatternTable[] {
+  const band = bands(tables, (t) => (axis === "row" ? t.position.y : t.position.x));
+  const mine = band.get(sourceId);
+  if (mine === undefined) return [];
+  return tables.filter((t) => band.get(t.id) === mine).sort((a, b) => (axis === "row" ? a.position.x - b.position.x : a.position.y - b.position.y));
+}
+
 /** The ids of the tables a pattern picks out, relative to `sourceId`. */
 export function patternTables(
   tables: PatternTable[],
@@ -133,6 +143,9 @@ if (isMain(import.meta.url)) {
   assert(set(patternTables(grid, "alternate", { sourceId: "00" })) === set(["00", "02", "10", "12", "20", "22"]), "alternate goes by number");
   assert(set(patternTables(grid, "selected", { selectedIds: ["00", "13", "nope"] })) === set(["00", "13"]), "selected is the selection, of tables only");
   assert(patternTables([], "checker", { sourceId: "x" }).length === 0, "an empty room picks nothing");
+  assert(tableLine(grid, "12", "row").map((t) => t.id).join(",") === "10,11,12,13", "a table's row, in order across the room");
+  assert(tableLine(grid, "01", "column").map((t) => t.id).join(",") === "01,11,21", "…and its column, top to bottom");
+  assert(tableLine(grid, "nope", "row").length === 0, "no such table, no line");
 
   console.log("table-patterns: all checks passed");
 }

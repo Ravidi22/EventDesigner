@@ -606,16 +606,20 @@ function chandelier(w: number, h: number, n: number, c: Colours, line: Line) {
   const arms = Array.from({ length: count }, (_, i) => polar(R * 0.74, -90 + (i * 360) / count));
   const bulb = Math.min(R * 0.1, ((Math.PI * R * 0.74) / arms.length) * 0.35);
   const stroke = c.print ? c.ink : c.tone;
+  // On screen the arms and bulbs are drawn a touch heavier than the rest of the plan's hairlines:
+  // the thing floats over a table drawn in the same greys, and at hall zoom a 1px gold line on a
+  // grey cloth was the one item on the plan a designer could not find.
+  const sw = c.print ? 1.5 : 2;
   return (
     <>
-      <circle r={R * 0.48} fill="none" {...line} strokeDasharray="4 3" />
+      <circle r={R * 0.48} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.8} strokeDasharray="4 3" />
       {arms.map((p, i) => (
-        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} stroke={stroke} strokeOpacity={0.9} strokeWidth={1.5} />
+        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} stroke={stroke} strokeOpacity={0.95} strokeWidth={sw} />
       ))}
       {arms.map((p, i) => (
-        <circle key={`b${i}`} cx={p.x} cy={p.y} r={bulb} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={1.5} />
+        <circle key={`b${i}`} cx={p.x} cy={p.y} r={bulb} fill={c.print ? "none" : stroke} fillOpacity={c.print ? undefined : 0.35} {...line} stroke={stroke} strokeOpacity={1} strokeWidth={sw} />
       ))}
-      <circle r={R * 0.13} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={1.5} />
+      <circle r={R * 0.13} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={sw} />
     </>
   );
 }

@@ -48,17 +48,23 @@ import {
   BookmarkPlus,
   Replace,
   Check,
+  Crosshair,
   LayoutGrid,
   PaintRoller,
   ArrowDownUp,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, isRunner } from "@/lib/catalog/categories";
+import { tableLine } from "@/lib/studio/table-patterns";
+import { patternTablesOf } from "./table-pattern-picker";
+import { WaveFields, waveOf } from "./dressing-bar";
+import type { HeightWave } from "@/lib/studio/hang-over";
+import { ArrowUpFromLine } from "lucide-react";
 import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
-import type { BenchSideKind, BenchSpec, DesignDocumentContent, WallSpan } from "@/lib/design-document/types";
+import type { BenchSideKind, BenchSpec, DesignDocumentContent, DesignTable, WallSpan } from "@/lib/design-document/types";
 import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
 import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
@@ -322,6 +328,9 @@ export function Inspector({
   renderDesigns,
   onScale,
   onHang,
+  onCentreOver,
+  onSpreadRow,
+  onHangOverDressing,
   onClimb,
   onApplyToAllTables,
   onVariant,
@@ -452,6 +461,12 @@ export function Inspector({
   /** How high one CEILING item hangs above the floor (Placement.hangHeightMm); null = its catalog
    *  row's default again. A rigging fact — nothing priced or packed reads it. */
   onHang?: (placementId: string, heightMm: number | null) => void;
+  /** A ceiling item back over the middle of the table it hangs over. */
+  onCentreOver?: (placementId: string) => void;
+  /** N of a ceiling item strung along the row (or column) of tables its table stands in. */
+  onSpreadRow?: (placementId: string, opts: { axis: "row" | "column"; count: number; wave?: HeightWave | null }) => void;
+  /** One of a ceiling item above each item set out on the table it hangs over. */
+  onHangOverDressing?: (placementId: string, wave?: HeightWave | null) => void;
   /** A rented flight or ramp standing on its own: its rise, steps or direction, with the run that
    *  follows and where it now stands (lib/studio/climb-item.ts builds the edit). */
   onClimb?: (placementId: string, edit: ClimbEdit) => void;
@@ -1544,6 +1559,9 @@ export function Inspector({
 
     const r = resolve(p.variantId);
     const table = p.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
+    // A ceiling item hung OVER a table (Placement.over): named here, centred, arranged in that
+    // table's focus mode, and hung over other tables in a pattern — the table-item verbs, above.
+    const overTable = p.layer === "ceiling" && p.over ? doc.tables.find((t) => t.id === p.over) : undefined;
     const shades = shadesOf(p.variantId);
     const drape = r?.anchor === "wall" ? p.span : undefined;
     const run = drape ? resolveSpan(structure, drape) : null;
@@ -1569,6 +1587,7 @@ export function Inspector({
           bench ? `${(bench.widthMm / 1000).toFixed(2)} מ׳` : null,
           bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
           table ? tableLabel(doc, table) : null,
+          overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
           drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ על הקיר` : "הקיר נמחק") : null,
         ]
           .filter(Boolean)
@@ -1700,6 +1719,33 @@ export function Inspector({
         )}
         {p.layer === "ceiling" && !drape && onHang && (
           <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
+        )}
+        {overTable && (
+          <>
+            {onCentreOver && <BarButton icon={Crosshair} label="למרכז השולחן — התלייה מעל אמצע השולחן" onClick={() => onCentreOver(p.id)} />}
+            {onSpreadRow && (
+              <RowSpreadPopover
+                tables={doc.tables}
+                sourceId={overTable.id}
+                name={r?.product.name ?? "הפריט"}
+                heightMm={hangHeightOf(p, r?.product)}
+                onSpread={(opts) => onSpreadRow(p.id, opts)}
+              />
+            )}
+            {onHangOverDressing &&
+              (() => {
+                const dressed = doc.placements.filter((x) => {
+                  if (x.layer !== "table" || x.tableId !== overTable.id) return false;
+                  const rx = resolve(x.variantId);
+                  return !!rx && rx.anchor !== "table" && !isRunner(rx.product);
+                }).length;
+                return dressed > 0 ? <BarButton icon={ArrowUpFromLine} label={`אחד מעל כל פריט שעל השולחן (${dressed})`} onClick={() => onHangOverDressing(p.id)} /> : null;
+              })()}
+            <Popover label="החלת הפריט מעל שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+              {renderPattern(overTable.id, p.id)}
+            </Popover>
+            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב מעל השולחן — סידור ופיזור של מה שתלוי מעליו · לחיצה כפולה" onClick={() => onDressTable(overTable.id)} />}
+          </>
         )}
         <BreachPopover breaches={breaches} />
 
@@ -2417,6 +2463,62 @@ function occupancyInk(seated: number, seats: number): string {
 
 /** How high one ceiling item hangs above the floor — its own height on this plan, or its catalog
  *  row's when it has none (lib/studio/hang.ts). Printed beside it on the ceiling plan. */
+/** "פיזור לאורך השורה" — N of a hung item strung from the first table of its row (or column) to
+ *  the last, through every table's middle on the way (lib/studio/table-patterns.ts tableLine).
+ *  The count starts at one per table. */
+function RowSpreadPopover({
+  tables,
+  sourceId,
+  name,
+  heightMm,
+  onSpread,
+}: {
+  tables: DesignTable[];
+  sourceId: string;
+  name: string;
+  heightMm?: number;
+  onSpread: (opts: { axis: "row" | "column"; count: number; wave?: HeightWave | null }) => void;
+}) {
+  const [axis, setAxis] = useState<"row" | "column">("row");
+  const [typed, setTyped] = useState<number | null>(null);
+  const [waveOn, setWaveOn] = useState(false);
+  const base = Math.round((heightMm ?? 3000) / 10);
+  const [a, setA] = useState<number | null>(null);
+  const [b, setB] = useState<number | null>(null);
+  const line = tableLine(patternTablesOf(tables), sourceId, axis);
+  const n = typed ?? Math.max(1, line.length);
+  const aCm = a ?? base;
+  const bCm = b ?? Math.max(30, base - 40);
+  return (
+    <Popover label="פיזור לאורך השורה" icon={AlignHorizontalDistributeCenter} value="לאורך השורה" panelClassName="w-72">
+      <Segmented
+        label="לאורך"
+        value={axis}
+        options={[
+          ["row", "השורה"],
+          ["column", "הטור"],
+        ]}
+        onChange={(v) => {
+          setAxis(v);
+          setTyped(null);
+        }}
+      />
+      <PanelRow label="כמה" htmlFor="row-spread-count">
+        <NumberField id="row-spread-count" aria-label="כמה" decimals={0} min={1} max={48} value={n} onChange={(v) => setTyped(Math.max(1, Math.min(48, Math.round(v))))} className="w-20" />
+      </PanelRow>
+      <Note>
+        {line.length < 2
+          ? `השולחן עומד לבדו ב${axis === "row" ? "שורה" : "טור"} שלו — אין קו למתוח לאורכו.`
+          : `${n} × ${name} מהשולחן הראשון ב${axis === "row" ? "שורה" : "טור"} עד האחרון (${line.length} שולחנות), דרך אמצע כל שולחן, במרווחים שווים; הקצוות מעל שולחנות הקצה. כל אחד נקשר לשולחן שמתחתיו.`}
+      </Note>
+      <WaveFields on={waveOn} a={aCm} b={bCm} onOn={setWaveOn} onA={setA} onB={setB} />
+      <Button size="sm" className="mt-2 w-full" disabled={line.length < 2} onClick={() => onSpread({ axis, count: n, wave: waveOf(waveOn, aCm, bCm) })}>
+        {`פיזור ${n} לאורך ${axis === "row" ? "השורה" : "הטור"}`}
+      </Button>
+    </Popover>
+  );
+}
+
 function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: number; onHang: (mm: number | null) => void }) {
   const shown = own ?? fallback;
   return (

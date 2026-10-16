@@ -66,8 +66,9 @@ export function copySelection(
   const tables = doc.tables.filter((t) => tableIds.has(t.id));
   const placements = doc.placements.filter((p) => {
     if (anchoredToWall(p.variantId)) return false;
-    // A stage's banquette dressing comes with the stage, as a table's dressing comes with the table.
-    return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || placementIds.has(p.id);
+    // A stage's banquette dressing comes with the stage, as a table's dressing comes with the table —
+    // and so does what hangs OVER the table (Placement.over).
+    return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.over !== undefined && tableIds.has(p.over)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || placementIds.has(p.id);
   });
   const grouped = new Set([...tables, ...placements].map((x) => x.groupId).filter((g): g is string => !!g));
   return { tables, placements, groups: (doc.groups ?? []).filter((g) => grouped.has(g.id)) };
@@ -134,6 +135,10 @@ export function pasteInto(
     ...rejoin(p),
     id: remapP.get(p.id)!,
     ...(p.tableId === undefined ? {} : { tableId: remap.get(p.tableId) ?? p.tableId }),
+    // A ceiling item hung over a copied table hangs over the copy; one whose table stayed behind
+    // stays over it, like a cloth whose table stayed behind. Its position is a room point and takes
+    // the paste delta below like any other.
+    ...(p.over === undefined ? {} : { over: remap.get(p.over) ?? p.over }),
     ...(p.perch === undefined ? {} : { perch: { ...p.perch, stageId: remapP.get(p.perch.stageId) ?? p.perch.stageId } }),
     // A numbered standalone banquette is numbered like a table: the next free number after the
     // tables', and empty — the same two rules a copied table follows (numberOf above).

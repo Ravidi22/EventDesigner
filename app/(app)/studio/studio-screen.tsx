@@ -91,13 +91,16 @@ import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/
 import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide } from "@/lib/design-document/stage";
 import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
-import { dressingSpots, tableBlock, tableBox, tableFootprint } from "@/components/footprint-shape";
-import { arrange, clampToTable, toTableFrame, type ArrangeKind } from "@/lib/design-document/dressing";
+import { chipBox, dressingSpots, tableBlock, tableBox, tableFootprint } from "@/components/footprint-shape";
+import { arrange, clampToTable, fromTableFrame, spineOf, toTableFrame, type ArrangeKind } from "@/lib/design-document/dressing";
+import { alongSpine, spanAlong, spineParam } from "@/lib/studio/spine";
+import { hungCopy, type HeightWave, type OverFrame } from "@/lib/studio/hang-over";
+import { tableLine } from "@/lib/studio/table-patterns";
 import { DressingBar } from "./dressing-bar";
-import { TablePatternPicker } from "./table-pattern-picker";
+import { TablePatternPicker, patternTablesOf } from "./table-pattern-picker";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
-import { hangTargetsOf, positionHungAt } from "./hang-targets";
-import { centreOver } from "@/lib/studio/hang";
+import { adoptHung, hangCentreOf, hangPointOf, hangTargetsOf, positionHungAt, tableUnderHang } from "./hang-targets";
+import { centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, landOnTop, restackTo, type StackBox, type StackEntry, type StackKind, type StackRef } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
 import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
@@ -348,12 +351,18 @@ export function StudioScreen({
     // reads the local scratch.
     const saved = event ? workspace?.document?.content : loadScratch();
     if (saved) {
-      setHistory(initHistory(saved));
+      // A drawing from before ceiling items were linked to their tables gets its links now, off the
+      // drawing (hang-targets.ts adoptHung) — the one edit made on open. `persisted` stays the
+      // server's copy, so an adopted link is saved once, and a document with nothing to adopt is
+      // the same object and is not written back at all.
+      setHistory(initHistory(adoptHung(saved, arrangedStructure(plan.structure, saved))));
       // What is already on the server, so the first render after a restore doesn't write it
       // straight back. Against localStorage that redundant save was free; it is a round trip now.
       persisted.current = saved;
     }
     setRestored(true);
+    // `plan` is derived from `workspace` (useMemo above), so it is current whenever this runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, workspace]);
 
   // גווני האירוע: every default shade on this screen (defaultVariantId — a drop, a swap, a table)
@@ -600,10 +609,15 @@ export function StudioScreen({
       if (sp) ensureStageParts();
     } else if (product.layer === "ceiling") {
       // Over a table or an element, a chandelier is hung from ITS middle — the shape's visual one
-      // (lib/studio/hang.ts) — wherever over it it was let go. Over bare floor, where it was let go.
+      // (lib/studio/hang.ts) — wherever over it it was let go, and over a TABLE it is linked to
+      // that table from then on (Placement.over): the table carries it, its focus mode arranges
+      // it. Over bare floor, where it was let go, free.
       const plain: Placement = { ...base, position: { x, y } };
-      const over = centreOver({ x, y }, hangTargetsOf(doc, arrangedStructure(plan.structure, doc)));
-      act({ type: "addPlacement", placement: over ? { ...plain, position: positionHungAt(plain, over.point) } : plain });
+      const targets = hangTargetsOf(doc, arrangedStructure(plan.structure, doc));
+      const over = centreOver({ x, y }, targets);
+      const hung = over ? { ...plain, position: positionHungAt(plain, over.point) } : plain;
+      const tableId = tableUnderHang(doc, targets, hangPointOf(hung));
+      act({ type: "addPlacement", placement: tableId ? { ...hung, over: tableId } : hung });
     } else if (product.category === "stage-benches") {
       // A banquette on its own is set like a table (lib/design-document/bench.ts): chairs along its
       // back, and the next table number — optional, cleared from its bar.
@@ -822,6 +836,21 @@ export function StudioScreen({
   /** The design items standing on a table — not its cloth, which is the table's surface. */
   const chipsOn = (tableId: string) =>
     doc.placements.filter((p) => p.layer === "table" && p.tableId === tableId && resolve(p.variantId)?.anchor !== "table");
+  /** What hangs OVER a table (Placement.over) — its ceiling design, arranged and applied like its dressing. */
+  const hungOn = (tableId: string) => doc.placements.filter((p) => p.layer === "ceiling" && p.over === tableId);
+  /** A table as a thing to hang over, for carrying a ceiling design across tables
+   *  (lib/studio/hang-over.ts hungCopy): a grouped table answers with its BLOCK's frame, so two
+   *  halves of a head table are one thing to hang the same chandelier over. */
+  const overFrameOf = (tableId: string): OverFrame | null => {
+    const t = doc.tables.find((x) => x.id === tableId);
+    if (!t) return null;
+    if (t.groupId) {
+      const blk = tableBlock(doc.tables.filter((x) => x.groupId === t.groupId));
+      if (blk) return { position: blk.centre, rotation: blk.rotation, widthMm: blk.widthMm, depthMm: blk.depthMm };
+    }
+    const b = tableBox(t);
+    return { position: t.position, rotation: t.rotation ?? 0, mirrored: t.mirrored, widthMm: b.widthMm, depthMm: b.depthMm };
+  };
   // Derived, so a table deleted (or undone away) while it was being dressed simply ends the mode.
   const dressingTable = dressing ? doc.tables.find((t) => t.id === dressing) : undefined;
 
@@ -1174,11 +1203,27 @@ export function StudioScreen({
             next = amend(next, { type: "setPlacementStage", id: sp.id, stage: { ...sp.stage, stairs: settled } });
           }
         }
+        // A ceiling item let go is linked to the table now under its hang point (Placement.over),
+        // or freed over bare floor — in the same entry as the move. While its own table is being
+        // dressed it stays that table's wherever round it it was slid: a pendant ring outside the
+        // rim is still the table's design.
+        const hungMoved = refs
+          .filter((r) => r.kind === "placement")
+          .map((r) => next.present.placements.find((x) => x.id === r.id))
+          .filter((p): p is Placement => !!p && p.layer === "ceiling");
+        if (hungMoved.length) {
+          const targets = hangTargetsOf(next.present, arrangedStructure(plan.structure, next.present));
+          for (const p of hungMoved) {
+            if (dressing && p.over === dressing) continue;
+            const over = tableUnderHang(next.present, targets, hangPointOf(p));
+            if ((p.over ?? null) !== over) next = amend(next, { type: "setPlacementOver", id: p.id, over });
+          }
+        }
         return next;
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [endDrag, docRefs, plan.structure, stackBoxes],
+    [endDrag, docRefs, plan.structure, stackBoxes, dressing],
   );
 
   // --- bulk edits --------------------------------------------------------------------------------
@@ -3077,6 +3122,19 @@ export function StudioScreen({
   const arrangeDressed = (kind: ArrangeKind | "auto") => {
     const t = doc.tables.find((x) => x.id === dressing);
     if (!t) return;
+    // What hangs OVER the table is arranged in its frame the way what stands on it is — when hung
+    // items are what is selected, or when nothing stands on the table at all. By each item's HANG
+    // POINT (its visual centre), never clamped to the top: the ceiling may reach past the rim.
+    const hung = hungOn(t.id);
+    const pickedHung = hung.filter((p) => selected.some((r) => r.kind === "placement" && r.id === p.id));
+    if (hung.length && (pickedHung.length || chipsOn(t.id).length === 0)) {
+      if (kind === "auto") return;
+      const current = new Map(hung.map((p) => [p.id, toTableFrame(t, hangPointOf(p))]));
+      const subset = pickedHung.length >= (kind === "center" ? 1 : 2) ? pickedHung.map((p) => p.id) : undefined;
+      const next = arrange(kind, tableBox(t), hung.map(chipBox), current, subset);
+      act({ type: "moveMany", moves: hung.map((p) => ({ kind: "placement" as const, id: p.id, position: positionHungAt(p, fromTableFrame(t, next.get(p.id)!)) })) });
+      return;
+    }
     if (kind === "auto") {
       act({ type: "resetDressing", tableId: t.id });
       return;
@@ -3089,6 +3147,150 @@ export function StudioScreen({
     const subset = picked.length >= (kind === "center" ? 1 : 2) ? picked : undefined;
     const next = arrange(kind, tableBox(t), laid.map((sp) => sp.box), current, subset);
     act({ type: "arrangeDressing", tableId: t.id, positions: [...next].map(([id, position]) => ({ id, position })) });
+  };
+
+  /** "פיזור": N of the one selected item — standing on the table, or hung over it — run evenly
+   *  along the table's SPINE (lib/studio/spine.ts: its long axis, or round the band of an arc).
+   *  Copies are added, or extras taken away, until there are N of that variant on (or over) the
+   *  table; a quantity of three becomes three placements, each with a place of its own; the N are
+   *  then laid along the line, the selected one first, and the table's other items stay where they
+   *  are. One history entry. */
+  /** N of a hung item with their hang points at these points in the ROOM — the body of פיזור over
+   *  a table, of a run along a row of tables, and of "one above each item". `pool` is what may be
+   *  reused (the source first, then its siblings of the same variant): copies are added or extras
+   *  taken away to make N, a quantity of three is exploded into three, then each is put at its
+   *  point and linked to the table under it (`over`, null = free). `wave` alternates two hang
+   *  heights along the run (HeightWave). One history entry; the run is left selected. */
+  const layHung = (src: Placement, pool: Placement[], points: { at: DocPoint; over: string | null }[], wave: HeightWave | null | undefined, hint: string) => {
+    const n = points.length;
+    if (n === 0) return;
+    const ordered = [src, ...pool.filter((p) => p.id !== src.id)];
+    const keep = ordered.slice(0, n);
+    const drop = ordered.slice(n);
+    const ids = keep.map((p) => p.id);
+    while (ids.length < n) ids.push(uid());
+    const { id: _i, tableId: _t, over: _o, groupId: _g, position: _p, quantity: _q, hangHeightMm: _h, ...rest } = src;
+    void _i; void _t; void _o; void _g; void _p; void _q; void _h;
+    const heightAt = (i: number): number | undefined => (wave ? (i % 2 === 0 ? wave.a : wave.b) : src.hangHeightMm);
+    const actions: Action[] = [];
+    ids.forEach((id, i) => {
+      const h = heightAt(i);
+      if (i >= keep.length) {
+        actions.push({
+          type: "addPlacement",
+          placement: { ...rest, id, layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, ...(points[i].over ? { over: points[i].over } : {}), ...(h ? { hangHeightMm: h } : {}) },
+        });
+        return;
+      }
+      const p = keep[i];
+      if (p.quantity !== 1) actions.push({ type: "setPlacementQuantity", id, quantity: 1 });
+      if ((p.over ?? null) !== points[i].over) actions.push({ type: "setPlacementOver", id, over: points[i].over });
+      if (wave && (p.hangHeightMm ?? 0) !== (h ?? 0)) actions.push({ type: "setPlacementHang", id, heightMm: h ?? null });
+    });
+    for (const p of drop) actions.push({ type: "removePlacement", id: p.id });
+    actions.push({ type: "moveMany", moves: ids.map((id, i) => ({ kind: "placement" as const, id, position: positionHungAt(src, points[i].at) })) });
+    batch(actions);
+    setSelected(ids.map((id) => ({ kind: "placement" as const, id })));
+    showHint(hint);
+  };
+
+  const spreadDressed = (count: number, wave?: HeightWave | null) => {
+    const t = doc.tables.find((x) => x.id === dressing);
+    const sel = selected.filter((r) => r.kind === "placement");
+    if (!t || sel.length !== 1) return;
+    const src = doc.placements.find((p) => p.id === sel[0].id);
+    if (!src) return;
+    const overhead = src.layer === "ceiling" && src.over === t.id;
+    const onTop = src.layer === "table" && src.tableId === t.id && resolve(src.variantId)?.anchor !== "table";
+    if (!overhead && !onTop) return;
+    const n = Math.max(1, Math.min(24, Math.round(count)));
+    const line = spineOf(tableBox(t));
+    const pts = alongSpine(line, n, 0.08);
+    const name = resolve(src.variantId)?.product.name ?? "הפריט";
+    if (overhead) {
+      const same = hungOn(t.id)
+        .filter((p) => p.variantId === src.variantId && p.id !== src.id)
+        .sort((a, b) => spineParam(line, toTableFrame(t, hangPointOf(a))) - spineParam(line, toTableFrame(t, hangPointOf(b))));
+      layHung(src, [src, ...same], pts.map((local) => ({ at: fromTableFrame(t, local), over: t.id })), wave, `${n} × ${name} מעל ${tableLabel(doc, t)}`);
+      return;
+    }
+    const spots = dressingSpots(t, chipsOn(t.id));
+    const localOf = (p: Placement) => spots.find((sp) => sp.p.id === p.id)?.local ?? { x: 0, y: 0 };
+    const same = chipsOn(t.id).filter((p) => p.variantId === src.variantId && p.id !== src.id);
+    const ordered = [src, ...same.sort((a, b) => spineParam(line, localOf(a)) - spineParam(line, localOf(b)))];
+    const keep = ordered.slice(0, n);
+    const drop = ordered.slice(n);
+    const ids = keep.map((p) => p.id);
+    while (ids.length < n) ids.push(uid());
+    const { id: _i, tableId: _t, over: _o, groupId: _g, position: _p, quantity: _q, ...rest } = src;
+    void _i; void _t; void _o; void _g; void _p; void _q;
+    const actions: Action[] = [];
+    for (const id of ids.slice(keep.length)) {
+      actions.push({ type: "addPlacement", placement: { ...rest, id, layer: "table", tableId: t.id, quantity: 1, position: { x: 0, y: 0 } } });
+    }
+    for (const p of drop) actions.push({ type: "removePlacement", id: p.id });
+    for (const p of keep) if (p.quantity !== 1) actions.push({ type: "setPlacementQuantity", id: p.id, quantity: 1 });
+    const dropped = new Set(drop.map((p) => p.id));
+    actions.push({
+      type: "arrangeDressing",
+      tableId: t.id,
+      positions: [
+        ...spots.filter((sp) => !dropped.has(sp.p.id) && !ids.includes(sp.p.id)).map((sp) => ({ id: sp.p.id, position: sp.local })),
+        ...ids.map((id, i) => ({ id, position: pts[i] })),
+      ],
+    });
+    batch(actions);
+    setSelected(ids.map((id) => ({ kind: "placement" as const, id })));
+    showHint(`${n} × ${name} לאורך ${tableLabel(doc, t)}`);
+  };
+
+  /** One of this ceiling item above EACH item set out on the table it hangs over — a pendant over
+   *  every candlestick: the dressing's own places (auto or arranged), read up through the table's
+   *  frame. The runner is not an item to hang over. */
+  const hangOverDressing = (id: string, wave?: HeightWave | null) => {
+    const src = doc.placements.find((x) => x.id === id);
+    const t = src?.over ? doc.tables.find((x) => x.id === src.over) : undefined;
+    if (!src || !t) return;
+    const spots = dressingSpots(t, chipsOn(t.id)).filter((sp) => !sp.runner);
+    if (spots.length === 0) {
+      showHint("אין פריטים על השולחן לתלות מעליהם");
+      return;
+    }
+    const same = hungOn(t.id).filter((p) => p.variantId === src.variantId && p.id !== src.id);
+    const name = resolve(src.variantId)?.product.name ?? "הפריט";
+    layHung(src, [src, ...same], spots.map((sp) => ({ at: fromTableFrame(t, sp.local), over: t.id })), wave, `${spots.length} × ${name} — אחד מעל כל פריט על ${tableLabel(doc, t)}`);
+  };
+
+  /** N of this ceiling item in a run along the ROW (or column) of tables its table stands in — a
+   *  garland across a row: from the first table's middle to the last's, through every middle on the
+   *  way (lib/studio/table-patterns.ts tableLine), N evenly along that line with the ends ON the end
+   *  tables. Each lands linked to the table under it, free where it hangs between two. Siblings of
+   *  the same variant already over the row's tables are the ones re-laid, so running it again with
+   *  another N re-strings the run rather than doubling it. */
+  const spreadAlongRow = (id: string, opts: { axis: "row" | "column"; count: number; wave?: HeightWave | null }) => {
+    const src = doc.placements.find((x) => x.id === id);
+    const t = src?.over ? doc.tables.find((x) => x.id === src.over) : undefined;
+    if (!src || !t) return;
+    const line = tableLine(patternTablesOf(doc.tables), t.id, opts.axis);
+    if (line.length < 2) {
+      showHint(opts.axis === "row" ? "השולחן עומד לבדו בשורה שלו" : "השולחן עומד לבדו בטור שלו");
+      return;
+    }
+    const n = Math.max(1, Math.min(48, Math.round(opts.count)));
+    const targets = hangTargetsOf(doc, arrangedStructure(plan.structure, doc));
+    const points = spanAlong(line.map((r) => r.position), n).map((at) => ({ at, over: tableUnderHang(doc, targets, at) }));
+    const inLine = new Set(line.map((r) => r.id));
+    const same = doc.placements.filter((p) => p.layer === "ceiling" && !!p.over && inLine.has(p.over) && p.variantId === src.variantId && p.id !== src.id);
+    const name = resolve(src.variantId)?.product.name ?? "הפריט";
+    layHung(src, [src, ...same], points, opts.wave, `${n} × ${name} לאורך ${opts.axis === "row" ? "השורה" : "הטור"} — ${line.length} שולחנות`);
+  };
+
+  /** A ceiling item back over the middle of the table it is linked to (or of what is under it). */
+  const centreHung = (id: string) => {
+    const p = doc.placements.find((x) => x.id === id);
+    if (!p || p.layer !== "ceiling") return;
+    const c = hangCentreOf(p, doc, hangTargetsOf(doc, arrangedStructure(plan.structure, doc)));
+    if (c) act({ type: "movePlacement", id, position: positionHungAt(p, c) });
   };
 
   /** The arrow keys on the table being dressed: the selected items on it step 1cm (Shift: 5cm) in
@@ -3104,6 +3306,12 @@ export function StudioScreen({
       if (!d) return false;
       const chips = doc.placements.filter((p) => p.layer === "table" && p.tableId === t.id && resolve(p.variantId)?.anchor !== "table");
       const picked = new Set(selected.filter((r) => r.kind === "placement").map((r) => r.id));
+      // Hung over the table: a room step, the ceiling is not clamped to the top.
+      const hung = doc.placements.filter((p) => p.layer === "ceiling" && p.over === t.id && picked.has(p.id));
+      if (hung.length && !chips.some((c) => picked.has(c.id))) {
+        act({ type: "moveMany", moves: hung.map((p) => ({ kind: "placement" as const, id: p.id, position: { x: p.position.x + d.x, y: p.position.y + d.y } })) });
+        return true;
+      }
       if (!chips.some((c) => picked.has(c.id))) return false;
       const local = toTableFrame({ position: { x: 0, y: 0 }, rotation: t.rotation, mirrored: t.mirrored }, d);
       const box = tableBox(t);
@@ -3127,6 +3335,29 @@ export function StudioScreen({
     const p = doc.placements.find((x) => x.id === placementId);
     const count = groups.reduce((n, g) => n + g.tableIds.length, 0);
     if (!p || count === 0) return;
+    // A ceiling item: hung over each target at the same relative spot (lib/studio/hang-over.ts), a
+    // block once rather than once per member. "add": a target already wearing this product above
+    // it keeps its one.
+    if (p.layer === "ceiling" && p.over) {
+      const from = overFrameOf(p.over);
+      if (!from) return;
+      const { id: _i, over: _o, tableId: _t, groupId: _g, ...rest } = p;
+      void _i; void _o; void _t; void _g;
+      const seen = new Set<string>();
+      const hangs = groups.flatMap((g) =>
+        g.tableIds.flatMap((tableId) => {
+          const t = doc.tables.find((x) => x.id === tableId);
+          const unit = t?.groupId ? `group:${t.groupId}` : tableId;
+          if (!t || seen.has(unit)) return [];
+          seen.add(unit);
+          const to = overFrameOf(tableId);
+          return to ? [{ tableId, items: [{ ...hungCopy(rest, from, to), variantId: g.variantId ?? p.variantId }] }] : [];
+        }),
+      );
+      act({ type: "hangOverTables", hangs, mode: "add" });
+      showHint(`${resolve(p.variantId)?.product.name ?? "הפריט"} נתלה מעל ${hangs.length} שולחנות${groups.length > 1 ? " בשני גוונים" : ""}`);
+      return;
+    }
     // One action per shade, in one history entry: two shades in alternation are one thing done.
     batch(
       groups.map((g) => ({
@@ -3148,7 +3379,33 @@ export function StudioScreen({
     const replaces = doc.placements
       .filter((p) => p.layer === "table" && p.tableId === fromTableId)
       .flatMap((p) => shadesOf(p.variantId).map((sh) => sh.id));
-    act({ type: "copyDressing", fromTableId, toTableIds, mode, replaces });
+    // What hangs over the source goes too — a table's design is what is on it AND above it — each
+    // copy at the same relative spot over its target (lib/studio/hang-over.ts), a block once.
+    const hung = hungOn(fromTableId);
+    const from = hung.length ? overFrameOf(fromTableId) : null;
+    const seen = new Set<string>();
+    const hangs = from
+      ? toTableIds.flatMap((tableId) => {
+          const t = doc.tables.find((x) => x.id === tableId);
+          const unit = t?.groupId ? `group:${t.groupId}` : tableId;
+          if (!t || seen.has(unit)) return [];
+          seen.add(unit);
+          const to = overFrameOf(tableId);
+          if (!to) return [];
+          return [{
+            tableId,
+            items: hung.map((p) => {
+              const { id: _i, over: _o, tableId: _t, groupId: _g, ...rest } = p;
+              void _i; void _o; void _t; void _g;
+              return hungCopy(rest, from, to);
+            }),
+          }];
+        })
+      : [];
+    batch([
+      { type: "copyDressing", fromTableId, toTableIds, mode, replaces },
+      ...(hangs.length ? [{ type: "hangOverTables" as const, hangs, mode }] : []),
+    ]);
     showHint(mode === "replace" ? `${toTableIds.length} שולחנות עוצבו מחדש` : `העיצוב הוחל על ${toTableIds.length} שולחנות`);
   };
 
@@ -3709,10 +3966,32 @@ export function StudioScreen({
                 <DressingBar
                   title={`עיצוב ${tableLabel(doc, dressingTable)}`}
                   count={chipsOn(dressingTable.id).length}
-                  selectedCount={selected.filter((r) => r.kind === "placement" && chipsOn(dressingTable.id).some((c) => c.id === r.id)).length}
+                  hungCount={hungOn(dressingTable.id).length}
+                  selectedCount={selected.filter((r) => r.kind === "placement" && (chipsOn(dressingTable.id).some((c) => c.id === r.id) || hungOn(dressingTable.id).some((c) => c.id === r.id))).length}
                   arranged={!!dressingTable.arranged}
                   onArrange={arrangeDressed}
                   onAuto={() => arrangeDressed("auto")}
+                  spread={(() => {
+                    const sel = selected.filter((r) => r.kind === "placement");
+                    const p = sel.length === 1 ? doc.placements.find((x) => x.id === sel[0].id) : undefined;
+                    if (!p) return null;
+                    const overhead = p.layer === "ceiling" && p.over === dressingTable.id;
+                    const onTop = p.layer === "table" && p.tableId === dressingTable.id && resolve(p.variantId)?.anchor !== "table";
+                    if (!overhead && !onTop) return null;
+                    const same = (overhead ? hungOn(dressingTable.id) : chipsOn(dressingTable.id)).filter((x) => x.variantId === p.variantId);
+                    return {
+                      name: resolve(p.variantId)?.product.name ?? "הפריט",
+                      count: same.reduce((n, x) => n + x.quantity, 0),
+                      overhead,
+                      heightMm: hangHeightOf(p, resolve(p.variantId)?.product),
+                      dressed: dressingSpots(dressingTable, chipsOn(dressingTable.id)).filter((sp) => !sp.runner).length,
+                    };
+                  })()}
+                  onSpread={spreadDressed}
+                  onAbove={(wave) => {
+                    const sel = selected.filter((r) => r.kind === "placement");
+                    if (sel.length === 1) hangOverDressing(sel[0].id, wave);
+                  }}
                   picker={renderPattern(dressingTable.id)}
                   designs={renderDesigns(dressingTable.id)}
                   onClose={() => setDressing(null)}
@@ -3830,6 +4109,9 @@ export function StudioScreen({
                 renderDesigns={renderDesigns}
                 onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
                 onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
+                onCentreOver={centreHung}
+                onSpreadRow={spreadAlongRow}
+                onHangOverDressing={hangOverDressing}
                 onClimb={(id, edit) => act({ type: "setPlacementClimb", id, ...edit })}
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}

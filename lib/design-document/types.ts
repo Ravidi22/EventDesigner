@@ -121,6 +121,14 @@ export interface Placement {
    *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
    *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */
   hangHeightMm?: number;
+  /** A CEILING item hung OVER this table (its id): dropped over it, or arranged above it in the
+   *  table's focus mode. `position` is still a point in the ROOM — every reader draws it where it
+   *  says — but the table carries it: moving, turning or flipping the table re-places the item by
+   *  the same offset in the table's new frame (lib/studio/hang-over.ts, applied by the reducer),
+   *  the focus mode arranges it like the table's dressing, and "apply to tables" hangs copies over
+   *  other tables at the same relative spot. Cleared when the table is removed; re-read from what
+   *  is under the hang point when the item is dragged on the plan (studio-screen's settleDrag). */
+  over?: string;
   /** Set on a design item standing on a stage's BANQUETTE (StageEdgeItem kind "bench") rather than on
    *  a table: the stage, and which of its edge items. Its `position` is ignored — the bench places it,
    *  spread along its length with the rest of its dressing — so it travels with the stage. Removing

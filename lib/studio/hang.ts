@@ -51,6 +51,12 @@ export const HANG_FIELD = "hangHeightMm";
 /** Hang heights are typed in centimetres and stored in whole centimetres; a ceiling 30m up is a typo. */
 export const HANG_MAX_MM = 30000;
 
+/** An offset off the middle of what an item hangs over shorter than this is not an offset: it is
+ *  the few centimetres a chandelier was let go beside the table's middle by eye, and a rigger told
+ *  "0.03 across" marks the middle anyway. Below it the item is hung dead centre — on the sketch's
+ *  live ties and on the printed ceiling plan alike. */
+export const OFFSET_MIN_MM = 100;
+
 /** Where a footprint's visual centre sits relative to its placement's position, once it is flipped,
  *  scaled and turned the way the canvas draws it (translate · rotate · flip · scale). */
 export function anchorOffset(f: Footprint, rotationDeg = 0, mirrored = false, scale = 1): Point {
@@ -158,7 +164,7 @@ export function wallTies(p: Point, walls: readonly [Point, Point][], maxMm = 400
 
 /** How far a hang point is off the centre of what it hangs over, as the two legs a crew measures —
  *  across, then along. A leg under `minMm` is no leg; a point on the centre has none at all. */
-export function centreOffset(p: Point, centre: Point, minMm = 20): HangTie[] {
+export function centreOffset(p: Point, centre: Point, minMm = OFFSET_MIN_MM): HangTie[] {
   const out: HangTie[] = [];
   const corner = { x: p.x, y: centre.y };
   const dx = Math.abs(p.x - centre.x);
@@ -255,6 +261,7 @@ if (isMain(import.meta.url)) {
   assert(legs.length === 2 && Math.abs(legs[0].mm - 400) < 1 && Math.abs(legs[1].mm - 300) < 1, "0.40 across and 0.30 along");
   assert(near(legs[0].b, legs[1].a) && near(legs[1].b, { x: 5400, y: 5700 }), "the legs run centre → corner → hang point");
   assert(centreOffset({ x: 5000, y: 6005 }, { x: 5000, y: 6000 }).length === 0, "hung on the centre, there is no offset to give");
+  assert(centreOffset({ x: 5030, y: 6060 }, { x: 5000, y: 6000 }).length === 0, "a few centimetres off by eye is the centre, not a figure (OFFSET_MIN_MM)");
   assert(centreOffset({ x: 5000, y: 6400 }, { x: 5000, y: 6000 }).length === 1, "straight down the line, one leg");
 
   // The height: the placement's own, else the catalog row's, else nothing.

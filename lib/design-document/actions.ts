@@ -4,6 +4,7 @@ import type { BenchSpec, DesignDocumentContent, DesignGroup, FeaturePlacement, P
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
+import { carryHung } from "../studio/hang-over";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
 const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
@@ -70,6 +71,15 @@ export type Action =
   // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
   // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
   | { type: "setPlacementHang"; id: string; heightMm: number | null }
+  // Which table a ceiling item hangs OVER (Placement.over): read off what is under its hang point
+  // when a drag of it ends, set by a drop over a table, cleared (null) over bare floor. From then on
+  // the table carries it (settleHung below) and the focus mode arranges it.
+  | { type: "setPlacementOver"; id: string; over: string | null }
+  // A table's ceiling design hung over other tables — each copy already placed by the caller at the
+  // same relative spot (lib/studio/hang-over.ts hungCopy), since only the caller has the tables'
+  // sizes. "replace" takes down what already hangs over a target first; "add" hangs beside it,
+  // skipping a variant the target already has above it.
+  | { type: "hangOverTables"; hangs: { tableId: string; items: Omit<Placement, "id" | "over" | "tableId">[] }[]; mode: "add" | "replace" }
   // A free-standing flight or ramp's rise, steps or direction (Placement.climb), together with the
   // run that follows from them and where it now stands — its head kept in place
   // (lib/studio/climb-item.ts builds all three). One entry, because it was one number typed.
@@ -152,6 +162,33 @@ export type RetypedTable = Pick<DesignTable, "type" | "variantId"> &
   Pick<Partial<DesignTable>, "diameterMm" | "widthMm" | "depthMm" | "seats">;
 
 export function apply(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
+  return settleHung(doc, reduce(doc, action));
+}
+
+/** What hangs over a table goes where the table goes. Run after EVERY action rather than inside the
+ *  dozen that can move a table (moveTable, moveMany, rotateMany, mirrorMany, retypeTable…): each
+ *  linked ceiling item whose table's frame changed is carried by the offset it had
+ *  (lib/studio/hang-over.ts carryHung) — unless the action placed the item itself (it is in the
+ *  drag too, or it was the thing arranged), in which case where it was put is where it goes. */
+function settleHung(before: DesignDocumentContent, after: DesignDocumentContent): DesignDocumentContent {
+  if (after === before || after.tables === before.tables) return after;
+  const was = new Map(before.tables.map((t) => [t.id, t]));
+  const now = new Map(after.tables.map((t) => [t.id, t]));
+  const wasPlacement = new Map(before.placements.map((p) => [p.id, p]));
+  let changed = false;
+  const placements = after.placements.map((p) => {
+    if (p.layer !== "ceiling" || !p.over || wasPlacement.get(p.id) !== p) return p;
+    const t0 = was.get(p.over);
+    const t1 = now.get(p.over);
+    if (!t0 || !t1 || t0 === t1) return p;
+    const next = carryHung(p, t0, t1);
+    if (next !== p) changed = true;
+    return next;
+  });
+  return changed ? { ...after, placements } : after;
+}
+
+function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
   switch (action.type) {
     case "addTable":
       return { ...doc, tables: [...doc.tables, action.table] };
@@ -349,7 +386,15 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
       return pruneGroups({
         ...doc,
         tables: doc.tables.filter((t) => t.id !== action.id),
-        placements: doc.placements.filter((p) => p.tableId !== action.id),
+        // What stood ON it goes with it; what hung OVER it stays, hanging free where it is.
+        placements: doc.placements
+          .filter((p) => p.tableId !== action.id)
+          .map((p) => {
+            if (p.over !== action.id) return p;
+            const { over: _gone, ...rest } = p;
+            void _gone;
+            return rest;
+          }),
       });
     case "addPlacement": {
       // Manually placing a variant back on a table clears its smart-apply exception (F-5.3).
@@ -393,6 +438,34 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           return h > 0 ? { ...rest, hangHeightMm: h } : rest;
         }),
       };
+    }
+    case "setPlacementOver": {
+      const p = doc.placements.find((x) => x.id === action.id);
+      if (!p || (p.over ?? null) === action.over) return doc;
+      const { over: _old, ...rest } = p;
+      void _old;
+      const next: Placement = action.over ? { ...rest, over: action.over } : rest;
+      return { ...doc, placements: doc.placements.map((x) => (x.id === action.id ? next : x)) };
+    }
+    case "hangOverTables": {
+      const targets = new Set(action.hangs.filter((h) => doc.tables.some((t) => t.id === h.tableId)).map((h) => h.tableId));
+      if (targets.size === 0) return doc;
+      const kept = action.mode === "replace" ? doc.placements.filter((p) => !(p.layer === "ceiling" && p.over && targets.has(p.over))) : doc.placements;
+      const added: Placement[] = [];
+      for (const h of action.hangs) {
+        if (!targets.has(h.tableId)) continue;
+        for (const it of h.items) {
+          // "add" gives a table what it lacks: a variant already hanging over it is not hung twice —
+          // judged against what hung there BEFORE this action, so a run of three of one pendant
+          // over a table that had none lands as three.
+          if (action.mode === "add" && kept.some((p) => p.layer === "ceiling" && p.over === h.tableId && p.variantId === it.variantId)) continue;
+          const { id: _old, tableId: _t, over: _o, groupId: _g, ...rest } = it as Placement;
+          void _old; void _t; void _o; void _g;
+          added.push({ ...rest, layer: "ceiling", id: crypto.randomUUID(), over: h.tableId });
+        }
+      }
+      if (added.length === 0 && kept === doc.placements) return doc;
+      return { ...doc, placements: [...kept, ...added] };
     }
     case "setPlacementClimb":
       return {
@@ -1361,6 +1434,43 @@ if (isMain(import.meta.url)) {
     assert(!("seats" in seatless.tables[0]), "a row with no seats leaves no stale chair count behind");
     const replaced = apply(dressed, { type: "retypeTable", id: "t", table: { type: "x", variantId: "x" }, position: { x: 5, y: 6 } });
     assert(replaced.tables[0].position.x === 5 && replaced.placements === dressed.placements, "a swap may re-place the table, and leaves its dressing alone");
+  }
+
+  // HUNG OVER A TABLE. A chandelier linked to a table goes where the table goes — moved, turned —
+  // and is left hanging free where it was when the table is removed; one in the same drag as its
+  // table is placed by the drag, not carried twice.
+  {
+    let g = initHistory({ calibration: { mmPerUnit: 1 }, tables: [], placements: [] });
+    g = dispatch(g, { type: "addTable", table: { id: "t7", type: "מלבן", number: 7, position: { x: 5000, y: 3000 }, rotation: 0 } });
+    const chand: Placement = { id: "ch", variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 5600, y: 3000 }, rotation: 0, scale: 1, over: "t7" };
+    const freeOne: Placement = { id: "fr", variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 9000, y: 9000 }, rotation: 0, scale: 1 };
+    g = dispatch(g, { type: "addPlacement", placement: chand });
+    g = dispatch(g, { type: "addPlacement", placement: freeOne });
+    g = dispatch(g, { type: "moveTable", id: "t7", position: { x: 8000, y: 3000 } });
+    const at = (id: string) => g.present.placements.find((p) => p.id === id)!;
+    assert(at("ch").position.x === 8600 && at("ch").position.y === 3000, "a moved table carries the chandelier hung over it");
+    assert(at("fr").position.x === 9000, "…and leaves a free one alone");
+    g = dispatch(g, { type: "rotateMany", turns: [{ kind: "table", id: "t7", position: { x: 8000, y: 3000 }, rotation: 90 }] });
+    assert(at("ch").position.x === 8000 && at("ch").position.y === 3600 && at("ch").rotation === 90, "a turned table turns what hangs over it round with it");
+    g = dispatch(g, { type: "moveMany", moves: [{ kind: "table", id: "t7", position: { x: 1000, y: 1000 } }, { kind: "placement", id: "ch", position: { x: 1234, y: 1234 } }] });
+    assert(at("ch").position.x === 1234 && at("ch").position.y === 1234, "an item dragged together with its table is placed by the drag, not carried twice");
+    g = dispatch(g, { type: "setPlacementOver", id: "ch", over: null });
+    assert(at("ch").over === undefined, "unlinked");
+    g = dispatch(g, { type: "setPlacementOver", id: "ch", over: "t7" });
+    assert(at("ch").over === "t7", "…and linked again");
+    assert(apply(g.present, { type: "setPlacementOver", id: "ch", over: "t7" }) === g.present, "the same link is no edit");
+    // Over other tables: a copy per target, already placed by the caller; replace takes the old down.
+    g = dispatch(g, { type: "addTable", table: { id: "t8", type: "מלבן", number: 8, position: { x: 6000, y: 6000 }, rotation: 0 } });
+    g = dispatch(g, { type: "hangOverTables", hangs: [{ tableId: "t8", items: [{ variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 6600, y: 6000 }, rotation: 0, scale: 1 }] }], mode: "add" });
+    const over8 = () => g.present.placements.filter((p) => p.over === "t8");
+    assert(over8().length === 1 && over8()[0].position.x === 6600, "a copy hangs over the target where the caller placed it");
+    g = dispatch(g, { type: "hangOverTables", hangs: [{ tableId: "t8", items: [{ variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 6000, y: 6000 }, rotation: 0, scale: 1 }] }], mode: "add" });
+    assert(over8().length === 1, "add does not hang a variant twice over one table");
+    g = dispatch(g, { type: "hangOverTables", hangs: [{ tableId: "t8", items: [{ variantId: "pend", layer: "ceiling", quantity: 1, position: { x: 5500, y: 6000 }, rotation: 0, scale: 1 }, { variantId: "pend", layer: "ceiling", quantity: 1, position: { x: 6500, y: 6000 }, rotation: 0, scale: 1 }] }], mode: "replace" });
+    assert(over8().length === 2 && over8().every((p) => p.variantId === "pend"), "replace takes down what hung there and hangs the run of two");
+    assert(apply(g.present, { type: "hangOverTables", hangs: [{ tableId: "nope", items: [] }], mode: "add" }) === g.present, "no target, no edit");
+    g = dispatch(g, { type: "removeTable", id: "t7" });
+    assert(at("ch").over === undefined && at("ch").position.x === 1234, "a removed table leaves its chandelier hanging free where it was");
   }
 
   console.log("actions self-check passed");

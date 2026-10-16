@@ -59,8 +59,8 @@ import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
-import { centreOver, formatHang, hangHeightOf, wallRuns } from "@/lib/studio/hang";
-import { hangPointOf, hangTargetsOf } from "../studio/hang-targets";
+import { formatHang, hangHeightOf, wallRuns } from "@/lib/studio/hang";
+import { hangCentreOf, hangPointOf, hangTargetsOf } from "../studio/hang-targets";
 import { tablesPhrase, type TableKit } from "@/lib/outputs/table-kits";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { pointInPolygon } from "@/lib/venues/faces";
@@ -438,7 +438,8 @@ export function PlacementMap({
   const hung = ceilingItems.map((p) => {
     const at = hangPointOf(p);
     const polygon = toWorld(outlineOf(placementFootprint(p)), p.position, p.rotation, p.mirrored, p.scale || 1);
-    return { p, at, over: centreOver(at, hangTargets)?.point, polygon, height: hangHeightOf(p, resolve(p.variantId)?.product) };
+    // Off the table it is LINKED to (Placement.over), even hanging past its rim — else what is under it.
+    return { p, at, over: hangCentreOf(p, doc, hangTargets) ?? undefined, polygon, height: hangHeightOf(p, resolve(p.variantId)?.product) };
   });
   // Each item's height beside it, placed with the figures so none lands on another.
   const hangNotes = hung.flatMap(({ polygon, height }) => {
