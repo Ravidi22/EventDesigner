@@ -69,9 +69,10 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
   const [view, setView] = useState<View>("quote");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("auto");
-  // The booklet in colour (the venue's lawn, pool, trees) or greyed for a crew that gets photocopies.
-  // ponytail: a CSS grayscale over the whole sheet, not a separate ink drawing — add hatches if grey
-  // canopies prove too heavy on a copier.
+  // The booklet in colour (the venue's lawn, pool, trees) or in black and white for a crew that gets
+  // photocopies. B&W is its own drawing, not the colour one greyed: every element filled with its
+  // kind's flat grey whatever its real colour, so sizes read at a glance (MONO in placement-map.tsx).
+  // The CSS grayscale stays on as a net under it — the text pages' photos, anything still in colour.
   const [mono, setMono] = useState(false);
   const [version, setVersion] = useState(1);
   // The studio's railing rule, for the stage sheet (settings → במות). Off until read, and off if
@@ -581,7 +582,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
               if (pg.kind === "detail")
                 return (
                   <article key={`detail-${pg.kit.key}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
-                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
+                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} mono={mono} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
                   </article>
                 );
               const { sheet, z } = pg;
@@ -596,6 +597,7 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
                     railingAboveMm={railingAboveMm}
                     letters={sheet.tables === "full" ? letters : undefined}
                     summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
+                    mono={mono}
                     paper={paperOf(pg.o)}
                     {...frame}
                   />

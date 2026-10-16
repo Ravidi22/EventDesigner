@@ -78,6 +78,22 @@ const INK = "#1b1725";
 const ZONE_TINT: Record<string, string> = { hall: "#faf9fd", canopy: "#e8f1fb", open: "#dcefe5", service: "#eeedf3" };
 const INK_SOFT = "#4a4658";
 const MUTED = "#7c7889";
+/** THE B&W BOOKLET (outputs → צבע: שחור-לבן): every element FILLED with a flat grey chosen by what it
+ *  IS, never by its real colour — so a table, a stage, a bar each read as a solid shape and their
+ *  lengths and sizes show at a glance, where hollow outlines on white made the eye trace every edge.
+ *  Paler the lower it stands — the ground, then the stage, then what stands on it — so the furniture
+ *  is the darkest thing on the page and black numbers stay legible on it. What stands ON a table is
+ *  left white, to read against the table's grey top. */
+const MONO = {
+  ground: "#f3f3f3",
+  feature: "#ebebeb",
+  rug: "#eeeeee",
+  drape: "#e4e4e4",
+  stage: "#e2e2e2",
+  chair: "#dcdcdc",
+  item: "#cfcfcf",
+  table: "#c4c4c4",
+} as const;
 
 // Table numbers into ranges ("1–3, 5") and table units into words — pure, self-checked in
 // lib/outputs/table-kits.ts (npm run check:table-kits).
@@ -179,6 +195,7 @@ export function PlacementMap({
   summary,
   bare,
   colour = false,
+  mono = false,
   seatCounts = false,
 }: {
   doc: DesignDocumentContent;
@@ -187,6 +204,8 @@ export function PlacementMap({
    *  cloth's colour, items in their shades. For a CLIENT (the quote's sketch); every crew sheet is
    *  ink on white, which is what survives a photocopier. */
   colour?: boolean;
+  /** The B&W booklet: every element filled with its kind's flat grey (MONO), the venue flattened. */
+  mono?: boolean;
   /** Write each table's people count under its number ("12 איש"). */
   seatCounts?: boolean;
   sheet?: PlanSheet;
@@ -252,8 +271,8 @@ export function PlacementMap({
 
   const symbolKey: LegendRow[] = [
     ...(chairSheet ? chairKey : []),
-    ...(framedFeatures.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
-    ...(framedFeatures.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
+    ...(mono && framedFeatures.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
+    ...(mono && framedFeatures.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
     ...(sheet.tables === "ghost" ? [{ label: "שולחן (להתמצאות בלבד)", swatch: "dot-ghost" as const }] : []),
     ...(sheet.layers.includes("ceiling") ? [{ label: "מעל גובה החתך", swatch: "overhead" as const }] : []),
   ];
@@ -276,6 +295,7 @@ export function PlacementMap({
     }
     return true;
   });
+  const shownIds = new Set(shown.map((p) => p.id));
 
   // Sorted by what they ARE, same split the studio canvas makes (canvas-stage.tsx): a cover is the
   // table's own surface and draws nothing separate, a drape hangs on a wall, a table-layer item
@@ -583,12 +603,14 @@ export function PlacementMap({
             );
           })}
           {/* Venue features in their own colours, as the quote and the studio draw them — the crew
-              sheets too: a lawn, a palm and a pool read faster in colour than as labelled outlines. */}
-          {groundFirst(structure.features).map((f) => <ColourFeature key={f.id} f={f} den={den} />)}
+              sheets too: a lawn, a palm and a pool read faster in colour than as labelled outlines.
+              Flattened to one pale tone each in the B&W booklet (`mono`). */}
+          {groundFirst(structure.features).map((f) => <ColourFeature key={f.id} f={f} den={den} mono={mono} />)}
 
           {/* THE FLOOR, back to front (stackOrder). Tables: "full" is the studio's own shape and style;
-              "ghost" flattens every table to the same faint dot pattern with no number — a rigger
-              needs to know which table is under a chandelier, not read the room's seating plan;
+              "ghost" flattens every table to the same faint dot pattern, numbered only where the
+              sheet asks (the chairs sheet) — a rigger needs to know which table is under a
+              chandelier, not read the room's seating plan;
               "none" skips them outright. Chairs are derived from each table's own seat count (the
               rule lib/studio/seating.ts draws by) and painted just under their table, so its white
               top covers the front of every chair tucked under it. A block's ring goes round the
@@ -607,9 +629,10 @@ export function PlacementMap({
                   carries={doc.tables.some((t) => pointInPolygon(t.position, toWorld(p.stage!.outline, p.position, p.rotation, p.mirrored)))}
                   den={den}
                   skip={joinedIds.size ? joinedIds : undefined}
+                  mono={mono}
                 />
               ) : (
-                <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} colour={colour} textMm={2.6 * den} chairs={sheet.chairs} />
+                <PlacementGlyph key={p.id} placement={p} x={p.position.x} y={p.position.y} colour={colour} mono={mono} textMm={2.6 * den} chairs={sheet.chairs} />
               );
             }
             if (sheet.tables === "none") return null;
@@ -621,32 +644,36 @@ export function PlacementMap({
                 {ring && ring.seats > 0 && (
                   <g transform={ring.transform}>
                     {ring.chairs.map((st, i) => (
-                      <ChairGlyph key={i} seat={st} colour={colour} />
+                      <ChairGlyph key={i} seat={st} colour={colour} mono={mono} />
                     ))}
                   </g>
                 )}
                 {sheet.chairs && !t.groupId && t.seats ? (
                   <g transform={placed(t.position, t.rotation, t.mirrored)}>
                     {seatsAround(tableFootprint(t), t.seats, undefined, tableBlockedSides(t)).map((st, i) => (
-                      <ChairGlyph key={i} seat={st} colour={colour} />
+                      <ChairGlyph key={i} seat={st} colour={colour} mono={mono} />
                     ))}
                   </g>
                 ) : null}
-                {sheet.tables === "ghost" ? <GhostTable t={t} /> : <TableGlyph t={t} colour={colour} cloth={clothOf.get(t.id)} />}
+                {sheet.tables === "ghost" ? <GhostTable t={t} /> : <TableGlyph t={t} colour={colour} mono={mono} cloth={clothOf.get(t.id)} />}
               </Fragment>
             );
           })}
 
           {/* Numbers are drawn per NUMBERED UNIT, not per table: a block of four pushed together
               carries one number, in the middle of the block, exactly as it does on the studio plan.
-              Only on a sheet that actually shows the tables at full weight — a ghosted table carries
-              no number, which is what "ghost" means. */}
-          {sheet.tables === "full" &&
+              On every sheet that numbers its tables — the chairs sheet's ghosted ones too, which is
+              where the crew setting chairs reads both the number and how many chairs go round it.
+              Under the number, in ONE stack centred on the table so nothing lands on anything else:
+              the count, the kit letter, the chair-type mark. */}
+          {sheet.tables !== "none" &&
             sheet.numbers &&
             numberedUnits(doc, benchOf).map((unit) => {
               // A standalone banquette somebody sits at is numbered like a table, at its centre (the
-              // strip is a rectangle, whose label point IS its centre); it wears no kit letter.
+              // strip is a rectangle, whose label point IS its centre); it wears no kit letter. Only
+              // where this sheet draws it — the chairs sheet draws no placements.
               const benchP = unit.kind === "bench" ? doc.placements.find((x) => x.id === unit.id) : undefined;
+              if (benchP && !shownIds.has(benchP.id)) return null;
               const bench = benchP ? standaloneBench(benchP, benchOf) : null;
               const members = doc.tables.filter((x) => unit.tableIds.includes(x.id));
               if (members.length === 0 && !bench) return null;
@@ -674,72 +701,81 @@ export function PlacementMap({
               // The kit letter rides under the number in a ring — "which arrangement goes on this
               // table" answered at the table, with the detail sheet of that letter behind it.
               const letter = members[0] ? letters?.get(members[0].id) : undefined;
-              // A table out of the numbering prints no number — only its kit letter, where the
-              // number would have stood.
-              // How many people sit at it — a block counts as the one table it is (groupSeats).
-              const people = !seatCounts ? 0 : bench ? bench.seats : members.length > 1 && members[0].groupId ? groupSeats(doc, members[0].groupId) : members.reduce((n, x) => n + (x.seats ?? 0), 0);
-              const countSize = size * 0.56;
-              const lift = letter && !unit.unnumbered ? size * 0.42 : people > 0 && !unit.unnumbered ? countSize * 0.62 : 0;
-              const letterAt = unit.unnumbered ? 0 : size * 0.62;
-              // On a coloured cloth a number needs a halo to stay readable, whatever the colour.
-              const halo = colour ? { stroke: "#ffffff", strokeWidth: size * 0.16, strokeLinejoin: "round" as const, paintOrder: "stroke" } : {};
-              return (
-                <Fragment key={unit.id}>
-                  {!unit.unnumbered && <text
-                    x={at.x}
-                    y={at.y - lift}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    fontSize={size}
-                    fontWeight={700}
-                    fontFamily="Assistant, sans-serif"
-                    fill={INK}
-                    {...halo}
-                  >
-                    {unit.number > 0 ? unit.number : "ראש"}
-                  </text>}
-                  {people > 0 && (
-                    <text
-                      x={at.x}
-                      y={unit.unnumbered ? at.y : at.y - lift + size * 0.5 + countSize * 0.55}
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fontSize={countSize}
-                      fontWeight={600}
-                      fontFamily="Assistant, sans-serif"
-                      fill={INK_SOFT}
-                      direction="rtl"
-                      {...halo}
-                      strokeWidth={countSize * 0.18}
-                    >
-                      {people} איש
+              // How many people sit at it ("12 איש", the quote's sketch) or how many chairs go round
+              // it ("12 כיסאות", the chairs sheet) — a block counts as the one table it is
+              // (groupSeats). A banquette's sofa side seats people but takes no chairs.
+              const seated = bench ? bench.seats : members.length > 1 && members[0].groupId ? groupSeats(doc, members[0].groupId) : members.reduce((n, x) => n + (x.seats ?? 0), 0);
+              const count = seatCounts ? seated : sheet.chairCounts ? (bench ? bench.chairs.length : seated) : 0;
+              const countText = seatCounts ? `${count} איש` : count === 1 ? "כיסא אחד" : `${count} כיסאות`;
+              // On the chairs sheet the count IS the content, so it never drops under 2mm on paper.
+              const countSize = sheet.chairCounts ? Math.max(2 * den, size * 0.6) : size * 0.56;
+              // On a coloured cloth, or over a ghosted table's dots and the chairs round it, a figure
+              // needs a white halo to stay readable.
+              const haloed = colour || sheet.tables === "ghost";
+              const halo = (width: number) => (haloed ? { stroke: "#ffffff", strokeWidth: width, strokeLinejoin: "round" as const, paintOrder: "stroke" } : {});
+              // Which chair goes round it, when the room has more than one kind — one square per kind
+              // its seated members take (a block may mix them).
+              const marks =
+                chairSheet && chairKinds.length > 1 && count > 0
+                  ? [...new Set(members.filter((x) => (x.seats ?? 0) > 0).map((x) => chairMark.get(chairOf(x, chairDefault) ?? "")))].filter((m): m is string => !!m)
+                  : [];
+              const k = 3.4 * den;
+              const rows: { key: string; h: number; draw: (y: number) => React.ReactNode }[] = [];
+              if (!unit.unnumbered)
+                rows.push({
+                  key: "number",
+                  h: size,
+                  draw: (y) => (
+                    <text x={at.x} y={y} textAnchor="middle" dominantBaseline="central" fontSize={size} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} {...halo(size * 0.16)}>
+                      {unit.number > 0 ? unit.number : "ראש"}
                     </text>
-                  )}
-                  {letter && (
-                    <g transform={`translate(${at.x} ${at.y + letterAt})`}>
+                  ),
+                });
+              if (count > 0)
+                rows.push({
+                  key: "count",
+                  h: countSize * 1.1,
+                  draw: (y) => (
+                    <text x={at.x} y={y} textAnchor="middle" dominantBaseline="central" fontSize={countSize} fontWeight={600} fontFamily="Assistant, sans-serif" fill={INK_SOFT} direction="rtl" {...halo(countSize * 0.18)}>
+                      {countText}
+                    </text>
+                  ),
+                });
+              if (letter)
+                rows.push({
+                  key: "letter",
+                  h: size * 1.08,
+                  draw: (y) => (
+                    <g transform={`translate(${at.x} ${y})`}>
                       <circle r={size * 0.38} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
                       <text textAnchor="middle" dominantBaseline="central" fontSize={size * 0.5} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK}>
                         {letter}
                       </text>
                     </g>
-                  )}
-                </Fragment>
-              );
-            })}
-
-          {/* The chair-type mark at each table, only when the room has more than one chair. */}
-          {chairSheet &&
-            chairKinds.length > 1 &&
-            seatedTables.map((t) => {
-              const at = tableLabelPoint(t);
-              const k = 3.4 * den;
+                  ),
+                });
+              if (marks.length > 0)
+                rows.push({
+                  key: "chair",
+                  h: k * 1.25,
+                  draw: (y) =>
+                    marks.map((m, i) => (
+                      <g key={m} transform={`translate(${at.x + (i - (marks.length - 1) / 2) * k * 1.2} ${y})`}>
+                        <rect x={-k / 2} y={-k / 2} width={k} height={k} rx={0.5 * den} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
+                        <text textAnchor="middle" dominantBaseline="central" fontSize={k * 0.62} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
+                          {m}
+                        </text>
+                      </g>
+                    )),
+                });
+              const total = rows.reduce((n, r) => n + r.h, 0);
+              const tops = rows.map((_, i) => rows.slice(0, i).reduce((n, r) => n + r.h, 0));
               return (
-                <g key={`chair-mark-${t.id}`} transform={`translate(${at.x} ${at.y})`}>
-                  <rect x={-k / 2} y={-k / 2} width={k} height={k} rx={0.5 * den} fill="#ffffff" stroke={INK} strokeWidth={LINE_WEIGHTS.furniture} vectorEffect="non-scaling-stroke" />
-                  <text textAnchor="middle" dominantBaseline="central" fontSize={k * 0.62} fontWeight={700} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
-                    {chairMark.get(chairOf(t, chairDefault) ?? "")}
-                  </text>
-                </g>
+                <Fragment key={unit.id}>
+                  {rows.map((r, i) => (
+                    <Fragment key={r.key}>{r.draw(at.y - total / 2 + tops[i] + r.h / 2)}</Fragment>
+                  ))}
+                </Fragment>
               );
             })}
 
@@ -778,7 +814,7 @@ export function PlacementMap({
                   y={-DRAPE_MM / 2}
                   width={resolved.lengthMm}
                   height={DRAPE_MM}
-                  fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : "none"}
+                  fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : mono ? MONO.drape : "none"}
                   stroke={INK}
                   strokeWidth={LINE_WEIGHTS.overhead}
                   strokeDasharray={OVERHEAD_DASH}
@@ -862,7 +898,7 @@ function JoinedRunGlyph({ run }: { run: JoinedRun }) {
 /** A stage on the drawing, in its own frame (the same one the studio lays its decks in). `skip`
  *  names the edge items printed as part of a run with another stage's (JoinedRunGlyph) — only
  *  their chairs are this glyph's. */
-function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string; carries?: boolean; den: number; skip?: ReadonlySet<string> }) {
+function StageGlyph({ p, build, railing, label, carries, den, skip, mono = false }: { p: StagePlacement; build: boolean; railing: EdgeRun[]; label?: string; carries?: boolean; den: number; skip?: ReadonlySet<string>; mono?: boolean }) {
   const stage = p.stage;
   const laid = build ? layStage(stage, deckOf) : null;
   const upright = uprightTransform(p.rotation, p.mirrored);
@@ -886,7 +922,7 @@ function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: Stage
     <g transform={placed(p.position, p.rotation, p.mirrored)}>
       <polygon
         points={stage.outline.map((q) => `${q.x},${q.y}`).join(" ")}
-        fill="#ffffff"
+        fill={mono ? MONO.stage : "#ffffff"}
         stroke={INK}
         strokeWidth={LINE_WEIGHTS.furniture}
         vectorEffect="non-scaling-stroke"
@@ -960,7 +996,7 @@ function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: Stage
           return shape.chairs.length ? (
             <g key={st.id}>
               {shape.chairs.map((seat, k) => (
-                <ChairGlyph key={`chair-${k}`} seat={seat} />
+                <ChairGlyph key={`chair-${k}`} seat={seat} mono={mono} />
               ))}
             </g>
           ) : null;
@@ -983,7 +1019,7 @@ function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: Stage
         return (
           <g key={st.id}>
             {shape.chairs.map((seat, k) => (
-              <ChairGlyph key={`chair-${k}`} seat={seat} />
+              <ChairGlyph key={`chair-${k}`} seat={seat} mono={mono} />
             ))}
             <polygon
               points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")}
@@ -1172,7 +1208,7 @@ export function StageSchedule({
   );
 }
 
-export function TableGlyph({ t, colour = false, cloth }: { t: DesignTable; colour?: boolean; cloth?: string }) {
+export function TableGlyph({ t, colour = false, mono = false, cloth }: { t: DesignTable; colour?: boolean; mono?: boolean; cloth?: string }) {
   // The catalog row's look under the table's own — the studio's merge (productStyle). Colour never
   // survives to print, but a dash or a weight chosen for the row has to: on paper they are what
   // carries the meaning the colour did on screen.
@@ -1215,7 +1251,7 @@ export function TableGlyph({ t, colour = false, cloth }: { t: DesignTable; colou
       <g transform={placed(t.position, t.rotation, t.mirrored)}>
         <FootprintShape
           footprint={tableFootprint(t)}
-          fill={resolved.fill}
+          fill={mono ? MONO.table : resolved.fill}
           stroke={resolved.stroke}
           strokeWidth={resolved.strokeWidth}
           strokeDasharray={dash}
@@ -1242,6 +1278,64 @@ function ColourFeature({ f, den, mono = false }: { f: StructureFeature; den: num
   // The stage's flights and ramps — the sketch's own edge items, in the room (lib/venues/stage-edges.ts).
   const edges = featureEdgeShapes(f);
   const style = resolveStyle(f.style, "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.feature });
+  if (mono) {
+    const fp = featureFootprint(f);
+    const round = fp.kind === "circle" || fp.kind === "ellipse";
+    const dash = style.dashArray.length ? style.dashArray.join(" ") : undefined;
+    return (
+      <g>
+        {edges.map(({ item, shape }) => (
+          <g key={item.id}>
+            <polygon points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill="#ffffff" stroke={MUTED} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
+            {shape.treads.map(([p, q], i) => (
+              <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+            ))}
+            {shape.climb && <WalkingLine arrow={shape.climb.arrow} slope={shape.climb.slope} ink={INK_SOFT} lineWidth={LINE_WEIGHTS.annotation} fill="#ffffff" textSize={slopeSize(shape.widthMm, shape.depthMm, den)} textFill={INK_SOFT} alertFill={INK} turnDeg={f.rotationDeg} />}
+          </g>
+        ))}
+        <g transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}>
+          <g transform={`translate(${f.x} ${f.y})`}>
+            {f.kind === "surface" ? (
+              <FootprintShape footprint={fp} fill={MONO.ground} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+            ) : isClimb(f.kind) ? (
+              <ClimbGlyph
+                f={f}
+                turnDeg={f.rotationDeg}
+                fill="#ffffff"
+                stroke={MUTED}
+                strokeWidth={LINE_WEIGHTS.feature}
+                lineWidth={LINE_WEIGHTS.annotation}
+                ink={INK_SOFT}
+                textSize={2.6 * den}
+                textFill={INK_SOFT}
+                alertFill={INK}
+              />
+            ) : f.kind === "plant" ? (
+              // The plan symbol for a tree: its canopy's edge and the trunk at its middle.
+              <>
+                <FootprintShape footprint={fp} fill="none" stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+                {round && <circle r={Math.min(f.widthMm, f.depthMm) * 0.06} fill={MUTED} />}
+              </>
+            ) : (
+              <FootprintShape
+                footprint={fp}
+                fill={f.kind === "stage" ? "url(#hatch-diagonal)" : f.kind === "pool" ? "url(#hatch-cross)" : MONO.feature}
+                stroke={MUTED}
+                strokeWidth={style.strokeWidth}
+                strokeDasharray={dash}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+          </g>
+        </g>
+        {f.kind !== "plant" && f.kind !== "surface" && !isClimb(f.kind) && f.label && (
+          <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT} stroke="#ffffff" strokeWidth={0.5 * den} strokeLinejoin="round" paintOrder="stroke">
+            {f.label}
+          </text>
+        )}
+      </g>
+    );
+  }
   return (
     <g>
       {edges.map(({ item, shape }) => (
@@ -1315,10 +1409,10 @@ function GhostTable({ t }: { t: DesignTable }) {
 
 /** A banquet chair, drawn exactly as the studio canvas draws it (canvas-stage.tsx's own Chair) — the
  *  seat's own rotation already points +x at the table, so this needs no further geometry. */
-export function ChairGlyph({ seat, colour = false }: { seat: Seat; colour?: boolean }) {
+export function ChairGlyph({ seat, colour = false, mono = false }: { seat: Seat; colour?: boolean; mono?: boolean }) {
   return (
     <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
-      {colour ? <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={MUTED} /> : <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={INK} print />}
+      {colour ? <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={MUTED} /> : <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={INK} print tone={mono ? MONO.chair : undefined} />}
     </g>
   );
 }
@@ -1333,6 +1427,7 @@ export function PlacementGlyph({
   overhead,
   shape,
   colour = false,
+  mono = false,
   textMm,
   chairs = true,
 }: {
@@ -1342,6 +1437,9 @@ export function PlacementGlyph({
   overhead?: boolean;
   shape?: Footprint;
   colour?: boolean;
+  /** The B&W booklet's flat grey (MONO): a rug its pale one, anything else standing on the floor the
+   *  item grey. Never passed for what stands ON a table, which stays white against the table's top. */
+  mono?: boolean;
   /** The sheet's text size in room mm (`den * printed mm`), for the words a picture writes — a ramp's
    *  slope. Absent = sized off the item. */
   textMm?: number;
@@ -1401,19 +1499,22 @@ export function PlacementGlyph({
       </g>
     );
   }
+  const rug = r?.product.category === "rugs";
+  const flat = mono && !overhead ? (rug ? MONO.rug : MONO.item) : undefined;
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
-      {r?.product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={INK} opacity={0.8} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
-        fill={symbol ? "none" : style.fill}
+        fill={symbol ? "none" : (flat ?? style.fill)}
         stroke={style.stroke}
         strokeWidth={style.strokeWidth}
         strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
+      {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. */}
+      {rug && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={INK} opacity={0.8} />}
     </g>
   );
 }

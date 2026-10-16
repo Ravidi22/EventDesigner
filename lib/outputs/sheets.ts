@@ -24,7 +24,11 @@ export interface PlanSheet {
   categories?: string[];
   tables: TablePresence;
   chairs: boolean;
+  /** Each table's number — wherever the tables are drawn, ghosted ones included (the chairs sheet). */
   numbers: boolean;
+  /** Each numbered table's chair count under its number: what the crew setting chairs counts out at
+   *  that table. */
+  chairCounts?: boolean;
   /** Which measurements this sheet carries (lib/outputs/measurements.ts). The room's overall width
    *  and depth are on every sheet and are not a flag. */
   measure?: { chains?: boolean; sizes?: boolean; ties?: boolean; gaps?: boolean; aisles?: boolean; hangs?: boolean };
@@ -49,15 +53,19 @@ export const PLAN_SHEETS: PlanSheet[] = [
   { id: "design", label: "שרטוט עיצוב", layers: ["floor", "table"], tables: "full", chairs: true, numbers: false },
   // The rigger marks each hook point on the floor before hoisting: two ties from it to the walls,
   // its offset off the centre of the table it hangs over, and its height (lib/studio/hang.ts).
-  { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, numbers: true, measure: { hangs: true } },
+  // Ghosted and unnumbered: what the rigger needs is which table is under the chandelier, not the
+  // seating plan, and its own offset figures already sit where a number would.
+  { id: "ceiling", label: "תוכנית תקרה", layers: ["ceiling"], tables: "ghost", chairs: false, numbers: false, measure: { hangs: true } },
   // "groups" filters by catalog category group, not by layer -- the stage sheet wants ONLY the stage
   // group off the floor layer, not every floor placement.
   { id: "stage", label: "תוכנית במה", layers: ["floor"], groups: ["grp-stages"], tables: "none", chairs: false, numbers: false, measure: { sizes: true, ties: true } },
   // Rugs are laid before anything stands on them, from their size and two distances to the walls.
   { id: "rugs", label: "תוכנית שטיחים", layers: ["floor"], categories: ["rugs"], tables: "ghost", chairs: false, numbers: false, measure: { sizes: true, ties: true } },
   // Chairs keep layers: [] on purpose: this sheet's chairs come from table seating, not from a floor
-  // placement, so filtering in the floor layer here would draw every chair twice.
-  { id: "chairs", label: "פריסת כיסאות", layers: [], tables: "ghost", chairs: true, numbers: true },
+  // placement, so filtering in the floor layer here would draw every chair twice. The tables are
+  // ghosted, but each still carries its number and how many chairs go round it — the two things the
+  // crew setting chairs reads at every table.
+  { id: "chairs", label: "פריסת כיסאות", layers: [], tables: "ghost", chairs: true, numbers: true, chairCounts: true },
 ];
 
 /** Whether a sheet would draw anything of its own for this document — a ceiling plan with nothing
@@ -106,5 +114,8 @@ if (isMain(import.meta.url)) {
   assert(!sheetHasContent(sheetById("rugs")!, bare, cat) && sheetHasContent(sheetById("rugs")!, withRug, cat), "the rug plan has content only when a rug is placed");
   assert(!sheetHasContent(sheetById("ceiling")!, withRug, cat), "a rug does not make a ceiling plan");
   assert(sheetById("design")!.numbers === false, "the design sheet carries no table numbers");
+  assert(sheetById("chairs")!.numbers && !!sheetById("chairs")!.chairCounts, "the chairs sheet numbers its tables and counts their chairs");
+  assert(PLAN_SHEETS.filter((s) => s.chairCounts).length === 1, "only the chairs sheet counts chairs at the table");
+  assert(!sheetById("ceiling")!.numbers, "the ceiling plan's ghosted tables stay unnumbered");
   console.log("sheets self-check passed");
 }

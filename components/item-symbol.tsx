@@ -72,11 +72,13 @@ export interface ItemSymbolProps {
   /** Whether a flower's inner detail is drawn at all — off for a sheet too small to print it. On
    *  screen the plan's zoom hides it by CSS instead (components/flower-symbol.tsx). */
   detail?: boolean;
-  /** The item's colour (its shade's swatch, or its row's fill). Absent = the material's default. */
+  /** The item's colour (its shade's swatch, or its row's fill). Absent = the material's default. In
+   *  print it is the flat fill the sheet asks for (the B&W booklet's grey), and absent = white. */
   tone?: string;
   /** The line colour. Screen: a soft ink; print: the sheet's ink. */
   ink?: string;
-  /** Monochrome for the printed sheet: every fill white, every line ink — legible photocopied. */
+  /** Monochrome for the printed sheet: every line ink, every fill white (or `tone`) — legible
+   *  photocopied. */
   print?: boolean;
   /** Hung from the ceiling: drawn, never filled, as FootprintShape draws anything overhead. */
   overhead?: boolean;
@@ -532,18 +534,19 @@ function SeatChairView({
   widthMm,
   depthMm,
   style = "dining",
-  tone = "#F4F2F9",
+  tone,
   ink = "var(--color-muted)",
   print,
 }: {
   widthMm: number;
   depthMm: number;
   style?: ChairStyle;
+  /** Absent = the neutral chair on screen, white in print. */
   tone?: string;
   ink?: string;
   print?: boolean;
 }) {
-  const t = print ? "#ffffff" : tone;
+  const t = tone || (print ? "#ffffff" : "#F4F2F9");
   const c: Colours = {
     tone: t,
     ink,

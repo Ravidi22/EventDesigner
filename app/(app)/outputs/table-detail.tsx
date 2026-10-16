@@ -113,11 +113,14 @@ export function TableDetail({
   kit,
   doc,
   lookup,
+  mono = false,
   ...frame
 }: {
   kit: TableKit;
   doc: DesignDocumentContent;
   lookup: ItemLookup;
+  /** The B&W booklet: the table and its chairs in their flat greys, the pieces on it left white. */
+  mono?: boolean;
 } & Omit<SheetFrameProps, "world" | "children" | "sheet" | "notes" | "legend">) {
   const unit = kit.units[0];
   const members = doc.tables.filter((t) => unit.tableIds.includes(t.id));
@@ -209,20 +212,20 @@ export function TableDetail({
                 .map((t) => (
                   <g key={`seat-${t.id}`} transform={placed(t.position, t.rotation, t.mirrored)}>
                     {seatsAround(tableFootprint(t), t.seats!, undefined, tableBlockedSides(t)).map((s, i) => (
-                      <ChairGlyph key={i} seat={s} />
+                      <ChairGlyph key={i} seat={s} mono={mono} />
                     ))}
                   </g>
                 ))}
             {group && group.seats > 0 && (
               <g transform={group.transform}>
                 {group.chairs.map((s, i) => (
-                  <ChairGlyph key={i} seat={s} />
+                  <ChairGlyph key={i} seat={s} mono={mono} />
                 ))}
               </g>
             )}
             {/* The table over its chairs — a chair's front is tucked under the table top. */}
             {members.map((t) => (
-              <TableGlyph key={t.id} t={t} />
+              <TableGlyph key={t.id} t={t} mono={mono} />
             ))}
             {spots.map(({ p, at, rotation, footprint }) => (
               <PlacementGlyph key={p.id} placement={{ ...p, rotation } as Placement} x={at.x} y={at.y} shape={footprint} />
