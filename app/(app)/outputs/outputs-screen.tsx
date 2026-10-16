@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, Share2, type LucideIcon } from "lucide-react";
+import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, RotateCw, Share2, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
@@ -11,6 +11,9 @@ import { recordExport, type ExportType } from "@/lib/outputs/actions";
 import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { useCatalog } from "@/lib/catalog/use-catalog";
+import { loadProducts } from "@/lib/catalog/storage";
+import type { Product } from "@/lib/catalog/types";
 import { zoneSheets } from "@/lib/outputs/zone-sheets";
 import { kitLetters, seatingSummary, tableKits, tablesPhrase } from "@/lib/outputs/table-kits";
 import { itemLookup } from "@/lib/outputs/lookup";
@@ -20,6 +23,7 @@ import { nearestWall } from "@/lib/studio/anchor";
 import { fetchSettings, fetchStageRules } from "@/lib/settings/actions";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
+import { Skeleton } from "@/components/skeleton";
 import { PackingList } from "./packing-list";
 import { KitSchedule, PlacementMap, StageSchedule, mapWorld } from "./placement-map";
 import { TableDetail, detailWorld } from "./table-detail";
@@ -61,8 +65,9 @@ const MARGIN_MM = 16;
 
 /** `frame`: which screen this is a page of. The same component closes the meeting (app/meeting) and
  *  is /outputs on its own; the one thing that differs is where "nothing to print yet" sends the
- *  designer — back into the stepper, or out to the studio (./back-to-studio.tsx). */
-export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meeting" }) {
+ *  designer — back into the stepper, or out to the studio (./back-to-studio.tsx).
+ *  `initialProducts`: the catalog, read on the server by /outputs (the meeting has none to hand). */
+export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "studio" | "meeting"; initialProducts?: Product[] }) {
   const meeting = frame === "meeting";
   // Empty until the event's real document loads. A packing list is the one screen that must never
   // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
@@ -110,6 +115,20 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
   };
   // EventSurface resolved all of this in one call for the whole surface.
   const { workspace, ready } = useEventWorkspace();
+
+  // THE CATALOG, which every sheet here resolves its items against, synchronously, while rendering
+  // (lib/catalog/storage.ts). Nothing on this screen used to load it, so the quote and the packing
+  // list said "עדיין אין פריטים בעיצוב" over a full drawing until the designer opened a sketch —
+  // the studio primes the cache, and these sheets were only ever borrowing it. /outputs reads it on
+  // the server, as the studio does; inside the meeting the sketch stages have usually primed it
+  // already (captured once, in the browser only — the server's module cache is not this studio's),
+  // and it is fetched when they have not.
+  const [warm] = useState(() => (typeof window !== "undefined" && loadProducts().length > 0 ? loadProducts() : undefined));
+  const catalog = useCatalog(initialProducts ?? warm);
+  // Neither half of "what is there to print" has arrived — the drawing (the workspace) or what its
+  // items are (the catalog). Until both have, the sheets show a sheet-shaped placeholder: an empty
+  // document read before its data lands is exactly the "no items" this screen used to show.
+  const loading = !ready || !catalog.ready;
 
   // The document, the event, the sheet number and the geometry all arrive together, from the one
   // read EventSurface makes for this whole surface (lib/events/workspace.ts). This used to be a
@@ -483,12 +502,12 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
             </div>
           )}
 
-          <Button onClick={print} className="w-full">
+          <Button onClick={print} disabled={loading} className="w-full">
             <Printer className="h-4 w-4" strokeWidth={2} />
             {view === "map" ? "הפקת חוברת PDF" : "הדפסה / PDF"}
           </Button>
           {view === "map" && (
-            <Button variant="outline" onClick={share} disabled={sharing || setPages.length === 0} className="w-full">
+            <Button variant="outline" onClick={share} disabled={loading || sharing || setPages.length === 0} className="w-full">
               <Share2 className="h-4 w-4" strokeWidth={2} />
               {sharing ? "מכין PDF…" : "שיתוף החוברת"}
             </Button>
@@ -517,7 +536,18 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
             <VenueAccessNotice tone="plan" className="no-print w-full max-w-3xl" />
           )}
 
-          {view === "map" ? (
+          {loading ? (
+            <SheetLoading widthMm={view === "quote" ? TRIM.A4[0] : w} heightMm={view === "quote" ? TRIM.A4[1] : h} />
+          ) : catalog.error ? (
+            // A catalog that failed to load would print every sheet empty — say so instead.
+            <div role="alert" className="no-print mx-auto flex max-w-md flex-col items-center gap-3 py-20 text-center">
+              <p className="text-sm text-ink-soft">לא ניתן לטעון את הקטלוג, ולכן אי אפשר להציג את פריטי העיצוב.</p>
+              <Button variant="outline" size="sm" onClick={() => void catalog.reload()}>
+                <RotateCw className="h-4 w-4" strokeWidth={2} />
+                נסו שוב
+              </Button>
+            </div>
+          ) : view === "map" ? (
             // One <article className="sheet"> per ticked sheet — each is its own printed page
             // (globals.css: .sheet breaks after itself), each carries its OWN drafting title block
             // (sheet-frame.tsx: venue/client, sheet name, "n / total", scale, date, version) instead
@@ -643,6 +673,26 @@ export function OutputsScreen({ frame = "studio" }: { frame?: "studio" | "meetin
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The sheet before its data lands: the page at its own trim size with a few bars on it, pulsing —
+ *  "it is arriving" and nothing that reads as content (components/skeleton.tsx's rule). */
+function SheetLoading({ widthMm, heightMm }: { widthMm: number; heightMm: number }) {
+  return (
+    <div
+      role="status"
+      aria-label="טוען את האירוע"
+      className="no-print flex max-w-full flex-col gap-3 bg-canvas shadow-lifted"
+      style={{ width: `${widthMm}mm`, height: `${heightMm}mm`, padding: `${MARGIN_MM}mm` }}
+    >
+      <Skeleton className="h-6 w-1/3" />
+      <Skeleton className="h-3.5 w-1/2" />
+      <Skeleton className="mt-6 h-48 w-full rounded-md" />
+      <Skeleton className="mt-2 h-3.5 w-full" />
+      <Skeleton className="h-3.5 w-5/6" />
+      <Skeleton className="h-3.5 w-2/3" />
     </div>
   );
 }
