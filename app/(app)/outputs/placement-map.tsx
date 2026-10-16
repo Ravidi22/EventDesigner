@@ -43,6 +43,7 @@ import {
   stageBox,
   stageCorners,
   stageShapeOf,
+  missingByShape,
   railingRuns,
   skirtMm,
   stageHeight,
@@ -51,6 +52,7 @@ import {
   type StagePlacement,
   type WallDistance,
 } from "@/lib/design-document/stage";
+import { pieceName } from "@/lib/studio/stage-rim";
 import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
 import { uprightTransform } from "@/lib/design-document/mirror";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
@@ -919,6 +921,29 @@ function StageGlyph({ p, build, railing, label, carries, den, skip }: { p: Stage
           {text(d.centre.x, d.centre.y, String(i + 1), Math.min(320, Math.min(d.widthMm, d.depthMm) * 0.4), 600)}
         </g>
       ))}
+      {/* A rim piece the studio does not have yet (a quarter-round, a curved deck): where it goes,
+          dashed, and said — the crew is not handed a stage with an unexplained hole in it. */}
+      {laid?.missing.map((m, i) => {
+        const xs = m.outline.map((q) => q.x);
+        const ys = m.outline.map((q) => q.y);
+        const cx = m.outline.reduce((s, q) => s + q.x, 0) / m.outline.length;
+        const cy = m.outline.reduce((s, q) => s + q.y, 0) / m.outline.length;
+        const size = Math.min(260, Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.35);
+        return (
+          <g key={`missing-${i}`}>
+            <polygon
+              points={m.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+              fill="url(#hatch-diagonal)"
+              fillOpacity={0.25}
+              stroke={INK}
+              strokeWidth={LINE_WEIGHTS.annotation}
+              strokeDasharray="4 3"
+              vectorEffect="non-scaling-stroke"
+            />
+            {size >= 60 && text(cx, cy, "חסר", size, 600)}
+          </g>
+        );
+      })}
       {(stage.stairs ?? []).map((st) => {
         const shape = edgeItemShape(stage, st, deckOf);
         if (!shape) return null;
@@ -1031,7 +1056,8 @@ export function StageSchedule({
         const laid = layStage(stage, deckOf);
         // A rounded or bowed rectangle is sized by its box, like a plain one by its sides.
         const size = stageRect(stage) ?? (stageShapeOf(stage) ? stageBox(stage) : null);
-        const cuts = laid.decks.filter((d) => d.cut).length;
+        // Rim pieces the studio does not have yet, by shape — said, so the crew knows what to bring.
+        const missing = missingByShape(laid.missing);
         const baseH = stageHeight(stage, deckOf);
         const parts = [
           { id: undefined as string | undefined, label: "בסיס", heightMm: baseH },
@@ -1064,7 +1090,7 @@ export function StageSchedule({
               {stages.length > 1 ? `במה ${i + 1}` : "במה"}
               {size && <span className="nums ms-2 font-normal text-ink-soft">{`${m(size.widthMm)}×${m(size.depthMm)} מ׳`}</span>}
               <span className="nums ms-2 font-normal text-ink-soft">{laid.decks.length} פלטות</span>
-              {cuts > 0 && <span className="nums ms-2 font-normal text-ink-soft">{cuts} לחיתוך</span>}
+              {missing.length > 0 && <span className="nums ms-2 font-normal text-ink-soft">{`חסרות בקטלוג: ${missing.map((g) => `${pieceName(g.info)} ×${g.count}`).join(" · ")}`}</span>}
             </p>
             <table className="mt-1.5 w-full text-sm">
               <thead>

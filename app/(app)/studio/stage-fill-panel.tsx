@@ -1,10 +1,11 @@
 "use client";
 
-import { Check, Expand, Grid2x2Plus, PenLine, Plus, Ruler, Squircle, TriangleAlert, X } from "lucide-react";
+import { Check, Expand, Grid2x2Plus, PenLine, Ruler, Squircle, TriangleAlert, X } from "lucide-react";
 import type { Point } from "@/lib/studio/hall";
 import { asRect, type DeckType, type FillResult } from "@/lib/studio/stage-fill";
 import type { AreaShape, RoundedAt } from "@/lib/studio/stage-draw";
-import { QUARTER_FIT_MM } from "@/lib/design-document/stage";
+import type { PieceInfo } from "@/lib/studio/stage-rim";
+import { MissingPieces } from "./missing-pieces";
 import { Bar, BarButton, Note, PanelRow, ltr } from "@/components/inspector-bar";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
@@ -72,7 +73,7 @@ export function StageFillPanel({
   onRedraw,
   onResize,
   onCommit,
-  onAddQuarter,
+  onAddPieces,
   onClose,
 }: {
   state: Extract<StageFillState, { phase: "pick" }>;
@@ -85,9 +86,9 @@ export function StageFillPanel({
   onRedraw: () => void;
   onResize: (widthMm: number, depthMm: number) => void;
   onCommit: () => void;
-  /** Put a quarter-round corner piece of this radius into the catalog (category stage-decks), for
-   *  a rounded stage whose corners would otherwise be cut decks. */
-  onAddQuarter: (radiusMm: number) => void;
+  /** Put these rim pieces — a quarter-round, a curved deck, a triangle the stage needs and the studio
+   *  lacks — into the catalog (category stage-decks), chosen for this stage. */
+  onAddPieces: (infos: PieceInfo[]) => void;
   onClose: () => void;
 }) {
   const decks = layout?.decks ?? [];
@@ -101,12 +102,8 @@ export function StageFillPanel({
   const roundedMm = rectangle ? (state.roundedMm ?? 0) : 0;
   const bowMm = rectangle ? (state.bowMm ?? 0) : 0;
   const roundedAt: RoundedAt = state.roundedAt ?? "all";
-  const cornerCount = roundedAt === "all" ? 4 : 2;
-  const cutCount = decks.filter((d) => d.cut).length;
-  // The quarter-round piece that would stand in each corner: one of about the corner's radius in
-  // the catalog — chosen, or there to be chosen, or missing.
-  const quarterType = roundedMm > 0 ? types.filter((t) => t.quarterMm && Math.abs(t.quarterMm - roundedMm) <= QUARTER_FIT_MM).sort((a, b) => Math.abs(a.quarterMm! - roundedMm) - Math.abs(b.quarterMm! - roundedMm))[0] : undefined;
-  const quarterChosen = !!quarterType && state.chosen.includes(quarterType.id);
+  // The rim pieces the build needs and the catalog does not have (lib/studio/stage-rim.ts).
+  const missing = layout?.missing ?? [];
   const AT_LABEL: Record<RoundedAt, string> = { all: "כל הפינות", front: "פינות החזית", back: "פינות האחוריות" };
   const shapeValue = [roundedMm > 0 ? `R${cm(roundedMm)} · ${AT_LABEL[roundedAt]}` : null, bowMm > 0 ? `חזית קמורה ${cm(bowMm)}` : null].filter(Boolean).join(" · ") || "ישרות";
   // A round area has no sides to read lengths off: its size is said here instead.
@@ -128,7 +125,7 @@ export function StageFillPanel({
     <Bar
       icon={Grid2x2Plus}
       title={state.editing ? "עריכת במה" : "מילוי במות"}
-      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, cutCount > 0 ? `${cutCount} לחיתוך` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
+      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, missing.length > 0 ? `${missing.length} חסרות` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
       onClose={onClose}
     >
       <Popover label="אילו במות" icon={Grid2x2Plus} value={`${state.chosen.length} מתוך ${types.length}`} panelClassName="w-80">
@@ -163,8 +160,8 @@ export function StageFillPanel({
       </Popover>
 
       {/* A rectangle's corners rounded, its front bowed — derived from the plain rectangle every
-          time, so the radius can be changed back and forth. The decks are laid on the rectangle; what
-          the curves cut off is said here: cut decks, or the quarter-round piece that spares them. */}
+          time, so the radius can be changed back and forth. The curves are built of pieces made for
+          them; the ones the catalog lacks are said in "חסר בקטלוג". */}
       {rectangle && (
         <Popover label="פינות" icon={Squircle} value={shapeValue} panelClassName="w-80">
           <PanelRow label="רדיוס הפינות (ס״מ)" htmlFor="stage-round">
@@ -203,25 +200,10 @@ export function StageFillPanel({
               className="w-20"
             />
           </PanelRow>
-          {cutCount > 0 && <Note>{cutCount} פלטות לחיתוך — הצוות חותך אותן לקו, והן נספרות שלמות.</Note>}
-          {roundedMm > 0 && quarterType && quarterChosen && <Note>{quarterType.name} עומד בכל פינה מעוגלת ({cornerCount}) — בלי חיתוך שם.</Note>}
-          {roundedMm > 0 && quarterType && !quarterChosen && (
-            <Button size="sm" variant="outline" className="w-full" onClick={() => onChange({ ...state, chosen: [...state.chosen, quarterType.id] })}>
-              להשתמש ב{quarterType.name} שבקטלוג
-            </Button>
-          )}
-          {roundedMm > 0 && !quarterType && (
-            <>
-              <Note>
-                חסר בקטלוג: רבע עיגול R{cm(roundedMm)} ×{cornerCount} — בלעדיו הפלטות בפינות נחתכות לקשת.
-              </Note>
-              <Button size="sm" className="w-full" onClick={() => onAddQuarter(roundedMm)}>
-                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-                הוספה לקטלוג
-              </Button>
-            </>
-          )}
-          <Note>0 = פינות ישרות, חזית ישרה. הקשתות נשמרות גם כשמשנים מידות אחר כך; המדרגות עוקבות אחריהן.</Note>
+          <Note>
+            0 = פינות ישרות, חזית ישרה. הקשתות נבנות מפלטות בצורה (רבע עיגול, פלטה מעוגלת) — מה שאין בקטלוג
+            מופיע ב״חסר בקטלוג״. הקשתות נשמרות גם כשמשנים מידות אחר כך; המדרגות עוקבות אחריהן.
+          </Note>
         </Popover>
       )}
 
@@ -235,11 +217,19 @@ export function StageFillPanel({
               </li>
             ))}
           </ul>
-          {pct < 100 && !suggestions.length && (
+          {pct < 100 && !suggestions.length && !missing.length && (
             <Note>{100 - pct}% מהאזור לא מכוסה — אפשר להוסיף פלטה קטנה יותר לבחירה, או לסמן אזור בכפולות של הפלטות.</Note>
           )}
         </Popover>
       )}
+
+      <MissingPieces
+        missing={missing}
+        types={types}
+        chosen={state.chosen}
+        onUse={(ids) => onChange({ ...state, chosen: [...state.chosen, ...ids.filter((id) => !state.chosen.includes(id))] })}
+        onAdd={onAddPieces}
+      />
 
       {suggestions.length > 0 && (
         <Popover label="מידה מדויקת" icon={Ruler} value={`${100 - pct}% לא מכוסה`} panelClassName="w-72">

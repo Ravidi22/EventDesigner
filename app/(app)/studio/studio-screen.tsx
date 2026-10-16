@@ -44,6 +44,7 @@ import { ALIGN_LABEL, alignedCentres, alignUnits, needsThree, type AlignOp } fro
 import { mirrorFlips, type MirrorAxis, type MirrorSubject } from "@/lib/design-document/mirror";
 import { axisGap, clearanceIssues, distributedCentres, placeAtGap, polysGap, spacedCentres, spreadAxis, type CentredBox } from "@/lib/studio/proximity";
 import { defaultFront, lengthSnapper, polygonsOverlap, resizeRect, signedArea, type DeckType } from "@/lib/studio/stage-fill";
+import type { PieceInfo } from "@/lib/studio/stage-rim";
 import {
   carryLevels,
   carryPieces,
@@ -56,6 +57,8 @@ import {
   skirtMm,
   autoRisers,
   stageDecksInRoom,
+  stageMissingInRoom,
+  pieceProduct,
   stageFromArea,
   stageHeight,
   stageOutlineInRoom,
@@ -1659,9 +1662,10 @@ export function StudioScreen({
     () =>
       catalog
         .filter((p) => STAGE_PIECE_CATEGORIES.includes(p.category) && !p.archived)
-        // Rectangles the fill lays — and quarter-rounds, which it stands in the corners of a rounded
-        // stage (lib/design-document/stage.ts quarterPieces); any other shape is a stage of its own.
-        .filter((p) => ["rect", "quarter-circle"].includes(p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect")) && !p.appearance?.parts?.length)
+        // Rectangles the fill lays in rows — and every SHAPED piece (a quarter-round, a deck with a
+        // curved side, a triangle), which the rim of a curved or angled stage is built of where it
+        // fits (lib/studio/stage-rim.ts). A piece made of several added shapes is a stage of its own.
+        .filter((p) => !p.appearance?.parts?.length)
         // The FIRST variant, not the event's shade: a deck's id is structural — a stage stores it and
         // is laid from it — and must be the same id whatever event is open (firstVariantId).
         .map((p) => ({ name: p.name, ...deckTypeOf(firstVariantId(p), p) }))
@@ -1729,7 +1733,7 @@ export function StudioScreen({
     const laid = layStage(stage, deckOf);
     return {
       placement,
-      layout: { ...laid, decks: stageDecksInRoom(placement, deckOf) },
+      layout: { ...laid, decks: stageDecksInRoom(placement, deckOf), missing: stageMissingInRoom(placement, deckOf) },
       overlaps: stageObstacles.some((o) => polygonsOverlap(o, clean.outline)),
       /** The shaped outline where it stands in the room — what the canvas draws instead of the plain
        *  rectangle while a shape is on. */
@@ -2041,8 +2045,11 @@ export function StudioScreen({
       railingAboveMm,
       stairsCounted: !!(stage.stairsVariant ?? stageParts.stairsVariant),
       skirtCounted: !!(stage.skirtVariant ?? stageParts.skirtVariant),
+      missing: laid.missing,
+      pieceTypes: deckTypes,
+      chosen: stage.decks,
     };
-  }, [soleStage, railingAboveMm, stageRailings, wallDistanceFor, activeEdge, doc.placements, stageParts, catalog]);
+  }, [soleStage, railingAboveMm, stageRailings, wallDistanceFor, activeEdge, doc.placements, stageParts, catalog, deckTypes]);
 
   /** A rectangular stage typed to an exact size: the back stays where it stands and the front moves
    *  toward the room — what pulling its front handle does — with no snapping at all. */
@@ -3887,6 +3894,7 @@ export function StudioScreen({
                     polygon: stagePreview?.shapedOutline ?? stageFill.polygon,
                     front: stagePreview?.shapedOutline ? stagePreview.placement.stage.front : stageFill.front,
                     decks: stageLayout?.decks ?? [],
+                    missing: stageLayout?.missing ?? [],
                     curved: !!stageFill.smooth?.length || !!stagePreview?.shapedOutline,
                   }
                 : null
@@ -4064,7 +4072,7 @@ export function StudioScreen({
                   onRedraw={() => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape }))}
                   onResize={resizeStageArea}
                   onCommit={commitStageFill}
-                  onAddQuarter={(radiusMm) => void addQuarterPiece(radiusMm)}
+                  onAddPieces={(infos) => void addStagePieces(infos)}
                   onClose={() => setStageFill(null)}
                 />
               ) : (
@@ -4154,6 +4162,12 @@ export function StudioScreen({
                 onExplodeStage={explodeStage}
                 onStageHeight={setStageHeightMm}
                 onStageSize={setStageSize}
+                onAddStagePieces={(infos) => {
+                  if (soleStage) void addStagePieces(infos, soleStage.id);
+                }}
+                onUseStagePieces={(ids) => {
+                  if (soleStage) patchStage(soleStage.id, (s) => ({ ...s, decks: [...s.decks, ...ids.filter((id) => !s.decks.includes(id))] }));
+                }}
                 onLevelHeight={setLevelHeight}
                 onRemoveLevel={removeLevel}
                 onAddLevel={startLevel}
@@ -4304,31 +4318,24 @@ export function StudioScreen({
     }
   }
 
-  /** The fill tool's "הוספה לקטלוג": a quarter-round corner piece of the rounded stage's radius, as a
-   *  stage-decks row drawn as a quarter-circle (its box one radius across, lib/studio/footprint.ts),
-   *  at the height of the decks the stage is being built from — and chosen for the stage at once,
-   *  so its corners stand on it instead of on cut decks. One row of the studio's own, through the
-   *  same action every catalog row goes through. */
-  async function addQuarterPiece(radiusMm: number) {
-    const r = Math.round(radiusMm);
-    const heightMm = stagePreview ? stageHeight(stagePreview.placement.stage, deckOf) : (deckTypes[0]?.heightMm ?? 600);
-    const p: Product = {
-      id: uid(),
-      name: `רבע עיגול R${Math.round(r / 10)}`,
-      category: "stage-decks",
-      layer: "floor",
-      dimensions: { diameterMm: r * 2, widthMm: r, depthMm: r, heightMm },
-      categoryFields: {},
-      spec: "פלטת פינה לבמה עם פינות מעוגלות",
-      styleTags: [],
-      variants: [],
-      appearance: { shape: "quarter-circle", content: "none" },
-    };
-    if (await saveProduct(p)) {
-      setStageFill((cur) => (cur?.phase === "pick" ? { ...cur, chosen: [...cur.chosen, p.id] } : cur));
-      showHint(`${p.name} נוסף לקטלוג ונבחר לבמה — אפשר לשנות לו מחיר ושם בקטלוג`);
-    } else {
-      showHint("ההוספה לקטלוג נכשלה — נסו שוב");
-    }
+  /** "הוספה לקטלוג" for the pieces a stage's rim is missing (layStage `missing`): each one a
+   *  stage-decks row drawn as its shape (pieceProduct — a quarter-round, a curved deck, a triangle),
+   *  at the stage's height, and chosen for the stage at once — the stage being drawn in the fill
+   *  tool, or the one on the plan whose bar asked — so the next build stands it where it was missing.
+   *  Chosen BEFORE the save: an id the catalog does not know yet is simply not laid
+   *  (stageDeckTypes), and the stage picks the piece up the moment its row arrives. Rows of the
+   *  studio's own, through the same action every catalog row goes through. */
+  async function addStagePieces(infos: PieceInfo[], stageId?: string) {
+    if (!infos.length) return;
+    const stage = stageId ? (doc.placements.find((x) => x.id === stageId)?.stage ?? null) : (stagePreview?.placement.stage ?? null);
+    const heightMm = stage ? stageHeight(stage, deckOf) : (deckTypes[0]?.heightMm ?? 600);
+    const products: Product[] = infos.map((info) => ({ id: uid(), category: "stage-decks", layer: "floor", categoryFields: {}, styleTags: [], variants: [], ...pieceProduct(info, heightMm) }));
+    const ids = products.map((p) => p.id);
+    if (stageId) patchStage(stageId, (s) => ({ ...s, decks: [...s.decks, ...ids] }));
+    else setStageFill((cur) => (cur?.phase === "pick" ? { ...cur, chosen: [...cur.chosen, ...ids] } : cur));
+    const saved = await Promise.all(products.map((p) => saveProduct(p)));
+    const failed = saved.filter((ok) => !ok).length;
+    if (failed) showHint(failed === products.length ? "ההוספה לקטלוג נכשלה — נסו שוב" : `${products.length - failed} מתוך ${products.length} נוספו לקטלוג — נסו שוב את השאר`);
+    else showHint(products.length === 1 ? `${products[0].name} נוספה לקטלוג ונבחרה לבמה — אפשר לשנות לה מחיר ושם בקטלוג` : `${products.length} פלטות נוספו לקטלוג ונבחרו לבמה — אפשר לשנות להן מחיר ושם בקטלוג`);
   }
 }

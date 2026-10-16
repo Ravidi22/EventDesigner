@@ -34,7 +34,7 @@ import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
 import { Grid2x2Plus, ShieldAlert } from "lucide-react";
-import { lengthSnapper, type LaidDeck, type LengthSnap } from "@/lib/studio/stage-fill";
+import { lengthSnapper, type LaidDeck, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
 import { constrainNext, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
 import {
   benchInRoom,
@@ -324,7 +324,7 @@ export function CanvasStage({
   areaRefDeg?: number;
   /** The drawn area and the decks it would get — a preview, drawn over everything, taking no clicks.
    *  `curved`: a round area, whose dozens of chords are no sides to label. */
-  areaPreview: { polygon: Point[]; front: number; decks: LaidDeck[]; curved?: boolean } | null;
+  areaPreview: { polygon: Point[]; front: number; decks: LaidDeck[]; missing?: MissingPiece[]; curved?: boolean } | null;
   /** A click on one of the preview's edges: that edge is the stage's front now. */
   onPickFront: (edge: number) => void;
   /** The preview's outline re-shaped by its grips (corners dragged, sides pushed, split, removed). */
@@ -2424,9 +2424,8 @@ export function CanvasStage({
               />
               <g className="pointer-events-none">
                 {areaPreview.decks.map((d, i) =>
-                  // A deck CUT to a curve, or a whole piece (a quarter-round in a corner), is drawn as
-                  // what is left of it — a cut one hatched, so the preview says which sheets the crew
-                  // will be cutting.
+                  // A whole piece — a quarter-round in a corner, a curved deck on the rim — is drawn as
+                  // its own outline.
                   d.outline ? (
                     <polygon
                       key={i}
@@ -2435,7 +2434,6 @@ export function CanvasStage({
                       fillOpacity={0.85}
                       stroke="var(--color-accent)"
                       strokeWidth={1.5}
-                      strokeDasharray={d.cut ? "6 3" : undefined}
                       vectorEffect="non-scaling-stroke"
                     />
                   ) : (
@@ -2454,6 +2452,9 @@ export function CanvasStage({
                     />
                   ),
                 )}
+                {/* What the catalog does not have — a quarter-round, a curved deck — where it goes:
+                    the panel's "חסר בקטלוג" names it and adds it. */}
+                {areaPreview.missing?.map((m, i) => <MissingPieceShape key={`m${i}`} outline={m.outline} />)}
               </g>
               {areaPreview.polygon.map((a, i) => {
                 const b = areaPreview.polygon[(i + 1) % areaPreview.polygon.length];
@@ -3747,6 +3748,22 @@ function PlacementNodeView({
  *  built of, as seams: the plan holds one stage, and the build is there to be looked at, not handled.
  *  Unselected there are no seams, so the room reads as a room with a stage in it rather than a
  *  crew's diagram. */
+/** A rim piece the catalog does not have, where it goes — warn-tinted and dashed: the stage bar's
+ *  and the fill panel's "חסר בקטלוג" name it and add it. */
+function MissingPieceShape({ outline }: { outline: Point[] }) {
+  return (
+    <polygon
+      points={outline.map((q) => `${q.x},${q.y}`).join(" ")}
+      fill="var(--color-warn-tint)"
+      fillOpacity={0.9}
+      stroke="var(--color-warn)"
+      strokeWidth={1.5}
+      strokeDasharray="5 3"
+      vectorEffect="non-scaling-stroke"
+    />
+  );
+}
+
 function StageMarks({
   stage,
   selected,
@@ -3773,7 +3790,8 @@ function StageMarks({
 }) {
   // Every side at one weight — the front is not marked on the plan; the area tool shows it while it
   // is being chosen, and the printed stage plan writes "קהל" in front of it.
-  const decks = selected ? layStage(stage, deckOf).decks : [];
+  const laid = selected ? layStage(stage, deckOf) : null;
+  const decks = laid?.decks ?? [];
   const upright = uprightTransform(rotation, mirrored);
   return (
     <g className="pointer-events-none">
@@ -3831,6 +3849,7 @@ function StageMarks({
           />
         ),
       )}
+      {laid?.missing.map((m, i) => <MissingPieceShape key={`missing-${i}`} outline={m.outline} />)}
       {/* Stairs, banquettes and barriers are part of the stage on the floor — drawn always: a flight
           with a line across each tread, a banquette as a seat-coloured strip, a barrier as a heavy
           line along the inside of its edge. The one being edited is in the accent. */}

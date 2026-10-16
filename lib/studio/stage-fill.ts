@@ -34,9 +34,29 @@
 // RECTANGLE does not divide into the decks, the gap is not left for the designer to discover: the
 // nearest smaller and larger sizes that DO divide are offered instead (`suggestions`).
 //
+// THE FRONT LINE IS WHERE THE ROWS START. The rows behind the front are laid from the front edge
+// itself — not from whatever sticks out furthest in front of it. Anything that DOES stand in front of
+// the line (a catwalk, an apron) is laid on its own, from its own far end back to the line, so its
+// leftover lands against the body of the stage. Counting the body's rows from the tip of a half-round
+// in front of it was how a stage got a column of strips along its front and a hole in its middle.
+//
+// CURVES AND ANGLED SIDES ARE BUILT OF PIECES, NOT CHASED WITH STRIPS (./stage-rim.ts). Where the
+// outline curves or runs at an angle to the rows, the decks are laid in the rectilinear CORE that is
+// left when each such run is replaced by the two legs of a right angle, and the RIM between them and
+// the line is cut into pieces: a quarter-round, a half-round, a triangle, a deck with a curved side.
+// A piece the studio owns (`pieces`, any non-rectangular stage deck) is stood where it fits; one it
+// does not own is MISSING — listed with its outline so the panel can offer to add it to the catalog —
+// and is never faked with a cut sheet. Each run may instead take the OUTER corner (the core reaches
+// past the line, and the decks there that overhang it become curved-deck pieces of their own), and
+// the build kept is the one with the fewest bare holes, then the fewest DIFFERENT new pieces, then
+// the fewest new pieces, then the fewest decks — tried run-group by run-group, not exhaustively.
+//
 // Pure, no DOM, self-checked: `npm run check:stage-fill`.
 import type { Point } from "@/lib/design-document/types";
+import { boxOf, clipToBox, clipY, congruent, coreOutline, curveTest, describePiece, distToBoundary, inside, isRectangle, normal, polyArea, rimSegments, runRegion, signedArea, turned, type Box, type Normal, type PieceInfo, type RimRun, type RimSegment, type Turn } from "./stage-rim";
 import { isMain } from "../self-check";
+
+export { signedArea };
 
 export interface DeckType {
   id: string;
@@ -47,12 +67,11 @@ export interface DeckType {
   /** A round (or oval) platform: one piece, never laid by this fill — a round stage built of
    *  exactly that piece stands on it whole (lib/design-document/stage.ts layStage). */
   round?: boolean;
-  /** Any other platform that is not a rectangle — a half-round, a triangle — as its outline about
-   *  its own centre: also one piece, never laid by this fill, only stood whole (StageBuild.pieces). */
+  /** Any other platform that is not a rectangle — a half-round, a triangle, a deck with a curved
+   *  side — as its outline about its own centre: never laid in rows, but stood whole where the rim of
+   *  a stage is its shape (`FillOptions.pieces`), or where a stage is built of it (StageBuild.pieces). */
   outline?: Point[];
-  /** A QUARTER-ROUND piece — a corner platform — and its radius: what a stage with rounded corners
-   *  stands in each corner when the studio owns one of about the corner's radius
-   *  (lib/design-document/stage.ts quarterPieces). Carries `outline` too. */
+  /** A QUARTER-ROUND piece — a corner platform — and its radius. Carries `outline` too. */
   quarterMm?: number;
 }
 
@@ -64,12 +83,19 @@ export interface LaidDeck {
   rotation: number;
   widthMm: number;
   depthMm: number;
-  /** A whole deck the crew CUTS to the stage's line — the corner of a rounded stage, the sliver of a
-   *  bowed front — drawn as `outline` (what is left of it) and counted as the whole deck it was. */
-  cut?: boolean;
-  /** Its shape where it is not the rectangle it was: a cut deck's remainder, a whole piece's own
-   *  outline. In the same frame as `centre`. */
+  /** A whole piece's own outline, where it stands. In the same frame as `centre`. */
   outline?: Point[];
+  /** …flipped across its own width before it was turned (StagePiece.mirrored). */
+  mirrored?: boolean;
+}
+
+/** A piece of the rim no deck the stage may use can be: its outline where it goes (in the same
+ *  frame as the decks), and what it is. Pieces of one shape — turned or flipped — share `shape` and
+ *  one `info`, which describes it the way a catalog row would draw it (stage-rim.ts describePiece). */
+export interface MissingPiece {
+  outline: Point[];
+  shape: string;
+  info: PieceInfo;
 }
 
 /** A rectangle that the chosen decks cover exactly, near the one drawn. */
@@ -93,6 +119,8 @@ export interface FillResult {
   rect: { widthMm: number; depthMm: number } | null;
   /** Rectangles the decks would cover exactly, when this one they do not. Empty otherwise. */
   suggestions: SizeSuggestion[];
+  /** The rim pieces the stage needs and the studio does not have (see the header). */
+  missing: MissingPiece[];
 }
 
 export interface FillOptions {
@@ -119,6 +147,12 @@ export interface FillOptions {
    *  end-to-end chord is the line the stage is really built along. The rows still start at the
    *  front: the grid begins at the outline's foremost point. */
   axis?: readonly [Point, Point];
+  /** The corners the outline's curves run THROUGH (StageBuild.smooth), by index — one curve is one
+   *  stretch of rim, even where one of its chords happens to lie along the rows. */
+  smooth?: readonly number[];
+  /** Pieces that are not rectangles the stage may stand on its rim — a quarter-round, a curved deck,
+   *  a triangle (DeckType.outline / round). A shaped type among `types` counts as one too. */
+  pieces?: readonly DeckType[];
 }
 
 export const STAGE_TOLERANCE_MM = 50;
@@ -131,40 +165,8 @@ const FAMILY_MODULE_MM = 100;
 
 const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
 const r10 = (mm: number) => Math.round(mm / 10) * 10;
-
-function inside(p: Point, poly: readonly Point[]): boolean {
-  let c = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[i];
-    const b = poly[j];
-    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c;
-  }
-  return c;
-}
-
-function distToBoundary(p: Point, poly: readonly Point[]): number {
-  let best = Infinity;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len2 = dx * dx + dy * dy;
-    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
-    best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
-  }
-  return best;
-}
-
-export function signedArea(poly: readonly Point[]): number {
-  let s = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    s += a.x * b.y - b.x * a.y;
-  }
-  return s / 2;
-}
+/** A deck the fill lays in rows — not a shaped piece. */
+const isRectDeck = (t: DeckType) => t.widthMm > 0 && t.depthMm > 0 && !t.round && !t.outline;
 
 function longestEdge(poly: readonly Point[]): number {
   let best = 0;
@@ -197,7 +199,7 @@ function frameOf(polygon: readonly Point[], front: number, axis?: readonly [Poin
     return { x: dx * cos + dy * sin, y: s * (-dx * sin + dy * cos) };
   };
   const toWorld = (p: Point): Point => ({ x: a.x + p.x * cos - s * p.y * sin, y: a.y + p.x * sin + s * p.y * cos });
-  return { theta, toLocal, toWorld };
+  return { theta, s, toLocal, toWorld };
 }
 
 /** A four-cornered outline with square corners, measured from `front`. */
@@ -246,7 +248,84 @@ interface Laid {
   decks: LaidDeck[];
   covered: number;
   turned: number;
+  /** The decks as boxes in the fill's own frame (x along the front, y back) — what the rim is cut
+   *  against (see the rim, below). */
+  boxes: { x: number; y: number; w: number; d: number }[];
 }
+
+/** Which cells of a grid have their centre inside `poly` — the same even-odd rule as `inside`, with
+ *  the crossings worked out once per ROW instead of once per cell. A cell centre is inside exactly
+ *  when it lies in [x₀, x₁), [x₂, x₃), … of its row's sorted crossings, which is what counting the
+ *  crossings beyond it comes to. */
+function insideCells(poly: readonly Point[], minX: number, minY: number, step: number, nx: number, ny: number): Uint8Array {
+  const out = new Uint8Array(nx * ny);
+  const xs: number[] = [];
+  for (let j = 0; j < ny; j++) {
+    const y = minY + (j + 0.5) * step;
+    xs.length = 0;
+    for (let i = 0, k = poly.length - 1; i < poly.length; k = i++) {
+      const a = poly[i];
+      const b = poly[k];
+      // Spelled exactly as `inside` spells it, so a centre on a crossing falls the same way.
+      if (a.y > y !== b.y > y) xs.push(((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x);
+    }
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      // Centres cx = minX + (i + .5)·step with xs[k] <= cx < xs[k+1].
+      let i = Math.max(0, Math.ceil((xs[k] - minX) / step - 0.5) - 1);
+      while (i < nx && minX + (i + 0.5) * step < xs[k]) i++;
+      for (; i < nx && minX + (i + 0.5) * step < xs[k + 1]; i++) out[j * nx + i] = 1;
+    }
+  }
+  return out;
+}
+
+/** The distance from each cell centre to `poly`'s boundary, worked out only for the cells within
+ *  `band` of some edge (the rest are Infinity): every comparison against a distance up to `band`
+ *  comes out exactly as distToBoundary's does, at a fraction of the cost. */
+function edgeDistances(poly: readonly Point[], minX: number, minY: number, step: number, nx: number, ny: number, band: number): Float64Array {
+  const out = new Float64Array(nx * ny).fill(Infinity);
+  for (let e = 0; e < poly.length; e++) {
+    const a = poly[e];
+    const b = poly[(e + 1) % poly.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x) - band - minX) / step - 0.5));
+    const i1 = Math.min(nx - 1, Math.ceil((Math.max(a.x, b.x) + band - minX) / step - 0.5));
+    const j0 = Math.max(0, Math.floor((Math.min(a.y, b.y) - band - minY) / step - 0.5));
+    const j1 = Math.min(ny - 1, Math.ceil((Math.max(a.y, b.y) + band - minY) / step - 0.5));
+    for (let j = j0; j <= j1; j++) {
+      const py = minY + (j + 0.5) * step;
+      for (let i = i0; i <= i1; i++) {
+        const px = minX + (i + 0.5) * step;
+        const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / len2));
+        const d = Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+        if (d < out[j * nx + i]) out[j * nx + i] = d;
+      }
+    }
+  }
+  return out;
+}
+
+/** A summed-area table over a 0/1 mask: how many cells of any box are set, in four reads. */
+function summed(mask: Uint8Array, nx: number, ny: number, want: (v: number) => boolean): Int32Array {
+  const s = new Int32Array((nx + 1) * (ny + 1));
+  for (let j = 0; j < ny; j++) {
+    let row = 0;
+    for (let i = 0; i < nx; i++) {
+      if (want(mask[j * nx + i])) row++;
+      s[(j + 1) * (nx + 1) + i + 1] = s[j * (nx + 1) + i + 1] + row;
+    }
+  }
+  return s;
+}
+const boxSum = (s: Int32Array, nx: number, i: number, j: number, w: number, h: number) =>
+  s[(j + h) * (nx + 1) + i + w] - s[j * (nx + 1) + i + w] - s[(j + h) * (nx + 1) + i] + s[j * (nx + 1) + i];
+
+/** The cells of one grid classified for laying — the same for every family laid at that step, so a
+ *  fill trying several families classifies each grid once. */
+type CellCache = Map<string, Uint8Array>;
 
 /** One family, one frame: the greedy row fill. */
 function lay(
@@ -259,6 +338,7 @@ function lay(
   exceed = false,
   /** Where the grid starts, back from the outline's own corner — see FillOptions.phases. */
   offset: Point = { x: 0, y: 0 },
+  cache?: CellCache,
 ): Laid {
   const minX = Math.min(...local.map((p) => p.x)) - offset.x;
   const maxX = Math.max(...local.map((p) => p.x));
@@ -271,7 +351,6 @@ function lay(
   // drawn floor, it is laid; past the line, the strip stays bare. `bound` is never exceeded.
   const reach = exceed && types.length ? Math.max(...types.map((t) => Math.max(t.widthMm, t.depthMm))) / 2 : 0;
   const inOne = (p: Point, poly: readonly Point[], t: number) => inside(p, poly) || distToBoundary(p, poly) <= t;
-  const within = (p: Point) => inOne(p, local, tol) && (!bound || inOne(p, bound, tol));
   const near = (p: Point) => inOne(p, local, tol + reach) && (!bound || inOne(p, bound, tol));
 
   const dims = types.flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]);
@@ -280,13 +359,27 @@ function lay(
   const nx = Math.max(1, Math.floor((maxX - minX + tol + reach) / step + 1e-6));
   const ny = Math.max(1, Math.floor((maxY - minY + tol + reach) / step + 1e-6));
   // 1 = a cell of the drawn area; 2 = a cell past its edge a deck may still reach into (exceeding
-  // only — without it there are none); 0 = not for laying on.
-  const free = new Uint8Array(nx * ny);
-  for (let j = 0; j < ny; j++)
-    for (let i = 0; i < nx; i++) {
-      const c = { x: minX + (i + 0.5) * step, y: minY + (j + 0.5) * step };
-      free[j * nx + i] = blocks.some((b) => inside(c, b)) ? 0 : within(c) ? 1 : near(c) ? 2 : 0;
+  // only — without it there are none); 0 = not for laying on. A cell is the drawn area's when its
+  // centre is inside the outline or within the tolerance of its line (and of `bound`'s).
+  const key = `${step}|${offset.x}|${offset.y}|${reach}`;
+  let free = cache?.get(key);
+  if (!free) {
+    free = new Uint8Array(nx * ny);
+    const inLocal = insideCells(local, minX, minY, step, nx, ny);
+    const dLocal = edgeDistances(local, minX, minY, step, nx, ny, tol + reach);
+    const inBound = bound ? insideCells(bound, minX, minY, step, nx, ny) : null;
+    const dBound = bound ? edgeDistances(bound, minX, minY, step, nx, ny, tol) : null;
+    const inBlocks = blocks.map((b) => insideCells(b, minX, minY, step, nx, ny));
+    for (let c = 0; c < nx * ny; c++) {
+      if (inBlocks.some((b) => b[c])) continue;
+      if (inBound && !inBound[c] && !(dBound![c] <= tol)) continue;
+      free[c] = inLocal[c] || dLocal[c] <= tol ? 1 : dLocal[c] <= tol + reach ? 2 : 0;
     }
+    cache?.set(key, free);
+  }
+  const allowed = summed(free, nx, ny, (v) => v !== 0);
+  const drawn = summed(free, nx, ny, (v) => v === 1);
+  const taken = new Uint8Array(nx * ny);
 
   // Largest first; long side along the front before across it. `turned` = the deck's own DEPTH runs
   // along the front (how its rotation comes out); `across` = its LONG side runs front to back (what
@@ -318,25 +411,26 @@ function lay(
       { x: x0 + 1, y: y0 + d - 1 },
     ].every(near) && (!exceed || onFloor({ x: x0 + w / 2, y: y0 + d / 2 }));
 
+  // A spot is free for a deck when every cell under it may be laid on and none is taken: the first
+  // from the summed-area table, the second against the decks laid so far (a few dozen at most).
+  const placed: { i: number; j: number; w: number; h: number }[] = [];
   const fits = (i: number, j: number, sh: (typeof shapes)[number]) => {
     if (i + sh.cw > nx || j + sh.ch > ny) return false;
-    for (let y = j; y < j + sh.ch; y++) for (let x = i; x < i + sh.cw; x++) if (!free[y * nx + x]) return false;
+    if (boxSum(allowed, nx, i, j, sh.cw, sh.ch) !== sh.cw * sh.ch) return false;
+    if (placed.some((p) => i < p.i + p.w && p.i < i + sh.cw && j < p.j + p.h && p.j < j + sh.ch)) return false;
     return footprintOk(minX + i * step, minY + j * step, sh.w, sh.d);
   };
 
   const boxes: { x: number; y: number; w: number; d: number; type: DeckType; turned: boolean; across: boolean; frac: number }[] = [];
   for (let j = 0; j < ny; j++)
     for (let i = 0; i < nx; i++) {
-      if (!free[j * nx + i]) continue;
+      if (!free[j * nx + i] || taken[j * nx + i]) continue;
       const s = shapes.find((sh) => fits(i, j, sh));
       if (!s) continue;
       // How much of the deck is on the drawn floor — what it COVERS, as against what it hangs over.
-      let on = 0;
-      for (let y = j; y < j + s.ch; y++)
-        for (let x = i; x < i + s.cw; x++) {
-          if (free[y * nx + x] === 1) on++;
-          free[y * nx + x] = 0;
-        }
+      const on = boxSum(drawn, nx, i, j, s.cw, s.ch);
+      placed.push({ i, j, w: s.cw, h: s.ch });
+      for (let y = j; y < j + s.ch; y++) taken.fill(1, y * nx + i, y * nx + i + s.cw);
       boxes.push({ x: minX + i * step, y: minY + j * step, w: s.w, d: s.d, type: s.type, turned: s.turned, across: s.across, frac: on / (s.cw * s.ch) });
     }
 
@@ -369,14 +463,16 @@ function lay(
     decks,
     covered: boxes.reduce((s, b) => s + b.w * b.d * b.frac, 0),
     turned: boxes.filter((b) => b.across).length,
+    boxes: boxes.map(({ x, y, w, d }) => ({ x, y, w, d })),
   };
 }
 
 /** The best layout over every family and every deck alone: most covered, then fewest decks, then
  *  fewest turned. Coverage is compared to the half-percent — 0.1% more cover is not worth a
- *  second family of legs. */
-function best(
-  local: readonly Point[],
+ *  second family of legs. Several PARTS (behind the front line and in front of it) are laid with
+ *  one family between them — one stage, one system of decks — each from its own first row. */
+function bestParts(
+  parts: readonly (readonly Point[])[],
   blocks: readonly (readonly Point[])[],
   types: readonly DeckType[],
   tol: number,
@@ -390,8 +486,9 @@ function best(
   const candidates = [...fams, ...types.filter(() => types.length > 1).map((t) => [t])].filter(
     (c, i, all) => all.findIndex((o) => o.length === c.length && o.every((t, k) => t.id === c[k].id)) === i,
   );
-  let winner: Laid = { decks: [], covered: 0, turned: 0 };
+  let winner: Laid = { decks: [], covered: 0, turned: 0, boxes: [] };
   let winnerKey = [-1, 0, 0];
+  const caches = parts.map((): CellCache => new Map());
   for (const c of candidates) {
     // A curve tries its rows at a few offsets within one grid step, when the step is coarse (a family
     // of one deck size steps a whole deck at a time); a fine step already finds every row.
@@ -399,7 +496,13 @@ function best(
     const k = phases && step >= 200 ? Math.min(6, Math.floor(step / 100)) : 1;
     for (let oy = 0; oy < k; oy++)
       for (let ox = 0; ox < k; ox++) {
-        const l = lay(local, blocks, c, tol, frame, bound, exceed, { x: (ox * step) / k, y: (oy * step) / k });
+        const each = parts.map((part, p) => lay(part, blocks, c, tol, frame, bound, exceed, { x: (ox * step) / k, y: (oy * step) / k }, caches[p]));
+        const l: Laid = {
+          decks: each.flatMap((e) => e.decks),
+          covered: each.reduce((s, e) => s + e.covered, 0),
+          turned: each.reduce((s, e) => s + e.turned, 0),
+          boxes: each.flatMap((e) => e.boxes),
+        };
         const key = [Math.round((Math.min(1, l.covered / areaMm2) * 200)), -l.decks.length, -l.turned];
         const better = key[0] !== winnerKey[0] ? key[0] > winnerKey[0] : key[1] !== winnerKey[1] ? key[1] > winnerKey[1] : key[2] > winnerKey[2];
         if (better) {
@@ -411,37 +514,358 @@ function best(
   return winner;
 }
 
+function best(
+  local: readonly Point[],
+  blocks: readonly (readonly Point[])[],
+  types: readonly DeckType[],
+  tol: number,
+  frame: ReturnType<typeof frameOf>,
+  areaMm2: number,
+): Laid {
+  return bestParts([local], blocks, types, tol, frame, areaMm2);
+}
+
+/** The outline in the fill's frame, split at the front line (y = 0): the part behind it, laid from
+ *  the line back, and the part in front of it (a catwalk, an apron), laid from its own far end back
+ *  to the line — see the header. One part when nothing stands in front. */
+function frontParts(local: readonly Point[]): Point[][] {
+  if (!local.some((p) => p.y < -1)) return [[...local]];
+  return [clipY(local, 0, true), clipY(local, 0, false)].filter((p) => polyArea(p) > 1);
+}
+
 /** Lay decks of the given types across `polygon`. */
 export function fillWithDecks(polygon: readonly Point[], types: readonly DeckType[], opts: FillOptions = {}): FillResult {
   const areaMm2 = Math.abs(signedArea(polygon));
-  const usable = types.filter((t) => t.widthMm > 0 && t.depthMm > 0);
+  const usable = types.filter(isRectDeck);
+  const owned = [...(opts.pieces ?? []), ...types.filter((t) => !isRectDeck(t) && t.widthMm > 0 && t.depthMm > 0)];
   const front = opts.front !== undefined && opts.front >= 0 && opts.front < polygon.length ? opts.front : longestEdge(polygon);
-  const empty: FillResult = { decks: [], coverage: 0, areaMm2, front, rect: null, suggestions: [] };
-  if (polygon.length < 3 || usable.length === 0 || areaMm2 <= 0) return empty;
+  const empty: FillResult = { decks: [], coverage: 0, areaMm2, front, rect: null, suggestions: [], missing: [] };
+  if (polygon.length < 3 || areaMm2 <= 0 || (usable.length === 0 && owned.length === 0)) return empty;
 
   const tol = opts.toleranceMm ?? STAGE_TOLERANCE_MM;
   const frame = frameOf(polygon, front, opts.axis);
   const local = polygon.map(frame.toLocal);
   const blocks = (opts.obstacles ?? []).map((ob) => ob.map(frame.toLocal));
   const bound = opts.within ? opts.within.map(frame.toLocal) : null;
-  const laid = best(local, blocks, usable, tol, frame, areaMm2, bound, !!opts.exceed, !!opts.phases);
-  const coverage = Math.min(1, laid.covered / areaMm2);
   const rect = asRect(polygon, front);
+  // A raised level is laid within its stage as it always was; a stage whose outline runs only along
+  // the rows has no rim.
+  const segments = bound ? [] : rimSegments(local, opts.smooth?.length ? new Set(opts.smooth) : undefined);
+  if (!segments.some((s) => s.kind === "run")) {
+    if (!usable.length) return empty;
+    const laid = bestParts(frontParts(local), blocks, usable, tol, frame, areaMm2, bound, !!opts.exceed, !!opts.phases);
+    const coverage = Math.min(1, laid.covered / areaMm2);
+    return {
+      decks: laid.decks,
+      coverage,
+      areaMm2,
+      front,
+      rect,
+      suggestions: rect && coverage < 0.995 && blocks.length === 0 && !bound ? suggestSizes(rect, usable, tol) : [],
+      missing: [],
+    };
+  }
+  const built = rimBuild(local, segments, blocks, usable, owned, tol, frame, areaMm2, !!opts.exceed);
+  return { decks: built.decks, coverage: Math.min(1, built.covered / areaMm2), areaMm2, front, rect, suggestions: [], missing: built.missing };
+}
 
-  return {
-    decks: laid.decks,
-    coverage,
-    areaMm2,
-    front,
-    rect,
-    suggestions: rect && coverage < 0.995 && blocks.length === 0 && !bound ? suggestSizes(rect, usable, tol) : [],
+// ── The rim ───────────────────────────────────────────────────────────────────────────────────
+
+/** Pieces narrower than this (area over longest side), or smaller than RIM_SLIVER_MM2, are the
+ *  tolerance's — the line wobbling past a deck — and not a piece anyone brings. */
+const RIM_THIN_MM = 40;
+const RIM_SLIVER_MM2 = 15_000;
+/** A rim piece is at most a deck's long side either way, and a quarter more than its area. */
+const RIM_AREA_FACTOR = 1.25;
+const STANDARD_KINDS = new Set(["quarter", "half", "triangle", "round"]);
+
+/** A joined rim region without the points the join left on a straight line. */
+const tidyRun = (pts: Point[]) => pts.filter((p, i) => i === 0 || Math.abs(p.x - pts[i - 1].x) > 0.5 || Math.abs(p.y - pts[i - 1].y) > 0.5);
+
+interface RimPiece {
+  /** In the fill's frame. */
+  poly: Point[];
+  owned?: { type: DeckType; turn: Turn; centre: Point };
+}
+
+interface RimEval {
+  decks: LaidDeck[];
+  pieces: RimPiece[];
+  /** Missing pieces, grouped by shape. */
+  groups: { rep: Normal; info: PieceInfo; members: Point[][] }[];
+  bare: number;
+  covered: number;
+  score: number[];
+}
+
+const better = (a: number[], b: number[]) => {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+};
+
+function rimBuild(
+  local: readonly Point[],
+  segments: readonly RimSegment[],
+  blocks: readonly (readonly Point[])[],
+  usable: readonly DeckType[],
+  owned: readonly DeckType[],
+  tol: number,
+  frame: ReturnType<typeof frameOf>,
+  areaMm2: number,
+  exceed: boolean,
+): { decks: LaidDeck[]; missing: MissingPiece[]; covered: number } {
+  const runs: RimRun[] = segments.flatMap((s) => (s.kind === "run" ? [s.run] : []));
+  const maxSide = usable.length ? Math.max(...usable.map((t) => Math.max(t.widthMm, t.depthMm))) : 2440;
+  const maxArea = RIM_AREA_FACTOR * (usable.length ? Math.max(...usable.map((t) => t.widthMm * t.depthMm)) : 2440 * 1220);
+  const narrowest = usable.length ? Math.min(...usable.map((t) => Math.min(t.widthMm, t.depthMm))) : 0;
+  // Which edges of a piece lie along the stage's own curves — what makes a side of it curved.
+  const onCurve = curveTest(runs.map((r) => r.pts));
+  const ownedShapes = owned.map((t) => ({ t, n: normal(t.outline?.length ? t.outline : ellipse(t.widthMm, t.depthMm)) }));
+  const ownedFor = (poly: Point[]): RimPiece["owned"] => {
+    const n = normal(poly);
+    for (const o of ownedShapes) {
+      const turn = congruent(n, o.n);
+      if (turn) return { type: o.t, turn, centre: n.centre };
+    }
+    return undefined;
   };
+  // Runs of one shape are decided together — the four corners of a rounded stage, the two halves of
+  // an apron — so a stage comes out the same on both sides.
+  const groupOf: number[] = [];
+  const reps: Normal[] = [];
+  runs.forEach((r, i) => {
+    const n = normal(runRegion(r));
+    const g = reps.findIndex((rep) => congruent(rep, n));
+    groupOf[i] = g >= 0 ? g : reps.push(n) - 1;
+  });
+  const covering = (poly: Point[]) => {
+    // How much of a piece an obstacle (a level, a recess, a piece already standing) already covers.
+    if (!blocks.length) return 0;
+    const b = boxOf(poly);
+    let hit = 0;
+    let all = 0;
+    for (let i = 0; i < 6; i++)
+      for (let j = 0; j < 6; j++) {
+        const p = { x: b.x0 + ((i + 0.5) * (b.x1 - b.x0)) / 6, y: b.y0 + ((j + 0.5) * (b.y1 - b.y0)) / 6 };
+        if (!inside(p, poly)) continue;
+        all++;
+        if (blocks.some((o) => inside(p, o))) hit++;
+      }
+    return all ? hit / all : 0;
+  };
+
+  const evaluate = (outer: boolean[]): RimEval => {
+    const core = coreOutline(segments, (r) => outer[r]);
+    const coreArea = polyArea(core);
+    const innerRuns = runs.map((r, i) => ({ r, i })).filter(({ i }) => !outer[i]);
+    const outerRegions = runs.filter((_, i) => outer[i]).map((r) => runRegion(r, true));
+    const innerRegions = innerRuns.map(({ r }) => runRegion(r));
+    const laid =
+      coreArea > 1 && usable.length
+        ? bestParts(frontParts(core), exceed ? [...blocks, ...innerRegions] : blocks, usable, tol, frame, coreArea, null, exceed)
+        : { decks: [], covered: 0, turned: 0, boxes: [] };
+    // A deck over an OUTER corner that overhangs the line is not laid: what of it is on the stage is
+    // a piece of the rim (a deck with a curved side), cut along the deck's own seams. Overhanging is
+    // reaching past the line by more than the tolerance — at a corner, or by more than a tolerance-
+    // wide strip along the deck — into the part of the core that is not stage.
+    const overhangs = (b: { x: number; y: number; w: number; d: number }) => {
+      if (!outerRegions.length) return false;
+      const box = { x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.d };
+      const over = outerRegions.reduce((s, o) => s + polyArea(clipToBox(o, box)), 0);
+      if (over <= 1) return false;
+      if (over > tol * Math.max(b.w, b.d)) return true;
+      const corners = [{ x: box.x0, y: box.y0 }, { x: box.x1, y: box.y0 }, { x: box.x1, y: box.y1 }, { x: box.x0, y: box.y1 }];
+      return corners.some((p) => !inside(p, local) && distToBoundary(p, local) > tol && outerRegions.some((o) => inside(p, o) || distToBoundary(p, o) <= 1));
+    };
+    const keep = laid.boxes.map((b) => !overhangs(b));
+    const kept = laid.boxes.filter((_, i) => keep[i]);
+    const dropped = laid.boxes.filter((_, i) => !keep[i]);
+    const toBox = (b: { x: number; y: number; w: number; d: number }): Box => ({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.d });
+
+    const fixed: { poly: Point[]; from: "deck" | "rim" | "gap" }[] = [];
+    for (const b of dropped) fixed.push({ poly: clipToBox(local, toBox(b)), from: "deck" });
+    // What the core's decks leave uncovered — a gap where a run's corner falls between rows, or
+    // the part of an OUTER corner no deck reached: cut along every deck seam and core corner, and
+    // gathered into the largest rectangles a piece can be.
+    const xs = [...new Set([...core.map((p) => p.x), ...laid.boxes.flatMap((b) => [b.x, b.x + b.w])].map((v) => Math.round(v)))].sort((a, b) => a - b);
+    const ys = [...new Set([...core.map((p) => p.y), ...laid.boxes.flatMap((b) => [b.y, b.y + b.d])].map((v) => Math.round(v)))].sort((a, b) => a - b);
+    const cx = xs.length - 1;
+    const cy = ys.length - 1;
+    const open = new Uint8Array(Math.max(0, cx * cy));
+    for (let j = 0; j < cy; j++)
+      for (let i = 0; i < cx; i++) {
+        const c = { x: (xs[i] + xs[i + 1]) / 2, y: (ys[j] + ys[j + 1]) / 2 };
+        if (xs[i + 1] - xs[i] < 1 || ys[j + 1] - ys[j] < 1 || coreArea <= 1 || !inside(c, core)) continue;
+        if (laid.boxes.some((b) => c.x > b.x && c.x < b.x + b.w && c.y > b.y && c.y < b.y + b.d)) continue;
+        // The rim's own regions are pieces already, never gaps of the core.
+        if (innerRegions.some((r) => inside(c, r))) continue;
+        if (blocks.some((o) => inside(c, o))) continue;
+        if (polyArea(clipToBox(local, { x0: xs[i], x1: xs[i + 1], y0: ys[j], y1: ys[j + 1] })) <= 1) continue;
+        open[j * cx + i] = 1;
+      }
+    for (let j = 0; j < cy; j++)
+      for (let i = 0; i < cx; i++) {
+        if (!open[j * cx + i]) continue;
+        let i1 = i + 1;
+        while (i1 < cx && open[j * cx + i1] && xs[i1 + 1] - xs[i] <= maxSide + 1) i1++;
+        let j1 = j + 1;
+        const rowOpen = (jj: number) => {
+          for (let ii = i; ii < i1; ii++) if (!open[jj * cx + ii]) return false;
+          return true;
+        };
+        while (j1 < cy && rowOpen(j1) && ys[j1 + 1] - ys[j] <= maxSide + 1 && (xs[i1] - xs[i]) * (ys[j1 + 1] - ys[j]) <= maxArea) j1++;
+        for (let jj = j; jj < j1; jj++) for (let ii = i; ii < i1; ii++) open[jj * cx + ii] = 0;
+        fixed.push({ poly: clipToBox(local, { x0: xs[i], x1: xs[i1], y0: ys[j], y1: ys[j1] }), from: "gap" });
+      }
+    const decks = laid.decks.filter((_, i) => keep[i]);
+    const keptArea = kept.reduce((s, b) => s + polyArea(clipToBox(local, toBox(b))), 0);
+    // The rim's own regions, two ways: each run its own piece; or consecutive runs about one corner
+    // (the two quarters of a half-round, a whole disc) joined into one, where that is still a piece
+    // one can carry or the studio has it whole. Whichever needs less.
+    const assemble = (join: boolean) => {
+      const raw = [...fixed];
+      const regions: Point[][] = [];
+      for (let k = 0; k < innerRuns.length; ) {
+        let m = k + 1;
+        const same = (a: Point, b: Point) => Math.abs(a.x - b.x) <= 5 && Math.abs(a.y - b.y) <= 5;
+        while (join && m < innerRuns.length && innerRuns[m].i === innerRuns[m - 1].i + 1 && same(innerRuns[m].r.inner, innerRuns[k].r.inner)) m++;
+        const along = m - k > 1 ? tidyRun(innerRuns.slice(k, m).flatMap(({ r }, n) => (n ? r.pts.slice(1) : r.pts))) : null;
+        // Runs that close on themselves (every quarter of a disc) are the whole piece — no corner.
+        const joined = along ? (same(along[0], along[along.length - 1]) ? along.slice(0, -1) : [...along, innerRuns[k].r.inner]) : null;
+        const jb = joined ? boxOf(joined) : null;
+        if (joined && jb && ((jb.x1 - jb.x0 <= maxSide + 1 && jb.y1 - jb.y0 <= maxSide + 1 && polyArea(joined) <= maxArea) || ownedFor(joined))) regions.push(joined);
+        else for (let q = k; q < m; q++) regions.push(innerRegions[q]);
+        k = m;
+      }
+      return { raw, regions };
+    };
+    const variants = [assemble(false), ...(innerRuns.length > 1 ? [assemble(true)] : [])];
+    let bestOf: RimEval | null = null;
+    for (const { raw, regions } of variants) {
+      const e = finish(raw, regions);
+      if (!bestOf || better(e.score, bestOf.score)) bestOf = e;
+    }
+    return bestOf!;
+
+    function finish(raw: { poly: Point[]; from: "deck" | "rim" | "gap" }[], regions: Point[][]): RimEval {
+      for (const region of regions) {
+        if (covering(region) > 0.5) continue;
+        const b = boxOf(region);
+        const w = b.x1 - b.x0;
+        const h = b.y1 - b.y0;
+        if (ownedFor(region) || (w <= maxSide + 1 && h <= maxSide + 1 && polyArea(region) <= maxArea)) {
+          raw.push({ poly: region, from: "rim" });
+          continue;
+        }
+        // Too big to carry: cut into equal pieces that are not.
+        const nx = Math.max(1, Math.ceil(w / maxSide - 1e-6));
+        let ny = Math.max(1, Math.ceil(h / maxSide - 1e-6));
+        while ((w / nx) * (h / ny) > maxArea && ny < 20) ny++;
+        for (let i = 0; i < nx; i++)
+          for (let j = 0; j < ny; j++) raw.push({ poly: clipToBox(region, { x0: b.x0 + (i * w) / nx, x1: b.x0 + ((i + 1) * w) / nx, y0: b.y0 + (j * h) / ny, y1: b.y0 + ((j + 1) * h) / ny }), from: "rim" });
+      }
+      let bare = 0;
+      const pieces: RimPiece[] = [];
+      const missing: Point[][] = [];
+      for (const { poly, from } of raw) {
+        const a = polyArea(poly);
+        if (a < RIM_SLIVER_MM2) continue;
+        const b = boxOf(poly);
+        if (a / Math.max(b.x1 - b.x0, b.y1 - b.y0) < RIM_THIN_MM) continue;
+        const own = ownedFor(poly);
+        if (own) pieces.push({ poly, owned: own });
+        // A bare rectangle left among the decks is a size question (the drawn size is not what the
+        // decks make), not a piece to buy — and so is any leftover narrower than the narrowest deck
+        // (the 12cm a 5m depth leaves behind four rows of sheets, where it meets an angled corner);
+        // one cut out of the rim is a piece.
+        else if (from === "gap" && (isRectangle(poly) || Math.min(b.x1 - b.x0, b.y1 - b.y0) < narrowest)) bare += a;
+        else missing.push(poly);
+      }
+      const groups: RimEval["groups"] = [];
+      for (const m of missing) {
+        const n = normal(m);
+        const g = groups.find((x) => congruent(x.rep, n));
+        if (g) g.members.push(m);
+        else groups.push({ rep: n, info: describePiece(m, onCurve), members: [m] });
+      }
+      const covered = keptArea + pieces.reduce((s, p) => s + polyArea(p.poly), 0);
+      const score = [
+        Math.round((bare / areaMm2) * 100),
+        groups.length,
+        groups.filter((g) => !STANDARD_KINDS.has(g.info.kind)).length,
+        missing.length,
+        decks.length + pieces.length,
+      ];
+      return { decks, pieces, groups, bare, covered, score };
+    }
+  };
+
+  // Every run in, then each shape of run out, then every run out, then every flip that helped. Each
+  // build chooses its own family of decks: a core notched at its corners may be best built of strips
+  // where the plain rectangle the outer corners leave is built of sheets.
+  const first = evaluate(runs.map(() => false));
+  let winner = first;
+  const flips = reps.map((_, g) => runs.map((r, i) => groupOf[i] === g && r.outerOk));
+  const helped: boolean[][] = [];
+  for (const f of flips) {
+    if (!f.some(Boolean)) continue;
+    const e = evaluate(f);
+    if (better(e.score, first.score)) helped.push(f);
+    if (better(e.score, winner.score)) winner = e;
+  }
+  if (runs.every((r) => r.outerOk) && reps.length > 1) {
+    const e = evaluate(runs.map(() => true));
+    if (better(e.score, winner.score)) winner = e;
+  }
+  if (helped.length > 1) {
+    const e = evaluate(runs.map((_, i) => helped.some((f) => f[i])));
+    if (better(e.score, winner.score)) winner = e;
+  }
+
+  const world = (p: Point) => {
+    const w = frame.toWorld(p);
+    return { x: Math.round(w.x), y: Math.round(w.y) };
+  };
+  const baseDeg = (frame.theta * 180) / Math.PI;
+  const norm = (deg: number) => Math.round((((deg % 360) + 360) % 360) * 100) / 100;
+  const pieceDecks: LaidDeck[] = winner.pieces.flatMap(({ owned: o }) => {
+    if (!o) return [];
+    // Placed in the fill's frame as a StagePiece is (flipped, then turned), then carried out — a
+    // frame that is itself a mirror image turns the other way and flips the piece once more.
+    const shape = o.type.outline?.length ? o.type.outline : ellipse(o.type.widthMm, o.type.depthMm);
+    const outline = turned(shape, o.turn).map((q) => world({ x: o.centre.x + q.x, y: o.centre.y + q.y }));
+    const rot = o.turn.rot * 90;
+    return [
+      {
+        typeId: o.type.id,
+        centre: world(o.centre),
+        rotation: norm(frame.s > 0 ? baseDeg + rot : baseDeg - rot + 180),
+        widthMm: o.type.widthMm,
+        depthMm: o.type.depthMm,
+        outline,
+        ...((frame.s > 0 ? o.turn.mirror : !o.turn.mirror) ? { mirrored: true } : {}),
+      },
+    ];
+  });
+  const missing: MissingPiece[] = winner.groups.flatMap((g, k) => {
+    const shape = `${g.info.kind}:${g.info.widthMm}x${g.info.depthMm}:${k}`;
+    return g.members.map((m) => ({ outline: m.map(world), shape, info: g.info }));
+  });
+  return { decks: [...winner.decks, ...pieceDecks], missing, covered: winner.covered };
+}
+
+/** An oval piece's outline about its centre, for comparing with the rim. */
+function ellipse(w: number, d: number): Point[] {
+  return Array.from({ length: 48 }, (_, k) => {
+    const t = (2 * Math.PI * k) / 48;
+    return { x: (w / 2) * Math.cos(t), y: (d / 2) * Math.sin(t) };
+  });
 }
 
 /** The step a stage built from these decks grows in: the largest module every deck measurement is a
  *  whole number of, never finer than 10cm. What the resize handles snap a stage's sides to. */
 export function deckModule(types: readonly DeckType[]): number {
-  const dims = types.flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]).filter((d) => d > 0);
+  const dims = types.filter(isRectDeck).flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]).filter((d) => d > 0);
   return dims.length ? Math.max(100, dims.reduce((g, d) => gcd(g, d))) : 1000;
 }
 
@@ -457,7 +881,7 @@ export type LengthSnap = (mm: number, opts?: { magnetMm?: number; gridMm?: numbe
 export function lengthSnapper(types: readonly DeckType[], maxMm = 60_000): LengthSnap {
   const units = Math.ceil(maxMm / 10);
   const ok = new Uint8Array(units + 1);
-  for (const fam of families(types.filter((t) => t.widthMm > 0 && t.depthMm > 0))) {
+  for (const fam of families(types.filter(isRectDeck))) {
     const steps = [...new Set(fam.flatMap((t) => [r10(t.widthMm) / 10, r10(t.depthMm) / 10]))].filter((d) => d > 0);
     const reach = new Uint8Array(units + 1);
     reach[0] = 1;
@@ -479,18 +903,54 @@ export function lengthSnapper(types: readonly DeckType[], maxMm = 60_000): Lengt
   };
 }
 
+/** The lengths a stage built of these decks is MADE in, as a crew lays it: along the front, whole
+ *  decks end to end and turned ones (a·long + b·short of the family's main deck); front to back,
+ *  rows of that deck and at most one row of a finishing strip (r·short + one strip), or decks turned
+ *  along a catwalk. Not every sum of every side — with 40/60/80 strips that is nearly every length,
+ *  and "12.20×5.20, 65 decks" is a size made of strips nobody wants offered. Sorted, up to `maxMm`. */
+function madeLengths(types: readonly DeckType[], maxMm: number): { along: number[]; deep: number[] } {
+  const along = new Set<number>();
+  const deep = new Set<number>();
+  for (const fam of families(types)) {
+    const main = [...fam].sort((a, b) => b.widthMm * b.depthMm - a.widthMm * a.depthMm)[0];
+    const L = r10(Math.max(main.widthMm, main.depthMm));
+    const S = r10(Math.min(main.widthMm, main.depthMm));
+    // Strips: the family's other decks that share the main deck's long side, by their other side.
+    const strips = [0, ...fam.filter((t) => t !== main && [t.widthMm, t.depthMm].map(r10).includes(L)).map((t) => r10(Math.min(t.widthMm, t.depthMm) === L ? Math.max(t.widthMm, t.depthMm) : Math.min(t.widthMm, t.depthMm)))];
+    // Any other size of the family stands in its own right (a 1×1 beside a 2×1).
+    const others = fam.filter((t) => t !== main && !strips.includes(r10(Math.min(t.widthMm, t.depthMm)))).flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]);
+    const sides = [...new Set([L, S, ...others])].filter((s) => s > 0);
+    // Whole decks end to end: every sum of the family's sides up to maxMm (one pass, as lengthSnapper).
+    const units = Math.ceil(maxMm / 10);
+    const reach = new Uint8Array(units + 1);
+    reach[0] = 1;
+    for (let i = 1; i <= units; i++) if (sides.some((s) => i >= s / 10 && reach[i - s / 10])) reach[i] = 1;
+    for (let i = 1; i <= units; i++) if (reach[i]) {
+      along.add(i * 10);
+      deep.add(i * 10);
+    }
+    for (let r = 0; r * S <= maxMm; r++) for (const s of strips) if (r * S + s > 0 && r * S + s <= maxMm) deep.add(r * S + s);
+  }
+  const sorted = (s: Set<number>) => [...s].sort((a, b) => a - b);
+  return { along: sorted(along), deep: sorted(deep) };
+}
+
 /** Rectangles near `rect` that the decks cover exactly: the largest that fits INSIDE what was drawn,
  *  and the smallest that CONTAINS it. Ties keep the front length nearest to what was drawn — the
- *  front is the measurement a designer chose on purpose. */
+ *  front is the measurement a designer chose on purpose. The sizes tried are the ones the decks are
+ *  made in (madeLengths), the two either side of each measurement. */
 function suggestSizes(rect: { widthMm: number; depthMm: number }, types: readonly DeckType[], tol: number): SizeSuggestion[] {
-  const step = deckModule(types);
-  const around = (mm: number) => {
-    const f = Math.floor((mm + tol) / step);
-    return [f - 1, f, f + 1, f + 2].filter((n) => n > 0).map((n) => n * step);
-  };
-  const exact: { widthMm: number; depthMm: number; decks: number }[] = [];
-  for (const w of around(rect.widthMm))
-    for (const d of around(rect.depthMm)) {
+  const made = madeLengths(types, Math.max(rect.widthMm, rect.depthMm) + 5000);
+  const around = (mm: number, list: number[]) => [...list.filter((l) => l <= mm + tol).slice(-2), ...list.filter((l) => l > mm + tol).slice(0, 2)];
+  const sizes: { widthMm: number; depthMm: number }[] = [];
+  for (const w of around(rect.widthMm, made.along)) for (const d of around(rect.depthMm, made.deep)) sizes.push({ widthMm: w, depthMm: d });
+  // Each size is laid only when it is the next one wanted — the preferred order first, stopping at
+  // the first the decks cover exactly — rather than all sixteen.
+  const tried = new Map<string, number | null>();
+  const decksFor = (s: { widthMm: number; depthMm: number }) => {
+    const k = `${s.widthMm}x${s.depthMm}`;
+    if (!tried.has(k)) {
+      const { widthMm: w, depthMm: d } = s;
       const poly = [
         { x: 0, y: 0 },
         { x: w, y: 0 },
@@ -498,14 +958,21 @@ function suggestSizes(rect: { widthMm: number; depthMm: number }, types: readonl
         { x: 0, y: d },
       ];
       const l = best(poly, [], types, 0, frameOf(poly, 0), w * d);
-      if (l.covered >= w * d - 1) exact.push({ widthMm: w, depthMm: d, decks: l.decks.length });
+      tried.set(k, l.covered >= w * d - 1 ? l.decks.length : null);
     }
+    return tried.get(k)!;
+  };
   const area = (s: { widthMm: number; depthMm: number }) => s.widthMm * s.depthMm;
   const closer = (a: { widthMm: number }, b: { widthMm: number }) => Math.abs(a.widthMm - rect.widthMm) - Math.abs(b.widthMm - rect.widthMm);
-  const within = exact.filter((s) => s.widthMm <= rect.widthMm + tol && s.depthMm <= rect.depthMm + tol);
-  const containing = exact.filter((s) => s.widthMm >= rect.widthMm - tol && s.depthMm >= rect.depthMm - tol);
-  const smaller = within.sort((a, b) => area(b) - area(a) || closer(a, b))[0];
-  const larger = containing.sort((a, b) => area(a) - area(b) || closer(a, b))[0];
+  const first = (list: { widthMm: number; depthMm: number }[]) => {
+    for (const s of list) {
+      const decks = decksFor(s);
+      if (decks !== null) return { ...s, decks };
+    }
+    return undefined;
+  };
+  const smaller = first(sizes.filter((s) => s.widthMm <= rect.widthMm + tol && s.depthMm <= rect.depthMm + tol).sort((a, b) => area(b) - area(a) || closer(a, b)));
+  const larger = first(sizes.filter((s) => s.widthMm >= rect.widthMm - tol && s.depthMm >= rect.depthMm - tol).sort((a, b) => area(a) - area(b) || closer(a, b)));
   return [
     ...(smaller ? [{ direction: "smaller" as const, ...smaller }] : []),
     ...(larger ? [{ direction: "larger" as const, ...larger }] : []),
@@ -731,6 +1198,59 @@ if (isMain(import.meta.url)) {
     const square = fillWithDecks(bowed, [big], { front: 0, axis: [bowPts[0], bowPts[8]] });
     assert(square.decks.length >= askew.decks.length && square.decks.every((d) => d.rotation === 0), "laid along the bow's chord, the rows are square to the stage");
     assert(square.decks.every((d) => d.centre.y - d.depthMm / 2 >= -300 - 60), "…and start at the front");
+  }
+
+  // THE FRONT LINE AND THE RIM — the stage that showed the old fill up: a 12×5 body with an R1.8
+  // half-round out of the middle of its front. Laid from the apron's tip, the body's rows were
+  // offset from its own front, strips ran from the apron through the body, and a hole was left in
+  // its middle; the curve was stair-stepped with strips.
+  {
+    const arc = (cx: number, cy: number, r: number, from: number, to: number, n: number): Point[] =>
+      Array.from({ length: n + 1 }, (_, k) => {
+        const a = ((from + ((to - from) * k) / n) * Math.PI) / 180;
+        return { x: Math.round(cx + r * Math.cos(a)), y: Math.round(cy + r * Math.sin(a)) };
+      });
+    const apron: Point[] = [{ x: 0, y: 0 }, ...arc(6000, 0, 1800, 180, 360, 16), { x: 12000, y: 0 }, { x: 12000, y: 5000 }, { x: 0, y: 5000 }];
+    const smooth = Array.from({ length: 15 }, (_, k) => k + 2);
+    const withApron = fillWithDecks(apron, base244, { front: 0, smooth });
+    const bodyAlone = fillWithDecks(rect(0, 0, 12000, 5000), base244, { front: 0 });
+    assert(JSON.stringify(withApron.decks) === JSON.stringify(bodyAlone.decks), "an apron leaves the body's decks exactly as the body alone has them — its rows from its own front line");
+    assert(withApron.decks.every((d) => d.centre.y > 0), "…no strip run out into the apron");
+    assert(
+      withApron.missing.length === 2 && withApron.missing.every((m) => m.info.kind === "quarter" && Math.abs((m.info.radiusMm ?? 0) - 1800) <= 20) && withApron.missing[0].shape === withApron.missing[1].shape,
+      "…and the apron is named for what it is: one piece, a quarter-round R180, twice",
+    );
+    const R = 1800;
+    const quarter: DeckType = { id: "q180", widthMm: R, depthMm: R, quarterMm: R, outline: [{ x: -R / 2, y: R / 2 }, { x: R / 2, y: R / 2 }, ...arc(-R / 2, R / 2, R, 0, -90, 8).slice(1, 8), { x: -R / 2, y: -R / 2 }] };
+    const owned = fillWithDecks(apron, [...base244, quarter], { front: 0, smooth });
+    const pieces = owned.decks.filter((d) => d.typeId === "q180");
+    assert(owned.missing.length === 0 && pieces.length === 2 && pieces.every((d) => d.outline!.every((q) => q.y <= 1 && Math.hypot(q.x - 6000, q.y) <= R + 3)), "…and with the piece in the catalog, two of it stand in the apron");
+    assert(owned.coverage > withApron.coverage + 0.05, "…covering what was missing");
+
+    // A T: the catwalk in front of the front line is laid on its own, from its tip back, and the
+    // body's rows still start at the line.
+    const tee: Point[] = [{ x: 0, y: 0 }, { x: 2440, y: 0 }, { x: 2440, y: -1830 }, { x: 4880, y: -1830 }, { x: 4880, y: 0 }, { x: 7320, y: 0 }, { x: 7320, y: 3660 }, { x: 0, y: 3660 }];
+    const t = fillWithDecks(tee, base244, { front: 0 });
+    const behind = t.decks.filter((d) => d.centre.y > 0);
+    assert(behind.length === 9 && behind.every((d) => d.rotation === 0 && [610, 1830, 3050].includes(d.centre.y)), "a T's body is its nine sheets in rows from the front line");
+    assert(t.coverage > 0.995 && t.missing.length === 0, "…and its catwalk is decked to its tip");
+
+    // Small rounded corners on sheets: the four corner sheets are one curved sheet, four of it — and a
+    // corner cut at 45° is a sheet with its corner cut, named, not a hole.
+    const r5: Point[] = [];
+    const s5: number[] = [];
+    for (const [cx, cy, from] of [[500, 500, 180], [6820, 500, 270], [6820, 3160, 0], [500, 3160, 90]] as const)
+      arc(cx, cy, 500, from, from + 90, 6).forEach((p, k) => {
+        if (k > 0 && k < 6) s5.push(r5.length);
+        r5.push(p);
+      });
+    const rounded = fillWithDecks(r5, [sheet], { front: 6, smooth: s5 });
+    assert(rounded.decks.length === 5 && rounded.missing.length === 4 && new Set(rounded.missing.map((m) => m.shape)).size === 1 && rounded.missing[0].info.kind === "curve", "a 7.32×3.66 rounded R50: five sheets, and one curved sheet four times");
+    const cut = fillWithDecks([{ x: 0, y: 0 }, { x: 7320, y: 0 }, { x: 7320, y: 2440 }, { x: 6100, y: 3660 }, { x: 0, y: 3660 }], [sheet], { front: 0 });
+    assert(cut.decks.length === 8 && cut.missing.length === 1 && cut.missing[0].info.kind === "angled", "a corner cut at 45°: eight sheets, and the corner sheet with its corner cut, named");
+    const t2 = Date.now();
+    fillWithDecks(apron, base244, { front: 0, smooth });
+    assert(Date.now() - t2 < 1000, "a stage with a rim answers inside a second");
   }
 
   const t0 = Date.now();

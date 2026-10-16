@@ -112,6 +112,9 @@ import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
 import { ArrowDownToLine } from "lucide-react";
 import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
 import type { Selection, SpinMode } from "./canvas-stage";
+import type { DeckType, MissingPiece } from "@/lib/studio/stage-fill";
+import type { PieceInfo } from "@/lib/studio/stage-rim";
+import { MissingPieces } from "./missing-pieces";
 
 // The studio's object inspector: ONE BAR along the bottom of the canvas, not a panel down its side.
 //
@@ -241,6 +244,11 @@ export interface StagePanel {
   /** Whether the catalog has a row to count stairs and skirt as on the quote. */
   stairsCounted: boolean;
   skirtCounted: boolean;
+  /** The rim pieces the build needs and the catalog does not have (lib/studio/stage-rim.ts), the
+   *  stage pieces the catalog has, and the ones this stage is built from — for "חסר בקטלוג". */
+  missing: MissingPiece[];
+  pieceTypes: (DeckType & { name: string })[];
+  chosen: string[];
 }
 
 /** What the bar for several stages (a group of them, or a handful selected) shows. */
@@ -363,6 +371,8 @@ export function Inspector({
   onExplodeStage,
   onStageHeight,
   onStageSize,
+  onAddStagePieces,
+  onUseStagePieces,
   onLevelHeight,
   onRemoveLevel,
   onAddLevel,
@@ -533,6 +543,10 @@ export function Inspector({
   onStageHeight: (heightMm: number) => void;
   /** A rectangular stage set to an exact size, its back edge held where it stands. */
   onStageSize: (size: { widthMm: number; depthMm: number }) => void;
+  /** The stage's missing rim pieces made catalog rows and chosen for it; or catalog pieces it was not
+   *  built from, chosen for it. */
+  onAddStagePieces: (infos: PieceInfo[]) => void;
+  onUseStagePieces: (ids: string[]) => void;
   onLevelHeight: (levelId: string, heightMm: number) => void;
   onRemoveLevel: (levelId: string) => void;
   /** Draw a raised level on the stage (the area tool, bounded by the stage). */
@@ -1354,6 +1368,8 @@ export function Inspector({
               </Note>
             </Popover>
           )}
+
+          <MissingPieces missing={sp.missing} types={sp.pieceTypes} chosen={sp.chosen} onUse={onUseStagePieces} onAdd={onAddStagePieces} />
 
           <Popover label="בנויה מ" icon={Blocks} value={`${sp.deckCount} פלטות`} panelClassName="w-72">
             {sp.decks.length > 0 ? (

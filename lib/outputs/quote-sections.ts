@@ -23,6 +23,7 @@
 //     everything it is built from (lib/design-document/stage.ts), with what it includes in words.
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { layStage } from "@/lib/design-document/stage";
 import type { NumberedUnit } from "@/lib/design-document/groups";
 import { tableKits } from "./table-kits";
 import type { QuoteLookup } from "./quote";
@@ -188,6 +189,10 @@ function stagesLine(sectionKey: string, doc: DesignDocumentContent, stages: Plac
       priced++;
     } else unpriced++;
   }
+  // A rim piece the studio does not have yet (a quarter-round, a curved deck) has no price either:
+  // the line is a partial sum until the piece is in the catalog.
+  const deckOf = ctxOf(opts).deckOf;
+  if (deckOf && stages.some((p) => p.stage && layStage(p.stage, deckOf).missing.length > 0)) unpriced++;
   const n = stages.reduce((s, p) => s + p.quantity, 0);
   const words = [...includes];
   const detail = words.length ? `כולל ${words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} ו${words[words.length - 1]}`}` : undefined;
