@@ -9,6 +9,8 @@ import { benchLayout, type BenchLayout } from "@/lib/design-document/bench";
 import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
+import { FlowerDrawing } from "./flower-symbol";
+import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -60,6 +62,13 @@ export interface ItemSymbolProps {
   footprint: Footprint;
   /** Candles, arms, bulbs — symbolCount(). */
   count: number;
+  /** For an arrangement or a centrepiece: which flowers, in what form and shade — the row's spec
+   *  resolved by lib/catalog/flower-spec.ts (`flowerDrawSpecOf`, one object per row/size/shade, so
+   *  this memoises). Absent = the default mix in `tone`, for a tile that has no row. */
+  flowers?: FlowerDrawSpec;
+  /** Whether a flower's inner detail is drawn at all — off for a sheet too small to print it. On
+   *  screen the plan's zoom hides it by CSS instead (components/flower-symbol.tsx). */
+  detail?: boolean;
   /** The item's colour (its shade's swatch, or its row's fill). Absent = the material's default. */
   tone?: string;
   /** The line colour. Screen: a soft ink; print: the sheet's ink. */
@@ -85,7 +94,7 @@ export interface ItemSymbolProps {
   chairs?: boolean;
 }
 
-function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
   if (w <= 0 || h <= 0) return null;
   const t = print ? "#ffffff" : tone || DEFAULT_TONE[kind];
@@ -107,10 +116,21 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
       body = candlestick(w, h, round, count, c, line);
       break;
     case "flowers":
-      body = flowers(w, h, round, c, line);
+      body = <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />;
       break;
     case "centerpiece":
-      body = centerpiece(w, h, round, c, line);
+      // The base it stands on, faint, under the flowers spilling over it.
+      body = (
+        <>
+          {round && Math.abs(w - h) <= 1 && (
+            <>
+              <circle r={w / 2} fill={c.print ? "#ffffff" : "#F4F1F8"} {...line} strokeOpacity={line.strokeOpacity * 0.6} />
+              <circle r={w * 0.43} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.35} />
+            </>
+          )}
+          <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />
+        </>
+      );
       break;
     case "vase":
       body = vase(w, h, round, c, line);
@@ -134,10 +154,10 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
       body = fountain(w, h, round, c, line);
       break;
     case "arch":
-      body = along(w, h, (L, D) => arch(L, D, c, line));
+      body = along(w, h, (L, D) => arch(L, D, c, line, ink, detail));
       break;
     case "chuppah":
-      body = chuppah(w, h, round, c, line);
+      body = chuppah(w, h, round, c, line, ink, detail);
       break;
     case "bar":
       body = round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
@@ -255,46 +275,23 @@ function along(w: number, h: number, draw: (length: number, depth: number) => Re
 
 const polar = (r: number, deg: number) => ({ x: r * Math.cos((deg * Math.PI) / 180), y: r * Math.sin((deg * Math.PI) / 180) });
 
-/** One bloom seen from above: the flower, and the lighter heart of it. */
-function bloom(key: string, x: number, y: number, r: number, c: Colours, line: Line, dim = false) {
-  return (
-    <g key={key}>
-      <circle cx={x} cy={y} r={r} fill={c.tone} fillOpacity={dim && !c.print ? 0.82 : 1} {...line} strokeOpacity={line.strokeOpacity * 0.7} />
-      <circle cx={x} cy={y} r={r * 0.38} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.45} {...(c.print ? line : {})} />
-    </g>
-  );
-}
-
-function leaf(key: string, x: number, y: number, len: number, deg: number, c: Colours, line: Line) {
-  return (
-    <ellipse
-      key={key}
-      cx={x}
-      cy={y}
-      rx={len / 2}
-      ry={len / 5}
-      transform={`rotate(${deg} ${x} ${y})`}
-      fill={c.print ? "#ffffff" : LEAF}
-      {...line}
-      strokeOpacity={line.strokeOpacity * 0.5}
-    />
-  );
-}
-
-/** A round bunch: leaves showing round the rim, a bloom in the middle and a ring of six round it. */
-function cluster(r: number, c: Colours, line: Line, at = { x: 0, y: 0 }, prefix = "") {
-  const out: ReactNode[] = [];
-  for (let k = 0; k < 5; k++) {
-    const deg = 18 + k * 72;
-    const p = polar(r * 0.7, deg);
-    out.push(leaf(`${prefix}l${k}`, at.x + p.x, at.y + p.y, r * 0.62, deg, c, line));
+/**
+ * Flowers with no row behind them — an arch's garland, a chuppah's poles, a tile with no product:
+ * the default mix (lib/catalog/flower-draw.ts) in the item's tone, at this size. Kept per
+ * (form, size, tone) so the same object comes back and the drawing memoises; a plan has a handful
+ * of these, not hundreds.
+ */
+const plain = new Map<string, FlowerDrawSpec>();
+function plainFlowers(w: number, h: number, tone: string | undefined, form?: FlowerForm): FlowerDrawSpec {
+  const f = form ?? (Math.max(w, h) >= Math.min(w, h) * 2.2 ? "runner" : "dome");
+  const key = `${f}|${Math.round(w)}|${Math.round(h)}|${tone ?? ""}`;
+  let spec = plain.get(key);
+  if (!spec) {
+    if (plain.size > 400) plain.clear();
+    spec = { form: f, w: Math.round(w), h: Math.round(h), lines: defaultMix(), shade: tone, seed: seedOf(key) };
+    plain.set(key, spec);
   }
-  for (let k = 0; k < 6; k++) {
-    const p = polar(r * 0.5, -90 + k * 60);
-    out.push(bloom(`${prefix}b${k}`, at.x + p.x, at.y + p.y, r * 0.3, c, line, k % 2 === 1));
-  }
-  out.push(bloom(`${prefix}c`, at.x, at.y, r * 0.34, c, line));
-  return out;
+  return spec;
 }
 
 // ── the pictures ────────────────────────────────────────────────────────────────────────────────
@@ -344,40 +341,6 @@ function candlestick(w: number, h: number, round: boolean, n: number, c: Colours
       <circle r={R * 0.2} fill={c.tone} {...line} />
       {arms.map((p, i) => candle(`c${i}`, p.x, p.y, r))}
       {n % 2 === 1 && candle("cc", 0, 0, r * 0.95)}
-    </>
-  );
-}
-
-/** An arrangement: a round bunch, or blooms in a staggered run along a long one. */
-function flowers(w: number, h: number, round: boolean, c: Colours, line: Line) {
-  if (round && Math.abs(w - h) < 1) return cluster(w / 2, c, line);
-  return along(w, h, (L, D) => {
-    const n = Math.max(3, Math.round(L / (D * 0.5)));
-    const r = Math.min(D * 0.3, L / (n * 1.6));
-    const out: ReactNode[] = [];
-    // Leaves out past the ends and along the sides, under the blooms.
-    out.push(leaf("le0", -L / 2 + D * 0.3, 0, D * 0.6, 0, c, line), leaf("le1", L / 2 - D * 0.3, 0, D * 0.6, 0, c, line));
-    for (let i = 0; i < n - 1; i++) {
-      const x = -L / 2 + D * 0.4 + ((i + 0.5) * (L - D * 0.8)) / (n - 1);
-      out.push(leaf(`ls${i}`, x, (i % 2 ? 1 : -1) * D * 0.3, D * 0.45, i % 2 ? 35 : -35, c, line));
-    }
-    for (let i = 0; i < n; i++) {
-      const x = -L / 2 + D * 0.4 + (i * (L - D * 0.8)) / (n - 1);
-      out.push(bloom(`b${i}`, x, (i % 2 ? 1 : -1) * D * 0.1, r, c, line, i % 2 === 1));
-    }
-    return out;
-  });
-}
-
-/** A centrepiece: the base it stands on, faint, and the flowers spilling over it. */
-function centerpiece(w: number, h: number, round: boolean, c: Colours, line: Line) {
-  if (!round || Math.abs(w - h) > 1) return flowers(w, h, round, c, line);
-  const R = w / 2;
-  return (
-    <>
-      <circle r={R} fill={c.print ? "#ffffff" : "#F4F1F8"} {...line} strokeOpacity={line.strokeOpacity * 0.6} />
-      <circle r={R * 0.86} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.35} />
-      {cluster(R * 0.78, c, line)}
     </>
   );
 }
@@ -692,30 +655,34 @@ function fountain(w: number, h: number, round: boolean, c: Colours, line: Line) 
   );
 }
 
-/** An arch, seen from above: a foot at each end and the span between them, dressed with flowers. */
-function arch(L: number, D: number, c: Colours, line: Line) {
+/** An arch, seen from above: a foot at each end and the span between them, dressed with a garland
+ *  of flowers — the runner form of the same drawing an arrangement is (components/flower-symbol.tsx),
+ *  in the arch's own tone. */
+function arch(L: number, D: number, c: Colours, line: Line, ink: string, detail: boolean) {
   const foot = Math.min(D, L * 0.2);
   const span = D * 0.38;
-  const groups = Math.max(2, Math.round(L / 550));
-  const out: ReactNode[] = [
-    <rect key="span" x={-L / 2 + foot / 2} y={-span / 2} width={L - foot} height={span} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.14} {...line} />,
-    <rect key="f0" x={-L / 2} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />,
-    <rect key="f1" x={L / 2 - foot} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />,
-  ];
-  for (let i = 0; i < groups; i++) {
-    const x = -L / 2 + foot * 0.7 + (i * (L - foot * 1.4)) / (groups - 1);
-    out.push(...cluster(D * 0.42, c, line, { x, y: (i % 2 ? 1 : -1) * D * 0.08 }, `g${i}`));
-  }
-  return out;
+  return (
+    <>
+      <rect x={-L / 2 + foot / 2} y={-span / 2} width={L - foot} height={span} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.14} {...line} />
+      <rect x={-L / 2} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />
+      <rect x={L / 2 - foot} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />
+      <FlowerDrawing spec={plainFlowers(L - foot * 1.2, D * 0.9, c.print ? undefined : c.tone, "runner")} ink={ink} print={c.print} detail={detail} />
+    </>
+  );
 }
 
 /** A chuppah: the canopy, its four poles, the folds of the cloth corner to corner, and flowers at the
  *  two front poles — the side the couple face the guests from. */
-function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line) {
+function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line, ink: string, detail: boolean) {
   const m = Math.min(w, h);
   const pole = m * 0.045;
   const fold = { ...line, strokeOpacity: line.strokeOpacity * 0.55, strokeDasharray: "4 3" };
-  const flower = { ...c, tone: c.print ? c.tone : "#E8BCCE" };
+  // The flowers on the poles are the blush every arrangement defaults to, not the canopy's colour.
+  const posy = (p: { x: number; y: number }, key: string) => (
+    <g key={key} transform={`translate(${p.x} ${p.y})`}>
+      <FlowerDrawing spec={plainFlowers(m * 0.28, m * 0.28, undefined, "dome")} ink={ink} print={c.print} detail={detail} />
+    </g>
+  );
   const post = (p: { x: number; y: number }, i: number) => (
     <circle key={`p${i}`} cx={p.x} cy={p.y} r={pole} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.55} {...line} />
   );
@@ -729,8 +696,8 @@ function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line) {
         {/* The back poles bare; the front two wrapped in flowers. */}
         {post(poles[2], 2)}
         {post(poles[3], 3)}
-        {cluster(m * 0.13, flower, line, poles[0], "f0")}
-        {cluster(m * 0.13, flower, line, poles[1], "f1")}
+        {posy(poles[0], "f0")}
+        {posy(poles[1], "f1")}
       </>
     );
   }
@@ -750,8 +717,8 @@ function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line) {
       {/* The back poles bare; the front two (+y) wrapped in flowers. */}
       {post(poles[0], 0)}
       {post(poles[1], 1)}
-      {cluster(m * 0.14, flower, line, poles[2], "f0")}
-      {cluster(m * 0.14, flower, line, poles[3], "f1")}
+      {posy(poles[2], "f0")}
+      {posy(poles[3], "f1")}
     </>
   );
 }

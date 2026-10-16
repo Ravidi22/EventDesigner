@@ -28,6 +28,7 @@ import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushion
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
@@ -3514,6 +3515,9 @@ function PlacementNodeView({
           kind={symbol}
           footprint={footprint}
           count={symbolCount(product, symbol)}
+          // Which flowers, in what form, in this placement's shade — one object per row/size/shade
+          // (lib/catalog/flower-spec.ts), so the memo above holds.
+          flowers={symbol === "flowers" || symbol === "centerpiece" ? flowerDrawSpecOf(product, footprint, own) : undefined}
           tone={own}
           overhead={overhead}
           chairStyle={chairStyleOf(product)}

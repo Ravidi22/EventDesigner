@@ -13,6 +13,7 @@ import { anySurface } from "@/lib/catalog/textures";
 import { CATEGORY_BY_ID, anchorOf } from "@/lib/catalog/categories";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
@@ -77,6 +78,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           kind={symbol}
           footprint={f}
           count={symbolCount(product, symbol)}
+          flowers={symbol === "flowers" || symbol === "centerpiece" ? flowerDrawSpecOf(product, f, swatch ?? product.appearance?.style?.fill) : undefined}
           tone={swatch ?? product.appearance?.style?.fill}
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}

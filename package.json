@@ -53,6 +53,8 @@
     "check:underlay": "tsx lib/venues/underlay.ts",
     "check:csv": "tsx lib/catalog/csv.ts",
     "check:flowers": "tsx lib/catalog/flowers.ts",
+    "check:flower-kinds": "tsx lib/catalog/flower-kinds.ts",
+    "check:flower-draw": "tsx lib/catalog/flower-draw.ts",
     "check:shades": "tsx lib/catalog/shades.ts",
     "check:meeting": "tsx lib/meeting/steps.ts",
     "check:zone-selection": "tsx lib/events/zone-selection.ts",

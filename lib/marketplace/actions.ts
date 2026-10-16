@@ -22,6 +22,8 @@ import { organizations, productVariants, products, studioSettings, suppliers } f
 import { toProducts, toProductRow, toVariantRows } from "@/lib/catalog/db-mapping";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { knownFlowerOfProduct, type KnownFlower } from "@/lib/catalog/flowers";
+import { STEM_CATEGORY_FALLBACK } from "@/lib/catalog/flower-spec";
 import { copyFileInto } from "@/lib/files/copy";
 import type { MarketItem, MarketSupplier, SourceStatus } from "./types";
 
@@ -262,4 +264,33 @@ export async function acceptSourcePrice(productId: string): Promise<Product[]> {
   }
   const { fetchProducts } = await import("@/lib/catalog/actions");
   return fetchProducts();
+}
+
+/**
+ * The stems the marketplace sells, as the drawer's flower rows offer them (KnownFlower,
+ * lib/catalog/flowers.ts): name, what it draws as, its colour, the supplier's name. Published
+ * supplier rows in the three stem categories and nothing else of theirs — the same `published()`
+ * every read here goes through. For any studio account; a supplier filling its own spec rows sees
+ * the other suppliers' stems too, which is the marketplace working as designed.
+ */
+export async function fetchMarketFlowers(): Promise<KnownFlower[]> {
+  await currentActor();
+  const database = db();
+  const rows = await database
+    .select({ product: products })
+    .from(products)
+    .innerJoin(organizations, eq(organizations.id, products.organizationId))
+    .where(and(published(), inArray(products.category, Object.keys(STEM_CATEGORY_FALLBACK))));
+  if (rows.length === 0) return [];
+  const productRows = rows.map((r) => r.product);
+  const [variantRows, profiles] = await Promise.all([
+    database
+      .select()
+      .from(productVariants)
+      .where(and(eq(productVariants.archived, false), inArray(productVariants.productId, productRows.map((r) => r.id)))),
+    profilesOf([...new Set(productRows.map((r) => r.organizationId))]),
+  ]);
+  return toProducts(productRows, variantRows)
+    .map((p, i) => knownFlowerOfProduct(p, profiles.get(productRows[i].organizationId)?.name, STEM_CATEGORY_FALLBACK[p.category]))
+    .sort((a, b) => a.name.localeCompare(b.name, "he"));
 }

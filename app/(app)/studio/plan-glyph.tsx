@@ -11,6 +11,7 @@ import { ItemSymbol } from "@/components/item-symbol";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 
 // The thing under the pointer while an item is being dragged off the rail — the same picture that
@@ -77,6 +78,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           kind={symbol}
           footprint={footprint}
           count={symbolCount(product, symbol)}
+          flowers={symbol === "flowers" || symbol === "centerpiece" ? flowerDrawSpecOf(product, footprint, product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill) : undefined}
           tone={product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill}
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}

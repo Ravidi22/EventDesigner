@@ -542,3 +542,17 @@ body {
 svg[data-moving] .plan-grain {
   filter: none;
 }
+
+/* A flower's detail (components/flower-symbol.tsx): the spiral of a rose, the florets of a
+   hydrangea — `fl-d` — is hidden under a FAR view (PlanCanvas writes data-lod from the zoom, like
+   data-moving, with no re-render), and the one far-only shape a filler has in their place (`fl-f`,
+   a soft disc) is shown. A hall of sixty arrangements at hall zoom paints sixty discs of colour. */
+.fl-f {
+  display: none;
+}
+svg[data-lod="far"] .fl-d {
+  display: none;
+}
+svg[data-lod="far"] .fl-f {
+  display: inline;
+}

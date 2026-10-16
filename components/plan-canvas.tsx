@@ -184,6 +184,9 @@ const SNAP_TOL_PX = 6; // alignment/inference pull radius
 const EDGE_MARGIN_PX = 56; // how far inside the frame a freshly drawn point is kept
 const MIN_MM_PER_PX = 0.5; // most zoomed-in (1px ≈ 0.5mm)
 const MAX_MM_PER_PX = 300; // most zoomed-out
+/** Past this the view is FAR (data-lod on the <svg>): a ⌀60 arrangement is under 50px, and the
+ *  detail inside a flower is noise. See components/flower-symbol.tsx. */
+const FAR_LOD_MM_PER_PX = 12;
 const DRAG_THRESHOLD_PX = 4; // pointer travel before a press turns into a drag
 const MIN_FIXTURE_MM = 200; // a stage/bar can't be resized smaller than this
 
@@ -731,6 +734,14 @@ export function PlanCanvas({
     const v = live.current;
     const { w, h } = rectRef.current;
     worldRef.current?.setAttribute("transform", worldTransform(v, w, h));
+    // How far out the view is, for the drawings that carry two levels of detail (a flower's
+    // spiral, components/flower-symbol.tsx): written on the <svg> like data-moving, read by CSS,
+    // so crossing the threshold re-renders nothing.
+    const svg = svgRef.current;
+    if (svg) {
+      const lod = v.mmPerPx > FAR_LOD_MM_PER_PX ? "far" : "near";
+      if (svg.getAttribute("data-lod") !== lod) svg.setAttribute("data-lod", lod);
+    }
     const grid = gridRef.current;
     if (grid) {
       const cell = adaptiveGridMm(v.mmPerPx) / v.mmPerPx;

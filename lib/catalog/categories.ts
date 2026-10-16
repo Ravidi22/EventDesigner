@@ -29,6 +29,9 @@ import {
   Shapes,
   Amphora,
   TreeDeciduous,
+  Flower,
+  Leaf,
+  Wheat,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
@@ -61,6 +64,7 @@ export type CategoryGroupId =
   | "grp-chuppahs"
   | "grp-table-design"
   | "grp-ceiling-design"
+  | "grp-flowers"
   | "grp-accessories";
 
 export interface CategoryGroup {
@@ -75,6 +79,9 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
   { id: "grp-chuppahs", label: "חופות" },
   { id: "grp-table-design", label: "עיצוב שולחן" },
   { id: "grp-ceiling-design", label: "עיצובי תקרה" },
+  // The flowers THEMSELVES — stems, greens, dried — as a florist sells them: what a supplier
+  // publishes on the marketplace, and what an arrangement's spec rows are picked from.
+  { id: "grp-flowers", label: "פרחים וירק" },
   { id: "grp-accessories", label: "מוצרים נלווים" },
 ];
 
@@ -171,6 +178,14 @@ export const CATEGORIES: CategoryDef[] = [
   // used up and priced as a design, and a catalog that filed the 80cm gold vase there would count it
   // as consumed every time it went out.
   { id: "vases", label: "אגרטלים וכלים", group: "grp-table-design", defaultLayer: "table", icon: Amphora, dims: "round", fields: [] },
+  // One flower, as the florist sells it: a cut stem, a sprig of greenery, a dried plume. The size
+  // is the HEAD seen from above (what the plan draws — lib/catalog/flower-kinds.ts knows the
+  // usual one per kind), the height the stem's length, neither required. Consumable, and what an
+  // arrangement's spec rows are made of; a supplier organisation publishes these on the
+  // marketplace, and a studio that copies one can still drop it on a table as a single head.
+  { id: "flowers", label: "פרחים", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
+  { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
+  { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
@@ -264,6 +279,7 @@ export const DESIGN_PASS_GROUPS: CategoryGroupId[] = [
   "grp-table-design",
   "grp-ceiling-design",
   "grp-chuppahs",
+  "grp-flowers",
   "grp-accessories",
 ];
 

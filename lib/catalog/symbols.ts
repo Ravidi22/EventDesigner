@@ -43,6 +43,11 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   candlesticks: "candlestick",
   "flower-arrangements": "flowers",
   centerpieces: "centerpiece",
+  // A stem on its own — the marketplace's cut flowers, greens and dried plumes — is one head of
+  // its kind (lib/catalog/flower-spec.ts), the same drawing an arrangement is made of.
+  flowers: "flowers",
+  greenery: "flowers",
+  "dried-flowers": "flowers",
   vases: "vase",
   trees: "tree",
   chairs: "chair",

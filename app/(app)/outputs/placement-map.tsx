@@ -28,6 +28,7 @@ import { FootprintShape, dressingSpots, tableBlock, tableBlockedSides, tableFoot
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
@@ -1305,6 +1306,13 @@ export function PlacementGlyph({
   // (lib/design-document/bench.ts) — drawn by the same picture the studio draws.
   const bench = symbol === "bench" ? (standaloneBench(placement, benchOf) ?? undefined) : undefined;
   const benchProps = symbol === "bench" ? { bench, chairs } : {};
+  // An arrangement's flowers, from its row (lib/catalog/flower-spec.ts), in the shade of this
+  // placement; their inner detail only where the sheet is large enough to print it (1:50 and
+  // closer — `textMm` is 2.6 printed mm in room mm, so it carries the scale).
+  const flowerProps =
+    r && (symbol === "flowers" || symbol === "centerpiece")
+      ? { flowers: flowerDrawSpecOf(r.product, footprint, r.swatch ?? r.product.appearance?.style?.fill), detail: textMm === undefined || textMm <= 2.6 * 50 }
+      : {};
   if (colour) {
     // The studio's PlacementNode, without the pointer: the shade picked for this placement over the
     // row's own fill, the category's picture in that shade, a material where the row has one.
@@ -1314,7 +1322,7 @@ export function PlacementGlyph({
     const dark = !!own && isDark(own);
     return (
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
         {!symbol && (
           <FootprintShape
             footprint={footprint}
@@ -1334,7 +1342,7 @@ export function PlacementGlyph({
   }
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
       {r?.product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={INK} opacity={0.8} />}
       <FootprintShape
         footprint={footprint}

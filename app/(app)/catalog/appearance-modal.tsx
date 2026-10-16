@@ -49,6 +49,9 @@ import { hasSurface, type Surface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, categoryHasSymbol, chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
+import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
+import { FlowerDrawing } from "@/components/flower-symbol";
 import { climbRise } from "@/lib/studio/climb-item";
 
 type Curves = (EdgeCurve | null)[];
@@ -1286,6 +1289,11 @@ export function AppearanceModal({
                               kind={previewSymbol}
                               footprint={resolveFootprint(preview)}
                               count={symbolCount(preview, previewSymbol)}
+                              flowers={
+                                previewSymbol === "flowers" || previewSymbol === "centerpiece"
+                                  ? flowerDrawSpecOf(preview, resolveFootprint(preview), preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill)
+                                  : undefined
+                              }
                               tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
                               overhead={preview.layer === "ceiling"}
                               chairStyle={chairStyleOf(preview)}
@@ -1618,6 +1626,53 @@ export function AppearanceModal({
                           />
                         </svg>
                         <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{CHAIR_STYLE_LABEL[st]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Which form an arrangement takes — a dome, a low cushion, a wild garden, a cascade, a
+                runner, bud vases (lib/catalog/flower-draw.ts). Absent = by its height: a 25cm one is
+                a cushion, a taller one a dome, a strip a runner. The flowers in each tile are the
+                row's own spec in its first shade, so the tiles show THIS arrangement six ways. */}
+            {(draft.category === "flower-arrangements" || draft.category === "centerpieces") && previewSymbol && (
+              <div>
+                <span className={fieldLabelClassName}>צורת הסידור</span>
+                <div className="grid grid-cols-3 gap-1" role="radiogroup" aria-label="צורת הסידור">
+                  {[undefined, ...FLOWER_FORMS].map((form) => {
+                    const chosen = preview.appearance?.symbolStyle;
+                    const on = form === undefined ? !isFlowerForm(chosen) : chosen === form;
+                    const f = resolveFootprint(preview);
+                    const b = footprintBounds(f);
+                    const shown = form ?? defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
+                    const wide = shown === "runner";
+                    const spec: FlowerDrawSpec = {
+                      form: shown,
+                      w: wide ? 1600 : 600,
+                      h: wide ? 360 : 600,
+                      lines: drawLinesOf(preview),
+                      shade: preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill,
+                      seed: 11,
+                    };
+                    return (
+                      <button
+                        key={form ?? "auto"}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        title={form ? FLOWER_FORM_HINT[form] : "לפי גובה הסידור"}
+                        onClick={() => setAppearance({ symbolStyle: form })}
+                        className={
+                          "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
+                          (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
+                        }
+                      >
+                        <svg viewBox={wide ? "-840 -340 1680 680" : "-340 -340 680 680"} className="h-10 w-full" aria-hidden>
+                          <FlowerDrawing spec={spec} />
+                        </svg>
+                        <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{form ? FLOWER_FORM_LABEL[form] : `אוטומטי (${FLOWER_FORM_LABEL[shown]})`}</span>
                       </button>
                     );
                   })}
