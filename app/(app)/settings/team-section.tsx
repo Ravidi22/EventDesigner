@@ -11,6 +11,7 @@ import {
   type StudioRole,
 } from "@/lib/team/types";
 import {
+  emailInvite,
   inviteMember,
   regenerateInvite,
   removeMember,
@@ -37,9 +38,11 @@ const ROLE_OPTIONS = ASSIGNABLE.map((r) => ({ value: r, label: STUDIO_ROLE_LABEL
 export function TeamSection({
   initialMembers,
   initialMe,
+  emailEnabled,
 }: {
   initialMembers: StudioMember[];
   initialMe: StudioMember | null;
+  emailEnabled: boolean;
 }) {
   // Both from page.tsx. The Promise.all that used to be here looked like one round trip and was in
   // fact two: on the client, Next dispatches server actions one at a time, so the second waited for
@@ -54,7 +57,7 @@ export function TeamSection({
   // The link is returned once, by the call that minted it — the row stores only a hash, so there is
   // no "show it again". Holding it in state is what keeps it on screen until the designer has
   // actually sent it.
-  const [invite, setInvite] = useState<{ email: string; url: string } | null>(null);
+  const [invite, setInvite] = useState<Invite | null>(null);
 
   // Only the owner may change the studio's people. The server enforces this on every call; hiding
   // the controls here is so a designer is not shown buttons that answer them with an error.
@@ -70,7 +73,7 @@ export function TeamSection({
     setMembers(result.members);
     if (result.error) return setError(result.error);
 
-    show(address, result.link);
+    show(result.members.find((m) => m.email === address)?.id, address, result.link);
     setName("");
     setEmail("");
     setRole("designer");
@@ -78,18 +81,19 @@ export function TeamSection({
     setInviting(false);
   };
 
-  // Nothing mails this. The app has no mail provider (see docs/02 §9), and an invitation nobody can
-  // deliver is a row that blocks its own address from signing up — so the link is put in the
-  // designer's hands to send the way they already talk to their people.
-  const show = (email: string, link?: string) => {
-    if (link) setInvite({ email, url: `${window.location.origin}${link}` });
+  // The link is put in the designer's hands to send the way they already talk to their people —
+  // copy, WhatsApp, and (when the deployment has a mail provider, lib/email/) email. An invitation
+  // nobody delivers is a row that blocks its own address from signing up, so the panel stays until
+  // it is dismissed.
+  const show = (id: string | undefined, email: string, link?: string) => {
+    if (link && id) setInvite({ id, email, url: `${window.location.origin}${link}` });
   };
 
   const newLink = async (member: StudioMember) => {
     const result = await regenerateInvite(member.id);
     setMembers(result.members);
     if (result.error) return setError(result.error);
-    show(member.email, result.link);
+    show(member.id, member.email, result.link);
   };
 
   // Their venue grants go with them — the foreign key on venue_grants cascades, so there is no
@@ -155,7 +159,7 @@ export function TeamSection({
           </div>
         )}
 
-        {invite && <InviteLink invite={invite} onDone={() => setInvite(null)} />}
+        {invite && <InviteLink invite={invite} emailEnabled={emailEnabled} onDone={() => setInvite(null)} />}
 
         <div>
           {members.map((m) => {
@@ -267,16 +271,33 @@ export function TeamSection({
   );
 }
 
+/** A just-minted invitation: whose row, their address, and the one copy of the link. */
+interface Invite {
+  id: string;
+  email: string;
+  url: string;
+}
+
 /**
- * The invitation link, and the two ways it actually gets sent.
+ * The invitation link, and the ways it actually gets sent.
  *
- * This panel is the delivery mechanism — there is no email provider in the app, on purpose. It
+ * This panel is the delivery mechanism: copy, WhatsApp, and email when the deployment can send it. It
  * stays until dismissed rather than flashing, because the one thing that must not happen is the
  * designer navigating away with the link unsent: the row is already written, the address is already
  * blocked from signing up on its own, and the token cannot be shown again (only replaced).
  */
-function InviteLink({ invite, onDone }: { invite: { email: string; url: string }; onDone: () => void }) {
+function InviteLink({ invite, emailEnabled, onDone }: { invite: Invite; emailEnabled: boolean; onDone: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [mail, setMail] = useState<{ state: "idle" | "sending" | "sent" } | { state: "failed"; error: string }>({ state: "idle" });
+
+  const sendByEmail = async () => {
+    setMail({ state: "sending" });
+    // The token is the last path segment of the link this screen was handed; the server checks it
+    // against the hash it stored before it mails anything.
+    const token = new URL(invite.url).pathname.split("/").pop() ?? "";
+    const result = await emailInvite(invite.id, token);
+    setMail("error" in result ? { state: "failed", error: result.error } : { state: "sent" });
+  };
 
   const copy = async () => {
     try {
@@ -328,7 +349,20 @@ function InviteLink({ invite, onDone }: { invite: { email: string; url: string }
           <MessageCircle className="h-4 w-4" strokeWidth={1.8} />
           וואטסאפ
         </a>
+        {emailEnabled && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={mail.state === "sending" || mail.state === "sent"}
+            onClick={() => void sendByEmail()}
+            className={mail.state === "sent" ? "bg-accent-tint" : ""}
+          >
+            {mail.state === "sent" ? <Check className="h-4 w-4 text-success" strokeWidth={2.5} /> : <Mail className="h-4 w-4" strokeWidth={1.8} />}
+            {mail.state === "sent" ? "נשלח במייל" : mail.state === "sending" ? "שולח…" : "שליחה במייל"}
+          </Button>
+        )}
       </div>
+      {mail.state === "failed" && <p className="mt-2 text-xs font-medium text-alert-ink">{mail.error}</p>}
     </div>
   );
 }

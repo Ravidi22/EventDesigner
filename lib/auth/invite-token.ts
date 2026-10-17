@@ -17,7 +17,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 /** How long an invitation stays claimable. Long enough for someone on holiday, short enough that a
  *  forgotten invite stops blocking its own address from signing up (see the schema note). */
-const TTL_DAYS = 14;
+export const INVITE_TTL_DAYS = 14;
 
 export interface MintedInvite {
   /** Show this once, then forget it. It is the only readable copy. */
@@ -34,7 +34,7 @@ export function mintInviteToken(): MintedInvite {
   return {
     token,
     tokenHash: hashInviteToken(token),
-    expiresAt: new Date(Date.now() + TTL_DAYS * 24 * 60 * 60 * 1000),
+    expiresAt: new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000),
   };
 }
 

@@ -58,6 +58,7 @@ export function SettingsScreen({
   initialGoogle,
   initialOffsets,
   initialStageRules,
+  emailEnabled,
 }: {
   initialSettings: BusinessSettings;
   initialMe: StudioMember | null;
@@ -65,6 +66,8 @@ export function SettingsScreen({
   initialGoogle: GoogleStatus;
   initialOffsets: CheckpointOffsets;
   initialStageRules: StageRules;
+  /** Whether this deployment can send mail — the team section offers "send by email" only then. */
+  emailEnabled: boolean;
 }) {
   const [section, setSection] = useState<SectionId>("business");
 
@@ -114,7 +117,7 @@ export function SettingsScreen({
         {section === "meeting" && <MeetingSection />}
         {section === "checkpoints" && <CheckpointsSection initialOffsets={initialOffsets} />}
         {section === "stages" && <StagesSection initialRules={initialStageRules} />}
-        {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} />}
+        {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} emailEnabled={emailEnabled} />}
         {section === "sharing" && <SharingSection initialMembers={initialMembers} initialMe={initialMe} />}
         {section === "calendar" && <CalendarSection initialStatus={initialGoogle} />}
         {section === "data" && <DataSection />}

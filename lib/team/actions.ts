@@ -14,8 +14,12 @@ import { and, asc, eq, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/db/org";
 import { revalidateSettings } from "@/lib/db/revalidate";
-import { users } from "@/lib/db/schema";
-import { invitePath, mintInviteToken } from "@/lib/auth/invite-token";
+import { organizations, studioSettings, users } from "@/lib/db/schema";
+import { INVITE_TTL_DAYS, hashInviteToken, invitePath, mintInviteToken } from "@/lib/auth/invite-token";
+import { currentSession } from "@/lib/auth/session";
+import { emailConfig } from "@/lib/email/config";
+import { sendEmail } from "@/lib/email/send";
+import { invitationEmail } from "@/lib/email/templates";
 import {
   canManagePeople,
   isStudioRole,
@@ -194,6 +198,62 @@ export async function regenerateInvite(id: string): Promise<InviteResult> {
   if (!row) return { error: "אין הזמנה פתוחה לאדם הזה", members };
   revalidateSettings();
   return { members, link: invitePath(invite.token) };
+}
+
+/**
+ * Mail an invitation link that was just minted to the person it was minted for.
+ *
+ * The token comes back FROM THE SCREEN, because the server kept only its hash (see inviteMember).
+ * That makes the token the input to distrust: the call proves it holds the live link by hashing it
+ * and matching the pending row of this studio — so the server never mails a link it did not mint,
+ * to an address it did not choose. Whoever could call this could only send a pending member their
+ * own invitation, which the owner already holds.
+ *
+ * A mail failure comes back as { error } for the screen to show; the invitation stands either way,
+ * and the link is still on screen to copy or send by WhatsApp.
+ */
+export async function emailInvite(memberId: string, token: string): Promise<{ ok: true } | { error: string }> {
+  assertId(memberId, "memberId");
+  const actor = await currentActor();
+  if (!canManagePeople(actor.role)) throw new Error("only the owner can invite people");
+  const config = emailConfig();
+  if (!config) return { error: "שליחת מיילים לא מוגדרת בשרת" };
+  if (typeof token !== "string" || !/^[A-Za-z0-9_-]{20,200}$/.test(token)) throw new Error("bad token");
+
+  const database = db();
+  const [row] = await database
+    .select({ email: users.email, inviteTokenHash: users.inviteTokenHash, inviteExpiresAt: users.inviteExpiresAt })
+    .from(users)
+    .where(
+      and(
+        eq(users.id, memberId),
+        eq(users.organizationId, actor.organizationId),
+        eq(users.kind, "studio"),
+        eq(users.state, "pending"),
+      ),
+    )
+    .limit(1);
+  if (!row || row.inviteTokenHash !== hashInviteToken(token) || !row.inviteExpiresAt || row.inviteExpiresAt < new Date()) {
+    return { error: "הקישור הזה כבר לא בתוקף. הנפיקו קישור חדש ונסו שוב." };
+  }
+
+  const [studio] = await database
+    .select({ businessName: studioSettings.businessName, orgName: organizations.name })
+    .from(organizations)
+    .leftJoin(studioSettings, eq(studioSettings.organizationId, organizations.id))
+    .where(eq(organizations.id, actor.organizationId))
+    .limit(1);
+  const studioName = studio?.businessName?.trim() || studio?.orgName?.trim() || "";
+  const me = await currentSession();
+
+  const message = invitationEmail({
+    studioName,
+    inviterName: me?.name,
+    url: `${config.appUrl}${invitePath(token)}`,
+    expiresInDays: INVITE_TTL_DAYS,
+  });
+  const sent = await sendEmail({ to: row.email, ...message, fromName: studioName || "Eve", replyTo: me?.email });
+  return sent.ok ? { ok: true } : { error: "המייל לא נשלח. אפשר להעתיק את הקישור או לשלוח בוואטסאפ." };
 }
 
 /** Change what someone is inside the studio. Owner only, and never your own row: a lone owner who
