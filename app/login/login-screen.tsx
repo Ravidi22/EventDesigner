@@ -134,10 +134,10 @@ export function LoginScreen({ google, canReset }: { google: boolean; canReset: b
         <>
           עדיין אין לכם חשבון?{" "}
           <Link
-            href={kind ? `/signup?kind=${kind}` : "/signup"}
+            href="/signup"
             className="font-medium text-accent transition-colors hover:text-accent-hover"
           >
-            {kind === "client" ? "יצירת חשבון חדש" : "יצירת סטודיו חדש"}
+            יצירת סטודיו חדש
           </Link>
         </>
       }

@@ -39,6 +39,9 @@ export async function requireSession(): Promise<Session> {
 export async function requireStudio(): Promise<Session> {
   const session = await requireSession();
   if (session.kind !== "studio") redirect("/client");
+  // A studio account that has not named its business yet has no organisation, and every screen
+  // behind this guard is scoped by one. /welcome is where it gets it.
+  if (!session.organizationId) redirect("/welcome");
   return session;
 }
 

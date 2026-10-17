@@ -19,11 +19,12 @@ import { checkRedirectUri, googleConfig } from "@/lib/google/config";
 import { redirectUriBlocks } from "@/lib/google/types";
 import { emailEnabled } from "@/lib/email/config";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
+import { revalidateSettings } from "@/lib/db/revalidate";
 import { authAccounts, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { callAuth } from "./auth-call";
 import { hashInviteToken } from "./invite-token";
-import { HOME_FOR, isAccountKind, type AccountKind } from "./kinds";
+import { HOME_FOR, type AccountKind } from "./kinds";
 import { hashPassword, passwordProblem } from "./password";
 import { currentSession, type Session } from "./session";
 
@@ -33,7 +34,7 @@ export interface AuthResult {
   /** A Hebrew message to show the person, or absent on success. */
   error?: string;
   /** Which field it belongs under, when it belongs under one. */
-  field?: "email" | "password" | "studioName" | "name";
+  field?: "email" | "password" | "studioName" | "name" | "phone";
   /** Where this account belongs, on success. The two kinds land in different halves of the app and
    *  the caller should not have to re-derive which. */
   home?: string;
@@ -66,26 +67,29 @@ function today(): string {
 
 type AuthUser = { id: string; kind?: string };
 
+/** Where a new studio account goes until it has named its business (app/welcome). */
+const WELCOME = "/welcome";
+
+/**
+ * Open a studio account: a person, and nothing else yet.
+ *
+ * SIGN-UP IS FOR STUDIOS ONLY. An event owner comes in through their designer's invitation, which
+ * is what attaches them to their event; an open client sign-up would land on an empty portal. And
+ * the business itself (its name, phone, the organisation, the base catalog) is created on
+ * /welcome, after the account exists — so this form is three fields, and the person who abandons
+ * it halfway has created nothing.
+ */
 export async function signUp(input: {
-  kind: AccountKind;
-  /** Required for a studio; ignored for a client, who has no business to name. */
-  studioName?: string;
   name: string;
   email: string;
   password: string;
   /** "זכור אותי", as on the sign-in form. Anything but a literal true is a no. */
   remember?: boolean;
 }): Promise<AuthResult> {
-  // The kind arrives from a form the person controls, so it is checked against the two values that
-  // exist rather than cast — an unrecognised kind must not fall through to a default that grants
-  // more than was asked for.
-  const kind: AccountKind = isAccountKind(input?.kind) ? input.kind : "client";
-  const studioName = String(input?.studioName ?? "").trim();
   const name = String(input?.name ?? "").trim();
   const email = normalizeEmail(String(input?.email ?? ""));
   const password = String(input?.password ?? "");
 
-  if (kind === "studio" && !studioName) return { error: "יש להזין שם עסק", field: "studioName" };
   if (!name) return { error: "יש להזין שם מלא", field: "name" };
   if (!EMAIL_RE.test(email)) return { error: "כתובת אימייל לא תקינה", field: "email" };
   const problem = passwordProblem(password);
@@ -119,7 +123,8 @@ export async function signUp(input: {
     email,
     password,
     rememberMe: input?.remember === true,
-    callbackURL: HOME_FOR[kind],
+    // Where the verification link lands, when mail requires one.
+    callbackURL: WELCOME,
   });
   if (!created.ok) {
     if (created.status === 429) return { error: TOO_MANY };
@@ -128,36 +133,59 @@ export async function signUp(input: {
   }
   const userId = created.data.user.id;
 
-  // Better Auth wrote the person; what they ARE is ours to write. A client creates NO organisation:
-  // they own nothing here, and a tenant boundary that means nothing is worse than none.
-  const organizationId = kind === "studio" ? await claimOrganization(studioName) : null;
-  await database
-    .update(users)
-    .set({
-      kind,
-      organizationId,
-      // Whoever creates the studio owns it; everyone after them is invited into it.
-      role: "owner",
-      state: "active",
-      // The day they joined the STUDIO; a client joined none.
-      joinedAt: kind === "studio" ? today() : null,
-    })
-    .where(eq(users.id, userId));
-
-  // A new studio opens a catalog that already knows what an עגול 180 is (lib/catalog/standard).
-  // BEST-EFFORT: the account is real, and refusing someone their sign-up over a shelf of furniture
-  // is the wrong trade. `npm run catalog:standard` is the retry, and it is idempotent.
-  if (organizationId) {
-    try {
-      await installStandardCatalog(organizationId);
-    } catch (error) {
-      console.error("standard catalog install failed for", organizationId, error);
-    }
-  }
+  // Better Auth wrote the person; what they ARE is ours to write. A studio account with no
+  // organisation yet: the (app) layout sends it to /welcome until it has one.
+  await database.update(users).set({ kind: "studio", role: "owner", state: "active" }).where(eq(users.id, userId));
 
   // With mail configured, the address must be confirmed before there is a session.
   if (!created.data.token) return { verifyEmail: true };
-  return { home: HOME_FOR[kind] };
+  return { home: WELCOME };
+}
+
+/**
+ * /welcome: name the business, and the studio comes into being — its organisation, its settings
+ * row, its owner, and a catalog that already knows what an עגול 180 is (lib/catalog/standard).
+ *
+ * Only for a signed-in studio account that has no organisation yet; anyone else is refused, so this
+ * cannot be used to move an existing member into a new studio of their own.
+ */
+export async function completeOnboarding(input: { studioName: string; phone?: string }): Promise<AuthResult> {
+  const session = await currentSession();
+  if (!session) return { error: "יש להתחבר מחדש" };
+  if (session.kind !== "studio") throw new Error("only a studio account opens a studio");
+  if (session.organizationId) return { home: HOME_FOR.studio };
+
+  const studioName = String(input?.studioName ?? "").trim();
+  const phone = String(input?.phone ?? "").trim();
+  if (!studioName) return { error: "יש להזין שם עסק", field: "studioName" };
+  if (studioName.length > 120) return { error: "השם ארוך מדי", field: "studioName" };
+  if (phone.length > 40) return { error: "מספר טלפון לא תקין", field: "phone" };
+
+  const organizationId = await claimOrganization(studioName);
+  const database = db();
+  // Conditional on "still has no organisation", so two tabs pressing המשך cannot attach one person
+  // to two studios: the second update matches nothing.
+  const [claimed] = await database
+    .update(users)
+    .set({ organizationId, role: "owner", joinedAt: today() })
+    .where(and(eq(users.id, session.userId), sql`${users.organizationId} is null`))
+    .returning({ id: users.id });
+  if (!claimed) return { home: HOME_FOR.studio };
+
+  await database
+    .update(studioSettings)
+    .set({ ownerName: session.name ?? "", phone })
+    .where(eq(studioSettings.organizationId, organizationId));
+
+  // BEST-EFFORT: the studio is real, and refusing someone their studio over a shelf of furniture
+  // is the wrong trade. `npm run catalog:standard` is the retry, and it is idempotent.
+  try {
+    await installStandardCatalog(organizationId);
+  } catch (error) {
+    console.error("standard catalog install failed for", organizationId, error);
+  }
+  revalidateSettings();
+  return { home: HOME_FOR.studio };
 }
 
 /**

@@ -322,7 +322,7 @@ async function verifyInvites() {
   // The address is real now, so signing up with it must not be refused as "taken" — that message
   // sends someone to a sign-in form that will also refuse them, which is the dead end this whole
   // flow exists to close.
-  const blocked = await signUp({ kind: "studio", studioName: "x", name: "שירה", email: address, password: "hunter2hunter2" });
+  const blocked = await signUp({ name: "שירה", email: address, password: "hunter2hunter2" });
   check("signing up with an invited address points at the link", blocked.error?.includes("קישור ההזמנה") === true, blocked.error);
 
   // Re-issuing invalidates. One hash per row, so the link a designer forwarded to the wrong person

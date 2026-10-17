@@ -322,7 +322,7 @@ export default function Home() {
                   <p className="mt-0.5 text-sm text-muted">{p.who}</p>
                 </div>
                 <p className="leading-relaxed text-ink-soft text-pretty">{p.includes}</p>
-                <Link href="/signup?kind=studio" className={`${outlineCta} justify-self-start md:justify-self-end`}>
+                <Link href="/signup" className={`${outlineCta} justify-self-start md:justify-self-end`}>
                   הרשמה
                 </Link>
               </article>
@@ -415,7 +415,7 @@ function Audience({ kind, className }: { kind: AccountKind; className: string })
         ))}
       </ul>
       {a.cta ? (
-        <Link href={`/signup?kind=${kind}`} className={`${outlineCta} mt-8 self-start`}>
+        <Link href="/signup" className={`${outlineCta} mt-8 self-start`}>
           {a.cta}
         </Link>
       ) : (
