@@ -40,6 +40,7 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   numeric,
   boolean,
   jsonb,
@@ -161,7 +162,11 @@ export const users = pgTable(
     /** Meaningful only for studio accounts; a client is not a rung on this ladder. */
     role: studioRoleEnum("role").notNull().default("designer"),
     state: inviteStateEnum("state").notNull().default("pending"),
-    /** scrypt, salted per user — see lib/auth/password.ts for the encoding.
+    /** ⚠ LEGACY. Passwords live in auth_accounts now (Better Auth's "credential" row, same scrypt
+     *  format); migration 0013 copied every hash there and nothing reads this column any more. It is
+     *  kept until that migration has run on Neon, then dropped.
+     *
+     *  scrypt, salted per user — see lib/auth/password.ts for the encoding.
      *
      *  NULLABLE, and that is the whole difference between the two rows this table holds: someone
      *  who signed up has a hash, someone who was INVITED is a real row with a real email and no
@@ -183,7 +188,13 @@ export const users = pgTable(
     /** The day they joined the studio, as the settings list prints it — a calendar date, not the
      *  instant the row was written, which is what createdAt already says. */
     joinedAt: date("joined_at"),
+    /** Whether the person proved they own `email` (Better Auth, lib/auth/auth.ts). An invitation
+     *  link proves it, so does Google; a plain sign-up proves it by clicking the verification mail. */
+    emailVerified: boolean("email_verified").notNull().default(false),
+    /** A profile picture URL, when a provider supplied one. Better Auth's core user field. */
+    image: text("image"),
     createdAt: created(),
+    updatedAt: updated(),
   },
   (t) => [
     index("users_org_idx").on(t.organizationId),
@@ -192,28 +203,87 @@ export const users = pgTable(
   ],
 );
 
-/** A signed-in browser.
- *
- *  Sessions live in the database rather than in a signed cookie so that they can be REVOKED — a
- *  stolen laptop, a member removed from the studio, a password changed. A self-contained signed
- *  token is valid until it expires no matter what happens on this end, and "log out everywhere"
- *  cannot be built on top of one.
- *
- *  ⚠ The column holds a HASH of the token, never the token. The cookie the browser carries is the
- *  only copy of the secret itself, so a leaked database dump cannot be replayed as a login. */
-export const sessions = pgTable(
-  "sessions",
+
+// ── Better Auth (lib/auth/auth.ts) ─────────────────────────────────────────────────────────────
+// Who is signed in, and how they prove it. Better Auth owns these four tables; `users` above is
+// its "user" model too, mapped field by field, so a person is still ONE row and every foreign key in
+// this schema still points at users.id. Roles, tenancy and venue grants stay in our own tables —
+// Better Auth answers "who", nothing else (docs/02, ADR-10).
+
+/** A signed-in browser. The cookie carries this token SIGNED with BETTER_AUTH_SECRET, and only a
+ *  validly signed cookie is ever looked up, so a database dump alone cannot be replayed as a login
+ *  without that secret, which lives with the deployment, never in the database. Revoking is still
+ *  deleting a row. */
+export const authSessions = pgTable(
+  "auth_sessions",
   {
     id: id(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    tokenHash: text("token_hash").notNull().unique(),
+    token: text("token").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("auth_sessions_user_idx").on(t.userId)],
+);
+
+/** How a person signs in: a password ("credential", the scrypt hash in `password`, lib/auth/password.ts)
+ *  or a Google account. One person, several rows. */
+export const authAccounts = pgTable(
+  "auth_accounts",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** The provider's id for the person (Google's "sub"); the user's own id for "credential". */
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    index("auth_accounts_user_idx").on(t.userId),
+    uniqueIndex("auth_accounts_provider_key").on(t.providerId, t.accountId),
+  ],
+);
+
+/** One-time values: email verification and password-reset tokens, Google sign-in state.
+ *  `identifier` is stored HASHED (verification.storeIdentifier in lib/auth/auth.ts), so a dump
+ *  holds no usable reset link. */
+export const authVerifications = pgTable(
+  "auth_verifications",
+  {
+    id: id(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: created(),
+    updatedAt: updated(),
   },
-  (t) => [index("sessions_user_idx").on(t.userId)],
+  (t) => [index("auth_verifications_identifier_idx").on(t.identifier)],
 );
+
+/** Rate-limit counters for the sign-in, sign-up and reset endpoints. In the database because on
+ *  Vercel every request may land on a different instance: an in-memory counter limits nothing. */
+export const authRateLimits = pgTable("auth_rate_limits", {
+  id: id(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  /** Milliseconds since the epoch, as Better Auth writes it. */
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+});
 
 /** BusinessSettings (lib/settings/types.ts) + the configured meeting flow
  *  (lib/meeting/steps.ts). Both are written by lib/settings/actions.ts — see the note there on why

@@ -35,6 +35,9 @@ export function SignupScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The address a verification mail went to — set when mail is configured and the account must be
+  // confirmed before there is a session (lib/auth/auth.ts, requireEmailVerification).
+  const [sentTo, setSentTo] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -61,6 +64,12 @@ export function SignupScreen() {
         return;
       }
 
+      if (result.verifyEmail) {
+        setSentTo(email.trim().toLowerCase());
+        setBusy(false);
+        return;
+      }
+
       // The server says where this account belongs — the two kinds land in different halves of the
       // app, and guessing here would bounce the person through a guard on arrival.
       router.replace(result.home ?? "/dashboard");
@@ -70,6 +79,25 @@ export function SignupScreen() {
       setBusy(false);
     }
   };
+
+  if (sentTo) {
+    return (
+      <AuthShell
+        title="בדקו את תיבת המייל"
+        lede="שלחנו קישור לאישור הכתובת. החשבון ייפתח אחרי הלחיצה עליו."
+        footer={
+          <Link href="/login" className="font-medium text-accent transition-colors hover:text-accent-hover">
+            חזרה לכניסה
+          </Link>
+        }
+      >
+        <p className="mt-6 text-center text-sm leading-relaxed text-ink-soft">
+          הקישור נשלח אל <span dir="ltr" className="font-semibold text-ink">{sentTo}</span> ותקף 24 שעות. לא הגיע? בדקו
+          בתיקיית הספאם, או נסו להתחבר שוב ונשלח קישור חדש.
+        </p>
+      </AuthShell>
+    );
+  }
 
   return (
     <AuthShell

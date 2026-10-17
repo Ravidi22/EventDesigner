@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { connection } from "next/server";
 import { checkRedirectUri, googleConfig } from "@/lib/google/config";
 import { redirectUriBlocks } from "@/lib/google/types";
+import { emailEnabled } from "@/lib/email/config";
 import { LoginScreen } from "./login-screen";
 
 export const metadata: Metadata = { title: "כניסה · Eve" };
@@ -18,7 +19,7 @@ export default async function LoginPage() {
   const google = config !== null && !redirectUriBlocks(checkRedirectUri(config));
   return (
     <Suspense>
-      <LoginScreen google={google} />
+      <LoginScreen google={google} canReset={emailEnabled()} />
     </Suspense>
   );
 }

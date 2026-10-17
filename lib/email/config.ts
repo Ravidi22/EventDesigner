@@ -12,6 +12,7 @@
 // the attacker's server. So the origin is configured, like GOOGLE_REDIRECT_URI, and never derived.
 //
 // ⚠ SERVER ONLY. RESEND_API_KEY sends mail as the studio's domain; it must never become NEXT_PUBLIC_.
+import { appOrigin } from "@/lib/app-url";
 import { isMain } from "@/lib/self-check";
 
 export interface EmailConfig {
@@ -25,18 +26,6 @@ export interface EmailConfig {
 
 const ADDRESS = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
 
-/** The origin of APP_URL, or null when it is not an absolute http(s) URL. Origin only: a path or a
- *  trailing slash in the variable would otherwise double up in every link built on it. */
-function readOrigin(raw: string | undefined): string | null {
-  if (!raw) return null;
-  try {
-    const url = new URL(raw.trim());
-    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The configuration, or null when email has not been set up for this deployment.
  *
@@ -46,7 +35,7 @@ function readOrigin(raw: string | undefined): string | null {
 export function emailConfig(): EmailConfig | null {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const fromAddress = process.env.EMAIL_FROM?.trim().toLowerCase();
-  const appUrl = readOrigin(process.env.APP_URL);
+  const appUrl = appOrigin();
   if (!apiKey || !fromAddress || !ADDRESS.test(fromAddress) || !appUrl) return null;
   return { apiKey, fromAddress, appUrl };
 }

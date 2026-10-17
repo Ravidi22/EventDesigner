@@ -11,7 +11,7 @@ import { KIND_ENTRY, isAccountKind } from "@/lib/auth/kinds";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** `?google=` from app/api/auth/google/callback, in Hebrew. A cancel is not an error and says nothing. */
+/** What a Google sign-in came back with, in Hebrew. A cancel is not an error and says nothing. */
 const GOOGLE_OUTCOME: Record<string, string> = {
   // One line each: this screen fits one viewport, and the way onward is already on it.
   "no-account": "לא נמצא חשבון עם כתובת ה-Google הזו.",
@@ -20,6 +20,17 @@ const GOOGLE_OUTCOME: Record<string, string> = {
   expired: "הכניסה עם Google לא הושלמה בזמן. נסו שוב.",
   failed: "הכניסה עם Google נכשלה. נסו שוב.",
 };
+
+/** Better Auth sends a failed Google sign-in back to /login with `?error=<code>`; the form's own
+ *  no-script path uses `?error=credentials`. One sentence for each. */
+function returnedError(code: string | null): string | null {
+  if (!code || code === "access_denied") return null;
+  if (code === "credentials") return "האימייל או הסיסמה שגויים";
+  if (code === "signup_disabled") return GOOGLE_OUTCOME["no-account"];
+  if (code.includes("state") || code === "please_restart_the_process") return GOOGLE_OUTCOME.expired;
+  if (code.includes("session")) return GOOGLE_OUTCOME.invited;
+  return GOOGLE_OUTCOME.failed;
+}
 
 /** Google's own mark, in its own colours — the one place a brand's colours are not ours to restyle. */
 function GoogleMark() {
@@ -35,7 +46,7 @@ function GoogleMark() {
 
 // A real sign-in: the action sets an httpOnly session cookie and this screen navigates. The
 // front-end shell that used to route straight to /dashboard without establishing anything is gone.
-export function LoginScreen({ google }: { google: boolean }) {
+export function LoginScreen({ google, canReset }: { google: boolean; canReset: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const asked = params.get("kind");
@@ -47,10 +58,9 @@ export function LoginScreen({ google }: { google: boolean }) {
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   // What the Google callback sent them back with, if it sent them back.
   // …or what signInFromForm did, when the form had to post itself.
-  const [formError, setFormError] = useState<string | null>(
-    GOOGLE_OUTCOME[params.get("google") ?? ""] ??
-      (params.get("error") === "credentials" ? "האימייל או הסיסמה שגויים" : null),
-  );
+  const [formError, setFormError] = useState<string | null>(returnedError(params.get("error")));
+  // Back from /reset with a new password: say so once, above the form.
+  const resetDone = params.get("reset") === "done";
   // WHICH door is being walked through, not just that one is: the arrow runs on the button that
   // was pressed, and the other one waits.
   const [busy, setBusy] = useState<"password" | "google" | null>(null);
@@ -142,6 +152,11 @@ export function LoginScreen({ google }: { google: boolean }) {
       >
         <input type="hidden" name="next" value={params.get("next") ?? ""} />
         <FormError message={formError} />
+        {resetDone && !formError && (
+          <p className="rounded-md bg-success-tint px-3 py-2 text-sm font-medium text-success-ink" role="status">
+            הסיסמה עודכנה. התחברו עם הסיסמה החדשה.
+          </p>
+        )}
         <Field
           id="email"
           label="אימייל"
@@ -163,16 +178,23 @@ export function LoginScreen({ google }: { google: boolean }) {
           error={fieldErrors.password}
         />
 
-        <label className="flex items-center gap-2.5 self-start text-sm text-ink">
-          <input
-            type="checkbox"
-            name="remember"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-            className="h-4 w-4 accent-[var(--color-accent)]"
-          />
-          זכור אותי
-        </label>
+        <div className="flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2.5 text-sm text-ink">
+            <input
+              type="checkbox"
+              name="remember"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+            זכור אותי
+          </label>
+          {canReset && (
+            <Link href="/forgot" className="text-sm font-medium text-accent transition-colors hover:text-accent-hover">
+              שכחתי סיסמה
+            </Link>
+          )}
+        </div>
 
         <Button
           type="submit"

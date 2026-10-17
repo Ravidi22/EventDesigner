@@ -1,40 +1,31 @@
 "use server";
-// Sign up, sign in, sign out.
+// Sign up, sign in, sign out, reset — the account screens' actions.
 //
 // These are the only server actions in the app that do NOT begin with currentOrg() — they are how a
 // caller acquires an organisation in the first place. Everything else refuses to run without one.
+//
+// THE CREDENTIAL WORK IS BETTER AUTH'S (lib/auth/auth.ts): hashing, sessions, verification and reset
+// tokens, the rate limit. What stays here is what is ours: the Hebrew messages, which field an error
+// belongs under, the studio a sign-up creates, the invitation a member accepts. Every credential
+// call goes through callAuth (lib/auth/auth-call.ts) — the router, so the rate limit applies.
 //
 // They return `{ error }` rather than throwing. An unhandled throw in a server action reaches the
 // browser as a generic "an error occurred", which is the right amount of detail for a bug and the
 // wrong amount for "that password is incorrect" — a person needs to be told which field to fix.
 import { and, eq, gt, sql } from "drizzle-orm";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { checkRedirectUri, googleConfig } from "@/lib/google/config";
 import { redirectUriBlocks } from "@/lib/google/types";
-import {
-  SIGN_IN_NONCE_COOKIE,
-  SIGN_IN_TTL_MS,
-  safeNext,
-  signInCookiePath,
-  signInUrl,
-  signSignInState,
-} from "./google-sign-in";
+import { emailEnabled } from "@/lib/email/config";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
-import { organizations, studioSettings, users } from "@/lib/db/schema";
+import { authAccounts, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
+import { callAuth } from "./auth-call";
 import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, isAccountKind, type AccountKind } from "./kinds";
-import { hashPassword, passwordProblem, verifyPassword } from "./password";
-import {
-  createSession,
-  currentSession,
-  destroySession,
-  pruneExpiredSessions,
-  revokeOtherSessions,
-  type Session,
-} from "./session";
+import { hashPassword, passwordProblem } from "./password";
+import { currentSession, type Session } from "./session";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -46,11 +37,24 @@ export interface AuthResult {
   /** Where this account belongs, on success. The two kinds land in different halves of the app and
    *  the caller should not have to re-derive which. */
   home?: string;
+  /** The account exists but the address is not confirmed yet: a verification mail is on its way,
+   *  and there is no session until it is clicked. */
+  verifyEmail?: boolean;
 }
+
+const TOO_MANY = "יותר מדי ניסיונות. נסו שוב בעוד דקה.";
 
 /** Emails are compared case-insensitively and stored lowercase: nobody thinks of Noa@studio.co.il
  *  and noa@studio.co.il as two accounts, and the unique index would happily hold both. */
 const normalizeEmail = (v: string) => v.trim().toLowerCase();
+
+/** A path on this site to go to after signing in, or null. Never another origin: `//evil.com` and
+ *  `/\evil.com` are both read by browsers as a different host. */
+function safeNext(value: unknown): string | null {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")
+    ? value
+    : null;
+}
 
 /** Today, as the SERVER's calendar day. `toISOString().slice(0,10)` would be the UTC day, which is
  *  yesterday for anyone signing up after 9pm in Israel. */
@@ -60,14 +64,7 @@ function today(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** A real scrypt hash of a value nobody knows, so verifying against it costs the same as verifying
- *  a real one. Computed once, on first use — not at module load, which would make importing this
- *  file cost 100ms of key derivation on every cold start. */
-let dummyHash: string | null = null;
-async function noSuchUserHash(): Promise<string> {
-  dummyHash ??= await hashPassword(`no-such-user:${Math.random()}${Date.now()}`);
-  return dummyHash;
-}
+type AuthUser = { id: string; kind?: string };
 
 export async function signUp(input: {
   kind: AccountKind;
@@ -100,64 +97,56 @@ export async function signUp(input: {
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
-  // Sign-UP is the one place an "this email is taken" message is unavoidable — the person has to be
-  // told to sign in instead. (Sign-IN never distinguishes; see below.)
+  // Sign-UP is the one place an "this email is taken" message is allowed — the person has to be
+  // told to sign in instead. (Sign-IN never distinguishes.)
   //
-  // The invited case gets its own sentence, and it is not politeness: an invitation writes a real
-  // row for an address whose owner has no password yet, so without this they would be refused here
-  // AND at sign-in, with a message telling them to do the thing they were just refused. They are
+  // The invited case gets its own sentence: an invitation writes a real row for an address whose
+  // owner has no password yet, so without this they would be refused here AND at sign-in. They are
   // not turned into an account holder here either — the link is what proves the invitation reached
   // the person it was addressed to, and claiming a seat by knowing an email address is not proof.
   if (existing) {
     return {
       error:
         existing.state === "pending" && existing.inviteTokenHash
-          ? "הכתובת הזו הוזמנה לסטודיו — הצטרפו דרך קישור ההזמנה שקיבלתם"
+          ? "הכתובת הזו הוזמנה לסטודיו. הצטרפו דרך קישור ההזמנה שקיבלתם"
           : "כבר קיים חשבון עם האימייל הזה",
       field: "email",
     };
   }
 
-  const passwordHash = await hashPassword(password);
-  // A client creates NO organisation. They own nothing here — an organisation for a client would be
-  // an empty studio nobody works in, and a tenant boundary that means nothing is worse than none.
-  const organizationId = kind === "studio" ? await claimOrganization(studioName) : null;
-
-  let userId: string;
-  try {
-    const [row] = await database
-      .insert(users)
-      .values({
-        organizationId,
-        kind,
-        email,
-        name,
-        // Whoever creates the studio owns it; everyone after them is invited into it. For a client
-        // the column is meaningless — they are not on this ladder — so it keeps its default and
-        // nothing reads it.
-        role: "owner",
-        state: "active",
-        passwordHash,
-        // The day they joined the STUDIO. A client joined no studio, so it stays null rather than
-        // recording a date about a thing that did not happen.
-        joinedAt: kind === "studio" ? today() : null,
-      })
-      .returning({ id: users.id });
-    userId = row.id;
-  } catch {
-    // The unique index caught a second signup that raced the check above. One email, one account,
-    // across both kinds — which is deliberate: a designer who is also somebody's client is one
-    // person, and two rows would be two passwords to keep in step.
-    return { error: "כבר קיים חשבון עם האימייל הזה", field: "email" };
+  const created = await callAuth<{ token: string | null; user: AuthUser }>("/sign-up/email", {
+    name,
+    email,
+    password,
+    rememberMe: input?.remember === true,
+    callbackURL: HOME_FOR[kind],
+  });
+  if (!created.ok) {
+    if (created.status === 429) return { error: TOO_MANY };
+    if (created.code?.startsWith("USER_ALREADY_EXISTS")) return { error: "כבר קיים חשבון עם האימייל הזה", field: "email" };
+    return { error: "ההרשמה נכשלה. נסו שוב." };
   }
+  const userId = created.data.user.id;
+
+  // Better Auth wrote the person; what they ARE is ours to write. A client creates NO organisation:
+  // they own nothing here, and a tenant boundary that means nothing is worse than none.
+  const organizationId = kind === "studio" ? await claimOrganization(studioName) : null;
+  await database
+    .update(users)
+    .set({
+      kind,
+      organizationId,
+      // Whoever creates the studio owns it; everyone after them is invited into it.
+      role: "owner",
+      state: "active",
+      // The day they joined the STUDIO; a client joined none.
+      joinedAt: kind === "studio" ? today() : null,
+    })
+    .where(eq(users.id, userId));
 
   // A new studio opens a catalog that already knows what an עגול 180 is (lib/catalog/standard).
-  //
-  // AFTER the account exists, not beside the organisation: an install into an organisation whose
-  // user row then lost a race would be seven rows in a studio nobody can sign into. BEST-EFFORT for
-  // the mirror-image reason — the account is real, the session is about to be created, and refusing
-  // someone their sign-up over a shelf of furniture is the wrong trade. `npm run catalog:standard`
-  // is the retry, and it is idempotent.
+  // BEST-EFFORT: the account is real, and refusing someone their sign-up over a shelf of furniture
+  // is the wrong trade. `npm run catalog:standard` is the retry, and it is idempotent.
   if (organizationId) {
     try {
       await installStandardCatalog(organizationId);
@@ -166,7 +155,8 @@ export async function signUp(input: {
     }
   }
 
-  await createSession(userId, { remember: input?.remember === true });
+  // With mail configured, the address must be confirmed before there is a session.
+  if (!created.data.token) return { verifyEmail: true };
   return { home: HOME_FOR[kind] };
 }
 
@@ -176,18 +166,10 @@ export async function signUp(input: {
  * Normally: a brand-new one, with its settings row.
  *
  * THE EXCEPTION, and it is a migration convenience with an expiry date: before sign-up existed,
- * every row in this database belonged to one placeholder organisation, because currentOrg() was a
- * constant. A designer who had already drawn a venue and built a catalog would watch all of it
- * vanish the moment accounts arrived, since their new studio is a different organisation. So the
- * FIRST account adopts that placeholder — the data that existed before there were accounts belongs
- * to the first account.
- *
- * Three conditions, all required, because "the first person to sign up gets whatever is lying
- * around" is otherwise a way to walk into someone else's studio:
- *   1. the organisation is the well-known placeholder id, not any organisation that happens to
- *      be empty;
- *   2. it has no users at all, so it has never been claimed;
- *   3. this is not production, where that row should never have been seeded in the first place.
+ * every row in this database belonged to one placeholder organisation. So the FIRST account adopts
+ * that placeholder — the data that existed before there were accounts belongs to the first account.
+ * Three conditions, all required: the well-known placeholder id, no users in it yet, and not
+ * production, where that row should never have been seeded.
  */
 async function claimOrganization(studioName: string): Promise<string> {
   const database = db();
@@ -204,30 +186,18 @@ async function claimOrganization(studioName: string): Promise<string> {
         .from(users)
         .where(eq(users.organizationId, SINGLE_ORG_ID));
       if (count === 0) {
-        await database
-          .update(organizations)
-          .set({ name: studioName })
-          .where(eq(organizations.id, SINGLE_ORG_ID));
+        await database.update(organizations).set({ name: studioName }).where(eq(organizations.id, SINGLE_ORG_ID));
         await database
           .insert(studioSettings)
           .values({ organizationId: SINGLE_ORG_ID, businessName: studioName })
-          .onConflictDoUpdate({
-            target: studioSettings.organizationId,
-            set: { businessName: studioName },
-          });
+          .onConflictDoUpdate({ target: studioSettings.organizationId, set: { businessName: studioName } });
         return SINGLE_ORG_ID;
       }
     }
   }
 
-  const [org] = await database
-    .insert(organizations)
-    .values({ name: studioName })
-    .returning({ id: organizations.id });
-  await database.insert(studioSettings).values({
-    organizationId: org.id,
-    businessName: studioName,
-  });
+  const [org] = await database.insert(organizations).values({ name: studioName }).returning({ id: organizations.id });
+  await database.insert(studioSettings).values({ organizationId: org.id, businessName: studioName });
   return org.id;
 }
 
@@ -241,35 +211,32 @@ export async function signIn(input: {
   const password = String(input?.password ?? "");
   if (!email || !password) return { error: "יש להזין אימייל וסיסמה" };
 
-  const [user] = await db()
-    .select({ id: users.id, kind: users.kind, passwordHash: users.passwordHash, state: users.state })
-    .from(users)
-    .where(and(eq(users.email, email), eq(users.state, "active")))
-    .limit(1);
+  // ONE message for an unknown address and a wrong password, and Better Auth hashes the password
+  // either way, so the two take equally long. Telling them apart would tell a stranger which emails
+  // are accounts here.
+  const result = await callAuth<{ user: AuthUser }>("/sign-in/email", {
+    email,
+    password,
+    rememberMe: input?.remember === true,
+  });
+  if (!result.ok) {
+    if (result.status === 429) return { error: TOO_MANY };
+    // Only reachable with the RIGHT password, so it says nothing to someone guessing.
+    if (result.code === "EMAIL_NOT_VERIFIED") {
+      return { error: "צריך לאשר את כתובת האימייל. שלחנו אליה קישור אימות.", field: "email" };
+    }
+    return { error: "האימייל או הסיסמה שגויים", field: "password" };
+  }
 
-  // ONE message for both halves, and the hash runs either way. Two different answers would tell a
-  // stranger which of your emails are real accounts; skipping the hash when the user is missing
-  // would tell them the same thing in milliseconds. So an unknown email is verified against a
-  // throwaway hash and takes exactly as long as a wrong password.
-  const ok = await verifyPassword(password, user?.passwordHash ?? (await noSuchUserHash()));
-  if (!user || !ok) return { error: "האימייל או הסיסמה שגויים", field: "password" };
-
-  await pruneExpiredSessions();
-  await createSession(user.id, { remember: input?.remember === true });
   // ONE sign-in form for both kinds, on purpose. Which half of the app you belong to is a fact
-  // about your account, not a thing to make you declare at the door — and a chooser on the sign-in
-  // screen would be a way to ask "does this email belong to a designer?" without a password.
-  return { home: HOME_FOR[user.kind] };
+  // about your account, not a thing to make you declare at the door.
+  const kind: AccountKind = result.data.user.kind === "studio" ? "studio" : "client";
+  return { home: HOME_FOR[kind] };
 }
 
 /**
  * The same sign-in, for the form posting ITSELF — the path taken when the page's script never ran.
- *
- * The sign-in screen is the one screen that must work when nothing else does: with the form's
- * onSubmit dead (a script blocked, an extension, a dev server opened under a name it will not serve
- * its scripts to), pressing כניסה used to reload the page and say nothing, which reads as a wrong
- * password with no message. As the form's `action`, this is what the browser does instead: it
- * answers with a redirect either way — onward, or back to the form with `?error=` to explain.
+ * It answers with a redirect either way: onward, or back to the form with `?error=` to explain.
  */
 export async function signInFromForm(formData: FormData): Promise<void> {
   const next = safeNext(formData.get("next"));
@@ -287,11 +254,11 @@ export async function signInFromForm(formData: FormData): Promise<void> {
 }
 
 /**
- * Begin "המשך עם Google": leave the nonce on this browser and hand back where to send it.
+ * Begin "המשך עם Google": Better Auth mints the state (and its cookie) and hands back Google's URL.
  *
- * An action rather than a link for the cookie's sake — the nonce has to be set by the same click
- * that mints the state it is half of. Refused before the browser leaves when the callback cannot be
- * reached from here, for the reason `startGoogleConnect` gives.
+ * It signs in only an account that already exists for that verified address (disableImplicitSignUp
+ * in lib/auth/auth.ts). Refused before the browser leaves when the callback cannot be reached from
+ * here — Google would take the person through consent and then strand them.
  */
 export async function startGoogleSignIn(input: {
   remember?: boolean;
@@ -301,32 +268,26 @@ export async function startGoogleSignIn(input: {
   if (!config || redirectUriBlocks(checkRedirectUri(config))) {
     return { error: "כניסה עם Google אינה זמינה כאן. התחברו עם אימייל וסיסמה." };
   }
-
-  const { state, nonce } = signSignInState(
-    { remember: input?.remember === true, next: safeNext(input?.next) },
-    config,
-  );
-  const store = await cookies();
-  store.set(SIGN_IN_NONCE_COOKIE, nonce, {
-    httpOnly: true,
-    // Lax, not strict: the cookie has to ride the top-level navigation BACK from Google.
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: signInCookiePath(config),
-    maxAge: SIGN_IN_TTL_MS / 1000,
+  const result = await callAuth<{ url?: string }>("/sign-in/social", {
+    provider: "google",
+    // A client lands on /dashboard and the layout sends them on to /client — one hop, the same
+    // one the old flow took, because the kind is not known until Google says who this is.
+    callbackURL: safeNext(input?.next) ?? "/dashboard",
+    errorCallbackURL: "/login",
+    disableRedirect: true,
   });
-  return { url: signInUrl(state, config) };
+  if (!result.ok || !result.data.url) {
+    return { error: result.ok || result.status !== 429 ? "הכניסה עם Google נכשלה. נסו שוב." : TOO_MANY };
+  }
+  return { url: result.data.url };
 }
 
 /**
  * What the join screen shows before anyone types: which studio, and which address was invited.
  *
- * Returns null for a token that is wrong, expired or already used — the screen shows one "this link
- * is no longer valid" state for all three, because telling a stranger which of those it is turns
- * this into a way to test tokens.
- *
- * The email is returned and NOT editable on that screen: the invitation was addressed to it, and an
- * editable address would let whoever holds the link join under any address they like.
+ * Returns null for a token that is wrong, expired or already used — one "this link is no longer
+ * valid" state for all three, because telling a stranger which it is turns this into a token test.
+ * The email is returned and NOT editable: the invitation was addressed to it.
  */
 export async function inviteInfo(
   token: string,
@@ -352,10 +313,10 @@ export async function inviteInfo(
 /**
  * Claim an invitation: set a password, become active, and land signed in.
  *
- * The whole thing is ONE conditional UPDATE. The conditions — this token, still pending, not yet
- * expired — are in the WHERE clause rather than in an `if` after a SELECT, so two people opening
- * the same link at the same moment cannot both succeed: the first update flips `state` and clears
- * the hash, and the second matches no rows.
+ * The claim is ONE conditional UPDATE — this token, still pending, not yet expired are in the WHERE
+ * clause — so two people opening the same link at the same moment cannot both succeed. The password
+ * goes in as Better Auth's credential account in the same transaction. The link proved the address
+ * reached its owner, so the email counts as verified.
  */
 export async function acceptInvite(input: {
   token: string;
@@ -372,55 +333,52 @@ export async function acceptInvite(input: {
   if (problem) return { error: problem, field: "password" };
 
   const passwordHash = await hashPassword(password);
-  const [row] = await db()
-    .update(users)
-    .set({
-      name,
-      passwordHash,
-      state: "active",
-      joinedAt: today(),
-      // The link is spent. A used invitation must not still be a way into the account it created.
-      inviteTokenHash: null,
-      inviteExpiresAt: null,
-    })
-    .where(
-      and(
-        eq(users.inviteTokenHash, hashInviteToken(token)),
-        eq(users.state, "pending"),
-        gt(users.inviteExpiresAt, new Date()),
-      ),
-    )
-    .returning({ id: users.id, kind: users.kind });
+  const claimed = await db().transaction(async (tx) => {
+    const [row] = await tx
+      .update(users)
+      .set({
+        name,
+        state: "active",
+        emailVerified: true,
+        joinedAt: today(),
+        // The link is spent. A used invitation must not still be a way into the account it created.
+        inviteTokenHash: null,
+        inviteExpiresAt: null,
+      })
+      .where(
+        and(
+          eq(users.inviteTokenHash, hashInviteToken(token)),
+          eq(users.state, "pending"),
+          gt(users.inviteExpiresAt, new Date()),
+        ),
+      )
+      .returning({ id: users.id, kind: users.kind, email: users.email });
+    if (!row) return null;
+    await tx.insert(authAccounts).values({
+      userId: row.id,
+      accountId: row.id,
+      providerId: "credential",
+      password: passwordHash,
+    });
+    return row;
+  });
 
-  if (!row) return { error: "קישור ההזמנה פג או כבר נוצל. בקשו מהסטודיו קישור חדש." };
+  if (!claimed) return { error: "קישור ההזמנה פג או כבר נוצל. בקשו מהסטודיו קישור חדש." };
 
-  await createSession(row.id);
-  return { home: HOME_FOR[row.kind] };
+  // Through the ordinary sign-in, so the session is Better Auth's and nothing here mints one.
+  const signedIn = await callAuth("/sign-in/email", { email: claimed.email, password, rememberMe: true });
+  if (!signedIn.ok) return { error: "ההצטרפות הושלמה. התחברו עם האימייל והסיסמה שבחרתם." };
+  return { home: HOME_FOR[claimed.kind] };
 }
 
 export async function signOut(): Promise<void> {
-  await destroySession();
+  await callAuth("/sign-out", {});
 }
 
 /**
- * Change your own password.
- *
- * This one needs NO email, which is exactly why it exists ahead of reset-by-email: a person who
- * knows their current password should never have been unable to change it just because there is no
- * sending domain yet. Reset-by-email is the other half — for someone who has FORGOTTEN it — and
- * that genuinely waits on delivery.
- *
- * Three things it does that are worth stating:
- *
- *  1. IT REQUIRES THE CURRENT PASSWORD. Not ceremony: a session cookie is a bearer token, so a
- *     borrowed laptop or a stolen cookie must not be enough to lock the real owner out of their own
- *     account. Knowing the old password is what proves this is the owner and not the browser.
- *  2. IT REVOKES EVERY OTHER SESSION. Changing a password is what a person does when they think
- *     someone else has it, and a change that leaves the intruder's session alive answers the fear
- *     without addressing it. This browser's own session survives, so they are not signed out of the
- *     screen they are standing on.
- *  3. IT REFUSES TO REUSE THE OLD ONE, so "change your password" cannot be satisfied by typing the
- *     same thing twice.
+ * Change your own password. Requires the current one — a session cookie is a bearer token, so a
+ * borrowed laptop must not be enough to lock the owner out — and signs out every OTHER session,
+ * because changing a password is what a person does when they think someone else has it.
  */
 export async function changePassword(input: {
   currentPassword: string;
@@ -432,28 +390,48 @@ export async function changePassword(input: {
   const currentPassword = String(input?.currentPassword ?? "");
   const newPassword = String(input?.newPassword ?? "");
   if (!currentPassword) return { error: "יש להזין את הסיסמה הנוכחית", field: "password" };
-
-  const [user] = await db()
-    .select({ id: users.id, passwordHash: users.passwordHash })
-    .from(users)
-    .where(and(eq(users.id, session.userId), eq(users.state, "active")))
-    .limit(1);
-  if (!user) return { error: "יש להתחבר מחדש" };
-
-  const ok = await verifyPassword(currentPassword, user.passwordHash ?? (await noSuchUserHash()));
-  if (!ok) return { error: "הסיסמה הנוכחית שגויה", field: "password" };
-
   const problem = passwordProblem(newPassword);
   if (problem) return { error: problem, field: "password" };
-  if (newPassword === currentPassword) {
-    return { error: "הסיסמה החדשה זהה לנוכחית", field: "password" };
+  if (newPassword === currentPassword) return { error: "הסיסמה החדשה זהה לנוכחית", field: "password" };
+
+  const result = await callAuth("/change-password", { currentPassword, newPassword, revokeOtherSessions: true });
+  if (!result.ok) {
+    if (result.status === 429) return { error: TOO_MANY };
+    if (result.code === "CREDENTIAL_ACCOUNT_NOT_FOUND") {
+      return { error: "לחשבון הזה אין סיסמה: הוא נכנס עם Google.", field: "password" };
+    }
+    return { error: "הסיסמה הנוכחית שגויה", field: "password" };
   }
-
-  const passwordHash = await hashPassword(newPassword);
-  await db().update(users).set({ passwordHash }).where(eq(users.id, user.id));
-  await revokeOtherSessions(user.id);
-
   return {};
+}
+
+/**
+ * "שכחתי סיסמה". ALWAYS the same answer, whether or not the address has an account — the mail
+ * itself is the only place the difference shows (lib/auth/auth.ts sends it, after the response).
+ */
+export async function requestPasswordReset(input: { email: string }): Promise<{ ok: true } | { error: string }> {
+  if (!emailEnabled()) return { error: "איפוס סיסמה במייל אינו זמין כרגע. פנו לבעלי הסטודיו." };
+  const email = normalizeEmail(String(input?.email ?? ""));
+  if (!EMAIL_RE.test(email)) return { error: "כתובת אימייל לא תקינה" };
+  const result = await callAuth("/request-password-reset", { email, redirectTo: "/reset" });
+  if (!result.ok && result.status === 429) return { error: TOO_MANY };
+  return { ok: true };
+}
+
+/** Set a new password from a reset link. Every session of the account ends (revokeSessionsOnPasswordReset). */
+export async function resetPassword(input: { token: string; password: string }): Promise<AuthResult> {
+  const token = String(input?.token ?? "");
+  const password = String(input?.password ?? "");
+  if (!token) return { error: "הקישור אינו תקין" };
+  const problem = passwordProblem(password);
+  if (problem) return { error: problem, field: "password" };
+
+  const result = await callAuth("/reset-password", { token, newPassword: password });
+  if (!result.ok) {
+    if (result.status === 429) return { error: TOO_MANY };
+    return { error: "הקישור פג או כבר נוצל. בקשו קישור חדש." };
+  }
+  return { home: "/login?reset=done" };
 }
 
 /** The signed-in user, for the shell. Null rather than a throw — the shell has to be able to render

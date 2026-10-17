@@ -92,6 +92,20 @@
       "when": 1791534321308,
       "tag": "0012_furry_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792241008623,
+      "tag": "0013_better_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792241108678,
+      "tag": "0014_drop_hand_written_sessions",
+      "breakpoints": true
     }
   ]
 }

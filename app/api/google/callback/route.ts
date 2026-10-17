@@ -9,8 +9,7 @@
 // other end of this URL is a designer who just clicked "אישור" on a Google screen; what they need is
 // to land back where they started with a line telling them what happened. `?google=` carries that.
 import { NextResponse } from "next/server";
-import { isSignInState } from "@/lib/auth/google-sign-in";
-import { completeGoogleSignIn } from "@/lib/auth/google-sign-in-callback";
+import { AUTH_BASE_PATH, auth, authOrigin } from "@/lib/auth/auth";
 import { currentSession } from "@/lib/auth/session";
 import { googleConfig } from "@/lib/google/config";
 import { readState } from "@/lib/google/oauth";
@@ -25,14 +24,24 @@ function back(request: Request, outcome: string): NextResponse {
   return NextResponse.redirect(url);
 }
 
+/** Better Auth's Google callback, answered in place: same query, same cookies, its redirect back. */
+function handToSignIn(request: Request): Promise<Response> {
+  const search = new URL(request.url).search;
+  return auth().handler(
+    new Request(`${authOrigin()}${AUTH_BASE_PATH}/callback/google${search}`, { method: "GET", headers: request.headers }),
+  );
+}
+
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
 
   // TWO flows come home through this one URL, because it is the one redirect URI the Cloud project
-  // has registered: a calendar being connected by someone signed in, and — told apart by its
-  // state — "המשך עם Google" from the sign-in screen, by someone who is not. See
-  // lib/auth/google-sign-in.ts. Everything below this line is the calendar's.
-  if (isSignInState(params.get("state") ?? "")) return completeGoogleSignIn(request);
+  // has registered: a calendar being connected by someone signed in, and "המשך עם Google" from the
+  // sign-in screen, by someone who is not. They are told apart by the shape of the state: the
+  // calendar signs its own (lib/google/oauth.ts, `<payload>.<signature>`), while Better Auth's is a
+  // random string with no dot. The sign-in is handed to Better Auth's own callback, which checks the
+  // state against the cookie it set and the row it stored. Everything below is the calendar's.
+  if (!(params.get("state") ?? "").includes(".")) return handToSignIn(request);
 
   // The designer pressed "ביטול" on Google's consent screen. Not an error — just a no.
   const denied = params.get("error");

@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",
     "check:selection": "tsx lib/venues/selection.ts",
-  "check:add-tools": "tsx lib/venues/add-tools.ts",
+    "check:add-tools": "tsx lib/venues/add-tools.ts",
     "check:measure": "tsx lib/design-document/measure.ts",
     "check:anchor": "tsx lib/studio/anchor.ts",
     "check:clipboard": "tsx lib/studio/clipboard.ts",
@@ -65,7 +65,6 @@
     "check:runway": "tsx lib/production/runway.ts",
     "check:costs": "tsx lib/suppliers/cost-boundary.ts",
     "check:password": "tsx lib/auth/password.ts",
-    "check:google-sign-in": "tsx lib/auth/google-sign-in.ts",
     "check:email": "tsx lib/email/config.ts && tsx lib/email/send.ts && tsx lib/email/templates/index.ts",
     "check:access": "tsx lib/venues/access.ts",
     "check:files": "tsx lib/files/keys.ts",
@@ -76,6 +75,7 @@
     "gen:calendar": "tsx lib/calendar/generate.mts"
   },
   "dependencies": {
+    "better-auth": "1.7.10",
     "drizzle-orm": "^0.45.2",
     "lucide-react": "^1.24.0",
     "next": "16.2.10",

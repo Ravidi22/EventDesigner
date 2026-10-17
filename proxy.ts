@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 // The NAME only, from a module that imports nothing — see lib/auth/cookie-name.ts. Reaching into
 // the session module here would pull node:crypto and the Postgres driver into an edge bundle.
-import { SESSION_COOKIE } from "@/lib/auth/cookie-name";
+import { SESSION_COOKIES } from "@/lib/auth/cookie-name";
 
 // Next 16 calls this Proxy; it is what earlier versions called Middleware, renamed, same hook.
 //
@@ -17,7 +17,7 @@ import { SESSION_COOKIE } from "@/lib/auth/cookie-name";
 // happens before anything renders.
 
 /** Where you may go without a session: the two account screens, and the marketing home. */
-const AUTH_PAGES = ["/login", "/signup"];
+const AUTH_PAGES = ["/login", "/signup", "/forgot"];
 /**
  * …plus the invitation links. `/join/<token>` is public BY DEFINITION — the person opening it has
  * no account yet, which is the whole reason they were sent it. Guarding it sent them to a sign-in
@@ -34,12 +34,16 @@ const AUTH_PAGES = ["/login", "/signup"];
  * `/api/google/callback` is where Google returns a browser — including one that is signing IN,
  * which is signed out by definition. Its calendar half checks the session itself and sends a
  * signed-out caller away, so nothing is opened by listing it here.
+ *
+ * `/reset` is where a password-reset link lands (whoever forgot a password is signed out), and
+ * `/api/auth` is Better Auth's own routes: email verification links, the reset handshake, sign-in
+ * itself. Each checks its own token; this layer has nothing to add.
  */
-const PUBLIC = [...AUTH_PAGES, "/join", "/api/google/callback", "/"];
+const PUBLIC = [...AUTH_PAGES, "/join", "/reset", "/api/auth", "/api/google/callback", "/"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const hasCookie = request.cookies.has(SESSION_COOKIE);
+  const hasCookie = SESSION_COOKIES.some((name) => request.cookies.has(name));
   const isPublic = PUBLIC.some((p) => pathname === p || (p !== "/" && pathname.startsWith(`${p}/`)));
 
   if (!hasCookie && !isPublic) {
