@@ -163,6 +163,27 @@ export interface Placement {
    *  `sizeMm`'s depth, re-derived whenever the rise changes (lib/studio/climb-item.ts). Absent = the
    *  row's own height, climbing toward the top of the item as the catalog draws it. */
   climb?: PlacementClimb;
+  /** A BLOCK OF CHAIRS IN ROWS — a `chairs` row set out as rows × chairs per row, the seats facing a
+   *  חופה (lib/design-document/chair-rows.ts). Read only for a chair standing on the floor. Its
+   *  footprint and every chair's place are derived from this; `quantity` is kept at rows × chairs per
+   *  row by the action that writes it (setChairRows), so it is counted as the chairs it is. Absent =
+   *  one chair. */
+  rows?: ChairRows;
+}
+
+/** See Placement.rows — what the designer chose; everything else about the block is derived. */
+export interface ChairRows {
+  /** How many rows, front to back. */
+  rows: number;
+  /** How many chairs in each row — across the aisle too, when there is one. */
+  perRow: number;
+  /** Clear space between two chairs side by side, mm. Absent = CHAIR_GAP_MM (5cm). */
+  gapMm?: number;
+  /** Clear space between a row's backrests and the seats of the row behind — the legroom, mm.
+   *  Absent = ROW_GAP_MM (45cm). */
+  rowGapMm?: number;
+  /** A centre aisle splitting every row in two, mm wide. Absent = one unbroken block. */
+  aisleMm?: number;
 }
 
 /** One long side of a banquette, and who sits there:
@@ -389,6 +410,11 @@ export interface FeaturePlacement {
   dx: number; // mm from where the venue puts it
   dy: number;
   rotationDeg?: number; // degrees on top of the venue's own facing
+  /** THIS EVENT took it out of the room — the rolling bar wheeled away for the night. The venue still
+   *  has it, every other event still sees it, and the offset is kept so bringing it back puts it
+   *  where this event last had it. Only a feature the venue lets a sketch move (featureMovable) can
+   *  be taken out; the user asked for "unlocked elements can be deleted, not just moved" (2026-10-17). */
+  removed?: true;
 }
 
 /** Several things on the plan the designer has said are ONE thing.

@@ -17,6 +17,7 @@ import {
   ringSpecOf,
   roundSizeMm,
   shapeFootprint,
+  uShapeBandOf,
   type BuiltOutline,
   type RingShape,
 } from "@/lib/studio/footprint";
@@ -218,6 +219,29 @@ function RingFields({
             ? "הצד הפתוח הוא צד הקיר. הפתח הוא כמה הרגל התחתונה נעצרת לפני הקיר — 0 כשהיא מגיעה עד אליו. סובבו או שקפו את הפריט על התוכנית כדי להפנות אותו."
             : "החצי העליון של אליפסה חלולה: הצלע הישרה למעלה ורבע קשת יורד מכל צד עד הקיר, שהוא הצד הפתוח למטה. סובבו את הפריט על התוכנית כדי להפנות אותו."}
       </Note>
+    </div>
+  );
+}
+
+/** The square ח's one number beyond its box: how deep its counter is (uShapeBandOf). Stored as the
+ *  band of its RingSpec, like the curved bars' — so stretching the bar keeps a 60cm counter at 60cm
+ *  instead of thickening it with the arms. Shared by the base shape and a part. */
+function CounterFields({ idPrefix, widthMm, depthMm, ring, onChange }: { idPrefix: string; widthMm: number; depthMm: number; ring?: RingSpec; onChange: (ring: RingSpec) => void }) {
+  const band = uShapeBandOf(widthMm || DEFAULT_PRESET_MM.w, depthMm || DEFAULT_PRESET_MM.h, ring);
+  return (
+    <div className="space-y-2">
+      <PanelRow label="עומק הדלפק (ס״מ)" htmlFor={`${idPrefix}-band`}>
+        <NumberField
+          id={`${idPrefix}-band`}
+          decimals={0}
+          min={5}
+          commitOnBlur
+          value={mmToCm(band)}
+          onChange={(v) => onChange({ ...ring, bandMm: Math.round(v * 10) })}
+          className="w-20"
+        />
+      </PanelRow>
+      <Note>{ring?.bandMm ? "נשאר קבוע כשמשנים את הרוחב והעומק של הח׳." : "כרגע שליש מהצלע הקצרה — מספר שתקלידו יישאר קבוע גם כשמשנים את הגודל."}</Note>
     </div>
   );
 }
@@ -474,6 +498,11 @@ function PartBar({
       {ringShape && ringSpec && (
         <Popover label={RING_LABEL[ringShape]} icon={Donut} value={`רצועה ${cm(ringSpec.bandMm)}`} panelClassName="w-72">
           <RingFields idPrefix={id} shape={ringShape} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
+        </Popover>
+      )}
+      {part.shape === "u-shape" && (
+        <Popover label="ח" icon={Donut} value={`דלפק ${cm(uShapeBandOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring))}`} panelClassName="w-72">
+          <CounterFields idPrefix={id} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
         </Popover>
       )}
       <BarButton icon={PenLine} label={drawn ? "עריכת הקווים" : "עיצוב חופשי — עריכת הקווים ביד"} onClick={onRedraw} />
@@ -1485,6 +1514,22 @@ export function AppearanceModal({
                         <RingFields
                           idPrefix="a-ring"
                           shape={ringShape}
+                          widthMm={draft.dimensions.widthMm ?? 0}
+                          depthMm={draft.dimensions.depthMm ?? 0}
+                          ring={draft.appearance?.ring}
+                          onChange={(ring) => setAppearance({ ring })}
+                        />
+                      </Popover>
+                    )}
+                    {shape === "u-shape" && !stretch && (
+                      <Popover
+                        label="ח"
+                        icon={Donut}
+                        value={`דלפק ${mmToCm(uShapeBandOf(draft.dimensions.widthMm || DEFAULT_PRESET_MM.w, draft.dimensions.depthMm || DEFAULT_PRESET_MM.h, draft.appearance?.ring))}`}
+                        panelClassName="w-72"
+                      >
+                        <CounterFields
+                          idPrefix="a-counter"
                           widthMm={draft.dimensions.widthMm ?? 0}
                           depthMm={draft.dimensions.depthMm ?? 0}
                           ring={draft.appearance?.ring}

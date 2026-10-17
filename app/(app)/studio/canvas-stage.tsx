@@ -6,7 +6,8 @@ import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
-import { benchOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { ChairBlock } from "@/components/chair-block";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
@@ -33,7 +34,7 @@ import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
-import { PlanCanvas, RotateHandle, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
+import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
 import { Grid2x2Plus, ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LaidDeck, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
@@ -231,6 +232,7 @@ export function CanvasStage({
   placeGhost,
   onPlaceStage,
   armed,
+  armedSize,
   onPlaceArmed,
   onDisarm,
   stageWallDistance,
@@ -337,6 +339,9 @@ export function CanvasStage({
   /** The catalog item armed on the rail (click-to-place): it follows the pointer, at true scale,
    *  and every click on the plan puts one down where it shows. */
   armed?: Product | null;
+  /** The size the armed item lands at when it is not its catalog's — a chair armed as a BLOCK OF
+   *  ROWS (the rail's "שורות כיסאות"), whose ghost and snapping are the block's. */
+  armedSize?: { widthMm: number; depthMm: number } | null;
   /** A click with an item armed — the point already snapped and cleared exactly as a drop's is.
    *  `keep` is Shift: stay armed even for an item that lets go after one (placesOnce). */
   onPlaceArmed?: (at: Point, keep: boolean) => void;
@@ -1027,8 +1032,9 @@ export function CanvasStage({
       return { ref, axes: { width: true, depth: true, uniform: false }, clamp, centre: p.position, rotation: p.rotation || 0, size };
     }
     const r = p ? resolve(p.variantId) : undefined;
-    // Not a stretch item (a carpet has corners of its own), nothing on a table, nothing on a wall.
-    if (!p || !r || r.sizing === "stretch" || r.anchor !== "free" || p.tableId) return null;
+    // Not a stretch item (a carpet has corners of its own), nothing on a table, nothing on a wall —
+    // and not a block of chairs, whose size is its rows (its bar's "שורות").
+    if (!p || !r || r.sizing === "stretch" || r.anchor !== "free" || p.tableId || p.rows) return null;
     const axes = resizeAxes(r.product);
     if (!axes) return null;
     const product = r.product;
@@ -1744,6 +1750,48 @@ export function CanvasStage({
           </>
         );
       }}
+      // THE ROTATE KNOB is painted last of all (PlanCanvas's `topmost`): a hung item's ties, a
+      // breach's figure and the walls' lengths are all drawn after the overlay, and every one of
+      // them used to land on the knob — the user found it hidden "in some cases" (2026-10-17).
+      topmost={(tctx) => (
+        <>
+          {/* ONE rotate handle for whatever is selected, rather than a knob on every node. A table
+              turned on its own and six turned together are the same gesture about a different
+              pivot, and a handle per item would put six of them on screen for one selection —
+              overlapping each other, each promising to turn only its own table.
+
+              Not offered for a cloth or a drape: one is its table's surface (it turns when the
+              table does) and the other is pinned to a wall by both its ends, so neither has a
+              facing of its own to spin. A selection holding one is a selection with nothing
+              coherent to turn, so the handle stays away rather than turning half of it.
+              Not while a tool owns every click (placing, drawing an area, picking a stage's side):
+              those panes used to cover the knob, and above them it would steal their click. */}
+          {rotatable && !placeGhost && !drawArea && !stairPick && !(armed && onPlaceArmed) && (
+            <RotateHandle
+              pivot={rotatable.pivot}
+              reachMm={rotatable.reachMm}
+              rotationDeg={rotatable.rotationDeg}
+              onRotate={(deg, mods) => rotateSelection(deg, mods)}
+              onCommit={() => {
+                rotateGesture.current = null;
+                onEndDrag(rotatableRefs);
+              }}
+              clientToMm={tctx.clientToMm}
+              mm={tctx.mm}
+              // The label says which of the two gestures this handle is about to be, because they
+              // look identical until the pointer moves and only one of them keeps everything where
+              // it is.
+              label={
+                rotatable.count === 1
+                  ? "סיבוב הפריט — גרירה · Alt לזווית חופשית"
+                  : spin === "each"
+                    ? `סיבוב ${rotatable.count} הפריטים, כל אחד סביב עצמו — גרירה · Alt לזווית חופשית`
+                    : `סיבוב ${rotatable.count} הפריטים יחד סביב מרכז משותף — גרירה · Alt לזווית חופשית`
+              }
+            />
+          )}
+        </>
+      )}
       overlay={(ctx) => (
         <>
           <StructureDoors structure={plan.structure} />
@@ -2010,40 +2058,6 @@ export function CanvasStage({
             />
           )}
 
-          {/* ONE rotate handle for whatever is selected, rather than a knob on every node. A table
-              turned on its own and six turned together are the same gesture about a different
-              pivot, and a handle per item would put six of them on screen for one selection —
-              overlapping each other, each promising to turn only its own table.
-
-              Not offered for a cloth or a drape: one is its table's surface (it turns when the
-              table does) and the other is pinned to a wall by both its ends, so neither has a
-              facing of its own to spin. A selection holding one is a selection with nothing
-              coherent to turn, so the handle stays away rather than turning half of it. */}
-          {rotatable && (
-            <RotateHandle
-              pivot={rotatable.pivot}
-              reachMm={rotatable.reachMm}
-              rotationDeg={rotatable.rotationDeg}
-              onRotate={(deg, mods) => rotateSelection(deg, mods)}
-              onCommit={() => {
-                rotateGesture.current = null;
-                onEndDrag(rotatableRefs);
-              }}
-              clientToMm={ctx.clientToMm}
-              mm={ctx.mm}
-              // The label says which of the two gestures this handle is about to be, because they
-              // look identical until the pointer moves and only one of them keeps everything where
-              // it is.
-              label={
-                rotatable.count === 1
-                  ? "סיבוב הפריט — גרירה · Alt לזווית חופשית"
-                  : spin === "each"
-                    ? `סיבוב ${rotatable.count} הפריטים, כל אחד סביב עצמו — גרירה · Alt לזווית חופשית`
-                    : `סיבוב ${rotatable.count} הפריטים יחד סביב מרכז משותף — גרירה · Alt לזווית חופשית`
-              }
-            />
-          )}
-
           {edgingStage && onEdgeItemSelect && onEdgeItemChange && (
             <EdgeItemHandles
               p={edgingStage}
@@ -2154,7 +2168,7 @@ export function CanvasStage({
 
             {/* The selected ceiling item, measured: off the walls, and off the middle of what it
                 hangs over — the table it is linked to, else what is under it (hang-ties.tsx). */}
-            {hangSubject && <HangTies at={hangPointOf(hangSubject)} walls={hangWalls} over={hangCentreOf(hangSubject, doc, hangTargets)} mm={ctx.mm} />}
+            {hangSubject && <HangTies at={hangPointOf(hangSubject)} walls={hangWalls} over={hangCentreOf(hangSubject, doc, hangTargets)} mm={ctx.mm} avoid={rotatable ? [rotateKnobPoint(rotatable.pivot, rotatable.reachMm, rotatable.rotationDeg, ctx.mm)] : []} />}
           </g>
 
           {/* THE AREA TOOL. A pane over the whole plan while corners are being placed — every click
@@ -2196,6 +2210,7 @@ export function CanvasStage({
           {armed && onPlaceArmed && !placeGhost && !drawArea && !stairPick && (
             <ArmedPane
               product={armed}
+              size={armedSize ?? undefined}
               ctx={ctx}
               at={armedAt}
               onAt={setArmedAt}
@@ -3518,14 +3533,17 @@ function PlacementNodeView({
   // and a word across the middle sat on top of the levels and the seams.
   // Its category's picture — a candelabrum, a bunch of flowers, a sofa — rather than its outline with
   // a word in it (lib/catalog/symbols.ts). The picture says what it is, so nothing is written inside.
-  const symbol = placement.stage ? null : symbolOf(product, footprint);
+  // A BLOCK OF CHAIRS IN ROWS is its chairs, each drawn at its own size where its row puts it — not
+  // one chair stretched over the block (lib/design-document/chair-rows.ts).
+  const block = chairBlockOf(placement);
+  const symbol = placement.stage || block ? null : symbolOf(product, footprint);
   // A flight or a ramp on its own draws its steps from the step it covers on THIS plan, and writes
   // its slope at a screen size — passed to it alone, since a zoom-sized prop re-draws every frame.
   const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(product, placement.climb) : undefined;
   // What it is made of (MapAppearance.texture) — timber, marble, a lawn — as its fill. A picture is
   // its own fill, and an overhead item is never filled at all.
-  const surfaced = !symbol && !overhead && anySurface(product?.appearance);
-  const content = placement.stage || symbol
+  const surfaced = !symbol && !block && !overhead && anySurface(product?.appearance);
+  const content = placement.stage || symbol || block
     ? { mode: "none" as const }
     : product
       ? resolveContent(product)
@@ -3568,7 +3586,7 @@ function PlacementNodeView({
       transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${placement.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`${r?.label ?? "פריט"}${bench ? `${benchNumber ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
+      aria-label={`${r?.label ?? "פריט"}${block ? ` — ${block.spec.rows} שורות × ${block.spec.perRow}, ${placement.quantity} כיסאות` : ""}${bench ? `${benchNumber ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
       className={(drag.onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
       onDoubleClick={
         onOpen
@@ -3624,7 +3642,8 @@ function PlacementNodeView({
           />
         </g>
       )}
-      {symbol ? (
+      {block && <ChairBlock product={block.product} spec={block.spec} tone={own} />}
+      {symbol || block ? (
         // The picture is the item; its footprint stays as the thing that takes the pointer (an
         // invisible fill) and, once selected, as the accent outline that says how much room it takes.
         <FootprintShape
@@ -3710,7 +3729,8 @@ function PlacementNodeView({
       )}
       {/* content.mode "none" renders nothing */}
 
-      {placement.quantity > 1 && (
+      {/* A block's quantity IS its chairs, and they are drawn — no "×25" pill over them. */}
+      {placement.quantity > 1 && !block && (
         <g className="pointer-events-none">
           <rect
             x={-bounds.w / 2 + 40}
@@ -4314,6 +4334,7 @@ function ResizeHandles({
  *      is where it lands. */
 function ArmedPane({
   product,
+  size,
   ctx,
   at,
   onAt,
@@ -4326,6 +4347,8 @@ function ArmedPane({
   dressingTableId,
 }: {
   product: Product;
+  /** Lands at this size, not the catalog's (a block of chairs in rows). */
+  size?: { widthMm: number; depthMm: number };
   ctx: CanvasLayerContext;
   at: Point | null;
   onAt: (p: Point | null) => void;
@@ -4338,7 +4361,7 @@ function ArmedPane({
   /** The table being dressed, if any — it takes items where they are put. */
   dressingTableId?: string | null;
 }) {
-  const item = carriedOf(product);
+  const item = size ? { ...carriedOf(product), ...size } : carriedOf(product);
   const onWall = CATEGORY_BY_ID[product.category]?.anchor === "wall";
   const onTable = !onWall && product.layer === "table";
   // Table and wall items are hit-tested on the raw point (which table, which wall); pulling that
@@ -4350,7 +4373,7 @@ function ArmedPane({
     return { x: Math.round(p.x), y: Math.round(p.y) };
   };
 
-  const footprint = resolveFootprint(product);
+  const footprint: Footprint = size ? { kind: "rect", ...size } : resolveFootprint(product);
   const table = onTable && at ? tableAt(doc, at.x, at.y) : undefined;
   const near = onWall && at ? nearestWall(structure, at) : null;
   const wall = near ? wallSegment(structure, near.wallId) : null;

@@ -39,7 +39,21 @@ export function HangAxes({ guide, mm }: { guide: HangAxisGuide; mm: (px: number)
   );
 }
 
-export function HangTies({ at, walls, over, mm }: { at: Point; walls: [Point, Point][]; over: Point | null; mm: (px: number) => number }) {
+export function HangTies({
+  at,
+  walls,
+  over,
+  mm,
+  avoid = [],
+}: {
+  at: Point;
+  walls: [Point, Point][];
+  over: Point | null;
+  mm: (px: number) => number;
+  /** Points a figure must keep off — the rotate knob, which hangs right on the tie to the wall
+   *  above and used to wear its number. Each is a knob-sized box. */
+  avoid?: Point[];
+}) {
   const ties = wallTies(at, walls);
   const legs = over ? centreOffset(at, over) : [];
   const all: (HangTie & { leg: boolean })[] = [...ties.map((t) => ({ ...t, leg: false })), ...legs.map((t) => ({ ...t, leg: true }))];
@@ -51,7 +65,7 @@ export function HangTies({ at, walls, over, mm }: { at: Point; walls: [Point, Po
       const h = font * 1.4;
       return { a: t.a, b: t.b, w, h, gap: mm(4), side: 1 as const, inline: true };
     }),
-    [],
+    avoid.map((p) => ({ minX: p.x - mm(14), minY: p.y - mm(14), maxX: p.x + mm(14), maxY: p.y + mm(14) })),
   );
   const tick = mm(6);
   return (

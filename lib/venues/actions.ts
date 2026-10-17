@@ -380,6 +380,7 @@ export async function saveVenuePlan(
             ceilingHeightMm: sql`excluded.ceiling_height_mm`,
             capacity: sql`excluded.capacity`,
             style: sql`excluded.style`,
+            surface: sql`excluded.surface`,
           },
         });
     }

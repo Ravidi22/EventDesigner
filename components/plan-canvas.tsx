@@ -162,6 +162,9 @@ export interface CanvasLayerContext {
    *  own pointerup — a layer's pointer events bubble up to it — so this is for a gesture that ends
    *  some other way (a cancel, a key). */
   endSnap: () => void;
+  /** Whether the canvas's "הצגת מידות" is on — a host draws its own figures (an element's size, a
+   *  door's distances) under the same switch the walls' lengths answer to. */
+  dims: boolean;
 }
 export type CanvasLayer = ReactNode | ((ctx: CanvasLayerContext) => ReactNode);
 
@@ -204,6 +207,18 @@ const HALO = {
 } as const;
 
 const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
+
+/** A figure written on the plan: screen-sized, semibold, and set in a halo of the canvas's own
+ *  surface so it reads over a wall, a lawn or a dark zone tint. Takes no pointer (the class on the
+ *  element): a length printed over a handle must never be what the press lands on. */
+const DIM_TEXT = (mm: (px: number) => number) => ({
+  fontSize: mm(12),
+  fontWeight: 600,
+  paintOrder: "stroke" as const,
+  stroke: "var(--color-surface)",
+  strokeWidth: mm(3),
+  strokeLinejoin: "round" as const,
+});
 
 // The grid pattern's own on-screen cell size, kept roughly constant across zoom levels rather than
 // the world-space interval (gridMm) being what's constant. A fixed-mm grid inverts what a designer
@@ -390,6 +405,7 @@ export function PlanCanvas({
   panTool = false,
   backdrop,
   overlay,
+  topmost,
   graph,
   onMoveGraphNode,
   onCurveGraphWall,
@@ -478,6 +494,10 @@ export function PlanCanvas({
   // World-space content painted directly ABOVE the walls but below every handle — door openings,
   // which only read as gaps if they overpaint the wall they cut through.
   overlay?: CanvasLayer;
+  // World-space content painted LAST, over every figure the canvas draws itself — the wall lengths,
+  // the tape, the guides. For the handles a measurement must never cover: the rotate knob sat under
+  // a wall's length label (which took its click) and under a hung item's ties (the user, 2026-10-17).
+  topmost?: CanvasLayer;
   // A connected wall graph, drawn and reshaped alongside `outline`. Its nodes join the snap
   // references, so tracing a new wing aligns to the walls already on the plan.
   graph?: CanvasGraph;
@@ -1500,11 +1520,12 @@ export function PlanCanvas({
   // once. Before this, the context was rebuilt — and every layer re-run — on every render of the
   // canvas, which a drag made happen per frame (each snap lit a guide line).
   const layerCtx = useMemo<CanvasLayerContext>(
-    () => ({ clientToMm, mm: (px: number) => px * mmPerPx, snap: snapHost, endSnap }),
-    [clientToMm, mmPerPx, snapHost, endSnap],
+    () => ({ clientToMm, mm: (px: number) => px * mmPerPx, snap: snapHost, endSnap, dims: showDims }),
+    [clientToMm, mmPerPx, snapHost, endSnap, showDims],
   );
   const backdropNode = useMemo(() => (typeof backdrop === "function" ? backdrop(layerCtx) : backdrop), [backdrop, layerCtx]);
   const overlayNode = useMemo(() => (typeof overlay === "function" ? overlay(layerCtx) : overlay), [overlay, layerCtx]);
+  const topmostNode = useMemo(() => (typeof topmost === "function" ? topmost(layerCtx) : topmost), [topmost, layerCtx]);
 
   const entryOpen = entry !== null;
   useEffect(() => {
@@ -2483,7 +2504,7 @@ export function PlanCanvas({
           const curve = edgeCurves[i] ?? null;
           const mid = edgeMidpoint(a, b, curve);
           return (
-            <text key={i} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
+            <text key={i} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent pointer-events-none" fill="currentColor" style={DIM_TEXT(mm)}>
               {fmtLenBare(wallLengthMm(a, b))}
             </text>
           );
@@ -2500,7 +2521,7 @@ export function PlanCanvas({
           if (!a || !b) return null;
           const mid = edgeMidpoint(a, b, w.curve ?? null);
           return (
-            <text key={w.id} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent" fill="currentColor" style={{ fontSize: mm(12), fontWeight: 600 }}>
+            <text key={w.id} x={mid.x} y={mid.y} dy={-mm(7)} textAnchor="middle" className="text-accent pointer-events-none" fill="currentColor" style={DIM_TEXT(mm)}>
               {fmtLenBare(wallLengthMm(a, b))}
             </text>
           );
@@ -2570,6 +2591,10 @@ export function PlanCanvas({
             </g>
           );
         })}
+
+      {/* The host's handles that no figure may cover (see `topmost`) — after the wall lengths, the
+          tape and the guides, so a knob is always on top and always takes its own press. */}
+      {topmostNode}
       </g>
 
       {/* No pane over the plan while the tape is armed (there was one, swallowing every press so the
@@ -2958,6 +2983,12 @@ function BezierHandles({
  * Rotation lands on 15° steps unless Alt is held — the same lock, and the same release, that
  * governs drawing a wall. A stage is almost never at 37.4°.
  */
+/** Where RotateHandle's knob hangs: 22 screen px past `reachMm` above the pivot, in the thing's own
+ *  frame. Exported so a host can keep its own figures off it (the hang ties' labels do). */
+export function rotateKnobPoint(pivot: Point, reachMm: number, rotationDeg: number, mm: (px: number) => number): Point {
+  return fromLocalFrame({ x: 0, y: -(reachMm + mm(22)) }, pivot, rotationDeg);
+}
+
 export function RotateHandle({
   pivot,
   reachMm,
@@ -3001,8 +3032,7 @@ export function RotateHandle({
   // `rotationDeg` stays live on purpose: for a lone item the handle is meant to ride round with it.
   const frame = useRef<{ pivot: Point; reachMm: number } | null>(null);
   const held = frame.current ?? { pivot, reachMm };
-  const gap = mm(22);
-  const at = fromLocalFrame({ x: 0, y: -(held.reachMm + gap) }, held.pivot, rotationDeg);
+  const at = rotateKnobPoint(held.pivot, held.reachMm, rotationDeg, mm);
   const stalkFrom = fromLocalFrame({ x: 0, y: -held.reachMm }, held.pivot, rotationDeg);
 
   const drag = dragHandlers(

@@ -61,7 +61,9 @@ export function eventPlan(event: Pick<EventSummary, "venueId" | "zoneIds"> | nul
   if (geometry.access === "denied") return { ...EMPTY_PLAN, venueId: event.venueId, access: "denied" };
   const { structure, zones: allZones, mmPerUnit } = geometry;
   const faces = detectFaces(structure);
-  const all = resolveZones(allZones, faces);
+  // The VENUE's features, not this event's arrangement of them: a zone is the property's, and one
+  // made of a stage stays where the venue has the stage when a sketch nudges it for one evening.
+  const all = resolveZones(allZones, faces, structure.features);
   // Ordered by the event's own list, not the venue's: the first zone is the one the designer
   // reached for first, and a picker that reorders behind their back is its own small bug.
   const zones = event.zoneIds

@@ -95,9 +95,16 @@ export function hitsInBox(structure: VenueStructure, zones: ResolvedZone[], box:
   // A feature counts when the box TOUCHES it, as the sketch's band takes its tables — a band
   // drawn across a row of planters should not have to reach every one's middle. (A node is a
   // point; a wall still wants both ends, or the band over one room grabs the next room's walls.)
+  // The GROUND is the exception: it is under everything, so a band drawn round three planters on a
+  // lawn always touches the lawn, and took it — and the courtyard's paving with it. A surface is
+  // taken only when the band holds all of it, as the sketch's band never takes it at all.
   for (const f of structure.features) {
     const b = featureBounds(f);
-    if (b.maxX >= box.minX && b.minX <= box.maxX && b.maxY >= box.minY && b.minY <= box.maxY) hits.push({ kind: "feature", id: f.id });
+    const hit =
+      f.kind === "surface"
+        ? b.minX >= box.minX && b.maxX <= box.maxX && b.minY >= box.minY && b.maxY <= box.maxY
+        : b.maxX >= box.minX && b.minX <= box.maxX && b.maxY >= box.minY && b.minY <= box.maxY;
+    if (hit) hits.push({ kind: "feature", id: f.id });
   }
 
   for (const e of structure.entrances) {
@@ -217,6 +224,11 @@ if (isMain(import.meta.url)) {
   // Turned 90°, the same bar is 500 wide and 1000 deep, so its box reaches further in y.
   const turned: VenueStructure = { ...s, features: [{ ...s.features[0], rotationDeg: 90 }] };
   assert(ids(hitsInBox(turned, zones, { minX: 1900, minY: 2400, maxX: 2100, maxY: 2600 }).filter((h) => h.kind === "feature")) === "feature:f1", "the band reads the feature's turned extent");
+
+  // The ground is taken only whole: a band across part of a lawn takes the planter on it, not the lawn.
+  const lawn: VenueStructure = { ...s, features: [...s.features, { id: "g", kind: "surface", label: "דשא", x: 2000, y: 2000, widthMm: 3000, depthMm: 3000, heightMm: 0, shape: "rect", rotationDeg: 0, surface: "grass" }] };
+  assert(ids(hitsInBox(lawn, zones, { minX: 1400, minY: 1400, maxX: 2600, maxY: 2600 }).filter((h) => h.kind === "feature")) === "feature:f1", "a band round the bar on a lawn takes the bar, not the lawn");
+  assert(ids(hitsInBox(lawn, zones, { minX: 0, minY: 0, maxX: 4000, maxY: 4000 }).filter((h) => h.kind === "feature")) === "feature:f1,feature:g", "…one round the whole lawn takes it too");
 
   // A box in the empty middle of nothing takes nothing.
   assert(hitsInBox(s, zones, { minX: 20000, minY: 20000, maxX: 21000, maxY: 21000 }).length === 0, "an empty box selects nothing");

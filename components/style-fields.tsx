@@ -158,6 +158,7 @@ export function StyleFields({
   strokeWidthDefault,
   fillLabel = "מילוי",
   strokeLabel = "קו מתאר",
+  fillOnly = false,
 }: {
   style: ElementStyle | undefined;
   onChange: (style: ElementStyle | undefined) => void;
@@ -165,6 +166,10 @@ export function StyleFields({
   strokeWidthDefault: number;
   fillLabel?: string;
   strokeLabel?: string;
+  /** Only the colour row — for what is drawn as a picture rather than an outline (a lawn, a palm),
+   *  whose drawing reads the fill as its tint and has no line of its own to style. Offering the line
+   *  rows there was offering controls that did nothing. */
+  fillOnly?: boolean;
 }) {
   const patch = (p: Partial<ElementStyle>) => {
     const next: ElementStyle = { ...style, ...p };
@@ -185,35 +190,39 @@ export function StyleFields({
         onChange={(v) => patch({ fill: v })}
         onOpacityChange={(v) => patch({ fillOpacity: v })}
       />
-      <ColorField
-        label={strokeLabel}
-        value={style?.stroke}
-        opacity={style?.strokeOpacity}
-        onChange={(v) => patch({ stroke: v })}
-        onOpacityChange={(v) => patch({ strokeOpacity: v })}
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        <NumberField
-          layout="inline"
-          label="עובי קו"
-          decimals={1}
-          min={0.5}
-          step={0.5}
-          value={style?.strokeWidthPx ?? strokeWidthDefault}
-          onChange={(v) => patch({ strokeWidthPx: v })}
-          className="w-14"
-        />
-        <label className={`flex items-center gap-1.5 ${inlineLabelClassName}`}>
-          סגנון קו
-          <Select
-            value={style?.dash ?? "solid"}
-            onChange={(v) => patch({ dash: v === "solid" ? undefined : (v as DashPattern) })}
-            options={DASH_OPTIONS}
-            className="w-24"
-            aria-label="סגנון קו"
+      {!fillOnly && (
+        <>
+          <ColorField
+            label={strokeLabel}
+            value={style?.stroke}
+            opacity={style?.strokeOpacity}
+            onChange={(v) => patch({ stroke: v })}
+            onOpacityChange={(v) => patch({ strokeOpacity: v })}
           />
-        </label>
-      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <NumberField
+              layout="inline"
+              label="עובי קו"
+              decimals={1}
+              min={0.5}
+              step={0.5}
+              value={style?.strokeWidthPx ?? strokeWidthDefault}
+              onChange={(v) => patch({ strokeWidthPx: v })}
+              className="w-14"
+            />
+            <label className={`flex items-center gap-1.5 ${inlineLabelClassName}`}>
+              סגנון קו
+              <Select
+                value={style?.dash ?? "solid"}
+                onChange={(v) => patch({ dash: v === "solid" ? undefined : (v as DashPattern) })}
+                options={DASH_OPTIONS}
+                className="w-24"
+                aria-label="סגנון קו"
+              />
+            </label>
+          </div>
+        </>
+      )}
     </div>
   );
 }

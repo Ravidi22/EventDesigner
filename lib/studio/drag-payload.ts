@@ -1,5 +1,7 @@
 import type { Product } from "@/lib/catalog/types";
-import { footprintBounds, resolveFootprint } from "./footprint";
+import type { ChairRows } from "@/lib/design-document/types";
+import { chairRowsLayout } from "@/lib/design-document/chair-rows";
+import { catalogBox, footprintBounds, resolveFootprint } from "./footprint";
 import { solidKind } from "./catalog-resolver";
 
 // What the pointer is carrying between the catalog rail and the canvas, for the length of one HTML5
@@ -36,6 +38,31 @@ export function carriedOf(product: Product): CarriedItem {
 
 export function carryProduct(product: Product): void {
   carried = carriedOf(product);
+}
+
+// A BLOCK OF CHAIRS IN ROWS travels as its chair's product id behind this prefix — the rail's
+// "שורות כיסאות" card, dragged or armed (lib/design-document/chair-rows.ts). The drop and the armed
+// click both read it with rowsTool(); everything else about the drag is the chair's.
+const ROWS_PREFIX = "rows:";
+
+/** The id the rail carries for a block of `chairProductId`. */
+export function rowsToolId(chairProductId: string): string {
+  return ROWS_PREFIX + chairProductId;
+}
+
+/** What a carried or armed id names: the product, and whether it is a block of rows of it. */
+export function rowsTool(id: string): { productId: string; rows: boolean } {
+  return id.startsWith(ROWS_PREFIX) ? { productId: id.slice(ROWS_PREFIX.length), rows: true } : { productId: id, rows: false };
+}
+
+/** The block a chair lands as — the size the canvas's guides and the armed ghost measure. */
+export function carriedRowsOf(product: Product, spec: ChairRows): CarriedItem {
+  const l = chairRowsLayout(spec, catalogBox(product));
+  return { productId: product.id, widthMm: l.widthMm, depthMm: l.depthMm, solid: solidKind(product) };
+}
+
+export function carryRows(product: Product, spec: ChairRows): void {
+  carried = carriedRowsOf(product, spec);
 }
 
 export function dropCarried(): void {

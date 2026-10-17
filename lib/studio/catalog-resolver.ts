@@ -4,7 +4,7 @@
 // The index includes ARCHIVED products/variants on purpose (F-4.5) — a design document
 // must always resolve, even when the item is hidden from the catalog.
 import type { Product, Variant } from "@/lib/catalog/types";
-import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
+import type { ChairRows, DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
 import { CATEGORY_BY_ID, anchorOf, type Sizing } from "@/lib/catalog/categories";
 import type { Anchor } from "@/lib/catalog/categories";
@@ -72,6 +72,17 @@ export const benchOf: BenchLookup = (p) => {
   if (!r || r.product.category !== "stage-benches") return null;
   return p.sizeMm ?? catalogBox(r.product);
 };
+
+/** Which placements are BLOCKS OF CHAIRS IN ROWS (Placement.rows, lib/design-document/chair-rows.ts):
+ *  a `chairs` row standing on the floor — not on a table, a stage or a banquette — with rows set. And
+ *  the chair it is made of and that chair's own box, which every chair in it is laid at. The one
+ *  definition the footprint, the canvas, the printed map and the bar all read. */
+export function chairBlockOf(p: Placement): { spec: ChairRows; product: Product; chair: { widthMm: number; depthMm: number } } | null {
+  if (!p.rows || p.stage || p.perch || p.tableId || p.span) return null;
+  const r = resolve(p.variantId);
+  if (!r || r.product.category !== "chairs") return null;
+  return { spec: p.rows, product: r.product, chair: catalogBox(r.product) };
+}
 
 // The open event's shades (EventSummary.shades), primed by the studio when its event resolves —
 // the same synchronous-cache shape as the catalog above, and for the same reason: a drop decides

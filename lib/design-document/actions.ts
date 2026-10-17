@@ -1,6 +1,7 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { BenchSpec, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
+import type { BenchSpec, ChairRows, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
+import { chairRowsCount, cleanRows } from "./chair-rows";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
@@ -108,6 +109,10 @@ export type Action =
   // A STANDALONE banquette's sides, heights, number and occupancy (Placement.bench) — the whole spec,
   // replaced; null puts it back to the defaults. The caller merges, so one history entry is one edit.
   | { type: "setPlacementBench"; id: string; bench: BenchSpec | null }
+  // A chair set out as a BLOCK OF ROWS, or put back to one chair (null) — the spec and the count it
+  // is, together (lib/design-document/chair-rows.ts): `quantity` = rows × chairs per row, so the
+  // quote and the packing list count every chair. `position` keeps the front row where it stood.
+  | { type: "setChairRows"; id: string; rows: ChairRows | null; position?: Point }
   // F-3.3 smart-apply, generalised: put this item on exactly these tables. The caller decides which
   // tables those are — every table of a type, every table on the plan, the ones the designer has
   // selected, the ones inside a zone. Two narrower actions (applyToTableType / applyToAllTables)
@@ -150,7 +155,12 @@ export type Action =
   | { type: "arrangeFeature"; featureId: string; dx: number; dy: number; rotationDeg?: number }
   | { type: "arrangeFeatures"; arrangements: FeaturePlacement[] }
   // Put it back where the property has it: a deleted row, not a remembered number.
-  | { type: "resetFeature"; featureId: string };
+  | { type: "resetFeature"; featureId: string }
+  // Take movable features out of THIS event's room, and bring them back — a flag on the event's
+  // row (FeaturePlacement.removed); the venue never loses anything. Bringing one back keeps where
+  // this event last had it.
+  | { type: "removeFeatures"; featureIds: string[] }
+  | { type: "restoreFeatures"; featureIds: string[] };
 
 /** The three kinds of thing on the plan that have a free position of their own, and so can be
  *  dragged and turned as a set. A cloth and a drape are not among them: one is its table's surface
@@ -558,6 +568,20 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
           return rest;
         }),
       };
+    case "setChairRows":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { rows: _old, ...rest } = p;
+          const at = action.position ? { position: action.position } : {};
+          if (!action.rows) return { ...rest, ...at, quantity: 1 };
+          const rows = cleanRows(action.rows);
+          // A block is drawn at its chairs' real size: a drawing scale left on the chair it was
+          // made from would stretch every chair in it.
+          return { ...rest, ...at, rows, quantity: chairRowsCount(rows), scale: 1 };
+        }),
+      };
     case "setPlacementPerch":
       return {
         ...doc,
@@ -676,6 +700,30 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
     case "arrangeFeatures":
       return action.arrangements.length === 0 ? doc : withArrangements(doc, action.arrangements);
 
+    case "removeFeatures": {
+      const ids = new Set(action.featureIds);
+      if (ids.size === 0) return doc;
+      const rows = [...(doc.features ?? [])];
+      for (const id of ids) {
+        const i = rows.findIndex((f) => f.featureId === id);
+        if (i >= 0) rows[i] = { ...rows[i], removed: true };
+        else rows.push({ featureId: id, dx: 0, dy: 0, removed: true });
+      }
+      return { ...doc, features: rows };
+    }
+
+    case "restoreFeatures": {
+      const ids = new Set(action.featureIds);
+      if (!doc.features?.some((f) => ids.has(f.featureId) && f.removed)) return doc;
+      const rows = doc.features.flatMap((f) => {
+        if (!ids.has(f.featureId) || !f.removed) return [f];
+        const { removed: _gone, ...kept } = f;
+        // A row that only ever said "taken out" says nothing once it is back: no trace left.
+        return kept.dx === 0 && kept.dy === 0 && !norm360(kept.rotationDeg ?? 0) ? [] : [kept];
+      });
+      return rows.length === 0 ? withoutFeatures(doc) : { ...doc, features: rows };
+    }
+
     case "resetFeature": {
       if (!doc.features?.some((f) => f.featureId === action.featureId)) return doc;
       const rest = doc.features.filter((f) => f.featureId !== action.featureId);
@@ -711,6 +759,8 @@ function withArrangements(doc: DesignDocumentContent, rows: FeaturePlacement[]):
       dx: Math.round(row.dx),
       dy: Math.round(row.dy),
       ...(row.rotationDeg !== undefined ? { rotationDeg: norm360(row.rotationDeg) } : kept !== undefined ? { rotationDeg: kept } : {}),
+      // An arrangement never brings a feature back on its own — that is restoreFeatures' job.
+      ...(i >= 0 && next[i].removed ? { removed: true as const } : {}),
     };
     if (i >= 0) next[i] = merged;
     else next.push(merged);
@@ -1157,6 +1207,10 @@ if (isMain(import.meta.url)) {
     const climbed = apply(base, { type: "setPlacementClimb", id: "a", climb: { heightMm: 290 }, sizeMm: { widthMm: 1200, depthMm: 3480 }, position: { x: 5, y: 1860 } });
     assert(climbed.placements[0].climb?.heightMm === 290 && climbed.placements[0].sizeMm?.depthMm === 3480 && climbed.placements[0].position.y === 1860, "a climb's rise, run and place land as one edit");
     assert(!("climb" in apply(climbed, { type: "setPlacementClimb", id: "a", climb: {} }).placements[0]), "an empty climb leaves no field behind");
+    const block = apply(base, { type: "setChairRows", id: "a", rows: { rows: 5, perRow: 5 }, position: { x: 0, y: 900 } });
+    assert(block.placements[0].rows?.perRow === 5 && block.placements[0].quantity === 25 && block.placements[0].position.y === 900, "a block of 5×5 is 25 chairs on the quote, its front row kept in place");
+    const single = apply(block, { type: "setChairRows", id: "a", rows: null });
+    assert(!("rows" in single.placements[0]) && single.placements[0].quantity === 1, "…and put back, one chair again");
 
     const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
     assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");
@@ -1375,6 +1429,16 @@ if (isMain(import.meta.url)) {
     assert(apply(base, { type: "resetFeature", featureId: "bar" }) === base, "…and resetting one nobody moved is not an edit");
     const two = apply(dragged, { type: "arrangeFeature", featureId: "pool", dx: 10, dy: 10 });
     assert(apply(two, { type: "resetFeature", featureId: "bar" }).features?.length === 1, "putting one back leaves the other arranged");
+    // Taken out for this event, and brought back — where it last stood.
+    const gone = apply(dragged, { type: "removeFeatures", featureIds: ["bar"] });
+    assert(gone.features?.find((f) => f.featureId === "bar")?.removed === true, "taking a feature out flags its row");
+    assert(gone.features?.find((f) => f.featureId === "bar")?.dx === dragged.features?.find((f) => f.featureId === "bar")?.dx, "…and keeps where this event had it");
+    const back = apply(gone, { type: "restoreFeatures", featureIds: ["bar"] });
+    assert(!back.features?.find((f) => f.featureId === "bar")?.removed, "bringing it back clears the flag");
+    assert(back.features?.find((f) => f.featureId === "bar")?.dx === dragged.features?.find((f) => f.featureId === "bar")?.dx, "…at the same offset");
+    const fresh = apply(base, { type: "removeFeatures", featureIds: ["pool"] });
+    assert(fresh.features?.length === 1 && fresh.features[0].removed === true && fresh.features[0].dx === 0, "an unmoved feature gets a row that only says 'taken out'");
+    assert(!("features" in apply(fresh, { type: "restoreFeatures", featureIds: ["pool"] })), "…which leaves no trace once it is back");
 
     // A feature travels in a group drag with the tables beside it, in the one action.
     const withTable: DesignDocumentContent = {

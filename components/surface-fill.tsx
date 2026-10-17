@@ -10,7 +10,9 @@
 //
 // Colour: one base per material (or the designer's own style.fill), every other tone derived from
 // it by black/white overlays, the same rule as components/plant-glyph.tsx.
-import { memo, useId } from "react";
+import { memo, useId, useMemo } from "react";
+import type { SurfaceMaterial } from "@/lib/venues/structure";
+import type { Point } from "@/lib/studio/hall";
 import { footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { TEXTURE_TILE_MM, TEXTURE_TILE_RANGE, hasSurface, surfaceLayers, type Surface, type Texture, type TextureImage } from "@/lib/catalog/textures";
 import { FootprintShape, sameDrawProps } from "@/components/footprint-shape";
@@ -303,6 +305,37 @@ function SurfaceFillView({
 }
 
 export const SurfaceFill = memo(SurfaceFillView, sameDrawProps);
+
+/** A zone's floor (Zone.surface): the material's real-scale texture across its whole region — the
+ *  same drawing a `surface` feature is (components/surface-fill.tsx), on the zone's own outline.
+ *  Shared by every surface that draws the property: the hall editor, the sketch and the printed map. */
+export const ZoneSurface = memo(function ZoneSurface({
+  boundary,
+  material,
+  id,
+  color,
+}: {
+  boundary: Point[];
+  material: SurfaceMaterial;
+  /** Seeds the texture's noise — the zone's id, so two lawns side by side are not one lawn twice. */
+  id: string;
+  color?: string;
+}) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of boundary) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const footprint = useMemo(() => ({ kind: "custom" as const, outline: boundary.map((p) => ({ x: p.x - cx, y: p.y - cy })) }), [boundary, cx, cy]);
+  if (boundary.length < 3) return null;
+  return (
+    <g transform={`translate(${cx} ${cy})`} className="pointer-events-none">
+      <SurfaceFill material={material} footprint={footprint} w={maxX - minX} d={maxY - minY} id={`zone-${id}`} color={color} />
+    </g>
+  );
+});
 
 const hexOrUndefined = (c?: string) => (c && /^#[0-9a-f]{6}$/i.test(c) ? c : undefined);
 

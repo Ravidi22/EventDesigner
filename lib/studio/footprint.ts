@@ -150,6 +150,16 @@ export function ringSpecOf(w: number, d: number, ring?: Partial<RingSpec>, shape
   return { bandMm: Math.min(R, Math.max(50, band)), gapMm: gap, gapAt: ring?.gapAt ?? "center" };
 }
 
+/** How deep a square ח's counter is — `ring.bandMm` when it was measured (the user, 2026-10-17: a
+ *  ח bar's counter is a real 60cm, and stretching the bar must not thicken it), else a third of the
+ *  shorter side, which is what every ח drew before the number existed. Clamped so an opening always
+ *  survives: under half the width (the two legs) and under the depth (the closed side). */
+export function uShapeBandOf(w: number, d: number, ring?: Partial<RingSpec>): number {
+  const stated = ring?.bandMm;
+  if (!stated || !(stated > 0)) return Math.min(w, d) / 3;
+  return Math.max(50, Math.min(stated, w / 2 - 25, d - 25));
+}
+
 /** The band and sweep an arc is actually drawn with — the stored spec, or the defaults for one that
  *  has none yet, clamped so no number typed into the modal can turn it inside out. The band never
  *  exceeds the radius: at exactly the radius the hole closes and the arc is a solid slice. */
@@ -434,11 +444,11 @@ export function buildShapeOutline(
     // and every extreme is one of them: the outer box is the full w × d and both legs reach the open
     // edge, so rule 1 holds with no curve anywhere to hide an apex inside.
     //
-    // The counter is a third of the SHORTER side. A share of the depth alone would read right on a
-    // wide bar and then swallow its own opening on a ח deeper than it is wide, which is the one way
-    // a derived shape can stop being the shape it is named after.
+    // The counter is a third of the SHORTER side unless it was measured (uShapeBandOf). A share of
+    // the depth alone would read right on a wide bar and then swallow its own opening on a ח deeper
+    // than it is wide, which is the one way a derived shape can stop being the shape it is named after.
     case "u-shape": {
-      const t = Math.min(w, d) / 3;
+      const t = uShapeBandOf(w, d, ring);
       return {
         outline: [
           { x: -hw, y: -hh }, // the closed side, along the top
@@ -864,6 +874,20 @@ if (isMain(import.meta.url)) {
   // Deeper than it is wide: the band comes off the short side, so the opening survives.
   const tall = buildShapeOutline("u-shape", 900, 3000)!;
   assert(area(tall.outline) < 900 * 3000, "a ח deeper than it is wide is still open, not a solid slab");
+  // A measured counter: ורדה's 9.0 × 1.2m ח bar drew a 40cm counter (a third of 1.2m); at 60cm it is
+  // 60cm whatever the box, and a stretched bar keeps it rather than thickening with the arms.
+  const counter = (w: number, d: number) => {
+    const o = buildShapeOutline("u-shape", w, d, undefined, { bandMm: 600 })!.outline;
+    return o[2].x - o[3].x; // the outside of the right leg to its inside, along the open edge
+  };
+  assert(Math.abs(counter(9000, 1200) - 600) < 1e-6 && Math.abs(counter(9000, 2400) - 600) < 1e-6, "a measured ח counter stays its depth when the bar is stretched");
+  assert(uShapeBandOf(1200, 600) === 200 && uShapeBandOf(1200, 600, {}) === 200, "…and with no number it is still a third of the shorter side");
+  assert(uShapeBandOf(1000, 3000, { bandMm: 900 }) === 475 && uShapeBandOf(3000, 500, { bandMm: 900 }) === 475, "a counter never closes the ח's opening");
+  {
+    const u60 = buildShapeOutline("u-shape", 3600, 1800, undefined, { bandMm: 600 })!;
+    const b60 = customShapeBounds(u60.outline);
+    assert(b60.w === 3600 && b60.h === 1800, "a measured ח still measures its two numbers");
+  }
 
   assert(buildShapeOutline("rect", 100, 100) === null, "a primitive is not built");
   assert(buildShapeOutline("custom", 100, 100) === null, "a drawn outline is not built");

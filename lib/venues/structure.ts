@@ -12,7 +12,7 @@
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
 import type { ArcSpec, MapShape, Product, RingSpec } from "@/lib/catalog/types";
-import { footprintBounds, resolveFootprint, shapeFootprint, type Footprint } from "@/lib/studio/footprint";
+import { footprintBounds, resolveFootprint, shapeFootprint, uShapeBandOf, type Footprint } from "@/lib/studio/footprint";
 import {
   absoluteControlPoints,
   bulgeDepthMm,
@@ -56,10 +56,32 @@ export interface Wall {
 export interface StructureEntrance {
   id: string;
   wallId: string;
-  distanceMm: number; // along the wall's straight chord from node a
+  distanceMm: number; // along the wall's straight chord from node a, to the opening's middle
   widthMm: number;
   swingInward: boolean;
   doubleDoor: boolean;
+  /** Which end of its wall the door is MEASURED from — on screen and in the bar's fields — when
+   *  the corner a plan or a tape gives the distance from is node b's (the user asked to choose,
+   *  2026-10-17). Storage is unchanged: `distanceMm` is always from node a; this only says which
+   *  way to read it (doorOffsets). Absent = node a. */
+  measureFrom?: "a" | "b";
+}
+
+/** Where a door stands, read from the corner it is measured from (StructureEntrance.measureFrom):
+ *  that corner to the near edge of the opening, to its middle, and the far corner to the far edge.
+ *  Along the wall's chord, like `distanceMm`. */
+export function doorOffsets(e: Pick<StructureEntrance, "distanceMm" | "widthMm" | "measureFrom">, wallLenMm: number): { toEdgeMm: number; toCentreMm: number; farEdgeMm: number } {
+  const fromA = e.measureFrom !== "b";
+  const centre = fromA ? e.distanceMm : wallLenMm - e.distanceMm;
+  return { toEdgeMm: centre - e.widthMm / 2, toCentreMm: centre, farEdgeMm: wallLenMm - centre - e.widthMm / 2 };
+}
+
+/** The stored `distanceMm` for an opening whose middle is `centreMm` from the corner it is measured
+ *  from, held inside the wall (the opening never hangs off either end). */
+export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measureFrom">, wallLenMm: number, centreMm: number): number {
+  const half = Math.min(e.widthMm / 2, wallLenMm / 2);
+  const c = Math.max(half, Math.min(wallLenMm - half, centreMm));
+  return Math.round(e.measureFrom === "b" ? wallLenMm - c : c);
 }
 
 // Fixed things a designer has to plan around and cannot move: the pool, a built stage, a permanent
@@ -157,6 +179,10 @@ export interface StructureFeature {
   plant?: PlantSpecies;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
+  /** A surface laid wall to wall in a CLOSED SHAPE of the walls, without that shape being a zone
+   *  (./face-surfaces.ts): its outline is re-laid on the shape after every edit of the walls, and
+   *  it takes no drag, resize or turn of its own. Absent = a free surface (or any other feature). */
+  fillsFace?: true;
   /** iff `kind` is "stairs" or "ramp": which way it climbs, and risers when they were typed. The
    *  height it climbs is `heightMm`; everything else is derived from it (./climb.ts). */
   climb?: FeatureClimb;
@@ -185,6 +211,16 @@ export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): b
 /** A surface's material, with the same fallback rule as plantSpecies. */
 export function surfaceMaterial(f: Pick<StructureFeature, "surface">): SurfaceMaterial {
   return f.surface && SURFACE_MATERIALS.includes(f.surface) ? f.surface : "paving";
+}
+
+/** What changing a surface's material writes: the material; its name, if it was still called by the
+ *  old material's; and the TINT dropped. The tint is the material's base colour (surface-fill.tsx),
+ *  so one picked for soil made the bed's new lawn brown — every bed at אמרה carries soil's #8a5f42.
+ *  The opacity, a separate choice, stays. */
+export function surfaceMaterialPatch(f: StructureFeature, material: SurfaceMaterial): Partial<Omit<StructureFeature, "id">> {
+  const renamed = !!f.label && f.label !== SURFACE_MATERIAL_LABEL[surfaceMaterial(f)];
+  const { fill: _tint, ...style } = f.style ?? {};
+  return { surface: material, ...(renamed ? {} : { label: SURFACE_MATERIAL_LABEL[material] }), style: Object.keys(style).length ? style : undefined };
 }
 
 export function plantSpecies(f: Pick<StructureFeature, "plant">): PlantSpecies {
@@ -429,12 +465,19 @@ export function addFeature(s: VenueStructure, f: Omit<StructureFeature, "id">): 
  *  leaves the room it was made in. Diagonal, so a copy of a hedge never lands exactly end-on. */
 export const DUPLICATE_OFFSET_MM = 600;
 
+/** A feature as it is copied: a new thing, so never born locked, and a surface that filled a closed
+ *  shape lands beside it as a free one — the copy is not in that shape (./face-surfaces.ts). */
+export function copiedFeature(f: StructureFeature): Omit<StructureFeature, "id"> {
+  const { id: _id, locked: _locked, fillsFace: _face, ...rest } = f;
+  return rest;
+}
+
 /** Copies of the given features — stairs, style, species and all — offset together, so a group
  *  copied keeps its own arrangement. The new ids come back in the same order, for the selection. */
 export function duplicateFeatures(s: VenueStructure, ids: string[]): { structure: VenueStructure; featureIds: string[] } {
   const copies = s.features
     .filter((f) => ids.includes(f.id))
-    .map((f) => ({ ...f, id: crypto.randomUUID(), x: f.x + DUPLICATE_OFFSET_MM, y: f.y + DUPLICATE_OFFSET_MM }));
+    .map((f) => ({ ...copiedFeature(f), ...(f.locked ? { locked: true as const } : {}), id: crypto.randomUUID(), x: f.x + DUPLICATE_OFFSET_MM, y: f.y + DUPLICATE_OFFSET_MM }));
   return { structure: { ...s, features: [...s.features, ...copies] }, featureIds: copies.map((f) => f.id) };
 }
 
@@ -499,12 +542,15 @@ export function updateFeature(s: VenueStructure, id: string, patch: Partial<Omit
     ...s,
     features: s.features.map((f) => {
       if (f.id !== id) return f;
-      const next = { ...f, ...patch };
+      const next = { ...f, ...patch, ...counterKept(f, patch) };
       // The edge items ride with the geometry (the sketch's own rehomeEdgeItems): a resized rectangle
       // keeps its flights on their sides, full ones stretched with them; a reshaped stage keeps
       // those that still have a side. The legacy one-flight field is read into the new form on the
       // first edit of any kind, and dropped.
       if ("edgeItems" in patch) return dropLegacyStairs(next);
+      // Nothing on its edges to carry: a lawn, a palm, a column — nearly every feature, and the
+      // ones re-laid on every frame of a wall drag (./face-surfaces.ts) — skip the stage build.
+      if (!f.edgeItems?.length && !f.stairs) return next;
       const touched = GEOMETRY_KEYS.some((k) => k in patch);
       if (!touched && !f.stairs) return next;
       const was = featurePlacement(f);
@@ -512,6 +558,16 @@ export function updateFeature(s: VenueStructure, id: string, patch: Partial<Omit
       return dropLegacyStairs({ ...next, edgeItems: items });
     }),
   };
+}
+
+/** A ח whose counter was never measured draws it at a third of its shorter side — so the first
+ *  resize would thicken the counter along with the arms. The user's rule (2026-10-17): the counter
+ *  is a real depth that stays put. So a resize of an unmeasured ח first writes down the depth it was
+ *  drawn at, and every later one keeps it. */
+function counterKept(f: StructureFeature, patch: Partial<Omit<StructureFeature, "id">>): Partial<StructureFeature> {
+  const resized = patch.widthMm !== undefined || patch.depthMm !== undefined;
+  if (!resized || "ring" in patch || f.shape !== "u-shape" || (patch.shape ?? f.shape) !== "u-shape" || f.ring?.bandMm) return {};
+  return { ring: { ...f.ring, bandMm: Math.round(uShapeBandOf(f.widthMm, f.depthMm)) } };
 }
 
 // --- stairs ----------------------------------------------------------------
@@ -678,8 +734,9 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
     shape,
     ...(outline && outline.length >= 3 ? { outline, ...(edgeCurves ? { edgeCurves } : {}) } : {}),
     // An oval ring or a horseshoe is sized by its box like any derived shape, so unlike the arc it
-    // comes across as itself — with the band and opening its two numbers cannot say.
-    ...((shape === "oval-ring" || shape === "horseshoe" || shape === "rounded-u") && product.appearance?.ring ? { ring: product.appearance.ring } : {}),
+    // comes across as itself — with the band and opening its two numbers cannot say. A square ח
+    // brings its measured counter depth the same way (uShapeBandOf).
+    ...((shape === "oval-ring" || shape === "horseshoe" || shape === "rounded-u" || shape === "u-shape") && product.appearance?.ring ? { ring: product.appearance.ring } : {}),
   };
 }
 
@@ -854,6 +911,16 @@ if (isMain(import.meta.url)) {
   assert(removeNode(withDoor, "n3").entrances.length === 0, "deleting a corner takes the doors on every wall it killed");
   assert(removeEntrance(withDoor, entranceId).entrances.length === 0, "a door can also be removed on its own");
 
+  // Measured from either corner: a 1.6m door whose middle is 2m from node a on a 4m wall.
+  {
+    const door = { distanceMm: 2000, widthMm: 1600 };
+    assert(JSON.stringify(doorOffsets(door, 4000)) === JSON.stringify({ toEdgeMm: 1200, toCentreMm: 2000, farEdgeMm: 1200 }), "from node a: 1.20 to the opening, 2.00 to its middle");
+    const offB = doorOffsets({ distanceMm: 1000, widthMm: 1000, measureFrom: "b" }, 4000);
+    assert(offB.toEdgeMm === 2500 && offB.toCentreMm === 3000 && offB.farEdgeMm === 500, "from node b, the same door reads from the other corner");
+    assert(doorDistanceFrom({ widthMm: 1000, measureFrom: "b" }, 4000, 3000) === 1000, "a distance typed from node b is stored from node a");
+    assert(doorDistanceFrom({ widthMm: 1000 }, 4000, 100) === 500, "an opening is never pushed past its wall's end");
+  }
+
   const { structure: withPool, featureId } = addFeature(base, newFeature("pool", { x: 2500, y: 2000 }));
   assert(withPool.features[0].shape === "ellipse" && withPool.features[0].heightMm === 0, "a pool starts as a flat ellipse");
   assert(updateFeature(withPool, featureId, { x: 3000 }).features[0].y === 2000, "moving a feature in x leaves y alone");
@@ -881,6 +948,20 @@ if (isMain(import.meta.url)) {
   assert(placed.x === 1000 && placed.y === 2001, "…snapped to whole millimetres like everything else the plan stores");
   const bounds = footprintBounds(featureFootprint(placed));
   assert(bounds.w === 3600 && bounds.h === 1800, "the drawn ח measures what the inspector says it does");
+
+  // The counter is a depth of its own: an unmeasured ח writes down the 40cm it is drawn at the first
+  // time it is resized, a measured one keeps its number, and the catalog's number comes across.
+  {
+    const { structure: one, featureId } = addFeature(base, { ...placed, widthMm: 9000, depthMm: 1200 });
+    const stretched = updateFeature(one, featureId, { depthMm: 2400 }).features.find((f) => f.id === featureId)!;
+    assert(stretched.ring?.bandMm === 400, `stretching an unmeasured ח keeps the counter it was drawn with (${stretched.ring?.bandMm})`);
+    const typed = updateFeature(one, featureId, { ring: { bandMm: 600 } });
+    assert(updateFeature(typed, featureId, { widthMm: 6000 }).features.find((f) => f.id === featureId)!.ring?.bandMm === 600, "…and a typed counter survives a resize");
+    const rect = updateFeature(one, featureId, { shape: "rect", widthMm: 3000 }).features.find((f) => f.id === featureId)!;
+    assert(!rect.ring, "a ח turned into a rectangle gains no counter");
+    const fromRow = newFeatureFromProduct("bar", { ...uBar, appearance: { shape: "u-shape", content: "none", ring: { bandMm: 600 } } }, { x: 0, y: 0 });
+    assert(fromRow.ring?.bandMm === 600, "a ח bar placed from the catalog brings its counter depth");
+  }
 
   // A round product's diameter becomes the feature's width, which is the one number the circle
   // renderer and the radius handle both read.

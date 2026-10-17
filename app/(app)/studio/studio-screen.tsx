@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { BenchSpec, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
+import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
+import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
+import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { emptyDocument } from "@/lib/design-document/types";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
@@ -38,8 +40,8 @@ import {
   spreadSeats,
   type NumberingOptions,
 } from "@/lib/design-document/groups";
-import { arrangedFeature, arrangedStructure, isFeatureMoved } from "@/lib/design-document/features";
-import { featureMovable } from "@/lib/venues/structure";
+import { arrangedFeature, arrangedStructure, isFeatureMoved, isFeatureRemoved, removedFeatures } from "@/lib/design-document/features";
+import { FEATURE_KIND_LABEL, featureMovable } from "@/lib/venues/structure";
 import { ALIGN_LABEL, alignedCentres, alignUnits, needsThree, type AlignOp } from "@/lib/studio/align";
 import { mirrorFlips, type MirrorAxis, type MirrorSubject } from "@/lib/design-document/mirror";
 import { axisGap, clearanceIssues, distributedCentres, placeAtGap, polysGap, spacedCentres, spreadAxis, type CentredBox } from "@/lib/studio/proximity";
@@ -568,12 +570,24 @@ export function StudioScreen({
    *  why it could not (a cloth over bare floor, a drape with no wall), which click-to-place needs
    *  to tell a placement from a refusal. */
   const dropProduct = (productId: string, x: number, y: number): boolean => {
-    const product = productById(productId);
+    // The rail's "שורות כיסאות" card carries its chair behind a prefix (lib/studio/drag-payload.ts).
+    const tool = rowsTool(productId);
+    const product = productById(tool.productId);
     if (!product) return false;
     const cat = CATEGORY_BY_ID[product.category];
     const id = uid();
     const variantId = defaultVariantId(product);
     const base = { id, variantId, layer: product.layer, quantity: 1, rotation: 0, scale: 1 };
+
+    // A BLOCK OF CHAIRS IN ROWS — five rows of five, centred where it was let go, counted as the
+    // chairs it is (lib/design-document/chair-rows.ts). Its bar sets the rows.
+    if (tool.rows && product.category === "chairs") {
+      const rows = cleanRows(NEW_BLOCK);
+      act({ type: "addPlacement", placement: { ...base, position: { x, y }, rows, quantity: chairRowsCount(rows) } });
+      landNew([{ kind: "placement", id }]);
+      setSelected([{ kind: "placement", id }]);
+      return true;
+    }
 
     // A TABLE IS NOT A PLACEMENT. Dropping one mints a DesignTable — the thing that carries a
     // number, wears a cloth, groups a smart-apply and prints on the placement map — rather than
@@ -809,7 +823,7 @@ export function StudioScreen({
         ...doc.tables.map((t) => ({ kind: "table" as const, id: t.id })),
         ...doc.placements.filter((p) => !p.tableId && !p.perch && shownInPass(p)).map((p) => ({ kind: "placement" as const, id: p.id })),
         // Only what this sketch may move (featureMovable) — a column or the floor is the room.
-        ...plan.structure.features.filter(featureMovable).map((f) => ({ kind: "feature" as const, id: f.id })),
+        ...plan.structure.features.filter((f) => featureMovable(f) && !isFeatureRemoved(doc, f)).map((f) => ({ kind: "feature" as const, id: f.id })),
       ],
       false,
     );
@@ -902,17 +916,32 @@ export function StudioScreen({
   const deleteSelection = useCallback(() => {
     if (selected.length === 0) return;
     const refs = docRefs(selected);
-    const kept = featureRefs(selected);
-    if (refs.length === 0) {
-      showHint(kept.length === 1 ? "פריט של המתחם — אפשר להזיז, לא למחוק" : "פריטי המתחם נשארים — אפשר להזיז אותם, לא למחוק");
-      return;
-    }
-    setSelected(kept);
-    batch(
-      refs.map((r) => (r.kind === "table" ? { type: "removeTable", id: r.id } : { type: "removePlacement", id: r.id })),
-    );
-    if (kept.length > 0) showHint("פריטי המתחם נשארו — אפשר להזיז אותם, לא למחוק");
-  }, [selected, batch, docRefs, featureRefs]);
+    // The venue's own features go out of THIS event's room only (FeaturePlacement.removed) — and
+    // only the ones the venue lets a sketch move, which are the only ones a sketch can select. The
+    // property keeps them; the toolbar's "פריטי מתחם שהוסרו" brings them back.
+    const venueOut = featureRefs(selected)
+      .map((r) => plan.structure.features.find((f) => f.id === r.id))
+      .filter((f): f is NonNullable<typeof f> => !!f && featureMovable(f))
+      .map((f) => f.id);
+    if (refs.length === 0 && venueOut.length === 0) return;
+    setSelected([]);
+    batch([
+      ...refs.map((r): Action => (r.kind === "table" ? { type: "removeTable", id: r.id } : { type: "removePlacement", id: r.id })),
+      ...(venueOut.length ? [{ type: "removeFeatures", featureIds: venueOut } satisfies Action] : []),
+    ]);
+    if (venueOut.length > 0) showHint(venueOut.length === 1 ? "פריט המתחם הוסר מהסקיצה של האירוע הזה בלבד" : `${venueOut.length} פריטי מתחם הוסרו מהסקיצה של האירוע הזה בלבד`);
+  }, [selected, batch, docRefs, featureRefs, plan.structure]);
+
+  /** Bring venue features this event took out back into its room, where it last had them. */
+  const restoreFeatures = useCallback(
+    (featureIds: string[]) => {
+      if (featureIds.length === 0) return;
+      act({ type: "restoreFeatures", featureIds });
+      showHint(featureIds.length === 1 ? "פריט המתחם חזר לסקיצה" : `${featureIds.length} פריטי מתחם חזרו לסקיצה`);
+    },
+    [act],
+  );
+  const removedVenueFeatures = useMemo(() => removedFeatures(plan.structure, doc).map((f) => ({ id: f.id, label: f.label || FEATURE_KIND_LABEL[f.kind] })), [plan.structure, doc]);
 
   // --- clipboard ---------------------------------------------------------------------------------
   // The rules for what a selection amounts to, and what a paste has to do to it, are in
@@ -2533,8 +2562,12 @@ export function StudioScreen({
   // Things an event has one of let go after one (placesOnce); Shift keeps them.
   const [armedId, setArmedId] = useState<string | null>(null);
   const [armedCount, setArmedCount] = useState(0);
-  // Read from the live catalog: an item archived while armed simply stops being armed.
-  const armed = armedId ? (catalog.find((p) => p.id === armedId && !p.archived) ?? null) : null;
+  // Read from the live catalog: an item archived while armed simply stops being armed. The rail's
+  // "שורות כיסאות" card arms its chair as a BLOCK (rowsTool) — the same chair, placed in rows.
+  const armedTool = armedId ? rowsTool(armedId) : null;
+  const armed = armedTool ? (catalog.find((p) => p.id === armedTool.productId && !p.archived) ?? null) : null;
+  const armedRows = !!armedTool?.rows && armed?.category === "chairs";
+  const armedBlock = useMemo(() => (armedRows && armed ? carriedRowsOf(armed, NEW_BLOCK) : null), [armedRows, armed]);
   const arm = (productId: string | null) => {
     setArmedId(productId);
     setArmedCount(0);
@@ -2543,7 +2576,7 @@ export function StudioScreen({
     if (productId) setPlacing(null);
   };
   const placeArmed = (at: Point, keep: boolean) => {
-    if (!armed || !dropProduct(armed.id, at.x, at.y)) return;
+    if (!armed || !dropProduct(armedRows ? rowsToolId(armed.id) : armed.id, at.x, at.y)) return;
     if (placesOnce(CATEGORY_BY_ID[armed.category]) && !keep) {
       arm(null);
       return;
@@ -3056,7 +3089,7 @@ export function StudioScreen({
     }
     const p = doc.placements.find((x) => x.id === sole.id);
     const r = p ? resolve(p.variantId) : undefined;
-    if (!p || !r || r.sizing === "stretch" || p.tableId || r.anchor !== "free") return null;
+    if (!p || !r || r.sizing === "stretch" || p.tableId || r.anchor !== "free" || p.rows) return null;
     // The row's own resize, or its category's default (a banquette is laid to length): resizeSpecOf.
     const axes = resizeAxes(r.product);
     const spec = resizeSpecOf(r.product);
@@ -3090,6 +3123,22 @@ export function StudioScreen({
       if (patch.number === null) delete bench.number;
       else if (patch.number !== undefined) bench.number = Math.max(0, Math.round(patch.number));
       act({ type: "setPlacementBench", id, bench: Object.keys(bench).length ? bench : null });
+    },
+    [doc.placements, act],
+  );
+
+  /** A chair set out in rows, re-set, or put back to one chair (lib/design-document/chair-rows.ts):
+   *  the count follows the rows, and more rows grow the block BACKWARD — its front row, the one
+   *  facing the chuppah, holds still, and so does its middle line (the aisle). One history entry. */
+  const changeChairRows = useCallback(
+    (id: string, rows: ChairRows | null) => {
+      const p = doc.placements.find((x) => x.id === id);
+      const r = p ? resolve(p.variantId) : undefined;
+      if (!p || !r) return;
+      const chair = catalogBox(r.product);
+      const before = p.rows ? chairRowsLayout(p.rows, chair) : chair;
+      const after = rows ? chairRowsLayout(rows, chair) : chair;
+      act({ type: "setChairRows", id, rows, position: chairRowsMove(p.position, p.rotation ?? 0, before, after) });
     },
     [doc.placements, act],
   );
@@ -3622,6 +3671,9 @@ export function StudioScreen({
       items.flatMap((p): Action[] => [
         { type: "setPlacementVariant", id: p.id, variantId },
         ...(p.sizeMm && !keepSize ? [{ type: "resizePlacement" as const, id: p.id, sizeMm: null }] : []),
+        // A block of chairs swapped for another chair stays a block; swapped for anything else it is
+        // one of that thing — not twenty-five sofas (lib/design-document/chair-rows.ts).
+        ...(p.rows && product.category !== "chairs" ? [{ type: "setChairRows" as const, id: p.id, rows: null }] : []),
       ]),
     );
     showHint(items.length === 1 ? `הוחלף ל${product.name}` : `${items.length} פריטים הוחלפו ל${product.name}`);
@@ -3829,6 +3881,8 @@ export function StudioScreen({
         onDeleteSketch={(id) => void deleteSketch(id)}
         saveState={saveState}
         onRetrySave={retrySave}
+        removedFeatures={removedVenueFeatures}
+        onRestoreFeatures={restoreFeatures}
       />
       <div className="flex min-h-0 flex-1">
         <CatalogRail
@@ -3838,7 +3892,7 @@ export function StudioScreen({
           mmPerPx={mmPerPx}
           onAddProduct={() => setAdding(blankProduct(railCategories[0]))}
           addedIds={addedIds}
-          armedId={armed?.id ?? null}
+          armedId={armed ? armedId : null}
           onArm={arm}
         />
         <div className="relative min-w-0 flex-1">
@@ -3972,6 +4026,7 @@ export function StudioScreen({
             placeGhost={placing ? placing.stage.outline : null}
             onPlaceStage={placeTemplate}
             armed={armed}
+            armedSize={armedBlock ? { widthMm: armedBlock.widthMm, depthMm: armedBlock.depthMm } : null}
             onPlaceArmed={placeArmed}
             onDisarm={() => arm(null)}
             onEdgeItemSelect={(stageId, itemId) => {
@@ -4256,6 +4311,7 @@ export function StudioScreen({
                 onStairChange={changeStair}
                 benchPanel={benchPanel}
                 onBench={changeBench}
+                onChairRows={changeChairRows}
                 onStageSurface={setSurface}
                 onStageCorners={setCorners}
                 onStageExceed={setExceed}
@@ -4307,7 +4363,7 @@ export function StudioScreen({
               >
                 <span>
                   {"מניחים: "}
-                  <span className="font-semibold text-accent">{armed.name}</span>
+                  <span className="font-semibold text-accent">{armedRows ? `שורות כיסאות · ${armed.name}` : armed.name}</span>
                 </span>
                 <span className="text-muted">·</span>
                 <span>

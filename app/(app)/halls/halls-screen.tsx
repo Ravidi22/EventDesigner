@@ -27,6 +27,7 @@ import {
   Scissors,
   SendToBack,
   Shapes,
+  SquareDashed,
   Trash2,
   TriangleAlert,
   Undo2,
@@ -77,13 +78,19 @@ import {
   updateFeature,
   type WallKind,
   PLANT_DEFAULTS,
+  SURFACE_MATERIAL_LABEL,
   type StructureFeature,
+  type SurfaceMaterial,
+  copiedFeature,
   featureEdgeItems,
   featureStage,
+  surfaceMaterialPatch,
 } from "@/lib/venues/structure";
+import { addSurfaceUnder, asOutline, featureWorldOutline, followsWalls, surfaceFilling, surfaceFromBoundary, surfaceInFace, syncFaceSurfaces } from "@/lib/venues/face-surfaces";
 import { insertRegionPoint, moveRegionPoint, removeRegionPoint, tidyRegion } from "@/lib/venues/region-edit";
-import { detectFaces, faceAt, pointInPolygon } from "@/lib/venues/faces";
+import { detectFaces, faceAt, pointInPolygon, type Face } from "@/lib/venues/faces";
 import {
+  detachedNote,
   isOpenAir,
   newZone,
   resolveZones,
@@ -91,6 +98,7 @@ import {
   type ZoneKind,
   type ZoneSource,
 } from "@/lib/venues/zone";
+import { ZONE_MARGIN_MM, featuresBoundary, presentFeatureIds } from "@/lib/venues/feature-zones";
 import {
   ZoneRegions,
   StructureFeatures,
@@ -98,7 +106,9 @@ import {
   StructureDoors,
   PlanUnderlayLayer,
   CalibrationOverlay,
+  FeatureRotateHandles,
 } from "@/components/venue-plan";
+import { VenueDims } from "@/components/venue-dims";
 import { UnderlayCropModal } from "@/components/underlay-crop-modal";
 import { AddElementFlyout } from "@/components/add-element-flyout";
 import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
@@ -211,6 +221,17 @@ const NEVER = () => false;
 /** How far each successive paste lands from the one before. */
 const PASTE_STEP_MM = 400;
 
+/** The add-element flyout's one entry that is not a tool: trace a surface of any shape, point by
+ *  point, as a freehand zone is traced. */
+const DRAW_SURFACE = "surface:draw";
+
+/** A surface laid in a closed shape follows the walls round it (lib/venues/face-surfaces.ts): any
+ *  edit that moved a wall or a corner re-lays them, inside that same history entry — so a wall drag
+ *  carries the floor with it frame by frame, and one undo takes both back. */
+function settleWalls(before: VenueStructure, after: VenueStructure): VenueStructure {
+  return after.nodes === before.nodes && after.walls === before.walls ? after : syncFaceSurfaces(after);
+}
+
 /** A feature's box as it stands, turned — what alignment and snapping measure. */
 function featureBox(f: StructureFeature): SnapBox {
   const rad = ((f.rotationDeg ?? 0) * Math.PI) / 180;
@@ -267,7 +288,12 @@ export function HallsScreen() {
   // The hand: a plain drag moves the view instead of selecting, over anything on the plan. A toggle
   // beside the modes rather than a mode of its own, so turning it off lands back where you were.
   const [handTool, setHandTool] = useState(false);
-  const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind } | null>(null);
+  // `intent: "surface"` — traced from the flyout's "ציור חופשי": the bar asks for a material, not a name.
+  const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind; intent?: "surface" } | null>(null);
+  // What the freehand trace in progress will become once it closes.
+  const [regionFor, setRegionFor] = useState<"zone" | "surface">("zone");
+  // The one free surface whose outline is open for editing point by point (the bar's "עריכת הקווים").
+  const [outlineEditId, setOutlineEditId] = useState<string | null>(null);
   // Which add-toolbar button is armed, if any — the next click on empty canvas places one of it and
   // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
   // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
@@ -457,16 +483,26 @@ export function HallsScreen() {
   // Regions are derived from the walls on every change, never stored — that is what makes a zone
   // follow its walls when they move instead of keeping a stale copy of its own outline.
   const faces = useMemo(() => detectFaces(structure), [structure]);
-  const resolved = useMemo(() => resolveZones(zones, faces), [zones, faces]);
+  // A zone made of features follows them the same way (lib/venues/feature-zones.ts).
+  const resolved = useMemo(() => resolveZones(zones, faces, structure.features), [zones, faces, structure.features]);
+  // What the zone being named will cover, drawn under its naming bar: the room clicked, the trace
+  // just closed, or the area round the features picked — whose margin is chosen by looking at it.
+  const draftBoundary = useMemo(() => {
+    const src = draftZone?.source;
+    if (!src) return null;
+    if (src.type === "face") return faceAt(faces, src.anchor)?.boundary ?? null;
+    if (src.type === "region") return src.boundary;
+    return featuresBoundary(structure.features, src.featureIds, src.marginMm);
+  }, [draftZone, faces, structure.features]);
 
   const editStructure = useCallback(
-    (fn: (s: VenueStructure) => VenueStructure) => hist.set((p) => ({ ...p, structure: fn(p.structure) })),
+    (fn: (s: VenueStructure) => VenueStructure) => hist.set((p) => ({ ...p, structure: settleWalls(p.structure, fn(p.structure)) })),
     [hist],
   );
   // A drag: the first move opens the entry, every later one overwrites it, `commit` closes it — so
   // dragging a corner across the plan is one undo step, not two hundred.
   const dragStructure = useCallback(
-    (fn: (s: VenueStructure) => VenueStructure) => hist.amend((p) => ({ ...p, structure: fn(p.structure) })),
+    (fn: (s: VenueStructure) => VenueStructure) => hist.amend((p) => ({ ...p, structure: settleWalls(p.structure, fn(p.structure)) })),
     [hist],
   );
   const editZones = useCallback(
@@ -567,9 +603,8 @@ export function HallsScreen() {
     let next = structure;
     const ids: string[] = [];
     for (const f of clip) {
-      // A pasted copy is a new thing: its own id, and never born locked.
-      const { id: _id, locked: _locked, ...rest } = f;
-      const r = addFeature(next, { ...rest, x: f.x + d, y: f.y + d });
+      // A pasted copy is a new thing: its own id, never born locked, and not in any closed shape.
+      const r = addFeature(next, { ...copiedFeature(f), x: f.x + d, y: f.y + d });
       next = r.structure;
       ids.push(r.featureId);
     }
@@ -585,7 +620,7 @@ export function HallsScreen() {
       const rows = selection
         .filter((r) => r.kind === "feature")
         .map((r) => structure.features.find((f) => f.id === r.id))
-        .filter((f): f is StructureFeature => !!f && !f.locked);
+        .filter((f): f is StructureFeature => !!f && !f.locked && !followsWalls(f));
       if (rows.length < 2 || (needsThree(op) && rows.length < 3)) return;
       const centres = alignedCentres(rows.map(featureBox), 0, op);
       editStructure((st) => rows.reduce((acc, f, i) => updateFeature(acc, f.id, { x: centres[i].x, y: centres[i].y }), st));
@@ -598,9 +633,12 @@ export function HallsScreen() {
   const snapFeatureAt = useCallback(
     (id: string, p: Point, snap: CanvasLayerContext["snap"]): Point => {
       const f = structure.features.find((x) => x.id === id);
-      if (!f || f.kind === "surface") return p;
+      if (!f) return p;
       const self = featureBox(f);
-      const boxes = structure.features.filter((o) => o.id !== id && o.kind !== "surface" && !isSelected(selection, "feature", o.id)).map(featureBox);
+      // A dragged lawn lines up with the walls and with the other GROUND — a paved path butted
+      // against a bed — never with the palm standing on it; and nothing else lines up with the ground.
+      const ground = f.kind === "surface";
+      const boxes = structure.features.filter((o) => o.id !== id && (o.kind === "surface") === ground && !isSelected(selection, "feature", o.id)).map(featureBox);
       return snap(p, { boxes, self: { widthMm: self.widthMm, depthMm: self.depthMm } });
     },
     [structure, selection],
@@ -662,6 +700,11 @@ export function HallsScreen() {
         onSelect: () => setLocked(ids, !allLocked),
       },
       {
+        label: "הגדרה כאזור",
+        icon: SquareDashed,
+        onSelect: () => startFeatureZone(ids),
+      },
+      {
         label: "שכפול",
         icon: Copy,
         onSelect: () => {
@@ -711,7 +754,7 @@ export function HallsScreen() {
         );
         // A locked member of the selection stays put while the rest are carried.
         const features = selection.flatMap((r) =>
-          r.kind === "feature" ? structure.features.filter((f) => f.id === r.id && !f.locked).map((f) => ({ id: f.id, x: f.x, y: f.y })) : [],
+          r.kind === "feature" ? structure.features.filter((f) => f.id === r.id && !f.locked && !followsWalls(f)).map((f) => ({ id: f.id, x: f.x, y: f.y })) : [],
         );
         const anchor = [...nodes, ...features].find((m) => m.id === id);
         if (!anchor) return;
@@ -846,10 +889,13 @@ export function HallsScreen() {
   // Shared by Enter and by clicking back near the first vertex (in onPick, below) — the two ways to
   // close a region boundary. Takes the boundary as an argument rather than reading `region` itself so
   // a caller that already has the point-to-close-with in hand doesn't need a redundant state update.
-  const finishRegion = useCallback((boundary: Point[]) => {
-    setDraftZone({ source: { type: "region", boundary }, name: "", kind: "open" });
-    setRegion(null);
-  }, []);
+  const finishRegion = useCallback(
+    (boundary: Point[]) => {
+      setDraftZone({ source: { type: "region", boundary }, name: "", kind: "open", ...(regionFor === "surface" ? { intent: "surface" as const } : {}) });
+      setRegion(null);
+    },
+    [regionFor],
+  );
 
   // Esc still ends a wall run or abandons a half-drawn region (and always clears the selection) —
   // but Enter is the documented way to finish a wall run now, closer to how Enter closes a region
@@ -866,7 +912,8 @@ export function HallsScreen() {
       if (e.key === "Escape") {
         // One step back per press, innermost first — the sketch's cascade. One Escape used to drop
         // everything at once: the tool in hand, the half-drawn room and the selection together.
-        if (edgePick) setEdgePick(null);
+        if (outlineEditId) setOutlineEditId(null);
+        else if (edgePick) setEdgePick(null);
         else if (activeEdge) setActiveEdge(null);
         else if (addMenuOpen) setAddMenuOpen(false);
         else if (armedToolId) setArmedToolId(null);
@@ -923,7 +970,7 @@ export function HallsScreen() {
             for (const r of selection) {
               if (r.kind === "feature") {
                 const f = next.features.find((x) => x.id === r.id);
-                if (f && !f.locked) next = updateFeature(next, r.id, { x: f.x + dx, y: f.y + dy });
+                if (f && !f.locked && !followsWalls(f)) next = updateFeature(next, r.id, { x: f.x + dx, y: f.y + dy });
               } else if (r.kind === "node") {
                 const n = next.nodes.find((x) => x.id === r.id);
                 if (n) next = moveNode(next, r.id, { x: n.x + dx, y: n.y + dy });
@@ -952,7 +999,7 @@ export function HallsScreen() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, runNodeId, region, selection, structure, addMenuOpen, armedToolId, draftZone, handTool, activeEdge, edgePick, removeEdge, deleteSelection, duplicateSelection, restackSelection, finishRegion, setLocked, copySelection, cutSelection, pasteClip, editStructure]);
+  }, [mode, runNodeId, region, selection, structure, addMenuOpen, armedToolId, draftZone, handTool, activeEdge, edgePick, outlineEditId, removeEdge, deleteSelection, duplicateSelection, restackSelection, finishRegion, setLocked, copySelection, cutSelection, pasteClip, editStructure]);
 
   // PlanCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
   // against every existing corner — so this only decides what a click *means* in the current mode.
@@ -1012,13 +1059,73 @@ export function HallsScreen() {
   // "zones" mode (still reachable mid-region, or from anywhere else that calls onPick) and a plain
   // select-mode click on the canvas (see onCanvasClick below) share the one rule for what counts as
   // "click a room to name it", instead of a dedicated mode being the only door to it.
+  const isZoneFace = (face: Face): boolean =>
+    resolved.some((r) => r.zone.source.type === "face" && faceAt(faces, r.zone.source.anchor) === face);
   const tryNameEnclosedFace = (p: Point): boolean => {
     const face = faceAt(faces, p);
     if (!face) return false; // nothing enclosed here — the region tool is the way to name open ground
-    const taken = resolved.some((r) => r.zone.source.type === "face" && faceAt(faces, r.zone.source.anchor) === face);
-    if (taken) return false;
+    if (isZoneFace(face)) return false;
     setDraftZone({ source: { type: "face", anchor: p }, name: "", kind: "hall" });
     return true;
+  };
+
+  /** A closed shape laid wall to wall in `material`, WITHOUT naming it a zone (the user, 2026-10-17):
+   *  a surface that follows the walls round it. A shape that already has one changes its material
+   *  instead of growing a second floor on the first. */
+  const layInFace = (face: Face, material: SurfaceMaterial) => {
+    const existing = surfaceFilling(structure, face, faces);
+    if (existing) {
+      editStructure((s) => updateFeature(s, existing.id, surfaceMaterialPatch(existing, material)));
+      setSelection([{ kind: "feature", id: existing.id }]);
+      return;
+    }
+    const { structure: next, featureId } = addSurfaceUnder(structure, surfaceInFace(face, material));
+    editStructure(() => next);
+    setSelection([{ kind: "feature", id: featureId }]);
+    setHint(`השטח הסגור נפרש ב${SURFACE_MATERIAL_LABEL[material]} · המשטח צמוד לקירות שסביבו`);
+  };
+
+  /** The draft's other answer: not a zone, a surface — the closed shape filled, or the trace laid. */
+  const saveDraftSurface = (material: SurfaceMaterial) => {
+    if (!draftZone) return;
+    const src = draftZone.source;
+    if (src.type === "face") {
+      const face = faceAt(faces, src.anchor);
+      if (face) layInFace(face, material);
+      // Mid wall-run (a wall that closed a loop): keep drawing, nothing to select.
+      if (mode === "walls") setSelection([]);
+    } else {
+      // A trace, or the area round the features picked — laid as a free surface of that outline.
+      const boundary = src.type === "region" ? src.boundary : (draftBoundary ?? []);
+      if (boundary.length >= 3) {
+        const { structure: next, featureId } = addSurfaceUnder(structure, surfaceFromBoundary(boundary, material));
+        editStructure(() => next);
+        setSelection([{ kind: "feature", id: featureId }]);
+      }
+      setMode("select");
+    }
+    setDraftZone(null);
+  };
+
+  /** "ציור חופשי" in the flyout's ground section: the freehand trace, for a surface. */
+  const startSurfaceDraw = () => {
+    setMode("zones");
+    setRegionFor("surface");
+    setSelection([]);
+    setDraftZone(null);
+    setArmedToolId(null);
+    setRegion([]);
+  };
+
+  /** A free surface's outline rewritten point by point — amended into one entry while a corner is
+   *  dragged, like a freehand zone's. Baked flat and unturned (lib/venues/face-surfaces.ts asOutline). */
+  const editSurfaceOutline = (id: string, fn: (b: Point[]) => Point[], during: "drag" | "edit" = "edit") => {
+    const apply = (s: VenueStructure) => {
+      const f = s.features.find((x) => x.id === id);
+      return f ? updateFeature(s, id, asOutline(fn(featureWorldOutline(f)))) : s;
+    };
+    if (during === "drag") dragStructure(apply);
+    else editStructure(apply);
   };
 
   const saveDraftZone = () => {
@@ -1027,6 +1134,24 @@ export function HallsScreen() {
     editZones((z) => [...z, zone]);
     setDraftZone(null);
     setSelection([{ kind: "zone", id: zone.id }]);
+  };
+
+  /** "הגדרה כאזור" — the selected features named as a zone of their own, without drawing round them
+   *  (the user, 2026-10-17: the חופות at אמרה). The zone is the area round them, a margin wide, and
+   *  follows them (lib/venues/feature-zones.ts). The draft asks its name like any other; the
+   *  features stay selected under it, so what it is made of is lit while it is named. */
+  const startFeatureZone = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setSelection(ids.map((id) => ({ kind: "feature" as const, id })));
+    setDraftZone({ source: { type: "features", featureIds: ids, marginMm: ZONE_MARGIN_MM }, name: "", kind: "canopy" });
+  };
+
+  /** A features zone re-made of the selection — how a feature is added to one, or taken out. */
+  const setZoneFeatures = (zoneId: string, ids: string[]) => {
+    const zone = zones.find((z) => z.id === zoneId);
+    if (!zone || zone.source.type !== "features" || ids.length === 0) return;
+    patchZone(zoneId, { source: { ...zone.source, featureIds: ids } });
+    setHint(`האזור ״${zone.name || "ללא שם"}״ מוגדר עכשיו לפי ${ids.length === 1 ? "אלמנט אחד" : `${ids.length} אלמנטים`}`);
   };
 
   const patchZone = (id: string, patch: Partial<Zone>) =>
@@ -1201,6 +1326,18 @@ export function HallsScreen() {
     isSelectMode && selection.length === 1 && selection[0].kind === "zone"
       ? zones.find((z) => z.id === selection[0].id && z.source.type === "region")
       : undefined;
+  // The zones made of features, with the members still on the plan — the bar's "אזור" offers to re-make
+  // one of them out of the selection.
+  const featureZones = zones.flatMap((z) =>
+    z.source.type === "features" ? [{ id: z.id, name: z.name, featureIds: presentFeatureIds(structure.features, z.source.featureIds) }] : [],
+  );
+  // The free surface open for point editing — gone the moment it is not the one thing selected.
+  const outlineSurface =
+    outlineEditId && isSelectMode && selection.length === 1 && selection[0].kind === "feature" && selection[0].id === outlineEditId
+      ? structure.features.find((f) => f.id === outlineEditId && f.kind === "surface" && !f.locked && !followsWalls(f))
+      : undefined;
+  if (outlineEditId && !outlineSurface) setOutlineEditId(null);
+  const outlineOfSurface = useMemo(() => (outlineSurface ? featureWorldOutline(outlineSurface) : null), [outlineSurface]);
 
   // ⚠ NOTHING FRAMES ITSELF ON SELECTION HERE, and that is deliberate. Picking a stage, a bar or a
   // pool on the plan used to travel the view onto it, on the argument that you were about to edit
@@ -1227,6 +1364,16 @@ export function HallsScreen() {
     if (!tool.kind) {
       addDoorNear(p);
       return;
+    }
+    // A ground clicked inside a closed shape that is not a zone fills that shape, wall to wall — the
+    // way to pave a path or plant a bed outlined with boundary lines. Inside a zone (its floor is the
+    // zone's own "משטח") or on open ground it lays a piece to size, as before.
+    if (tool.kind === "surface" && tool.surface) {
+      const face = faceAt(faces, p);
+      if (face && !isZoneFace(face)) {
+        layInFace(face, tool.surface);
+        return;
+      }
     }
     const { structure: next, featureId } = addFeature(
       structure,
@@ -1379,20 +1526,43 @@ export function HallsScreen() {
                     open={addMenuOpen}
                     onOpenChange={setAddMenuOpen}
                     side="bottom"
-                    items={tools.map((tool) => ({
-                      id: tool.id,
-                      label: tool.label,
-                      section: tool.section,
-                      title: tool.product ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}` : tool.label,
-                      disabled: tool.id === "entrance" && !structure.walls.some((w) => w.kind === "wall"),
-                      preview: <ToolPreview tool={tool} />,
-                    }))}
+                    items={tools.flatMap((tool, i) => {
+                      const item = {
+                        id: tool.id,
+                        label: tool.label,
+                        section: tool.section,
+                        title: tool.surface
+                          ? `${tool.label} — לחיצה בשטח סגור ממלאת אותו מקיר לקיר; בשטח פתוח מניחה משטח לשינוי גודל`
+                          : tool.product
+                            ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}`
+                            : tool.label,
+                        disabled: tool.id === "entrance" && !structure.walls.some((w) => w.kind === "wall"),
+                        preview: <ToolPreview tool={tool} />,
+                      };
+                      const firstGround = tool.section === "ground" && tools[i - 1]?.section !== "ground";
+                      return firstGround
+                        ? [
+                            {
+                              id: DRAW_SURFACE,
+                              label: "ציור חופשי",
+                              section: "ground",
+                              title: "ציור משטח בכל צורה — לחיצה לכל פינה, Enter לסגירה, ואז בחירת החומר",
+                              preview: <DrawSurfacePreview />,
+                            },
+                            item,
+                          ]
+                        : [item];
+                    })}
                     sections={ADD_TOOL_SECTIONS.map((id) => ({ id, label: ADD_TOOL_SECTION_LABEL[id] }))}
                     armedId={armedTool?.id ?? null}
                     triggerIcon={armedTool ? ADD_TOOL_ICON[addToolIconKey(armedTool)] : undefined}
                     onPick={(toolId) => {
-                      setArmedToolId((id) => (id === toolId ? null : toolId));
                       setAddMenuOpen(false);
+                      if (toolId === DRAW_SURFACE) {
+                        startSurfaceDraw();
+                        return;
+                      }
+                      setArmedToolId((id) => (id === toolId ? null : toolId));
                     }}
                   />
                   <div className="mx-0.5 h-5 w-px bg-border" />
@@ -1598,6 +1768,20 @@ export function HallsScreen() {
                   }
                 : undefined
             }
+            // The rotate knob, last of all: above the walls' hit lines and every length the canvas
+            // writes, so none of them can cover it or take its press (the user, 2026-10-17).
+            topmost={({ mm, clientToMm }) =>
+              isSelectMode && !placing ? (
+                <FeatureRotateHandles
+                  structure={structure}
+                  selectedIds={outlineSurface ? [] : featureSelection}
+                  onRotate={rotateFeature}
+                  onCommit={endGesture}
+                  clientToMm={clientToMm}
+                  mm={mm}
+                />
+              ) : null
+            }
             backdrop={({ clientToMm, mm, snap }) => {
               closeSnapMmRef.current = mm(16); // 16px, matching the outline tool's own SNAP_PX
               const closable = region !== null && region.length >= 3;
@@ -1621,6 +1805,18 @@ export function HallsScreen() {
                     onSelect={isSelectMode ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
                     mm={mm}
                   />
+                  {draftBoundary && draftBoundary.length >= 3 && (
+                    <polygon
+                      points={draftBoundary.map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill="var(--color-accent-tint)"
+                      fillOpacity={0.55}
+                      stroke="var(--color-accent)"
+                      strokeWidth={2}
+                      strokeDasharray="6 4"
+                      vectorEffect="non-scaling-stroke"
+                      pointerEvents="none"
+                    />
+                  )}
                   <StructureFeatures
                     structure={structure}
                     mm={mm}
@@ -1628,8 +1824,8 @@ export function HallsScreen() {
                     selectedIds={selection.filter((s) => s.kind === "feature").map((s) => s.id)}
                     onSelect={isSelectMode ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
                     onMove={isSelectMode ? (id, p, free) => moveWithGroup("feature", id, free ? p : snapFeatureAt(id, p, snap)) : undefined}
-                    onResize={isSelectMode ? resizeFeature : undefined}
-                    onRotate={isSelectMode ? rotateFeature : undefined}
+                    onResize={isSelectMode && !outlineSurface ? resizeFeature : undefined}
+                    // The knob is NOT drawn here but in `topmost` below, above every wall and figure.
                     activeEdgeItem={activeEdge}
                     onSelectEdgeItem={isSelectMode ? selectEdgeItem : undefined}
                     onEdgeItemChange={isSelectMode ? dragEdgeItem : undefined}
@@ -1652,6 +1848,20 @@ export function HallsScreen() {
                         return i + 1;
                       }}
                       onRemovePoint={(i) => editRegion(editableRegion.id, (b) => removeRegionPoint(b, i))}
+                      onCommit={endGesture}
+                    />
+                  )}
+                  {outlineSurface && outlineOfSurface && (
+                    <RegionOutlineEditor
+                      boundary={outlineOfSurface}
+                      mm={mm}
+                      clientToMm={clientToMm}
+                      onMovePoint={(i, to) => editSurfaceOutline(outlineSurface.id, (b) => moveRegionPoint(b, i, to), "drag")}
+                      onInsertPoint={(i) => {
+                        editSurfaceOutline(outlineSurface.id, (b) => insertRegionPoint(b, i).boundary, "drag");
+                        return i + 1;
+                      }}
+                      onRemovePoint={(i) => editSurfaceOutline(outlineSurface.id, (b) => removeRegionPoint(b, i))}
                       onCommit={endGesture}
                     />
                   )}
@@ -1712,7 +1922,7 @@ export function HallsScreen() {
                 </>
               );
             }}
-            overlay={({ mm, clientToMm }) => (
+            overlay={({ mm, clientToMm, dims }) => (
               <>
                 <StructureDoors
                   structure={structure}
@@ -1721,6 +1931,18 @@ export function HallsScreen() {
                   onMove={isSelectMode ? (id, distanceMm) => dragStructure((s) => updateEntrance(s, id, { distanceMm })) : undefined}
                   onCommit={endGesture}
                   clientToMm={clientToMm}
+                  mm={mm}
+                />
+                {/* The editor's own figures under "הצגת מידות" — element sizes, door chains, the
+                    selected element's gaps to the walls, freehand zone sides — and the selected
+                    door's chain always (components/venue-dims.tsx). */}
+                <VenueDims
+                  structure={structure}
+                  zones={resolved}
+                  dims={dims}
+                  editingOutline={outlineOfSurface}
+                  selectedFeatureIds={featureSelection}
+                  selectedDoorIds={selection.filter((s) => s.kind === "door").map((s) => s.id)}
                   mm={mm}
                 />
                 {/* Above the walls: the span being measured has to stay readable over a dark scan. */}
@@ -1743,7 +1965,11 @@ export function HallsScreen() {
                   : { left: cursorPos.x + 16, top: cursorPos.y + 18 }
               }
             >
-              {region !== null ? "הקיפו בנקודות · Enter לסגירה · Esc לביטול" : activeMode.hint}
+              {region !== null
+                ? regionFor === "surface"
+                  ? "הקיפו את המשטח בנקודות · Enter לסגירה · Esc לביטול"
+                  : "הקיפו בנקודות · Enter לסגירה · Esc לביטול"
+                : activeMode.hint}
             </div>
           )}
 
@@ -1774,8 +2000,14 @@ export function HallsScreen() {
                   onStartEdge={startEdge}
                   draftZone={draftZone}
                   onDraftZoneChange={(patch) => draftZone && setDraftZone({ ...draftZone, ...patch })}
+                  featureZones={featureZones}
+                  onFeatureZone={startFeatureZone}
+                  onSetZoneFeatures={setZoneFeatures}
                   onSaveDraftZone={saveDraftZone}
+                  onDraftSurface={saveDraftSurface}
                   onCancelDraftZone={() => setDraftZone(null)}
+                  outlineEditId={outlineSurface?.id ?? null}
+                  onToggleOutline={(id) => setOutlineEditId((cur) => (cur === id ? null : id))}
                 />
               </div>
             </div>
@@ -2146,6 +2378,7 @@ export function HallsScreen() {
                                 <Layers className="h-3.5 w-3.5" strokeWidth={1.4} />
                                 {isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${(r.zone.ceilingHeightMm / 1000).toFixed(1)} מ׳`}
                               </span>
+                              {r.zone.surface && <span>{SURFACE_MATERIAL_LABEL[r.zone.surface]}</span>}
                             </div>
                           )}
                         </button>
@@ -2161,7 +2394,7 @@ export function HallsScreen() {
                         </IconButton>
                       </div>
                       {r.detached && (
-                        <p className="px-3 pb-2.5 text-xs text-alert">השטח נפתח — הקירות סביבו אינם סוגרים אותו יותר.</p>
+                        <p className="px-3 pb-2.5 text-xs text-alert">{detachedNote(r.zone)}</p>
                       )}
                     </div>
                   );
@@ -2174,6 +2407,7 @@ export function HallsScreen() {
                   type="button"
                   onClick={() => {
                     setMode("zones");
+                    setRegionFor("zone");
                     setSelection([]);
                     setDraftZone(null);
                     setRegion([]);
@@ -2214,6 +2448,19 @@ export function HallsScreen() {
             ? () => editRegion(editingZone.zone.id, (b) => tidyRegion(b))
             : undefined
         }
+        members={editingZone?.zone.source.type === "features" ? presentFeatureIds(structure.features, editingZone.zone.source.featureIds) : undefined}
+        // Lights what the zone is made of on the plan — add one with Shift and the bar's "אזור" re-makes it.
+        onSelectMembers={(ids) => {
+          setEditingZoneId(null);
+          setSelection(ids.map((id) => ({ kind: "feature" as const, id })));
+        }}
+        // Cut loose from its features: a freehand zone of the outline it has now, its corners dragged
+        // on the plan from here on.
+        onDetach={
+          editingZone?.zone.source.type === "features" && editingZone.boundary.length >= 3
+            ? () => patchZone(editingZone.zone.id, { source: { type: "region", boundary: editingZone.boundary } })
+            : undefined
+        }
         // A feature belongs to a zone only by sitting inside its boundary (see resolveZones) —
         // there's no field to set, just a point to drop it at. The boundary's own centroid is the
         // one point guaranteed to read as "inside this zone" for any shape, convex or not. A
@@ -2241,6 +2488,29 @@ export function HallsScreen() {
         }}
       />
     </div>
+  );
+}
+
+/** "ציור חופשי": a lawn of no particular shape, its corners marked as the trace marks them. */
+const DRAW_PREVIEW_OUTLINE = [
+  { x: -620, y: -520 },
+  { x: 380, y: -660 },
+  { x: 660, y: 120 },
+  { x: 120, y: 640 },
+  { x: -660, y: 300 },
+];
+function DrawSurfacePreview() {
+  const s = 1600;
+  return (
+    <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md bg-inset">
+      <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-11 w-11" aria-hidden>
+        <SurfaceFill material="grass" footprint={{ kind: "custom", outline: DRAW_PREVIEW_OUTLINE }} w={1320} d={1300} id="draw-surface" />
+        <polygon points={DRAW_PREVIEW_OUTLINE.map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke="var(--color-accent)" strokeWidth={40} strokeDasharray="90 70" />
+        {DRAW_PREVIEW_OUTLINE.map((q, i) => (
+          <circle key={i} cx={q.x} cy={q.y} r={70} fill="var(--color-accent)" />
+        ))}
+      </svg>
+    </span>
   );
 }
 

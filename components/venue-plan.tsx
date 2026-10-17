@@ -9,10 +9,11 @@ import { isAdditiveClick } from "@/lib/keyboard";
 import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
 import { FootprintShape } from "@/components/footprint-shape";
 import { PlantGlyph } from "@/components/plant-glyph";
-import { SurfaceFill } from "@/components/surface-fill";
+import { SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { ClimbGlyph } from "@/components/climb-glyph";
 import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
-import { NO_DECKS } from "@/lib/venues/stage-edges";
+import { NO_DECKS, edgesMatter, takesEdgeItems } from "@/lib/venues/stage-edges";
+import { followsWalls } from "@/lib/venues/face-surfaces";
 import type { StageEdgeKind, StageStair } from "@/lib/design-document/types";
 import type { WallDistance } from "@/lib/design-document/stage";
 import { isClimb } from "@/lib/venues/climb";
@@ -298,16 +299,21 @@ export const ZoneRegions = memo(function ZoneRegions({
           const displayName =
             r.zone.name.length > maxNameChars ? `${r.zone.name.slice(0, maxNameChars - 1)}…` : r.zone.name;
 
+          // A zone laid in a material (Zone.surface) is that material, wall to wall; the tint the
+          // designer picked colours it rather than being painted over it. Selected, a light wash on
+          // top says so, as on any zone.
+          const surface = r.zone.surface;
           return (
             <g
               key={r.zone.id}
               onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(r.zone.id, isAdditiveClick(e)); } : undefined}
               className={onSelect ? "cursor-pointer" : undefined}
             >
+              {surface && <ZoneSurface boundary={r.boundary} material={surface} id={r.zone.id} color={hexOf(r.zone.style?.fill)} />}
               <path
                 d={outlinePathD(r.boundary)}
-                fill={style.fill}
-                fillOpacity={style.fillOpacity}
+                fill={surface ? (selected ? "var(--color-accent-wash)" : "transparent") : style.fill}
+                fillOpacity={surface ? (selected ? 0.35 : 1) : style.fillOpacity}
                 stroke={selected ? "var(--color-accent)" : style.stroke}
                 strokeOpacity={style.strokeOpacity}
                 strokeWidth={selected ? 2.5 : style.strokeWidth}
@@ -321,6 +327,7 @@ export const ZoneRegions = memo(function ZoneRegions({
                 textAnchor="middle"
                 dominantBaseline="central"
                 fill={selected ? "var(--color-accent-deep)" : "var(--color-ink)"}
+                {...halo(mm(3))}
                 style={{ fontSize: mm(ZONE_NAME_PX), fontWeight: 700 }}
                 className="pointer-events-none"
               >
@@ -335,6 +342,7 @@ export const ZoneRegions = memo(function ZoneRegions({
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={selected ? "var(--color-accent)" : "var(--color-muted)"}
+                  {...halo(mm(2.5))}
                   style={{ fontSize: mm(ZONE_SUB_PX) }}
                   className="pointer-events-none"
                 >
@@ -347,6 +355,13 @@ export const ZoneRegions = memo(function ZoneRegions({
     </>
   );
 });
+
+const hexOf = (c?: string) => (c && /^#[0-9a-f]{6}$/i.test(c) ? c : undefined);
+
+/** A zone's name stands on whatever its floor is — and a hall laid in "אריחים" is near black, where
+ *  ink letters disappeared (both of אמרה's halls, 2026-10-17). A canvas-coloured outline painted
+ *  under the letters keeps them readable on any floor, and is invisible on a pale tint. */
+const halo = (w: number) => ({ stroke: "var(--color-canvas)", strokeWidth: w, strokeLinejoin: "round" as const, paintOrder: "stroke" as const });
 
 /** The editable outline of a freehand zone (lib/venues/region-edit.ts): a handle on every corner to
  *  drag, a smaller one mid-edge that becomes a new corner the moment it is dragged, and a
@@ -547,7 +562,7 @@ export function StructureFeatures({
   const labelPx = mm(FEATURE_LABEL_PX);
   // The one selected stage whose edge items take the pointer (its grips are drawn after every
   // feature, so no neighbour covers them), and the stage whose sides are lit for a new item.
-  const edging = selectedIds?.length === 1 && onEdgeItemChange && onSelectEdgeItem && clientToMm ? structure.features.find((f) => f.id === selectedIds[0] && !f.locked) : undefined;
+  const edging = selectedIds?.length === 1 && onEdgeItemChange && onSelectEdgeItem && clientToMm ? structure.features.find((f) => f.id === selectedIds[0] && !f.locked && takesEdgeItems(f)) : undefined;
   const edgingP = edging && featureEdgeItems(edging).length > 0 ? featurePlacement(edging) : null;
   const picking = edgePick && onPickEdge && clientToMm ? structure.features.find((f) => f.id === edgePick.featureId) : undefined;
   return (
@@ -601,6 +616,46 @@ export function StructureFeatures({
   );
 }
 
+/** The rotate knob of every selected, unlocked feature — for a host that paints it in PlanCanvas's
+ *  `topmost` layer, above the walls' hit lines, their lengths and every other figure (the hall
+ *  editor; a knob near a wall used to sit under that wall and its length label). A host that uses
+ *  this passes no `onRotate` to StructureFeatures, so each knob is drawn once. */
+export function FeatureRotateHandles({
+  structure,
+  selectedIds,
+  onRotate,
+  onCommit,
+  clientToMm,
+  mm,
+}: {
+  structure: VenueStructure;
+  selectedIds: string[];
+  onRotate: (id: string, rotationDeg: number) => void;
+  onCommit?: () => void;
+  clientToMm: (clientX: number, clientY: number) => { x: number; y: number };
+  mm: (px: number) => number;
+}) {
+  return (
+    <>
+      {structure.features
+        .filter((f) => selectedIds.includes(f.id) && !f.locked && !followsWalls(f))
+        .map((f) => (
+          <RotateHandle
+            key={f.id}
+            pivot={{ x: f.x, y: f.y }}
+            reachMm={(usesDiameter(f.shape) ? f.widthMm : f.depthMm) / 2}
+            rotationDeg={f.rotationDeg ?? 0}
+            onRotate={(deg) => onRotate(f.id, deg)}
+            onCommit={onCommit}
+            clientToMm={clientToMm}
+            mm={mm}
+            label={`סיבוב ${f.label} — גרירה · Alt לזווית חופשית`}
+          />
+        ))}
+    </>
+  );
+}
+
 /** Whether a feature writes anything sized by the zoom: its name — except a plant, a surface and a
  *  flight of stairs, which are their drawings — or a ramp's slope (its own, or a ramp on its edge),
  *  which it writes whatever its name. */
@@ -645,14 +700,18 @@ const FeatureNode = memo(function FeatureNode({
         // thing: a surface moves only once it is already selected. It is the biggest thing on the
         // plan and under everything else, so a press that missed a table by a pixel used to pick up
         // the whole lawn; now that press selects it, and the next one moves it.
-        const locked = !!f.locked;
-        const onMove = locked || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
-        const onResize = locked ? undefined : onResizeProp;
-        const onRotate = locked ? undefined : onRotateProp;
+        // A surface laid wall to wall in a closed shape (lib/venues/face-surfaces.ts) is the walls'
+        // shape: it follows them, and has no drag, size or turn of its own.
+        const pinned = !!f.locked || followsWalls(f);
+        const onMove = pinned || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
+        const onResize = pinned ? undefined : onResizeProp;
+        const onRotate = pinned ? undefined : onRotateProp;
         // The stage's edges (its flights and ramps), as the sketch draws a stage's: in the feature's
-        // own frame, inside its turned group — null for anything with none.
+        // own frame, inside its turned group — null for anything with none. A selected STAGE with no
+        // flights at all still draws its bare edges in red: the bar says they are marked on the plan,
+        // and with no items there was nothing drawing them.
         const edgeItems = featureEdgeItems(f);
-        const stageP = edgeItems.length > 0 ? featurePlacement(f) : null;
+        const stageP = edgeItems.length > 0 || (selected && edgesMatter(f)) ? featurePlacement(f) : null;
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",
           stroke: selected ? "var(--color-accent)" : "var(--color-muted)",
@@ -765,14 +824,14 @@ const FeatureNode = memo(function FeatureNode({
                     rotation={f.rotationDeg ?? 0}
                     labelMm={labelPx}
                     activeItem={activeEdgeItem}
-                    gaps={selected && wallDistance ? stageGaps(stageP, NO_DECKS, wallDistance) : undefined}
+                    gaps={selected && wallDistance && edgesMatter(f) ? stageGaps(stageP, NO_DECKS, wallDistance) : undefined}
                   />
                 )}
               </g>
               {/* The padlock on a locked feature, once it is selected and someone is looking for
                   the handles that are not there. Drawn, not an icon component: this is inside the
                   plan's SVG, sized by the zoom like a handle. */}
-              {selected && locked && mm !== unscaled && (
+              {selected && f.locked && mm !== unscaled && (
                 <g className="pointer-events-none" transform={`translate(${f.x} ${f.y - (usesDiameter(f.shape) ? f.widthMm : f.depthMm) / 2 - mm(16)})`}>
                   <circle r={mm(11)} fill="#ffffff" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                   <rect x={-mm(4.5)} y={-mm(1)} width={mm(9)} height={mm(6.5)} rx={mm(1.2)} fill="var(--color-accent)" />

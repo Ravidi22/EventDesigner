@@ -43,6 +43,28 @@ export type VenueEdgeKind = Extract<StageEdgeKind, "stairs" | "ramp">;
 export const VENUE_EDGE_KINDS: VenueEdgeKind[] = ["stairs", "ramp"];
 export const VENUE_EDGE_LABEL: Record<VenueEdgeKind, string> = { stairs: "מדרגות", ramp: "רמפה" };
 
+/** Which venue features are offered flights and ramps (the bar's "קצוות").
+ *
+ *  A stage, always. A "מבנה" or "אחר" only when it is something a guest climbs ONTO: a platform —
+ *  raised 30cm to 1.5m and at least 1.2m across both ways. The rule used to be "anything 30cm or
+ *  taller", and the user found it on everything (2026-10-17, "the bar has an option to add stairs"):
+ *  a 1.1m bar counter, every 1m fence panel and 3m post round the property, the 9m columns of the
+ *  קוליסאום — each offered stairs and a red "open edges" warning. A bar, a pool, the planting and the
+ *  ground are never climbed onto. Whatever already carries items keeps the panel, so they can be
+ *  taken off again. */
+export function takesEdgeItems(f: Pick<StructureFeature, "kind" | "heightMm" | "widthMm" | "depthMm" | "edgeItems" | "stairs">): boolean {
+  if (f.kind === "stage") return true;
+  if ((f.edgeItems?.length ?? 0) > 0 || f.stairs) return true;
+  if (f.kind !== "structure" && f.kind !== "other") return false;
+  return f.heightMm >= 300 && f.heightMm <= 1500 && Math.min(f.widthMm, f.depthMm) >= 1200;
+}
+
+/** Whether a bare edge is worth a warning — a stage's, where people stand and perform. A platform
+ *  someone may climb is offered its stairs, but an edge left open there is not called a fault. */
+export function edgesMatter(f: Pick<StructureFeature, "kind">): boolean {
+  return f.kind === "stage";
+}
+
 /** A built stage is built of nothing the catalog knows: its height is its own (featureStage sets
  *  `heightMm`), so the deck lookup is never asked anything. */
 export const NO_DECKS: DeckLookup = () => undefined;
@@ -232,6 +254,15 @@ if (isMain(import.meta.url)) {
     features: [...s.features, { id: "st", ...newFeature("stage", { x: 0, y: 0 }), ...patch }],
   });
   const itemsOf = (s: VenueStructure) => featureEdgeItems(s.features.find((f) => f.id === "st")!);
+
+  // ── who is offered stairs at all ─────────────────────────────────────────────────────────────
+  const of = (kind: StructureFeature["kind"], heightMm: number, widthMm = 4000, depthMm = 3000) => takesEdgeItems({ kind, heightMm, widthMm, depthMm });
+  assert(of("stage", 200) && edgesMatter({ kind: "stage" }), "a stage, however low, takes stairs — and its open edges are flagged");
+  assert(!of("bar", 1100, 4000, 1200), "a bar counter is never climbed onto (the user's report)");
+  assert(!of("structure", 1000, 2400, 1000) && !of("structure", 3000, 750, 750) && !of("structure", 9000, 2000, 2000), "nor a fence panel, a post or a column");
+  assert(of("structure", 600, 3000, 2000) && !edgesMatter({ kind: "structure" }), "a 60cm built platform is offered stairs, without a warning for its edges");
+  assert(!of("pool", 0) && !of("plant", 1000) && !of("surface", 0), "nor a pool, a plant or the ground");
+  assert(takesEdgeItems({ kind: "bar", heightMm: 1100, widthMm: 4000, depthMm: 1200, edgeItems: [{ id: "x", edge: 0, t: 0.5, widthMm: 1000 }] }), "…but what already carries a flight keeps the panel, to take it off");
 
   // ── a new rectangular stage gets the sketch's default: a flight on every open side ──────────
   const rect = withDefaultEdges(stageAt(empty), "st", wallDistanceOf(empty));

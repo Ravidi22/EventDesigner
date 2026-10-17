@@ -533,6 +533,11 @@ export const zones = pgTable(
     ceilingHeightMm: integer("ceiling_height_mm").notNull().default(0), // 0 = open to the sky
     capacity: jsonb("capacity").$type<ZoneCapacity>(),
     style: jsonb("style").$type<ElementStyle>(),
+    /** What the zone's floor is laid in (SurfaceMaterial — grass, paving, tile…), drawn as a texture
+     *  across its whole region. Null = no surface, the kind's tint alone. Plain text, not an enum:
+     *  the materials are an app vocabulary that grows, and a value this build does not know reads as
+     *  null (toZone). */
+    surface: text("surface"),
     createdAt: created(),
   },
   (t) => [index("zones_venue_idx").on(t.venueId), index("zones_org_idx").on(t.organizationId)],

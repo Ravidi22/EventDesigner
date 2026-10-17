@@ -224,6 +224,8 @@ export function clearanceSubjects(
   }
   // The venue's own furniture asks for nothing, but a table that asked for aisle room is as much in
   // breach against the house bar as against a hired one.
-  if (visible.floor) for (const f of structure.features) add({ kind: "feature", id: f.id });
+  // Not the ground: a table is SET on a lawn, and one standing near a lawn's edge (or across it) was
+  // reported as too close to it, as though the grass were a wall.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface") add({ kind: "feature", id: f.id });
   return out;
 }

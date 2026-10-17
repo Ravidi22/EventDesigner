@@ -148,17 +148,22 @@ export function BarButton({
   onClick,
   disabled,
   tone = "default",
+  active,
 }: {
   icon: LucideIcon;
   label: string;
   onClick: () => void;
   disabled?: boolean;
   tone?: "default" | "danger";
+  /** A toggle that is on — a mode the button entered and will leave (the hall editor's outline
+   *  editing). Absent = a plain action, with no pressed state to announce. */
+  active?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={active}
       title={label}
       disabled={disabled}
       onClick={onClick}
@@ -166,7 +171,9 @@ export function BarButton({
         "shrink-0 rounded-md p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35 " +
         (tone === "danger"
           ? "text-muted hover:bg-alert-tint hover:text-alert"
-          : "text-muted hover:bg-accent-tint hover:text-accent-hover")
+          : active
+            ? "bg-accent-tint text-accent"
+            : "text-muted hover:bg-accent-tint hover:text-accent-hover")
       }
     >
       <Icon className="h-4 w-4" strokeWidth={1.75} />

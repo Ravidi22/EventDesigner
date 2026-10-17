@@ -18,17 +18,22 @@ import {
   MousePointer2,
   MoveHorizontal,
   Palette,
+  PenLine,
   Plus,
   Ruler,
   SendToBack,
   Shapes,
+  SquareDashed,
   Trash2,
   Type,
   Undo2,
+  Unlink,
   type LucideIcon,
 } from "lucide-react";
 import { Segmented } from "@/components/segmented";
-import { VENUE_EDGE_KINDS, VENUE_EDGE_LABEL, edgeRows, featureGaps, type VenueEdgeKind } from "@/lib/venues/stage-edges";
+import { VENUE_EDGE_KINDS, VENUE_EDGE_LABEL, edgeRows, edgesMatter, featureGaps, takesEdgeItems, type VenueEdgeKind } from "@/lib/venues/stage-edges";
+import { featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
+import { SurfaceTiles } from "@/components/surface-tiles";
 import type { WallDistance } from "@/lib/design-document/stage";
 import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
 import { Popover } from "@/components/popover";
@@ -41,7 +46,8 @@ import { Switch } from "@/components/toggle";
 import { TextField } from "@/components/text-field";
 import { InspectorDivider, SegmentedToggle } from "@/components/plan-canvas";
 import { ALIGN_LABEL, needsThree, type AlignOp } from "@/lib/studio/align";
-import { bulgeDepthMm, maxBulgeDepthMm, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import { bulgeDepthMm, maxBulgeDepthMm, polygonAreaMm2, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import { ringSpecOf, uShapeBandOf } from "@/lib/studio/footprint";
 import type { ElementStyle } from "@/lib/element-style";
 import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
@@ -50,9 +56,10 @@ import {
   PLANT_DEFAULTS,
   PLANT_SPECIES,
   PLANT_SPECIES_LABEL,
-  SURFACE_MATERIALS,
   SURFACE_MATERIAL_LABEL,
   addEntrance,
+  doorDistanceFrom,
+  doorOffsets,
   featureMovable,
   moveNode,
   nodeMap,
@@ -61,6 +68,7 @@ import {
   setWallBulge,
   setWallLength,
   surfaceMaterial,
+  surfaceMaterialPatch,
   updateEntrance,
   updateFeature,
   updateWall,
@@ -72,8 +80,9 @@ import {
   type VenueStructure,
   type WallKind,
 } from "@/lib/venues/structure";
-import { ClimbFields, FEATURE_ICON, PLANT_ICON, STAGE_STAIRS_RULE, SURFACE_ICON } from "@/components/venue-inspector";
+import { ClimbFields, FEATURE_ICON, PLANT_ICON, SURFACE_ICON } from "@/components/venue-inspector";
 import { ZONE_KIND_LABEL, type ZoneKind, type ZoneSource } from "@/lib/venues/zone";
+import { MAX_ZONE_MARGIN_MM } from "@/lib/venues/feature-zones";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
 
 // The selection bar of the hall editor — the same `Bar` of chips the sketch puts under a selected
@@ -103,6 +112,15 @@ const RESTACK: { how: Restack; label: string; icon: LucideIcon }[] = [
 const ALIGN_OPS: AlignOp[] = ["right", "hcenter", "left", "top", "vmiddle", "bottom", "distribute-x", "distribute-y"];
 
 const EDGE_ICON: Record<VenueEdgeKind, LucideIcon> = { stairs: Footprints, ramp: Accessibility };
+
+/** "מהפינה הימנית" — which corner of a door's wall `corner` is, seen from the door on the plan as it
+ *  is drawn: left/right along a wall that runs across the screen, top/bottom along one that runs
+ *  down it. */
+function cornerWord(door: { x: number; y: number }, corner: { x: number; y: number }): string {
+  const dx = corner.x - door.x;
+  const dy = corner.y - door.y;
+  return Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? "מהפינה הימנית" : "מהפינה השמאלית") : dy > 0 ? "מהפינה התחתונה" : "מהפינה העליונה";
+}
 const m = (mm: number) => (mm / 1000).toFixed(2);
 const cmOf = (mm: number) => Math.round(mm / 10);
 
@@ -127,8 +145,14 @@ export function SelectionBar({
   onStartEdge,
   draftZone,
   onDraftZoneChange,
+  featureZones,
+  onFeatureZone,
+  onSetZoneFeatures,
   onSaveDraftZone,
+  onDraftSurface,
   onCancelDraftZone,
+  outlineEditId,
+  onToggleOutline,
 }: {
   selection: PlanSelection[];
   structure: VenueStructure;
@@ -159,15 +183,42 @@ export function SelectionBar({
   onStartEdge: (featureId: string, kind: VenueEdgeKind) => void;
   /** A picked-but-not-yet-real area — a face just closed by a wall, or a freehand region just
    *  closed. Not a `PlanSelection`: it has no id yet, so it takes over the bar on its own. */
-  draftZone?: { source: ZoneSource; name: string; kind: ZoneKind } | null;
-  onDraftZoneChange?: (patch: { name?: string; kind?: ZoneKind }) => void;
+  draftZone?: { source: ZoneSource; name: string; kind: ZoneKind; intent?: "surface" } | null;
+  onDraftZoneChange?: (patch: { name?: string; kind?: ZoneKind; source?: ZoneSource }) => void;
+  /** The venue's zones made of features (lib/venues/feature-zones.ts), each with its members still on
+   *  the plan — what the "אזור" chip may re-make out of the selection. */
+  featureZones?: { id: string; name: string; featureIds: string[] }[];
+  /** "הגדרה כאזור": the selected features named as a zone, the area round them. Absent = no chip. */
+  onFeatureZone?: (featureIds: string[]) => void;
+  /** A features zone re-made of these features — a member added or taken out. */
+  onSetZoneFeatures?: (zoneId: string, featureIds: string[]) => void;
   onSaveDraftZone?: () => void;
+  /** The draft's other answer: lay it in a material WITHOUT naming it a zone — a closed shape filled
+   *  wall to wall, or the trace laid as a surface (lib/venues/face-surfaces.ts). */
+  onDraftSurface?: (material: SurfaceMaterial) => void;
   onCancelDraftZone?: () => void;
+  /** The free surface whose outline is out for point editing, and the switch for it. */
+  outlineEditId?: string | null;
+  onToggleOutline?: (featureId: string) => void;
 }) {
   // ── a zone being named ───────────────────────────────────────────────────────────────────────
   if (draftZone) {
+    // Traced from "ציור חופשי": a surface, whose one question is what it is laid in.
+    if (draftZone.intent === "surface") {
+      return (
+        <Bar icon={Grid2x2} title="משטח חדש" facts="ממה הוא עשוי?" onClose={onCancelDraftZone}>
+          <SurfaceTiles label="" columns={9} onChange={(m) => m && onDraftSurface?.(m)} />
+        </Bar>
+      );
+    }
+    const src = draftZone.source;
     return (
-      <Bar icon={Layers} title={draftZone.source.type === "face" ? "מתן שם לשטח הסגור" : "מתן שם לשטח המסומן"} onClose={onCancelDraftZone}>
+      <Bar
+        icon={src.type === "features" ? SquareDashed : Layers}
+        title={src.type === "face" ? "מתן שם לשטח הסגור" : src.type === "features" ? "אזור מהאלמנטים שנבחרו" : "מתן שם לשטח המסומן"}
+        facts={src.type === "features" ? `${src.featureIds.length === 1 ? "אלמנט אחד" : `${src.featureIds.length} אלמנטים`} · האזור זז ומשתנה איתם` : undefined}
+        onClose={onCancelDraftZone}
+      >
         <TextField
           autoFocus
           aria-label="שם האזור"
@@ -182,9 +233,51 @@ export function SelectionBar({
           onChange={(kind) => onDraftZoneChange?.({ kind })}
           ariaLabel="סוג האזור"
         />
+        {/* How far round the features the zone reaches — drawn on the plan as it is typed. */}
+        {src.type === "features" && (
+          <NumberField
+            layout="inline"
+            label="מרווח (מ׳)"
+            decimals={1}
+            min={0}
+            max={MAX_ZONE_MARGIN_MM / 1000}
+            step={0.5}
+            value={src.marginMm / 1000}
+            onChange={(m) => onDraftZoneChange?.({ source: { ...src, marginMm: Math.round(m * 1000) } })}
+            className="w-16"
+          />
+        )}
         <Button size="sm" onClick={onSaveDraftZone} disabled={!draftZone.name.trim()}>
           שמירה
         </Button>
+        {/* Or not a zone at all: the shape is only to be COLOURED — a path, a bed, a lot the events
+            never book (the user, 2026-10-17). */}
+        {onDraftSurface && (
+          <>
+            <InspectorDivider />
+            <Popover label="משטח בלבד" icon={Grid2x2} value="בלי אזור" panelClassName="w-80">
+              {(close) => (
+                <>
+                  <SurfaceTiles
+                    label=""
+                    onChange={(m) => {
+                      if (!m) return;
+                      close();
+                      onDraftSurface(m);
+                    }}
+                  />
+                  <Note>
+                    {src.type === "face"
+                      ? "ממלא את השטח הסגור בחומר מקיר לקיר, בלי להגדיר אותו כאזור: הוא לא נכנס לרשימת האזורים, והמשטח זז עם הקירות שסביבו."
+                      : src.type === "features"
+                        ? "השטח שמסביב לאלמנטים נפרש בחומר בלי להגדיר אותו כאזור. המשטח נשאר בצורה הזו ולא זז איתם; אפשר להזיז אותו ולשנות את קוויו אחר כך."
+                        : "השטח המסומן נפרש בחומר בלי להגדיר אותו כאזור. אפשר להזיז אותו ולשנות את קוויו אחר כך."}
+                  </Note>
+                </>
+              )}
+            </Popover>
+          </>
+        )}
       </Bar>
     );
   }
@@ -209,9 +302,12 @@ export function SelectionBar({
       items={RESTACK.filter((r) => canRestack(r.how)).map<MenuItem>((r) => ({ label: r.label, icon: r.icon, onSelect: () => onRestack(r.how) }))}
     />
   );
-  const styleOf = (style: ElementStyle | undefined, onChange: (style: ElementStyle | undefined) => void) => (
+  // `tintOnly` for what is drawn as a picture (a lawn, a palm): its drawing reads the fill as its
+  // tint and has no line to style, so the line rows did nothing there.
+  const styleOf = (style: ElementStyle | undefined, onChange: (style: ElementStyle | undefined) => void, tintOnly = false) => (
     <Popover label="מראה" icon={Palette} panelClassName="w-80">
-      <StyleFields style={style} onChange={onChange} strokeWidthDefault={1.25} />
+      <StyleFields style={style} onChange={onChange} strokeWidthDefault={1.25} fillOnly={tintOnly} fillLabel={tintOnly ? "גוון" : undefined} />
+      {tintOnly && <Note>הגוון מחליף את הצבע של החומר עצמו. ניקוי השדה מחזיר את הצבע המקורי.</Note>}
     </Popover>
   );
   // A selection made only of locked features is not deleted from here either: the lock means
@@ -222,6 +318,63 @@ export function SelectionBar({
       <BarButton icon={Trash2} label={`${label} · Delete`} onClick={onDelete} tone="danger" disabled={allLocked} />
     </div>
   );
+
+  // "אזור" — the selected features named as a zone of their own, WITHOUT drawing round them (the
+  // user, 2026-10-17: "define the canopies as zones"): the area round them, a margin wide, following
+  // them as they move (lib/venues/feature-zones.ts). A selection that already IS a zone's features
+  // says which; any other zone made of features can be re-made of the selection — how one is added
+  // to it or taken out (its dialog's "בחירת האלמנטים" puts its members in the selection first).
+  const zoneChip = (() => {
+    if (!onFeatureZone || features.length === 0) return null;
+    const ids = features.map((f) => f.id);
+    const own = featureZones?.find((z) => z.featureIds.length === ids.length && ids.every((id) => z.featureIds.includes(id)));
+    const others = (featureZones ?? []).filter((z) => z !== own);
+    const what = ids.length === 1 ? "האלמנט" : `${ids.length} האלמנטים`;
+    return (
+      <Popover label="אזור" icon={SquareDashed} value={own ? own.name || "ללא שם" : "הגדרה"} panelClassName="w-80">
+        {(close) => (
+          <>
+            {own ? (
+              <Note>{`${ids.length === 1 ? "האלמנט הזה הוא" : "האלמנטים האלה הם"} האזור ״${own.name || "ללא שם"}״ — הוא עוטף אותם וזז איתם. שם, סוג ומרווח: בעריכת האזור ברשימה.`}</Note>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => {
+                    close();
+                    onFeatureZone(ids);
+                  }}
+                >
+                  {`הגדרת ${what} כאזור`}
+                </Button>
+                <Note>בלי לצייר סביבם: האזור עוטף את האלמנטים במרווח שתבחרו, וזז ומשתנה איתם — למשל חופה: הבמה, המסלול והבריכה.</Note>
+              </>
+            )}
+            {others.length > 0 && onSetZoneFeatures && (
+              <div className="mt-3 flex flex-col gap-1.5 border-t border-border-soft pt-3">
+                <p className="text-xs font-medium text-ink-soft">{own ? "או להגדיר אזור אחר לפיהם:" : "או לעדכן אזור קיים לפי הנבחרים:"}</p>
+                {others.map((z) => (
+                  <Button
+                    key={z.id}
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      close();
+                      onSetZoneFeatures(z.id, ids);
+                    }}
+                  >
+                    {`עדכון ״${z.name || "ללא שם"}״`}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Popover>
+    );
+  })();
 
   // ── several things ───────────────────────────────────────────────────────────────────────────
   if (selection.length > 1) {
@@ -267,6 +420,7 @@ export function SelectionBar({
         )}
         {features.length > 0 &&
           styleOf(features[0].style, (style) => apply((s) => features.reduce((acc, f) => updateFeature(acc, f.id, { style }), s)))}
+        {zoneChip}
         {lockButton}
         {stackMenu}
         {onDuplicate && features.length > 0 ? (
@@ -410,9 +564,22 @@ export function SelectionBar({
     const wall = door ? structure.walls.find((w) => w.id === door.wallId) : null;
     const pts = wall ? wallPoints(structure, wall) : null;
     if (!door || !pts) return null;
+    const len = wallLengthMm(pts.a, pts.b);
+    const off = doorOffsets(door, len);
+    // The two corners the distance can run from, named by where they lie on the plan as it is drawn
+    // (the door's wall from its middle) — a designer reads "from the left-hand corner" off the
+    // screen, and node a / node b mean nothing to anyone.
+    const centre = { x: pts.a.x + ((pts.b.x - pts.a.x) * door.distanceMm) / (len || 1), y: pts.a.y + ((pts.b.y - pts.a.y) * door.distanceMm) / (len || 1) };
+    const from = door.measureFrom === "b" ? "b" : "a";
+    const setCentre = (centreMm: number) => apply((s) => updateEntrance(s, door.id, { distanceMm: doorDistanceFrom(door, len, centreMm) }));
     return (
-      <Bar icon={DoorOpen} title="כניסה" facts={`${door.widthMm / 10} ס״מ · ${door.doubleDoor ? "כנף כפולה" : "כנף יחידה"}`} onClose={onClose}>
-        <Popover label="מידות" icon={Ruler} value={`${door.widthMm / 10} ס״מ`}>
+      <Bar
+        icon={DoorOpen}
+        title="כניסה"
+        facts={`${door.widthMm / 10} ס״מ · ${(off.toEdgeMm / 1000).toFixed(2)} מ׳ ${cornerWord(centre, from === "a" ? pts.a : pts.b)} · ${door.doubleDoor ? "כנף כפולה" : "כנף יחידה"}`}
+        onClose={onClose}
+      >
+        <Popover label="מידות" icon={Ruler} value={`${door.widthMm / 10} ס״מ`} panelClassName="w-80">
           <PanelRow label="רוחב (ס״מ)" htmlFor="door-width">
             <NumberField
               id="door-width"
@@ -420,22 +587,54 @@ export function SelectionBar({
               min={40}
               step={10}
               value={door.widthMm / 10}
-              onChange={(cm) => apply((s) => updateEntrance(s, door.id, { widthMm: Math.round(cm * 10) }))}
+              // The corner it is measured from stays where it was: a wider door grows away from it.
+              onChange={(cm) =>
+                apply((s) => {
+                  const widthMm = Math.round(cm * 10);
+                  return updateEntrance(s, door.id, { widthMm, distanceMm: doorDistanceFrom({ ...door, widthMm }, len, off.toEdgeMm + widthMm / 2) });
+                })
+              }
               className="w-24"
             />
           </PanelRow>
-          <PanelRow label="מרחק מקצה הקיר (מ׳)" htmlFor="door-at">
+          <div className="py-1">
+            <Segmented
+              label="מדידה מ־"
+              value={from}
+              options={[
+                ["a", cornerWord(centre, pts.a)],
+                ["b", cornerWord(centre, pts.b)],
+              ] as const}
+              onChange={(v) => apply((s) => updateEntrance(s, door.id, { measureFrom: v === "b" ? "b" : undefined }))}
+            />
+          </div>
+          <PanelRow label="מהפינה עד הפתח (מ׳)" htmlFor="door-edge">
+            <NumberField
+              id="door-edge"
+              decimals={2}
+              min={0}
+              max={Math.max(0, (len - door.widthMm) / 1000)}
+              step={0.1}
+              commitOnBlur
+              value={off.toEdgeMm / 1000}
+              onChange={(m) => setCentre(m * 1000 + door.widthMm / 2)}
+              className="w-24"
+            />
+          </PanelRow>
+          <PanelRow label="מהפינה עד אמצע הפתח (מ׳)" htmlFor="door-at">
             <NumberField
               id="door-at"
               decimals={2}
               min={0}
-              max={wallLengthMm(pts.a, pts.b) / 1000}
+              max={len / 1000}
               step={0.1}
-              value={door.distanceMm / 1000}
-              onChange={(m) => apply((s) => updateEntrance(s, door.id, { distanceMm: Math.round(m * 1000) }))}
+              commitOnBlur
+              value={off.toCentreMm / 1000}
+              onChange={(m) => setCentre(m * 1000)}
               className="w-24"
             />
           </PanelRow>
+          <Note>{`מהפינה השנייה עד הפתח: ${(off.farEdgeMm / 1000).toFixed(2)} מ׳. המידות מסומנות על התוכנית כשהכניסה נבחרת.`}</Note>
         </Popover>
         <SegmentedToggle
           value={door.doubleDoor}
@@ -467,6 +666,9 @@ export function SelectionBar({
   // Stairs and a ramp are measured by what they climb, not by a free width × depth × height: their
   // own panel replaces the shape and the size.
   const climb = isClimb(feature.kind);
+  const surface = feature.kind === "surface";
+  // A surface laid wall to wall in a closed shape: the walls are its size and shape.
+  const bound = followsWalls(feature);
   const icon =
     feature.kind === "plant" ? PLANT_ICON[plantSpecies(feature)] : feature.kind === "surface" ? SURFACE_ICON[surfaceMaterial(feature)] : FEATURE_ICON[feature.kind];
   const size = climb
@@ -474,7 +676,21 @@ export function SelectionBar({
     : feature.shape === "circle"
       ? `⌀ ${(feature.widthMm / 1000).toFixed(2)} מ׳`
       : `${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`;
-  const facts = [FEATURE_KIND_LABEL[feature.kind], size, !climb && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null, feature.locked ? "נעול" : null]
+  // The depth of a ח's counter or a curved bar's band — null for every shape that has none.
+  const band =
+    feature.shape === "u-shape"
+      ? uShapeBandOf(feature.widthMm, feature.depthMm, feature.ring)
+      : feature.shape === "oval-ring" || feature.shape === "horseshoe" || feature.shape === "rounded-u"
+        ? ringSpecOf(feature.widthMm, feature.depthMm, feature.ring, feature.shape).bandMm
+        : null;
+  const facts = [
+    // A surface says what it is laid in — unless its name already does ("דשא" is not "דשא · דשא").
+    surface && feature.label && feature.label !== SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)] ? SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)] : FEATURE_KIND_LABEL[feature.kind],
+    bound ? `ממלא שטח סגור · ${Math.round(polygonAreaMm2(featureWorldOutline(feature)) / 1_000_000)} מ״ר` : size,
+    band !== null && feature.kind === "bar" ? `דלפק ${Math.round(band / 10)} ס״מ` : null,
+    !climb && !surface && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null,
+    feature.locked ? "נעול" : null,
+  ]
     .filter(Boolean)
     .join(" · ");
 
@@ -577,39 +793,38 @@ export function SelectionBar({
           <Note>החלפת הסוג מביאה איתה את הגודל המקורב שלו, כמו הנחה מחדש.</Note>
         </Popover>
       ) : climb ? null : (
-        <Popover label="צורה" icon={Shapes} value={feature.kind === "surface" ? `${SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)]} · ${SHAPE_LABEL[feature.shape]}` : SHAPE_LABEL[feature.shape]}>
-          {feature.kind === "surface" && (
-            <PanelRow label="חומר" stack>
-              <Select
-                value={surfaceMaterial(feature)}
-                options={SURFACE_MATERIALS.map((m) => ({ value: m, label: SURFACE_MATERIAL_LABEL[m] }))}
-                onChange={(v) => {
-                  const next = v as SurfaceMaterial;
-                  const renamed = feature.label !== SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)];
-                  patch({ surface: next, ...(renamed ? {} : { label: SURFACE_MATERIAL_LABEL[next] }) });
-                }}
-                aria-label="חומר"
-                className="w-full"
-              />
-            </PanelRow>
+        <>
+          {/* A surface's material, picked by its look — the zone dialog's own tiles. */}
+          {surface && (
+            <Popover label="חומר" icon={SURFACE_ICON[surfaceMaterial(feature)]} value={SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)]} panelClassName="w-80">
+              <SurfaceTiles label="" value={surfaceMaterial(feature)} onChange={(m) => m && patch(surfaceMaterialPatch(feature, m))} />
+              {feature.style?.fill && <Note>החלפת החומר מחזירה את הצבע שלו — הגוון שנבחר לחומר הקודם יורד.</Note>}
+            </Popover>
           )}
-          <PanelRow label="צורה" stack>
-            <Select
-              value={feature.shape}
-              options={MAP_SHAPES.filter((sh) => sh !== "custom" || feature.shape === "custom").map((sh) => ({ value: sh, label: SHAPE_LABEL[sh] }))}
-              onChange={(shape) => patch({ shape: shape as StructureFeature["shape"] })}
-              aria-label="צורה"
-              className="w-full"
-            />
-          </PanelRow>
-        </Popover>
+          {!bound && (
+            <Popover label="צורה" icon={Shapes} value={SHAPE_LABEL[feature.shape]}>
+              <PanelRow label="צורה" stack>
+                <Select
+                  value={feature.shape}
+                  // The drawn outline is kept under any other shape, so "צורה חופשית" stays on the list
+                  // while there is one to go back to — once off it, it used to be gone for good.
+                  options={MAP_SHAPES.filter((sh) => sh !== "custom" || feature.shape === "custom" || (feature.outline?.length ?? 0) >= 3).map((sh) => ({ value: sh, label: SHAPE_LABEL[sh] }))}
+                  onChange={(shape) => patch({ shape: shape as StructureFeature["shape"] })}
+                  aria-label="צורה"
+                  className="w-full"
+                />
+              </PanelRow>
+              {surface && <Note>לכל צורה אחרת: ״עריכת הקווים״ בסרגל — גוררים פינות, מוסיפים ומוחקים.</Note>}
+            </Popover>
+          )}
+        </>
       )}
 
       {climb ? (
         <Popover label={feature.kind === "ramp" ? "רמפה" : "מדרגות"} icon={FEATURE_ICON[feature.kind]} value={size} panelClassName="w-[26rem]">
           <ClimbFields feature={feature} patch={patch} />
         </Popover>
-      ) : (
+      ) : bound ? null : (
         <Popover label="מידות" icon={Ruler} value={size}>
           <PanelRow label={feature.shape === "circle" ? "קוטר (מ׳)" : "רוחב (מ׳)"} htmlFor="feature-w">
             <NumberField
@@ -635,40 +850,77 @@ export function SelectionBar({
               />
             </PanelRow>
           )}
-          <PanelRow label="גובה (מ׳)" htmlFor="feature-h">
-            <NumberField
-              id="feature-h"
-              decimals={2}
-              min={0}
-              step={0.1}
-              value={feature.heightMm / 1000}
-              onChange={(m) => patch({ heightMm: Math.round(m * 1000) })}
-              className="w-24"
-            />
-          </PanelRow>
+          {/* The ground has no height — the field only ever showed a 0 nothing read. */}
+          {!surface && (
+            <PanelRow label="גובה (מ׳)" htmlFor="feature-h">
+              <NumberField
+                id="feature-h"
+                decimals={2}
+                min={0}
+                step={0.1}
+                value={feature.heightMm / 1000}
+                onChange={(m) => patch({ heightMm: Math.round(m * 1000) })}
+                className="w-24"
+              />
+            </PanelRow>
+          )}
+          {/* A ח's counter (and a curved bar's band) is a depth of its own: the box above is how far
+              the arms reach, this is how deep the counter is, and resizing never changes it. */}
+          {band !== null && (
+            <>
+              <PanelRow label={feature.kind === "bar" ? "עומק הדלפק (ס״מ)" : "עובי הפס (ס״מ)"} htmlFor="feature-band">
+                <NumberField
+                  id="feature-band"
+                  decimals={0}
+                  min={5}
+                  step={5}
+                  commitOnBlur
+                  value={Math.round(band / 10)}
+                  onChange={(cm) => patch({ ring: { ...feature.ring, bandMm: Math.round(cm * 10) } })}
+                  className="w-24"
+                />
+              </PanelRow>
+              <Note>{feature.kind === "bar" ? "עומק הדלפק נשאר קבוע כשמשנים את הרוחב והעומק של הבר." : "העובי נשאר קבוע כשמשנים את הגודל."}</Note>
+            </>
+          )}
         </Popover>
       )}
 
-      {!climb && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
+      {!climb && !bound && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
 
       {/* THE EDGES — the sketch's own panel: what stands on them, what is still bare (and one
           click to finish it), and adding one more, which is then clicked onto a side; each one is
-          edited by clicking it on the plan. Stairs and a ramp only on a built stage. */}
-      {STAGE_STAIRS_RULE(feature) &&
+          edited by clicking it on the plan. Stairs and a ramp only on a stage or a platform somebody
+          climbs onto (takesEdgeItems) — never a bar, a fence panel or a column — and only a STAGE's
+          bare edge is called a fault. */}
+      {takesEdgeItems(feature) &&
         (() => {
           const rows = edgeRows(feature, wallDistance);
           const gapsMm = featureGaps(feature, wallDistance).reduce((t, g) => t + g.lengthMm, 0);
           const flights = rows.filter((r) => r.kind === "stairs");
           const ramps = rows.filter((r) => r.kind === "ramp").length;
           const open = gapsMm > 0;
+          const warn = open && edgesMatter(feature);
           const picking = edgePick?.featureId === feature.id ? edgePick.kind : null;
           return (
             <Popover
               label="קצוות"
               icon={Footprints}
               panelClassName="w-80"
-              tone={open ? "warn" : "default"}
-              value={picking ? "לחצו על צד" : open ? `${m(gapsMm)} מ׳ פתוחים` : flights.length > 0 ? `${flights.length} מדרגות` : "סגור"}
+              tone={warn ? "warn" : "default"}
+              value={
+                picking
+                  ? "לחצו על צד"
+                  : warn
+                    ? `${m(gapsMm)} מ׳ פתוחים`
+                    : flights.length > 0
+                      ? `${flights.length} מדרגות`
+                      : ramps > 0
+                        ? "רמפה"
+                        : open
+                          ? "ללא מדרגות"
+                          : "סגור"
+              }
             >
               <ul className="space-y-1 text-sm">
                 {flights.length > 0 && (
@@ -687,7 +939,9 @@ export function SelectionBar({
               </ul>
               {open && (
                 <div className="mt-2 space-y-1.5 border-t border-border-soft pt-2">
-                  <p className="text-xs text-alert-ink">{m(gapsMm)} מ׳ של שפה פתוחה — מסומנים באדום בתוכנית.</p>
+                  <p className={`text-xs ${warn ? "text-alert-ink" : "text-muted"}`}>
+                    {warn ? `${m(gapsMm)} מ׳ של שפה פתוחה — מסומנים באדום בתוכנית.` : `${m(gapsMm)} מ׳ של שפה בלי מדרגות.`}
+                  </p>
                   <Button size="sm" variant="outline" className="w-full" onClick={() => onFillEdges(feature.id, "stairs")}>
                     מדרגות בכל הצדדים הפתוחים
                   </Button>
@@ -709,7 +963,23 @@ export function SelectionBar({
           );
         })()}
 
-      {styleOf(feature.style, (style) => patch({ style }))}
+      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant")}
+
+      {/* A surface that fills a closed shape follows its walls; cut loose, it is a free surface of
+          the same outline. A free one is reshaped point by point, as a freehand zone is. */}
+      {bound && <BarButton icon={Unlink} label="ניתוק מהקירות — המשטח נשאר בצורתו, ואפשר להזיז אותו ולשנות את קוויו" onClick={() => patch({ fillsFace: undefined })} />}
+      {surface && !bound && !feature.locked && onToggleOutline && (
+        <BarButton
+          icon={PenLine}
+          active={outlineEditId === feature.id}
+          label={
+            outlineEditId === feature.id
+              ? "סיום עריכת הקווים · Esc"
+              : "עריכת הקווים — גררו פינה, גררו נקודת אמצע כדי להוסיף פינה, לחיצה כפולה על פינה מוחקת אותה"
+          }
+          onClick={() => onToggleOutline(feature.id)}
+        />
+      )}
 
       {/* Whether an EVENT may move this in its sketch. Default by kind (featureMovable): a bar and a
           stage yes, everything else no. A sketch only ever stores its own offset — this plan is
@@ -723,6 +993,7 @@ export function SelectionBar({
         </Popover>
       )}
 
+      {zoneChip}
       {lockButton}
       {stackMenu}
       {onDuplicate ? (

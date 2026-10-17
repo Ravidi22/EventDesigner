@@ -43,7 +43,6 @@ import {
   climbRisers,
   climbRunMm,
   formatRatio,
-  isClimb,
   patchForHeight,
   patchForRisers,
   patchToAccessible,
@@ -71,12 +70,8 @@ import {
 } from "@/components/plan-canvas";
 
 export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface", "stairs", "ramp"];
-/** Which features may carry a flight of stairs (StairsFields): anything raised enough to need
- *  them, not the stage alone — a 60cm built platform labelled מבנה needs steps for exactly the
- *  same reason. Not stairs or a ramp: they ARE the climb, and a flight hung off a flight is not a
- *  thing anybody builds. */
-export const STAGE_STAIRS_RULE = (feature: StructureFeature): boolean =>
-  !(feature.kind === "plant" || feature.kind === "surface" || isClimb(feature.kind) || (feature.kind !== "stage" && feature.heightMm < 300));
+// Which features are offered flights and ramps is takesEdgeItems (lib/venues/stage-edges.ts) — a
+// stage, or a platform somebody climbs onto; never a bar, a fence or a column.
 
 export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   pool: Waves,

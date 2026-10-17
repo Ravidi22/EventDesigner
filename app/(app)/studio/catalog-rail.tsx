@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Heart, MousePointerClick, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import type { ChairRows } from "@/lib/design-document/types";
+import { NEW_BLOCK, chairRowsLayout } from "@/lib/design-document/chair-rows";
+import { catalogBox } from "@/lib/studio/footprint";
+import { ChairBlock } from "@/components/chair-block";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
@@ -16,7 +20,7 @@ import { Select } from "@/components/select";
 import { TagToggle } from "@/components/tag-toggle";
 import { ProductImage } from "../catalog/product-image";
 import { PlanGlyph, glyphSize } from "./plan-glyph";
-import { carryProduct, dropCarried } from "@/lib/studio/drag-payload";
+import { carryProduct, carryRows, dropCarried, rowsToolId } from "@/lib/studio/drag-payload";
 
 // Drag source. Each row carries its product id via dataTransfer; the canvas resolves the drop.
 // The products the client liked in the gallery (F-2.3) are pinned to the top ("תיק האירוע") so the
@@ -116,7 +120,20 @@ export function CatalogRail({
     return { added, liked, rest };
   }, [filters, addedIds, likedIds, products, allowedGroups]);
 
-  const empty = added.length === 0 && liked.length === 0 && rest.length === 0;
+  // "שורות כיסאות" — a block of the studio's first chair in rows, for a ceremony (lib/design-document/
+  // chair-rows.ts). One card, at the head of the catalog, wherever the chairs are in scope and the
+  // filters would show a chair; a search finds it by "שורות", "כיסא", "חופה" or "טקס".
+  const rowsChair = useMemo(() => {
+    const chair = products.find((p) => p.category === "chairs");
+    if (!chair) return null;
+    if (allowedGroups && !allowedGroups.has(CATEGORY_BY_ID[chair.category]?.group)) return null;
+    if (!matchesFilters(chair, { ...filters, search: "" })) return null;
+    const q = filters.search.trim();
+    if (q && !ROWS_WORDS.some((w) => w.includes(q) || q.includes(w)) && !matchesFilters(chair, filters)) return null;
+    return chair;
+  }, [products, allowedGroups, filters]);
+
+  const empty = added.length === 0 && liked.length === 0 && rest.length === 0 && !rowsChair;
   const active = hasActiveFilters(filters);
 
   return (
@@ -227,6 +244,7 @@ export function CatalogRail({
         )}
         {added.length > 0 && liked.length === 0 && rest.length > 0 && <SectionLabel>כל הקטלוג</SectionLabel>}
         <ul className="flex flex-col gap-1">
+          {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
           {rest.map((p) => (
             <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
           ))}
@@ -281,6 +299,117 @@ function showPlanGlyph(e: React.DragEvent, product: Product, mmPerPx: number) {
     root.unmount();
     host.remove();
   }, 0);
+}
+
+const ROWS_WORDS = ["שורות", "כיסא", "כיסאות", "חופה", "טקס"];
+
+/** The block's drag image: its chairs at the canvas's zoom, kept between 30 and 240 px on its longest
+ *  side like any item's (plan-glyph.tsx), held by its centre. */
+function showRowsGlyph(e: React.DragEvent, chair: Product, spec: ChairRows, mmPerPx: number) {
+  if (typeof document === "undefined" || typeof e.dataTransfer.setDragImage !== "function") return;
+  const l = chairRowsLayout(spec, catalogBox(chair));
+  let pxPerMm = 1 / Math.max(0.01, mmPerPx);
+  const longest = Math.max(l.widthMm, l.depthMm) * pxPerMm;
+  if (longest < 30) pxPerMm *= 30 / longest;
+  else if (longest > 240) pxPerMm *= 240 / longest;
+  const w = Math.max(8, Math.round(l.widthMm * pxPerMm));
+  const h = Math.max(8, Math.round(l.depthMm * pxPerMm));
+  const host = document.createElement("div");
+  host.setAttribute("aria-hidden", "true");
+  host.style.cssText = "position:fixed;top:0;inset-inline-start:-10000px;pointer-events:none;";
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() =>
+      root.render(
+        <svg width={w} height={h} viewBox={`${-l.widthMm / 2} ${-l.depthMm / 2} ${l.widthMm} ${l.depthMm}`} style={{ overflow: "visible", filter: "drop-shadow(0 4px 10px rgb(109 85 189 / 0.35))" }}>
+          <ChairBlock product={chair} spec={spec} />
+          <rect x={-l.widthMm / 2} y={-l.depthMm / 2} width={l.widthMm} height={l.depthMm} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} strokeDasharray="5 3" vectorEffect="non-scaling-stroke" />
+        </svg>,
+      ),
+    );
+    e.dataTransfer.setDragImage(host, w / 2, h / 2);
+  } catch {
+    // The browser's own snapshot is still a perfectly good drag.
+  }
+  setTimeout(() => {
+    root.unmount();
+    host.remove();
+  }, 0);
+}
+
+/** The rail's "שורות כיסאות": the studio's first chair, set out five rows of five — dragged, or
+ *  clicked and then clicked onto the plan, exactly as any row. The block's own bar sets the rows, the
+ *  gaps and an aisle, and swaps the chair. */
+function RowsCard({
+  chair,
+  mmPerPx,
+  armed,
+  onArm,
+}: {
+  chair: Product;
+  mmPerPx?: RefObject<number>;
+  armed: boolean;
+  onArm?: (productId: string | null) => void;
+}) {
+  const id = rowsToolId(chair.id);
+  const toggle = () => onArm?.(armed ? null : id);
+  const thumb: ChairRows = { rows: 3, perRow: 4, aisleMm: 600 };
+  const t = chairRowsLayout(thumb, catalogBox(chair));
+  const pad = Math.max(t.widthMm, t.depthMm) * 0.08;
+  return (
+    <li>
+      <div
+        draggable
+        role={onArm ? "button" : undefined}
+        tabIndex={onArm ? 0 : undefined}
+        aria-pressed={onArm ? armed : undefined}
+        title={onArm ? (armed ? "לחיצה נוספת מפסיקה את ההנחה" : "לחיצה — הנחה על התוכנית; גרירה — הנחה אחת") : undefined}
+        onClick={onArm ? toggle : undefined}
+        onKeyDown={
+          onArm
+            ? (e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                toggle();
+              }
+            : undefined
+        }
+        onDragStart={(e) => {
+          if (armed) onArm?.(null);
+          e.dataTransfer.setData("text/product", id);
+          e.dataTransfer.effectAllowed = "copy";
+          carryRows(chair, NEW_BLOCK);
+          showRowsGlyph(e, chair, NEW_BLOCK, mmPerPx?.current ?? 20);
+        }}
+        onDragEnd={dropCarried}
+        className={
+          "group flex cursor-grab items-center gap-2.5 rounded-md border p-1.5 transition-colors active:cursor-grabbing " +
+          (armed ? "border-accent-line bg-accent-tint" : "border-transparent hover:border-border hover:bg-bg")
+        }
+      >
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-canvas">
+          <svg viewBox={`${-t.widthMm / 2 - pad} ${-t.depthMm / 2 - pad} ${t.widthMm + pad * 2} ${t.depthMm + pad * 2}`} className="h-10 w-10" aria-hidden>
+            <ChairBlock product={chair} spec={thumb} />
+          </svg>
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className={"truncate text-sm font-medium " + (armed ? "text-accent" : "text-ink")}>שורות כיסאות</p>
+          <p className="truncate text-xs text-muted">
+            <span className="nums">{`${NEW_BLOCK.rows} × ${NEW_BLOCK.perRow}`}</span> · {chair.name}
+          </p>
+        </div>
+        {armed ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-surface px-1.5 py-0.5 text-xs font-semibold text-accent">
+            <MousePointerClick className="h-3.5 w-3.5" strokeWidth={2} />
+            מניחים
+          </span>
+        ) : (
+          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">לחופה</span>
+        )}
+      </div>
+    </li>
+  );
 }
 
 function ProductRow({

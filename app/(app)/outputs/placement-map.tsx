@@ -23,7 +23,7 @@ import { footprintPolygons } from "@/lib/studio/proximity";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { anySurface } from "@/lib/catalog/textures";
 import { PlantGlyph } from "@/components/plant-glyph";
-import { ItemSurface, SurfaceFill } from "@/components/surface-fill";
+import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { FootprintShape, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
@@ -32,7 +32,8 @@ import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
-import { benchOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { ChairBlock } from "@/components/chair-block";
 import {
   benchInRoom,
   edgeGaps,
@@ -539,12 +540,22 @@ export function PlacementMap({
           {plan.zones
             .filter((r) => r.boundary.length >= 3)
             .map((r) => (
-              <path
-                key={r.zone.id}
-                d={outlinePathD(r.boundary)}
-                fill={colour ? resolveStyle(r.zone.style, "screen", { fill: ZONE_TINT[r.zone.kind] ?? "#ffffff", stroke: "none", strokeWidth: 0 }).fill : "#ffffff"}
-                stroke="none"
-              />
+              <g key={r.zone.id}>
+                <path
+                  d={outlinePathD(r.boundary)}
+                  fill={
+                    r.zone.surface && mono
+                      ? MONO.ground
+                      : colour
+                        ? resolveStyle(r.zone.style, "screen", { fill: ZONE_TINT[r.zone.kind] ?? "#ffffff", stroke: "none", strokeWidth: 0 }).fill
+                        : "#ffffff"
+                  }
+                  stroke="none"
+                />
+                {/* A zone laid in a material (Zone.surface) prints it, as a ground feature does —
+                    flattened to the ground's pale tone in the B&W booklet, above. */}
+                {r.zone.surface && !mono && <ZoneSurface boundary={r.boundary} material={r.zone.surface} id={`q-${r.zone.id}`} color={r.zone.style?.fill && /^#[0-9a-f]{6}$/i.test(r.zone.style.fill) ? r.zone.style.fill : undefined} />}
+              </g>
             ))}
           {/* Walls. An "edge" (a terrace lip, a rim) prints lighter and dashed — never as something
               the crew would read as a wall they cannot carry a table through. */}
@@ -1456,8 +1467,10 @@ export function PlacementGlyph({
   // sheet's furniture weight whatever deck it was built from, as it does on screen.
   const style = resolveStyle(placement.stage ? undefined : productStyle(r?.product), "monochrome", { fill: "#ffffff", stroke: INK, strokeWidth: LINE_WEIGHTS.furniture });
   // The category's picture, in ink — the same one the studio draws, so the crew sees a chair where
-  // the designer put a chair (lib/catalog/symbols.ts).
-  const symbol = placement.stage ? null : symbolOf(r?.product, footprint);
+  // the designer put a chair (lib/catalog/symbols.ts). A block of chairs in rows is every one of its
+  // chairs, where the studio puts them (lib/design-document/chair-rows.ts).
+  const block = chairBlockOf(placement);
+  const symbol = placement.stage || block ? null : symbolOf(r?.product, footprint);
   // A flight or a ramp on its own: the step it covers on this plan, its slope kept upright.
   const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(r?.product, placement.climb) : undefined;
   const climbProps = rise ? { rise, turnDeg: placement.rotation, mirrored: placement.mirrored, textMm } : {};
@@ -1477,12 +1490,13 @@ export function PlacementGlyph({
     // row's own fill, the category's picture in that shade, a material where the row has one.
     const screen = resolveStyle(placement.stage ? undefined : productStyle(r?.product), "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.furniture });
     const own = placement.stage ? undefined : (r?.swatch ?? r?.product.appearance?.style?.fill);
-    const surfaced = !symbol && !overhead && anySurface(r?.product.appearance);
+    const surfaced = !symbol && !block && !overhead && anySurface(r?.product.appearance);
     const dark = !!own && isDark(own);
     return (
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
+        {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
         {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
-        {!symbol && (
+        {!symbol && !block && (
           <FootprintShape
             footprint={footprint}
             overhead={overhead}
@@ -1503,14 +1517,17 @@ export function PlacementGlyph({
   const flat = mono && !overhead ? (rug ? MONO.rug : MONO.item) : undefined;
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
+      {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
       {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+      {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
+          out by, at the weight of a note. */}
       <FootprintShape
         footprint={footprint}
         overhead={overhead}
-        fill={symbol ? "none" : (flat ?? style.fill)}
+        fill={symbol || block ? "none" : (flat ?? style.fill)}
         stroke={style.stroke}
-        strokeWidth={style.strokeWidth}
-        strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
+        strokeWidth={block ? LINE_WEIGHTS.annotation : style.strokeWidth}
+        strokeDasharray={block ? "4 3" : style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
       {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. */}

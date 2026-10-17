@@ -1,7 +1,8 @@
 import type { DesignTable, Placement, Point } from "@/lib/design-document/types";
 import type { Product } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { chairBlockOf, resolve } from "@/lib/studio/catalog-resolver";
+import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { customShapeBounds, footprintBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
 import { blockFrame, type BlockFrame } from "@/lib/design-document/block";
 import { dressingLayout, fromTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
@@ -215,6 +216,13 @@ export function dressingSpots(
 export function placementFootprint(placement: Placement): Footprint {
   // A stage is its own outline, whatever deck it was mostly built from (Placement.stage).
   if (placement.stage) return { kind: "custom", outline: placement.stage.outline };
+  // A block of chairs in rows takes the floor its rows do (lib/design-document/chair-rows.ts) — what
+  // it is hit, selected, measured and kept clear by, while each chair is drawn at its own size.
+  const block = chairBlockOf(placement);
+  if (block) {
+    const l = chairRowsLayout(block.spec, block.chair);
+    return { kind: "rect", widthMm: l.widthMm, depthMm: l.depthMm };
+  }
   const product = resolve(placement.variantId)?.product;
   if (!product) return { kind: "rect", widthMm: 600, depthMm: 600 };
   // A flight or a ramp standing on its own runs as far as the step it covers takes it, whether or

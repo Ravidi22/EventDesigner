@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { Plus, Ruler, Trash2 } from "lucide-react";
+import { MousePointer2, PenLine, Plus, Ruler, Trash2 } from "lucide-react";
 import { Button } from "@/components/button";
 import { CloseButton } from "@/components/close-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -12,7 +12,9 @@ import { TextField } from "@/components/text-field";
 import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, type AddTool } from "@/lib/venues/add-tools";
 import { formatDimensions } from "@/lib/catalog/format";
-import { ZONE_KIND_LABEL, type Zone, type ZoneKind } from "@/lib/venues/zone";
+import { ZONE_KIND_LABEL, detachedNote, type Zone, type ZoneKind } from "@/lib/venues/zone";
+import { MAX_ZONE_MARGIN_MM } from "@/lib/venues/feature-zones";
+import { SurfaceTiles } from "@/components/surface-tiles";
 
 const KIND_OPTIONS = (Object.keys(ZONE_KIND_LABEL) as ZoneKind[]).map((k) => [k, ZONE_KIND_LABEL[k]] as const);
 
@@ -29,6 +31,8 @@ const KIND_OPTIONS = (Object.keys(ZONE_KIND_LABEL) as ZoneKind[]).map((k) => [k,
 //
 // Shape is not edited here: a freehand zone is reshaped by its corner handles on the plan and a
 // walled one by its walls. The dialog says which, and offers the one-click tidy for a freehand trace.
+// A zone made of FEATURES (lib/venues/feature-zones.ts) is the one shape with a field: its margin —
+// with the way to light its features on the plan and the way to cut it loose into a freehand one.
 export function ZoneDialog({
   zone,
   areaM2,
@@ -38,6 +42,9 @@ export function ZoneDialog({
   onChange,
   onDelete,
   onTidy,
+  members,
+  onSelectMembers,
+  onDetach,
   onAddElement,
   onClose,
 }: {
@@ -56,6 +63,12 @@ export function ZoneDialog({
   onDelete: () => void;
   /** Straightens a freehand outline. Absent on a walled zone. */
   onTidy?: () => void;
+  /** A zone made of features: the ones still on the plan. Absent on every other zone. */
+  members?: string[];
+  /** Selects `members` on the plan (and closes the dialog). */
+  onSelectMembers?: (ids: string[]) => void;
+  /** Turns a features zone into a freehand one of the outline it has now. */
+  onDetach?: () => void;
   /** Places one of `addTools` inside this zone. Absent = no add-element control (a detached zone
    *  has no "inside" to place at). */
   onAddElement?: (tool: AddTool) => void;
@@ -148,6 +161,7 @@ export function ZoneDialog({
                     onChange={(m) => onChange({ ceilingHeightMm: Math.round(m * 1000) })}
                   />
                 </div>
+                <SurfaceTiles value={zone.surface} onChange={(surface) => onChange({ surface })} none="ללא" />
               </div>
 
               {/* How it is drawn on the plan. */}
@@ -161,7 +175,7 @@ export function ZoneDialog({
                 />
               </div>
 
-              {/* Where its shape is edited — on the plan, and differently for the two kinds of zone,
+              {/* Where its shape is edited — on the plan, and differently for each kind of zone,
                   which is exactly what a designer cannot tell from the tint alone. */}
               <div className="flex items-start justify-between gap-3 rounded-md bg-inset px-3.5 py-3 sm:col-span-2">
                 <div className="min-w-0">
@@ -176,12 +190,51 @@ export function ZoneDialog({
                   </p>
                   <p className={`mt-1 text-xs leading-relaxed ${detached ? "text-alert" : "text-muted"}`}>
                     {detached
-                      ? "השטח נפתח — הקירות סביבו אינם סוגרים אותו יותר."
+                      ? detachedNote(zone)
                       : zone.source.type === "region"
                         ? "על התוכנית: גררו פינה כדי להזיז אותה · גררו את הנקודה שבאמצע צלע כדי להוסיף פינה · לחיצה כפולה על פינה מוחקת אותה"
-                        : "הצורה נקבעת לפי הקירות שסביב האזור — גררו קיר או פינה במצב בחירה כדי לשנות אותה"}
+                        : zone.source.type === "features"
+                          ? `האזור עוטף ${members?.length === 1 ? "אלמנט אחד" : `${members?.length ?? 0} אלמנטים`} במרווח שסביבם, וזז ומשתנה איתם. להוספה או הסרה: בחרו את האלמנטים, ובסרגל שלהם ״אזור״ ← עדכון.`
+                          : "הצורה נקבעת לפי הקירות שסביב האזור — גררו קיר או פינה במצב בחירה כדי לשנות אותה"}
                   </p>
+                  {zone.source.type === "features" && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <NumberField
+                        layout="inline"
+                        label="מרווח סביב האלמנטים (מ׳)"
+                        decimals={1}
+                        min={0}
+                        max={MAX_ZONE_MARGIN_MM / 1000}
+                        step={0.5}
+                        commitOnBlur
+                        value={zone.source.marginMm / 1000}
+                        onChange={(m) => zone.source.type === "features" && onChange({ source: { ...zone.source, marginMm: Math.round(m * 1000) } })}
+                        className="w-20"
+                      />
+                    </div>
+                  )}
                 </div>
+                {zone.source.type === "features" && (
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    {onSelectMembers && !!members?.length && (
+                      <Button variant="outline" size="sm" onClick={() => onSelectMembers(members)} title="מסמן על התוכנית את האלמנטים שהאזור מוגדר לפיהם">
+                        <MousePointer2 className="h-4 w-4" strokeWidth={2} />
+                        בחירת האלמנטים
+                      </Button>
+                    )}
+                    {onDetach && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onDetach}
+                        title="האזור נשאר בצורתו הנוכחית ולא זז עוד עם האלמנטים; את פינותיו גוררים על התוכנית"
+                      >
+                        <PenLine className="h-4 w-4" strokeWidth={2} />
+                        ציור חופשי
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {onTidy && (
                   <Button
                     variant="outline"

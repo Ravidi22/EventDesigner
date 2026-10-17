@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2 } from "lucide-react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore } from "lucide-react";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
@@ -11,7 +11,7 @@ import { Select } from "@/components/select";
 import { TextField } from "@/components/text-field";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Popover } from "@/components/popover";
-import { BarButton } from "@/components/inspector-bar";
+import { BarButton, Note } from "@/components/inspector-bar";
 import { SwitchRow } from "@/components/toggle";
 import { fieldLabelClassName } from "@/components/control";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
@@ -55,6 +55,8 @@ export function Toolbar({
   onDeleteSketch,
   saveState,
   onRetrySave,
+  removedFeatures = [],
+  onRestoreFeatures,
 }: {
   canUndo: boolean;
   canRedo: boolean;
@@ -95,6 +97,10 @@ export function Toolbar({
   onDeleteSketch: (id: string) => void;
   saveState: "saving" | "saved" | "error";
   onRetrySave: () => void;
+  /** The venue's own features this event took out of its room (FeaturePlacement.removed), and how
+   *  to bring them back. Empty = no control at all. */
+  removedFeatures?: { id: string; label: string }[];
+  onRestoreFeatures?: (featureIds: string[]) => void;
 }) {
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
@@ -145,6 +151,10 @@ export function Toolbar({
           load into this one. Beside the numbering panel because it is the same kind of thing — a
           question about the document as a whole, not about what is selected in it. */}
       <SketchMenu sketches={sketches} sketchEmpty={sketchEmpty} onSave={onSaveSketch} onLoad={onLoadSketch} onDelete={onDeleteSketch} />
+
+      {/* What this event wheeled out of the venue's room — only while there is something to bring
+          back. Taken out from the canvas (Delete, or the feature's bar); the venue never lost it. */}
+      {removedFeatures.length > 0 && onRestoreFeatures && <RemovedFeaturesMenu features={removedFeatures} onRestore={onRestoreFeatures} />}
 
       {/* Which part of the property to work in. It FRAMES rather than filters: the rest of the plan
           stays drawn and stays reachable, held back so the חופה reads as the thing being designed
@@ -237,6 +247,30 @@ export function Toolbar({
         )}
       </div>
     </header>
+  );
+}
+
+/** The venue features this event took out of its room, each with its own way back, and all at once. */
+function RemovedFeaturesMenu({ features, onRestore }: { features: { id: string; label: string }[]; onRestore: (ids: string[]) => void }) {
+  return (
+    <Popover label={`פריטי מתחם שהוסרו (${features.length})`} icon={ArchiveRestore} trigger="icon" side="bottom" badge={features.length} panelClassName="w-72">
+      <ul className="space-y-1">
+        {features.map((f) => (
+          <li key={f.id} className="flex items-center justify-between gap-2 text-sm">
+            <span className="min-w-0 truncate text-ink">{f.label}</span>
+            <Button size="sm" variant="outline" onClick={() => onRestore([f.id])}>
+              החזרה
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {features.length > 1 && (
+        <Button size="sm" className="mt-3 w-full" onClick={() => onRestore(features.map((f) => f.id))}>
+          החזרת כולם
+        </Button>
+      )}
+      <Note>הוסרו מהסקיצה של האירוע הזה בלבד — בתוכנית המתחם ובאירועים האחרים הם במקומם.</Note>
+    </Popover>
   );
 }
 
