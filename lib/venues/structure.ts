@@ -27,7 +27,9 @@ import {
 } from "@/lib/studio/geometry";
 import { stairsFlights, type FeatureStairs } from "./stairs";
 import { footprintStageOutline, rectOutline, rehomeEdgeItems, sidePosition, tidyEdgeItems, type StagePlacement } from "../design-document/stage";
-import type { StageBuild, StageStair } from "../design-document/types";
+import type { ChairRows, StageBuild, StageStair } from "../design-document/types";
+import { FALLBACK_CHAIR, NEW_BLOCK, chairRowsLayout } from "../design-document/chair-rows";
+import type { ChairStyle } from "@/lib/catalog/symbols";
 import type { FeatureClimb } from "./climb";
 import { isMain } from "../self-check";
 
@@ -94,7 +96,21 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 // Stairs and a ramp are where the FLOOR changes height — the steps down from a lobby, a ramp at a
 // side door — and stand on the plan by themselves (./climb.ts), unlike the flight hung off a raised
 // feature (`stairs`, below), which needs a deck to climb onto.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "plant" | "surface" | "stairs" | "ramp";
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating";
+
+/** A `seating` feature's rows — the venue's own chairs set out for a ceremony, in rows facing a
+ *  חופה or a stage (the user, 2026-10-17: "שורות כיסאות is more for the /halls"). The rows are the
+ *  sketch's own block (ChairRows, lib/design-document/chair-rows.ts — one layout for both), plus the
+ *  chair they are made of: a venue's chairs are its own, not a catalog row, so the chair is a style
+ *  and a size here. Width × depth of the feature are DERIVED from these (./seating.ts) and written
+ *  with them, so every reader of the footprint sees the block's real floor. */
+export interface FeatureSeating extends ChairRows {
+  /** How each chair is drawn — the catalog's chair styles. Absent = a dining chair. */
+  chairStyle?: ChairStyle;
+  /** One chair's box. Absent = a dining chair's (FALLBACK_CHAIR). */
+  chairWidthMm?: number;
+  chairDepthMm?: number;
+}
 
 /** What a `surface` feature is laid in — the ground under everything else: a lawn, a paved court, a
  *  timber deck. Drawn as a real-scale texture (components/surface-fill.tsx), always beneath the
@@ -177,6 +193,8 @@ export interface StructureFeature {
   edgeItems?: StageStair[];
   /** iff `kind === "plant"`. Absent on a plant reads as a shrub — see plantSpecies. */
   plant?: PlantSpecies;
+  /** iff `kind === "seating"`: the rows and the chair (./seating.ts). Absent reads as five rows of five. */
+  seating?: FeatureSeating;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
   /** A surface laid wall to wall in a CLOSED SHAPE of the walls, without that shape being a zone
@@ -204,7 +222,8 @@ export interface StructureFeature {
  *  and the floor itself are not. A feature that is not movable is drawn in the sketch but takes no
  *  clicks — it is the room, like a wall. */
 export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
-  return f.movable ?? (f.kind === "bar" || f.kind === "stage");
+  // Chairs in rows too: an event sets the ceremony where its חופה is tonight.
+  return f.movable ?? (f.kind === "bar" || f.kind === "stage" || f.kind === "seating");
 }
 
 /** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
@@ -237,6 +256,7 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   surface: "משטח",
   stairs: "מדרגות",
   ramp: "רמפה",
+  seating: "שורות כיסאות",
 };
 
 export interface VenueStructure {
@@ -657,6 +677,11 @@ export function removeFeature(s: VenueStructure, id: string): VenueStructure {
   return { ...s, features: s.features.filter((f) => f.id !== id) };
 }
 
+const NEW_SEATING_BOX = (() => {
+  const l = chairRowsLayout(NEW_BLOCK, FALLBACK_CHAIR);
+  return { widthMm: l.widthMm, depthMm: l.depthMm };
+})();
+
 // Plausible starting dimensions per kind, so dropping one onto the plan gives something the right
 // rough size to nudge rather than a nondescript square to type over.
 const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "depthMm" | "heightMm" | "shape">> = {
@@ -671,6 +696,8 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   // it climbing the same 45cm at 1:12.
   stairs: { widthMm: 3000, depthMm: 560, heightMm: 450, shape: "rect" },
   ramp: { widthMm: 1500, depthMm: 5400, heightMm: 450, shape: "rect" },
+  // Five rows of five dining chairs — the box their layout comes to (./seating.ts), at a chair's height.
+  seating: { ...NEW_SEATING_BOX, heightMm: 900, shape: "rect" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
@@ -695,6 +722,7 @@ export function newFeature(kind: FeatureKind, at: Point, variant?: PlantSpecies 
     const material = SURFACE_MATERIALS.includes(variant as SurfaceMaterial) ? (variant as SurfaceMaterial) : "paving";
     return { ...base, label: SURFACE_MATERIAL_LABEL[material], ...FEATURE_DEFAULTS.surface, surface: material };
   }
+  if (kind === "seating") return { ...base, label: FEATURE_KIND_LABEL.seating, ...FEATURE_DEFAULTS.seating, seating: { ...NEW_BLOCK } };
   return { ...base, label: FEATURE_KIND_LABEL[kind], ...FEATURE_DEFAULTS[kind] };
 }
 

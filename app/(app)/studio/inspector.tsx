@@ -66,7 +66,7 @@ import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
 import type { BenchSideKind, BenchSpec, ChairRows, DesignDocumentContent, DesignTable, WallSpan } from "@/lib/design-document/types";
-import { AISLE_MM, CHAIR_GAP_MM, MAX_PER_ROW, MAX_ROWS, ROW_GAP_MM, chairRowsLayout } from "@/lib/design-document/chair-rows";
+import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
 import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
@@ -111,7 +111,7 @@ import { benchOf, chairBlockOf, coverOn, resolve, shadesOf, tableUtilization } f
 import { catalogBox } from "@/lib/studio/footprint";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
-import { Switch, SwitchRow } from "@/components/toggle";
+import { SwitchRow } from "@/components/toggle";
 import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
 import { ArrowDownToLine } from "lucide-react";
 import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
@@ -1692,7 +1692,7 @@ export function Inspector({
         {/* A chair's rows: how many, how many in each, the gaps and an aisle — a single chair is one
             row of one, and typing more makes it a block. */}
         {rowsAllowed && onChairRows && r && (
-          <ChairRowsPopover rows={p.rows} chair={catalogBox(r.product)} onChange={(rows) => onChairRows(p.id, rows)} />
+          <ChairRowsPopover single rows={p.rows} chair={catalogBox(r.product)} onChange={(rows) => onChairRows(p.id, rows)} />
         )}
         {/* Inline, not behind a subject: how many of a thing there are is the one field on this bar
             that gets edited over and over while placing. (A block's count is its rows.) */}
@@ -2665,70 +2665,6 @@ function ClimbPopover({
 
 /** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
  *  the quote, the packing list and the order still count it as the row it is. */
-/** A chair set out in ROWS — the seats facing a חופה (lib/design-document/chair-rows.ts): how many
- *  rows, how many chairs in each, the legroom between rows, the space between chairs, and a centre
- *  aisle. Every field is one edit; a single chair is a row of one, so typing 5 rows makes it a block,
- *  and "כיסא בודד" puts it back. What the block comes to — chairs and floor — is said under it. */
-function ChairRowsPopover({
-  rows,
-  chair,
-  onChange,
-}: {
-  rows: ChairRows | undefined;
-  chair: { widthMm: number; depthMm: number };
-  onChange: (rows: ChairRows | null) => void;
-}) {
-  const spec: ChairRows = rows ?? { rows: 1, perRow: 1 };
-  const layout = chairRowsLayout(spec, chair);
-  const count = layout.rows * layout.perRow;
-  const set = (patch: Partial<ChairRows>) => {
-    const next = { ...spec, ...patch };
-    // Back to one chair and nothing else asked of it: a chair, not a block of one.
-    if (next.rows <= 1 && next.perRow <= 1 && !rows) return;
-    onChange(next);
-  };
-  const cm = (mm: number) => Math.round(mm / 10);
-  return (
-    <Popover label="שורות" icon={Rows3} value={rows ? ltr(`${spec.rows}×${spec.perRow}`) : "כיסא בודד"} panelClassName="w-80">
-      <PanelRow label="שורות" htmlFor="rows-n">
-        <NumberField id="rows-n" decimals={0} min={1} max={MAX_ROWS} value={spec.rows} onChange={(n) => set({ rows: n })} className="w-20" />
-      </PanelRow>
-      <PanelRow label="כיסאות בשורה" htmlFor="rows-per">
-        <NumberField id="rows-per" decimals={0} min={1} max={MAX_PER_ROW} value={spec.perRow} onChange={(n) => set({ perRow: n })} className="w-20" />
-      </PanelRow>
-      {rows && (
-        <>
-          <PanelRow label="רווח בין השורות (ס״מ)" htmlFor="rows-gap">
-            <NumberField id="rows-gap" decimals={0} min={0} max={300} step={5} commitOnBlur value={cm(layout.rowGapMm)} onChange={(v) => set({ rowGapMm: v * 10 })} className="w-20" />
-          </PanelRow>
-          <PanelRow label="רווח בין הכיסאות (ס״מ)" htmlFor="rows-chair-gap">
-            <NumberField id="rows-chair-gap" decimals={0} min={0} max={300} step={5} commitOnBlur value={cm(layout.gapMm)} onChange={(v) => set({ gapMm: v * 10 })} className="w-20" />
-          </PanelRow>
-          <PanelRow label="מעבר באמצע">
-            <Switch checked={!!spec.aisleMm} onChange={(on) => set({ aisleMm: on ? AISLE_MM : 0 })} label="מעבר באמצע" />
-          </PanelRow>
-          {!!spec.aisleMm && (
-            <PanelRow label="רוחב המעבר (ס״מ)" htmlFor="rows-aisle">
-              <NumberField id="rows-aisle" decimals={0} min={10} max={600} step={10} commitOnBlur value={cm(spec.aisleMm)} onChange={(v) => set({ aisleMm: v * 10 })} className="w-20" />
-            </PanelRow>
-          )}
-          <p className="nums mt-1 text-xs font-medium text-ink">
-            {`${count} כיסאות · ${(layout.widthMm / 1000).toFixed(2)} × ${(layout.depthMm / 1000).toFixed(2)} מ׳`}
-          </p>
-          <Note>
-            השורה הראשונה היא החזית, והכיסאות פונים אליה — סובבו את הבלוק אל החופה. שורות נוספות מאריכות אותו לאחור, והחזית
-            נשארת במקומה. ברירת המחדל: {cm(ROW_GAP_MM)} ס״מ בין השורות, {cm(CHAIR_GAP_MM)} ס״מ בין הכיסאות.
-          </Note>
-          <Button size="sm" variant="outline" className="mt-2 w-full" onClick={() => onChange(null)}>
-            כיסא בודד
-          </Button>
-        </>
-      )}
-      {!rows && <Note>כיסא בודד הוא שורה אחת של כיסא אחד. כמה שורות או כמה כיסאות בשורה — והוא נעשה בלוק של שורות, כמו מול החופה.</Note>}
-    </Popover>
-  );
-}
-
 function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
   const pct = Math.round(scale * 100);
   return (

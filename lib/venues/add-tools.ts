@@ -12,6 +12,9 @@
 // than an array inside one of them: two pickers building their own ids separately is two protocols
 // that agree until one of them grows a department.
 //
+// The venue's own chairs in rows ("שורות כיסאות", ./seating.ts) take the studio's first chair as
+// their chair — its size and style — or a dining chair when the catalog has none.
+//
 // Only the two departments a VENUE has built versions of are catalog-backed. A pool, a "מבנה", a palm and an
 // "אחר" are shapes on a property, not products in a catalog, and there is nothing to pick from.
 import type { Product } from "@/lib/catalog/types";
@@ -29,7 +32,7 @@ import {
 import { CLIMB_BY_CATEGORY } from "./climb";
 import { isMain } from "../self-check";
 
-export type AddToolSection = "structure" | "ground" | "plants" | "bars" | "stages";
+export type AddToolSection = "structure" | "ground" | "plants" | "bars" | "stages" | "seating";
 
 export interface AddTool {
   /** Stable within one list, and the entire payload of a drag onto the canvas. */
@@ -44,9 +47,11 @@ export interface AddTool {
   plant?: PlantSpecies;
   /** The material, iff `kind === "surface"`. */
   surface?: SurfaceMaterial;
+  /** The chair the rows are made of, iff `kind === "seating"` — absent for a studio with no chairs. */
+  chair?: Product;
 }
 
-export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "ground", "plants", "bars", "stages"];
+export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "ground", "plants", "bars", "stages", "seating"];
 
 export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   structure: "מבנה",
@@ -54,6 +59,7 @@ export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   plants: "צמחייה",
   bars: "ברים ומזנונים",
   stages: "במות",
+  seating: "ישיבה",
 };
 
 // The features a designer places by drawing them, because no catalog has an opinion about them.
@@ -109,6 +115,9 @@ export function addTools(products: Product[] = []): AddTool[] {
       tools.push({ id: `product:${product.id}`, label: product.name, section, kind: CLIMB_BY_CATEGORY[product.category] ?? kind, product });
     }
   }
+  // The ceremony seating in front of a חופה — the venue's own chairs, five rows of five to start.
+  const chair = products.find((p) => !p.archived && p.category === "chairs");
+  tools.push({ id: "seating", label: FEATURE_KIND_LABEL.seating, section: "seating", kind: "seating", ...(chair ? { chair } : {}) });
   return tools;
 }
 
@@ -137,7 +146,8 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 8 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the eight plain things — door, stairs, ramp, pool, structure, other, bar, stage — and the planting");
+  assert(empty.length === 9 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the nine plain things — door, stairs, ramp, pool, structure, other, bar, stage, chairs in rows — and the planting");
+  assert(empty.find((t) => t.kind === "seating")?.chair === undefined, "…the rows of a dining chair when there is no chair to take");
   assert(empty.filter((t) => t.product).length === 0, "…none of them backed by a row that isn't there");
   for (const kind of ["bar", "stage"] as const) {
     const t = empty.find((x) => x.id === kind)!;

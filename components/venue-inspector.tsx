@@ -69,7 +69,7 @@ import {
   SegmentedToggle,
 } from "@/components/plan-canvas";
 
-export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface", "stairs", "ramp"];
+export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface", "stairs", "ramp", "seating"];
 // Which features are offered flights and ramps is takesEdgeItems (lib/venues/stage-edges.ts) — a
 // stage, or a platform somebody climbs onto; never a bar, a fence or a column.
 
@@ -84,6 +84,8 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   // The catalog's own icons for a stage's flight and a stage's ramp (lib/catalog/categories.ts).
   stairs: Footprints,
   ramp: Accessibility,
+  // The sketch's own block of chairs wears the same (app/(app)/studio/inspector.tsx).
+  seating: Rows3,
 };
 
 /** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one

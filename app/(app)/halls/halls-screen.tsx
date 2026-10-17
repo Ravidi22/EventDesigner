@@ -99,6 +99,9 @@ import {
   type ZoneSource,
 } from "@/lib/venues/zone";
 import { ZONE_MARGIN_MM, featuresBoundary, presentFeatureIds } from "@/lib/venues/feature-zones";
+import { newSeatingFeature } from "@/lib/venues/seating";
+import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
+import { SeatingGlyph } from "@/components/chair-block";
 import {
   ZoneRegions,
   StructureFeatures,
@@ -1377,7 +1380,11 @@ export function HallsScreen() {
     }
     const { structure: next, featureId } = addFeature(
       structure,
-      tool.product ? newFeatureFromProduct(tool.kind, tool.product, p) : newFeature(tool.kind, p, tool.plant ?? tool.surface),
+      tool.kind === "seating"
+        ? newSeatingFeature(p, tool.chair)
+        : tool.product
+          ? newFeatureFromProduct(tool.kind, tool.product, p)
+          : newFeature(tool.kind, p, tool.plant ?? tool.surface),
     );
     // A stage lands with the sketch's default flights — one on every side with floor in front
     // of it, one at the back of a round one — worked out against the walls as they stand.
@@ -1533,7 +1540,9 @@ export function HallsScreen() {
                         section: tool.section,
                         title: tool.surface
                           ? `${tool.label} — לחיצה בשטח סגור ממלאת אותו מקיר לקיר; בשטח פתוח מניחה משטח לשינוי גודל`
-                          : tool.product
+                          : tool.kind === "seating"
+                            ? `${tool.label} — חמש שורות של חמישה${tool.chair ? ` · ${tool.chair.name}` : ""}; השורות, הרווחים ומעבר באמצע בסרגל`
+                            : tool.product
                             ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}`
                             : tool.label,
                         disabled: tool.id === "entrance" && !structure.walls.some((w) => w.kind === "wall"),
@@ -2518,8 +2527,26 @@ function DrawSurfacePreview() {
  *  the ח that makes a ח bar worth picking is visible before it is placed, and two bars that differ
  *  only in size read as two sizes. The drawn elements have no such picture, so they keep the pastel
  *  swatch and icon that were standing in for one. */
+// The rows on the add-element card: three rows of four with an aisle, which says "ceremony" where
+// five by five at that size would be a grey square. A dining chair — the card is not the studio's.
+const SEATING_PREVIEW = { rows: 3, perRow: 4, aisleMm: 600 };
+const SEATING_PREVIEW_BOX = (() => {
+  const l = chairRowsLayout(SEATING_PREVIEW, FALLBACK_CHAIR);
+  return { w: l.widthMm, d: l.depthMm, pad: Math.max(l.widthMm, l.depthMm) * 0.1 };
+})();
+
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+  if (tool.kind === "seating") {
+    const { w, d, pad } = SEATING_PREVIEW_BOX;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox={`${-w / 2 - pad} ${-d / 2 - pad} ${w + pad * 2} ${d + pad * 2}`} className="h-10 w-10" aria-hidden>
+          <SeatingGlyph spec={SEATING_PREVIEW} />
+        </svg>
+      </span>
+    );
+  }
   if (tool.surface) {
     // A swatch of the material itself, at its real scale — a 1.6m square: four slabs across, a
     // dozen deck boards, enough lawn to see the grain.

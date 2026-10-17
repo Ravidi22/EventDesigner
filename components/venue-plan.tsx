@@ -11,6 +11,8 @@ import { FootprintShape } from "@/components/footprint-shape";
 import { PlantGlyph } from "@/components/plant-glyph";
 import { SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { ClimbGlyph } from "@/components/climb-glyph";
+import { SeatingGlyph } from "@/components/chair-block";
+import { seatingOf } from "@/lib/venues/seating";
 import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
 import { NO_DECKS, edgesMatter, takesEdgeItems } from "@/lib/venues/stage-edges";
 import { followsWalls } from "@/lib/venues/face-surfaces";
@@ -704,7 +706,9 @@ const FeatureNode = memo(function FeatureNode({
         // shape: it follows them, and has no drag, size or turn of its own.
         const pinned = !!f.locked || followsWalls(f);
         const onMove = pinned || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
-        const onResize = pinned ? undefined : onResizeProp;
+        // Chairs in rows are resized by their rows (the bar's "שורות"), never by a handle that
+        // would stretch the box away from the chairs in it (lib/venues/seating.ts).
+        const onResize = pinned || f.kind === "seating" ? undefined : onResizeProp;
         const onRotate = pinned ? undefined : onRotateProp;
         // The stage's edges (its flights and ramps), as the sketch draws a stage's: in the feature's
         // own frame, inside its turned group — null for anything with none. A selected STAGE with no
@@ -798,6 +802,21 @@ const FeatureNode = memo(function FeatureNode({
                     />
                     <FootprintShape footprint={featureFootprint(f)} {...common} fill="none" />
                   </>
+                ) : f.kind === "seating" ? (
+                  <>
+                    {/* The venue's own chairs in rows: the chairs are the picture, the block's box
+                        an invisible hit area (the gaps between chairs still take the click),
+                        outlined only when selected — as a plant is. */}
+                    <SeatingGlyph spec={seatingOf(f)} tone={f.style?.fill} />
+                    <FootprintShape
+                      footprint={featureFootprint(f)}
+                      fill="transparent"
+                      stroke={selected ? "var(--color-accent)" : "none"}
+                      strokeWidth={2}
+                      strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
                 ) : isClimb(f.kind) ? (
                   // Stairs or a ramp: the step edges and the walking line say what it is, so it
                   // carries no name — only a ramp's slope. The same tread-coloured well and muted
@@ -838,7 +857,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"

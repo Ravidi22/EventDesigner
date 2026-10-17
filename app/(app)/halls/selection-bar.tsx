@@ -3,6 +3,7 @@
 import {
   Accessibility,
   AlignCenterVertical,
+  Armchair,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -51,6 +52,9 @@ import { ringSpecOf, uShapeBandOf } from "@/lib/studio/footprint";
 import type { ElementStyle } from "@/lib/element-style";
 import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
+import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
+import { CHAIR_STYLES, CHAIR_STYLE_LABEL, type ChairStyle } from "@/lib/catalog/symbols";
+import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import {
   FEATURE_KIND_LABEL,
   PLANT_DEFAULTS,
@@ -667,13 +671,17 @@ export function SelectionBar({
   // own panel replaces the shape and the size.
   const climb = isClimb(feature.kind);
   const surface = feature.kind === "surface";
+  // The venue's own chairs in rows (lib/venues/seating.ts): sized by their rows and their chair.
+  const seating = feature.kind === "seating";
   // A surface laid wall to wall in a closed shape: the walls are its size and shape.
   const bound = followsWalls(feature);
   const icon =
     feature.kind === "plant" ? PLANT_ICON[plantSpecies(feature)] : feature.kind === "surface" ? SURFACE_ICON[surfaceMaterial(feature)] : FEATURE_ICON[feature.kind];
   const size = climb
     ? `${(feature.widthMm / 1000).toFixed(2)} × ${(climbRunMm(feature) / 1000).toFixed(2)} מ׳ · עולה ${Math.round(feature.heightMm / 10)} ס״מ`
-    : feature.shape === "circle"
+    : seating
+      ? `${seatingCount(feature)} כיסאות · ${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`
+      : feature.shape === "circle"
       ? `⌀ ${(feature.widthMm / 1000).toFixed(2)} מ׳`
       : `${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`;
   // The depth of a ח's counter or a curved bar's band — null for every shape that has none.
@@ -688,7 +696,7 @@ export function SelectionBar({
     surface && feature.label && feature.label !== SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)] ? SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)] : FEATURE_KIND_LABEL[feature.kind],
     bound ? `ממלא שטח סגור · ${Math.round(polygonAreaMm2(featureWorldOutline(feature)) / 1_000_000)} מ״ר` : size,
     band !== null && feature.kind === "bar" ? `דלפק ${Math.round(band / 10)} ס״מ` : null,
-    !climb && !surface && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null,
+    !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null,
     feature.locked ? "נעול" : null,
   ]
     .filter(Boolean)
@@ -792,7 +800,7 @@ export function SelectionBar({
           </PanelRow>
           <Note>החלפת הסוג מביאה איתה את הגודל המקורב שלו, כמו הנחה מחדש.</Note>
         </Popover>
-      ) : climb ? null : (
+      ) : climb || seating ? null : (
         <>
           {/* A surface's material, picked by its look — the zone dialog's own tiles. */}
           {surface && (
@@ -824,6 +832,37 @@ export function SelectionBar({
         <Popover label={feature.kind === "ramp" ? "רמפה" : "מדרגות"} icon={FEATURE_ICON[feature.kind]} value={size} panelClassName="w-[26rem]">
           <ClimbFields feature={feature} patch={patch} />
         </Popover>
+      ) : seating ? (
+        (() => {
+          // The sketch's own rows panel — the same fields, the same layout — and the chair they
+          // are made of. Every edit keeps the FRONT row where it stands (seatingPatch).
+          const spec = seatingOf(feature);
+          const chair = seatingChair(spec);
+          const style = spec.chairStyle ?? "dining";
+          return (
+            <>
+              <ChairRowsPopover rows={spec} chair={chair} onChange={(rows) => rows && patch(seatingPatch(feature, rows))} />
+              <Popover label="כיסא" icon={Armchair} value={CHAIR_STYLE_LABEL[style]} panelClassName="w-80">
+                <PanelRow label="סוג" stack>
+                  <Select
+                    value={style}
+                    options={CHAIR_STYLES.map((c) => ({ value: c, label: CHAIR_STYLE_LABEL[c] }))}
+                    onChange={(v) => patch(seatingPatch(feature, { chairStyle: v as ChairStyle }))}
+                    aria-label="סוג הכיסא"
+                    className="w-full"
+                  />
+                </PanelRow>
+                <PanelRow label="רוחב כיסא (ס״מ)" htmlFor="seat-w">
+                  <NumberField id="seat-w" decimals={0} min={30} max={120} step={5} commitOnBlur value={cmOf(chair.widthMm)} onChange={(cm) => patch(seatingPatch(feature, { chairWidthMm: cm * 10 }))} className="w-20" />
+                </PanelRow>
+                <PanelRow label="עומק כיסא (ס״מ)" htmlFor="seat-d">
+                  <NumberField id="seat-d" decimals={0} min={30} max={120} step={5} commitOnBlur value={cmOf(chair.depthMm)} onChange={(cm) => patch(seatingPatch(feature, { chairDepthMm: cm * 10 }))} className="w-20" />
+                </PanelRow>
+                <Note>הכיסאות של המקום עצמו: כך הם מצוירים כאן, בכל סקיצה ובהדפסה. גוון הכיסאות — ב״מראה״.</Note>
+              </Popover>
+            </>
+          );
+        })()
       ) : bound ? null : (
         <Popover label="מידות" icon={Ruler} value={size}>
           <PanelRow label={feature.shape === "circle" ? "קוטר (מ׳)" : "רוחב (מ׳)"} htmlFor="feature-w">
@@ -963,7 +1002,7 @@ export function SelectionBar({
           );
         })()}
 
-      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant")}
+      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating)}
 
       {/* A surface that fills a closed shape follows its walls; cut loose, it is a free surface of
           the same outline. A free one is reshaped point by point, as a freehand zone is. */}
