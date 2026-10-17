@@ -298,6 +298,90 @@ body {
     transform: translateY(0.75rem);
   }
 }
+/* The landing page's opening: the wordmark sets itself letter by letter on white, the dot lands,
+   and the plate lifts off the page. Pure CSS so there is no white flash waiting on hydration; an
+   inline script marks it [data-seen] on a repeat visit in the same tab and it never shows. What
+   follows it in the DOM reads --intro to hold its own entrance until the plate is gone. */
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: var(--color-canvas);
+  pointer-events: none;
+  animation: intro-out 520ms var(--ease-fluid) 1300ms both;
+}
+.intro[data-seen] {
+  display: none;
+}
+.intro ~ * {
+  --intro: 1500ms;
+}
+.intro[data-seen] ~ * {
+  --intro: 0ms;
+}
+@keyframes intro-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-1.5rem);
+  }
+}
+.intro-letter {
+  display: inline-block;
+  animation: intro-letter 560ms var(--ease-fluid) both;
+}
+@keyframes intro-letter {
+  from {
+    opacity: 0;
+    transform: translateY(0.35em);
+  }
+}
+.intro-dot {
+  display: inline-block;
+  transform-origin: 50% 85%;
+  animation: intro-dot 420ms var(--ease-fluid) 560ms both;
+}
+@keyframes intro-dot {
+  /* Not from nothing: a dot that is already a dot, growing into place. */
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+/* In-page links on the landing page glide to their section instead of jumping. */
+html:has(.landing) {
+  scroll-behavior: smooth;
+}
+.landing ::selection {
+  background: var(--color-accent-wash);
+  color: var(--color-accent-deep);
+}
+
+/* A pressed control gives under the finger. Transform only, so it never fights a hover's filter. */
+.press {
+  transition:
+    transform 160ms var(--ease-fluid),
+    filter 150ms ease,
+    background-color 150ms ease;
+}
+.press:active {
+  transform: scale(0.97);
+}
+
+/* An answer arriving under its question. */
+.landing details[open] > p {
+  animation: faq-in 220ms var(--ease-fluid) both;
+}
+@keyframes faq-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
 .hero-rule {
   transform-origin: right; /* RTL: the rule draws from the start edge */
   animation: hero-rule 640ms var(--ease-fluid) both;
@@ -577,6 +661,13 @@ input:-webkit-autofill:focus {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  /* Durations collapse above but delays do not — the plate would sit there, white, for 1.3s. */
+  .intro {
+    display: none;
+  }
+  .intro ~ * {
+    --intro: 0ms;
   }
 }
 
