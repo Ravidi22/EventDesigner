@@ -26,6 +26,7 @@ import {
   type PlantSpecies,
   type SurfaceMaterial,
 } from "./structure";
+import { CLIMB_BY_CATEGORY } from "./climb";
 import { isMain } from "../self-check";
 
 export type AddToolSection = "structure" | "ground" | "plants" | "bars" | "stages";
@@ -58,6 +59,9 @@ export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
 // The features a designer places by drawing them, because no catalog has an opinion about them.
 const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   { id: "entrance", label: "כניסה", kind: null },
+  // Where the floor changes height — beside the door, because that is where they usually are.
+  { id: "stairs", label: FEATURE_KIND_LABEL.stairs, kind: "stairs" },
+  { id: "ramp", label: FEATURE_KIND_LABEL.ramp, kind: "ramp" },
   { id: "pool", label: FEATURE_KIND_LABEL.pool, kind: "pool" },
   { id: "structure", label: FEATURE_KIND_LABEL.structure, kind: "structure" },
   { id: "other", label: FEATURE_KIND_LABEL.other, kind: "other" },
@@ -100,7 +104,9 @@ export function addTools(products: Product[] = []): AddTool[] {
       continue;
     }
     for (const product of rows) {
-      tools.push({ id: `product:${product.id}`, label: product.name, section, kind, product });
+      // A rented flight or ramp set down in a venue is that venue's stairs or ramp (./climb.ts) —
+      // a stage would have drawn it as a box with nothing to say which way is up.
+      tools.push({ id: `product:${product.id}`, label: product.name, section, kind: CLIMB_BY_CATEGORY[product.category] ?? kind, product });
     }
   }
   return tools;
@@ -131,7 +137,7 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 6 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the six things the plan has always offered, and the planting");
+  assert(empty.length === 8 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the eight plain things — door, stairs, ramp, pool, structure, other, bar, stage — and the planting");
   assert(empty.filter((t) => t.product).length === 0, "…none of them backed by a row that isn't there");
   for (const kind of ["bar", "stage"] as const) {
     const t = empty.find((x) => x.id === kind)!;
@@ -143,6 +149,7 @@ if (isMain(import.meta.url)) {
     product("b1", "בר בצורת ח 360×180", "bars"),
     product("b3", "בר ישן", "bars", true),
     product("s1", "במה 400×300", "stages"),
+    product("r1", "רמפת נגישות", "stage-ramps"),
     product("t1", "עגול 180", "tables"),
   ]);
   const bars = tools.filter((t) => t.section === "bars");
@@ -151,7 +158,8 @@ if (isMain(import.meta.url)) {
   assert(bars[0].label === "בר בצורת ח 360×180", "…in the order a Hebrew reader would look for them");
   assert(!tools.some((t) => t.product?.id === "b3"), "an archived row is off the list (F-4.5)");
   assert(!tools.some((t) => t.product?.id === "t1"), "a table is not something a venue has built");
-  assert(tools.filter((t) => t.section === "stages").length === 1, "the stage department is catalog-backed too");
+  assert(tools.filter((t) => t.section === "stages").length === 2, "the stage department is catalog-backed too");
+  assert(findAddTool(tools, "product:r1")?.kind === "ramp" && findAddTool(tools, "product:s1")?.kind === "stage", "…and a ramp in it lands as the venue's ramp, a stage as a stage");
   assert(new Set(tools.map((t) => t.id)).size === tools.length, "ids are unique — a drag has to name exactly one tool");
 
   assert(findAddTool(tools, "product:b1")?.product?.id === "b1", "a drag payload finds its row");

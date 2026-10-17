@@ -6,6 +6,7 @@ import { SUGGESTED_QUOTE_TERMS, type BusinessSettings } from "@/lib/settings/typ
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { ImageField } from "@/components/image-field";
+import { SwitchRow } from "@/components/toggle";
 import { Panel, SavedFlag } from "./ui";
 
 // F-8.1 business settings: logo + details (for the quote and outputs), VAT rate, currency (₪ in
@@ -54,6 +55,14 @@ export function BusinessSection({ initialSettings }: { initialSettings: Business
         <TextField label="טלפון" type="tel" dir="ltr" value={s.phone} onChange={(v) => patch({ phone: v })} className="text-end" />
         <TextField label="דוא״ל" type="email" dir="ltr" value={s.email} onChange={(v) => patch({ email: v })} className="text-end" />
         <TextField label="כתובת" value={s.address} onChange={(v) => patch({ address: v })} />
+        <TextField
+          label="אינסטגרם"
+          dir="ltr"
+          value={s.instagram}
+          onChange={(v) => patch({ instagram: v })}
+          placeholder="iritdesign"
+          className="text-end"
+        />
         {/* The field a client's accountant looks for first, and the one an Instagram-era quote
             almost always leaves off. */}
         <TextField
@@ -74,6 +83,17 @@ export function BusinessSection({ initialSettings }: { initialSettings: Business
           className="h-20 w-36"
           wrapperClassName="col-span-2"
         />
+        {/* The studio's own mark on its quotes: a photo or scan of the signature, printed over the
+            studio's line beside the client's. PNG with a transparent ground prints cleanest. */}
+        <ImageField
+          label="חתימת הסטודיו"
+          hint="מודפסת מעל שורת החתימה של הסטודיו בהצעת המחיר. מומלץ PNG על רקע שקוף."
+          value={s.signatureUrl}
+          onChange={(signatureUrl) => patch({ signatureUrl })}
+          kind="signature"
+          className="h-20 w-48"
+          wrapperClassName="col-span-2"
+        />
         <NumberField
           label="שיעור מע״מ (%)"
           min={0}
@@ -83,6 +103,22 @@ export function BusinessSection({ initialSettings }: { initialSettings: Business
           onChange={(v) => patch({ vatRate: v / 100 })}
         />
         <TextField label="מטבע" value={s.currency} onChange={() => {}} readOnly className="bg-bg text-muted" />
+        <div className="col-span-2">
+          <SwitchRow
+            checked={s.pricesIncludeVat}
+            onChange={(pricesIncludeVat) => patch({ pricesIncludeVat })}
+            label="המחירים כוללים מע״מ"
+            hint="מחירי הקטלוג והמחיר הסופי שמוקלד בהצעה כבר כוללים מע״מ — ההצעה מציגה את המע״מ שבתוכם. כבוי: המע״מ מתווסף מעל הסכום."
+          />
+        </div>
+        <div className="col-span-2">
+          <SwitchRow
+            checked={s.showBsd}
+            onChange={(showBsd) => patch({ showBsd })}
+            label="בס״ד בראש ההצעה"
+            hint="מודפס בפינת כל עמוד של הצעת המחיר."
+          />
+        </div>
         <NumberField
           label="תוקף ההצעה (ימים)"
           min={0}

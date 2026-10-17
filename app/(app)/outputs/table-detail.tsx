@@ -8,7 +8,7 @@ import { seatsAround, CHAIR_D_MM } from "@/lib/studio/seating";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { dressingSpots, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { SheetFrame, LINE_WEIGHTS, type NoteRow, type SheetFrameProps } from "./sheet-frame";
-import { ChairGlyph, PlacementGlyph, TableGlyph, formatTables, tableGroupBoxes } from "./placement-map";
+import { ChairGlyph, PlacementGlyph, TableGlyph, tablesPhrase, tableGroupBoxes } from "./placement-map";
 
 // A TABLE DETAIL — one design kit drawn large enough to set a table from.
 //
@@ -113,11 +113,14 @@ export function TableDetail({
   kit,
   doc,
   lookup,
+  mono = false,
   ...frame
 }: {
   kit: TableKit;
   doc: DesignDocumentContent;
   lookup: ItemLookup;
+  /** The B&W booklet: the table and its chairs in their flat greys, the pieces on it left white. */
+  mono?: boolean;
 } & Omit<SheetFrameProps, "world" | "children" | "sheet" | "notes" | "legend">) {
   const unit = kit.units[0];
   const members = doc.tables.filter((t) => unit.tableIds.includes(t.id));
@@ -152,8 +155,7 @@ export function TableDetail({
   });
 
   const seats = block ? (group?.seats ?? 0) : (members[0]?.seats ?? 0);
-  const numbers = kit.units.map((u) => u.number);
-  const appliesTo = numbers.length === 1 ? `שולחן ${numbers[0] || "ראש"}` : `שולחנות ${formatTables(numbers)}`;
+  const appliesTo = tablesPhrase(kit.units);
   // A kit that sits on tables of different shapes is drawn on the first; say so, rather than let the
   // crew assume the round drawn here is the shape of every table in the list.
   const shapes = new Set(
@@ -168,7 +170,7 @@ export function TableDetail({
     appliesTo,
     block ? `בלוק של ${members.length} שולחנות` : members[0] ? sizeOf(members[0]) : "",
     seats ? `${seats} כיסאות` : "",
-    shapes.size > 1 ? `הפריסה מוצגת על שולחן ${numbers[0] || "ראש"}` : "",
+    shapes.size > 1 ? `הפריסה מוצגת על ${tablesPhrase([unit])}` : "",
   ]
     .filter(Boolean)
     // RLM either side of each separator: between "Ø180" and "10" a bare "·" takes the numbers'
@@ -210,20 +212,20 @@ export function TableDetail({
                 .map((t) => (
                   <g key={`seat-${t.id}`} transform={placed(t.position, t.rotation, t.mirrored)}>
                     {seatsAround(tableFootprint(t), t.seats!, undefined, tableBlockedSides(t)).map((s, i) => (
-                      <ChairGlyph key={i} seat={s} />
+                      <ChairGlyph key={i} seat={s} mono={mono} />
                     ))}
                   </g>
                 ))}
             {group && group.seats > 0 && (
-              <g transform={`translate(${group.centre.x} ${group.centre.y})`}>
-                {seatsAround({ kind: "rect", widthMm: group.widthMm, depthMm: group.depthMm }, group.seats).map((s, i) => (
-                  <ChairGlyph key={i} seat={s} />
+              <g transform={group.transform}>
+                {group.chairs.map((s, i) => (
+                  <ChairGlyph key={i} seat={s} mono={mono} />
                 ))}
               </g>
             )}
             {/* The table over its chairs — a chair's front is tucked under the table top. */}
             {members.map((t) => (
-              <TableGlyph key={t.id} t={t} />
+              <TableGlyph key={t.id} t={t} mono={mono} />
             ))}
             {spots.map(({ p, at, rotation, footprint }) => (
               <PlacementGlyph key={p.id} placement={{ ...p, rotation } as Placement} x={at.x} y={at.y} shape={footprint} />

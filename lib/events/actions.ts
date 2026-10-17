@@ -14,7 +14,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
-import { revalidateEvents } from "@/lib/db/revalidate";
+import { revalidateEventStage, revalidateEvents } from "@/lib/db/revalidate";
 import { appointments, events, eventZones, venues, zones } from "@/lib/db/schema";
 import { linksForAppointments, removeFromGoogle } from "@/lib/google/sync";
 import type { EventSummary } from "./types";
@@ -75,6 +75,9 @@ function assertEvent(value: unknown): asserts value is EventSummary {
   assertStamp(e.quoteSentAt, "event.quoteSentAt");
   assertStamp(e.confirmedAt, "event.confirmedAt");
   assertStamp(e.lostAt, "event.lostAt");
+  // Cleaned on the way into the row (cleanShades, db-mapping.ts); only the shape is refused here.
+  if (e.shades !== undefined && !Array.isArray(e.shades)) throw new Error("event.shades must be a list");
+  if (e.eventType !== undefined && typeof e.eventType !== "string") throw new Error("event.eventType must be text");
   if (typeof e.createdAt !== "number") throw new Error("event.createdAt must be epoch ms");
 }
 
@@ -226,6 +229,10 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
           // missing from this list is invisible on the way in and only shows up as "the truck day I
           // typed did not stick".
           setupDate: row.setupDate,
+          // Same rule as setupDate: a details field missing from this list is silently dropped.
+          shades: row.shades,
+          // Same rule again: the quote's title reads it, so a dropped patch is a wrong quote.
+          eventType: row.eventType,
           venueId: row.venueId,
           zonesLabel: row.zonesLabel,
           guests: row.guests,
@@ -347,7 +354,7 @@ export async function reachStep(id: string, step: number): Promise<EventSummary[
     .update(events)
     .set({ step: sql`greatest(${events.step}, ${step})` })
     .where(and(eq(events.id, id), eq(events.organizationId, organizationId)));
-  revalidateEvents();
+  revalidateEventStage(); // the dashboard alone — /production never reads `step`
   return fetchEvents();
 }
 

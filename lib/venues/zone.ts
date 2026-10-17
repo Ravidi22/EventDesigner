@@ -12,10 +12,15 @@
 //            boundary behind as a stale duplicate.
 //   region — they drew it freehand over open ground (קוליסאום, lawn, parking), where there are no
 //            walls to enclose anything and therefore nothing to detect.
+//   features — they picked the venue features it is MADE of (a חופה: its stage, the runway, the pool
+//            it crosses) and the zone is the area round them, a margin wide, re-derived from where
+//            they stand on every read (./feature-zones.ts) — moved with them, never a stale copy.
 import type { Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
 import { outlineBounds, polygonAreaMm2, type Bounds } from "@/lib/studio/geometry";
 import { faceAt, type Face } from "./faces";
+import type { StructureFeature, SurfaceMaterial } from "./structure";
+import { featuresBoundary } from "./feature-zones";
 
 //   hall    — enclosed and roofed; walls, doors, ceiling height
 //   canopy  — a חופה: a real structure open to the sky
@@ -32,7 +37,10 @@ export const ZONE_KIND_LABEL: Record<ZoneKind, string> = {
 
 export type ZoneSource =
   | { type: "face"; anchor: Point }
-  | { type: "region"; boundary: Point[] };
+  | { type: "region"; boundary: Point[] }
+  /** The features it is made of, and how far round them it reaches (always written, so a later
+   *  default never moves a zone already drawn). */
+  | { type: "features"; featureIds: string[]; marginMm: number };
 
 export interface ZoneCapacity {
   seated?: number;
@@ -50,6 +58,11 @@ export interface Zone {
   /** Per-zone tint override. Absent = the kind's default fill, so the plan still reads by kind
    *  alone and a designer's colour choice is an addition, never the only signal. */
   style?: ElementStyle;
+  /** What its floor is laid in — the lawn of a garden, the tiles of a hall — drawn as a real-scale
+   *  texture across the whole region, under everything standing in it (components/surface-fill.tsx,
+   *  the same materials as a `surface` feature). The tint above, if any, colours the material.
+   *  Absent = no surface: the kind's tint, as every zone drew before this. */
+  surface?: SurfaceMaterial;
   createdAt: number;
 }
 
@@ -58,19 +71,34 @@ export interface Zone {
 export interface ResolvedZone {
   zone: Zone;
   boundary: Point[];
-  /** Face-sourced, but the walls no longer enclose its anchor — someone deleted or opened a wall.
-   *  Surfaced rather than silently dropped: the designer needs to know a named area came undone. */
+  /** Face-sourced, but the walls no longer enclose its anchor — someone deleted or opened a wall —
+   *  or made of features none of which is on the plan any more. Surfaced rather than silently
+   *  dropped: the designer needs to know a named area came undone. */
   detached: boolean;
 }
 
-export function resolveZone(zone: Zone, faces: Face[]): ResolvedZone {
-  if (zone.source.type === "region") return { zone, boundary: zone.source.boundary, detached: false };
-  const face = faceAt(faces, zone.source.anchor);
+/** `features` is the venue's own (the structure the faces were detected in) — what a features zone
+ *  is resolved against. A caller with none resolves such a zone as detached. */
+export function resolveZone(zone: Zone, faces: Face[], features: readonly StructureFeature[] = []): ResolvedZone {
+  const src = zone.source;
+  if (src.type === "region") return { zone, boundary: src.boundary, detached: false };
+  if (src.type === "features") {
+    const boundary = featuresBoundary(features, src.featureIds, src.marginMm);
+    return { zone, boundary, detached: boundary.length === 0 };
+  }
+  const face = faceAt(faces, src.anchor);
   return { zone, boundary: face?.boundary ?? [], detached: face === null };
 }
 
-export function resolveZones(zones: Zone[], faces: Face[]): ResolvedZone[] {
-  return zones.map((z) => resolveZone(z, faces));
+export function resolveZones(zones: Zone[], faces: Face[], features: readonly StructureFeature[] = []): ResolvedZone[] {
+  return zones.map((z) => resolveZone(z, faces, features));
+}
+
+/** What a detached zone's row says came undone — the walls, or the features it was made of. */
+export function detachedNote(zone: Zone): string {
+  return zone.source.type === "features"
+    ? "האלמנטים שהאזור הוגדר לפיהם אינם על התוכנית יותר."
+    : "השטח נפתח — הקירות סביבו אינם סוגרים אותו יותר.";
 }
 
 export function isOpenAir(zone: Zone): boolean {

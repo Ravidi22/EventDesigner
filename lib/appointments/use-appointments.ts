@@ -52,7 +52,10 @@ export function useAppointments(initial?: Appointment[]): AppointmentsHandle {
   useEffect(() => {
     if (initial !== undefined) return;
     let live = true;
-    load()
+    fetchAppointments()
+      .then((list) => {
+        if (live) setAppointments(list);
+      })
       .catch(() => {
         if (live) setError("לא ניתן לטעון את הפגישות");
       })

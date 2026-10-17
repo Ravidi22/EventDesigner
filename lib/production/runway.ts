@@ -140,6 +140,28 @@ export interface EventFacts {
   /** The last issued quote's total, for the runway's money column. Owner-visible only — this type
    *  is never handed to /present, /client, /meeting or /outputs (npm run check:costs). */
   quoteTotal?: number;
+  /** Who is on the truck (event_crew). The second typed fact after `confirmedAt`, and it earns it
+   *  the same way: an assignment is a decision, derivable from nothing. */
+  crew?: { id: string; name: string }[];
+  /** Orders (lib/orders/) whose window covers this event's day, counted by the supplier's answer.
+   *  Derived — nothing here is a status the designer sets. */
+  orders?: { confirmed: number; open: number; declined: number };
+}
+
+/** The one line a row shows about its orders, or nothing when there are none. */
+export function ordersLine(o: EventFacts["orders"]): string | undefined {
+  if (!o || o.confirmed + o.open + o.declined === 0) return undefined;
+  const parts: string[] = [];
+  if (o.confirmed) parts.push(`${o.confirmed} אושרו`);
+  if (o.open) parts.push(`${o.open} ממתינות`);
+  if (o.declined) parts.push(`${o.declined} נדחו`);
+  return `הזמנות: ${parts.join(" · ")}`;
+}
+
+/** The people two events both want. */
+export function sharedCrew(a: EventFacts, b: EventFacts): string[] {
+  const ids = new Set((a.crew ?? []).map((c) => c.id));
+  return (b.crew ?? []).filter((c) => ids.has(c.id)).map((c) => c.name);
 }
 
 // ── Lanes ──────────────────────────────────────────────────────────────────────────────────────
@@ -237,6 +259,9 @@ function alertFor(row: Omit<RunwayRow, "alert" | "lateCount">, today: string): s
   const { event: e, lane, checkpoints, daysUntil } = row;
   if (lane === "closed") return undefined;
   if (e.designChangedSinceQuote && e.quoteSentAt) return "העיצוב השתנה מאז ההצעה שנשלחה";
+  // A supplier said no. Nothing on the calendar is late yet, but the equipment the plan counts on
+  // is not coming, and the sooner that is seen the more suppliers are still an option.
+  if (e.orders?.declined) return e.orders.declined === 1 ? "ספק דחה הזמנה — צריך ספק אחר" : `${e.orders.declined} הזמנות נדחו — צריך ספק אחר`;
 
   // Earliest-due first, so the alert names the root slip rather than the last domino.
   const late = checkpoints
@@ -311,13 +336,16 @@ export function collisionsIn(rows: readonly RunwayRow[]): Collision[] {
       const gap = daysBetween(a.to, b.from);
       if (gap > PROXIMITY_DAYS) break;
       const days = daysBetween(live[i].event.date, live[j].event.date);
+      // Named when it can be: "ציוד וצוות משותפים" is a guess until someone is on both trucks.
+      const people = sharedCrew(live[i].event, live[j].event);
+      const who = people.length ? ` — ${people.join(", ")} בשניהם` : "";
       out.push({
         kind: "proximity",
         eventIds: [live[i].event.id, live[j].event.id],
         message:
           days === 0
-            ? "שני אירועים באותו יום — ציוד וצוות משותפים"
-            : `שני אירועים בהפרש ${days} ימים — ההקמה של השני חופפת לפירוק של הראשון`,
+            ? `שני אירועים באותו יום — ציוד וצוות משותפים${who}`
+            : `שני אירועים בהפרש ${days} ימים — ההקמה של השני חופפת לפירוק של הראשון${who}`,
       });
     }
   }
@@ -468,6 +496,25 @@ if (isMain(import.meta.url)) {
     TODAY,
   );
   assert(sameDay.collisions[0].message.includes("אותו יום"), "same-day says so plainly");
+
+  // A person on both trucks is named; a crew that differs is not.
+  const dana = { id: "u1", name: "דנה" };
+  const crewed = buildRunway(
+    [
+      { ...base, id: "a", date: "2026-10-10", confirmedAt: 1, crew: [dana, { id: "u2", name: "יוסי" }] },
+      { ...base, id: "b", date: "2026-10-10", confirmedAt: 1, crew: [dana] },
+    ],
+    DEFAULT_OFFSETS,
+    TODAY,
+  );
+  assert(crewed.collisions[0].message.endsWith("דנה בשניהם"), "the shared person is named");
+  assert(!sameDay.collisions[0].message.includes("בשניהם"), "nobody shared, nobody named");
+
+  // Orders are a line, and a refusal is the alert.
+  assert(ordersLine(undefined) === undefined && ordersLine({ confirmed: 0, open: 0, declined: 0 }) === undefined, "no orders, no line");
+  assert(ordersLine({ confirmed: 2, open: 1, declined: 0 }) === "הזמנות: 2 אושרו · 1 ממתינות", "the line counts by answer");
+  const refused = buildRow({ ...base, id: "e6", quoteSentAt: 1, confirmedAt: 2, orders: { confirmed: 1, open: 0, declined: 1 } }, DEFAULT_OFFSETS, TODAY);
+  assert(refused.alert === "ספק דחה הזמנה — צריך ספק אחר", "a declined order is the row's alert");
 
   // Work nobody has committed to is not a collision.
   const uncommitted = buildRunway(

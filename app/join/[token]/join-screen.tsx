@@ -25,9 +25,11 @@ export function JoinScreen({
   email: string;
   name: string;
   studioName: string;
-  /** studio = joining the team; client = an event owner being let in to see their event. */
+  /** studio = joining the team; client = invited to an EVENT by its studio, not into the studio —
+   *  the couple, not a colleague. */
   kind: "studio" | "client";
 }) {
+  const client = kind === "client";
   const router = useRouter();
   const [name, setName] = useState(invitedName);
   const [password, setPassword] = useState("");
@@ -63,11 +65,11 @@ export function JoinScreen({
 
   return (
     <AuthShell
-      title={kind === "client" ? "האירוע שלכם" : `הצטרפות ל${studioName}`}
+      title={client ? "האירוע שלכם מחכה" : `הצטרפות ל${studioName}`}
       lede={
-        kind === "client"
-          ? `נפתחה לכם גישה לסקיצה ולתוכנית של האירוע ב${studioName}. נשאר רק לבחור סיסמה.`
-          : "הוזמנתם לסטודיו. נשאר רק לבחור סיסמה — התפקיד וההרשאות כבר נקבעו."
+        client
+          ? `${studioName} שיתף אתכם בסקיצה של האירוע. בחרו סיסמה, וזה הכול — תוכלו לראות את הסקיצה, להזיז שולחנות ולשלוח למעצב את השינויים.`
+          :"הוזמנתם לסטודיו. נשאר רק לבחור סיסמה — התפקיד וההרשאות כבר נקבעו."
       }
       footer={
         <Link href="/login" className="font-semibold text-accent hover:underline">
@@ -77,7 +79,7 @@ export function JoinScreen({
     >
       <form onSubmit={submit} className="mt-7 flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium text-ink">האימייל שהוזמן</span>
+          <span className="text-sm font-medium text-ink">{client ? "האימייל שלכם" : "האימייל שהוזמן"}</span>
           <p
             dir="ltr"
             className="rounded-md border border-inset-border bg-inset px-3 py-2.5 text-start text-sm text-ink-soft"
@@ -101,7 +103,7 @@ export function JoinScreen({
         <FormError message={formError} />
 
         <Button type="submit" disabled={busy} className="mt-1 w-full justify-center">
-          {busy ? "רגע…" : "הצטרפות לסטודיו"}
+          {busy ? "רגע…" : client ? "כניסה לאירוע" : "הצטרפות לסטודיו"}
         </Button>
       </form>
     </AuthShell>

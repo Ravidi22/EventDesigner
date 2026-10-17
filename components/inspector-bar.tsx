@@ -5,6 +5,7 @@ import { Copy, RotateCcw, RotateCw, Trash2, X, type LucideIcon } from "lucide-re
 import { InspectorDivider, InspectorHeader } from "@/components/plan-canvas";
 import { NumberField } from "@/components/number-field";
 import { Popover } from "@/components/popover";
+import { fieldLabelClassName } from "@/components/control";
 
 // The floating selection bar the studio sketch puts under a selected thing — a title row, then a row
 // of chips that each open a small panel (components/popover.tsx). Shared, so that the catalog's
@@ -147,17 +148,22 @@ export function BarButton({
   onClick,
   disabled,
   tone = "default",
+  active,
 }: {
   icon: LucideIcon;
   label: string;
   onClick: () => void;
   disabled?: boolean;
   tone?: "default" | "danger";
+  /** A toggle that is on — a mode the button entered and will leave (the hall editor's outline
+   *  editing). Absent = a plain action, with no pressed state to announce. */
+  active?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={active}
       title={label}
       disabled={disabled}
       onClick={onClick}
@@ -165,7 +171,9 @@ export function BarButton({
         "shrink-0 rounded-md p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35 " +
         (tone === "danger"
           ? "text-muted hover:bg-alert-tint hover:text-alert"
-          : "text-muted hover:bg-accent-tint hover:text-accent-hover")
+          : active
+            ? "bg-accent-tint text-accent"
+            : "text-muted hover:bg-accent-tint hover:text-accent-hover")
       }
     >
       <Icon className="h-4 w-4" strokeWidth={1.75} />
@@ -173,20 +181,53 @@ export function BarButton({
   );
 }
 
-/** One row inside a popover. The label is left out where the panel's own heading already says what
- *  the single field in it is — repeating "סיבוב" under a panel titled "סיבוב" is noise. */
-export function PanelRow({ label, htmlFor, children }: { label?: string; htmlFor?: string; children: ReactNode }) {
+/** One row inside a popover: a label at the start, its control at the end.
+ *
+ *  The label WRAPS rather than truncating — it was `truncate`, and beside a control that would not
+ *  shrink it was cut to two letters, which is most of why the panels' labels could not be read. It
+ *  is ink-soft at 14px, the same as every other field label beside its input.
+ *
+ *  `stack` puts the label above a control that wants the whole width — a Select, whose option names
+ *  (a chair, a cloth) are longer than any number and would otherwise push the panel wider than its
+ *  card. The label is left out where the panel's own heading already says what the single field in
+ *  it is — repeating "סיבוב" under a panel titled "סיבוב" is noise. */
+export function PanelRow({
+  label,
+  htmlFor,
+  stack,
+  children,
+}: {
+  label?: string;
+  htmlFor?: string;
+  stack?: boolean;
+  children: ReactNode;
+}) {
+  if (stack) {
+    return (
+      <div className="py-1">
+        {label &&
+          (htmlFor ? (
+            <label htmlFor={htmlFor} className={fieldLabelClassName}>
+              {label}
+            </label>
+          ) : (
+            <span className={fieldLabelClassName}>{label}</span>
+          ))}
+        <div className="min-w-0">{children}</div>
+      </div>
+    );
+  }
   return (
-    <div className="flex min-h-9 items-center justify-between gap-2">
+    <div className="flex min-h-10 items-center gap-3 py-1">
       {label &&
         (htmlFor ? (
-          <label htmlFor={htmlFor} className="truncate text-sm text-ink-soft">
+          <label htmlFor={htmlFor} className="min-w-0 flex-1 text-sm leading-snug text-ink-soft">
             {label}
           </label>
         ) : (
-          <span className="truncate text-sm text-ink-soft">{label}</span>
+          <span className="min-w-0 flex-1 text-sm leading-snug text-ink-soft">{label}</span>
         ))}
-      <div className="flex shrink-0 items-center gap-1.5">{children}</div>
+      <div className={"flex items-center gap-1.5 " + (label ? "shrink-0 justify-end" : "min-w-0 flex-1 flex-wrap")}>{children}</div>
     </div>
   );
 }
@@ -202,6 +243,6 @@ export function ltr(text: string): ReactNode {
 
 /** A sentence of explanation, at the one size and ink they are all written in. */
 export function Note({ children }: { children: ReactNode }) {
-  return <p className="mt-2 text-xs leading-relaxed text-muted">{children}</p>;
+  return <p className="mt-3 text-caption leading-relaxed text-muted first:mt-0">{children}</p>;
 }
 

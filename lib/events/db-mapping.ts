@@ -7,6 +7,7 @@
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import type { events, eventZones } from "@/lib/db/schema";
 import type { EventSummary } from "./types";
+import { cleanShades } from "@/lib/catalog/shades";
 
 export type EventRow = InferSelectModel<typeof events>;
 export type EventZoneRow = InferSelectModel<typeof eventZones>;
@@ -51,6 +52,10 @@ export function toEvent(row: EventRow, zoneIds: string[]): EventSummary {
     // `setup_date` is a `date` column like `event_date`, so the same rule holds: it arrives as a
     // plain "yyyy-mm-dd" string and stays one. Absent means "loads in on the day".
     setupDate: orUndefined(row.setupDate),
+    // NOT NULL DEFAULT '{}' while the type says `shades?`: an empty palette and no palette are one
+    // value, folded back to absent like `archived` below.
+    shades: row.shades.length ? row.shades : undefined,
+    eventType: row.eventType || undefined,
     // The column is NOT NULL DEFAULT false while the type says `archived?: boolean`. Same collapse
     // as the catalog's: absent and false are one value spelled twice, so folding it back keeps the
     // round-trip lossless.
@@ -82,6 +87,8 @@ export function toEventRow(e: EventSummary, organizationId: string): EventInsert
     // `|| null` for the same reason eventDate uses it: "" is the app's "not set" and Postgres will
     // not accept it as a date.
     setupDate: e.setupDate || null,
+    shades: cleanShades(e.shades),
+    eventType: (e.eventType ?? "").trim().slice(0, 40),
     archived: e.archived ?? false,
     createdAt: new Date(e.createdAt),
   };

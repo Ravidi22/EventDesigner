@@ -24,6 +24,12 @@ export interface SnapContext {
   excludeVertexIdx?: number; // the vertex being dragged must not snap to itself
   anchor?: Point; // previous vertex while drawing — enables the angle constraint
   constrainAngle?: boolean;
+  /** The angle lock's step and the direction it is counted from. Default: 5° steps off the page's
+   *  own axes, which is how a hall is traced. The catalog's shape editor asks for 45° steps from the
+   *  shape's FIRST side instead (the stage tool's rule, lib/studio/stage-draw.ts): a table drawn at
+   *  an angle is still square to itself. */
+  angleStepDeg?: number;
+  angleRefDeg?: number;
   /** The extent of the thing being moved, if the caller knows it — its centre is the point being
    *  snapped. This is what turns on the two rules a POINT cannot express:
    *
@@ -73,11 +79,13 @@ const signedDelta = (a: number, b: number) => {
   return d > 180 ? d - 360 : d;
 };
 
-// Nearest multiple of 15°, except that the four orthogonals win an exact tie (7.5° sits between
-// 0 and 15 — a wall meant to be square should fall square, not shear off by a notch).
-export function constrainAngleDeg(deg: number): number {
-  const stepped = Math.round(deg / ANGLE_STEP_DEG) * ANGLE_STEP_DEG;
-  const ortho = Math.round(deg / 90) * 90;
+// Nearest multiple of the step, counted from `refDeg` (the page's axes by default, a shape's first
+// side when a host asks), except that the four orthogonals to the reference win an exact tie (2.5°
+// sits between 0 and 5 — a wall meant to be square should fall square, not shear off by a notch).
+export function constrainAngleDeg(deg: number, stepDeg = ANGLE_STEP_DEG, refDeg = 0): number {
+  const rel = deg - refDeg;
+  const stepped = refDeg + Math.round(rel / stepDeg) * stepDeg;
+  const ortho = refDeg + Math.round(rel / 90) * 90;
   const useOrtho = Math.abs(signedDelta(deg, ortho)) <= Math.abs(signedDelta(deg, stepped)) + 1e-9;
   return norm360(useOrtho ? ortho : stepped);
 }
@@ -239,7 +247,7 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
     const dy = p.y - anchor.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1e-6) return { point: roundPt(anchor), guides: { x: null, y: null }, angleLocked: true };
-    const rad = (constrainAngleDeg((Math.atan2(dy, dx) * 180) / Math.PI) * Math.PI) / 180;
+    const rad = (constrainAngleDeg((Math.atan2(dy, dx) * 180) / Math.PI, ctx.angleStepDeg ?? ANGLE_STEP_DEG, ctx.angleRefDeg ?? 0) * Math.PI) / 180;
     const ux = Math.cos(rad);
     const uy = Math.sin(rad);
     // The direction is fixed, so alignment can only act along the ray: slide the endpoint out/in to
@@ -352,6 +360,13 @@ if (isMain(import.meta.url)) {
   assert(constrainAngleDeg(-2) === 0, "negative angles normalise into [0,360)");
   assert(constrainAngleDeg(352) === 350, "wrap-around stays on a 5° multiple");
   assert(constrainAngleDeg(358) === 0, "just under 360° snaps to 0, not 360");
+  // The shape editor's lock: 45° steps counted from the first side, not from the page.
+  assert(constrainAngleDeg(70, 45, 30) === 75, "a 45° lock from a 30° side lands on 75°");
+  assert(constrainAngleDeg(52.5, 45, 30) === 30, "…and an exact tie between the side's own line and the 45° notch goes to the line");
+  assert(constrainAngleDeg(40, 45, 0) === 45 && constrainAngleDeg(20, 45, 0) === 0, "from the page it is the plain 45° grid");
+  const fromSide = snapPoint({ x: 1000, y: 2000 }, { ...base, anchor: origin, constrainAngle: true, angleStepDeg: 45, angleRefDeg: 30 });
+  const fromSideDeg = ((Math.atan2(fromSide.point.y, fromSide.point.x) * 180) / Math.PI + 360) % 360;
+  assert(fromSide.angleLocked === true && Math.abs(fromSideDeg - 75) < 0.5, `a draw locked from a 30° side lands on 75°, not on a page notch (${fromSideDeg})`);
 
   assert(gridStepMm(1000, 120) === 100, "a hall grid zoomed out steps in 100mm");
   assert(gridStepMm(1000, 6) === 5, "the same grid zoomed in steps in 5mm");

@@ -195,10 +195,7 @@ const SEAM_PROBE_MM = 60;
  *  A BOWED EDGE IS SAMPLED, not shortened to its chord: walking the chord of a חצי עיגול's bow puts
  *  its chairs up to 175mm inside the table, which at that size means they vanish under it. */
 export function seatSides(f: Footprint): SeatSide[] {
-  const measure = (pts: Point[], orient: number, covered = false): SeatSide => {
-    const lengths = pts.slice(0, -1).map((p, i) => dist(p, pts[i + 1]));
-    return { pts, lengths, len: lengths.reduce((a, b) => a + b, 0), orient, covered };
-  };
+  const measure = measureSide;
 
   if (f.kind === "circle" || f.kind === "ellipse") {
     const rx = (f.kind === "circle" ? f.diameterMm : f.widthMm) / 2;
@@ -221,20 +218,110 @@ export function seatSides(f: Footprint): SeatSide[] {
     return [0, 1, 2, 3].map((i) => measure([c[i], c[(i + 1) % 4]], 1));
   }
 
+  return compositeSides(f).sides;
+}
+
+function measureSide(pts: Point[], orient: number, covered = false): SeatSide {
+  const lengths = pts.slice(0, -1).map((p, i) => dist(p, pts[i + 1]));
+  return { pts, lengths, len: lengths.reduce((a, b) => a + b, 0), orient, covered };
+}
+
+/** The sides of a shape built from outlines — and, for each, which outline it belongs to, with
+ *  every outline's polygon: what the seam test needs. */
+function compositeSides(f: Footprint): { sides: SeatSide[]; part: number[]; polygons: Point[][] } {
   const parts = footprintOutlines(f).map(outlineSides);
-  const out: SeatSide[] = [];
-  parts.forEach((part, pi) => {
-    for (const pts of part.sides) {
-      const side = measure(pts, part.orient);
+  const sides: SeatSide[] = [];
+  const part: number[] = [];
+  parts.forEach((p, pi) => {
+    for (const pts of p.sides) {
+      const side = measureSide(pts, p.orient);
       if (parts.length > 1 && side.len > 0) {
         const { on, nx, ny } = pointOnSide(side, side.len / 2);
         const probe = { x: on.x + nx * SEAM_PROBE_MM, y: on.y + ny * SEAM_PROBE_MM };
         side.covered = parts.some((other, oi) => oi !== pi && inside(probe, other.polygon));
       }
-      out.push(side);
+      sides.push(side);
+      part.push(pi);
+    }
+  });
+  return { sides, part, polygons: parts.map((p) => p.polygon) };
+}
+
+/** A side, or the piece of one a chair could stand along, remembering which side it came from. */
+interface Stretch extends SeatSide {
+  /** Its index in seatSides() — what `blocked` names. */
+  of: number;
+}
+
+/** How often a side is tested for another shape standing against it, mm along it. */
+const SEAM_STEP_MM = 100;
+
+/** The pieces of a composite's sides a chair can actually stand on. A side's one midpoint probe says
+ *  whether the WHOLE side is buried — right for a counter's end under its round, wrong for two
+ *  rounds pushed together (one loop each, buried only at the pinch) or a long table with a short one
+ *  against half of it. So each side is walked in SEAM_STEP_MM steps and a chair tried at each: its
+ *  centre `offsetMm` out, its back half a chair further; where either lands inside another shape the
+ *  stretch is covered, and the uncovered stretches between are the sides chairs are shared over. A
+ *  stretch too short for one chair is covered too. A loop's two ends are one stretch when both are
+ *  open, so the ring stays even across where the loop happened to start. */
+function splitAtSeams(f: Footprint, offsetMm: number): Stretch[] {
+  const { sides, part, polygons } = compositeSides(f);
+  if (polygons.length < 2) return sides.map((s, i) => ({ ...s, of: i }));
+  const out: Stretch[] = [];
+  sides.forEach((side, i) => {
+    if (side.len <= 0) {
+      out.push({ ...side, of: i });
+      return;
+    }
+    const others = polygons.filter((_, pi) => pi !== part[i]);
+    const n = Math.max(1, Math.ceil(side.len / SEAM_STEP_MM));
+    const buried = Array.from({ length: n }, (_, k) => {
+      const { on, nx, ny } = pointOnSide(side, ((k + 0.5) * side.len) / n);
+      const at = (d: number) => ({ x: on.x + nx * d, y: on.y + ny * d });
+      const seat = at(offsetMm);
+      const back = at(offsetMm + CHAIR_D_MM / 2);
+      return others.some((poly) => inside(seat, poly) || inside(back, poly));
+    });
+    if (buried.every((b) => b === buried[0])) {
+      out.push({ ...side, covered: buried[0], of: i });
+      return;
+    }
+    // Runs of equal answer, each a stretch of the side.
+    const runs: { from: number; to: number; buried: boolean }[] = [];
+    buried.forEach((b, k) => {
+      const last = runs[runs.length - 1];
+      if (last && last.buried === b) last.to = k + 1;
+      else runs.push({ from: k, to: k + 1, buried: b });
+    });
+    const step = side.len / n;
+    const slice = (from: number, to: number) => slicePolyline(side, from * step, to * step);
+    const closed = dist(side.pts[0], side.pts[side.pts.length - 1]) < 1e-6;
+    let pieces = runs.map((r) => ({ pts: slice(r.from, r.to), buried: r.buried }));
+    if (closed && runs.length > 1 && runs[0].buried === runs[runs.length - 1].buried) {
+      // The loop's start falls inside one run: join its two ends into one stretch, last then first.
+      const head = pieces[0];
+      const tail = pieces[pieces.length - 1];
+      pieces = [{ pts: [...tail.pts, ...head.pts.slice(1)], buried: head.buried }, ...pieces.slice(1, -1)];
+    }
+    for (const piece of pieces) {
+      const s = measureSide(piece.pts, side.orient, piece.buried);
+      out.push({ ...s, covered: s.covered || s.len < CHAIR_W_MM, of: i });
     }
   });
   return out;
+}
+
+/** The points of a side between `from` and `to` mm along it, both ends included. */
+function slicePolyline(side: SeatSide, from: number, to: number): Point[] {
+  const pts: Point[] = [pointOnSide(side, from).on];
+  let walked = 0;
+  for (let i = 0; i < side.lengths.length; i++) {
+    const end = walked + side.lengths[i];
+    if (end > from + 1e-6 && end < to - 1e-6) pts.push(side.pts[i + 1]);
+    walked = end;
+  }
+  pts.push(pointOnSide(side, to).on);
+  return pts;
 }
 
 /** Split `count` between sides in proportion to their lengths, exactly — largest remainder, so the
@@ -359,8 +446,10 @@ export function seatsAround(
   blocked: readonly number[] = [],
 ): Seat[] {
   if (count <= 0) return [];
-  const sides = seatSides(footprint);
-  const open = sides.map((s, i) => s.len > 0 && !s.covered && !blocked.includes(i));
+  // A composite's sides are cut where another of its shapes stands against them; everything else
+  // is seated on its sides whole (the stretches are then the sides, one each).
+  const sides: Stretch[] = footprint.kind === "multi" ? splitAtSeams(footprint, offsetMm) : seatSides(footprint).map((s, i) => ({ ...s, of: i }));
+  const open = sides.map((s) => s.len > 0 && !s.covered && !blocked.includes(s.of));
   if (!open.some(Boolean)) return [];
 
   // A rectangle is laid in a cross; anything else is shared out by length alone.
@@ -605,6 +694,28 @@ if (isMain(import.meta.url)) {
     comboSeats.every((s) => !(Math.abs(s.x - 750) < 200 && Math.abs(s.y) < 300)),
     "…and nobody sits in the seam between its two shapes",
   );
+
+  // Two rounds pushed together: each is one loop, buried only at the pinch — the chairs go round
+  // both and none stands where the rims meet.
+  const twoRounds = { kind: "multi" as const, parts: [
+    ...footprintOutlines({ kind: "circle", diameterMm: 1800 }).map((o) => ({ ...o, outline: o.outline.map((p) => ({ x: p.x - 900, y: p.y })) })),
+    ...footprintOutlines({ kind: "circle", diameterMm: 1800 }).map((o) => ({ ...o, outline: o.outline.map((p) => ({ x: p.x + 900, y: p.y })) })),
+  ] };
+  const twoSeats = seatsAround(twoRounds, 20);
+  assert(twoSeats.length === 20, "two rounds seat twenty");
+  assert(
+    twoSeats.every((s) => (s.x < 0 ? Math.hypot(s.x - 900, s.y) : Math.hypot(s.x + 900, s.y)) >= 900 + CHAIR_D_MM / 2 - 20),
+    "…and none of them in the pinch, standing in the other table",
+  );
+  assert(twoSeats.filter((s) => s.x < 0).length === 10, "…ten round each");
+  // A short table against half of a long one: the long side's other half still seats.
+  const halfCovered = { kind: "multi" as const, parts: [
+    { outline: [{ x: -1200, y: -600 }, { x: 1200, y: -600 }, { x: 1200, y: 600 }, { x: -1200, y: 600 }] },
+    { outline: [{ x: 0, y: 600 }, { x: 1200, y: 600 }, { x: 1200, y: 1800 }, { x: 0, y: 1800 }] },
+  ] };
+  const hcSeats = seatsAround(halfCovered, 14);
+  assert(hcSeats.some((s) => s.y > 600 && s.y < 700 && s.x < 0), "the uncovered half of a half-covered side still takes chairs");
+  assert(!hcSeats.some((s) => s.y > 600 && s.y < 700 && s.x > 0 && s.x < 1200), "…and the covered half takes none");
 
   console.log("seating self-check passed");
 }

@@ -35,6 +35,7 @@ import { cleanFlowers } from "@/lib/catalog/flowers";
 import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { nearestWall } from "@/lib/studio/anchor";
+import { climbKindOf } from "@/lib/studio/climb-item";
 import { deckTypeOf } from "@/lib/design-document/stage";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
@@ -99,6 +100,26 @@ async function assertSupplierOwned(organizationId: string, supplierId: string): 
     .where(and(eq(suppliers.id, supplierId), eq(suppliers.organizationId, organizationId)))
     .limit(1);
   if (!row) throw new Error("supplier not found");
+}
+
+/** Name who sells a catalog row — the "ללא ספק" group's one-click fix. `variantId` is whatever the
+ *  procurement line carries: a variant's id, or the product's own id when it has no variants. */
+export async function assignSupplier(variantId: string, supplierId: string | null): Promise<void> {
+  assertId(variantId, "variantId");
+  if (supplierId !== null) assertId(supplierId, "supplierId");
+  const organizationId = await currentOrg();
+  if (supplierId) await assertSupplierOwned(organizationId, supplierId);
+  const database = db();
+  const [variant] = await database
+    .select({ productId: productVariants.productId })
+    .from(productVariants)
+    .where(and(eq(productVariants.id, variantId), eq(productVariants.organizationId, organizationId)))
+    .limit(1);
+  const productId = variant?.productId ?? variantId;
+  await database
+    .update(products)
+    .set({ supplierId, updatedAt: new Date() })
+    .where(and(eq(products.id, productId), eq(products.organizationId, organizationId)));
 }
 
 // ── Suppliers ──────────────────────────────────────────────────────────────────────────────────
@@ -404,6 +425,7 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
       return undefined;
     },
     wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
+    climbOf: (variantId) => climbKindOf(byVariant.get(variantId)),
   };
 }
 

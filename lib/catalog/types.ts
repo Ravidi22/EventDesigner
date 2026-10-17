@@ -337,6 +337,14 @@ export interface FlowerLine {
   id: string;
   name: string; // "ורד", "פיאוני", "אקליפטוס" — singular, as a spec lists them
   qty: number; // stems of it in ONE arrangement; whole and positive
+  /** What the plan draws it as (a FlowerKindId, lib/catalog/flower-kinds.ts) — set when the
+   *  designer picked a known flower in the drawer. Absent = read from the name. */
+  kind?: string;
+  /** This flower's OWN colour on the plan (hex). Absent = it follows the arrangement's shade — or
+   *  its kind's own colour, for a green or gypsophila. Pinned once, it is this colour in every shade
+   *  the arrangement is stocked in; the flowers that change with the shade are the ones left
+   *  unpinned. */
+  colour?: string;
 }
 
 export interface Product {
@@ -360,6 +368,10 @@ export interface Product {
   appearance?: MapAppearance; // absent → derived from dimensions (see resolveFootprint)
   visibility?: Visibility; // absent = private (see Visibility) — publishing is always explicit
   archived?: boolean; // F-4.5: hidden from the catalog but still resolvable by placements
+  /** Copied from a supplier's marketplace row (lib/marketplace/): the source product and
+   *  organisation. Provenance only — this row is the studio's. Absent on everything else. */
+  sourceProductId?: string;
+  sourceOrgId?: string;
   /** Absent = a thing of one size (see ResizeSpec). */
   resize?: ResizeSpec;
   /** SAFETY DISTANCE — the clear floor this item needs around it, in mm, and the one number the

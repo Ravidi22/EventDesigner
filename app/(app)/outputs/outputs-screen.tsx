@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, RotateCw, Share2, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
@@ -11,8 +11,11 @@ import { recordExport, type ExportType } from "@/lib/outputs/actions";
 import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { useCatalog } from "@/lib/catalog/use-catalog";
+import { loadProducts } from "@/lib/catalog/storage";
+import type { Product } from "@/lib/catalog/types";
 import { zoneSheets } from "@/lib/outputs/zone-sheets";
-import { kitLetters, seatingSummary, tableKits } from "@/lib/outputs/table-kits";
+import { kitLetters, seatingSummary, tableKits, tablesPhrase } from "@/lib/outputs/table-kits";
 import { itemLookup } from "@/lib/outputs/lookup";
 import { numberedUnits } from "@/lib/design-document/groups";
 import type { StagePlacement } from "@/lib/design-document/stage";
@@ -20,6 +23,7 @@ import { nearestWall } from "@/lib/studio/anchor";
 import { fetchSettings, fetchStageRules } from "@/lib/settings/actions";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
+import { Skeleton } from "@/components/skeleton";
 import { PackingList } from "./packing-list";
 import { KitSchedule, PlacementMap, StageSchedule, mapWorld } from "./placement-map";
 import { TableDetail, detailWorld } from "./table-detail";
@@ -27,6 +31,7 @@ import { sheetScale } from "./sheet-frame";
 import { SetCover, type SetEntry } from "./set-cover";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
+import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
 
 type View = "packing" | "map" | "quote";
 const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר" };
@@ -58,12 +63,22 @@ const TRIM: Record<Paper, [number, number]> = { A4: [210, 297], A3: [297, 420] }
  *  is the same white border the printer leaves. Keep the two in step. */
 const MARGIN_MM = 16;
 
-export function OutputsScreen() {
+/** `frame`: which screen this is a page of. The same component closes the meeting (app/meeting) and
+ *  is /outputs on its own; the one thing that differs is where "nothing to print yet" sends the
+ *  designer — back into the stepper, or out to the studio (./back-to-studio.tsx).
+ *  `initialProducts`: the catalog, read on the server by /outputs (the meeting has none to hand). */
+export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "studio" | "meeting"; initialProducts?: Product[] }) {
+  const meeting = frame === "meeting";
   // Empty until the event's real document loads. A packing list is the one screen that must never
   // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
   const [view, setView] = useState<View>("quote");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("auto");
+  // The booklet in colour (the venue's lawn, pool, trees) or in black and white for a crew that gets
+  // photocopies. B&W is its own drawing, not the colour one greyed: every element filled with its
+  // kind's flat grey whatever its real colour, so sizes read at a glance (MONO in placement-map.tsx).
+  // The CSS grayscale stays on as a net under it — the text pages' photos, anything still in colour.
+  const [mono, setMono] = useState(false);
   const [version, setVersion] = useState(1);
   // The studio's railing rule, for the stage sheet (settings → במות). Off until read, and off if
   // the read fails — the sheet then simply marks no railing, which is what an unset rule means.
@@ -100,6 +115,20 @@ export function OutputsScreen() {
   };
   // EventSurface resolved all of this in one call for the whole surface.
   const { workspace, ready } = useEventWorkspace();
+
+  // THE CATALOG, which every sheet here resolves its items against, synchronously, while rendering
+  // (lib/catalog/storage.ts). Nothing on this screen used to load it, so the quote and the packing
+  // list said "עדיין אין פריטים בעיצוב" over a full drawing until the designer opened a sketch —
+  // the studio primes the cache, and these sheets were only ever borrowing it. /outputs reads it on
+  // the server, as the studio does; inside the meeting the sketch stages have usually primed it
+  // already (captured once, in the browser only — the server's module cache is not this studio's),
+  // and it is fetched when they have not.
+  const [warm] = useState(() => (typeof window !== "undefined" && loadProducts().length > 0 ? loadProducts() : undefined));
+  const catalog = useCatalog(initialProducts ?? warm);
+  // Neither half of "what is there to print" has arrived — the drawing (the workspace) or what its
+  // items are (the catalog). Until both have, the sheets show a sheet-shaped placeholder: an empty
+  // document read before its data lands is exactly the "no items" this screen used to show.
+  const loading = !ready || !catalog.ready;
 
   // The document, the event, the sheet number and the geometry all arrive together, from the one
   // read EventSurface makes for this whole surface (lib/events/workspace.ts). This used to be a
@@ -158,7 +187,7 @@ export function OutputsScreen() {
   const [openSection, setOpenSection] = useState<"layers" | "zones" | "details" | "book" | null>("layers");
   const stages = doc.placements.filter((p): p is StagePlacement => !!p.stage);
   const kitted = new Set(kits.flatMap((k) => k.units.map((u) => u.id)));
-  const undressed = numberedUnits(doc).filter((u) => !kitted.has(u.id)).map((u) => u.number);
+  const undressed = numberedUnits(doc).filter((u) => !kitted.has(u.id));
 
   // Each drawing sheet's own paper: in "auto", whichever orientation fits its drawing at the larger
   // scale (a tie goes landscape — the title block reads better on a wide sheet).
@@ -215,11 +244,9 @@ export function OutputsScreen() {
   // F-6.4: every export carries a date and a running number — and now a ROW, which also seals the
   // drawing it was made from, so a sheet in a crew's hands stays checkable against the design it
   // came from rather than merely being numbered.
-  const print = async () => {
-    if (!event) {
-      window.print();
-      return;
-    }
+  // Records the export and paints its number on the sheets before they leave — print or share.
+  const stamp = async () => {
+    if (!event) return;
     let printed = version;
     try {
       printed = await recordExport(event.id, EXPORT_OF[view]);
@@ -231,8 +258,54 @@ export function OutputsScreen() {
     // Let React paint the number before the print dialog freezes the page — the sheet has to carry
     // the number that was actually recorded, not the one it was showing a moment ago.
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return () => setVersion(printed + 1);
+  };
+  const print = async () => {
+    const done = await stamp();
     window.print();
-    setVersion(printed + 1);
+    done?.();
+  };
+
+  // THE BOOKLET AS A FILE, for WhatsApp — the quote's own path (./quote-pdf.ts): every sheet
+  // photographed at its true size and bound in the browser. A share the browser refuses for a stale
+  // tap keeps the file, and the next tap shares it — as long as the set has not changed since.
+  const sheetsRef = useRef<HTMLDivElement>(null);
+  const [sharing, setSharing] = useState(false);
+  const [shareNote, setShareNote] = useState<string | null>(null);
+  const pending = useRef<{ key: string; file: File } | null>(null);
+  const setKey = JSON.stringify([entries, paper, orient, mono]);
+  const shareTitle = ["חוברת הפקה", event?.clientName?.trim()].filter(Boolean).join(" — ");
+  const share = async () => {
+    if (sharing) return;
+    setShareNote(null);
+    setSharing(true);
+    try {
+      let file = pending.current?.key === setKey ? pending.current.file : null;
+      let done: (() => void) | undefined;
+      if (!file) {
+        done = await stamp();
+        const pages = [...(sheetsRef.current?.querySelectorAll<HTMLElement>("article.sheet") ?? [])];
+        file = await buildQuotePdf(pages, quoteFileName(event?.clientName, event?.date, "חוברת הפקה"), {
+          title: shareTitle,
+          author: studioName || undefined,
+          trueSize: true,
+        });
+      }
+      const outcome = await shareFile(file, shareTitle);
+      if (outcome === "blocked") {
+        pending.current = { key: setKey, file };
+        setShareNote("ה-PDF מוכן — לחצו שוב על שיתוף");
+      } else {
+        pending.current = null;
+        if (outcome === "downloaded") setShareNote("הדפדפן לא תומך בשיתוף קבצים — ה-PDF הורד");
+      }
+      done?.();
+    } catch (e) {
+      console.error("booklet PDF failed", e);
+      setShareNote("הפקת ה-PDF נכשלה — נסו שוב");
+    } finally {
+      setSharing(false);
+    }
   };
 
   const today = new Date().toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
@@ -243,7 +316,7 @@ export function OutputsScreen() {
   const stamped = view === "packing";
 
   return (
-    <div className="flex h-full min-h-0 print:block">
+    <div className="flex h-full min-h-0 print:block print:h-auto">
       {/* F-6.1: page setup applies when printing.
           A PLAN SHEET OWNS ITS OWN MARGIN. sheet-frame.tsx draws the border, the title block and
           the scale bar inside a full-trim page (210x297 for A4), so globals.css's
@@ -254,7 +327,7 @@ export function OutputsScreen() {
           margin, which is the only margin they have. */}
       {/* Named pages carry each drawing sheet's own orientation into the PDF; the default page is
           the text pages' (and the quote's and packing list's). */}
-      <style>{`@media print { @page { size: ${paper} ${textOrient}; ${view === "map" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
+      <style>{`@media print { @page { size: ${view === "quote" ? "A4 portrait" : `${paper} ${textOrient}`}; ${view === "map" || view === "quote" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
 
       {/* THE SHAPE IS THE STUDIO'S, deliberately: a rail of things to work on down the start edge,
           the work itself filling the rest. This used to be one horizontal strip doing four unrelated
@@ -352,7 +425,7 @@ export function OutputsScreen() {
                         >
                           <span className="font-bold">ערכה {k.letter}</span>
                           <span className="nums ms-1.5 font-normal">
-                            · {k.units.length === 1 ? `שולחן ${k.units[0].number || "ראש"}` : `${k.units.length} שולחנות`}
+                            · {k.units.length === 1 ? tablesPhrase(k.units) : `${k.units.length} שולחנות`}
                           </span>
                         </RailToggle>
                       ))}
@@ -380,6 +453,9 @@ export function OutputsScreen() {
 
         {/* Page setup and the print itself, under the rule — you touch these once, after you have
             decided what you are printing. F-6.1. */}
+        {/* The quote carries its own actions (share, download, print) above its pages, and is
+            always A4 portrait — a client's document, not a sheet set. */}
+        {view !== "quote" && (
         <div className="flex shrink-0 flex-col gap-2.5 border-t border-border p-2.5">
           <div className="flex items-center justify-between gap-2">
             <span className="text-caption text-muted">גיליון</span>
@@ -412,16 +488,38 @@ export function OutputsScreen() {
             </Seg>
           </div>
 
-          <Button onClick={print} className="w-full">
+          {view === "map" && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-caption text-muted">צבע</span>
+              <Seg>
+                <SegItem active={!mono} onClick={() => setMono(false)} small>
+                  צבעוני
+                </SegItem>
+                <SegItem active={mono} onClick={() => setMono(true)} small>
+                  שחור-לבן
+                </SegItem>
+              </Seg>
+            </div>
+          )}
+
+          <Button onClick={print} disabled={loading} className="w-full">
             <Printer className="h-4 w-4" strokeWidth={2} />
             {view === "map" ? "הפקת חוברת PDF" : "הדפסה / PDF"}
           </Button>
+          {view === "map" && (
+            <Button variant="outline" onClick={share} disabled={loading || sharing || setPages.length === 0} className="w-full">
+              <Share2 className="h-4 w-4" strokeWidth={2} />
+              {sharing ? "מכין PDF…" : "שיתוף החוברת"}
+            </Button>
+          )}
+          {view === "map" && shareNote && <p role="status" className="text-center text-caption text-muted">{shareNote}</p>}
           {view === "map" && (
             <p className="nums text-center text-caption text-muted">
               {setPages.length} {setPages.length === 1 ? "עמוד" : "עמודים"} · {sheetTotal} {sheetTotal === 1 ? "גיליון" : "גיליונות"}
             </p>
           )}
         </div>
+        )}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg print:block">
@@ -429,7 +527,7 @@ export function OutputsScreen() {
           so this IS the preview. Scrolling lives here rather than on <main>, which keeps the
           toolbar pinned while a long document runs past it. */}
         <div className="min-h-0 flex-1 overflow-auto print:overflow-visible">
-          <div className="flex flex-col items-center gap-4 p-5 print:block print:p-0">
+          <div ref={sheetsRef} className="flex flex-col items-center gap-4 p-5 print:block print:p-0">
           {/* `no-print` on purpose — this explains the sheet to whoever is producing it; it is not
               part of what a client or a crew receives. The list and the quote carry their own
               notice, because both are rendered straight from the meeting flow too, where this
@@ -438,7 +536,18 @@ export function OutputsScreen() {
             <VenueAccessNotice tone="plan" className="no-print w-full max-w-3xl" />
           )}
 
-          {view === "map" ? (
+          {loading ? (
+            <SheetLoading widthMm={view === "quote" ? TRIM.A4[0] : w} heightMm={view === "quote" ? TRIM.A4[1] : h} />
+          ) : catalog.error ? (
+            // A catalog that failed to load would print every sheet empty — say so instead.
+            <div role="alert" className="no-print mx-auto flex max-w-md flex-col items-center gap-3 py-20 text-center">
+              <p className="text-sm text-ink-soft">לא ניתן לטעון את הקטלוג, ולכן אי אפשר להציג את פריטי העיצוב.</p>
+              <Button variant="outline" size="sm" onClick={() => void catalog.reload()}>
+                <RotateCw className="h-4 w-4" strokeWidth={2} />
+                נסו שוב
+              </Button>
+            </div>
+          ) : view === "map" ? (
             // One <article className="sheet"> per ticked sheet — each is its own printed page
             // (globals.css: .sheet breaks after itself), each carries its OWN drafting title block
             // (sheet-frame.tsx: venue/client, sheet name, "n / total", scale, date, version) instead
@@ -462,7 +571,7 @@ export function OutputsScreen() {
               const textPage = (key: string, body: React.ReactNode, fixed = false) => (
                 <article
                   key={key}
-                  className="sheet bg-canvas shadow-lifted"
+                  className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`}
                   style={{ ...pageOf(textOrient), width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
                 >
                   {body}
@@ -498,17 +607,17 @@ export function OutputsScreen() {
               if (pg.kind === "kits")
                 return textPage(
                   "kits",
-                  <KitSchedule kits={kits} undressed={undressed} lookup={itemLookup} details={new Set(kits.filter(detailOn).map((k) => k.key))} />,
+                  <KitSchedule kits={kits} undressed={undressed} lookup={itemLookup} details={new Set(kits.filter(detailOn).map((k) => k.key))} meeting={meeting} />,
                 );
               if (pg.kind === "detail")
                 return (
-                  <article key={`detail-${pg.kit.key}`} className="sheet bg-canvas shadow-lifted" style={pageOf(pg.o)}>
-                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
+                  <article key={`detail-${pg.kit.key}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
+                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} mono={mono} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
                   </article>
                 );
               const { sheet, z } = pg;
               return (
-                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className="sheet bg-canvas shadow-lifted" style={pageOf(pg.o)}>
+                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
                   <PlacementMap
                     doc={z.doc}
                     plan={{ ...plan, zones: z.zone ? [z.zone] : plan.zones, bounds: z.bounds }}
@@ -518,12 +627,24 @@ export function OutputsScreen() {
                     railingAboveMm={railingAboveMm}
                     letters={sheet.tables === "full" ? letters : undefined}
                     summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
+                    mono={mono}
                     paper={paperOf(pg.o)}
                     {...frame}
                   />
                 </article>
               );
             })
+          ) : view === "quote" ? (
+            // The quote is its own A4 pages (./quote-document.tsx) — the same boxes the PDF is
+            // built from — so it does not sit inside a sheet of this screen's.
+            <Quote
+              doc={doc}
+              meeting={meeting}
+              event={event}
+              plan={plan}
+              zonePlans={zonePlans}
+              documentVersion={workspace?.document?.version ?? null}
+            />
           ) : (
             <article
               className="sheet w-full bg-canvas shadow-lifted"
@@ -546,12 +667,32 @@ export function OutputsScreen() {
                 </header>
               )}
 
-              {view === "packing" ? <PackingList doc={doc} eventId={event?.id ?? null} /> : <Quote doc={doc} />}
+              <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} />
             </article>
             )}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The sheet before its data lands: the page at its own trim size with a few bars on it, pulsing —
+ *  "it is arriving" and nothing that reads as content (components/skeleton.tsx's rule). */
+function SheetLoading({ widthMm, heightMm }: { widthMm: number; heightMm: number }) {
+  return (
+    <div
+      role="status"
+      aria-label="טוען את האירוע"
+      className="no-print flex max-w-full flex-col gap-3 bg-canvas shadow-lifted"
+      style={{ width: `${widthMm}mm`, height: `${heightMm}mm`, padding: `${MARGIN_MM}mm` }}
+    >
+      <Skeleton className="h-6 w-1/3" />
+      <Skeleton className="h-3.5 w-1/2" />
+      <Skeleton className="mt-6 h-48 w-full rounded-md" />
+      <Skeleton className="mt-2 h-3.5 w-full" />
+      <Skeleton className="h-3.5 w-5/6" />
+      <Skeleton className="h-3.5 w-2/3" />
     </div>
   );
 }

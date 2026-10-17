@@ -1,3 +1,9 @@
+// LEGACY (2026-10-16): the ONE flight a venue stage used to carry. A stage's stairs are the
+// sketch's edge items now (lib/venues/stage-edges.ts, StructureFeature.edgeItems) — any number, on
+// any side, following a round rim. What is still read from here: the type, and the geometry that
+// turns a flight saved in this form into an edge item on the first read (lib/venues/structure.ts
+// legacyEdgeItems). Nothing writes this form any more.
+//
 // Stairs onto a raised feature — in practice the built stage, which is a 40–80cm deck nobody walks
 // onto without them, and whose approach a designer has to keep clear of tables.
 //
@@ -12,6 +18,8 @@
 // 17cm" — which is what stepsForRise answers, and why the inspector's height field writes a count.
 import type { Point } from "@/lib/studio/hall";
 import { fromLocalFrame, toLocalFrame } from "@/lib/studio/geometry";
+import { RISER_MAX_MM, walkingLine, walkingPadMm, type ClimbArrow } from "./climb";
+import { isMain } from "../self-check";
 
 /** Which edge of the deck the flight hangs off, in the feature's OWN frame — so it turns with the
  *  stage instead of pointing at a fixed compass direction the stage no longer faces. */
@@ -59,7 +67,11 @@ export interface StairsHost {
   stairs?: FeatureStairs;
 }
 
-const TARGET_RISER_MM = 170; // a comfortable event-stage step; the default count is whatever lands nearest this
+// The default count is the fewest risers that keep every step at or under the 18cm a building code
+// allows (RISER_MAX_MM — the same rule the sketch's stage flights and the venue's own floor stairs
+// use, lib/venues/climb.ts), so a venue stage and a sketch stage of one height get the same flight.
+// It used to round to the nearest 17cm, which handed a 70cm deck four 17.5cm risers one time and a
+// 75cm deck four 18.75cm ones the next — over the rule, and different from the stage beside it.
 const DEFAULT_TREAD_MM = 300;
 const DEFAULT_WIDTH_MM = 1200;
 export const MAX_STEPS = 20;
@@ -71,7 +83,8 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 /** How many risers a deck of this height needs for steps of about `riserMm` each. Never zero: a
  *  flight with no steps is not a flight, and a deck flush with the floor still gets the one step
  *  the designer explicitly asked for by adding stairs at all. */
-export function stepsForRise(heightMm: number, riserMm = TARGET_RISER_MM): number {
+export function stepsForRise(heightMm: number, riserMm?: number): number {
+  if (riserMm === undefined) return clamp(Math.ceil(heightMm / RISER_MAX_MM), 1, MAX_STEPS);
   if (!(riserMm > 0)) return 1;
   return clamp(Math.round(heightMm / riserMm), 1, MAX_STEPS);
 }
@@ -147,6 +160,10 @@ export interface StairsGeometry {
   nosings: [Point, Point][];
   /** Middle of the flight — where a label sits, and what a drag grabs. */
   centre: Point;
+  /** The walking line up the middle of the flight — a dot at its foot, an arrowhead at the deck —
+   *  so the plan says which way is up the way its floor stairs and the sketch's stage flights do
+   *  (components/climb-glyph.tsx WalkingLine). */
+  arrow: ClimbArrow;
 }
 
 /** The flight in world millimetres, rotation included. World rather than local on purpose: every
@@ -190,10 +207,13 @@ function flightGeometry(host: StairsHost, stairs: FeatureStairs, side: StairsSid
     );
   const nosings: [Point, Point][] = [];
   for (let i = 1; i < treads; i++) nosings.push([at(i * stairs.treadMm, -halfFlight), at(i * stairs.treadMm, halfFlight)]);
+  // From the foot (the far end) up to the deck edge, standing clear of both.
+  const pad = walkingPadMm(run);
   return {
     outline: [at(0, -halfFlight), at(0, halfFlight), at(run, halfFlight), at(run, -halfFlight)],
     nosings,
     centre: at(run / 2, 0),
+    arrow: walkingLine(at(run - pad, 0), at(pad, 0), stairs.widthMm),
   };
 }
 
@@ -210,8 +230,8 @@ export function stairsPlacementAt(host: StairsHost, p: Point): { side: StairsSid
   return { side, offsetMm: Math.round(along) };
 }
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/venues/stairs.ts
-if ((import.meta as { main?: boolean }).main) {
+// ponytail: self-check. Run: npm run check:stairs
+if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
   };
@@ -226,6 +246,11 @@ if ((import.meta as { main?: boolean }).main) {
   assert(risen > 100 && risen < 200, "…at a height a person can actually climb");
   assert(defaultStairs({ ...stage, heightMm: 0 }).steps === 1, "a deck flush with the floor still gets one step, not zero");
   assert(stepsForRise(600, 300) === 2, "asking for 30cm steps on a 60cm deck gives two of them");
+  assert(defaultStairs({ ...stage, heightMm: 750 }).steps === 5, "a 75cm deck takes five risers — four would be 18.75cm, over the 18cm rule");
+  assert(defaultStairs({ ...stage, heightMm: 360 }).steps === 2, "…and a 36cm one exactly two of 18cm");
+  // The walking line runs up the flight, foot to deck, inside the outline.
+  const walk = stairsGeometry({ ...stage, stairs: first })!.arrow;
+  assert(walk.from.y > walk.to.y && walk.to.y > 1000 && walk.from.y < 1900, "the arrow runs from the foot of the flight up to the deck edge, clear of both ends");
   assert(stepsForRise(600, 0) === 1, "a nonsense riser height falls back to a single step rather than dividing by zero");
 
   // --- footprint ----------------------------------------------------------------------------------

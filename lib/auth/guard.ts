@@ -45,6 +45,15 @@ export async function requireStudio(): Promise<Session> {
   return session;
 }
 
+/** A designer's studio — not a supplier's. A supplier account is a studio account whose
+ *  organisation publishes a catalog and answers orders; it has no events, venues, gallery or
+ *  outputs, so those screens send it to its own inbox rather than rendering an empty studio. */
+export async function requireDesigner(): Promise<Session> {
+  const session = await requireStudio();
+  if (session.organizationKind === "supplier") redirect("/orders");
+  return session;
+}
+
 /** A client. The mirror image: a designer who lands here goes back to their dashboard. */
 export async function requireClient(): Promise<Session> {
   const session = await requireSession();

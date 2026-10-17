@@ -6,8 +6,9 @@
 // product can be built and used before anyone opens an account, and so that opening one changes
 // nothing above the driver.
 //
-// It refuses to serve at all once R2 is on, rather than quietly continuing to work: two live
-// storage backends is how half a gallery ends up in one place and half in the other.
+// It refuses to STORE once R2 is on, rather than quietly continuing to work: two live storage
+// backends is how half a gallery ends up in one place and half in the other. GET is the exception
+// (see there): it proxies the bucket, so the page's own scripts can read a photo's bytes.
 import { NextResponse } from "next/server";
 import { currentSession } from "@/lib/auth/session";
 import { fileDriver } from "@/lib/files/driver";
@@ -84,20 +85,29 @@ export async function PUT(request: Request, context: { params: Promise<{ key: st
  * serving `text/html` — which is what turns an image host into a cross-site scripting hole.
  */
 export async function GET(_request: Request, context: { params: Promise<{ key: string[] }> }) {
-  const wrongBackend = localOnly();
-  if (wrongBackend) return wrongBackend;
-
   const key = await keyOf(context);
   if (!key) return NextResponse.json({ error: "bad key" }, { status: 400 });
-
-  const bytes = await readLocalFile(key);
-  if (!bytes) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const ext = key.slice(key.lastIndexOf(".") + 1);
   const type = Object.entries(ALLOWED_TYPES).find(([, e]) => e === ext)?.[0];
   if (!type) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  return new NextResponse(new Uint8Array(bytes), {
+  // With R2 on, this is a same-origin window onto the bucket — the one exception to "this route
+  // does not run when R2 is configured". <img> tags keep reading the public domain (free egress);
+  // only a script that must READ the bytes comes here (`sameOriginUrl`, lib/files/keys.ts), which
+  // is a handful of photos per PDF. Uploads stay presigned and never pass through this process.
+  const driver = fileDriver();
+  let bytes: Uint8Array<ArrayBuffer> | null;
+  if (driver.name === "r2") {
+    const upstream = await fetch(driver.publicUrl(key));
+    bytes = upstream.ok ? new Uint8Array(await upstream.arrayBuffer()) : null;
+  } else {
+    const local = await readLocalFile(key);
+    bytes = local ? new Uint8Array(local.buffer.slice(local.byteOffset, local.byteOffset + local.byteLength) as ArrayBuffer) : null;
+  }
+  if (!bytes) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  return new NextResponse(bytes, {
     headers: {
       "Content-Type": type,
       // Immutable: the key contains a uuid minted per upload, so this exact object never changes.

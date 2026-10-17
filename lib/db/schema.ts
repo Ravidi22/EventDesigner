@@ -59,6 +59,8 @@ import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
 import type { ElementStyle } from "@/lib/element-style";
 import type { MeetingStepId } from "@/lib/meeting/steps";
 import type { CheckpointOffsets } from "@/lib/production/runway";
+import type { QuoteLayout } from "@/lib/quotes/layout";
+import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -122,6 +124,19 @@ export const grantKindEnum = pgEnum("grant_kind", ["member", "guest"]);
 // They mean the same thing — invitation sent, not yet accepted — so there is one enum, and the
 // mapping layer picks the word its screen uses.
 export const inviteStateEnum = pgEnum("invite_state", ["pending", "active"]);
+/** What an organisation IS (Organization.kind). A studio designs events; a supplier publishes a
+ *  catalog that studios pull from (lib/marketplace/). Same tables, same tenant seam — the kind only
+ *  decides which screens exist and which cross-organisation read is allowed. */
+export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supplier"]);
+/** The supplier's answer to an order (Order.status, lib/orders/). Typed by the OTHER party, which
+ *  is why it is allowed on a screen that otherwise derives everything: "the supplier said yes" is
+ *  derivable from nothing, the same reasoning as events.confirmed_at. */
+export const orderStatusEnum = pgEnum("order_status", ["sent", "confirmed", "partial", "delivered", "declined"]);
+/** A client's standing on one event's sketch (event_clients.role). */
+export const clientRoleEnum = pgEnum("client_role", ["viewer", "editor"]);
+/** A sketch proposal's life (sketch_proposals): the client is editing it, it waits for the
+ *  designer, or the designer has answered. Withdrawing a sent one puts it back to `draft`. */
+export const proposalStatusEnum = pgEnum("proposal_status", ["draft", "submitted", "resolved"]);
 
 // ── Column helpers ─────────────────────────────────────────────────────────────────────────────
 const orgId = () => uuid("organization_id").notNull();
@@ -134,6 +149,8 @@ const updated = () => timestamp("updated_at", { withTimezone: true }).notNull().
 export const organizations = pgTable("organizations", {
   id: id(),
   name: text("name").notNull(),
+  /** studio (the default, every organisation before 2026-10) or supplier. See organizationKindEnum. */
+  kind: organizationKindEnum("kind").notNull().default("studio"),
   createdAt: created(),
 });
 
@@ -163,7 +180,7 @@ export const users = pgTable(
     role: studioRoleEnum("role").notNull().default("designer"),
     state: inviteStateEnum("state").notNull().default("pending"),
     /** ⚠ LEGACY. Passwords live in auth_accounts now (Better Auth's "credential" row, same scrypt
-     *  format); migration 0013 copied every hash there and nothing reads this column any more. It is
+     *  format); migration 0019 copied every hash there and nothing reads this column any more. It is
      *  kept until that migration has run on Neon, then dropped.
      *
      *  scrypt, salted per user — see lib/auth/password.ts for the encoding.
@@ -303,6 +320,16 @@ export const studioSettings = pgTable("studio_settings", {
    *  Instagram handle — the one field a client's accountant looks for first. */
   businessNumber: text("business_number").notNull().default(""),
   email: text("email").notNull().default(""),
+  /** The studio's Instagram handle, printed on the quote's letterhead beside the phone and email. */
+  instagram: text("instagram").notNull().default(""),
+  /** Whether catalog prices and the quote's typed price already INCLUDE VAT (the quote then prints
+   *  the VAT inside the total) or exclude it (the quote adds it on top). Israeli studios quoting
+   *  private clients quote VAT-inclusive, hence the default. */
+  pricesIncludeVat: boolean("prices_include_vat").notNull().default(true),
+  /** The studio's signature as an uploaded image, printed over the studio's line on the quote. */
+  signatureUrl: text("signature_url"),
+  /** Print בס״ד at the top of every page of the quote. */
+  showBsd: boolean("show_bsd").notNull().default(false),
   /** How long an issued quote holds its price. Without it the price is open forever. */
   quoteValidityDays: integer("quote_validity_days").notNull().default(14),
   /** Payment schedule, cancellation, what is excluded — free text, one line per clause, printed
@@ -428,12 +455,20 @@ export const products = pgTable(
      *  somehow arrives without an opinion about who may see it must not become visible to strangers
      *  because of a missing field. Publishing is always an explicit act.
      *
-     *  ⚠ The column is written and read today, but NOTHING CROSSES ORGANISATIONS YET — every query
-     *  in lib/catalog/actions.ts is still scoped to one studio. That is deliberate: a cross-org read
-     *  needs decisions this flag alone does not answer (may another studio PLACE a public item, and
-     *  what happens to their design when the owner archives it?) and it needs RLS, which arrives
-     *  with auth. The flag is recorded now so the day those land, the data is already there. */
+     *  ONE cross-organisation read exists, and it is lib/marketplace/actions.ts: a SUPPLIER
+     *  organisation's public rows are what every studio browses. A studio's own public rows (the
+     *  base library) cross nothing — the marketplace query filters on organizations.kind. Nobody
+     *  ever PLACES another organisation's row: adding from the marketplace COPIES it (below), so
+     *  the owner archiving theirs changes no design. */
     visibility: visibilityEnum("visibility").notNull().default("private"),
+    /** Where a copied row came from (lib/marketplace/): the supplier's product and organisation.
+     *  Provenance only — the copy is this studio's, with its own price, drawing and variants, and
+     *  nothing ever writes into it from the source. `synced_at` is when the cost was last taken
+     *  from the source, so the drawer can say "הספק עדכן את המחיר" by comparing it to the source's
+     *  updated_at. NULL on everything that was not copied from a supplier. */
+    sourceProductId: uuid("source_product_id"),
+    sourceOrgId: uuid("source_org_id"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
 
     /** How far the plan may stretch this item, and in what module (see ResizeSpec). NULL = a thing
      *  of one size, which is most of a catalog. JSON rather than four columns because it is only
@@ -484,6 +519,8 @@ export const products = pgTable(
     index("products_org_live_idx")
       .on(t.organizationId, t.category)
       .where(sql`${t.archived} = false`),
+    // "Is this marketplace item already in my catalog" — one lookup per card on /marketplace.
+    index("products_source_idx").on(t.organizationId, t.sourceProductId),
   ],
 );
 
@@ -566,6 +603,11 @@ export const zones = pgTable(
     ceilingHeightMm: integer("ceiling_height_mm").notNull().default(0), // 0 = open to the sky
     capacity: jsonb("capacity").$type<ZoneCapacity>(),
     style: jsonb("style").$type<ElementStyle>(),
+    /** What the zone's floor is laid in (SurfaceMaterial — grass, paving, tile…), drawn as a texture
+     *  across its whole region. Null = no surface, the kind's tint alone. Plain text, not an enum:
+     *  the materials are an app vocabulary that grows, and a value this build does not know reads as
+     *  null (toZone). */
+    surface: text("surface"),
     createdAt: created(),
   },
   (t) => [index("zones_venue_idx").on(t.venueId), index("zones_org_idx").on(t.organizationId)],
@@ -627,6 +669,13 @@ export const events = pgTable(
      *  two events whose dates differ by two days can still want the same chuppah and the same pair
      *  of hands at the same hour, and comparing `event_date` alone would call that clear. */
     setupDate: date("setup_date"),
+    /** גווני האירוע — variant NAMES from the studio's catalog, in the designer's order of
+     *  preference. An item placed for this event wears the first of them it stocks
+     *  (lib/catalog/shades.ts). Names, not variant ids: one shade spans every product that has it. */
+    shades: text("shades").array().notNull().default([]),
+    /** סוג האירוע — חתונה, בר מצווה… (EVENT_TYPES, lib/events/types.ts). Free text so a studio's
+     *  own word survives; "" = not said. Printed on the quote's cover and title. */
+    eventType: text("event_type").notNull().default(""),
     archived: boolean("archived").notNull().default(false),
     createdAt: created(),
   },
@@ -688,6 +737,10 @@ export const eventClients = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     /** When it was shared. There is no separate createdAt: the row IS the sharing. */
     sharedAt: created(),
+    /** What this person may do with the event's sketch: `editor` proposes changes (a sketch
+     *  proposal, below), `viewer` only looks — the parent paying for it who should see the plan but
+     *  not move the tables. Per PERSON, because the couple is two logins and the answer differs. */
+    role: clientRoleEnum("role").notNull().default("editor"),
   },
   (t) => [
     primaryKey({ columns: [t.eventId, t.userId] }),
@@ -974,6 +1027,9 @@ export const issuedQuotes = pgTable(
     hiddenVariantIds: uuid("hidden_variant_ids").array().notNull().default([]),
     mergedCategoryIds: text("merged_category_ids").array().notNull().default([]),
     total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+    /** The designer's choices the client was shown (QuoteLayout, lib/quotes/layout.ts) — price mode,
+     *  typed price, gifts, titles, notes, photos, order. Null on quotes issued before it existed. */
+    layout: jsonb("layout").$type<QuoteLayout>(),
     issuedAt: created(),
   },
   (t) => [
@@ -981,6 +1037,19 @@ export const issuedQuotes = pgTable(
     index("issued_quotes_document_idx").on(t.designDocumentId),
   ],
 );
+
+/** The quote being WORKED ON (QuoteLayout, lib/quotes/layout.ts), one per event, autosaved from the
+ *  quote screen. Apart from issued_quotes on purpose: a row there means a quote went to the client,
+ *  and procurement and the runway read it as such — a draft must never look like one. Issuing copies
+ *  this layout into the issued row. */
+export const quoteDrafts = pgTable("quote_drafts", {
+  eventId: uuid("event_id")
+    .primaryKey()
+    .references(() => events.id, { onDelete: "cascade" }),
+  organizationId: orgId(),
+  layout: jsonb("layout").$type<QuoteLayout>().notNull(),
+  updatedAt: updated(),
+});
 
 // ── Suppliers and what they cost ───────────────────────────────────────────────────────────────
 
@@ -1004,6 +1073,10 @@ export const suppliers = pgTable(
      *  thing (what the studio SELLS, not what a supplier stocks). */
     supplies: text("supplies"),
     note: text("note"),
+    /** The supplier's OWN organisation, when they have an account (organizations.kind = supplier).
+     *  Set by the marketplace the first time a studio adds one of their items; an order to a linked
+     *  supplier lands in their inbox, an order to an unlinked one is shared by hand. */
+    linkedOrgId: uuid("linked_org_id").references(() => organizations.id, { onDelete: "set null" }),
     /** Archived, never deleted, for the same reason as a product: an expense must not lose who it
      *  was paid to, and a supplier who stops trading is still part of last year's costs. */
     archived: boolean("archived").notNull().default(false),
@@ -1012,6 +1085,7 @@ export const suppliers = pgTable(
   },
   (t) => [
     index("suppliers_org_idx").on(t.organizationId),
+    uniqueIndex("suppliers_org_linked_key").on(t.organizationId, t.linkedOrgId),
     index("suppliers_org_live_idx")
       .on(t.organizationId, t.name)
       .where(sql`${t.archived} = false`),
@@ -1166,4 +1240,165 @@ export const googleEventLinks = pgTable(
     uniqueIndex("google_event_links_pair_key").on(t.connectionId, t.appointmentId),
     index("google_event_links_appointment_idx").on(t.appointmentId),
   ],
+);
+
+// ── Orders (lib/orders/) ─────────────────────────────────────────────────────────────────────────
+
+/** A procurement group, SENT. A snapshot of the lines at the moment the designer pressed שליחה —
+ *  the forecast keeps moving under it, and the supplier has to see what was actually asked.
+ *
+ *  Two organisations meet on this row: `organization_id` is the studio that ordered (the tenant,
+ *  as everywhere), `supplier_org_id` the supplier's own organisation when they have one. The
+ *  supplier's inbox is the one query in the app that reads rows of another tenant by THAT column,
+ *  and it reads only orders addressed to it (lib/orders/actions.ts, fetchIncomingOrders). */
+export const orders = pgTable(
+  "orders",
+  {
+    id: id(),
+    organizationId: orgId(),
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "restrict" }),
+    supplierOrgId: uuid("supplier_org_id").references(() => organizations.id, { onDelete: "set null" }),
+    /** The window the lines were reduced over. An order covers several events; an event's own
+     *  readiness is read back by date (lib/production). */
+    windowFrom: date("window_from").notNull(),
+    windowTo: date("window_to").notNull(),
+    status: orderStatusEnum("status").notNull().default("sent"),
+    note: text("note").notNull().default(""),
+    /** The supplier's reply, in their words. */
+    reply: text("reply").notNull().default(""),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("orders_org_idx").on(t.organizationId, t.sentAt),
+    index("orders_supplier_org_idx").on(t.supplierOrgId, t.sentAt),
+    index("orders_window_idx").on(t.organizationId, t.windowFrom, t.windowTo),
+  ],
+);
+
+export const orderLines = pgTable(
+  "order_lines",
+  {
+    id: id(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    /** The studio's variant — kept so readiness can match the line back to a drawing. Not a foreign
+     *  key, for the reason packing_spares has none: an un-varianted product's "variantId" is the
+     *  product's id. */
+    variantId: uuid("variant_id").notNull(),
+    description: text("description").notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3 }).notNull(),
+    unitLabel: text("unit_label").notNull(),
+    /** Per order unit, the studio's cost at the moment of sending. NULL = unknown. */
+    unitCost: numeric("unit_cost", { precision: 12, scale: 2 }),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [index("order_lines_order_idx").on(t.orderId)],
+);
+
+// ── Crew (lib/production/) ───────────────────────────────────────────────────────────────────────
+
+/** Who is on the truck. The one TYPED fact on the production runway beside confirmed_at, and it
+ *  earns it the same way: an assignment is a decision, derivable from nothing. A crew member's
+ *  runway shows only the events they are on; a collision between two events is named after the
+ *  person both of them want. */
+export const eventCrew = pgTable(
+  "event_crew",
+  {
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: orgId(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.userId] }), index("event_crew_user_idx").on(t.organizationId, t.userId)],
+);
+
+// ── The client side (lib/client-portal/, lib/proposals/, lib/notifications/) ────────────────────
+
+/** A client's changes to an event's sketch, waiting for the designer (docs/superpowers/specs/
+ *  2026-10-16-client-side-design.md).
+ *
+ *  A COPY, never a write into design_documents. The designer's drawing feeds the quote, the packing
+ *  list, procurement and the runway; a client moving a table in it would reprice the event with
+ *  nobody having decided anything. So the client edits `content` here, forked from `base` — the
+ *  drawing as it stood when they began — and the designer approves the difference
+ *  (lib/design-document/delta.ts), which is a three-way merge onto whatever the drawing is by then.
+ *
+ *  `base` is stored, not referenced: the working design_documents row is updated in place by
+ *  autosave, so the version number alone cannot say what the client saw.
+ *
+ *  `content` is never what the browser sent. Every save is re-derived on the server as
+ *  merge(base, base, sent, allowed), so a field a client may not change cannot be in this row.
+ *
+ *  One OPEN proposal per event (draft or submitted — the partial unique index): the couple shares
+ *  one, and `revision` turns two phones saving at once into a refused write rather than a lost one.
+ *  Resolved rows are kept: they are the record of what was asked and what was agreed. */
+export const sketchProposals = pgTable(
+  "sketch_proposals",
+  {
+    id: id(),
+    organizationId: orgId(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    status: proposalStatusEnum("status").notNull().default("draft"),
+    base: jsonb("base").$type<DesignDocumentContent>().notNull(),
+    /** design_documents.version of the base — for the record ("based on version 3"). */
+    baseVersion: integer("base_version").notNull(),
+    /** design_documents.updated_at of the base. A newer one means the designer has moved on and an
+     *  open draft is rebased when the client next opens it. Null = the event had no drawing yet. */
+    baseUpdatedAt: timestamp("base_updated_at", { withTimezone: true }),
+    content: jsonb("content").$type<DesignDocumentContent>().notNull(),
+    revision: integer("revision").notNull().default(0),
+    /** The client's message with it. */
+    note: text("note").notNull().default(""),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    submittedBy: uuid("submitted_by").references(() => users.id, { onDelete: "set null" }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    resolvedBy: uuid("resolved_by").references(() => users.id, { onDelete: "set null" }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    /** The designer's answer to the client. */
+    reply: text("reply").notNull().default(""),
+    /** Change keys (delta.ts `table:<id>`) the designer took, and the ones they did not. */
+    accepted: text("accepted").array().notNull().default([]),
+    rejected: text("rejected").array().notNull().default([]),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    index("sketch_proposals_org_idx").on(t.organizationId),
+    index("sketch_proposals_event_idx").on(t.eventId, t.createdAt),
+    uniqueIndex("sketch_proposals_open_key")
+      .on(t.eventId)
+      .where(sql`${t.status} in ('draft', 'submitted')`),
+  ],
+);
+
+/** The bell (lib/notifications/). One row per RECIPIENT, written when the thing happens.
+ *
+ *  `organizationId` is the studio whose event it is about — for a client recipient too, who has no
+ *  organisation of their own. It keeps ADR-2's "every table carries organizationId" true and lets a
+ *  studio's data be removed whole; the READ scope is the recipient (`user_id`), never the org. */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    organizationId: orgId(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id").references(() => events.id, { onDelete: "cascade" }),
+    /** NotificationKind (lib/notifications/types.ts). Text, not an enum: new kinds are expected. */
+    kind: text("kind").$type<NotificationKind>().notNull(),
+    payload: jsonb("payload").$type<NotificationPayload>().notNull().default({}),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)],
 );

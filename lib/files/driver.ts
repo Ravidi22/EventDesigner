@@ -15,7 +15,6 @@
 //
 // ⚠ SERVER ONLY. It reads credentials.
 import { presign } from "./sigv4";
-import type { FileKind } from "./keys";
 
 /** What a browser needs to store one file, and where it will be readable afterwards. */
 export interface UploadTicket {
@@ -191,27 +190,4 @@ export function fileDriver(): FileDriver {
   return config ? r2Driver(config) : localDriver();
 }
 
-/**
- * The stored key inside one of our own URLs, or null for anything else.
- *
- * "Anything else" is real and must be left alone: a venue logo can be a data URL or an address
- * somebody typed, and those are not ours to delete. Null is how a caller cleaning up a replaced
- * file knows to do nothing.
- *
- * Both shapes are recognised whichever driver is live, on purpose — a studio that used the local
- * driver and then configured R2 still has `/api/files/…` URLs in old rows, and those keys are still
- * the right thing to name when one of them is replaced.
- */
-export function keyFromUrl(url: unknown): string | null {
-  if (typeof url !== "string") return null;
-
-  const marker = "/api/files/";
-  const local = url.indexOf(marker);
-  if (local !== -1) return url.slice(local + marker.length);
-
-  const base = process.env.NEXT_PUBLIC_R2_PUBLIC_URL?.replace(/\/$/, "");
-  if (base && url.startsWith(base + "/")) return url.slice(base.length + 1);
-  return null;
-}
-
-export type { FileKind };
+export { keyFromUrl } from "./keys";

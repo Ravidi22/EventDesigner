@@ -1,0 +1,2316 @@
+[
+ {
+  "code": "47302",
+  "section": "flowers",
+  "name": "אלסטרומריה יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/47302l.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "47332",
+  "section": "flowers",
+  "name": "אלסטרומריה שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47332g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש-מלאי מוגבל וצבעים מוגבלים",
+  "pack": 20
+ },
+ {
+  "code": "47599",
+  "section": "flowers",
+  "name": "אמרנטוס",
+  "image": "https://www.bukiflowers.com/Pictures/47599l.jpg",
+  "remark": "ירוק\\בורדו",
+  "pack": 10
+ },
+ {
+  "code": "47595",
+  "section": "flowers",
+  "name": "אמרנטוס זקוף",
+  "image": "https://www.bukiflowers.com/Pictures/47595g2.jpg",
+  "remark": "ירוק\\אדום",
+  "pack": 10
+ },
+ {
+  "code": "41040",
+  "section": "flowers",
+  "name": "אסטר שורש",
+  "image": "https://www.bukiflowers.com/Pictures/41040l.jpg",
+  "remark": "סגול\\אדום\\ורוד",
+  "pack": 10
+ },
+ {
+  "code": "41038",
+  "section": "flowers",
+  "name": "אסקלפיאס טובורוזה",
+  "image": "https://www.bukiflowers.com/Pictures/41038g.jpg",
+  "remark": "כתום-מלאי מוגבל",
+  "pack": 20
+ },
+ {
+  "code": "47575",
+  "section": "flowers",
+  "name": "בבונג שדה(קמומיל)",
+  "image": "https://www.bukiflowers.com/Pictures/47575g2.jpg",
+  "remark": "צהוב-כותרת לבן",
+  "pack": 10
+ },
+ {
+  "code": "47524",
+  "section": "flowers",
+  "name": "בודהה פינגרס",
+  "image": "https://www.bukiflowers.com/Pictures/47524.jpg",
+  "pack": 1
+ },
+ {
+  "code": "47916",
+  "section": "flowers",
+  "name": "בוורדיה גבוהה",
+  "image": "https://www.bukiflowers.com/Pictures/47916g2.jpg",
+  "remark": "ורודים-גוונים משתנים לפי מלאי | אדום-מלאי מוגבל",
+  "pack": 10
+ },
+ {
+  "code": "41055",
+  "section": "flowers",
+  "name": "גיפסנית צבועה",
+  "image": "https://www.bukiflowers.com/Pictures/41055g2.jpg",
+  "remark": "צבע אחיד\\מיקס",
+  "pack": 1
+ },
+ {
+  "code": "41054",
+  "section": "flowers",
+  "name": "גיפסנית פרח גדול",
+  "image": "https://www.bukiflowers.com/Pictures/41054g2.jpg",
+  "remark": "לבן 25 ענף בממוצע",
+  "pack": 1
+ },
+ {
+  "code": "41044",
+  "section": "flowers",
+  "name": "גרברה",
+  "image": "https://www.bukiflowers.com/Pictures/41044g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 20
+ },
+ {
+  "code": "41042",
+  "section": "flowers",
+  "name": "גרברה כדור",
+  "image": "https://www.bukiflowers.com/Pictures/41042g2.jpg",
+  "remark": "צבע ירוק-שחור,קוטר ראש בערך 3-4 ס\"מ",
+  "pack": 20
+ },
+ {
+  "code": "41045",
+  "section": "flowers",
+  "name": "גרברה מיני",
+  "image": "https://www.bukiflowers.com/Pictures/41045g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 20
+ },
+ {
+  "code": "41049",
+  "section": "flowers",
+  "name": "גרברה מיקרו",
+  "image": "https://www.bukiflowers.com/Pictures/41049g2.jpg",
+  "remark": "לב שחור למעלה\\לב ירוק למטה...רק לציין צבע בבקשה",
+  "pack": 20
+ },
+ {
+  "code": "41051",
+  "section": "flowers",
+  "name": "גרברה ספיידר",
+  "image": "https://www.bukiflowers.com/Pictures/41051g2.jpg",
+  "remark": "מלאי מוגבל מאוד/צפוי חוסרים",
+  "pack": 20
+ },
+ {
+  "code": "41050",
+  "section": "flowers",
+  "name": "גרברה פונפון",
+  "image": "https://www.bukiflowers.com/Pictures/41050g2.jpg",
+  "remark": "מלאי מוגבל מאוד/צפוי חוסרים",
+  "pack": 20
+ },
+ {
+  "code": "41046",
+  "section": "flowers",
+  "name": "גרברה פסטה",
+  "image": "https://www.bukiflowers.com/Pictures/41046g2.jpg",
+  "remark": "הצבעים הנ\"ל הן במלאי,ועדיין מוגבל",
+  "pack": 20
+ },
+ {
+  "code": "47496",
+  "section": "flowers",
+  "name": "דליה",
+  "image": "https://www.bukiflowers.com/Pictures/47496g2.jpg",
+  "remark": "מלאי מוגבל צבעים מוגבלים",
+  "pack": 10
+ },
+ {
+  "code": "41088",
+  "section": "flowers",
+  "name": "הביסקוס אדום",
+  "image": "https://www.bukiflowers.com/Pictures/41088g2.jpg",
+  "remark": "אדום",
+  "pack": 10
+ },
+ {
+  "code": "41067",
+  "section": "flowers",
+  "name": "ורוניקה",
+  "image": "https://www.bukiflowers.com/Pictures/41067a.jpg",
+  "remark": "ורוד",
+  "pack": 20
+ },
+ {
+  "code": "41019",
+  "section": "flowers",
+  "name": "חמניות גדולות חומות\\צהובות",
+  "image": "https://www.bukiflowers.com/Pictures/47322a img_0190.jpg",
+  "remark": "פתוח\\סגור",
+  "pack": 10
+ },
+ {
+  "code": "47522",
+  "section": "flowers",
+  "name": "חמניות ראש קטן",
+  "image": "https://www.bukiflowers.com/Pictures/47522.jpg",
+  "remark": "סגור\\פתוח",
+  "pack": 10
+ },
+ {
+  "code": "41026",
+  "section": "flowers",
+  "name": "חרציות א רגולסקי/ב בן צבי",
+  "image": "https://www.bukiflowers.com/Pictures/41025g2.jpg",
+  "remark": "ראש מלא,מרגרטה,פונפון,סנטיני ולציין צבע בבקשה",
+  "pack": 30
+ },
+ {
+  "code": "41025",
+  "section": "flowers",
+  "name": "חרציות אקסטרה",
+  "image": "https://www.bukiflowers.com/Pictures/41025g2.jpg",
+  "remark": "ראש מלא,מרגרטה,פונפון,סנטיני ולציין צבע בבקשה",
+  "pack": 30
+ },
+ {
+  "code": "48225",
+  "section": "flowers",
+  "name": "חרצית יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/48225l.jpg",
+  "remark": "לבן\\צהוב\\ורוד מלאי קיים",
+  "pack": 5
+ },
+ {
+  "code": "48234",
+  "section": "flowers",
+  "name": "חרצית יבוא סנטיני בלבד",
+  "image": "https://www.bukiflowers.com/Pictures/48234g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 25
+ },
+ {
+  "code": "49583",
+  "section": "flowers",
+  "name": "חרצית ראש יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/49583l.jpg",
+  "remark": "ראש מלא\\ספיידר ונא לציין גם צבע אין בורדו ואין חום",
+  "pack": 10
+ },
+ {
+  "code": "47729",
+  "section": "flowers",
+  "name": "טווידה ורוד",
+  "image": "https://www.bukiflowers.com/Pictures/47729g2.jpg",
+  "remark": "ורוד",
+  "pack": 25
+ },
+ {
+  "code": "47704",
+  "section": "flowers",
+  "name": "טווידה לבן",
+  "image": "https://www.bukiflowers.com/Pictures/47704g2.jpg",
+  "remark": "לבן",
+  "pack": 25
+ },
+ {
+  "code": "47705",
+  "section": "flowers",
+  "name": "טווידה תכלת",
+  "image": "https://www.bukiflowers.com/Pictures/47705g2.jpg",
+  "remark": "תכלת",
+  "pack": 25
+ },
+ {
+  "code": "47141",
+  "section": "flowers",
+  "name": "כיסופית",
+  "image": "https://www.bukiflowers.com/Pictures/47141g2.jpg",
+  "remark": "לבן",
+  "pack": 25
+ },
+ {
+  "code": "41047",
+  "section": "flowers",
+  "name": "לוע ארי",
+  "image": "https://www.bukiflowers.com/Pictures/41047g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "47810",
+  "section": "flowers",
+  "name": "ליזיאנטוס 80 ס\"מ ורוד",
+  "image": "https://www.bukiflowers.com/Pictures/47810.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47815",
+  "section": "flowers",
+  "name": "ליזיאנטוס 80 ס\"מ ורוד בהיר",
+  "image": "https://www.bukiflowers.com/Pictures/47815.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47816",
+  "section": "flowers",
+  "name": "ליזיאנטוס 80 ס\"מ לבן",
+  "image": "https://www.bukiflowers.com/Pictures/47816.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47817",
+  "section": "flowers",
+  "name": "ליזיאנטוס 80 ס\"מ סגול",
+  "image": "https://www.bukiflowers.com/Pictures/47817.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47811",
+  "section": "flowers",
+  "name": "ליזיאנטוס 80 ס\"מ סגול-לבן",
+  "image": "https://www.bukiflowers.com/Pictures/47811.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47813",
+  "section": "flowers",
+  "name": "ליזיאנטוס 80 ס\"מ פוקסיה",
+  "image": "https://www.bukiflowers.com/Pictures/47813.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47462",
+  "section": "flowers",
+  "name": "ליזיאנטוס באלה 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/41029c.jpg",
+  "remark": "לבן\\ורוד",
+  "pack": 50
+ },
+ {
+  "code": "41142",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים ורוד",
+  "image": "https://www.bukiflowers.com/Pictures/41142g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41146",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים ורוד בהיר",
+  "image": "https://www.bukiflowers.com/Pictures/41146g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41141",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים לבן",
+  "image": "https://www.bukiflowers.com/Pictures/41141g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41147",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים לילך",
+  "image": "https://www.bukiflowers.com/Pictures/41147g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41148",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים סגול",
+  "image": "https://www.bukiflowers.com/Pictures/41148g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41144",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים פוקסיה",
+  "image": "https://www.bukiflowers.com/Pictures/41144g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41145",
+  "section": "flowers",
+  "name": "ליזיאנטוס קיטומים שמפיין",
+  "image": "https://www.bukiflowers.com/Pictures/41145g2.jpg",
+  "pack": 50
+ },
+ {
+  "code": "41004",
+  "section": "flowers",
+  "name": "ליליות",
+  "image": "https://www.bukiflowers.com/Pictures/41004l.jpg",
+  "remark": "נא לציין את הצבע המבוקש,נקטף אצלנו טרי!",
+  "pack": 10
+ },
+ {
+  "code": "41135",
+  "section": "flowers",
+  "name": "ליליות sweet sugar",
+  "image": "https://www.bukiflowers.com/Pictures/41135.jpg",
+  "remark": "סגור,לפתיחה נא להזמין מראש ש ב ו ע",
+  "pack": 10
+ },
+ {
+  "code": "41031",
+  "section": "flowers",
+  "name": "לימוניום אמילי",
+  "image": "https://www.bukiflowers.com/Pictures/41031g2.jpg",
+  "remark": "ורוד\\סגול\\לבן\\ בלבד !  נא לציין את הצבע המבוקש.מכיל בממוצע 15 ענף",
+  "pack": 1
+ },
+ {
+  "code": "48048",
+  "section": "flowers",
+  "name": "סחלב דנדרוביום ענף בודד",
+  "image": "https://www.bukiflowers.com/Pictures/47606l.jpg",
+  "remark": "לבן\\ורוד\\סגול בהיר\\סגול-לבן , נא לציין את הצבע המבוקש ,מגיע בענף בודד",
+  "pack": 1
+ },
+ {
+  "code": "47314",
+  "section": "flowers",
+  "name": "סחלב פילנופסיס-ענף",
+  "image": "https://www.bukiflowers.com/Pictures/47314 img_0651.jpg",
+  "remark": "מלאי מוגבל,יוחלף ביבוא במקרים של חוסר(60 ש\"ח)",
+  "pack": 1
+ },
+ {
+  "code": "41021",
+  "section": "flowers",
+  "name": "סייפן",
+  "image": "https://www.bukiflowers.com/Pictures/41021l.jpg",
+  "remark": "לבן בלבד כרגע",
+  "pack": 10
+ },
+ {
+  "code": "41070",
+  "section": "flowers",
+  "name": "פלוקס",
+  "image": "https://www.bukiflowers.com/Pictures/41070.jpg",
+  "remark": "לבן\\סגול\\ורוד פרחים סגורים",
+  "pack": 50
+ },
+ {
+  "code": "41061",
+  "section": "flowers",
+  "name": "פלוקס פתוח",
+  "image": "https://www.bukiflowers.com/Pictures/41061.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 50
+ },
+ {
+  "code": "47164",
+  "section": "flowers",
+  "name": "פרח פמפס טרי מקומי",
+  "image": "https://www.bukiflowers.com/Pictures/47164.jpg",
+  "remark": "פורח טרי-מעל 1.8 גובה",
+  "pack": 10
+ },
+ {
+  "code": "41000",
+  "section": "flowers",
+  "name": "צבעוני יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/41000g.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 50
+ },
+ {
+  "code": "47319",
+  "section": "flowers",
+  "name": "ציפורן אמריקאית",
+  "image": "https://www.bukiflowers.com/Pictures/47319g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 20
+ },
+ {
+  "code": "47448",
+  "section": "flowers",
+  "name": "ציפורן ברבטוס",
+  "image": "https://www.bukiflowers.com/Pictures/47519g2.jpg",
+  "remark": "סגול\\ורוד-לבן\\ורוד 40 סמ בלבד",
+  "pack": 10
+ },
+ {
+  "code": "41102",
+  "section": "flowers",
+  "name": "קאלות צבעוניות",
+  "image": "https://www.bukiflowers.com/Pictures/41102g2.jpg",
+  "remark": "נא לציין את הצבע המבוקש-אין לבן בכלל!!!!!!!",
+  "pack": 10
+ },
+ {
+  "code": "47454",
+  "section": "flowers",
+  "name": "קורקומה",
+  "image": "https://www.bukiflowers.com/Pictures/47454a.jpg",
+  "remark": "נא לציין את הגוון המבוקש",
+  "pack": 5
+ },
+ {
+  "code": "47455",
+  "section": "flowers",
+  "name": "קורקומה דו צבע",
+  "image": "https://www.bukiflowers.com/Pictures/47455.jpg",
+  "remark": "נא לציין את הגוון המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "47648",
+  "section": "flowers",
+  "name": "קורקומה לבנה",
+  "image": "https://www.bukiflowers.com/Pictures/47648.jpg",
+  "remark": "לבן",
+  "pack": 10
+ },
+ {
+  "code": "48226",
+  "section": "flowers",
+  "name": "קליקרפה",
+  "image": "https://www.bukiflowers.com/Pictures/48226g2.jpg",
+  "remark": "סגול",
+  "pack": 10
+ },
+ {
+  "code": "47700",
+  "section": "flowers",
+  "name": "רימון שחור",
+  "image": "https://www.bukiflowers.com/Pictures/0686a8f7-977c-430c-8a26-cc7a522e8817.jpg",
+  "pack": 1
+ },
+ {
+  "code": "41013",
+  "section": "flowers",
+  "name": "שושן אוריינטלי רב פעמונים",
+  "image": "https://www.bukiflowers.com/Pictures/41013g2.jpg",
+  "remark": "לבן\\ורוד בהיר\\פוקסיה\\כתום-חדש ,נקטף אצלנו טרי",
+  "pack": 10
+ },
+ {
+  "code": "41014",
+  "section": "flowers",
+  "name": "שושן אוריינטלי רב פעמונים כפול",
+  "image": "https://www.bukiflowers.com/Pictures/41014g2.jpg",
+  "remark": "רק לבן במלאי",
+  "pack": 10
+ },
+ {
+  "code": "41137",
+  "section": "flowers",
+  "name": "שושן אורנטלי צהוב",
+  "image": "https://www.bukiflowers.com/Pictures/41137.jpg",
+  "remark": "גל חדש של קטיף מדהים!",
+  "pack": 10
+ },
+ {
+  "code": "47322",
+  "section": "flowers",
+  "name": "שושן יפני פעמון בודד",
+  "image": "https://www.bukiflowers.com/Pictures/47322.jpg",
+  "remark": "סגור-ירוק    פתוח-לבן מלאי מוגבל",
+  "pack": 10
+ },
+ {
+  "code": "47327",
+  "section": "flowers",
+  "name": "שושן יפני רב פעמונים",
+  "image": "https://www.bukiflowers.com/Pictures/47327.jpg",
+  "remark": "ירוק-סגור   לבן-פתוח מלאי מוגבל",
+  "pack": 10
+ },
+ {
+  "code": "47326",
+  "section": "flowers",
+  "name": "שושן יפני שני פעומונים",
+  "image": "https://www.bukiflowers.com/Pictures/47326.jpg",
+  "remark": "ירוק-סגור   לבן-פתוח מלאי מוגבל",
+  "pack": 10
+ },
+ {
+  "code": "47643",
+  "section": "flowers",
+  "name": "שושן פתוח",
+  "image": "https://www.bukiflowers.com/Pictures/47643 img_0184.jpg",
+  "remark": "לבן פתוח-נקי מאבקנים הזמנה 4 ימים מראש!",
+  "pack": 10
+ },
+ {
+  "code": "47800",
+  "section": "roses",
+  "name": "ורד אוולנש - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47800g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47359",
+  "section": "roses",
+  "name": "ורד אוולנש 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47359.jpg",
+  "remark": "לבן-שמנת סגור בלבד",
+  "pack": 20
+ },
+ {
+  "code": "47360",
+  "section": "roses",
+  "name": "ורד אוולנש 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47359.jpg",
+  "remark": "לבן-שמנת סגור בלבד",
+  "pack": 20
+ },
+ {
+  "code": "47361",
+  "section": "roses",
+  "name": "ורד אוולנש 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47359.jpg",
+  "remark": "לבן-שמנת סגור בלבד",
+  "pack": 20
+ },
+ {
+  "code": "47362",
+  "section": "roses",
+  "name": "ורד אוולנש 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47359.jpg",
+  "remark": "לבן-שמנת סגור בלבד",
+  "pack": 20
+ },
+ {
+  "code": "47801",
+  "section": "roses",
+  "name": "ורד אושן סונג - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47801g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47391",
+  "section": "roses",
+  "name": "ורד אושן סונג 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47391.jpg",
+  "remark": "ורד לילך סגור בלבד",
+  "pack": 20
+ },
+ {
+  "code": "47392",
+  "section": "roses",
+  "name": "ורד אושן סונג 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47391.jpg",
+  "remark": "לילך",
+  "pack": 20
+ },
+ {
+  "code": "47393",
+  "section": "roses",
+  "name": "ורד אושן סונג 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47391.jpg",
+  "remark": "לילך",
+  "pack": 20
+ },
+ {
+  "code": "47394",
+  "section": "roses",
+  "name": "ורד אושן סונג 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47391.jpg",
+  "remark": "לילך",
+  "pack": 20
+ },
+ {
+  "code": "48181",
+  "section": "roses",
+  "name": "ורד אנגלי פוקסיה",
+  "image": "https://www.bukiflowers.com/Pictures/48181.jpg",
+  "remark": "פתיחת שטח בלבד,אריזות אחרות יחוייבו לפי גובה",
+  "pack": 40
+ },
+ {
+  "code": "48173",
+  "section": "roses",
+  "name": "ורד טיטניק 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48173.jpg",
+  "remark": "ורוד בהיר, סגור\\פתיחת שטח",
+  "pack": 20
+ },
+ {
+  "code": "48174",
+  "section": "roses",
+  "name": "ורד טיטניק 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48173.jpg",
+  "remark": "ורוד בהיר",
+  "pack": 20
+ },
+ {
+  "code": "48175",
+  "section": "roses",
+  "name": "ורד טיטניק 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48173.jpg",
+  "remark": "ורוד בהיר",
+  "pack": 20
+ },
+ {
+  "code": "48176",
+  "section": "roses",
+  "name": "ורד טיטניק 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48173.jpg",
+  "remark": "ורוד בהיר",
+  "pack": 20
+ },
+ {
+  "code": "47802",
+  "section": "roses",
+  "name": "ורד לוולי - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47802g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 20
+ },
+ {
+  "code": "47281",
+  "section": "roses",
+  "name": "ורד לוולי רד 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47282 img_9934.jpg",
+  "remark": "אין התחייבות על מחיר זה-עלול להשתנות בגלל חגים(כריסטמס,טו באב,וולנטיין,יום האישה),כמויות מוגבלות לכל לקוח,אין התחייבות להספקה בחגים הנ\"ל",
+  "pack": 20
+ },
+ {
+  "code": "47282",
+  "section": "roses",
+  "name": "ורד לוולי רד 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47282 img_9934.jpg",
+  "remark": "אין התחייבות על מחיר זה-עלול להשתנות בגלל חגים(כריסטמס,טו באב,וולנטיין,יום האישה),כמויות מוגבלות לכל לקוח,אין התחייבות להספקה בחגים הנ\"ל",
+  "pack": 20
+ },
+ {
+  "code": "47283",
+  "section": "roses",
+  "name": "ורד לוולי רד 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47282 img_9934.jpg",
+  "remark": "אין התחייבות על מחיר זה-עלול להשתנות בגלל חגים(כריסטמס,טו באב,וולנטיין,יום האישה),כמויות מוגבלות לכל לקוח,אין התחייבות להספקה בחגים הנ\"ל",
+  "pack": 20
+ },
+ {
+  "code": "47284",
+  "section": "roses",
+  "name": "ורד לוולי רד 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47282 img_9934.jpg",
+  "remark": "אין התחייבות על מחיר זה-עלול להשתנות בגלל חגים(כריסטמס,טו באב,וולנטיין,יום האישה),כמויות מוגבלות לכל לקוח,אין התחייבות להספקה בחגים הנ\"ל",
+  "pack": 20
+ },
+ {
+  "code": "47285",
+  "section": "roses",
+  "name": "ורד לוולי רד גובה מטר",
+  "image": "https://www.bukiflowers.com/Pictures/47282 img_9934.jpg",
+  "remark": "אין התחייבות על מחיר זה-עלול להשתנות בגלל חגים(כריסטמס,,טו באב,וולנטיין,יום האישה),כמויות מוגבלות לכל לקוח,אין התחייבות להספקה בחגים הנ\"ל",
+  "pack": 20
+ },
+ {
+  "code": "47803",
+  "section": "roses",
+  "name": "ורד מילווה - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47274g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 20
+ },
+ {
+  "code": "47274",
+  "section": "roses",
+  "name": "ורד מילווה 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47274.jpg",
+  "remark": "ורד כתום סגור",
+  "pack": 20
+ },
+ {
+  "code": "47275",
+  "section": "roses",
+  "name": "ורד מילווה 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47274.jpg",
+  "remark": "כתום",
+  "pack": 20
+ },
+ {
+  "code": "47276",
+  "section": "roses",
+  "name": "ורד מילווה 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47274.jpg",
+  "remark": "כתום",
+  "pack": 20
+ },
+ {
+  "code": "47278",
+  "section": "roses",
+  "name": "ורד מילווה 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47274.jpg",
+  "remark": "כתום",
+  "pack": 20
+ },
+ {
+  "code": "47412",
+  "section": "roses",
+  "name": "ורד מיס-פיגי 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47412.jpg",
+  "remark": "כתום-ורוד סגור",
+  "pack": 20
+ },
+ {
+  "code": "47417",
+  "section": "roses",
+  "name": "ורד מיס-פיגי 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47412.jpg",
+  "remark": "כתום-ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47411",
+  "section": "roses",
+  "name": "ורד מיקמאק 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47411.jpg",
+  "remark": "חום-אפור-ורוד סגור, מלאי מוגבל ללקוח\\הזמנה\\אירוע",
+  "pack": 20
+ },
+ {
+  "code": "47804",
+  "section": "roses",
+  "name": "ורד סוויט - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47804g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47286",
+  "section": "roses",
+  "name": "ורד סוויט אוולנש 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47286.jpg",
+  "remark": "ורוד בהיר סגור",
+  "pack": 20
+ },
+ {
+  "code": "47287",
+  "section": "roses",
+  "name": "ורד סוויט אוולנש 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47286.jpg",
+  "remark": "ורוד בהיר",
+  "pack": 20
+ },
+ {
+  "code": "47288",
+  "section": "roses",
+  "name": "ורד סוויט אוולנש 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47286.jpg",
+  "remark": "ורוד בהיר",
+  "pack": 20
+ },
+ {
+  "code": "47289",
+  "section": "roses",
+  "name": "ורד סוויט אוולנש 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47286.jpg",
+  "remark": "ורוד בהיר",
+  "pack": 20
+ },
+ {
+  "code": "48124",
+  "section": "roses",
+  "name": "ורד סירקוס 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48124.jpg",
+  "remark": "צהוב-אדום,סגור\\פתיחת שטח",
+  "pack": 20
+ },
+ {
+  "code": "48125",
+  "section": "roses",
+  "name": "ורד סירקוס 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48124.jpg",
+  "remark": "צהוב-אדום",
+  "pack": 20
+ },
+ {
+  "code": "48126",
+  "section": "roses",
+  "name": "ורד סירקוס 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48124.jpg",
+  "remark": "צהוב-אדום",
+  "pack": 20
+ },
+ {
+  "code": "48127",
+  "section": "roses",
+  "name": "ורד סירקוס 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48124.jpg",
+  "remark": "צהוב-אדום",
+  "pack": 20
+ },
+ {
+  "code": "48187",
+  "section": "roses",
+  "name": "ורד ספרי 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48187.jpg",
+  "remark": "לבן\\ורוד\\לילך\\אדום\\כתום\\צהוב נא לציין את הצבע המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "48188",
+  "section": "roses",
+  "name": "ורד ספרי 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48187.jpg",
+  "remark": "לבן\\ורוד\\לילך\\אדום\\כתום\\צהוב נא לציין את הצבע המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "48189",
+  "section": "roses",
+  "name": "ורד ספרי 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48187.jpg",
+  "remark": "לבן\\ורוד\\לילך\\אדום\\כתום\\צהוב נא לציין את הצבע המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "48190",
+  "section": "roses",
+  "name": "ורד ספרי 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/48187.jpg",
+  "remark": "לבן\\ורוד\\לילך\\אדום\\כתום\\צהוב נא לציין את הצבע המבוקש",
+  "pack": 10
+ },
+ {
+  "code": "47805",
+  "section": "roses",
+  "name": "ורד פיץ - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47805g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47255",
+  "section": "roses",
+  "name": "ורד פיץ אוולנש 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47255.jpg",
+  "remark": "ורד אפרסק סגור",
+  "pack": 20
+ },
+ {
+  "code": "47256",
+  "section": "roses",
+  "name": "ורד פיץ אוולנש 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47255.jpg",
+  "remark": "אפרסק (גוון כתום בהיר)",
+  "pack": 20
+ },
+ {
+  "code": "47257",
+  "section": "roses",
+  "name": "ורד פיץ אוולנש 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47255.jpg",
+  "remark": "אפרסק (גוון כתום בהיר)",
+  "pack": 20
+ },
+ {
+  "code": "47258",
+  "section": "roses",
+  "name": "ורד פיץ אוולנש 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47255.jpg",
+  "remark": "אפרסק(גוון כתום בהיר)",
+  "pack": 20
+ },
+ {
+  "code": "47806",
+  "section": "roses",
+  "name": "ורד פקולטה - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47806g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47471",
+  "section": "roses",
+  "name": "ורד פקולטה 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47471.jpg",
+  "remark": "ורד פוקסיה,סגור",
+  "pack": 20
+ },
+ {
+  "code": "47472",
+  "section": "roses",
+  "name": "ורד פקולטה 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47471.jpg",
+  "remark": "פוקסיה",
+  "pack": 20
+ },
+ {
+  "code": "47473",
+  "section": "roses",
+  "name": "ורד פקולטה 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47471.jpg",
+  "remark": "פוקסיה",
+  "pack": 20
+ },
+ {
+  "code": "47474",
+  "section": "roses",
+  "name": "ורד פקולטה 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47471.jpg",
+  "remark": "פוקסיה",
+  "pack": 20
+ },
+ {
+  "code": "47807",
+  "section": "roses",
+  "name": "ורד קול ווטר - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47807g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47682",
+  "section": "roses",
+  "name": "ורד קול ווטר 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47682.jpg",
+  "remark": "ורד סגול-ורוד סגור",
+  "pack": 20
+ },
+ {
+  "code": "47683",
+  "section": "roses",
+  "name": "ורד קול ווטר 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47682.jpg",
+  "remark": "סגול-ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47684",
+  "section": "roses",
+  "name": "ורד קול ווטר 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47682.jpg",
+  "remark": "סגול-ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47685",
+  "section": "roses",
+  "name": "ורד קולווטר 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47682.jpg",
+  "remark": "סגול-ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47808",
+  "section": "roses",
+  "name": "ורד קורונוס - שטח",
+  "image": "https://www.bukiflowers.com/Pictures/47808g2.jpg",
+  "remark": "ורד פתוח בלבד-לא מתאים לחנויות",
+  "pack": 40
+ },
+ {
+  "code": "47395",
+  "section": "roses",
+  "name": "ורד קרונוס 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47395.jpg",
+  "remark": "צהוב סגור",
+  "pack": 20
+ },
+ {
+  "code": "47396",
+  "section": "roses",
+  "name": "ורד קרונוס 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47395.jpg",
+  "remark": "צהוב",
+  "pack": 20
+ },
+ {
+  "code": "47397",
+  "section": "roses",
+  "name": "ורד קרונוס 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47395.jpg",
+  "remark": "צהוב",
+  "pack": 20
+ },
+ {
+  "code": "47291",
+  "section": "roses",
+  "name": "ורד ריבייבל 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47291.jpg",
+  "remark": "ורוד,סגור\\פתיחת שטח",
+  "pack": 20
+ },
+ {
+  "code": "47292",
+  "section": "roses",
+  "name": "ורד ריבייבל 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47291.jpg",
+  "remark": "ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47293",
+  "section": "roses",
+  "name": "ורד ריבייבל 70 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47291.jpg",
+  "remark": "ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47294",
+  "section": "roses",
+  "name": "ורד ריבייבל 80 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47291.jpg",
+  "remark": "ורוד",
+  "pack": 20
+ },
+ {
+  "code": "47387",
+  "section": "roses",
+  "name": "ורד שרי ברנדי 50 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47387.jpg",
+  "remark": "אדום-כתום,סגור\\פתיחת שטח",
+  "pack": 20
+ },
+ {
+  "code": "47388",
+  "section": "roses",
+  "name": "ורד שרי ברנדי 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47387.jpg",
+  "remark": "אדום-כתום",
+  "pack": 20
+ },
+ {
+  "code": "47495",
+  "section": "roses",
+  "name": "כותרות ורדים",
+  "image": "https://www.bukiflowers.com/Pictures/47495 img_1341.jpg",
+  "remark": "לבן \\אדום ,צבעים נוספים בהזמנה מיוחדת",
+  "pack": 25
+ },
+ {
+  "code": "41072",
+  "section": "imported",
+  "name": "אנטוריום יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/41072.jpg",
+  "remark": "נא להזמין שבועיים מראש ולציין את שם הזן לשים לב שבורדו נמצא במחיר אחר!!!!!",
+  "pack": 12
+ },
+ {
+  "code": "47311",
+  "section": "imported",
+  "name": "אנטוריום פרח קטן יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/41072.jpg",
+  "remark": "נא להזמין שבועיים מראש ולציין את שם הזן לשים לב שבורדו נמצא במחיר אחר!!!!!",
+  "pack": 20
+ },
+ {
+  "code": "48238",
+  "section": "imported",
+  "name": "אנטורים בורדו",
+  "image": "https://www.bukiflowers.com/Pictures/48238.jpg",
+  "remark": "אנטוריום בורדו לשים לב למחיר!!!!",
+  "pack": 12
+ },
+ {
+  "code": "48239",
+  "section": "imported",
+  "name": "אנטורים מיני בורדו",
+  "image": "https://www.bukiflowers.com/Pictures/48238.jpg",
+  "remark": "אנטוריום בורדו לשים לב למחיר!!!!",
+  "pack": 20
+ },
+ {
+  "code": "48220",
+  "section": "imported",
+  "name": "אסטילבה יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/48220b.jpg",
+  "remark": "לבן\\ ורוד בהיר \\ורוד כהה \\וברודו",
+  "pack": 10
+ },
+ {
+  "code": "48227",
+  "section": "imported",
+  "name": "הורטנזיה יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/47677.jpg",
+  "remark": "נא לציין את הצבע,שבועיים מראש ורוד בהיר ורוד עם ירוק  לילך תכלת כחול סגול כהה ירוק ולבן הצבעים עשויים להשתנות מפעם לפעם",
+  "pack": 5
+ },
+ {
+  "code": "47527",
+  "section": "imported",
+  "name": "סחלב וונדה ענף יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/47527a.jpg",
+  "remark": "הזמנה של שבועיים מראש,צירפנו קטלוג תמונות למוצר -אנא השתמשו בשמות הזנים. כל הזנים האדומים לא זמינים עד חודש יולי כרגע CHOCOLATE RED/LAVA",
+  "pack": 2
+ },
+ {
+  "code": "47315",
+  "section": "imported",
+  "name": "סחלב פינלופסיס-פעמון יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/47314 img_0651.jpg",
+  "remark": "לבן-לב צהוב\\לבן-לב ורוד\\ורוד\\פוקסיה בהזמנה של שבועיים מראש,מחיר הענף עלול להשתנות בהתאם לצבע",
+  "pack": 1
+ },
+ {
+  "code": "41003",
+  "section": "imported",
+  "name": "סחלב צימבידיום יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/41003.jpg",
+  "remark": "נא לציין את הצבע המבוקש הזמנה שבועיים מראש לבן ירוק צהוב ורוד בהיר בלבד!!!!!! אין חלודה איו בורדו אין כתום!!!! תמונות להמחשה בלבדדדדדד",
+  "pack": 1
+ },
+ {
+  "code": "41002",
+  "section": "imported",
+  "name": "סחלב צימבידיום מיני יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/41002ga.jpg",
+  "remark": "לבן/ ירוק/ צהוב/ בורדו בלבד !!!!!!!!! הזמנה שבועיים מראש",
+  "pack": 5
+ },
+ {
+  "code": "48240",
+  "section": "imported",
+  "name": "קלות לבן יבוא",
+  "image": "https://www.bukiflowers.com/images/noimg.jpg",
+  "remark": "לבן בלבד!",
+  "pack": 10
+ },
+ {
+  "code": "48236",
+  "section": "imported",
+  "name": "קלות צבע יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/41102.jpg",
+  "remark": "צבע בלבד-לא לבן!!!!נא לציין את הצבע המבוקש-הזמנה של שבועיים מראש",
+  "pack": 10
+ },
+ {
+  "code": "41007",
+  "section": "greenery",
+  "name": "אוקורוס",
+  "image": "https://www.bukiflowers.com/Pictures/41234672-f3f3-4b22-850b-ba1a790f4f83.jpg",
+  "remark": "ירוק",
+  "pack": 50
+ },
+ {
+  "code": "47188",
+  "section": "greenery",
+  "name": "אלוקסיה עלים",
+  "image": "https://www.bukiflowers.com/Pictures/f9a9368a-fae2-4324-ad26-64ef8fa8af96.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47218",
+  "section": "greenery",
+  "name": "אספדיסטרה / מגינית",
+  "image": "https://www.bukiflowers.com/Pictures/47218.jpg",
+  "remark": "ירוק כהה",
+  "pack": 50
+ },
+ {
+  "code": "47350",
+  "section": "greenery",
+  "name": "אספדיסטרה מגוונת",
+  "image": "https://www.bukiflowers.com/Pictures/47350 img_1199.jpg",
+  "remark": "ירוק-פס לבן",
+  "pack": 50
+ },
+ {
+  "code": "47219",
+  "section": "greenery",
+  "name": "אספדיסטרה מנוקדת",
+  "image": "https://www.bukiflowers.com/Pictures/47219.jpg",
+  "remark": "ירוק עם נקודות לבנות",
+  "pack": 25
+ },
+ {
+  "code": "47198",
+  "section": "greenery",
+  "name": "אספרגוס ורגטוס",
+  "image": "https://www.bukiflowers.com/Pictures/47198.jpg",
+  "remark": "ירוק כהה",
+  "pack": 50
+ },
+ {
+  "code": "47501",
+  "section": "greenery",
+  "name": "אספרגוס מאירי",
+  "image": "https://www.bukiflowers.com/Pictures/47501 img_1060.jpg",
+  "remark": "ירוק",
+  "pack": 50
+ },
+ {
+  "code": "47485",
+  "section": "greenery",
+  "name": "אספרגוס מרוקלאדיוס",
+  "image": "https://www.bukiflowers.com/Pictures/47485 img_1282.jpg",
+  "remark": "ירוק כהה-קצר",
+  "pack": 10
+ },
+ {
+  "code": "47710",
+  "section": "greenery",
+  "name": "אספרגוס נשפך",
+  "image": "https://www.bukiflowers.com/Pictures/47710.jpg",
+  "remark": "ירוק",
+  "pack": 25
+ },
+ {
+  "code": "47200",
+  "section": "greenery",
+  "name": "אספרגוס פלימוזיס",
+  "image": "https://www.bukiflowers.com/Pictures/47200.jpg",
+  "remark": "ירוק כהה",
+  "pack": 25
+ },
+ {
+  "code": "47189",
+  "section": "greenery",
+  "name": "אקליפטוס מטבעות",
+  "image": "https://www.bukiflowers.com/Pictures/d9f59752-9c7b-4fa1-ab71-015178d93032.jpg",
+  "remark": "ירוק-אפור",
+  "pack": 10
+ },
+ {
+  "code": "47193",
+  "section": "greenery",
+  "name": "אקליפטוס מקור",
+  "image": "https://www.bukiflowers.com/Pictures/47193 img_1073.jpg",
+  "remark": "ירוק-אדום בקצוות,רגיש בקיץ עם נטייה להתייבש מהר",
+  "pack": 10
+ },
+ {
+  "code": "47185",
+  "section": "greenery",
+  "name": "אקליפטוס פרובלנטה",
+  "image": "https://www.bukiflowers.com/Pictures/47185 img_0193.jpg",
+  "remark": "אפור",
+  "pack": 10
+ },
+ {
+  "code": "47124",
+  "section": "greenery",
+  "name": "אקליפטוס פרובלנטה גיינט",
+  "image": "https://www.bukiflowers.com/Pictures/img_8105.jpg",
+  "remark": "אפור,3 מטר גובה!",
+  "pack": 5
+ },
+ {
+  "code": "47197",
+  "section": "greenery",
+  "name": "אקציה",
+  "image": "https://www.bukiflowers.com/Pictures/47197.jpg",
+  "remark": "אפור-סגול-ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47169",
+  "section": "greenery",
+  "name": "ארליה 20 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47171.jpg",
+  "remark": "המוצג הימני",
+  "pack": 10
+ },
+ {
+  "code": "47170",
+  "section": "greenery",
+  "name": "ארליה 40 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47171.jpg",
+  "remark": "המוצג השמאלי",
+  "pack": 10
+ },
+ {
+  "code": "47171",
+  "section": "greenery",
+  "name": "ארליה 60 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/47171.jpg",
+  "remark": "המוצג האמצעי",
+  "pack": 10
+ },
+ {
+  "code": "47172",
+  "section": "greenery",
+  "name": "ארליה אצבעות קצר",
+  "image": "https://www.bukiflowers.com/Pictures/47172.jpg",
+  "remark": "שחור",
+  "pack": 20
+ },
+ {
+  "code": "47182",
+  "section": "greenery",
+  "name": "ביפי ענק",
+  "image": "https://www.bukiflowers.com/Pictures/47182.jpg",
+  "remark": "ירוק  יתכנו חוסרים במוצר זה",
+  "pack": 10
+ },
+ {
+  "code": "47655",
+  "section": "greenery",
+  "name": "בלה מקנדה",
+  "image": "https://www.bukiflowers.com/Pictures/47655.jpg",
+  "remark": "גובה מטר-ללא פריחה",
+  "pack": 5
+ },
+ {
+  "code": "47641",
+  "section": "greenery",
+  "name": "ברוש טויה",
+  "image": "https://www.bukiflowers.com/Pictures/47641.jpg",
+  "remark": "ירוק 10 ענפים בממוצע",
+  "pack": 1
+ },
+ {
+  "code": "47163",
+  "section": "greenery",
+  "name": "גומא דבורה",
+  "image": "https://www.bukiflowers.com/Pictures/47163 img_1178.jpg",
+  "remark": "אין אחריות אין זיכויים-מחזיק מעט",
+  "pack": 10
+ },
+ {
+  "code": "47162",
+  "section": "greenery",
+  "name": "גומא פפירוס",
+  "image": "https://www.bukiflowers.com/Pictures/img_8147.jpg",
+  "remark": "ירוק",
+  "pack": 5
+ },
+ {
+  "code": "40510",
+  "section": "greenery",
+  "name": "גזע ארליה 2 מטר",
+  "image": "https://www.bukiflowers.com/Pictures/img_8084.jpg",
+  "remark": "ירוק ,בהזמנה של 24 שעות מראש",
+  "pack": 5
+ },
+ {
+  "code": "47236",
+  "section": "greenery",
+  "name": "גרבילאה איבנהו",
+  "image": "https://www.bukiflowers.com/Pictures/47236.jpg",
+  "remark": "ירוק-אדום-צהוב",
+  "pack": 20
+ },
+ {
+  "code": "47694",
+  "section": "greenery",
+  "name": "גרבילאה חוטית",
+  "image": "https://www.bukiflowers.com/Pictures/47694.jpg",
+  "remark": "ירוק-אדום-חום",
+  "pack": 20
+ },
+ {
+  "code": "47693",
+  "section": "greenery",
+  "name": "גרבילאה מוזהבת",
+  "image": "https://www.bukiflowers.com/Pictures/47693.jpg",
+  "remark": "ירוק-זהב   רק 50 ס\"מ גובה",
+  "pack": 10
+ },
+ {
+  "code": "47234",
+  "section": "greenery",
+  "name": "גרבילאה עלים",
+  "image": "https://www.bukiflowers.com/Pictures/47234.jpg",
+  "remark": "ירוק-צהבהב",
+  "pack": 20
+ },
+ {
+  "code": "47233",
+  "section": "greenery",
+  "name": "גרבילאה רובוסטה",
+  "image": "https://www.bukiflowers.com/Pictures/47233 img_1262.jpg",
+  "remark": "ירוק-אפור 10-20 ענפים בממוצע",
+  "pack": 1
+ },
+ {
+  "code": "47520",
+  "section": "greenery",
+  "name": "גרין בל עופרים",
+  "image": "https://www.bukiflowers.com/Pictures/47520.jpg",
+  "remark": "ירוק",
+  "pack": 15
+ },
+ {
+  "code": "48211",
+  "section": "greenery",
+  "name": "דיאנלה",
+  "image": "https://www.bukiflowers.com/Pictures/48211.jpg",
+  "remark": "ירוק-לבן",
+  "pack": 10
+ },
+ {
+  "code": "48212",
+  "section": "greenery",
+  "name": "דיאנלה ירוקה",
+  "image": "https://www.bukiflowers.com/Pictures/img_8107.jpg",
+  "remark": "ירוק כהה",
+  "pack": 10
+ },
+ {
+  "code": "47237",
+  "section": "greenery",
+  "name": "דקל וושינגטונה צבוע",
+  "image": "https://www.bukiflowers.com/Pictures/ווש2.jpg",
+  "remark": "בהזמנה מראש של 72 שעות ,לפני נא לציין צבע",
+  "pack": 5
+ },
+ {
+  "code": "47203",
+  "section": "greenery",
+  "name": "דקל וושינגטוניה גזור\\לא גזור",
+  "image": "https://www.bukiflowers.com/Pictures/img_8136.jpg",
+  "remark": "בהזמנה של 24 שעות מראש,מחירו של גזור:20 שקל לענף",
+  "pack": 5
+ },
+ {
+  "code": "47160",
+  "section": "greenery",
+  "name": "דקל חמדוראה ענפים",
+  "image": "https://www.bukiflowers.com/Pictures/47160.jpg",
+  "pack": 20
+ },
+ {
+  "code": "47210",
+  "section": "greenery",
+  "name": "דרצנה ענף גבוה",
+  "image": "https://www.bukiflowers.com/Pictures/img_8501.jpg",
+  "remark": "ירוק-לבן\\צהבהב",
+  "pack": 5
+ },
+ {
+  "code": "47167",
+  "section": "greenery",
+  "name": "הדס ענפים",
+  "image": "https://www.bukiflowers.com/Pictures/47167.jpg",
+  "remark": "ירוק 10-15 ענפים בממוצע",
+  "pack": 1
+ },
+ {
+  "code": "47212",
+  "section": "greenery",
+  "name": "זיפן",
+  "image": "https://www.bukiflowers.com/Pictures/47212.jpg",
+  "remark": "ירוק\\חום ,כמות בחבילה 25 יח",
+  "pack": 1
+ },
+ {
+  "code": "47199",
+  "section": "greenery",
+  "name": "זית-ענפים",
+  "image": "https://www.bukiflowers.com/Pictures/47199.jpg",
+  "remark": "ירוק כהה",
+  "pack": 10
+ },
+ {
+  "code": "47147",
+  "section": "greenery",
+  "name": "חונדרו",
+  "image": "https://www.bukiflowers.com/Pictures/47147.jpg",
+  "remark": "ירוק כהה",
+  "pack": 20
+ },
+ {
+  "code": "47159",
+  "section": "greenery",
+  "name": "יעלי",
+  "image": "https://www.bukiflowers.com/Pictures/47159.jpg",
+  "remark": "ירוק-אדום-צהוב",
+  "pack": 10
+ },
+ {
+  "code": "47622",
+  "section": "greenery",
+  "name": "ירקה ירוקה",
+  "image": "https://www.bukiflowers.com/Pictures/47622 img_1155.jpg",
+  "remark": "ירוק כהה",
+  "pack": 50
+ },
+ {
+  "code": "47204",
+  "section": "greenery",
+  "name": "כוחיה",
+  "image": "https://www.bukiflowers.com/Pictures/47204.jpg",
+  "remark": "אפור",
+  "pack": 10
+ },
+ {
+  "code": "47713",
+  "section": "greenery",
+  "name": "לוגיסטרום",
+  "image": "https://www.bukiflowers.com/Pictures/47714.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47176",
+  "section": "greenery",
+  "name": "מונסטרה בינוני",
+  "image": "https://www.bukiflowers.com/Pictures/47175.jpg",
+  "remark": "ירוק כהה",
+  "pack": 10
+ },
+ {
+  "code": "47175",
+  "section": "greenery",
+  "name": "מונסטרה גדול",
+  "image": "https://www.bukiflowers.com/Pictures/47176 img_1223.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47174",
+  "section": "greenery",
+  "name": "מונסטרה ענק",
+  "image": "https://www.bukiflowers.com/Pictures/47174.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47177",
+  "section": "greenery",
+  "name": "מונסטרה קטן",
+  "image": "https://www.bukiflowers.com/Pictures/47176 img_1337.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "48013",
+  "section": "greenery",
+  "name": "מוס אפור טבעי",
+  "image": "https://www.bukiflowers.com/Pictures/48013.jpg",
+  "pack": 1
+ },
+ {
+  "code": "48014",
+  "section": "greenery",
+  "name": "מוס טרי-BALL",
+  "image": "https://www.bukiflowers.com/Pictures/48015 img_2205.jpg",
+  "pack": 1
+ },
+ {
+  "code": "48015",
+  "section": "greenery",
+  "name": "מוס טרי-פלאט",
+  "image": "https://www.bukiflowers.com/Pictures/48015 img_2701.jpg",
+  "pack": 1
+ },
+ {
+  "code": "47226",
+  "section": "greenery",
+  "name": "מוראה",
+  "image": "https://www.bukiflowers.com/Pictures/47226.jpg",
+  "remark": "ירוק",
+  "pack": 20
+ },
+ {
+  "code": "47494",
+  "section": "greenery",
+  "name": "מורן פרי שחור",
+  "image": "https://www.bukiflowers.com/Pictures/47494a.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47229",
+  "section": "greenery",
+  "name": "מריסיניה",
+  "image": "https://www.bukiflowers.com/Pictures/47229.jpg",
+  "remark": "ירוק כהה",
+  "pack": 20
+ },
+ {
+  "code": "47128",
+  "section": "greenery",
+  "name": "ננדיה",
+  "image": "https://www.bukiflowers.com/Pictures/47128.jpg",
+  "remark": "אדום-ירוק מחיר לענף חב של 5 יח",
+  "pack": 5
+ },
+ {
+  "code": "41344",
+  "section": "greenery",
+  "name": "סביון מאפיר ענף",
+  "image": "https://www.bukiflowers.com/Pictures/img_7986.jpg",
+  "remark": "אפור",
+  "pack": 10
+ },
+ {
+  "code": "41006",
+  "section": "greenery",
+  "name": "סביון מאפיר-עלים",
+  "image": "https://www.bukiflowers.com/Pictures/41006 img_1198.jpg",
+  "remark": "אפור",
+  "pack": 25
+ },
+ {
+  "code": "47153",
+  "section": "greenery",
+  "name": "סהרון קצר",
+  "image": "https://www.bukiflowers.com/Pictures/f6625abc-82b8-4f02-ac02-adbc759c725d.jpg",
+  "remark": "ירוק",
+  "pack": 50
+ },
+ {
+  "code": "47241",
+  "section": "greenery",
+  "name": "סורגום(דורה)",
+  "image": "https://www.bukiflowers.com/Pictures/47241.jpg",
+  "remark": "חום",
+  "pack": 10
+ },
+ {
+  "code": "47544",
+  "section": "greenery",
+  "name": "סליקס בינוני",
+  "image": "https://www.bukiflowers.com/Pictures/img_8089.jpg",
+  "remark": "המוצג השמאלי-בערך 2-2.5 מטר גובה",
+  "pack": 10
+ },
+ {
+  "code": "47555",
+  "section": "greenery",
+  "name": "סליקס ענק",
+  "image": "https://www.bukiflowers.com/Pictures/img_8089.jpg",
+  "remark": "המוצג הימני-בערך 3-3.5 מטר גובה",
+  "pack": 10
+ },
+ {
+  "code": "47697",
+  "section": "greenery",
+  "name": "סנסיווריה - חרבות",
+  "image": "https://www.bukiflowers.com/Pictures/47697 img_1311.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47239",
+  "section": "greenery",
+  "name": "ספארי סן סט מפוצל",
+  "image": "https://www.bukiflowers.com/Pictures/47239 img_1184.jpg",
+  "remark": "אדום-ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47215",
+  "section": "greenery",
+  "name": "עלי גן עדן",
+  "image": "https://www.bukiflowers.com/Pictures/47215 img_1309.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47154",
+  "section": "greenery",
+  "name": "ענן",
+  "image": "https://www.bukiflowers.com/Pictures/47154.jpg",
+  "remark": "ירוק\\ורוד עתיק 10-20 ענפים בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "47158",
+  "section": "greenery",
+  "name": "ענפי גוייאבה",
+  "image": "https://www.bukiflowers.com/Pictures/47158.jpg",
+  "pack": 10
+ },
+ {
+  "code": "47168",
+  "section": "greenery",
+  "name": "ענפי דקל אריקה",
+  "image": "https://www.bukiflowers.com/Pictures/47168.jpg",
+  "remark": "גובה 100 ס\"מ (1מטר)",
+  "pack": 20
+ },
+ {
+  "code": "47220",
+  "section": "greenery",
+  "name": "פורמיום",
+  "image": "https://www.bukiflowers.com/Pictures/e7199c7a-531a-462f-b4b3-28cb7e078e87.jpg",
+  "remark": "חום-לבן",
+  "pack": 50
+ },
+ {
+  "code": "47688",
+  "section": "greenery",
+  "name": "פיטוספורום איטלקי מגוון",
+  "image": "https://www.bukiflowers.com/Pictures/47688.jpg",
+  "remark": "ירוק-לבן\\ירוק כהה",
+  "pack": 20
+ },
+ {
+  "code": "47206",
+  "section": "greenery",
+  "name": "פיטוספורום גבוה",
+  "image": "https://www.bukiflowers.com/Pictures/47482a img_1068.jpg",
+  "remark": "ירוק-לבן\\ירוק-כהה",
+  "pack": 20
+ },
+ {
+  "code": "47482",
+  "section": "greenery",
+  "name": "פיטוספורום קצר",
+  "image": "https://www.bukiflowers.com/Pictures/47482 img_1065.jpg",
+  "remark": "ירוק-לבן\\ירוק כהה-",
+  "pack": 50
+ },
+ {
+  "code": "47712",
+  "section": "greenery",
+  "name": "פילפלון",
+  "image": "https://www.bukiflowers.com/Pictures/47712.jpg",
+  "remark": "יתכנו חוסרים במוצר",
+  "pack": 25
+ },
+ {
+  "code": "47211",
+  "section": "greenery",
+  "name": "פלומוזיס צבוע",
+  "image": "https://www.bukiflowers.com/Pictures/פלומ צבוע.jpg",
+  "remark": "בהזמנה מראש של 72 שעות,נא לציין צבע מבוקש",
+  "pack": 50
+ },
+ {
+  "code": "47161",
+  "section": "greenery",
+  "name": "פמפס",
+  "image": "https://www.bukiflowers.com/Pictures/47161.jpg",
+  "remark": "ירוק כהה",
+  "pack": 10
+ },
+ {
+  "code": "47695",
+  "section": "greenery",
+  "name": "ציקאס",
+  "image": "https://www.bukiflowers.com/Pictures/47695 img_1273.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47235",
+  "section": "greenery",
+  "name": "קיסוס גיינט",
+  "image": "https://www.bukiflowers.com/Pictures/img_8108.jpg",
+  "remark": "ירוק, בערך 2 מטר אורך",
+  "pack": 50
+ },
+ {
+  "code": "47690",
+  "section": "greenery",
+  "name": "קיסוסית",
+  "image": "https://www.bukiflowers.com/Pictures/47690.jpg",
+  "remark": "1.5 מטר מלופף על חוט=1יח",
+  "pack": 1
+ },
+ {
+  "code": "47691",
+  "section": "greenery",
+  "name": "קיסוסית קוצנית",
+  "image": "https://www.bukiflowers.com/Pictures/47691.jpg",
+  "remark": "בערך 2 מטר אורך,דוקרני",
+  "pack": 1
+ },
+ {
+  "code": "47221",
+  "section": "greenery",
+  "name": "קיסוס-ענפים",
+  "image": "https://www.bukiflowers.com/Pictures/47221 img_1164.jpg",
+  "remark": "ירוק-לבן\\ירוק כהה, 1-1.5 מטר",
+  "pack": 10
+ },
+ {
+  "code": "47181",
+  "section": "greenery",
+  "name": "קסנדו",
+  "image": "https://www.bukiflowers.com/Pictures/47181 img_1118.jpg",
+  "remark": "ירוק כהה",
+  "pack": 25
+ },
+ {
+  "code": "47719",
+  "section": "greenery",
+  "name": "רוזמרין-ענפים",
+  "image": "https://www.bukiflowers.com/Pictures/47719.jpg",
+  "remark": "ירוק 10 ענפים בממוצע",
+  "pack": 1
+ },
+ {
+  "code": "47184",
+  "section": "greenery",
+  "name": "רוסקוס",
+  "image": "https://www.bukiflowers.com/Pictures/47184.jpg",
+  "remark": "ירוק כהה",
+  "pack": 50
+ },
+ {
+  "code": "47689",
+  "section": "greenery",
+  "name": "רוסקוס מסולסל",
+  "image": "https://www.bukiflowers.com/Pictures/47689g.jpg",
+  "remark": "ירוק כהה-מבריק,חזק,ומחזיר מעמד",
+  "pack": 50
+ },
+ {
+  "code": "47173",
+  "section": "greenery",
+  "name": "רוסקוס צבוע",
+  "image": "https://www.bukiflowers.com/Pictures/47173.jpg",
+  "remark": "בהזמנה של 72 שעות מראש,נא לציין צבע מבוקש",
+  "pack": 50
+ },
+ {
+  "code": "47207",
+  "section": "greenery",
+  "name": "ריחן-ענפים",
+  "image": "https://www.bukiflowers.com/Pictures/47207.jpg",
+  "remark": "ירוק-פריחה שחורה מוצר לפי חבילה",
+  "pack": 1
+ },
+ {
+  "code": "47214",
+  "section": "greenery",
+  "name": "שבטבט",
+  "image": "https://www.bukiflowers.com/Pictures/47214.jpg",
+  "remark": "ירוק",
+  "pack": 25
+ },
+ {
+  "code": "47228",
+  "section": "greenery",
+  "name": "שמרופס",
+  "image": "https://www.bukiflowers.com/Pictures/47228 img_1256.jpg",
+  "remark": "ירוק",
+  "pack": 10
+ },
+ {
+  "code": "47598",
+  "section": "greenery",
+  "name": "שרך אפור",
+  "image": "https://www.bukiflowers.com/Pictures/47598 img_1140.jpg",
+  "remark": "אפור",
+  "pack": 50
+ },
+ {
+  "code": "47597",
+  "section": "greenery",
+  "name": "שרך ברזל",
+  "image": "https://www.bukiflowers.com/Pictures/47597 img_1115.jpg",
+  "remark": "ירוק כהה",
+  "pack": 50
+ },
+ {
+  "code": "47150",
+  "section": "greenery",
+  "name": "שרך עלה האור",
+  "image": "https://www.bukiflowers.com/Pictures/47150 img_1082.jpg",
+  "remark": "ירוק כהה",
+  "pack": 100
+ },
+ {
+  "code": "47151",
+  "section": "greenery",
+  "name": "שרך שרון",
+  "image": "https://www.bukiflowers.com/Pictures/47151 img_1076.jpg",
+  "remark": "ירוק בהיר",
+  "pack": 100
+ },
+ {
+  "code": "62405",
+  "section": "dried",
+  "name": "אוונה יבש",
+  "image": "https://www.bukiflowers.com/Pictures/62405.jpg",
+  "remark": "100 גר בחבילה=25 ענף בממוצע,לבן בלבד",
+  "pack": 1
+ },
+ {
+  "code": "62409",
+  "section": "dried",
+  "name": "אכילאה יבשה יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62409.jpg",
+  "remark": "*יבוא 2025* |לבן\\טבעי",
+  "pack": 1
+ },
+ {
+  "code": "62415",
+  "section": "dried",
+  "name": "אספרגוס ורגטוס חנוט",
+  "image": "https://www.bukiflowers.com/Pictures/62415g.jpg",
+  "remark": "נא לציין את הצבע המבוקש",
+  "pack": 1
+ },
+ {
+  "code": "62420",
+  "section": "dried",
+  "name": "אספרגוס פלומוזיס מולבן",
+  "image": "https://www.bukiflowers.com/Pictures/62420.jpg",
+  "remark": "הלבנה מושלמת,לא דביק,לא מסריח",
+  "pack": 25
+ },
+ {
+  "code": "62442",
+  "section": "dried",
+  "name": "אקליפוטוס גוני יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62442.jpg",
+  "remark": "*יבוא 2025* אדום\\כחול",
+  "pack": 1
+ },
+ {
+  "code": "62425",
+  "section": "dried",
+  "name": "אקליפטוס גיינט יבש גוונים",
+  "image": "https://www.bukiflowers.com/Pictures/62425g2.jpg",
+  "remark": "2 מטר כל ענף,יבש,צבוע,מוצר לפי ענפים,5 בחבילה",
+  "pack": 5
+ },
+ {
+  "code": "62411",
+  "section": "dried",
+  "name": "אקליפטוס מטבעות חנוט יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62411g2.jpg",
+  "remark": "כחול בלבד!",
+  "pack": 1
+ },
+ {
+  "code": "62443",
+  "section": "dried",
+  "name": "אקליפטוס פרי יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62443.jpg",
+  "remark": "*יבוא 2025* צהוב\\אדום\\טבעי",
+  "pack": 1
+ },
+ {
+  "code": "62438",
+  "section": "dried",
+  "name": "אקליפטוס פרי יבש יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62438.jpg",
+  "pack": 1
+ },
+ {
+  "code": "62398",
+  "section": "dried",
+  "name": "ארטישוק יבש",
+  "image": "https://www.bukiflowers.com/Pictures/62398.jpg",
+  "pack": 1
+ },
+ {
+  "code": "71361",
+  "section": "dried",
+  "name": "באלה חציר גדולה",
+  "image": "https://www.bukiflowers.com/Pictures/img_8098.jpg",
+  "remark": "מידות המוצר:  85X47X35",
+  "pack": 1
+ },
+ {
+  "code": "62468",
+  "section": "dried",
+  "name": "גומא מיני יבש כדורי",
+  "image": "https://www.bukiflowers.com/Pictures/62468.jpg",
+  "pack": 1
+ },
+ {
+  "code": "62447",
+  "section": "dried",
+  "name": "גונפרנה טבעית יבשה יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62447.jpg",
+  "remark": "רק לבן במלאי",
+  "pack": 1
+ },
+ {
+  "code": "62370",
+  "section": "dried",
+  "name": "גונפרנה יבשה יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62370g.jpg",
+  "remark": "כחול\\לבן\\שחור בלבד    25 ענף בממוצע בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "62392",
+  "section": "dried",
+  "name": "גזר-קיפח",
+  "image": "https://www.bukiflowers.com/Pictures/62392.jpg",
+  "pack": 1
+ },
+ {
+  "code": "62375",
+  "section": "dried",
+  "name": "גראס טבעי יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62375.jpg",
+  "remark": "*יבוא 2025* שחור\\חום\\ורוד\\לבן\\טבעי\\לבנדר-אזל\\כחול\\צהוב  מעל 50 ענף בחבילה!",
+  "pack": 1
+ },
+ {
+  "code": "47521",
+  "section": "dried",
+  "name": "גרינבל מיובש טבעי",
+  "image": "https://www.bukiflowers.com/Pictures/47521.jpg",
+  "remark": "טבעי מיובש,5 יח בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "62378",
+  "section": "dried",
+  "name": "דקל יבש טבעי מעוגל",
+  "image": "https://www.bukiflowers.com/Pictures/62378c.jpg",
+  "remark": "3 יח בחבילה  גובה 45 ס\"מ",
+  "pack": 1
+ },
+ {
+  "code": "62464",
+  "section": "dried",
+  "name": "דקל יבש טבעי מעוגל ראש 25-30 ס\"מ",
+  "image": "https://www.bukiflowers.com/Pictures/62445g2.jpg",
+  "remark": "מחיר ליח",
+  "pack": 1
+ },
+ {
+  "code": "62435",
+  "section": "dried",
+  "name": "זיפן יבש",
+  "image": "https://www.bukiflowers.com/Pictures/62435.jpg",
+  "remark": "נא לציין גוון",
+  "pack": 1
+ },
+ {
+  "code": "47699",
+  "section": "dried",
+  "name": "זמורת גפן - ענף בודד",
+  "image": "https://www.bukiflowers.com/Pictures/47699 img_0976.jpg",
+  "pack": 1
+ },
+ {
+  "code": "62381",
+  "section": "dried",
+  "name": "זנב חתול יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62381.jpg",
+  "pack": 1
+ },
+ {
+  "code": "60845",
+  "section": "dried",
+  "name": "חבילת חציר בינונית",
+  "image": "https://www.bukiflowers.com/Pictures/60845 img_2699.jpg",
+  "remark": "מידות המוצר 12X27 ס\"מ,המוצר הימני בתמונה",
+  "pack": 1
+ },
+ {
+  "code": "60838",
+  "section": "dried",
+  "name": "חבילת חציר קטנה",
+  "image": "https://www.bukiflowers.com/Pictures/60845 img_2699.jpg",
+  "remark": "מידות המוצר 11X6 ס\"מ המוצר השמאלי בתמונה",
+  "pack": 1
+ },
+ {
+  "code": "47121",
+  "section": "dried",
+  "name": "חיטה טבעי מקומי",
+  "image": "https://www.bukiflowers.com/Pictures/47121.jpg",
+  "remark": "חום טבעי-50 יח בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "47201",
+  "section": "dried",
+  "name": "חרדלית",
+  "image": "https://www.bukiflowers.com/Pictures/47201.jpg",
+  "remark": "5 ענפים בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "47142",
+  "section": "dried",
+  "name": "כותנה ענף בודד",
+  "image": "https://www.bukiflowers.com/Pictures/47142 img_0919.jpg",
+  "remark": "7-8 פרחים על ענף בממוצע",
+  "pack": 1
+ },
+ {
+  "code": "62374",
+  "section": "dried",
+  "name": "לבנדר יבש מקומי",
+  "image": "https://www.bukiflowers.com/Pictures/62374g.jpg",
+  "remark": "מכיל 50 יח בערך-קטיף 2024",
+  "pack": 1
+ },
+ {
+  "code": "62314",
+  "section": "dried",
+  "name": "לגורוס-זנב ארנב יבוא 100 יח",
+  "image": "https://www.bukiflowers.com/Pictures/62314g2.jpg",
+  "remark": "שחור ולבן בלבד!!!!!",
+  "pack": 1
+ },
+ {
+  "code": "62441",
+  "section": "dried",
+  "name": "לגורוס-זנב ארנב יבוא 50 יח",
+  "image": "https://www.bukiflowers.com/Pictures/62441g2.jpg",
+  "remark": "*יבוא 2025* ורוד בהיר\\לילך\\צהוב\\חום | צבע חדש-כחול",
+  "pack": 1
+ },
+ {
+  "code": "62324",
+  "section": "dried",
+  "name": "לוטוס יבש על מקל",
+  "image": "https://www.bukiflowers.com/Pictures/62324c.jpg",
+  "remark": "10 יח בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "62373",
+  "section": "dried",
+  "name": "לימוניום יבוא יבש",
+  "image": "https://www.bukiflowers.com/Pictures/62373g2.jpg",
+  "remark": "כחול",
+  "pack": 1
+ },
+ {
+  "code": "62437",
+  "section": "dried",
+  "name": "לימוניום סנסי יבש",
+  "image": "https://www.bukiflowers.com/Pictures/62437.jpg",
+  "remark": "צהוב \\לבן בלבד",
+  "pack": 1
+ },
+ {
+  "code": "62371",
+  "section": "dried",
+  "name": "לינו גראס",
+  "image": "https://www.bukiflowers.com/Pictures/62371g.jpg",
+  "remark": "לבן\\שחור\\חום  בלבד מעל 50 ענף בחבילה!",
+  "pack": 1
+ },
+ {
+  "code": "62469",
+  "section": "dried",
+  "name": "מוזהבת יבשה",
+  "image": "https://www.bukiflowers.com/images/noimg.jpg",
+  "pack": 1
+ },
+ {
+  "code": "70191",
+  "section": "dried",
+  "name": "מוס חנוט 0.5 קילו",
+  "image": "https://www.bukiflowers.com/Pictures/70191.jpg",
+  "remark": "צבע אמצעי חסר!-רק בהיר\\תפוח",
+  "pack": 1
+ },
+ {
+  "code": "62322",
+  "section": "dried",
+  "name": "משיין יבש לבן",
+  "image": "https://www.bukiflowers.com/Pictures/62322g.jpg",
+  "remark": "קטיף 2025 | לבן פתוח",
+  "pack": 1
+ },
+ {
+  "code": "62315",
+  "section": "dried",
+  "name": "סילבר גראס 70 ס\"מ(עטוף נייר חום)",
+  "image": "https://www.bukiflowers.com/Pictures/62315.jpg",
+  "remark": "*יבוא 2025* |טבעי\\לבנדר\\חום\\לבן\\כחול\\צהוב\\ורוד|6 יח בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "47526",
+  "section": "dried",
+  "name": "סליקס צבוע",
+  "image": "https://www.bukiflowers.com/Pictures/img_8090.jpg",
+  "remark": "אדום\\אפור\\לבן   ניתן להזמין מראש(72 שעות) בכל הגוונים    נא לציין צבע מבוקש",
+  "pack": 10
+ },
+ {
+  "code": "47208",
+  "section": "dried",
+  "name": "עשב בר",
+  "image": "https://www.bukiflowers.com/Pictures/47208.jpg",
+  "remark": "טבעי כ35 ענף בחבילה",
+  "pack": 1
+ },
+ {
+  "code": "62412",
+  "section": "dried",
+  "name": "פוניקס גראס יבש-מבצע",
+  "image": "https://www.bukiflowers.com/Pictures/62412.jpg",
+  "remark": "לבן\\דבש\\כחול   100 גר בחבילה=מעל 100 יח!!!",
+  "pack": 1
+ },
+ {
+  "code": "62403",
+  "section": "dried",
+  "name": "פילאריס יבש יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62403.jpg",
+  "remark": "לבן\\טבעי\\לילך\\חום בלבד",
+  "pack": 1
+ },
+ {
+  "code": "62382",
+  "section": "dried",
+  "name": "פמפס חנוט יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62382g.jpg",
+  "remark": "טבעי(אפור) וכחול בלבד!",
+  "pack": 1
+ },
+ {
+  "code": "62384",
+  "section": "dried",
+  "name": "פמפס יבש צבע טבעי מבצע",
+  "image": "https://www.bukiflowers.com/Pictures/62384.jpg",
+  "remark": "15 ענף בחבילה=5 חב *3 טבעי אפור",
+  "pack": 1
+ },
+ {
+  "code": "62448",
+  "section": "dried",
+  "name": "פרח כדור יבוא",
+  "image": "https://www.bukiflowers.com/Pictures/62448g2.jpg",
+  "remark": "ורוד  בלבד",
+  "pack": 1
+ },
+ {
+  "code": "62312",
+  "section": "dried",
+  "name": "פרח פמפס חנוט גבוה",
+  "image": "https://www.bukiflowers.com/Pictures/62312g.jpg",
+  "remark": "אדום\\אפור(טבעי) בלבד!",
+  "pack": 1
+ },
+ {
+  "code": "62454",
+  "section": "dried",
+  "name": "קרספידיה יבשה צהוב",
+  "image": "https://www.bukiflowers.com/Pictures/41091 img_0788.jpg",
+  "pack": 10
+ },
+ {
+  "code": "62406",
+  "section": "dried",
+  "name": "תירס הודי יבש",
+  "image": "https://www.bukiflowers.com/Pictures/62406.jpg",
+  "remark": "כחול\\ורוד בלבד!",
+  "pack": 1
+ },
+ {
+  "code": "62369",
+  "section": "dried",
+  "name": "תפזורת אצטרובל",
+  "image": "https://www.bukiflowers.com/Pictures/62369.jpg",
+  "pack": 1
+ }
+]

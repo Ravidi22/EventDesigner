@@ -15,10 +15,11 @@
 //     would leave a bar hanging three metres outside a corrected wall, on every event ever drawn.
 //   • "Put it back" is deleting a row, not remembering a number.
 //
-// Nothing here can resize, delete or add a feature, and nothing here touches a wall, a door or a
-// zone. Moving a thing that was built to be moved is the whole of it.
+// Nothing here can resize or add a feature, and nothing here touches a wall, a door or a zone.
+// Moving a thing that was built to be moved is most of it — and taking it out of THIS event's room
+// (FeaturePlacement.removed), which deletes nothing at the venue: "bring it back" clears a flag.
 import type { DesignDocumentContent, FeaturePlacement } from "./types";
-import type { StructureFeature, VenueStructure } from "../venues/structure";
+import { featureMovable, type StructureFeature, type VenueStructure } from "../venues/structure";
 import { isMain } from "../self-check";
 
 const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
@@ -39,10 +40,12 @@ export function isFeatureMoved(doc: DesignDocumentContent, featureId: string): b
   return !!p && (p.dx !== 0 || p.dy !== 0 || norm360(p.rotationDeg ?? 0) !== 0);
 }
 
-/** One feature as this event has it. */
+/** One feature as this event has it. A feature the venue does not let a sketch move
+ *  (featureMovable) is where the property has it, whatever row this event kept from before the
+ *  switch was turned off — the row is left alone, so turning it back on brings the arrangement back. */
 export function arrangedFeature(doc: DesignDocumentContent, f: StructureFeature): StructureFeature {
   const p = featurePlacement(doc, f.id);
-  if (!p) return f;
+  if (!p || !featureMovable(f)) return f;
   return {
     ...f,
     x: Math.round(f.x + p.dx),
@@ -72,8 +75,25 @@ export function arrangedStructure(
   // A row pointing at a feature since deleted at /halls is ignored, exactly like a drape's dangling
   // wallId: the property is the authority on what exists, and an event cannot conjure one back.
   const byId = new Map(rows.map((r) => [r.featureId, r]));
-  if (!structure.features.some((f) => byId.has(f.id))) return structure;
-  return { ...structure, features: structure.features.map((f) => arrangedFeature(doc, f)) };
+  if (!structure.features.some((f) => byId.has(f.id) && featureMovable(f))) return structure;
+  // A feature this event took out (FeaturePlacement.removed) is simply not in its room — not drawn,
+  // not measured, not in the way of a table, not on the crew's map. Only a movable one: a feature
+  // the venue has since fixed in place comes back, its row kept for the day it is freed again.
+  return {
+    ...structure,
+    features: structure.features.filter((f) => !(byId.get(f.id)?.removed && featureMovable(f))).map((f) => arrangedFeature(doc, f)),
+  };
+}
+
+/** Has this event taken this feature out of its room? */
+export function isFeatureRemoved(doc: DesignDocumentContent, f: Pick<StructureFeature, "id" | "kind" | "movable">): boolean {
+  return !!featurePlacement(doc, f.id)?.removed && featureMovable(f);
+}
+
+/** The venue's features this event has taken out — what "bring it back" offers. */
+export function removedFeatures(structure: VenueStructure, doc: DesignDocumentContent): StructureFeature[] {
+  if (!doc.features?.some((r) => r.removed)) return [];
+  return structure.features.filter((f) => isFeatureRemoved(doc, f));
 }
 
 // ponytail: self-check. Run: npm run check:features
@@ -143,6 +163,32 @@ if (isMain(import.meta.url)) {
   assert(!isFeatureMoved(doc([{ featureId: "bar", dx: 0, dy: 0, rotationDeg: 360 }]), "bar"), "…nor is a full turn");
   assert(isFeatureMoved(doc([{ featureId: "bar", dx: 0, dy: 0, rotationDeg: 90 }]), "bar"), "…but a quarter turn is");
   assert(!isFeatureMoved(doc(), "bar"), "an event that arranged nothing has moved nothing");
+
+  // ── which features a sketch may move ─────────────────────────────────────────────────────────
+  // Absent switch = the kind's default: a bar and a stage roll about, a pool, a column, the planting
+  // and the floor do not.
+  assert(featureMovable({ kind: "bar" }) && featureMovable({ kind: "stage" }), "a bar and a stage move by default");
+  assert(!featureMovable({ kind: "pool" }) && !featureMovable({ kind: "structure" }) && !featureMovable({ kind: "surface" }), "…a pool, a column and a floor do not");
+  assert(featureMovable({ kind: "structure", movable: true }), "the venue's switch turns a column movable");
+  assert(!featureMovable({ kind: "bar", movable: false }), "…and a built-in bar fixed");
+
+  // A fixed feature ignores an arrangement — and the row is kept, not deleted.
+  const pool: StructureFeature = { ...feature("pool", 5000, 5000), kind: "pool" };
+  const withFixed: VenueStructure = { ...structure, features: [{ ...feature("bar", 1000, 1000), movable: false }, pool] };
+  const rows = doc([{ featureId: "bar", dx: 500, dy: 0 }, { featureId: "pool", dx: 500, dy: 0 }]);
+  assert(arrangedStructure(withFixed, rows) === withFixed, "nothing movable was arranged, so the property comes back as is");
+  assert(arrangedFeature(rows, pool).x === 5000, "a pool (fixed by default) stays where the property has it");
+  assert(arrangedFeature(rows, { ...pool, movable: true }).x === 5500, "…until the venue lets it move, and the event's row applies again");
+
+  // ── taken out for one event ─────────────────────────────────────────────────────────────────
+  const out = doc([{ featureId: "bar", dx: 500, dy: 0, removed: true }]);
+  assert(!arrangedStructure(structure, out).features.some((f) => f.id === "bar"), "a feature this event took out is not in its room");
+  assert(arrangedStructure(structure, out).features.length === 1 && structure.features.length === 2, "…the rest is, and the venue keeps it");
+  assert(removedFeatures(structure, out).map((f) => f.id).join() === "bar", "…and it is listed for bringing back");
+  assert(isFeatureRemoved(out, structure.features[0]) && !isFeatureRemoved(out, structure.features[1]), "only the one taken out says so");
+  const fixedOut: VenueStructure = { ...structure, features: [{ ...feature("bar", 1000, 1000), movable: false }, pool] };
+  assert(arrangedStructure(fixedOut, out).features.some((f) => f.id === "bar"), "a feature the venue has since fixed comes back into the room");
+  assert(removedFeatures(fixedOut, out).length === 0, "…and is not offered as taken out");
 
   console.log("features self-check passed");
 }

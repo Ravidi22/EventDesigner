@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronUp, Search as SearchIcon, Shapes, type LucideIcon } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp, Search as SearchIcon, Shapes, type LucideIcon } from "lucide-react";
 
 // The add-element trigger and its flyout — a searchable gallery of cards instead of a flat text
 // list, so picking an element reads more like choosing a product than reading a menu.
@@ -39,6 +39,7 @@ export function AddElementFlyout({
   triggerLabel = "אלמנט",
   searchPlaceholder = "חיפוש אלמנט...",
   columns = 4,
+  side = "top",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -52,6 +53,9 @@ export function AddElementFlyout({
   triggerLabel?: string;
   searchPlaceholder?: string;
   columns?: 3 | 4;
+  /** Which way the flyout opens. "top" from a dock along the canvas's bottom (the catalog's shape
+   *  editor); "bottom" from a toolbar along its top (the hall editor). */
+  side?: "top" | "bottom";
 }) {
   const [search, setSearch] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -62,10 +66,9 @@ export function AddElementFlyout({
   // RTL-logical insets because `fixed` coordinates are physical regardless of `dir`. Measured at the
   // moment of the click that opens it (a DOM read the trigger's own handler is already in a position
   // to make), not in an effect reacting to `open` — there is nowhere else `open` ever turns true.
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
-  useEffect(() => {
-    if (!open) setSearch("");
-  }, [open]);
+  const [pos, setPos] = useState<{ left: number; bottom?: number; top?: number } | null>(null);
+  // A closed flyout holds no search; adjusted during render rather than one effect late.
+  if (!open && search) setSearch("");
   const query = search.trim();
   const filtered = query ? items.filter((t) => t.label.includes(query)) : items;
   const TriggerIcon = triggerIcon ?? Shapes;
@@ -76,7 +79,7 @@ export function AddElementFlyout({
         FLYOUT_MARGIN,
         Math.min(r.right - FLYOUT_WIDTH, window.innerWidth - FLYOUT_WIDTH - FLYOUT_MARGIN),
       );
-      setPos({ left, bottom: window.innerHeight - r.top + FLYOUT_GAP });
+      setPos(side === "bottom" ? { left, top: r.bottom + FLYOUT_GAP } : { left, bottom: window.innerHeight - r.top + FLYOUT_GAP });
     }
     onOpenChange(true);
   };
@@ -95,7 +98,7 @@ export function AddElementFlyout({
       >
         <span className="flex items-center gap-0.5">
           <TriggerIcon className="h-[18px] w-[18px]" strokeWidth={1.6} />
-          <ChevronUp className="h-3 w-3" strokeWidth={2} />
+          {side === "bottom" ? <ChevronDown className="h-3 w-3" strokeWidth={2} /> : <ChevronUp className="h-3 w-3" strokeWidth={2} />}
         </span>
         {triggerLabel}
       </button>
@@ -108,7 +111,7 @@ export function AddElementFlyout({
           <div
             role="menu"
             className="fixed z-50 rounded-md border border-border bg-surface p-3 shadow-floating"
-            style={{ left: pos.left, bottom: pos.bottom, width: FLYOUT_WIDTH }}
+            style={{ left: pos.left, bottom: pos.bottom, top: pos.top, width: FLYOUT_WIDTH }}
           >
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted" style={{ insetInlineStart: 10 }} strokeWidth={1.75} />

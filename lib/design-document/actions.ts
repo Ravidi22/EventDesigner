@@ -1,14 +1,23 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
+import type { BenchSpec, ChairRows, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
+import { chairRowsCount, cleanRows } from "./chair-rows";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
+import { freeNumbers, numberedUnits } from "./groups";
+import { carryHung } from "../studio/hang-over";
+
+/** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
+const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
 
 export type Action =
   | { type: "addTable"; table: DesignTable }
   | { type: "moveTable"; id: string; position: DesignTable["position"] }
   | { type: "removeTable"; id: string }
   | { type: "renumberTable"; id: string; number: number }
+  // Take these tables out of the numbering (DesignTable.unnumbered), or put them back — a block by
+  // all its tables at once. Back in, each takes a number nobody else shows (freeNumbers).
+  | { type: "setTablesNumbered"; tableIds: string[]; numbered: boolean }
   | { type: "styleTable"; id: string; style: ElementStyle | undefined }
   // How many chairs go round this one table. Seeded from the catalog row when it was dropped, and
   // editable after: a head table seats what the family is, not what the product says.
@@ -60,6 +69,22 @@ export type Action =
   // round. A drawing size, not a different product: the quote, the packing list and the order count
   // it as the row it is. Held to 30%–300%; 1 = the catalog's size.
   | { type: "setPlacementScale"; id: string; scale: number }
+  // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
+  // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
+  | { type: "setPlacementHang"; id: string; heightMm: number | null }
+  // Which table a ceiling item hangs OVER (Placement.over): read off what is under its hang point
+  // when a drag of it ends, set by a drop over a table, cleared (null) over bare floor. From then on
+  // the table carries it (settleHung below) and the focus mode arranges it.
+  | { type: "setPlacementOver"; id: string; over: string | null }
+  // A table's ceiling design hung over other tables — each copy already placed by the caller at the
+  // same relative spot (lib/studio/hang-over.ts hungCopy), since only the caller has the tables'
+  // sizes. "replace" takes down what already hangs over a target first; "add" hangs beside it,
+  // skipping a variant the target already has above it.
+  | { type: "hangOverTables"; hangs: { tableId: string; items: Omit<Placement, "id" | "over" | "tableId">[] }[]; mode: "add" | "replace" }
+  // A free-standing flight or ramp's rise, steps or direction (Placement.climb), together with the
+  // run that follows from them and where it now stands — its head kept in place
+  // (lib/studio/climb-item.ts builds all three). One entry, because it was one number typed.
+  | { type: "setPlacementClimb"; id: string; climb: PlacementClimb; sizeMm?: { widthMm: number; depthMm: number }; position?: Point }
   // Switching a placed item to another shade of the same product (F-4.2). Not a remove+add: the
   // item keeps its id, its place on the plan and the size it was stretched to — only its colour
   // changes, which is exactly what the designer is doing when the client says "in cream instead".
@@ -81,6 +106,13 @@ export type Action =
   | { type: "setPlacementStage"; id: string; stage: StageBuild; position?: Point; rotation?: number; mirrored?: boolean; scale?: number }
   // A design item put on (or taken off) a stage's banquette.
   | { type: "setPlacementPerch"; id: string; perch: { stageId: string; itemId: string } | null }
+  // A STANDALONE banquette's sides, heights, number and occupancy (Placement.bench) — the whole spec,
+  // replaced; null puts it back to the defaults. The caller merges, so one history entry is one edit.
+  | { type: "setPlacementBench"; id: string; bench: BenchSpec | null }
+  // A chair set out as a BLOCK OF ROWS, or put back to one chair (null) — the spec and the count it
+  // is, together (lib/design-document/chair-rows.ts): `quantity` = rows × chairs per row, so the
+  // quote and the packing list count every chair. `position` keeps the front row where it stood.
+  | { type: "setChairRows"; id: string; rows: ChairRows | null; position?: Point }
   // F-3.3 smart-apply, generalised: put this item on exactly these tables. The caller decides which
   // tables those are — every table of a type, every table on the plan, the ones the designer has
   // selected, the ones inside a zone. Two narrower actions (applyToTableType / applyToAllTables)
@@ -123,7 +155,12 @@ export type Action =
   | { type: "arrangeFeature"; featureId: string; dx: number; dy: number; rotationDeg?: number }
   | { type: "arrangeFeatures"; arrangements: FeaturePlacement[] }
   // Put it back where the property has it: a deleted row, not a remembered number.
-  | { type: "resetFeature"; featureId: string };
+  | { type: "resetFeature"; featureId: string }
+  // Take movable features out of THIS event's room, and bring them back — a flag on the event's
+  // row (FeaturePlacement.removed); the venue never loses anything. Bringing one back keeps where
+  // this event last had it.
+  | { type: "removeFeatures"; featureIds: string[] }
+  | { type: "restoreFeatures"; featureIds: string[] };
 
 /** The three kinds of thing on the plan that have a free position of their own, and so can be
  *  dragged and turned as a set. A cloth and a drape are not among them: one is its table's surface
@@ -135,6 +172,33 @@ export type RetypedTable = Pick<DesignTable, "type" | "variantId"> &
   Pick<Partial<DesignTable>, "diameterMm" | "widthMm" | "depthMm" | "seats">;
 
 export function apply(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
+  return settleHung(doc, reduce(doc, action));
+}
+
+/** What hangs over a table goes where the table goes. Run after EVERY action rather than inside the
+ *  dozen that can move a table (moveTable, moveMany, rotateMany, mirrorMany, retypeTable…): each
+ *  linked ceiling item whose table's frame changed is carried by the offset it had
+ *  (lib/studio/hang-over.ts carryHung) — unless the action placed the item itself (it is in the
+ *  drag too, or it was the thing arranged), in which case where it was put is where it goes. */
+function settleHung(before: DesignDocumentContent, after: DesignDocumentContent): DesignDocumentContent {
+  if (after === before || after.tables === before.tables) return after;
+  const was = new Map(before.tables.map((t) => [t.id, t]));
+  const now = new Map(after.tables.map((t) => [t.id, t]));
+  const wasPlacement = new Map(before.placements.map((p) => [p.id, p]));
+  let changed = false;
+  const placements = after.placements.map((p) => {
+    if (p.layer !== "ceiling" || !p.over || wasPlacement.get(p.id) !== p) return p;
+    const t0 = was.get(p.over);
+    const t1 = now.get(p.over);
+    if (!t0 || !t1 || t0 === t1) return p;
+    const next = carryHung(p, t0, t1);
+    if (next !== p) changed = true;
+    return next;
+  });
+  return changed ? { ...after, placements } : after;
+}
+
+function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
   switch (action.type) {
     case "addTable":
       return { ...doc, tables: [...doc.tables, action.table] };
@@ -282,11 +346,47 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
           return { ...t, blockedSides: [...new Set(action.sides)].filter((i) => Number.isInteger(i) && i >= 0).sort((a, b) => a - b) };
         }),
       };
-    case "renumberTable":
+    case "renumberTable": {
+      // A whole, non-negative number. The inspector's field formats to no decimals but PARSES them,
+      // so "2.5" typed into it was stored as table 2.5 and printed that way on the placement map.
+      const number = tableNo(action.number);
+      if (number === null) return doc;
       return {
         ...doc,
-        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number: action.number } : t)),
+        tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number } : t)),
       };
+    }
+    case "setTablesNumbered": {
+      const ids = new Set(action.tableIds);
+      if (!doc.tables.some((t) => ids.has(t.id) && !!t.unnumbered === action.numbered)) return doc;
+      const flagged: DesignDocumentContent = {
+        ...doc,
+        tables: doc.tables.map((t) => {
+          if (!ids.has(t.id)) return t;
+          if (!action.numbered) return { ...t, unnumbered: true };
+          const { unnumbered: _out, ...rest } = t;
+          return rest;
+        }),
+      };
+      if (!action.numbered) return flagged;
+      // Back into the numbering: a returning table keeps its number unless another table has taken
+      // it meanwhile — two table 4s is the one outcome this must never produce.
+      const lone = flagged.tables.filter((t) => ids.has(t.id) && !t.groupId).map((t) => t.id);
+      const renum = freeNumbers(flagged, lone);
+      let next: DesignDocumentContent = renum.size
+        ? { ...flagged, tables: flagged.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) }
+        : flagged;
+      // …and a returning BLOCK is numbered as the block it is.
+      for (const gid of new Set(flagged.tables.filter((t) => ids.has(t.id) && t.groupId).map((t) => t.groupId!))) {
+        const units = numberedUnits(next).filter((u) => !u.unnumbered);
+        const mine = units.find((u) => u.id === gid);
+        const taken = units.filter((u) => u.id !== gid).map((u) => u.number);
+        if (!mine || mine.number === 0 || !taken.includes(mine.number)) continue;
+        const number = taken.reduce((m, n) => Math.max(m, n), 0) + 1;
+        next = { ...next, groups: (next.groups ?? []).map((g) => (g.id === gid ? { ...g, number } : g)) };
+      }
+      return next;
+    }
     case "styleTable":
       return {
         ...doc,
@@ -296,7 +396,15 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
       return pruneGroups({
         ...doc,
         tables: doc.tables.filter((t) => t.id !== action.id),
-        placements: doc.placements.filter((p) => p.tableId !== action.id),
+        // What stood ON it goes with it; what hung OVER it stays, hanging free where it is.
+        placements: doc.placements
+          .filter((p) => p.tableId !== action.id)
+          .map((p) => {
+            if (p.over !== action.id) return p;
+            const { over: _gone, ...rest } = p;
+            void _gone;
+            return rest;
+          }),
       });
     case "addPlacement": {
       // Manually placing a variant back on a table clears its smart-apply exception (F-5.3).
@@ -328,6 +436,62 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, scale } : p)),
       };
     }
+    case "setPlacementHang": {
+      // Whole centimetres, inside a room; 0 or null clears it back to the row's default.
+      const h = action.heightMm === null ? 0 : Math.round(Math.min(30000, Math.max(0, action.heightMm)) / 10) * 10;
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { hangHeightMm: _old, ...rest } = p;
+          void _old;
+          return h > 0 ? { ...rest, hangHeightMm: h } : rest;
+        }),
+      };
+    }
+    case "setPlacementOver": {
+      const p = doc.placements.find((x) => x.id === action.id);
+      if (!p || (p.over ?? null) === action.over) return doc;
+      const { over: _old, ...rest } = p;
+      void _old;
+      const next: Placement = action.over ? { ...rest, over: action.over } : rest;
+      return { ...doc, placements: doc.placements.map((x) => (x.id === action.id ? next : x)) };
+    }
+    case "hangOverTables": {
+      const targets = new Set(action.hangs.filter((h) => doc.tables.some((t) => t.id === h.tableId)).map((h) => h.tableId));
+      if (targets.size === 0) return doc;
+      const kept = action.mode === "replace" ? doc.placements.filter((p) => !(p.layer === "ceiling" && p.over && targets.has(p.over))) : doc.placements;
+      const added: Placement[] = [];
+      for (const h of action.hangs) {
+        if (!targets.has(h.tableId)) continue;
+        for (const it of h.items) {
+          // "add" gives a table what it lacks: a variant already hanging over it is not hung twice —
+          // judged against what hung there BEFORE this action, so a run of three of one pendant
+          // over a table that had none lands as three.
+          if (action.mode === "add" && kept.some((p) => p.layer === "ceiling" && p.over === h.tableId && p.variantId === it.variantId)) continue;
+          const { id: _old, tableId: _t, over: _o, groupId: _g, ...rest } = it as Placement;
+          void _old; void _t; void _o; void _g;
+          added.push({ ...rest, layer: "ceiling", id: crypto.randomUUID(), over: h.tableId });
+        }
+      }
+      if (added.length === 0 && kept === doc.placements) return doc;
+      return { ...doc, placements: [...kept, ...added] };
+    }
+    case "setPlacementClimb":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { climb: _old, ...rest } = p;
+          void _old;
+          return {
+            ...rest,
+            ...(Object.keys(action.climb).length ? { climb: action.climb } : {}),
+            ...(action.sizeMm ? { sizeMm: action.sizeMm } : {}),
+            ...(action.position ? { position: action.position } : {}),
+          };
+        }),
+      };
     case "setPlacementVariant":
       return {
         ...doc,
@@ -394,6 +558,30 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
         exceptions,
       });
     }
+    case "setPlacementBench":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          if (action.bench) return { ...p, bench: action.bench };
+          const { bench: _plain, ...rest } = p;
+          return rest;
+        }),
+      };
+    case "setChairRows":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { rows: _old, ...rest } = p;
+          const at = action.position ? { position: action.position } : {};
+          if (!action.rows) return { ...rest, ...at, quantity: 1 };
+          const rows = cleanRows(action.rows);
+          // A block is drawn at its chairs' real size: a drawing scale left on the chair it was
+          // made from would stretch every chair in it.
+          return { ...rest, ...at, rows, quantity: chairRowsCount(rows), scale: 1 };
+        }),
+      };
     case "setPlacementPerch":
       return {
         ...doc,
@@ -467,19 +655,26 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
     case "ungroup": {
       if (!doc.groups?.some((g) => g.id === action.groupId)) return doc;
       const clear = <T extends { groupId?: string }>(x: T): T => (x.groupId === action.groupId ? { ...x, groupId: undefined } : x);
-      return {
+      const released: DesignDocumentContent = {
         ...doc,
         tables: doc.tables.map(clear),
         placements: doc.placements.map(clear),
         groups: doc.groups.filter((g) => g.id !== action.groupId),
       };
+      // Each table comes back with the number it had underneath — unless the room was renumbered
+      // round the block meanwhile and another table now shows it. Without this, a block of 1 and 2
+      // renumbered to 1 beside a table renumbered to 2 came apart as two table 2s.
+      const renum = freeNumbers(released, doc.tables.filter((t) => t.groupId === action.groupId).map((t) => t.id));
+      return renum.size ? { ...released, tables: released.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) } : released;
     }
 
     case "renumberGroup": {
       if (!doc.groups?.some((g) => g.id === action.groupId)) return doc;
+      const number = tableNo(action.number);
+      if (number === null) return doc;
       return {
         ...doc,
-        groups: doc.groups.map((g) => (g.id === action.groupId ? { ...g, number: action.number } : g)),
+        groups: doc.groups.map((g) => (g.id === action.groupId ? { ...g, number } : g)),
       };
     }
 
@@ -504,6 +699,30 @@ export function apply(doc: DesignDocumentContent, action: Action): DesignDocumen
 
     case "arrangeFeatures":
       return action.arrangements.length === 0 ? doc : withArrangements(doc, action.arrangements);
+
+    case "removeFeatures": {
+      const ids = new Set(action.featureIds);
+      if (ids.size === 0) return doc;
+      const rows = [...(doc.features ?? [])];
+      for (const id of ids) {
+        const i = rows.findIndex((f) => f.featureId === id);
+        if (i >= 0) rows[i] = { ...rows[i], removed: true };
+        else rows.push({ featureId: id, dx: 0, dy: 0, removed: true });
+      }
+      return { ...doc, features: rows };
+    }
+
+    case "restoreFeatures": {
+      const ids = new Set(action.featureIds);
+      if (!doc.features?.some((f) => ids.has(f.featureId) && f.removed)) return doc;
+      const rows = doc.features.flatMap((f) => {
+        if (!ids.has(f.featureId) || !f.removed) return [f];
+        const { removed: _gone, ...kept } = f;
+        // A row that only ever said "taken out" says nothing once it is back: no trace left.
+        return kept.dx === 0 && kept.dy === 0 && !norm360(kept.rotationDeg ?? 0) ? [] : [kept];
+      });
+      return rows.length === 0 ? withoutFeatures(doc) : { ...doc, features: rows };
+    }
 
     case "resetFeature": {
       if (!doc.features?.some((f) => f.featureId === action.featureId)) return doc;
@@ -540,6 +759,8 @@ function withArrangements(doc: DesignDocumentContent, rows: FeaturePlacement[]):
       dx: Math.round(row.dx),
       dy: Math.round(row.dy),
       ...(row.rotationDeg !== undefined ? { rotationDeg: norm360(row.rotationDeg) } : kept !== undefined ? { rotationDeg: kept } : {}),
+      // An arrangement never brings a feature back on its own — that is restoreFeatures' job.
+      ...(i >= 0 && next[i].removed ? { removed: true as const } : {}),
     };
     if (i >= 0) next[i] = merged;
     else next.push(merged);
@@ -980,6 +1201,16 @@ if (isMain(import.meta.url)) {
 
     const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
     assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
+    const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });
+    assert(hung.placements[0].hangHeightMm === 3200, "a hang height is kept in whole centimetres");
+    assert(!("hangHeightMm" in apply(hung, { type: "setPlacementHang", id: "a", heightMm: null }).placements[0]), "null hands it back to the catalog's height");
+    const climbed = apply(base, { type: "setPlacementClimb", id: "a", climb: { heightMm: 290 }, sizeMm: { widthMm: 1200, depthMm: 3480 }, position: { x: 5, y: 1860 } });
+    assert(climbed.placements[0].climb?.heightMm === 290 && climbed.placements[0].sizeMm?.depthMm === 3480 && climbed.placements[0].position.y === 1860, "a climb's rise, run and place land as one edit");
+    assert(!("climb" in apply(climbed, { type: "setPlacementClimb", id: "a", climb: {} }).placements[0]), "an empty climb leaves no field behind");
+    const block = apply(base, { type: "setChairRows", id: "a", rows: { rows: 5, perRow: 5 }, position: { x: 0, y: 900 } });
+    assert(block.placements[0].rows?.perRow === 5 && block.placements[0].quantity === 25 && block.placements[0].position.y === 900, "a block of 5×5 is 25 chairs on the quote, its front row kept in place");
+    const single = apply(block, { type: "setChairRows", id: "a", rows: null });
+    assert(!("rows" in single.placements[0]) && single.placements[0].quantity === 1, "…and put back, one chair again");
 
     const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
     assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");
@@ -1031,12 +1262,66 @@ if (isMain(import.meta.url)) {
     assert(ungrouped.tables.every((t) => t.groupId === undefined), "…and releases every member");
     assert(ungrouped.tables.map((t) => t.number).join(",") === "3,7,9", "…leaving the numbers they always had");
 
+    // BUG (was): a block of 1 and 2, renumbered to 1 with a table beside it renumbered to 2, came
+    // apart as two table 2s — the member's hidden 2 was handed back as though nothing had changed.
+    {
+      const pair = apply(
+        { calibration: { mmPerUnit: 1 }, tables: [tbl("p", 1), tbl("q", 2), tbl("r", 3)], placements: [] },
+        { type: "group", groupId: "b", refs: [{ kind: "table", id: "p" }, { kind: "table", id: "q" }], number: 1 },
+      );
+      const room = apply(pair, { type: "renumberTable", id: "r", number: 2 });
+      const apart = apply(room, { type: "ungroup", groupId: "b" });
+      const nums = apart.tables.map((t) => t.number);
+      assert(new Set(nums).size === 3, `an ungrouped block never duplicates a number the room now shows (${nums.join(",")})`);
+      assert(apart.tables.find((t) => t.id === "p")?.number === 1, "…a member whose own number is still free keeps it");
+      assert(apart.tables.find((t) => t.id === "q")?.number === 3, "…and one whose number was taken goes to the end");
+    }
+
+    // BUG (was): the number field parses decimals and minus signs; the reducer stored them.
+    assert(apply(before, { type: "renumberTable", id: "a", number: 2.6 }).tables[0].number === 3, "a table number is whole");
+    assert(apply(before, { type: "renumberTable", id: "a", number: -4 }).tables[0].number === 0, "…and never negative");
+    assert(apply(before, { type: "renumberTable", id: "a", number: NaN }) === before, "…and nothing usable is no edit");
+    assert(apply(g.present, { type: "renumberGroup", groupId: "g1", number: 4.4 }).groups?.[0].number === 4, "a block's number is whole too");
+
+    // Out of the numbering, and back.
+    {
+      const off = apply(before, { type: "setTablesNumbered", tableIds: ["b"], numbered: false });
+      assert(off.tables.find((t) => t.id === "b")?.unnumbered === true, "a table can be taken out of the numbering");
+      assert(off.tables.find((t) => t.id === "b")?.number === 7, "…keeping its number underneath");
+      assert(apply(off, { type: "setTablesNumbered", tableIds: ["b"], numbered: false }) === off, "…and doing it again is no edit");
+      const taken = apply(off, { type: "renumberTable", id: "c", number: 7 });
+      const back = apply(taken, { type: "setTablesNumbered", tableIds: ["b"], numbered: true });
+      const b = back.tables.find((t) => t.id === "b")!;
+      assert(!("unnumbered" in b), "back in, the flag goes rather than reading false");
+      assert(b.number === 8, "…and a number another table took meanwhile is not handed back: it goes to the end");
+      const free = apply(off, { type: "setTablesNumbered", tableIds: ["b"], numbered: true });
+      assert(free.tables.find((t) => t.id === "b")?.number === 7, "…while one still free is kept");
+      const block = apply(g.present, { type: "setTablesNumbered", tableIds: ["a", "b"], numbered: false });
+      const blockTaken = apply(block, { type: "renumberTable", id: "c", number: 12 });
+      const blockBack = apply(blockTaken, { type: "setTablesNumbered", tableIds: ["a", "b"], numbered: true });
+      assert(blockBack.groups?.[0].number === 13, "a block coming back into the numbering takes a number nobody shows");
+    }
+
     // Tables and placements group together — a stage deck and the tables beside it are one thing if
     // the designer says so.
     const mixed = apply(before, { type: "group", groupId: "g3", refs: [{ kind: "table", id: "a" }, { kind: "placement", id: "deck" }] });
     assert(mixed.placements[0].groupId === "g3" && mixed.tables[0].groupId === "g3", "a group can hold both kinds");
     assert(groupOf(mixed, "g3")?.number === undefined, "a group nobody numbered carries no number");
     assert(groupOf(mixed, undefined) === undefined, "an ungrouped thing has no group");
+
+    // Ctrl+G over a group of stages (studio-screen groupStages): the ones that touched were merged
+    // — the folded-in member removed — and what was left re-grouped under a new id, in one entry.
+    // The old group goes with its member; the survivors belong to the new one and to nothing else.
+    const deckAt = (id: string, x: number): Placement => ({ id, variantId: "stage", layer: "floor", quantity: 1, position: { x, y: 0 }, rotation: 0, scale: 1 });
+    let regrouped: DesignDocumentContent = { calibration: { mmPerUnit: 9 }, tables: [], placements: [deckAt("p", 0), deckAt("q", 2000), deckAt("r", 9000)] };
+    regrouped = apply(regrouped, { type: "group", groupId: "old", refs: ["p", "q", "r"].map((id) => ({ kind: "placement" as const, id })) });
+    regrouped = apply(regrouped, { type: "removePlacement", id: "q" });
+    regrouped = apply(regrouped, { type: "group", groupId: "new", refs: [{ kind: "placement", id: "p" }, { kind: "placement", id: "r" }] });
+    assert(regrouped.groups?.length === 1 && regrouped.groups[0].id === "new", "a stage group whose touching members merged is re-grouped under a new id, the old one gone");
+    assert(regrouped.placements.length === 2 && regrouped.placements.every((p) => p.groupId === "new"), "…and every survivor belongs to it alone");
+    // All of them merged into one: a group of one is no group, so the lone stage stands free.
+    const allOne = apply(apply(regrouped, { type: "removePlacement", id: "r" }), { type: "setPlacementStage", id: "p", stage: { outline: [{ x: -1000, y: -500 }, { x: 1000, y: -500 }, { x: 1000, y: 500 }, { x: -1000, y: 500 }], front: 0, decks: ["stage"] } });
+    assert(!allOne.groups?.length && allOne.placements[0].groupId === undefined && !!allOne.placements[0].stage, "…and when every member merged into one, that stage is in no group");
 
     // Occupancy: never negative, and never silently trimmed to the seat count either.
     const chaired = apply(before, { type: "setTableChair", ids: ["a"], variantId: "napoleon" });
@@ -1144,6 +1429,16 @@ if (isMain(import.meta.url)) {
     assert(apply(base, { type: "resetFeature", featureId: "bar" }) === base, "…and resetting one nobody moved is not an edit");
     const two = apply(dragged, { type: "arrangeFeature", featureId: "pool", dx: 10, dy: 10 });
     assert(apply(two, { type: "resetFeature", featureId: "bar" }).features?.length === 1, "putting one back leaves the other arranged");
+    // Taken out for this event, and brought back — where it last stood.
+    const gone = apply(dragged, { type: "removeFeatures", featureIds: ["bar"] });
+    assert(gone.features?.find((f) => f.featureId === "bar")?.removed === true, "taking a feature out flags its row");
+    assert(gone.features?.find((f) => f.featureId === "bar")?.dx === dragged.features?.find((f) => f.featureId === "bar")?.dx, "…and keeps where this event had it");
+    const back = apply(gone, { type: "restoreFeatures", featureIds: ["bar"] });
+    assert(!back.features?.find((f) => f.featureId === "bar")?.removed, "bringing it back clears the flag");
+    assert(back.features?.find((f) => f.featureId === "bar")?.dx === dragged.features?.find((f) => f.featureId === "bar")?.dx, "…at the same offset");
+    const fresh = apply(base, { type: "removeFeatures", featureIds: ["pool"] });
+    assert(fresh.features?.length === 1 && fresh.features[0].removed === true && fresh.features[0].dx === 0, "an unmoved feature gets a row that only says 'taken out'");
+    assert(!("features" in apply(fresh, { type: "restoreFeatures", featureIds: ["pool"] })), "…which leaves no trace once it is back");
 
     // A feature travels in a group drag with the tables beside it, in the one action.
     const withTable: DesignDocumentContent = {
@@ -1203,6 +1498,43 @@ if (isMain(import.meta.url)) {
     assert(!("seats" in seatless.tables[0]), "a row with no seats leaves no stale chair count behind");
     const replaced = apply(dressed, { type: "retypeTable", id: "t", table: { type: "x", variantId: "x" }, position: { x: 5, y: 6 } });
     assert(replaced.tables[0].position.x === 5 && replaced.placements === dressed.placements, "a swap may re-place the table, and leaves its dressing alone");
+  }
+
+  // HUNG OVER A TABLE. A chandelier linked to a table goes where the table goes — moved, turned —
+  // and is left hanging free where it was when the table is removed; one in the same drag as its
+  // table is placed by the drag, not carried twice.
+  {
+    let g = initHistory({ calibration: { mmPerUnit: 1 }, tables: [], placements: [] });
+    g = dispatch(g, { type: "addTable", table: { id: "t7", type: "מלבן", number: 7, position: { x: 5000, y: 3000 }, rotation: 0 } });
+    const chand: Placement = { id: "ch", variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 5600, y: 3000 }, rotation: 0, scale: 1, over: "t7" };
+    const freeOne: Placement = { id: "fr", variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 9000, y: 9000 }, rotation: 0, scale: 1 };
+    g = dispatch(g, { type: "addPlacement", placement: chand });
+    g = dispatch(g, { type: "addPlacement", placement: freeOne });
+    g = dispatch(g, { type: "moveTable", id: "t7", position: { x: 8000, y: 3000 } });
+    const at = (id: string) => g.present.placements.find((p) => p.id === id)!;
+    assert(at("ch").position.x === 8600 && at("ch").position.y === 3000, "a moved table carries the chandelier hung over it");
+    assert(at("fr").position.x === 9000, "…and leaves a free one alone");
+    g = dispatch(g, { type: "rotateMany", turns: [{ kind: "table", id: "t7", position: { x: 8000, y: 3000 }, rotation: 90 }] });
+    assert(at("ch").position.x === 8000 && at("ch").position.y === 3600 && at("ch").rotation === 90, "a turned table turns what hangs over it round with it");
+    g = dispatch(g, { type: "moveMany", moves: [{ kind: "table", id: "t7", position: { x: 1000, y: 1000 } }, { kind: "placement", id: "ch", position: { x: 1234, y: 1234 } }] });
+    assert(at("ch").position.x === 1234 && at("ch").position.y === 1234, "an item dragged together with its table is placed by the drag, not carried twice");
+    g = dispatch(g, { type: "setPlacementOver", id: "ch", over: null });
+    assert(at("ch").over === undefined, "unlinked");
+    g = dispatch(g, { type: "setPlacementOver", id: "ch", over: "t7" });
+    assert(at("ch").over === "t7", "…and linked again");
+    assert(apply(g.present, { type: "setPlacementOver", id: "ch", over: "t7" }) === g.present, "the same link is no edit");
+    // Over other tables: a copy per target, already placed by the caller; replace takes the old down.
+    g = dispatch(g, { type: "addTable", table: { id: "t8", type: "מלבן", number: 8, position: { x: 6000, y: 6000 }, rotation: 0 } });
+    g = dispatch(g, { type: "hangOverTables", hangs: [{ tableId: "t8", items: [{ variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 6600, y: 6000 }, rotation: 0, scale: 1 }] }], mode: "add" });
+    const over8 = () => g.present.placements.filter((p) => p.over === "t8");
+    assert(over8().length === 1 && over8()[0].position.x === 6600, "a copy hangs over the target where the caller placed it");
+    g = dispatch(g, { type: "hangOverTables", hangs: [{ tableId: "t8", items: [{ variantId: "chand", layer: "ceiling", quantity: 1, position: { x: 6000, y: 6000 }, rotation: 0, scale: 1 }] }], mode: "add" });
+    assert(over8().length === 1, "add does not hang a variant twice over one table");
+    g = dispatch(g, { type: "hangOverTables", hangs: [{ tableId: "t8", items: [{ variantId: "pend", layer: "ceiling", quantity: 1, position: { x: 5500, y: 6000 }, rotation: 0, scale: 1 }, { variantId: "pend", layer: "ceiling", quantity: 1, position: { x: 6500, y: 6000 }, rotation: 0, scale: 1 }] }], mode: "replace" });
+    assert(over8().length === 2 && over8().every((p) => p.variantId === "pend"), "replace takes down what hung there and hangs the run of two");
+    assert(apply(g.present, { type: "hangOverTables", hangs: [{ tableId: "nope", items: [] }], mode: "add" }) === g.present, "no target, no edit");
+    g = dispatch(g, { type: "removeTable", id: "t7" });
+    assert(at("ch").over === undefined && at("ch").position.x === 1234, "a removed table leaves its chandelier hanging free where it was");
   }
 
   console.log("actions self-check passed");

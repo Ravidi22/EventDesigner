@@ -4,7 +4,16 @@ import { CLOTH_DROP_MM, type ChairStyle, type SymbolKind } from "@/lib/catalog/s
 
 export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
+import type { PlacementClimb, Point } from "@/lib/design-document/types";
+import { benchLayout, type BenchLayout } from "@/lib/design-document/bench";
+import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
+import { ClimbGlyph } from "./climb-glyph";
+import { FlowerDrawing } from "./flower-symbol";
+import { SurfaceFill } from "./surface-fill";
+import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
+import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
+import { outlinePathD } from "@/lib/studio/geometry";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -32,6 +41,9 @@ const DEFAULT_TONE: Record<SymbolKind, string> = {
   candlestick: "#C9A24A",
   flowers: "#E8BCCE",
   centerpiece: "#E8BCCE",
+  // Glass, which most of a vase shelf is; a gold or a white one says so through its shade.
+  vase: "#EEF2F5",
+  tree: LEAF,
   chair: "#F7F6FC",
   sofa: "#ECE7F5",
   chandelier: "#C9A24A",
@@ -41,6 +53,11 @@ const DEFAULT_TONE: Record<SymbolKind, string> = {
   chuppah: "#FBF7F1",
   bar: "#FFFFFF",
   runner: "#EFE3CF",
+  // The plan's own inset well (--color-inset): a flight is floor, not furniture.
+  stairs: "#FAF9FD",
+  ramp: "#FAF9FD",
+  // A banquette's top: the same quiet upholstery a sofa is.
+  bench: "#ECE7F5",
 };
 
 export interface ItemSymbolProps {
@@ -48,22 +65,47 @@ export interface ItemSymbolProps {
   footprint: Footprint;
   /** Candles, arms, bulbs — symbolCount(). */
   count: number;
-  /** The item's colour (its shade's swatch, or its row's fill). Absent = the material's default. */
+  /** For an arrangement or a centrepiece: which flowers, in what form and shade — the row's spec
+   *  resolved by lib/catalog/flower-spec.ts (`flowerDrawSpecOf`, one object per row/size/shade, so
+   *  this memoises). Absent = the default mix in `tone`, for a tile that has no row. */
+  flowers?: FlowerDrawSpec;
+  /** Whether a flower's inner detail is drawn at all — off for a sheet too small to print it. On
+   *  screen the plan's zoom hides it by CSS instead (components/flower-symbol.tsx). */
+  detail?: boolean;
+  /** The item's colour (its shade's swatch, or its row's fill). Absent = the material's default. In
+   *  print it is the flat fill the sheet asks for (the B&W booklet's grey), and absent = white. */
   tone?: string;
   /** The line colour. Screen: a soft ink; print: the sheet's ink. */
   ink?: string;
-  /** Monochrome for the printed sheet: every fill white, every line ink — legible photocopied. */
+  /** Monochrome for the printed sheet: every line ink, every fill white (or `tone`) — legible
+   *  photocopied. */
   print?: boolean;
   /** Hung from the ceiling: drawn, never filled, as FootprintShape draws anything overhead. */
   overhead?: boolean;
   /** Which chair, for a chair (symbolStyleOf). Absent = a dining chair, or a stool when round. */
   chairStyle?: ChairStyle;
+  /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
+  rise?: PlacementClimb & { heightMm: number };
+  /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
+  turnDeg?: number;
+  mirrored?: boolean;
+  /** The size of words the picture writes (a ramp's slope), in the drawing's mm: the caller's screen
+   *  or printed size. Absent = sized off the item itself, for a card or a drag image. */
+  textMm?: number;
+  /** For a banquette: how it is laid on THIS plan — which side is chairs, which a sofa, how many
+   *  (lib/design-document/bench.ts). Absent = the default layout at its size (a card, a drag image):
+   *  chairs along its back. `chairs: false` leaves the chairs off (a sheet that hides every chair). */
+  bench?: BenchLayout;
+  chairs?: boolean;
 }
 
-function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
-  if (w <= 0 || h <= 0) return null;
-  const t = print ? "#ffffff" : tone || DEFAULT_TONE[kind];
+  // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
+  // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
+  const shaped = kind === "bar" && (footprint.kind === "custom" || footprint.kind === "multi");
+  if (!shaped && (w <= 0 || h <= 0)) return null;
+  const t = print ? tone || "#ffffff" : tone || DEFAULT_TONE[kind];
   const c: Colours = {
     tone: t,
     ink,
@@ -82,10 +124,27 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
       body = candlestick(w, h, round, count, c, line);
       break;
     case "flowers":
-      body = flowers(w, h, round, c, line);
+      body = <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />;
       break;
     case "centerpiece":
-      body = centerpiece(w, h, round, c, line);
+      // The base it stands on, faint, under the flowers spilling over it.
+      body = (
+        <>
+          {round && Math.abs(w - h) <= 1 && (
+            <>
+              <circle r={w / 2} fill={c.print ? "#ffffff" : "#F4F1F8"} {...line} strokeOpacity={line.strokeOpacity * 0.6} />
+              <circle r={w * 0.43} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.35} />
+            </>
+          )}
+          <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />
+        </>
+      );
+      break;
+    case "vase":
+      body = vase(w, h, round, c, line);
+      break;
+    case "tree":
+      body = tree(w, h, c, line);
       break;
     case "chair":
       body = round ? pouf(w, h, c, line) : chair(w, h, chairStyle ?? "dining", c, line);
@@ -103,19 +162,97 @@ function ItemSymbolView({ kind, footprint, count, tone, ink = "var(--color-ink-s
       body = fountain(w, h, round, c, line);
       break;
     case "arch":
-      body = along(w, h, (L, D) => arch(L, D, c, line));
+      body = along(w, h, (L, D) => arch(L, D, c, line, ink, detail));
       break;
     case "chuppah":
-      body = chuppah(w, h, round, c, line);
+      body = chuppah(w, h, round, c, line, ink, detail);
       break;
     case "bar":
-      body = round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
+      body = shaped ? shapedBar(footprint, c, line) : round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
       break;
     case "runner":
       body = along(w, h, (L, D) => runner(L, D, c, line));
       break;
+    case "stairs":
+    case "ramp":
+      // The venue's own stairs' drawing (components/climb-glyph.tsx), so a rented flight and a built
+      // one read the same: its edge and step lines a quiet ink, its walking line the strong one.
+      body = (
+        <ClimbGlyph
+          f={{ kind, shape: "rect", widthMm: w, depthMm: h, heightMm: rise?.heightMm ?? 0, climb: rise }}
+          fill={t}
+          stroke={print ? ink : "var(--color-muted)"}
+          strokeWidth={1}
+          lineWidth={1}
+          ink={ink}
+          textSize={textMm ?? Math.min(w * 0.24, h * 0.3)}
+          textFill={ink}
+          alertFill={print ? ink : "var(--color-alert-ink)"}
+          turnDeg={turnDeg}
+          mirrored={mirrored}
+        />
+      );
+      break;
+    case "bench":
+      body = benchSymbol(w, h, bench ?? benchLayout(w, h), chairs, c, line);
+      break;
   }
   return <g className="pointer-events-none">{body}</g>;
+}
+
+/** A banquette standing on its own (lib/design-document/bench.ts), in its own frame — the strip is
+ *  its top; along a chairs side the same chairs a table has, pushed in against it; along a sofa side
+ *  the cushions inside the strip and the backrest line toward the other half. A stage's edge
+ *  banquette is drawn by the stage (its chairs with the stage's Chair) and borrows SofaCushions. */
+function benchSymbol(w: number, h: number, lay: BenchLayout, chairs: boolean, c: Colours, line: Line) {
+  // A table's chair — the very drawing SeatChair is (chair(), turned so +x faces what it is pulled
+  // up to), in the chair's own quiet tone, so a banquette's chairs match the tables' round the room.
+  const seatTone = c.print ? "#ffffff" : "#F4F2F9";
+  const seat: Colours = { ...c, tone: seatTone, inkOpacity: c.print ? 1 : 0.75, shade: c.print ? "#ffffff" : isDark(seatTone) ? "#ffffff" : c.ink };
+  const seatLine = { ...line, strokeOpacity: seat.inkOpacity };
+  return (
+    <>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={Math.min(40, h * 0.1)} fill={c.tone} {...line} />
+      {chairs &&
+        lay.chairs.map((s, i) => (
+          <g key={`chair-${i}`} transform={`translate(${s.x} ${s.y}) rotate(${s.facingDeg}) rotate(-90)`}>
+            {chair(CHAIR_W_MM, CHAIR_D_MM, "dining", seat, seatLine)}
+          </g>
+        ))}
+      {sofaCushions(lay.cushions, lay.backs, c, line)}
+    </>
+  );
+}
+
+function sofaCushions(cushions: Point[][], backs: [Point, Point][], c: Colours, line: Line) {
+  if (cushions.length === 0 && backs.length === 0) return null;
+  const shade = { fill: c.shade, fillOpacity: c.print ? 1 : c.shadeOpacity };
+  return (
+    <>
+      {cushions.map((q, i) => (
+        <polygon key={`c-${i}`} points={q.map((p) => `${p.x},${p.y}`).join(" ")} {...shade} {...line} strokeLinejoin="round" />
+      ))}
+      {backs.map(([a, b], i) => (
+        <line key={`b-${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} {...line} strokeWidth={c.print ? 1 : 2} strokeOpacity={1} strokeLinecap="round" />
+      ))}
+    </>
+  );
+}
+
+/** A sofa side of a STAGE's edge banquette: its cushions and backrest where the stage laid them (in
+ *  the stage's frame — EdgeItemShape.cushions/backs). Screen inks, or the sheet's ink in print. */
+export function SofaCushions({ cushions, backs, ink = "var(--color-ink-soft)", print }: { cushions: Point[][]; backs: [Point, Point][]; ink?: string; print?: boolean }) {
+  const c: Colours = {
+    tone: print ? "#ffffff" : DEFAULT_TONE.bench,
+    ink,
+    inkOpacity: print ? 1 : 0.6,
+    shade: print ? "#ffffff" : ink,
+    shadeOpacity: print ? 1 : 0.14,
+    print: !!print,
+    overhead: false,
+  };
+  const line = { stroke: ink, strokeOpacity: c.inkOpacity, strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const };
+  return <g className="pointer-events-none">{sofaCushions(cushions, backs, c, line)}</g>;
 }
 
 // ── shared ──────────────────────────────────────────────────────────────────────────────────────
@@ -146,46 +283,23 @@ function along(w: number, h: number, draw: (length: number, depth: number) => Re
 
 const polar = (r: number, deg: number) => ({ x: r * Math.cos((deg * Math.PI) / 180), y: r * Math.sin((deg * Math.PI) / 180) });
 
-/** One bloom seen from above: the flower, and the lighter heart of it. */
-function bloom(key: string, x: number, y: number, r: number, c: Colours, line: Line, dim = false) {
-  return (
-    <g key={key}>
-      <circle cx={x} cy={y} r={r} fill={c.tone} fillOpacity={dim && !c.print ? 0.82 : 1} {...line} strokeOpacity={line.strokeOpacity * 0.7} />
-      <circle cx={x} cy={y} r={r * 0.38} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.45} {...(c.print ? line : {})} />
-    </g>
-  );
-}
-
-function leaf(key: string, x: number, y: number, len: number, deg: number, c: Colours, line: Line) {
-  return (
-    <ellipse
-      key={key}
-      cx={x}
-      cy={y}
-      rx={len / 2}
-      ry={len / 5}
-      transform={`rotate(${deg} ${x} ${y})`}
-      fill={c.print ? "#ffffff" : LEAF}
-      {...line}
-      strokeOpacity={line.strokeOpacity * 0.5}
-    />
-  );
-}
-
-/** A round bunch: leaves showing round the rim, a bloom in the middle and a ring of six round it. */
-function cluster(r: number, c: Colours, line: Line, at = { x: 0, y: 0 }, prefix = "") {
-  const out: ReactNode[] = [];
-  for (let k = 0; k < 5; k++) {
-    const deg = 18 + k * 72;
-    const p = polar(r * 0.7, deg);
-    out.push(leaf(`${prefix}l${k}`, at.x + p.x, at.y + p.y, r * 0.62, deg, c, line));
+/**
+ * Flowers with no row behind them — an arch's garland, a chuppah's poles, a tile with no product:
+ * the default mix (lib/catalog/flower-draw.ts) in the item's tone, at this size. Kept per
+ * (form, size, tone) so the same object comes back and the drawing memoises; a plan has a handful
+ * of these, not hundreds.
+ */
+const plain = new Map<string, FlowerDrawSpec>();
+function plainFlowers(w: number, h: number, tone: string | undefined, form?: FlowerForm): FlowerDrawSpec {
+  const f = form ?? (Math.max(w, h) >= Math.min(w, h) * 2.2 ? "runner" : "dome");
+  const key = `${f}|${Math.round(w)}|${Math.round(h)}|${tone ?? ""}`;
+  let spec = plain.get(key);
+  if (!spec) {
+    if (plain.size > 400) plain.clear();
+    spec = { form: f, w: Math.round(w), h: Math.round(h), lines: defaultMix(), shade: tone, seed: seedOf(key) };
+    plain.set(key, spec);
   }
-  for (let k = 0; k < 6; k++) {
-    const p = polar(r * 0.5, -90 + k * 60);
-    out.push(bloom(`${prefix}b${k}`, at.x + p.x, at.y + p.y, r * 0.3, c, line, k % 2 === 1));
-  }
-  out.push(bloom(`${prefix}c`, at.x, at.y, r * 0.34, c, line));
-  return out;
+  return spec;
 }
 
 // ── the pictures ────────────────────────────────────────────────────────────────────────────────
@@ -239,36 +353,42 @@ function candlestick(w: number, h: number, round: boolean, n: number, c: Colours
   );
 }
 
-/** An arrangement: a round bunch, or blooms in a staggered run along a long one. */
-function flowers(w: number, h: number, round: boolean, c: Colours, line: Line) {
-  if (round && Math.abs(w - h) < 1) return cluster(w / 2, c, line);
-  return along(w, h, (L, D) => {
-    const n = Math.max(3, Math.round(L / (D * 0.5)));
-    const r = Math.min(D * 0.3, L / (n * 1.6));
-    const out: ReactNode[] = [];
-    // Leaves out past the ends and along the sides, under the blooms.
-    out.push(leaf("le0", -L / 2 + D * 0.3, 0, D * 0.6, 0, c, line), leaf("le1", L / 2 - D * 0.3, 0, D * 0.6, 0, c, line));
-    for (let i = 0; i < n - 1; i++) {
-      const x = -L / 2 + D * 0.4 + ((i + 0.5) * (L - D * 0.8)) / (n - 1);
-      out.push(leaf(`ls${i}`, x, (i % 2 ? 1 : -1) * D * 0.3, D * 0.45, i % 2 ? 35 : -35, c, line));
-    }
-    for (let i = 0; i < n; i++) {
-      const x = -L / 2 + D * 0.4 + (i * (L - D * 0.8)) / (n - 1);
-      out.push(bloom(`b${i}`, x, (i % 2 ? 1 : -1) * D * 0.1, r, c, line, i % 2 === 1));
-    }
-    return out;
-  });
-}
-
-/** A centrepiece: the base it stands on, faint, and the flowers spilling over it. */
-function centerpiece(w: number, h: number, round: boolean, c: Colours, line: Line) {
-  if (!round || Math.abs(w - h) > 1) return flowers(w, h, round, c, line);
-  const R = w / 2;
+/** A vessel — a vase, an urn, a footed bowl: its rim, the opening inside it in the shade's darker
+ *  tone, and the foot showing faintly through. Empty, because what is arranged in it is its own item
+ *  (a centrepiece, an arrangement) and is drawn by that one. An oval bowl is an oval rim. */
+function vase(w: number, h: number, round: boolean, c: Colours, line: Line) {
+  const ring = (k: number, props: object) =>
+    round ? <ellipse rx={(w / 2) * k} ry={(h / 2) * k} {...props} /> : <rect x={(-w / 2) * k} y={(-h / 2) * k} width={w * k} height={h * k} rx={Math.min(w, h) * 0.12 * k} {...props} />;
   return (
     <>
-      <circle r={R} fill={c.print ? "#ffffff" : "#F4F1F8"} {...line} strokeOpacity={line.strokeOpacity * 0.6} />
-      <circle r={R * 0.86} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.35} />
-      {cluster(R * 0.78, c, line)}
+      {ring(1, { fill: c.tone, ...line })}
+      {ring(0.8, { fill: c.shade, fillOpacity: c.print ? 0 : c.shadeOpacity * 1.3, ...line, strokeOpacity: line.strokeOpacity * 0.6 })}
+      {ring(0.32, { fill: "none", ...line, strokeOpacity: line.strokeOpacity * 0.35 })}
+    </>
+  );
+}
+
+/** [radius, bearing] of each clump of a canopy, as fractions of its radius. */
+const TREE_CLUMPS: [number, number][] = [
+  [0.4, 0], [0.33, 44], [0.38, 80], [0.42, 122], [0.34, 166], [0.39, 204], [0.35, 246], [0.41, 284], [0.36, 326],
+];
+
+/** A tree from above: its canopy — a ring of overlapping clumps round a fuller middle, in the tree's
+ *  colour (white for a blossom tree, through its shade) — and the trunk at the centre. */
+function tree(w: number, h: number, c: Colours, line: Line) {
+  const rx = w / 2;
+  const ry = h / 2;
+  // Uneven on purpose — nine equal lobes read as a flower, not a tree. Each clump touches the edge.
+  const clumps = TREE_CLUMPS.map(([r, deg]) => ({ r, ...polar(1 - r, deg) }));
+  const soft = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  return (
+    <>
+      {clumps.map((p, i) => (
+        <ellipse key={i} cx={p.x * rx} cy={p.y * ry} rx={rx * p.r} ry={ry * p.r} fill={c.tone} {...soft} />
+      ))}
+      <ellipse rx={rx * 0.62} ry={ry * 0.62} fill={c.tone} />
+      <ellipse rx={rx * 0.4} ry={ry * 0.4} fill={c.shade} fillOpacity={c.print ? 0 : c.shadeOpacity} {...soft} strokeOpacity={line.strokeOpacity * 0.25} />
+      <circle r={Math.min(rx, ry) * 0.07} fill={c.print ? "#ffffff" : "#8A6A4F"} {...line} />
     </>
   );
 }
@@ -414,18 +534,19 @@ function SeatChairView({
   widthMm,
   depthMm,
   style = "dining",
-  tone = "#F4F2F9",
+  tone,
   ink = "var(--color-muted)",
   print,
 }: {
   widthMm: number;
   depthMm: number;
   style?: ChairStyle;
+  /** Absent = the neutral chair on screen, white in print. */
   tone?: string;
   ink?: string;
   print?: boolean;
 }) {
-  const t = print ? "#ffffff" : tone;
+  const t = tone || (print ? "#ffffff" : "#F4F2F9");
   const c: Colours = {
     tone: t,
     ink,
@@ -494,16 +615,20 @@ function chandelier(w: number, h: number, n: number, c: Colours, line: Line) {
   const arms = Array.from({ length: count }, (_, i) => polar(R * 0.74, -90 + (i * 360) / count));
   const bulb = Math.min(R * 0.1, ((Math.PI * R * 0.74) / arms.length) * 0.35);
   const stroke = c.print ? c.ink : c.tone;
+  // On screen the arms and bulbs are drawn a touch heavier than the rest of the plan's hairlines:
+  // the thing floats over a table drawn in the same greys, and at hall zoom a 1px gold line on a
+  // grey cloth was the one item on the plan a designer could not find.
+  const sw = c.print ? 1.5 : 2;
   return (
     <>
-      <circle r={R * 0.48} fill="none" {...line} strokeDasharray="4 3" />
+      <circle r={R * 0.48} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.8} strokeDasharray="4 3" />
       {arms.map((p, i) => (
-        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} stroke={stroke} strokeOpacity={0.9} strokeWidth={1.5} />
+        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} stroke={stroke} strokeOpacity={0.95} strokeWidth={sw} />
       ))}
       {arms.map((p, i) => (
-        <circle key={`b${i}`} cx={p.x} cy={p.y} r={bulb} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={1.5} />
+        <circle key={`b${i}`} cx={p.x} cy={p.y} r={bulb} fill={c.print ? "none" : stroke} fillOpacity={c.print ? undefined : 0.35} {...line} stroke={stroke} strokeOpacity={1} strokeWidth={sw} />
       ))}
-      <circle r={R * 0.13} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={1.5} />
+      <circle r={R * 0.13} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={sw} />
     </>
   );
 }
@@ -531,9 +656,20 @@ function fountain(w: number, h: number, round: boolean, c: Colours, line: Line) 
   const water = c.print ? "#ffffff" : c.tone === DEFAULT_TONE.fountain ? WATER : c.tone;
   const ripple = { fill: "none", stroke: c.print ? c.ink : "#ffffff", strokeOpacity: c.print ? 0.5 : 0.9, strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const };
   const R = Math.min(w, h) / 2;
+  // The basin holds the same water the venue's pool is drawn in (components/surface-fill.tsx) — a
+  // flat blue disc beside a textured pool read as a lid. The item's own tone tints it; the printed
+  // sheet keeps the flat white basin. One seed for every fountain: its ripples are not a signature.
+  const basin: Footprint = round ? { kind: "ellipse", widthMm: w, depthMm: h } : { kind: "rect", widthMm: w, depthMm: h };
   return (
     <>
-      {round ? <ellipse rx={w / 2} ry={h / 2} fill={water} {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill={water} {...line} />}
+      {c.print ? (
+        round ? <ellipse rx={w / 2} ry={h / 2} fill={water} {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill={water} {...line} />
+      ) : (
+        <>
+          <SurfaceFill material="water" footprint={basin} w={w} d={h} id="fountain" color={c.tone === DEFAULT_TONE.fountain ? undefined : c.tone} />
+          {round ? <ellipse rx={w / 2} ry={h / 2} fill="none" {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill="none" {...line} />}
+        </>
+      )}
       {round ? <ellipse rx={w / 2 - R * 0.08} ry={h / 2 - R * 0.08} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} /> : <rect x={-w / 2 + R * 0.08} y={-h / 2 + R * 0.08} width={w - R * 0.16} height={h - R * 0.16} rx={R * 0.1} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} />}
       <circle r={R * 0.68} {...ripple} strokeDasharray="5 4" />
       <circle r={R * 0.42} fill={c.print ? "#ffffff" : WATER_DEEP} {...line} />
@@ -543,30 +679,34 @@ function fountain(w: number, h: number, round: boolean, c: Colours, line: Line) 
   );
 }
 
-/** An arch, seen from above: a foot at each end and the span between them, dressed with flowers. */
-function arch(L: number, D: number, c: Colours, line: Line) {
+/** An arch, seen from above: a foot at each end and the span between them, dressed with a garland
+ *  of flowers — the runner form of the same drawing an arrangement is (components/flower-symbol.tsx),
+ *  in the arch's own tone. */
+function arch(L: number, D: number, c: Colours, line: Line, ink: string, detail: boolean) {
   const foot = Math.min(D, L * 0.2);
   const span = D * 0.38;
-  const groups = Math.max(2, Math.round(L / 550));
-  const out: ReactNode[] = [
-    <rect key="span" x={-L / 2 + foot / 2} y={-span / 2} width={L - foot} height={span} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.14} {...line} />,
-    <rect key="f0" x={-L / 2} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />,
-    <rect key="f1" x={L / 2 - foot} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />,
-  ];
-  for (let i = 0; i < groups; i++) {
-    const x = -L / 2 + foot * 0.7 + (i * (L - foot * 1.4)) / (groups - 1);
-    out.push(...cluster(D * 0.42, c, line, { x, y: (i % 2 ? 1 : -1) * D * 0.08 }, `g${i}`));
-  }
-  return out;
+  return (
+    <>
+      <rect x={-L / 2 + foot / 2} y={-span / 2} width={L - foot} height={span} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.14} {...line} />
+      <rect x={-L / 2} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />
+      <rect x={L / 2 - foot} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />
+      <FlowerDrawing spec={plainFlowers(L - foot * 1.2, D * 0.9, c.print ? undefined : c.tone, "runner")} ink={ink} print={c.print} detail={detail} />
+    </>
+  );
 }
 
 /** A chuppah: the canopy, its four poles, the folds of the cloth corner to corner, and flowers at the
  *  two front poles — the side the couple face the guests from. */
-function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line) {
+function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line, ink: string, detail: boolean) {
   const m = Math.min(w, h);
   const pole = m * 0.045;
   const fold = { ...line, strokeOpacity: line.strokeOpacity * 0.55, strokeDasharray: "4 3" };
-  const flower = { ...c, tone: c.print ? c.tone : "#E8BCCE" };
+  // The flowers on the poles are the blush every arrangement defaults to, not the canopy's colour.
+  const posy = (p: { x: number; y: number }, key: string) => (
+    <g key={key} transform={`translate(${p.x} ${p.y})`}>
+      <FlowerDrawing spec={plainFlowers(m * 0.28, m * 0.28, undefined, "dome")} ink={ink} print={c.print} detail={detail} />
+    </g>
+  );
   const post = (p: { x: number; y: number }, i: number) => (
     <circle key={`p${i}`} cx={p.x} cy={p.y} r={pole} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.55} {...line} />
   );
@@ -580,8 +720,8 @@ function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line) {
         {/* The back poles bare; the front two wrapped in flowers. */}
         {post(poles[2], 2)}
         {post(poles[3], 3)}
-        {cluster(m * 0.13, flower, line, poles[0], "f0")}
-        {cluster(m * 0.13, flower, line, poles[1], "f1")}
+        {posy(poles[0], "f0")}
+        {posy(poles[1], "f1")}
       </>
     );
   }
@@ -601,8 +741,8 @@ function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line) {
       {/* The back poles bare; the front two (+y) wrapped in flowers. */}
       {post(poles[0], 0)}
       {post(poles[1], 1)}
-      {cluster(m * 0.14, flower, line, poles[2], "f0")}
-      {cluster(m * 0.14, flower, line, poles[3], "f1")}
+      {posy(poles[2], "f0")}
+      {posy(poles[3], "f1")}
     </>
   );
 }
@@ -630,9 +770,9 @@ function roundBar(w: number, h: number, c: Colours, line: Line) {
 /** A bar: the counter guests lean on along its front, the aisle the bartender works in, and the back
  *  bar with its bottles along the back edge. */
 function bar(L: number, D: number, c: Colours, line: Line) {
-  const top = Math.min(D * 0.4, 600);
-  const back = Math.min(D * 0.2, 400);
-  const bottles = Math.max(0, Math.floor((L - back) / 260));
+  const top = counterTopMm(D);
+  const back = counterShelfMm(D);
+  const bottles = Math.max(0, Math.floor((L - back) / BOTTLE_PITCH_MM));
   return (
     <>
       <rect x={-L / 2} y={-D / 2} width={L} height={D} fill={c.tone} {...line} />
@@ -643,10 +783,43 @@ function bar(L: number, D: number, c: Colours, line: Line) {
           key={i}
           cx={-L / 2 + back / 2 + ((i + 0.5) * (L - back)) / bottles}
           cy={-D / 2 + back / 2}
-          r={Math.min(back * 0.28, 45)}
+          r={bottleRadiusMm(back)}
           fill="#ffffff"
           {...line}
         />
+      ))}
+    </>
+  );
+}
+
+/** A bar of any other shape — a ח, an oval ring, a horseshoe, an arc, an outline drawn by hand — in
+ *  the straight bar's own strips, laid along its band (lib/catalog/bar-draw.ts says which edge is
+ *  which): the counter top along the guests' side, the bartender's shelf and its bottles along the
+ *  side that faces in, and the shapes added to it drawn as back bars with their bottles. */
+function shapedBar(f: Footprint, c: Colours, line: Line) {
+  const d = barDrawing(f);
+  const strip = (s: Strip, key: string, opacity: number) => (
+    <path
+      key={key}
+      d={s.map((ring) => `M ${ring.map((p) => `${p.x} ${p.y}`).join(" L ")} Z`).join(" ")}
+      fillRule="evenodd"
+      fill={c.print ? "#ffffff" : c.ink}
+      fillOpacity={c.print ? 1 : opacity}
+      {...line}
+      strokeOpacity={line.strokeOpacity * 0.7}
+      strokeLinejoin="round"
+    />
+  );
+  return (
+    <>
+      <FootprintShape footprint={f} fill={c.tone} {...line} />
+      {d.front.map((s, i) => strip(s, `f${i}`, 0.1))}
+      {d.shelf.map((s, i) => strip(s, `s${i}`, 0.18))}
+      {d.backs.map((p, i) => (
+        <path key={`b${i}`} d={outlinePathD(p.outline, p.edgeCurves)} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.18} {...line} strokeOpacity={line.strokeOpacity * 0.7} />
+      ))}
+      {d.bottles.map((b, i) => (
+        <circle key={`o${i}`} cx={b.x} cy={b.y} r={b.r} fill="#ffffff" {...line} />
       ))}
     </>
   );

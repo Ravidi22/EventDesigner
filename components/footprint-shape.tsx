@@ -1,13 +1,17 @@
 import type { DesignTable, Placement, Point } from "@/lib/design-document/types";
 import type { Product } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { chairBlockOf, resolve } from "@/lib/studio/catalog-resolver";
+import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { customShapeBounds, footprintBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
+import { blockFrame, type BlockFrame } from "@/lib/design-document/block";
 import { dressingLayout, fromTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
+import { footprintSpine } from "@/lib/studio/spine";
 import { isRunner } from "@/lib/catalog/categories";
 import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
+import { climbKindOf } from "@/lib/studio/climb-item";
 
 // The one place a catalog footprint turns into SVG. Three surfaces draw the same shapes — the
 // studio canvas, the drag image that leaves the rail, and the placement map the crew is handed on
@@ -64,7 +68,9 @@ export function FootprintShape({
     );
   }
   if (footprint.kind === "custom") {
-    const b = customShapeBounds(footprint.outline);
+    // The box of what is DRAWN — a bowed side's apex counts (customShapeBounds samples the curves),
+    // so a shape with one side bowed out stands on its visual centre, not its corners'.
+    const b = customShapeBounds(footprint.outline, footprint.edgeCurves);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
     return <path d={outlinePathD(centered, footprint.edgeCurves)} {...props} />;
   }
@@ -98,6 +104,16 @@ export function tableFootprint(table: DesignTable): Footprint {
   return { kind: "rect", widthMm: table.widthMm ?? 0, depthMm: table.depthMm ?? 0 };
 }
 
+/** A block of tables (a design group) as the one table it is: its frame and its members' shapes
+ *  where they stand, for the chairs round the lot (lib/design-document/block.ts). Every surface that
+ *  draws a block's ring reads it here — the studio canvas, the printed map, the table detail — so
+ *  none of them can seat the block differently. */
+export function tableBlock(tables: readonly DesignTable[]): BlockFrame | null {
+  return blockFrame(
+    tables.map((t) => ({ id: t.id, footprint: tableFootprint(t), position: t.position, rotation: t.rotation || 0, mirrored: t.mirrored, blockedSides: tableBlockedSides(t) })),
+  );
+}
+
 /** Where a table's number is written, in plan millimetres: the shape's own label point
  *  (lib/studio/label-anchor.ts — its centre on a rectangle or a round, the middle of the band on an
  *  arc) carried through the same flip and turn the table is drawn with, so the number on paper sits
@@ -116,7 +132,10 @@ export function tableLabelPoint(table: DesignTable): Point {
 export function tableBox(table: DesignTable): TableBox {
   const f = tableFootprint(table);
   const b = footprintBounds(f);
-  return { widthMm: b.w, depthMm: b.h, round: f.kind === "circle" || f.kind === "ellipse" };
+  const round = f.kind === "circle" || f.kind === "ellipse";
+  // The line its items are laid along (lib/studio/spine.ts) — only a SHAPED table needs one; a
+  // rectangle's or a round's is its axis, which the layout already assumes.
+  return { widthMm: b.w, depthMm: b.h, round, ...(f.kind === "custom" || f.kind === "multi" ? { spine: footprintSpine(f) } : {}) };
 }
 
 /** An item's box on a table — its footprint at its scale. */
@@ -197,8 +216,21 @@ export function dressingSpots(
 export function placementFootprint(placement: Placement): Footprint {
   // A stage is its own outline, whatever deck it was mostly built from (Placement.stage).
   if (placement.stage) return { kind: "custom", outline: placement.stage.outline };
+  // A block of chairs in rows takes the floor its rows do (lib/design-document/chair-rows.ts) — what
+  // it is hit, selected, measured and kept clear by, while each chair is drawn at its own size.
+  const block = chairBlockOf(placement);
+  if (block) {
+    const l = chairRowsLayout(block.spec, block.chair);
+    return { kind: "rect", widthMm: l.widthMm, depthMm: l.depthMm };
+  }
   const product = resolve(placement.variantId)?.product;
   if (!product) return { kind: "rect", widthMm: 600, depthMm: 600 };
+  // A flight or a ramp standing on its own runs as far as the step it covers takes it, whether or
+  // not its row stretches (lib/studio/climb-item.ts) — the run is not a choice, the rise is.
+  if (placement.sizeMm && !product.resize && climbKindOf(product)) {
+    const base = sizedFootprint(product);
+    if (base.kind === "rect") return { kind: "rect", ...placement.sizeMm };
+  }
   return sizedFootprint(product, placement.sizeMm);
 }
 

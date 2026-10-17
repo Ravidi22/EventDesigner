@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { requireSession } from "@/lib/auth/guard";
+import { ORG_HOME } from "@/lib/auth/kinds";
 import { WelcomeScreen } from "./welcome-screen";
 
 export const metadata: Metadata = { title: "ברוכים הבאים · Eve" };
@@ -11,6 +12,6 @@ export const metadata: Metadata = { title: "ברוכים הבאים · Eve" };
 export default async function WelcomePage() {
   const session = await requireSession();
   if (session.kind !== "studio") redirect("/client");
-  if (session.organizationId) redirect("/dashboard");
+  if (session.organizationId) redirect(ORG_HOME[session.organizationKind ?? "studio"]);
   return <WelcomeScreen name={session.name ?? ""} />;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useMounted } from "@/lib/use-mounted";
 import { Download, HardDrive, RotateCcw, TriangleAlert, Upload } from "lucide-react";
 import { fileStorageBackend } from "@/lib/files/actions";
 import {
@@ -17,12 +18,12 @@ import { Note, Panel } from "./ui";
 // While everything lives in localStorage, this browser profile *is* the database. Export is the
 // only backup that exists, so it gets a real place in settings rather than a dev-tools trick.
 export function DataSection() {
-  const [stats, setStats] = useState<SnapshotStats>({ keys: 0, bytes: 0 });
+  // Read in render once mounted: localStorage is not on the server, and this is a settings panel.
+  const mounted = useMounted();
+  const stats: SnapshotStats = mounted ? snapshotStats() : { keys: 0, bytes: 0 };
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => setStats(snapshotStats()), []);
 
   const download = () => {
     const blob = new Blob([exportSnapshot()], { type: "application/json" });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isTypingTarget } from "@/lib/keyboard";
+import { isShortcut, isTypingTarget } from "@/lib/keyboard";
 
 // A generic snapshot undo stack, for state that isn't an outline.
 //
@@ -34,6 +34,10 @@ export interface History<T> {
   canRedo: boolean;
 }
 
+const apply = <T,>(next: T | ((prev: T) => T), prev: T): T =>
+  typeof next === "function" ? (next as (p: T) => T)(prev) : next;
+const push = <T,>(past: T[], present: T) => [...past, present].slice(-MAX_HISTORY);
+
 export function useHistory<T>(initial: T | (() => T), opts: { keyboard?: boolean } = {}): History<T> {
   const [stack, setStack] = useState<Stack<T>>(() => ({
     past: [],
@@ -43,10 +47,6 @@ export function useHistory<T>(initial: T | (() => T), opts: { keyboard?: boolean
   // Whether a gesture is open. A ref rather than state: it is read and written within a single
   // pointermove and must not wait for a render to take effect.
   const open = useRef(false);
-
-  const apply = (next: T | ((prev: T) => T), prev: T): T =>
-    typeof next === "function" ? (next as (p: T) => T)(prev) : next;
-  const push = (past: T[], present: T) => [...past, present].slice(-MAX_HISTORY);
 
   const set = useCallback((next: T | ((prev: T) => T)) => {
     open.current = false;
@@ -97,11 +97,12 @@ export function useHistory<T>(initial: T | (() => T), opts: { keyboard?: boolean
     if (!keyboard) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || isTypingTarget()) return;
-      const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) {
+      // By the physical key (lib/keyboard.ts isShortcut): on a Hebrew layout Ctrl+Z arrived as
+      // Ctrl+"ז" and undo silently stopped working the moment the designer typed a client's name.
+      if (isShortcut(e, "z") && !e.shiftKey) {
         e.preventDefault();
         undo();
-      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+      } else if (isShortcut(e, "y") || (isShortcut(e, "z") && e.shiftKey)) {
         e.preventDefault();
         redo();
       }

@@ -11,11 +11,43 @@
 // the whole bucket to anyone who could guess an id.
 import { isMain } from "../self-check";
 
+/**
+ * The stored key inside one of our own URLs, or null for anything else.
+ *
+ * "Anything else" is real and must be left alone: a venue logo can be a data URL or an address
+ * somebody typed, and those are not ours to delete. Null is how a caller cleaning up a replaced
+ * file knows to do nothing.
+ *
+ * Both shapes are recognised whichever driver is live, on purpose — a studio that used the local
+ * driver and then configured R2 still has `/api/files/…` URLs in old rows, and those keys are still
+ * the right thing to name when one of them is replaced.
+ */
+export function keyFromUrl(url: unknown): string | null {
+  if (typeof url !== "string") return null;
+
+  const marker = "/api/files/";
+  const local = url.indexOf(marker);
+  if (local !== -1) return url.slice(local + marker.length);
+
+  const base = process.env.NEXT_PUBLIC_R2_PUBLIC_URL?.replace(/\/$/, "");
+  if (base && url.startsWith(base + "/")) return url.slice(base.length + 1);
+  return null;
+}
+
+/** One of our own files on THIS origin (`/api/files/<key>`, which proxies the bucket), so a script
+ *  on the page may read its bytes — the bucket's public domain sends no CORS header, and a PDF
+ *  built in the browser (app/(app)/outputs/quote-pdf.ts) captured every photo as a blank. Anything
+ *  that is not ours is returned as it was. */
+export function sameOriginUrl(url: string): string {
+  const key = keyFromUrl(url);
+  return key ? `/api/files/${key}` : url;
+}
+
 /** What a file is FOR. It decides the folder and, later, which sizes get generated — not who may
  *  read it, which is the key prefix's job. */
-export type FileKind = "gallery" | "product" | "underlay" | "logo";
+export type FileKind = "gallery" | "product" | "underlay" | "logo" | "signature";
 
-export const FILE_KINDS: FileKind[] = ["gallery", "product", "underlay", "logo"];
+export const FILE_KINDS: FileKind[] = ["gallery", "product", "underlay", "logo", "signature"];
 
 export function isFileKind(value: unknown): value is FileKind {
   return typeof value === "string" && (FILE_KINDS as string[]).includes(value);

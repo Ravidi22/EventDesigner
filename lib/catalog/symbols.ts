@@ -12,9 +12,10 @@
 // stored but the designer's one opt-out (MapAppearance.symbol === false), which brings back the
 // outline + name/icon they chose — for the item the category's picture gets wrong.
 //
-// Only a PRIMITIVE footprint (circle, ellipse, rectangle) is drawn this way. A ח-shaped bar or a
-// hand-drawn outline is its own picture already, and a symbol laid into its bounding box would draw
-// a sofa across the hole in the middle of it.
+// Only a PRIMITIVE footprint (circle, ellipse, rectangle) is drawn this way — a symbol laid into
+// the bounding box of a hand-drawn outline would draw a sofa across the hole in the middle of it.
+// The one exception is a BAR: a ח, an oval ring, a horseshoe or an arc is what a bar in a hall
+// mostly is, so its picture is laid along its band rather than into its box (lib/catalog/bar-draw.ts).
 import type { Product } from "./types";
 import { isRunner } from "./categories";
 import type { Footprint } from "@/lib/studio/footprint";
@@ -23,6 +24,8 @@ export type SymbolKind =
   | "candlestick"
   | "flowers"
   | "centerpiece"
+  | "vase"
+  | "tree"
   | "chair"
   | "sofa"
   | "chandelier"
@@ -31,13 +34,23 @@ export type SymbolKind =
   | "arch"
   | "chuppah"
   | "bar"
-  | "runner";
+  | "runner"
+  | "stairs"
+  | "ramp"
+  | "bench";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   candlesticks: "candlestick",
   "flower-arrangements": "flowers",
   centerpieces: "centerpiece",
+  // A stem on its own — the marketplace's cut flowers, greens and dried plumes — is one head of
+  // its kind (lib/catalog/flower-spec.ts), the same drawing an arrangement is made of.
+  flowers: "flowers",
+  greenery: "flowers",
+  "dried-flowers": "flowers",
+  vases: "vase",
+  trees: "tree",
   chairs: "chair",
   sofas: "sofa",
   chandeliers: "chandelier",
@@ -46,6 +59,13 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   arches: "arch",
   chuppahs: "chuppah",
   bars: "bar",
+  // A flight or a ramp standing on its own (lib/studio/climb-item.ts): its step edges and the line
+  // it is walked up, as the venue's own stairs are drawn (components/climb-glyph.tsx).
+  "stage-stairs": "stairs",
+  "stage-ramps": "ramp",
+  // A banquette standing on its own (lib/design-document/bench.ts): its top, the chairs along a
+  // chairs side, the cushions of a sofa side. A stage's edge banquette is drawn by the stage itself.
+  "stage-benches": "bench",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */
@@ -60,6 +80,10 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   // A runner is filed with the cloths but is drawn as itself: a strip of fabric on the table.
   const kind = isRunner(product) ? "runner" : SYMBOL_BY_CATEGORY[product.category];
   if (!kind) return null;
+  // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into. A banquette
+  // is a strip with two long sides — the same.
+  if (kind === "stairs" || kind === "ramp" || kind === "bench") return footprint.kind === "rect" ? kind : null;
+  if (kind === "bar") return kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 

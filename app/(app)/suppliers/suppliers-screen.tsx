@@ -15,13 +15,15 @@ import { SupplierDrawer, blankSupplier } from "./supplier-drawer";
 import { ExpensesTab } from "./expenses-tab";
 import { ExpenseDrawer, blankExpense } from "./expense-drawer";
 import { ProcurementTab } from "./procurement-tab";
+import { OrdersTab } from "./orders-tab";
 
-type Tab = "suppliers" | "expenses" | "procurement";
+type Tab = "suppliers" | "expenses" | "procurement" | "orders";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "suppliers", label: "ספקים" },
   { id: "expenses", label: "הוצאות" },
   { id: "procurement", label: "רכש" },
+  { id: "orders", label: "הזמנות" },
 ];
 
 const isTab = (v: string | undefined): v is Tab => TABS.some((t) => t.id === v);
@@ -195,6 +197,8 @@ export function SuppliersScreen({
         ))}
 
       {tab === "procurement" && <ProcurementTab />}
+
+      {tab === "orders" && <OrdersTab />}
 
       <SupplierDrawer
         supplier={editingSupplier}

@@ -22,9 +22,10 @@ import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { revalidateSettings } from "@/lib/db/revalidate";
 import { authAccounts, eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
+import { notify, studioRecipients } from "@/lib/notifications/write";
 import { callAuth } from "./auth-call";
 import { hashInviteToken } from "./invite-token";
-import { HOME_FOR, type AccountKind } from "./kinds";
+import { HOME_FOR, ORG_HOME, isOrgKind, type AccountKind, type OrgKind } from "./kinds";
 import { hashPassword, passwordProblem } from "./password";
 import { currentSession, type Session } from "./session";
 
@@ -69,6 +70,18 @@ type AuthUser = { id: string; kind?: string };
 
 /** Where a new studio account goes until it has named its business (app/welcome). */
 const WELCOME = "/welcome";
+
+/** Where this account lands after signing in: the client side, a designer's dashboard, or a
+ *  supplier's order inbox. Read from the rows rather than guessed from the account kind alone. */
+async function homeOf(userId: string): Promise<string> {
+  const [row] = await db()
+    .select({ kind: users.kind, orgKind: organizations.kind })
+    .from(users)
+    .leftJoin(organizations, eq(organizations.id, users.organizationId))
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.kind === "studio" ? ORG_HOME[row.orgKind ?? "studio"] : HOME_FOR.client;
+}
 
 /**
  * Open a studio account: a person, and nothing else yet.
@@ -146,22 +159,31 @@ export async function signUp(input: {
  * /welcome: name the business, and the studio comes into being — its organisation, its settings
  * row, its owner, and a catalog that already knows what an עגול 180 is (lib/catalog/standard).
  *
+ * The business is a designer's studio or a supplier (lib/auth/kinds.ts, `orgKind`) — asked here,
+ * not on the sign-up form, because it is a fact about the business and the sign-up opens a person.
+ *
  * Only for a signed-in studio account that has no organisation yet; anyone else is refused, so this
  * cannot be used to move an existing member into a new studio of their own.
  */
-export async function completeOnboarding(input: { studioName: string; phone?: string }): Promise<AuthResult> {
+export async function completeOnboarding(input: {
+  studioName: string;
+  phone?: string;
+  /** A designer's studio (the default) or a supplier. Checked, never cast — it arrives from a form. */
+  orgKind?: OrgKind;
+}): Promise<AuthResult> {
   const session = await currentSession();
   if (!session) return { error: "יש להתחבר מחדש" };
   if (session.kind !== "studio") throw new Error("only a studio account opens a studio");
-  if (session.organizationId) return { home: HOME_FOR.studio };
+  if (session.organizationId) return { home: ORG_HOME[session.organizationKind ?? "studio"] };
 
+  const orgKind: OrgKind = isOrgKind(input?.orgKind) ? input.orgKind : "studio";
   const studioName = String(input?.studioName ?? "").trim();
   const phone = String(input?.phone ?? "").trim();
   if (!studioName) return { error: "יש להזין שם עסק", field: "studioName" };
   if (studioName.length > 120) return { error: "השם ארוך מדי", field: "studioName" };
   if (phone.length > 40) return { error: "מספר טלפון לא תקין", field: "phone" };
 
-  const organizationId = await claimOrganization(studioName);
+  const organizationId = await claimOrganization(studioName, orgKind);
   const database = db();
   // Conditional on "still has no organisation", so two tabs pressing המשך cannot attach one person
   // to two studios: the second update matches nothing.
@@ -170,7 +192,7 @@ export async function completeOnboarding(input: { studioName: string; phone?: st
     .set({ organizationId, role: "owner", joinedAt: today() })
     .where(and(eq(users.id, session.userId), sql`${users.organizationId} is null`))
     .returning({ id: users.id });
-  if (!claimed) return { home: HOME_FOR.studio };
+  if (!claimed) return { home: await homeOf(session.userId) };
 
   await database
     .update(studioSettings)
@@ -179,13 +201,17 @@ export async function completeOnboarding(input: { studioName: string; phone?: st
 
   // BEST-EFFORT: the studio is real, and refusing someone their studio over a shelf of furniture
   // is the wrong trade. `npm run catalog:standard` is the retry, and it is idempotent.
-  try {
-    await installStandardCatalog(organizationId);
-  } catch (error) {
-    console.error("standard catalog install failed for", organizationId, error);
+  // A supplier gets none of it: the base tables are a DESIGNER's shelf (every hall's 1.80 round),
+  // and a supplier's catalog is what they sell, published row by row.
+  if (orgKind === "studio") {
+    try {
+      await installStandardCatalog(organizationId);
+    } catch (error) {
+      console.error("standard catalog install failed for", organizationId, error);
+    }
   }
   revalidateSettings();
-  return { home: HOME_FOR.studio };
+  return { home: ORG_HOME[orgKind] };
 }
 
 /**
@@ -199,7 +225,7 @@ export async function completeOnboarding(input: { studioName: string; phone?: st
  * Three conditions, all required: the well-known placeholder id, no users in it yet, and not
  * production, where that row should never have been seeded.
  */
-async function claimOrganization(studioName: string): Promise<string> {
+async function claimOrganization(studioName: string, kind: OrgKind): Promise<string> {
   const database = db();
 
   if (process.env.NODE_ENV !== "production") {
@@ -214,7 +240,7 @@ async function claimOrganization(studioName: string): Promise<string> {
         .from(users)
         .where(eq(users.organizationId, SINGLE_ORG_ID));
       if (count === 0) {
-        await database.update(organizations).set({ name: studioName }).where(eq(organizations.id, SINGLE_ORG_ID));
+        await database.update(organizations).set({ name: studioName, kind }).where(eq(organizations.id, SINGLE_ORG_ID));
         await database
           .insert(studioSettings)
           .values({ organizationId: SINGLE_ORG_ID, businessName: studioName })
@@ -224,7 +250,7 @@ async function claimOrganization(studioName: string): Promise<string> {
     }
   }
 
-  const [org] = await database.insert(organizations).values({ name: studioName }).returning({ id: organizations.id });
+  const [org] = await database.insert(organizations).values({ name: studioName, kind }).returning({ id: organizations.id });
   await database.insert(studioSettings).values({ organizationId: org.id, businessName: studioName });
   return org.id;
 }
@@ -258,8 +284,7 @@ export async function signIn(input: {
 
   // ONE sign-in form for both kinds, on purpose. Which half of the app you belong to is a fact
   // about your account, not a thing to make you declare at the door.
-  const kind: AccountKind = result.data.user.kind === "studio" ? "studio" : "client";
-  return { home: HOME_FOR[kind] };
+  return { home: await homeOf(result.data.user.id) };
 }
 
 /**
@@ -408,10 +433,29 @@ export async function acceptInvite(input: {
 
   if (!claimed) return { error: "קישור ההזמנה פג או כבר נוצל. בקשו מהסטודיו קישור חדש." };
 
+  // A client joining is news for the studio that shared with them — the designer sent a link over
+  // WhatsApp and otherwise has no way to know it was opened. One line per event, to each studio's
+  // owner and designers.
+  if (claimed.kind === "client") {
+    const shared = await db()
+      .select({ eventId: events.id, organizationId: events.organizationId, clientName: events.clientName })
+      .from(eventClients)
+      .innerJoin(events, eq(events.id, eventClients.eventId))
+      .where(eq(eventClients.userId, claimed.id));
+    for (const e of shared) {
+      await notify(await studioRecipients(e.organizationId), {
+        kind: "client.joined",
+        organizationId: e.organizationId,
+        eventId: e.eventId,
+        payload: { actorName: name, eventLabel: e.clientName },
+      });
+    }
+  }
+
   // Through the ordinary sign-in, so the session is Better Auth's and nothing here mints one.
   const signedIn = await callAuth("/sign-in/email", { email: claimed.email, password, rememberMe: true });
   if (!signedIn.ok) return { error: "ההצטרפות הושלמה. התחברו עם האימייל והסיסמה שבחרתם." };
-  return { home: HOME_FOR[claimed.kind] };
+  return { home: await homeOf(claimed.id) };
 }
 
 export async function signOut(): Promise<void> {

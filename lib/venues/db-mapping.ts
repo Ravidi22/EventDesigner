@@ -10,7 +10,7 @@ import type { venues, zones, venueStructures, venueGrants } from "@/lib/db/schem
 import type { GrantKind, VenueGrant, VenueRole } from "./access";
 import type { Venue, VenuePlan } from "./types";
 import type { Zone, ZoneKind, ZoneSource, ZoneCapacity } from "./zone";
-import type { VenueStructure } from "./structure";
+import { SURFACE_MATERIALS, type SurfaceMaterial, type VenueStructure } from "./structure";
 import type { ElementStyle } from "@/lib/element-style";
 
 export type VenueRow = InferSelectModel<typeof venues>;
@@ -51,6 +51,8 @@ export function toZone(row: ZoneRow): Zone {
     ceilingHeightMm: row.ceilingHeightMm,
     capacity: orUndefined(row.capacity) as ZoneCapacity | undefined,
     style: orUndefined(row.style) as ElementStyle | undefined,
+    // A value this build does not know (a material removed since) reads as no surface at all.
+    surface: row.surface && SURFACE_MATERIALS.includes(row.surface as SurfaceMaterial) ? (row.surface as SurfaceMaterial) : undefined,
     // The app carries createdAt as epoch milliseconds (it sorts and compares, never formats a
     // timezone), while the column is timestamptz so the database can reason about it too.
     createdAt: row.createdAt.getTime(),
@@ -68,6 +70,7 @@ export function toZoneRow(z: Zone, organizationId: string): ZoneInsert {
     ceilingHeightMm: z.ceilingHeightMm,
     capacity: z.capacity ?? null,
     style: z.style ?? null,
+    surface: z.surface ?? null,
     createdAt: new Date(z.createdAt),
   };
 }

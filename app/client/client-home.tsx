@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, LogOut, MapPin, Users } from "lucide-react";
+import Link from "next/link";
+import { CalendarDays, ChevronLeft, LogOut, MapPin, Users } from "lucide-react";
+import { NotificationBell } from "@/components/notification-bell";
 import { Wordmark } from "@/components/wordmark";
 import { signOut } from "@/lib/auth/actions";
 import { formatEventDate } from "@/lib/events/types";
-import type { ClientEvent } from "@/lib/client-portal/actions";
+import type { ClientEvent } from "@/lib/client-portal/types";
 
 // The client's home. One screen, no sidebar, no navigation — there is one thing here and it is
 // their own event.
@@ -44,6 +46,7 @@ export function ClientHome({
             {email}
           </span>
         </span>
+        <NotificationBell />
         <button
           type="button"
           onClick={leave}
@@ -69,7 +72,7 @@ function NothingShared() {
       <h1 className="font-display text-h2 text-ink text-balance">החשבון שלכם מוכן</h1>
       <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-ink-soft">
         עדיין לא שותף איתכם אירוע. כשהמעצב ישתף את האירוע שלכם, הוא יופיע כאן — עם התאריך, המתחם
-        והסקיצה שהוכנה עבורכם.
+        והסקיצה שהוכנה עבורכם, שאפשר להזיז בה שולחנות ולשלוח למעצב לאישור.
       </p>
       <p className="mx-auto mt-5 max-w-md text-xs leading-relaxed text-muted">
         אם כבר יש לכם אירוע בתכנון, בקשו מהמעצב לשתף אותו עם כתובת האימייל שאיתה נרשמתם.
@@ -84,7 +87,11 @@ function EventList({ events }: { events: ClientEvent[] }) {
       <h1 className="font-display text-h1 text-ink text-balance">האירוע שלכם</h1>
       <div className="mt-6 flex flex-col gap-4">
         {events.map((e) => (
-          <article key={e.id} className="rounded-lg border border-border bg-surface p-6">
+          <Link
+            key={e.id}
+            href={`/client/events/${e.id}`}
+            className="group block rounded-lg border border-border bg-surface p-6 transition-shadow hover:shadow-floating focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
             <p className="font-label text-[10px] font-medium uppercase tracking-[3px] text-quiet" dir="ltr">
               {e.studioName}
             </p>
@@ -107,12 +114,11 @@ function EventList({ events }: { events: ClientEvent[] }) {
                 </Row>
               )}
             </dl>
-            {/* No sketch yet: showing the plan is the next piece of work, and a card that promised
-                one before it exists would be the same lie as a fake empty state. */}
-            <p className="mt-5 border-t border-border pt-4 text-xs leading-relaxed text-muted">
-              הסקיצה של האירוע תופיע כאן ברגע שהמעצב ישתף אותה.
+            <p className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4 text-sm font-semibold text-accent">
+              לסקיצה של האירוע — לצפייה ולהצעת שינויים
+              <ChevronLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
             </p>
-          </article>
+          </Link>
         ))}
       </div>
     </>

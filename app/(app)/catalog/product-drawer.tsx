@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import {
   PRICE_UNIT_LABEL,
@@ -19,13 +19,22 @@ import {
   type PriceUnit,
   type StockKind,
 } from "@/lib/catalog/types";
-import { FLOWER_NAMES, cleanFlowers, stemCount } from "@/lib/catalog/flowers";
+import { cleanFlowers, knownFlowersOf, stemCount, type KnownFlower } from "@/lib/catalog/flowers";
+import { FLOWER_KIND_BY_ID, type FlowerKindId, type FlowerRole } from "@/lib/catalog/flower-kinds";
+import { DEFAULT_SHADE } from "@/lib/catalog/flower-draw";
+import { FlowerHead } from "@/components/flower-symbol";
+import { ComboField, type ComboOption } from "@/components/combo-field";
 import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierList } from "@/lib/suppliers/use-suppliers";
 import { catalogBox, footprintBounds, resolveContent, resolveFootprint, roundSizeMm } from "@/lib/studio/footprint";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
+import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
 import { CATEGORIES, CATEGORY_BY_ID, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
 import { isPlacedAnywhere, isStandardProduct } from "@/lib/catalog/actions";
+import { acceptSourcePrice, fetchSourceStatus } from "@/lib/marketplace/actions";
+import type { SourceStatus } from "@/lib/marketplace/types";
+import { formatPrice } from "@/lib/catalog/format";
+import { useIsSupplier } from "@/components/org-kind-context";
 import { Button } from "@/components/button";
 import { Drawer } from "@/components/drawer";
 import { TagToggle } from "@/components/tag-toggle";
@@ -41,6 +50,8 @@ import { AppearancePreview } from "./appearance-preview";
 import { AppearanceModal } from "./appearance-modal";
 
 const uid = () => crypto.randomUUID();
+/** The built-in vocabulary alone, made once — a default made per render would re-memo every row. */
+const NO_KNOWN_FLOWERS: KnownFlower[] = knownFlowersOf([]);
 
 /** What a new product of this category is drawn as. `CategoryDef.dims` used to pick which size
  *  fields the drawer showed; it seeds the SHAPE now, and the shape picks the fields — see the
@@ -75,7 +86,8 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     name: "",
     category: c.id,
     layer: c.defaultLayer,
-    dimensions: { heightMm: 0 },
+    // A table starts at 75cm (CategoryDef.defaultHeightMm); everything else starts empty and asks.
+    dimensions: { heightMm: c.defaultHeightMm ?? 0 },
     categoryFields: {},
     styleTags: [],
     variants: [],
@@ -155,9 +167,13 @@ function ResizeFields({
         }
         label="גודל גמיש על התוכנית"
         hint={
-          ready
-            ? "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
-            : "יש להשלים קודם את הצורה והמידות."
+          !ready
+            ? "יש להשלים קודם את הצורה והמידות."
+            : // The category stretches its rows by default (CategoryDef.defaultResize) — a banquette is
+              // laid to length — and the switch here is for a row that wants its own module and range.
+              !spec && CATEGORY_BY_ID[draft.category]?.defaultResize
+              ? "פריטי הקטגוריה הזו נמתחים לאורכם בסקיצה כברירת מחדל. הפעלה כאן קובעת לשורה הזו קפיצות וטווח משלה."
+              : "פריט אחד שנמתח בסקיצה לגודל שהאירוע צריך — במה, בר ישר, ספה, שולחן אבירים — במקום שורה נפרדת לכל מידה."
         }
       />
       {spec && (
@@ -198,60 +214,84 @@ function ResizeFields({
   );
 }
 
+const ROLE_LABEL: Record<FlowerRole, string> = { head: "ראש פרח", fill: "מילוי", trail: "נשפך מהשפה", green: "ירק" };
+
+/** The row's small picture of a known flower — the head the plan will draw, in the colour it comes
+ *  in, else the blush an unpinned flower defaults to (a green in its own). */
+function FlowerIcon({ kind, colour }: { kind: FlowerKindId; colour?: string }) {
+  return (
+    <svg viewBox="-44 -44 88 88" className="h-5 w-5" aria-hidden>
+      <FlowerHead kind={kind} r={40} colour={colour ?? FLOWER_KIND_BY_ID[kind].natural ?? DEFAULT_SHADE} />
+    </svg>
+  );
+}
+
 /** "מפרט פרחים" — what an arrangement is made of, as rows that multiply (Product.flowers): a flower
  *  and how many stems of it, per arrangement. The stem total every other surface reads is their sum,
  *  shown here and never typed while there are rows; an arrangement with no rows may still type a bare
- *  total, which is the designer saying "180 stems, don't ask me which". Names are offered from a
- *  datalist — the built-in vocabulary plus whatever this catalog already calls its flowers — and
- *  anything typed is taken. */
+ *  total, which is the designer saying "180 stems, don't ask me which". Names are offered from the
+ *  known flowers (lib/catalog/flowers.ts: the built-in vocabulary, this catalog's own names, the
+ *  marketplace's stems) in a ComboField, and anything typed is taken; a pick also records what the
+ *  flower is DRAWN as and the colour it comes in. Each row may pin its own colour — absent, it
+ *  follows the arrangement's shade (a green or gypsophila its own). */
 function FlowerSpecFields({
   lines,
-  names,
+  known,
   typedStems,
   onChange,
   onTypedStems,
 }: {
   lines: FlowerLine[];
-  names: string[];
+  known: KnownFlower[];
   /** The bare total, used only while there are no rows. */
   typedStems: number;
   onChange: (lines: FlowerLine[]) => void;
   onTypedStems: (stems: number) => void;
 }) {
-  const listId = "p-flower-names";
   const setLine = (id: string, p: Partial<FlowerLine>) => onChange(lines.map((l) => (l.id === id ? { ...l, ...p } : l)));
   const add = () => onChange([...lines, { id: uid(), name: "", qty: 0 }]);
   const remove = (id: string) => onChange(lines.filter((l) => l.id !== id));
   const total = stemCount(lines);
-  const columns = "grid grid-cols-[1fr_5.5rem_2rem] items-center gap-2";
+  const columns = "grid grid-cols-[1fr_5.5rem_auto_2rem] items-center gap-2";
+  const options = useMemo<ComboOption[]>(
+    () =>
+      known.map((k) => ({
+        value: k.name,
+        hint: k.source ?? ROLE_LABEL[FLOWER_KIND_BY_ID[k.kind].role],
+        icon: <FlowerIcon kind={k.kind} colour={k.colour} />,
+      })),
+    [known],
+  );
+  const byName = useMemo(() => new Map(known.map((k) => [k.name, k])), [known]);
 
   return (
     <div className="space-y-2">
-      <datalist id={listId}>
-        {names.map((n) => (
-          <option key={n} value={n} />
-        ))}
-      </datalist>
-
       {lines.length === 0 ? (
         <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted">
           אין מפרט. הוסיפו את הפרחים שמרכיבים את הסידור — סוג וכמות גבעולים לכל אחד. סך הגבעולים יחושב
-          מהם, ורשימת הציוד והרכש יפרטו אותם פרח־פרח.
+          מהם, רשימת הציוד והרכש יפרטו אותם פרח־פרח, והתוכנית תצייר את הסידור מהם.
         </p>
       ) : (
         <div className="space-y-2">
           <div className={`${columns} px-0.5 text-[11px] font-semibold text-faint`}>
             <span>פרח</span>
             <span>גבעולים</span>
+            <span>צבע</span>
             <span />
           </div>
           {lines.map((l, i) => (
             <div key={l.id} className={columns}>
-              <TextField
+              <ComboField
                 value={l.name}
-                onChange={(name) => setLine(l.id, { name })}
+                // Typing drops the picked kind: the name decides again (kindOfName) until the
+                // designer picks a suggestion, which records what it is drawn as.
+                onChange={(name) => setLine(l.id, { name, kind: undefined })}
+                onPick={(opt) => {
+                  const k = byName.get(opt.value);
+                  if (k) setLine(l.id, { name: k.name, kind: k.kind, colour: k.colour ?? l.colour });
+                }}
+                options={options}
                 placeholder="ורד, פיאוני, אקליפטוס…"
-                list={listId}
                 aria-label={`פרח ${i + 1}`}
                 // A row that mounts empty was just added — put the cursor where the designer is
                 // about to type. Saved rows never mount empty (cleanFlowers drops them).
@@ -265,6 +305,7 @@ function FlowerSpecFields({
                 placeholder="כמות"
                 aria-label={`כמות גבעולים — ${l.name || `פרח ${i + 1}`}`}
               />
+              <SwatchField value={l.colour} onChange={(colour) => setLine(l.id, { colour })} label={`צבע — ${l.name || `פרח ${i + 1}`} (ריק = לפי הגוון)`} />
               <button
                 type="button"
                 onClick={() => remove(l.id)}
@@ -275,6 +316,10 @@ function FlowerSpecFields({
               </button>
             </div>
           ))}
+          <p className="text-xs leading-relaxed text-muted">
+            צבע ריק = הפרח נצבע לפי גוון הסידור שנבחר באירוע; ירק וגיבסנית בצבעם הטבעי. צבע שנקבע כאן
+            נשאר בכל גוון.
+          </p>
         </div>
       )}
 
@@ -328,15 +373,16 @@ export function ProductDrawer({
   onClose,
   internal = true,
   categories = CATEGORIES,
-  flowerNames = FLOWER_NAMES,
+  knownFlowers = NO_KNOWN_FLOWERS,
 }: {
   product: Product | null;
   onSave: (p: Product) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
-  /** Flower names to suggest in the spec rows — the catalog passes flowerNamesOf(its products) so
-   *  one studio spells "ורד" one way; the default is the built-in vocabulary alone. */
-  flowerNames?: string[];
+  /** The flowers to suggest in the spec rows — the catalog passes knownFlowersOf(its products, the
+   *  marketplace's stems) so one studio spells "ורד" one way and a supplier's stem brings its
+   *  colour; the default is the built-in vocabulary alone. */
+  knownFlowers?: KnownFlower[];
   /** False when the drawer opens in a room with a client in it — the meeting's drawing passes add
    *  to the catalog from the studio's rail. Everything the client must not see goes: the price and
    *  its unit, the shades' prices, the whole procurement half (supplier, cost, stock, order unit)
@@ -358,6 +404,11 @@ export function ProductDrawer({
   // was about, not a bare boolean: a drawer that goes straight from a base table to a new product
   // would otherwise carry the previous row's answer until the next one came back.
   const [libraryId, setLibraryId] = useState<string | null>(null);
+  // A supplier publishes; a designer buys. The same drawer, worded for whichever is holding it.
+  const supplierOrg = useIsSupplier();
+  // The source of a copied row (lib/marketplace/): asked of the server when the drawer opens one,
+  // keyed on the id the answer was about, like `libraryId`.
+  const [source, setSource] = useState<{ id: string; status: SourceStatus | null } | null>(null);
   // Loaded once, the first time the drawer opens — the catalog's first paint owes nothing to it.
   // Never in the meeting: the supplier list is cost-side data and nothing there would show it.
   const suppliers = useSupplierList(product !== null && internal);
@@ -381,6 +432,20 @@ export function ProductDrawer({
       current = false;
     };
   }, [productId]);
+  const sourceProductId = product?.sourceProductId;
+  useEffect(() => {
+    if (!productId || !sourceProductId) return;
+    let current = true;
+    fetchSourceStatus(productId)
+      .then((status) => {
+        if (current) setSource({ id: productId, status });
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [productId, sourceProductId]);
+  const sourceStatus = source && source.id === productId ? source.status : null;
 
   if (!product) return null;
 
@@ -435,8 +500,14 @@ export function ProductDrawer({
   const changeCategory = (id: string) =>
     setDraft((d) => {
       const c = CATEGORY_BY_ID[id];
+      // A NEW product's height re-seeds with the category while it is still the old category's seed
+      // (or empty) — a fresh row starts as a table at 75cm, and turning it into a chair must not
+      // leave it 75cm tall. A saved product's height is a measurement and is never touched.
+      const seededHeight = CATEGORY_BY_ID[d.category]?.defaultHeightMm ?? 0;
+      const reseedHeight = !d.id && (d.dimensions.heightMm === 0 || d.dimensions.heightMm === seededHeight);
       return {
         ...d,
+        ...(reseedHeight ? { dimensions: { ...d.dimensions, heightMm: c.defaultHeightMm ?? 0 } } : {}),
         category: id,
         layer: c.defaultLayer,
         categoryFields: {},
@@ -701,7 +772,7 @@ export function ProductDrawer({
               <SectionDivider label="מפרט פרחים" />
               <FlowerSpecFields
                 lines={draft.flowers ?? []}
-                names={flowerNames}
+                known={knownFlowers}
                 typedStems={Number(draft.categoryFields.stems ?? 0)}
                 onChange={(flowers) => patch({ flowers })}
                 onTypedStems={(v) => setField("stems", v)}
@@ -740,6 +811,34 @@ export function ProductDrawer({
               יקבל הילה, ואזהרה כשמשהו מתקרב אליו יותר מזה. ריק = בלי כלל.
             </p>
           </div>
+
+          {/* How high a ceiling item hangs — the default every placed one starts from, overridden per
+              item in the studio. In categoryFields (lib/studio/hang.ts's HANG_FIELD): a rigging fact,
+              printed on the ceiling plan, and never a multiplier the quote or the order reads. */}
+          {draft.layer === "ceiling" && category.anchor !== "wall" && (
+            <div>
+              <NumberField
+                id="p-hang"
+                label="גובה תלייה מהרצפה (ס״מ)"
+                className="w-44"
+                min={0}
+                max={HANG_MAX_MM / 10}
+                hideZero
+                placeholder="—"
+                value={cmOf(Number(draft.categoryFields[HANG_FIELD]) || 0)}
+                onChange={(v) =>
+                  setDraft((d) => {
+                    const { [HANG_FIELD]: _old, ...rest } = d.categoryFields;
+                    void _old;
+                    return { ...d, categoryFields: v > 0 ? { ...rest, [HANG_FIELD]: Math.round(Math.min(v * 10, HANG_MAX_MM)) } : rest };
+                  })
+                }
+              />
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                מהרצפה עד תחתית הפריט. מודפס ליד הפריט בתוכנית התקרה, ואפשר לשנות לכל פריט בסקיצה. ריק = לא צוין.
+              </p>
+            </div>
+          )}
 
           <SectionDivider label="מפרט" />
 
@@ -821,7 +920,7 @@ export function ProductDrawer({
             </div>
           </div>
 
-          {internal && (
+          {internal && !supplierOrg && (
             <>
               {/* ── Procurement (lib/suppliers/) ─────────────────────────────────────────────────
                   Kept AFTER the price and clearly apart from it, because the two numbers on this
@@ -836,6 +935,35 @@ export function ProductDrawer({
                 מה שאתם משלמים על הפריט וכמה מהם צריך להזמין. פנימי — לא מופיע בהצעת המחיר ולא במסכי
                 הלקוח.
               </p>
+
+              {/* A row copied from the marketplace says where it came from, and the ONE thing the
+                  source may ever do to it: offer its current price. Nothing is written without the
+                  button — the cost is the designer's, like everything else on this row. */}
+              {sourceStatus && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-inset-border bg-inset px-3 py-2 text-xs leading-relaxed text-ink-soft">
+                  <span>
+                    {sourceStatus.gone
+                      ? `הפריט כבר לא מפורסם אצל ${sourceStatus.supplierName || "הספק"} — העותק שלכם נשאר.`
+                      : sourceStatus.updated
+                        ? `${sourceStatus.supplierName || "הספק"} עדכן את המחיר: ${formatPrice(sourceStatus.wholesalePrice)}`
+                        : `מהשוק — ${sourceStatus.supplierName || "ספק"}, מחיר ספק ${formatPrice(sourceStatus.wholesalePrice)}`}
+                  </span>
+                  {sourceStatus.updated && !sourceStatus.gone && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void acceptSourcePrice(draft.id).then(() => {
+                          patch({ costPrice: sourceStatus.wholesalePrice });
+                          setSource({ id: draft.id, status: { ...sourceStatus, updated: false } });
+                        });
+                      }}
+                    >
+                      עדכון העלות
+                    </Button>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -949,8 +1077,18 @@ export function ProductDrawer({
                 <SwitchRow
                   checked={draft.visibility === "public"}
                   onChange={(on) => patch({ visibility: on ? "public" : undefined })}
-                  label={`${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`}
-                  hint={VISIBILITY_HINT[draft.visibility ?? "private"]}
+                  label={
+                    supplierOrg
+                      ? `מפורסם בשוק הספקים — ${draft.name.trim() || "הפריט"}`
+                      : `${VISIBILITY_LABEL.public} — ${draft.name.trim() || "הפריט"}`
+                  }
+                  hint={
+                    supplierOrg
+                      ? draft.visibility === "public"
+                        ? "כל מעצב ב-Eve רואה את הפריט ואת המחיר, ויכול להוסיף אותו לקטלוג שלו."
+                        : "טיוטה — רק אתם רואים את הפריט. הדליקו כדי לפרסם אותו למעצבים."
+                      : VISIBILITY_HINT[draft.visibility ?? "private"]
+                  }
                 />
               )}
             </>

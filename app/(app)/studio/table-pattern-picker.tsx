@@ -25,6 +25,15 @@ export interface PatternGroup {
   variantId?: string;
 }
 
+/** The tables as the patterns read them: where each stands, its number, its type and its size. */
+export function patternTablesOf(tables: readonly DesignTable[]): PatternTable[] {
+  return tables.map((t) => {
+    const b = tableBox(t);
+    // A table out of the numbering alternates after the numbered ones, by where it stands.
+    return { id: t.id, position: t.position, number: t.unnumbered ? Number.MAX_SAFE_INTEGER : t.number, type: t.type, sizeMm: Math.max(b.widthMm, b.depthMm) };
+  });
+}
+
 export function TablePatternPicker({
   tables,
   sourceId,
@@ -53,14 +62,7 @@ export function TablePatternPicker({
   const [second, setSecond] = useState(() => item?.shades.find((sh) => sh.id !== item.variantId)?.id ?? "");
   const [split, setSplit] = useState<Split>("checker");
 
-  const rows: PatternTable[] = useMemo(
-    () =>
-      tables.map((t) => {
-        const b = tableBox(t);
-        return { id: t.id, position: t.position, number: t.number, type: t.type, sizeMm: Math.max(b.widthMm, b.depthMm) };
-      }),
-    [tables],
-  );
+  const rows: PatternTable[] = useMemo(() => patternTablesOf(tables), [tables]);
   const halves = PATTERN_HALVES[pattern];
   const picked = useMemo(
     () => new Set(patternTables(rows, pattern, { sourceId, selectedIds: selectedTableIds, invert: halves && invert })),
@@ -111,7 +113,7 @@ export function TablePatternPicker({
                 disabled={disabled}
                 onClick={() => setPattern(p)}
                 className={
-                  "rounded-sm px-2 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
+                  "rounded-sm px-2 py-1.5 text-xs font-semibold leading-snug transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
                   (pattern === p ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
                 }
               >
@@ -120,7 +122,7 @@ export function TablePatternPicker({
             );
           })}
         </div>
-        <p className="mt-1.5 text-xs text-muted">{PATTERN_HINT[pattern]}</p>
+        <p className="mt-1.5 text-caption leading-relaxed text-muted">{PATTERN_HINT[pattern]}</p>
       </div>
 
       {halves && (
@@ -178,7 +180,7 @@ export function TablePatternPicker({
               <div>
                 <span className={fieldLabelClassName}>הגוון השני</span>
                 <SwatchPicker options={item!.shades.filter((sh) => sh.id !== item!.variantId)} value={second} onChange={setSecond} label="הגוון השני" />
-                <p className="mt-1 text-xs text-muted">
+                <p className="mt-1 text-caption text-muted">
                   {`${item!.shades.find((sh) => sh.id === item!.variantId)?.name ?? ""} ו${item!.shades.find((sh) => sh.id === second)?.name ?? "—"}`}
                 </p>
               </div>

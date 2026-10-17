@@ -10,7 +10,9 @@
 //
 // Colour: one base per material (or the designer's own style.fill), every other tone derived from
 // it by black/white overlays, the same rule as components/plant-glyph.tsx.
-import { memo, useId } from "react";
+import { memo, useId, useMemo } from "react";
+import type { SurfaceMaterial } from "@/lib/venues/structure";
+import type { Point } from "@/lib/studio/hall";
 import { footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { TEXTURE_TILE_MM, TEXTURE_TILE_RANGE, hasSurface, surfaceLayers, type Surface, type Texture, type TextureImage } from "@/lib/catalog/textures";
 import { FootprintShape, sameDrawProps } from "@/components/footprint-shape";
@@ -28,6 +30,7 @@ export const SURFACE_BASE: Record<Texture, string> = {
   soil: "#6f4d34",
   tile: "#2b2a2e",
   plain: "#b9b6b1",
+  water: "#9fcbe0",
 };
 
 /** One band of noise laid over the base: a turbulence, turned into a tint whose opacity follows one
@@ -93,6 +96,13 @@ const GRAINS: Record<Texture, Grain[]> = {
     { freq: "0.00012", octaves: 1, rgb: [1, 1, 1], gain: 0.22, bias: -0.06, channel: 0 },
   ],
   plain: [], // a flat colour — no grain, and so no filter at all (see below)
+  water: [
+    // The depth: a slow, broad darkening, metres across — where the floor of the pool falls away.
+    { freq: "0.0004", octaves: 2, rgb: [0.05, 0.2, 0.35], gain: 0.9, bias: -0.4, channel: 0 },
+    // Caustics: the net of light the surface throws on the water — a fine noise, its bright peaks
+    // only (band-passed), thin and wandering like marble's veins but white.
+    { freq: "0.006 0.004", octaves: 2, rgb: [1, 1, 1], gain: 1, bias: 0, channel: 1, band: "0 0 0 0 0 0 0 0 0 0 0 0 0.45 0.6 0.45 0 0 0 0 0 0" },
+  ],
 };
 
 function mix(hex: string, toward: string, t: number): string {
@@ -181,6 +191,29 @@ function LaidPattern({ id, material, base, w, d }: { id: string; material: Textu
       </pattern>
     );
   }
+  if (material === "water") {
+    // Ripples: a wind-blown surface, read in plan — rows of soft crests ~45cm apart, each a short
+    // sine wave, every row shifted so the crests never line up. White at a low opacity, so they
+    // ride on whatever the water is tinted; the base and its grain are what say "water".
+    const crest = (y: number, x: number) => (
+      <path
+        d={`M ${x} ${y} q 120 -70 240 0 t 240 0 t 240 0 t 240 0`}
+        fill="none"
+        stroke="#ffffff"
+        strokeOpacity={0.35}
+        strokeWidth={14}
+        strokeLinecap="round"
+      />
+    );
+    return (
+      <pattern id={id} patternUnits="userSpaceOnUse" x={at.x} y={at.y} width={1920} height={1800}>
+        {crest(150, -60)}
+        {crest(600, 420)}
+        {crest(1050, 180)}
+        {crest(1500, 660)}
+      </pattern>
+    );
+  }
   if (material === "grass") {
     // The mower's stripes: two-metre bands, alternately a shade lighter.
     return (
@@ -217,7 +250,7 @@ function SurfaceFillView({
   const uid = `sf${useId().replace(/[^a-zA-Z0-9_-]/g, "")}x${seed}`;
   const base = color ?? SURFACE_BASE[material];
   const grains = GRAINS[material];
-  const hasPattern = material === "paving" || material === "deck" || material === "grass" || material === "tile" || material === "wood";
+  const hasPattern = material === "paving" || material === "deck" || material === "grass" || material === "tile" || material === "wood" || material === "water";
   return (
     <g opacity={opacity}>
       <defs>
@@ -272,6 +305,37 @@ function SurfaceFillView({
 }
 
 export const SurfaceFill = memo(SurfaceFillView, sameDrawProps);
+
+/** A zone's floor (Zone.surface): the material's real-scale texture across its whole region — the
+ *  same drawing a `surface` feature is (components/surface-fill.tsx), on the zone's own outline.
+ *  Shared by every surface that draws the property: the hall editor, the sketch and the printed map. */
+export const ZoneSurface = memo(function ZoneSurface({
+  boundary,
+  material,
+  id,
+  color,
+}: {
+  boundary: Point[];
+  material: SurfaceMaterial;
+  /** Seeds the texture's noise — the zone's id, so two lawns side by side are not one lawn twice. */
+  id: string;
+  color?: string;
+}) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of boundary) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const footprint = useMemo(() => ({ kind: "custom" as const, outline: boundary.map((p) => ({ x: p.x - cx, y: p.y - cy })) }), [boundary, cx, cy]);
+  if (boundary.length < 3) return null;
+  return (
+    <g transform={`translate(${cx} ${cy})`} className="pointer-events-none">
+      <SurfaceFill material={material} footprint={footprint} w={maxX - minX} d={maxY - minY} id={`zone-${id}`} color={color} />
+    </g>
+  );
+});
 
 const hexOrUndefined = (c?: string) => (c && /^#[0-9a-f]{6}$/i.test(c) ? c : undefined);
 

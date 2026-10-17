@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useMounted } from "@/lib/use-mounted";
 import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
 import type { CheckpointOffsets } from "@/lib/production/runway";
@@ -69,15 +70,13 @@ export function SettingsScreen({
   /** Whether this deployment can send mail — the team section offers "send by email" only then. */
   emailEnabled: boolean;
 }) {
-  const [section, setSection] = useState<SectionId>("business");
-
   // The section lives in the hash rather than in a query param: it makes /settings#sharing
   // linkable from the venue plan editor without pulling this client screen into the
-  // useSearchParams / Suspense dance for one string.
-  useEffect(() => {
-    const fromHash = window.location.hash.slice(1);
-    if (SECTIONS.some((s) => s.id === fromHash)) setSection(fromHash as SectionId);
-  }, []);
+  // useSearchParams / Suspense dance for one string. Read in render after mount; a click wins.
+  const mounted = useMounted();
+  const fromHash = mounted ? window.location.hash.slice(1) : "";
+  const [picked, setSection] = useState<SectionId | null>(null);
+  const section: SectionId = picked ?? (SECTIONS.some((s) => s.id === fromHash) ? (fromHash as SectionId) : "business");
 
   const go = (id: SectionId) => {
     setSection(id);

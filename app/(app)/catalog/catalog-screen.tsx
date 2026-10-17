@@ -21,9 +21,9 @@ import { PAGE_GUTTER } from "@/components/page-gutter";
 import { ProductCard } from "./product-card";
 import { Filters, EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
-import { flowerNamesOf } from "@/lib/catalog/flowers";
+import { knownFlowersOf, type KnownFlower } from "@/lib/catalog/flowers";
 
-export function CatalogScreen({ initialProducts }: { initialProducts: Product[] }) {
+export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initialProducts: Product[]; marketFlowers?: KnownFlower[] }) {
   // The catalog comes from page.tsx's server-side read; the hook primes the studio's synchronous
   // cache with it and hands back the list plus the three write paths.
   const { products, ready, error, save, remove, importMany } = useCatalog(initialProducts);
@@ -41,9 +41,10 @@ export function CatalogScreen({ initialProducts }: { initialProducts: Product[] 
 
   // F-4.5: archived products are hidden from the catalog (placements still resolve them).
   const visible = useMemo(() => products.filter((p) => !p.archived), [products]);
-  // The flower names this studio already uses, offered in the drawer's spec rows — archived
-  // arrangements included, since a name is a name whether or not the row is still on sale.
-  const flowerNames = useMemo(() => flowerNamesOf(products), [products]);
+  // The flowers the drawer's spec rows offer: the vocabulary, the names this studio already uses
+  // (archived arrangements included — a name is a name whether or not the row is still on sale)
+  // and the stems the marketplace sells, with their colours.
+  const knownFlowers = useMemo(() => knownFlowersOf(products, marketFlowers), [products, marketFlowers]);
   // `search` is held in the header-search context rather than in `filters`, so it's spliced in
   // here — the predicate itself is the same one the studio's catalog rail runs.
   const filtered = useMemo(
@@ -223,7 +224,7 @@ export function CatalogScreen({ initialProducts }: { initialProducts: Product[] 
       <ProductDrawer
         product={editing}
         onSave={saveProduct}
-        flowerNames={flowerNames}
+        knownFlowers={knownFlowers}
         // The drawer's מחיקה asks the same question the menu's does — it is the same destructive
         // act, and it was the one path that used to delete with no question at all. The drawer
         // closes itself on the way out, so the two dialogs are never open at once.

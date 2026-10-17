@@ -4,13 +4,16 @@
 // The index includes ARCHIVED products/variants on purpose (F-4.5) — a design document
 // must always resolve, even when the item is hidden from the catalog.
 import type { Product, Variant } from "@/lib/catalog/types";
-import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
+import type { ChairRows, DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { loadProducts, catalogVersion } from "@/lib/catalog/storage";
 import { CATEGORY_BY_ID, anchorOf, type Sizing } from "@/lib/catalog/categories";
 import type { Anchor } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
+import { shadeVariant } from "@/lib/catalog/shades";
 import { tableAreaMm2 } from "./geometry";
+import { catalogBox } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
+import type { BenchLookup } from "@/lib/design-document/bench";
 
 export interface Resolved {
   product: Product;
@@ -59,7 +62,51 @@ export const deckOf: DeckLookup = (variantId) => {
   return r ? deckTypeOf(variantId, r.product) : undefined;
 };
 
+/** Which placements are STANDALONE banquettes (lib/design-document/bench.ts): a `stage-benches` row
+ *  standing free — not a stage, not perched on one, not on a table — and the box it is drawn at, the
+ *  size it was stretched to or the catalog's. The one definition every surface reads (the canvas,
+ *  the printed map, the seating readout, the packing list), so none can disagree about what is one. */
+export const benchOf: BenchLookup = (p) => {
+  if (p.stage || p.perch || p.tableId) return null;
+  const r = resolve(p.variantId);
+  if (!r || r.product.category !== "stage-benches") return null;
+  return p.sizeMm ?? catalogBox(r.product);
+};
+
+/** Which placements are BLOCKS OF CHAIRS IN ROWS (Placement.rows, lib/design-document/chair-rows.ts):
+ *  a `chairs` row standing on the floor — not on a table, a stage or a banquette — with rows set. And
+ *  the chair it is made of and that chair's own box, which every chair in it is laid at. The one
+ *  definition the footprint, the canvas, the printed map and the bar all read. */
+export function chairBlockOf(p: Placement): { spec: ChairRows; product: Product; chair: { widthMm: number; depthMm: number } } | null {
+  if (!p.rows || p.stage || p.perch || p.tableId || p.span) return null;
+  const r = resolve(p.variantId);
+  if (!r || r.product.category !== "chairs") return null;
+  return { spec: p.rows, product: r.product, chair: catalogBox(r.product) };
+}
+
+// The open event's shades (EventSummary.shades), primed by the studio when its event resolves —
+// the same synchronous-cache shape as the catalog above, and for the same reason: a drop decides
+// its variant mid-gesture and cannot wait on a read. Client-only in practice: nothing on the server
+// primes it, so there it is always empty and changes nothing.
+let eventShades: readonly string[] = [];
+
+/** The studio's open event changed: its palette is what every default below prefers now. */
+export function primeEventShades(shades: readonly string[] | undefined): void {
+  eventShades = shades ?? [];
+}
+
+/** The shade an item lands in when nobody picked one: the first of the open event's shades it
+ *  stocks (lib/catalog/shades.ts), else its first variant, as it always was. */
 export function defaultVariantId(product: Product): string {
+  return shadeVariant(product.variants, eventShades)?.id ?? product.variants[0]?.id ?? product.id;
+}
+
+/** A product's first variant, whatever the open event's shades — the STRUCTURAL id a stage stores
+ *  and is looked up by: a deck it may be built from, the studio's stairs/skirt/banquette rows, a
+ *  surface. defaultVariantId is for what the designer DROPS; here a shade-matched pick would make a
+ *  deck product that stocks a variant named like an event shade a different id per event, so a
+ *  stage's stored `surfaceVariant` matched no option and its chosen decks read as gone. */
+export function firstVariantId(product: Product): string {
   return product.variants[0]?.id ?? product.id;
 }
 

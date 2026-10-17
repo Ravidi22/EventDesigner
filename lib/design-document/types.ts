@@ -18,6 +18,12 @@ export interface DesignTable {
   id: string;
   type: string; // "round" | "rectangle" | "knight" ... (drives smart-apply, F-3.3)
   number: number; // human-facing table number for the placement map
+  /** Left out of the numbering — a cocktail table, the gift table, a table for the band. It is still
+   *  a table (drawn, seated, dressed, quoted and packed), but no number is drawn on it or printed for
+   *  it, renumbering passes it by, and it uses up no number. `number` is kept underneath, as a
+   *  grouped table keeps its own, and is reissued only if another table has taken it by the time it
+   *  is numbered again (freeNumbers in ./groups.ts). Absent = numbered, which is every table. */
+  unnumbered?: boolean;
   position: Point;
   rotation: number; // degrees
   diameterMm?: number;
@@ -111,6 +117,18 @@ export interface Placement {
    *  shaped item it is the BOUNDING BOX the shape is redrawn into; absent means "the size the
    *  catalog gives it". */
   sizeMm?: { widthMm: number; depthMm: number };
+  /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
+   *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
+   *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */
+  hangHeightMm?: number;
+  /** A CEILING item hung OVER this table (its id): dropped over it, or arranged above it in the
+   *  table's focus mode. `position` is still a point in the ROOM — every reader draws it where it
+   *  says — but the table carries it: moving, turning or flipping the table re-places the item by
+   *  the same offset in the table's new frame (lib/studio/hang-over.ts, applied by the reducer),
+   *  the focus mode arranges it like the table's dressing, and "apply to tables" hangs copies over
+   *  other tables at the same relative spot. Cleared when the table is removed; re-read from what
+   *  is under the hang point when the item is dragged on the plan (studio-screen's settleDrag). */
+  over?: string;
   /** Set on a design item standing on a stage's BANQUETTE (StageEdgeItem kind "bench") rather than on
    *  a table: the stage, and which of its edge items. Its `position` is ignored — the bench places it,
    *  spread along its length with the rest of its dressing — so it travels with the stage. Removing
@@ -134,6 +152,87 @@ export interface Placement {
    *  this outline rather than the catalog's, and it counts on the quote and the packing list as the
    *  decks it is built from — never as one of `variantId`. Absent on everything else. */
   stage?: StageBuild;
+  /** A STANDALONE BANQUETTE — a `stage-benches` row standing free on the floor, not on a stage edge
+   *  and not perched on one. What this placement says about its two long sides, its heights and its
+   *  number (see BenchSpec). Read only for such a row (lib/design-document/bench.ts decides which);
+   *  absent = a banquette with chairs along its back and nothing along its front, exactly as a stage
+   *  edge banquette starts. */
+  bench?: BenchSpec;
+  /** How a rented flight of stairs or ramp standing ON ITS OWN climbs on this plan — a `stage-stairs`
+   *  or `stage-ramps` row dropped off the rail, not one on a stage's edge (StageStair). Its run is
+   *  `sizeMm`'s depth, re-derived whenever the rise changes (lib/studio/climb-item.ts). Absent = the
+   *  row's own height, climbing toward the top of the item as the catalog draws it. */
+  climb?: PlacementClimb;
+  /** A BLOCK OF CHAIRS IN ROWS — a `chairs` row set out as rows × chairs per row, the seats facing a
+   *  חופה (lib/design-document/chair-rows.ts). Read only for a chair standing on the floor. Its
+   *  footprint and every chair's place are derived from this; `quantity` is kept at rows × chairs per
+   *  row by the action that writes it (setChairRows), so it is counted as the chairs it is. Absent =
+   *  one chair. */
+  rows?: ChairRows;
+}
+
+/** See Placement.rows — what the designer chose; everything else about the block is derived. */
+export interface ChairRows {
+  /** How many rows, front to back. */
+  rows: number;
+  /** How many chairs in each row — across the aisle too, when there is one. */
+  perRow: number;
+  /** Clear space between two chairs side by side, mm. Absent = CHAIR_GAP_MM (5cm). */
+  gapMm?: number;
+  /** Clear space between a row's backrests and the seats of the row behind — the legroom, mm.
+   *  Absent = ROW_GAP_MM (45cm). */
+  rowGapMm?: number;
+  /** A centre aisle splitting every row in two, mm wide. Absent = one unbroken block. */
+  aisleMm?: number;
+}
+
+/** One long side of a banquette, and who sits there:
+ *    chairs — chairs stand against it and its top is their table (a head-table banquette);
+ *    sofa   — people sit ON it, facing away from it, out into the room;
+ *    none   — nobody.
+ *  `seats` is how many, when the designer said; absent = one per SEAT_WIDTH_MM (60cm) of its length,
+ *  0 = none on that side. Shared by a stage's edge banquette (StageStair.bench) and a standalone one
+ *  (Placement.bench) so both are laid, drawn, counted and packed by one function (benchLayout). */
+export type BenchSideKind = "chairs" | "sofa" | "none";
+export interface BenchSide {
+  kind: BenchSideKind;
+  seats?: number;
+}
+
+/** What a banquette is, beyond its length: each long side, and its two heights.
+ *
+ *  `back` is the side the banquette LEANS to — on a stage edge item the stage side; on a standalone
+ *  one the −y side as drawn (before its turn). `front` is the other. Each defaults differently:
+ *  back = chairs with an automatic count, front = none, which is exactly what every banquette drawn
+ *  before this existed was.
+ *
+ *  Two heights because the two kinds of side sit at two heights: `heightMm` is the TOP for a chairs
+ *  side — table height, BENCH_TOP_MM (750) above the surface the chairs stand on (the deck, for a
+ *  stage's outer banquette; the floor, for a standalone one) — and `sofaHeightMm` is the SEAT of a
+ *  sofa side, SOFA_SEAT_MM (460) above the floor the sitters' feet rest on. `depthMm` is the strip's
+ *  depth, BENCH_DEPTH_MM when absent.
+ *
+ *  `number`/`seated` belong to a STANDALONE banquette only: with anyone seated at it, it is a numbered
+ *  unit of the plan like a table (lib/design-document/groups.ts) — the number is optional, the
+ *  designer may clear it — and `seated` is the same typed note a table's is (DesignTable.seated). */
+export interface BenchSpec {
+  back?: BenchSide;
+  front?: BenchSide;
+  heightMm?: number;
+  sofaHeightMm?: number;
+  depthMm?: number;
+  number?: number;
+  seated?: number;
+}
+
+/** See Placement.climb. The venue's own stairs carry the same two choices (lib/venues/climb.ts). */
+export interface PlacementClimb {
+  /** The height it climbs, mm. Absent = its catalog row's height. */
+  heightMm?: number;
+  /** Climbs toward the bottom of the item as drawn (+y) rather than the top. */
+  reversed?: boolean;
+  /** Steps, when the designer typed them. Absent = derived from the height. Stairs only. */
+  risers?: number;
 }
 
 /** A stage as the designer drew it: an outline, the side that faces the room, and which decks it may
@@ -184,6 +283,37 @@ export interface StageBuild {
    *  deck rather than six and a bare strip. The designer's choice, made in the fill tool and
    *  changeable on the stage's bar; absent = the outline is the line. */
   exceed?: boolean;
+  /** The corners of `outline` the line runs THROUGH rather than turns at — vertex i joins edge i−1
+   *  to edge i as one curve. A round stage is a fine polygon with every vertex here, and its rim is
+   *  ONE side: an edge item on it is placed along the curve (lib/design-document/stage.ts
+   *  stageSide), not on one 25cm chord of it. Absent = every corner is a corner. */
+  smooth?: number[];
+  /** Platforms that stand in the stage WHOLE — a half-round, a disc, a triangle the studio owns as
+   *  one piece, which no fill can lay because it is not a rectangle. Each stands where it is in the
+   *  stage's frame, and the decks are laid round it (lib/design-document/stage.ts layStage). A stage
+   *  made of one such piece is just that piece; one merged with a rectangular stage keeps its piece
+   *  and fills the rest with decks. Absent = decks only. */
+  pieces?: StagePiece[];
+  /** A RECTANGLE SHAPED by the fill tool (lib/studio/stage-draw.ts shapeRect): its corners rounded
+   *  off at this radius, mm — these corners (absent with a radius = every corner) — and its front
+   *  bowed out toward the room by this much at the middle, mm. The outline already carries the
+   *  result; these say what was done so a resize or the fill tool reopened can do the same to the
+   *  new rectangle (lib/design-document/stage.ts plainRect, shapedRect), and so the decks are laid
+   *  over the plain rectangle and CUT to the curves — or a quarter-round piece the studio owns is
+   *  stood in each corner. Not `corners`, which is the corner PIECES where two runs of stairs meet.
+   *  Absent = a plain outline, whatever its shape. */
+  roundedMm?: number;
+  roundedAt?: "all" | "front" | "back";
+  bowMm?: number;
+}
+
+/** One whole piece in a stage (StageBuild.pieces): the catalog variant it is, its centre and facing
+ *  in the stage's own frame, and whether it is flipped across its own width. */
+export interface StagePiece {
+  variantId: string;
+  centre: Point;
+  rotation: number;
+  mirrored?: boolean;
 }
 
 /** A stage saved to be used again — its shape, levels, edges, height, decks and finishes, and what
@@ -230,12 +360,17 @@ export type StageEdgeKind = "stairs" | "bench" | "barrier" | "backdrop" | "ramp"
 export interface StageStair {
   id: string;
   kind?: StageEdgeKind;
-  /** A bench's depth from the edge, mm. Absent = BENCH_DEPTH_MM. */
+  /** A bench's two sides and heights — the NEW form, shared with a standalone banquette (BenchSpec;
+   *  its `number`/`seated` are not read here). The three fields under it are the legacy form of the
+   *  back side alone — read when `bench` says nothing about that field, never written any more
+   *  (lib/design-document/bench.ts, benchSpecOf). */
+  bench?: BenchSpec;
+  /** LEGACY — a bench's depth from the edge, mm. Absent = BENCH_DEPTH_MM. */
   depthMm?: number;
-  /** A bench's seat height, mm. Absent = BENCH_HEIGHT_MM (never above the stage it stands against). */
+  /** LEGACY — a bench's top height above the deck, mm. Absent = BENCH_TOP_MM. */
   heightMm?: number;
-  /** How many chairs stand on a bench, when the designer said. Absent = one per SEAT_WIDTH_MM; 0 =
-   *  none. They are drawn on it, counted as seats, and packed as chairs. */
+  /** LEGACY — how many chairs stand on a bench's STAGE side, when the designer said. Absent = one per
+   *  SEAT_WIDTH_MM; 0 = none. They are drawn on it, counted as seats, and packed as chairs. */
   seats?: number;
   level?: string;
   edge: number;
@@ -248,6 +383,12 @@ export interface StageStair {
   /** How many steps up, when the designer said — the studio's own flight has four whatever the
    *  height. Absent = derived from the height it climbs (risers of at most 18cm). */
   risers?: number;
+  /** Stairs or a banquette set INTO the stage rather than out from it. An inner flight is recessed
+   *  into the deck — it climbs from the floor at the edge to the deck inside the outline, and the
+   *  decks are laid around its recess; it is what a side too close to a wall for a flight's run can
+   *  still take. An inner banquette stands on the deck along the inside of the edge, its chairs
+   *  further in behind it. Absent = outside, as every item was before. Ignored on other kinds. */
+  inner?: boolean;
 }
 
 /** Where THIS EVENT puts one of the venue's own features — the rolling bar pushed against the far
@@ -269,6 +410,11 @@ export interface FeaturePlacement {
   dx: number; // mm from where the venue puts it
   dy: number;
   rotationDeg?: number; // degrees on top of the venue's own facing
+  /** THIS EVENT took it out of the room — the rolling bar wheeled away for the night. The venue still
+   *  has it, every other event still sees it, and the offset is kept so bringing it back puts it
+   *  where this event last had it. Only a feature the venue lets a sketch move (featureMovable) can
+   *  be taken out; the user asked for "unlocked elements can be deleted, not just moved" (2026-10-17). */
+  removed?: true;
 }
 
 /** Several things on the plan the designer has said are ONE thing.

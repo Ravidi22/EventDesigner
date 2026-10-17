@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -10,7 +10,8 @@ import {
   LayoutGrid,
   Images,
   Truck,
-  Bell,
+  Store,
+  Inbox,
   LogOut,
   type LucideIcon,
 } from "lucide-react";
@@ -19,16 +20,20 @@ import { setActiveVenueId } from "@/lib/venues/storage";
 import { useVenues } from "@/lib/venues/use-venues";
 import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
-import { IconButton } from "@/components/icon-button";
+import { NotificationBell } from "@/components/notification-bell";
 import { HeaderSearchProvider } from "@/components/header-search-context";
 import { EventDialog } from "@/components/event-dialog";
 import { SidePanel } from "@/components/side-panel";
+import { OrgKindProvider } from "@/components/org-kind-context";
+import { ORG_HOME, type OrgKind } from "@/lib/auth/kinds";
 
 interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
   match?: (path: string) => boolean;
+  /** Which organisations get this row. Absent = a designer's studio only. */
+  for?: readonly OrgKind[];
 }
 
 const GENERAL: NavItem[] = [
@@ -38,8 +43,11 @@ const GENERAL: NavItem[] = [
   // a wedding app reads as "the nice part"; what this tab actually says is "how long do I have".
   { href: "/production", label: "הפקה", icon: CalendarClock },
   { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
-  { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid },
+  { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid, for: ["studio", "supplier"] },
+  // A supplier's inbox: the orders studios sent them. A designer's orders live under ספקים ורכש.
+  { href: "/orders", label: "הזמנות", icon: Inbox, for: ["supplier"] },
   { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
+  { href: "/marketplace", label: "שוק הספקים", icon: Store },
   { href: "/gallery", label: "גלריה ומצגות", icon: Images },
 ];
 
@@ -49,6 +57,8 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
+  { test: (p) => p.startsWith("/marketplace"), title: "שוק הספקים" },
+  { test: (p) => p.startsWith("/orders"), title: "הזמנות" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ומצגות" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
   { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
@@ -60,6 +70,8 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
 export interface ShellUser {
   name: string | null;
   email: string;
+  /** A designer's studio or a supplier — which rows the sidebar has, and where the wordmark goes. */
+  orgKind: OrgKind;
 }
 
 export function AppShell({ children, user }: { children: ReactNode; user: ShellUser }) {
@@ -67,7 +79,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [headerSearch, setHeaderSearch] = useState("");
+  // Keyed by the page it was typed on, so a page never reads the previous page's text.
+  const [search, setSearch] = useState({ pathname: "", value: "" });
   const [creating, setCreating] = useState(false);
   // Venues come from the (app) layout's server-side read, through VenuesProvider — the switcher does
   // not fetch them, and neither does anything else that needs them. The selection itself still lives
@@ -85,16 +98,18 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
   // whatever page you land on next.
-  useEffect(() => {
-    setHeaderSearch("");
-  }, [pathname]);
+  const headerSearch = search.pathname === pathname ? search.value : "";
+  const setHeaderSearch = useCallback((value: string) => setSearch({ pathname, value }), [pathname]);
 
   const meta = TITLES.find((t) => t.test(pathname));
   const settingsActive = pathname.startsWith("/settings");
-  const isCatalog = pathname.startsWith("/catalog");
-  // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
-  // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
-  const showHeaderActions = pathname.startsWith("/dashboard") || pathname.startsWith("/production");
+  // The "new event" CTA is a dashboard/events action — everywhere else (the venue plan, the
+  // catalog, the gallery, settings…) it is chrome with nothing to act on. The BELL is on every studio
+  // page since it has something to say (components/notification-bell.tsx): a client's changes to a
+  // sketch arrive while the designer is anywhere.
+  const showHeaderActions =
+    user.orgKind === "studio" && (pathname.startsWith("/dashboard") || pathname.startsWith("/production"));
+  const nav = GENERAL.filter((item) => (item.for ?? ["studio"]).includes(user.orgKind));
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
   // local part of their own email is the thing they will recognise.
@@ -124,13 +139,13 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         collapsed={collapsed}
         onToggle={() => setCollapsed((c) => !c)}
         label="סרגל הצד"
-        className="no-print shrink-0 rounded-md bg-surface py-6 shadow-floating"
+        className="no-print shrink-0 py-6"
         expandedClassName="w-[258px] px-4"
         collapsedClassName="w-[96px] px-2"
       >
         <Link
-          href="/dashboard"
-          aria-label="Eve — לוח בקרה"
+          href={ORG_HOME[user.orgKind]}
+          aria-label={user.orgKind === "supplier" ? "Eve — הזמנות" : "Eve — לוח בקרה"}
           className={
             "mb-[26px] flex flex-col items-center overflow-hidden " + (collapsed ? "px-1 py-3" : "px-2 py-5")
           }
@@ -146,6 +161,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           )}
         </Link>
 
+        {/* A supplier has no properties — the switcher would be an empty list with an "add" button
+            leading to a wall editor they have no use for. */}
+        {user.orgKind === "studio" && (
         <VenueSwitcher
           venues={venues}
           activeId={activeVenueId}
@@ -162,9 +180,10 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           onSetLogo={(id, url) => setLogo(id, url)}
           onDelete={(id) => remove(id)}
         />
+        )}
 
         <nav className="flex flex-col gap-[3px]">
-          {GENERAL.map((item) => (
+          {nav.map((item) => (
             <NavRow key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
           ))}
         </nav>
@@ -241,11 +260,12 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
           <div className="flex-1" />
 
-          {showHeaderActions && (
+          {(showHeaderActions || user.orgKind === "studio") && (
             <div className="flex shrink-0 items-center gap-1.5">
               {/* Opens the details form in place rather than navigating to /meeting?new: answering
                   six questions is not worth losing the screen you were on. The dialog walks into
                   the meeting itself once the event exists — see components/event-dialog.tsx. */}
+              {showHeaderActions && (
               <button
                 type="button"
                 onClick={() => setCreating(true)}
@@ -253,15 +273,16 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               >
                 + יצירת אירוע חדש
               </button>
-              <IconButton label="התראות">
-                <Bell className="h-4 w-4" strokeWidth={1.75} />
-              </IconButton>
+              )}
+              <NotificationBell />
             </div>
           )}
         </header>
 
         <main className="min-h-0 flex-1 overflow-auto print:block print:overflow-visible">
-          <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+          <OrgKindProvider value={user.orgKind}>
+            <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+          </OrgKindProvider>
         </main>
 
         {/* Mounted at the shell, so "אירוע חדש" is reachable from every page without each of them

@@ -19,13 +19,18 @@
 // Pure: no catalog lookups. The caller measures the table and the items (components/footprint-shape
 // has `dressingSpots`, which does it from the catalog) and hands the boxes in.
 import type { DesignTable, Point } from "./types";
+import { alongSpine, spineParam } from "../studio/spine";
 import { isMain } from "../self-check";
 
-/** A table's own extent in its frame. `round` = a circle or an ellipse, laid out radially. */
+/** A table's own extent in its frame. `round` = a circle or an ellipse, laid out radially. `spine`
+ *  is the line things are laid ALONG (lib/studio/spine.ts): the long axis of a rectangle, the
+ *  middle of an arc's band, a horseshoe's ח — absent = the box's long axis, which is what every
+ *  table had before shapes had spines. */
 export interface TableBox {
   widthMm: number;
   depthMm: number;
   round: boolean;
+  spine?: Point[];
 }
 
 /** One item on it: its id and its footprint's box (already scaled). */
@@ -61,15 +66,22 @@ function middleOut<T>(items: T[]): T[] {
   return out;
 }
 
-/** Evenly along one axis, each item centred in its own share of the usable length. */
+/** A straight line through the centre, `length` long, along x or y. */
+const axisLine = (length: number, horizontal: boolean): Point[] =>
+  horizontal ? [{ x: -length / 2, y: 0 }, { x: length / 2, y: 0 }] : [{ x: 0, y: -length / 2 }, { x: 0, y: length / 2 }];
+
+/** The line a table's items run along: its spine, else its long axis. */
+export const spineOf = (t: TableBox): Point[] => t.spine ?? axisLine(Math.max(t.widthMm, t.depthMm), longAxisX(t));
+
+/** Evenly along a line, each item centred in its own share of the usable length. */
+function spreadAlong(ordered: ChipBox[], line: Point[]): Map<string, Point> {
+  const pts = alongSpine(line, ordered.length, MARGIN);
+  return new Map(ordered.map((c, i) => [c.id, pts[i]]));
+}
+
+/** Evenly along one axis — the same, on a straight line. */
 function spread(ordered: ChipBox[], length: number, horizontal: boolean): Map<string, Point> {
-  const usable = length * (1 - MARGIN * 2);
-  const out = new Map<string, Point>();
-  ordered.forEach((c, i) => {
-    const at = ordered.length === 1 ? 0 : -usable / 2 + ((i + 0.5) * usable) / ordered.length;
-    out.set(c.id, horizontal ? { x: Math.round(at), y: 0 } : { x: 0, y: Math.round(at) });
-  });
-  return out;
+  return spreadAlong(ordered, axisLine(length, horizontal));
 }
 
 /** On a ring about the centre, the first at the top. */
@@ -90,8 +102,9 @@ export function autoLayout(table: TableBox, chips: ChipBox[]): Map<string, Point
   if (chips.length === 1) return new Map([[chips[0].id, { x: 0, y: 0 }]]);
   const bySize = [...chips].sort((a, b) => area(b) - area(a));
   const long = Math.max(table.widthMm, table.depthMm) / Math.max(1, Math.min(table.widthMm, table.depthMm));
-  // A long table (a banquet run, a 240×100): a run along it.
-  if (long >= 1.3) return spread(middleOut(bySize), Math.max(table.widthMm, table.depthMm), longAxisX(table));
+  // A long table (a banquet run, a 240×100, a crescent): a run along it — along its SPINE, so on an
+  // arc head table the run follows the band rather than cutting across the air it curves round.
+  if (long >= 1.3) return spreadAlong(middleOut(bySize), spineOf(table));
   // A round or square one: two face each other across it; three or more ring the biggest.
   if (chips.length === 2) return spread(middleOut(bySize), table.widthMm * 0.8, true);
   const [first, ...rest] = bySize;
@@ -117,9 +130,17 @@ export function arrange(kind: ArrangeKind | "auto", table: TableBox, chips: Chip
     for (const [id, p] of onRing(moving, table, moving.length <= 2 ? 0.5 : 0.6)) out.set(id, p);
     return out;
   }
-  // A row along the long side, a column across: in the order they already stand along that axis, so
-  // the action tidies what the designer laid out rather than reshuffling it.
-  const horizontal = kind === "row" ? longAxisX(table) : !longAxisX(table);
+  // A row along the table — its spine, so a row on a crescent follows the crescent — a column
+  // across it: in the order they already stand along that line, so the action tidies what the
+  // designer laid out rather than reshuffling it.
+  if (kind === "row") {
+    const line = spineOf(table);
+    const along = (c: ChipBox) => spineParam(line, current.get(c.id) ?? { x: 0, y: 0 });
+    const ordered = [...moving].sort((a, b) => along(a) - along(b));
+    for (const [id, p] of spreadAlong(ordered, line)) out.set(id, p);
+    return out;
+  }
+  const horizontal = !longAxisX(table);
   const along = (c: ChipBox) => {
     const p = current.get(c.id) ?? { x: 0, y: 0 };
     return horizontal ? p.x : p.y;
@@ -211,6 +232,17 @@ if (isMain(import.meta.url)) {
   const p = { x: 300, y: -120 };
   assert(close(toTableFrame(t, fromTableFrame(t, p)), p), "table frame round-trips");
   assert(close(fromTableFrame({ position: { x: 0, y: 0 }, rotation: 90 }, { x: 100, y: 0 }), { x: 0, y: 100 }), "a quarter turn carries the dressing round");
+
+  // A crescent (an arc band, as a spine): the run goes ROUND the band, in the order the items stood
+  // along it, and never cuts across the air inside the arc.
+  const bend: Point[] = [];
+  for (let k = 0; k <= 12; k++) bend.push({ x: Math.round(1700 * Math.cos(Math.PI + (k * Math.PI) / 12)), y: Math.round(1700 * Math.sin(Math.PI + (k * Math.PI) / 12)) + 800 });
+  const crescent: TableBox = { widthMm: 4000, depthMm: 2000, round: false, spine: bend };
+  const onArc = autoLayout(crescent, [candle("a"), centre, candle("b")]);
+  for (const id of ["a", "b", "c"]) assert(Math.abs(Math.hypot(onArc.get(id)!.x, onArc.get(id)!.y - 800) - 1700) < 20, `${id} is laid on the band of the crescent`);
+  assert(Math.abs(onArc.get("c")!.x) < 2 && onArc.get("c")!.y < -800, "the centrepiece is at the crescent's apex");
+  const rowArc = arrange("row", crescent, [candle("a"), candle("b")], new Map([["a", { x: 1200, y: 0 }], ["b", { x: -1200, y: 0 }]]));
+  assert(rowArc.get("b")!.x < 0 && rowArc.get("a")!.x > 0, "a row round the crescent keeps the order the items stood in along it");
 
   // An arranged table is drawn as it was arranged.
   const kept = dressingLayout(true, long, [{ ...candle("a"), position: { x: 700, y: 0 } }]);

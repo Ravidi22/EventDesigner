@@ -17,6 +17,7 @@ import {
   ringSpecOf,
   roundSizeMm,
   shapeFootprint,
+  uShapeBandOf,
   type BuiltOutline,
   type RingShape,
 } from "@/lib/studio/footprint";
@@ -31,7 +32,8 @@ import { Popover } from "@/components/popover";
 import { StructureFeatures } from "@/components/venue-plan";
 import { emptyStructure, type StructureFeature } from "@/lib/venues/structure";
 import type { HostSnapOptions } from "@/components/plan-canvas";
-import { useOutlineEditor, type SelectedRef } from "@/lib/studio/use-outline-editor";
+import { closeRefusal, sideIndicesAfterInsert, sideIndicesAfterRemove, useOutlineEditor, type SelectedRef } from "@/lib/studio/use-outline-editor";
+import { isTypingTarget } from "@/lib/keyboard";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
 import { Segmented } from "@/components/segmented";
@@ -48,6 +50,10 @@ import { hasSurface, type Surface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, categoryHasSymbol, chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
+import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
+import { FlowerDrawing } from "@/components/flower-symbol";
+import { climbRise } from "@/lib/studio/climb-item";
 
 type Curves = (EdgeCurve | null)[];
 const padCurves = (c: Curves | undefined, len: number): Curves => Array.from({ length: len }, (_, i) => c?.[i] ?? null);
@@ -217,6 +223,29 @@ function RingFields({
   );
 }
 
+/** The square ח's one number beyond its box: how deep its counter is (uShapeBandOf). Stored as the
+ *  band of its RingSpec, like the curved bars' — so stretching the bar keeps a 60cm counter at 60cm
+ *  instead of thickening it with the arms. Shared by the base shape and a part. */
+function CounterFields({ idPrefix, widthMm, depthMm, ring, onChange }: { idPrefix: string; widthMm: number; depthMm: number; ring?: RingSpec; onChange: (ring: RingSpec) => void }) {
+  const band = uShapeBandOf(widthMm || DEFAULT_PRESET_MM.w, depthMm || DEFAULT_PRESET_MM.h, ring);
+  return (
+    <div className="space-y-2">
+      <PanelRow label="עומק הדלפק (ס״מ)" htmlFor={`${idPrefix}-band`}>
+        <NumberField
+          id={`${idPrefix}-band`}
+          decimals={0}
+          min={5}
+          commitOnBlur
+          value={mmToCm(band)}
+          onChange={(v) => onChange({ ...ring, bandMm: Math.round(v * 10) })}
+          className="w-20"
+        />
+      </PanelRow>
+      <Note>{ring?.bandMm ? "נשאר קבוע כשמשנים את הרוחב והעומק של הח׳." : "כרגע שליש מהצלע הקצרה — מספר שתקלידו יישאר קבוע גם כשמשנים את הגודל."}</Note>
+    </div>
+  );
+}
+
 // ── Added shapes, placed like the hall plan's elements ─────────────────────────────────────────
 //
 // A shape beside the base one is added exactly the way /halls adds a bar or a pool: pick a card in
@@ -265,7 +294,7 @@ const isPartShape = (id: string): id is Exclude<ShapePart["shape"], "custom"> =>
  *  and its size fields do. Curves are offsets from their endpoints, so they scale by the same two. */
 function rescaleCustomPart(part: ShapePart, widthMm: number, depthMm: number): Pick<ShapePart, "outline" | "edgeCurves" | "widthMm" | "depthMm"> {
   const outline = part.outline ?? [];
-  const b = customShapeBounds(outline);
+  const b = customShapeBounds(outline, part.edgeCurves);
   const sx = b.w > 0 ? Math.max(100, widthMm) / b.w : 1;
   const sy = b.h > 0 ? Math.max(100, depthMm) / b.h : 1;
   return {
@@ -319,6 +348,33 @@ function turnedBox(w: number, h: number, deg: number) {
   const s = Math.abs(Math.sin(t));
   return { widthMm: w * c + h * s, depthMm: w * s + h * c };
 }
+
+// ── Where the parts live while they are edited ─────────────────────────────────────────────────
+//
+// STORED, a part's x/y is its centre relative to the base shape's centre (placedPartOutline reads it
+// so; the composite is centred on the lot). IN THE EDITOR it is the part's place on the canvas. The
+// two differ by where the base's centre falls on the canvas (`anchor` below), and the editor converts
+// on the way in (openAnchor, once) and on the way out (storedParts, at save and for every preview).
+//
+// Why not keep the stored offsets and add the anchor when drawing? Because the anchor MOVES: drag one
+// corner of the base, push a side, type a new width, square it up on close — its box's centre shifts,
+// and every part stored relative to it slid by half the change while the designer was looking at
+// the corner they were dragging. On the canvas a part is a thing standing where it was put; the base
+// reshaped under it leaves it standing there, and so does Ctrl+Z of that reshape (the outline
+// editor's history holds the base alone, and now has nothing of the parts' to keep in step).
+
+/** Where the base shape's centre lands on the canvas when the editor opens: footprintOutlines
+ *  centres a derived shape on (0,0); a hand-drawn outline is drawn where its points are. */
+function openAnchor(p: Product): { x: number; y: number } {
+  const a = p.appearance;
+  if (a?.shape === "custom" && a.outline && a.outline.length >= 3) {
+    const b = customShapeBounds(a.outline, a.edgeCurves);
+    return { x: b.cx, y: b.cy };
+  }
+  return { x: 0, y: 0 };
+}
+
+const shifted = (p: ShapePart, dx: number, dy: number): ShapePart => ({ ...p, x: Math.round(p.x + dx), y: Math.round(p.y + dy) });
 
 /** The base shape's picker: every shape as its own picture, plus "draw it yourself". A grid of cards
  *  rather than a Select — the bar sits on the bottom edge of the canvas, and a list that opens
@@ -396,6 +452,7 @@ function PartBar({
               id={`${id}-d`}
               decimals={0}
               min={0}
+              commitOnBlur
               value={(D ?? 0) / field.factor / 10}
               onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })}
               className="w-20"
@@ -403,11 +460,13 @@ function PartBar({
           </PanelRow>
         ) : (
           <>
+            {/* commitOnBlur, like the main shape's: a size typed digit by digit rescaled the shape
+                at "1", then "12", then "120" — a hand-drawn part through rescaleCustomPart each time. */}
             <PanelRow label="רוחב (ס״מ)" htmlFor={`${id}-w`}>
-              <NumberField id={`${id}-w`} decimals={0} min={0} value={cm(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} className="w-20" />
+              <NumberField id={`${id}-w`} decimals={0} min={0} commitOnBlur value={cm(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} className="w-20" />
             </PanelRow>
             <PanelRow label="עומק (ס״מ)" htmlFor={`${id}-h`}>
-              <NumberField id={`${id}-h`} decimals={0} min={0} value={cm(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} className="w-20" />
+              <NumberField id={`${id}-h`} decimals={0} min={0} commitOnBlur value={cm(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} className="w-20" />
             </PanelRow>
           </>
         )}
@@ -439,6 +498,11 @@ function PartBar({
       {ringShape && ringSpec && (
         <Popover label={RING_LABEL[ringShape]} icon={Donut} value={`רצועה ${cm(ringSpec.bandMm)}`} panelClassName="w-72">
           <RingFields idPrefix={id} shape={ringShape} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
+        </Popover>
+      )}
+      {part.shape === "u-shape" && (
+        <Popover label="ח" icon={Donut} value={`דלפק ${cm(uShapeBandOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring))}`} panelClassName="w-72">
+          <CounterFields idPrefix={id} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
         </Popover>
       )}
       <BarButton icon={PenLine} label={drawn ? "עריכת הקווים" : "עיצוב חופשי — עריכת הקווים ביד"} onClick={onRedraw} />
@@ -516,8 +580,26 @@ export function AppearanceModal({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const [draft, setDraft] = useState<Product>(() => withSizeFor(product));
+  // The parts come in at their place on the canvas and go out relative to the base again (see "Where
+  // the parts live while they are edited", above).
+  const [draft, setDraft] = useState<Product>(() => {
+    const p = withSizeFor(product);
+    const at = openAnchor(p);
+    const parts = p.appearance?.parts;
+    return parts?.length ? { ...p, appearance: { ...p.appearance!, parts: parts.map((q) => shifted(q, at.x, at.y)) } } : p;
+  });
   const [pickingIcon, setPickingIcon] = useState(false);
+  // A transient line over the canvas — why a close was refused, and the like. The studio's own.
+  const [hint, setHint] = useState<string | null>(null);
+  const hintTimer = useRef<number | null>(null);
+  const showHint = (msg: string) => {
+    setHint(msg);
+    if (hintTimer.current !== null) window.clearTimeout(hintTimer.current);
+    hintTimer.current = window.setTimeout(() => setHint(null), 2800);
+  };
+  useEffect(() => () => {
+    if (hintTimer.current !== null) window.clearTimeout(hintTimer.current);
+  }, []);
   const [elementsOpen, setElementsOpen] = useState(false);
   const [armedShape, setArmedShape] = useState<Exclude<ShapePart["shape"], "custom"> | null>(null);
   const [selectedPart, setSelectedPart] = useState<string | null>(null);
@@ -550,7 +632,8 @@ export function AppearanceModal({
   // The colour the item's surfaces are tinted by: its own fill, else its first shade.
   const itemColor = draft.appearance?.style?.fill ?? draft.variants.find((v) => !v.archived && v.swatch)?.swatch;
 
-  const bounds = outline.length >= 3 ? customShapeBounds(outline) : null;
+  // The box of what is DRAWN, bowed sides included — the drawer's two numbers and the saved size.
+  const bounds = outline.length >= 3 ? customShapeBounds(outline, curves) : null;
 
   // Patch appearance, always keeping the required fields present — and seeding them from what the
   // plan already draws, so changing only the style of a product that never had an appearance row
@@ -583,8 +666,15 @@ export function AppearanceModal({
   const changeShape = (next: MapShape) => {
     if (next === "custom") {
       // A hand-drawn shape starts from whatever the item is already drawn as rather than from a
-      // blank canvas — the derived shapes ARE outlines, so there is no reason to redraw one.
-      if (outline.length < 3) insertPreset(custom ? "rect" : shape);
+      // blank canvas — the derived shapes ARE outlines, so the one on the canvas is handed over as
+      // it is. (Rebuilding it from the item's numbers is how a quarter circle doubled here: its one
+      // number is a diameter, and the rebuild read it as the quarter's width, which is a radius.) A
+      // drawing left behind by an earlier switch away from מותאם is found where it was left.
+      if (outline.length >= 3) {
+        // the earlier drawing stands
+      } else if (derived) {
+        ed.setAll({ mode: "edit", outline: derived.outline, edgeCurves: derived.edgeCurves, lockedEdges: derived.outline.map(() => false) });
+      } else insertPreset("rect");
       setAppearance({ shape: "custom", blockedSides: undefined });
       return;
     }
@@ -636,7 +726,7 @@ export function AppearanceModal({
         ...d,
         appearance: { shape: shapeOf(d), content: contentOf(d), ...d.appearance, parts: next.length ? next : undefined },
       };
-      const count = seatSides(resolveFootprint(withParts)).length;
+      const count = seatSides(resolveFootprint(withStoredParts(withParts))).length;
       const blocked = withParts.appearance!.blockedSides?.filter((i) => i < count);
       withParts.appearance = { ...withParts.appearance!, blockedSides: blocked?.length ? blocked : undefined };
       return withParts;
@@ -676,23 +766,65 @@ export function AppearanceModal({
   const canvasOutline = derived?.outline ?? outline;
   const canvasCurves = derived?.edgeCurves ?? curves;
   const canvasLocked = derived ? derived.outline.map(() => false) : lockedEdges;
-  const canvasBounds = canvasOutline.length >= 3 ? customShapeBounds(canvasOutline) : null;
-  // Where the base shape's centre sits on the canvas — a part's offset is measured from here.
+  const canvasBounds = canvasOutline.length >= 3 ? customShapeBounds(canvasOutline, canvasCurves) : null;
+  // Where the base shape's centre sits on the canvas — a STORED part's offset is measured from here.
   const anchor = canvasBounds ? { x: canvasBounds.cx, y: canvasBounds.cy } : { x: 0, y: 0 };
+  /** The parts as the row stores them: relative to the base's centre (see "Where the parts live"). */
+  const storedParts = (list: readonly ShapePart[]): ShapePart[] | undefined => (list.length ? list.map((p) => shifted(p, -anchor.x, -anchor.y)) : undefined);
+  const withStoredParts = (p: Product): Product =>
+    p.appearance?.parts?.length ? { ...p, appearance: { ...p.appearance, parts: storedParts(p.appearance.parts) } } : p;
 
   /** Wrap an edit so that grabbing a DERIVED shape first turns it into a hand-drawn one — seeded
    *  with the outline the designer is looking at, then the edit applied to it. The seed replaces the
-   *  editor's state outright (no undo back into the numbers: from here the outline IS the shape). */
+   *  editor's state outright (no undo back into the numbers: from here the outline IS the shape).
+   *  Blocked sides go with the numbers, as they do when מותאם is picked from the shape grid: they
+   *  index the sides of a shape that is about to stop being that shape. */
   const free =
     <A extends unknown[]>(fn: (...a: A) => void) =>
     (...a: A) => {
       if (derived) {
         ed.reset({ outline: derived.outline, edgeCurves: derived.edgeCurves });
         ed.setSelected(selected);
-        setAppearance({ shape: "custom" });
+        setAppearance({ shape: "custom", blockedSides: undefined });
       }
       fn(...a);
     };
+
+  // ── Closing a drawn outline ─────────────────────────────────────────────────────────────────
+  // Sides were held to 45° steps while drawing; the close squares what is nearly square (the closing
+  // side is the one the designer never drew) and refuses a self-crossing outline, saying why.
+  const closeDrawn = (editor: typeof ed) => {
+    const why = closeRefusal(editor.outline);
+    if (why) showHint(why);
+    else editor.closeOutline();
+  };
+
+  // ── Sides nobody sits at follow the corners ─────────────────────────────────────────────────
+  // blockedSides index the outline's sides; a corner added or removed renumbers them (lib/studio/
+  // use-outline-editor.ts). Not while a derived shape is being freed — `free` has just dropped them.
+  const reblock = (next: number[]) => setAppearance({ blockedSides: next.length ? next : undefined });
+  const insertVertexReblocking = (edgeIdx: number) => {
+    ed.insertVertexOnWall(edgeIdx);
+    if (!derived && blocked.length) reblock(sideIndicesAfterInsert(blocked, edgeIdx));
+  };
+  const removeVertexReblocking = (idx: number) => {
+    ed.removeVertex(idx);
+    if (!derived && blocked.length) reblock(sideIndicesAfterRemove(blocked, idx, canvasOutline.length));
+  };
+  const removeSelectionReblocking = (refs: SelectedRef[]) => {
+    ed.removeSelection(refs);
+    if (derived || !blocked.length) return;
+    // Highest corner first, the way the editor takes them out, so each index is read against the
+    // outline as it stands at that step.
+    let next = blocked;
+    let n = canvasOutline.length;
+    for (const k of refs.filter((r) => r.kind === "vertex").map((r) => Number(r.id)).sort((a, b) => b - a)) {
+      if (n <= 3) break;
+      next = sideIndicesAfterRemove(next, k, n);
+      n -= 1;
+    }
+    reblock(next);
+  };
 
   // ── Parts on the canvas ─────────────────────────────────────────────────────────────────────
   const patchPart = (id: string, p: Partial<ShapePart>) => setParts(parts.map((x) => (x.id === id ? patchedPart(x, p) : x)));
@@ -701,7 +833,7 @@ export function AppearanceModal({
     setSelectedPart(null);
   };
   const placePart = (shapeId: Exclude<ShapePart["shape"], "custom">, at: { x: number; y: number }) => {
-    const part = newPart(shapeId, { x: at.x - anchor.x, y: at.y - anchor.y });
+    const part = newPart(shapeId, at);
     setParts([...parts, part]);
     setSelectedPart(part.id);
     setSelected([]);
@@ -712,14 +844,14 @@ export function AppearanceModal({
   const partFeatures: StructureFeature[] = parts.filter((p) => p.id !== drawingPart?.id).map((p) => {
     const round = usesDiameter(p.shape);
     // A hand-drawn part's box is its outline's; the feature layer stretches the outline to it.
-    const ob = p.shape === "custom" && p.outline && p.outline.length >= 3 ? customShapeBounds(p.outline) : null;
+    const ob = p.shape === "custom" && p.outline && p.outline.length >= 3 ? customShapeBounds(p.outline, p.edgeCurves) : null;
     const w = (ob ? ob.w : round ? (roundSizeMm(p.shape, p) ?? 0) / (p.shape === "quarter-circle" ? 2 : 1) : p.widthMm) || 600;
     return {
       id: p.id,
       kind: "other",
       label: "",
-      x: anchor.x + p.x,
-      y: anchor.y + p.y,
+      x: p.x,
+      y: p.y,
       widthMm: w,
       depthMm: ob ? ob.h || 600 : round ? w : p.depthMm || 600,
       heightMm: 0,
@@ -748,10 +880,11 @@ export function AppearanceModal({
     setSelected([]);
     setArmedShape(null);
     if (part) {
+      // The part's x/y are its place on the canvas here, so the placed outline IS the canvas outline.
       const o = placedPartOutline(part);
       partEd.reset({
         mode: "edit",
-        outline: o.outline.map((v) => ({ x: v.x + anchor.x, y: v.y + anchor.y })),
+        outline: o.outline.map((v) => ({ x: v.x, y: v.y })),
         edgeCurves: padCurves(o.edgeCurves, o.outline.length),
       });
       setDrawingPart({ id: part.id, isNew: false });
@@ -764,13 +897,13 @@ export function AppearanceModal({
   /** The parts with the shape being drawn written in — or as they are, if it is not a closed shape. */
   const partsWithDrawing = (): ShapePart[] => {
     if (!drawingPart || partEd.mode !== "edit" || partEd.outline.length < 3) return parts;
-    const b = customShapeBounds(partEd.outline);
+    const b = customShapeBounds(partEd.outline, partEd.edgeCurves);
     const drawn = {
       shape: "custom" as const,
       outline: partEd.outline.map((v) => ({ x: Math.round(v.x), y: Math.round(v.y) })),
       edgeCurves: padCurves(partEd.edgeCurves, partEd.outline.length),
-      x: Math.round(b.cx - anchor.x),
-      y: Math.round(b.cy - anchor.y),
+      x: Math.round(b.cx),
+      y: Math.round(b.cy),
       rotation: 0,
       widthMm: Math.round(b.w),
       depthMm: Math.round(b.h),
@@ -804,7 +937,7 @@ export function AppearanceModal({
   // outline's corners are the canvas's own references already.
   const partBox = (p: ShapePart) => {
     const b = footprintBounds(shapeFootprint(p.shape, p));
-    return { x: anchor.x + p.x, y: anchor.y + p.y, ...turnedBox(b.w, b.h, p.rotation || 0) };
+    return { x: p.x, y: p.y, ...turnedBox(b.w, b.h, p.rotation || 0) };
   };
   const snapOpts = (id: string, self?: { widthMm: number; depthMm: number }): HostSnapOptions => ({
     boxes: [
@@ -815,7 +948,8 @@ export function AppearanceModal({
   });
   const straight = (deg: number) => Math.abs(((deg % 180) + 180) % 180) < 0.01;
 
-  // ── Keyboard: delete, copy, paste, duplicate ────────────────────────────────────────────────
+  // ── Keyboard: Escape, delete, copy, paste, duplicate ────────────────────────────────────────
+  /** A copy a step off the original. `from` is a part at its place on the canvas. */
   const paste = (from: ShapePart) => {
     const part = { ...from, id: crypto.randomUUID(), x: from.x + PASTE_STEP_MM, y: from.y + PASTE_STEP_MM };
     setParts([...parts, part]);
@@ -825,27 +959,47 @@ export function AppearanceModal({
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const typing = isTypingTarget();
+      if (e.key === "Escape") {
+        // ESCAPE NEVER CLOSES THIS MODAL — it steps back one level. The editor closes through its ✕,
+        // ביטול or the save alone; a drawing session lost to a reflex Esc is the bug this replaces.
+        // A field keeps its own Escape. The canvas has already taken the presses that are its (a
+        // tape put down, a half-drawn outline thrown away) and marked them handled — its listener is
+        // on the window ahead of this one. Then, in order: a selected added shape; the shape being
+        // drawn by hand (its selection, then the drawing itself — ביטול, as the bar's button); the
+        // base's selection; an armed element. preventDefault is what keeps the <dialog>'s close
+        // watcher from firing at all: a cancelled `cancel` event is honoured only once without user
+        // activation, and Esc grants none — so the keydown is where it has to be stopped.
+        if (!typing && !e.defaultPrevented) {
+          if (selectedPart) setSelectedPart(null);
+          else if (drawingPart) {
+            if (partEd.selected.length) partEd.setSelected([]);
+            else cancelDrawingPart();
+          } else if (selected.length) setSelected([]);
+          else if (armedShape) setArmedShape(null);
+        }
+        e.preventDefault();
+        return;
+      }
+      if (typing) return;
       if (drawingPart) return; // the outline editor owns the keys while a shape is being drawn
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (mod && (key === "c" || e.code === "KeyC") && selectedPartRow) {
         e.preventDefault();
-        copiedPart = selectedPartRow;
+        // Kept relative to the base, as the row stores it: the copy outlives this modal, and the
+        // next product's base stands wherever its own outline was drawn.
+        copiedPart = shifted(selectedPartRow, -anchor.x, -anchor.y);
       } else if (mod && (key === "v" || e.code === "KeyV") && copiedPart) {
         e.preventDefault();
         // Each paste steps on from the last one, so three pastes are three shapes, not one on top of two.
-        copiedPart = paste(copiedPart);
+        copiedPart = shifted(paste(shifted(copiedPart, anchor.x, anchor.y)), -anchor.x, -anchor.y);
       } else if (mod && (key === "d" || e.code === "KeyD") && selectedPartRow) {
         e.preventDefault();
         paste(selectedPartRow);
       } else if (!mod && selectedPart && (e.key === "Delete" || e.key === "Backspace")) {
         e.preventDefault();
         removePart(selectedPart);
-      } else if (!mod && selectedPart && e.key === "Escape") {
-        e.preventDefault();
-        setSelectedPart(null);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -856,12 +1010,20 @@ export function AppearanceModal({
     e.stopPropagation();
     onClose();
   };
+  // A `cancel` reaches the <dialog> only when an Escape got past every keydown handler without
+  // preventDefault (the window handler above always calls it — this is the belt under it), or from
+  // a route that is no key at all. Either way the editor stays open, edits and all.
+  const refuseCancel = (e: { preventDefault: () => void; stopPropagation: () => void }) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
   // What the canvas draws: the local draft, with the outline the editor is holding right now, so a
-  // vertex dragged on the canvas is a fill and a stroke in the same breath.
-  const preview: Product = custom
-    ? { ...draft, appearance: { shape: "custom", content, ...draft.appearance, outline, edgeCurves: curves } }
-    : draft;
+  // vertex dragged on the canvas is a fill and a stroke in the same breath — and its parts relative
+  // to the base again, which is how every resolver reads them.
+  const preview: Product = withStoredParts(
+    custom ? { ...draft, appearance: { shape: "custom", content, ...draft.appearance, outline, edgeCurves: curves } } : draft,
+  );
   // Drawn as its category's picture (a candelabrum, a sofa) rather than outline + content?
   const previewSymbol = stretch ? null : symbolOf(preview, resolveFootprint(preview));
 
@@ -874,7 +1036,7 @@ export function AppearanceModal({
     if (!seated || !itemFootprint || seatCount <= 0) return null;
     const basePiece = footprintOutlines(itemFootprint)[0];
     if (!basePiece) return null;
-    const c = customShapeBounds(basePiece.outline);
+    const c = customShapeBounds(basePiece.outline, basePiece.edgeCurves);
     return {
       at: { x: anchor.x - c.cx, y: anchor.y - c.cy },
       seats: seatsAround(itemFootprint, seatCount, undefined, blocked),
@@ -890,10 +1052,10 @@ export function AppearanceModal({
     (asksDiameter && !roundSizeMm(shape, draft.dimensions)) ||
     (asksBox && (!draft.dimensions.widthMm || !draft.dimensions.depthMm));
 
-  const hint =
+  const drawHint =
     outline.length === 0 ? "לחצו על הקנבס כדי לצייר את הצורה"
-    : outline.length < 3 ? "הקלידו מספר לאורך מדויק · Alt לשחרור נעילת הזווית"
-    : "Enter או לחיצה על הנקודה הראשונה לסגירת הצורה · הקלידו מספר לאורך מדויק · Esc לניקוי";
+    : outline.length < 3 ? "הצלעות נצמדות לזוויות של 45° · Alt לשחרור · הקלידו מספר לאורך מדויק בס״מ"
+    : "Enter או לחיצה על הנקודה הראשונה לסגירת הצורה · הקלידו מספר לאורך בס״מ · Esc לניקוי";
 
   return (
     // `close`/`cancel` don't bubble in the DOM, but React dispatches them up the FIBER tree anyway —
@@ -903,7 +1065,7 @@ export function AppearanceModal({
     <dialog
       ref={ref}
       onClose={stopThenClose}
-      onCancel={stopThenClose}
+      onCancel={refuseCancel}
       className="modal m-auto max-h-none rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
     >
       <div className="flex h-[80vh] w-[88vw] max-w-5xl flex-col">
@@ -914,8 +1076,8 @@ export function AppearanceModal({
               {partEd.mode === "draw"
                 ? partEd.outline.length === 0
                   ? "לחצו על הקנבס כדי לצייר את הצורה הנוספת"
-                  : "Enter או לחיצה על הנקודה הראשונה לסגירת הצורה · הקלידו מספר לאורך מדויק · Esc לביטול"
-                : "גררו נקודה להזזה · ידית האמצע מעקמת קצה · ״סיום״ כשהצורה מוכנה"}
+                  : "Enter או לחיצה על הנקודה הראשונה לסגירת הצורה · 45° מהצלע הראשונה, Alt לשחרור · אורך בס״מ · Esc לביטול"
+                : "גררו נקודה או צלע להזזה · ידית האמצע מעקמת צלע · ״סיום״ כשהצורה מוכנה · Esc לביטול"}
             </span>
           )}
           {derived && !drawingPart && (
@@ -926,14 +1088,14 @@ export function AppearanceModal({
           {custom && !drawingPart && (
             <>
               {mode === "draw" ? (
-                <span className="text-xs text-muted">{hint}</span>
+                <span className="text-xs text-muted">{drawHint}</span>
               ) : (
                 <span className="hidden text-xs text-muted lg:inline">
-                  גררו נקודה להזזה · ידית האמצע מעקמת קצה · בחרו קצה לעריכת אורך/זווית/עיקום · רווח לגרירת התצוגה
+                  גררו נקודה או צלע להזזה · ידית האמצע מעקמת צלע · בחרו צלע לעריכת אורך/זווית/עיקום · רווח לגרירת התצוגה
                 </span>
               )}
               {mode === "draw" && outline.length >= 3 && (
-                <Button type="button" variant="ghost" onClick={ed.closeOutline}>
+                <Button type="button" variant="ghost" onClick={() => closeDrawn(ed)}>
                   סגירת הצורה
                 </Button>
               )}
@@ -951,9 +1113,19 @@ export function AppearanceModal({
           {/* The canvas, for the one shape that owns an outline — and for every other shape, what
               the canvas would be showing anyway: the thing that will actually be drawn. */}
           <div className="relative min-h-0 flex-1 bg-canvas">
+            {/* Why something was refused (an outline that crosses itself), for a moment, over the
+                canvas — the studio's own hint line. */}
+            <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center" aria-live="polite">
+              {hint && <span className="rounded-md bg-ink px-3 py-1.5 text-sm text-canvas shadow-dialog">{hint}</span>}
+            </div>
             {custom || derived ? (
               <>
                 <PlanCanvas
+                  // A footprint is a cm-scale thing: typed and shown in centimetres. Drawn sides are
+                  // held to 45° steps from the FIRST side (the stage tool's rule), Alt frees.
+                  lengthUnit="cm"
+                  drawAngleStepDeg={45}
+                  drawAngleFromFirstSide
                   {...(drawingPart
                     ? {
                         // The added shape being drawn owns the canvas's outline editor.
@@ -966,9 +1138,10 @@ export function AppearanceModal({
                         onToggleSelect: partEd.toggleSelected,
                         onSelectMany: partEd.selectMany,
                         onAddVertex: partEd.addVertex,
-                        onCloseOutline: partEd.closeOutline,
+                        onCloseOutline: () => closeDrawn(partEd),
                         onCancelDraw: cancelDrawingPart,
                         onMoveVertex: partEd.moveVertex,
+                        onMoveWall: partEd.moveWall,
                         onMoveWallHandle: partEd.moveWallHandle,
                         onMoveSelection: partEd.moveSelection,
                         onToggleWallLock: partEd.toggleWallLock,
@@ -993,9 +1166,10 @@ export function AppearanceModal({
                         onToggleSelect: ed.toggleSelected,
                         onSelectMany: ed.selectMany,
                         onAddVertex: ed.addVertex,
-                        onCloseOutline: ed.closeOutline,
+                        onCloseOutline: () => closeDrawn(ed),
                         onCancelDraw: clearShape,
                         onMoveVertex: free(ed.moveVertex),
+                        onMoveWall: free(ed.moveWall),
                         onMoveWallHandle: free(ed.moveWallHandle),
                         onMoveSelection: free(ed.moveSelection),
                         onToggleWallLock: free(ed.toggleWallLock),
@@ -1072,7 +1246,7 @@ export function AppearanceModal({
                         {parts.filter((p) => p.id !== drawingPart?.id && hasSurface(p)).map((p) => (
                           <g
                             key={p.id}
-                            transform={`translate(${anchor.x + p.x} ${anchor.y + p.y})${p.rotation ? ` rotate(${p.rotation})` : ""}`}
+                            transform={`translate(${p.x} ${p.y})${p.rotation ? ` rotate(${p.rotation})` : ""}`}
                             className="pointer-events-none"
                           >
                             <ItemSurface appearance={{ texture: p.texture, textureImage: p.textureImage }} footprint={shapeFootprint(p.shape, p)} color={itemColor} seed={p.id} />
@@ -1092,7 +1266,7 @@ export function AppearanceModal({
                             if (!part) return;
                             const box = partBox(part);
                             const at = ctx.snap(p, snapOpts(id, { widthMm: box.widthMm, depthMm: box.depthMm }));
-                            patchPart(id, { x: Math.round(at.x - anchor.x), y: Math.round(at.y - anchor.y) });
+                            patchPart(id, { x: Math.round(at.x), y: Math.round(at.y) });
                           }}
                           onResize={drawingPart ? undefined : (id, r) => {
                             const part = parts.find((x) => x.id === id);
@@ -1126,8 +1300,8 @@ export function AppearanceModal({
                               ...(usesDiameter(part.shape)
                                 ? { diameterMm: Math.round(widthMm * (part.shape === "quarter-circle" ? 2 : 1)) }
                                 : { widthMm: Math.round(widthMm), depthMm: Math.round(depthMm) }),
-                              x: Math.round(x - anchor.x),
-                              y: Math.round(y - anchor.y),
+                              x: Math.round(x),
+                              y: Math.round(y),
                             });
                           }}
                           onRotate={drawingPart ? undefined : (id, deg) => patchPart(id, { rotation: deg })}
@@ -1144,9 +1318,15 @@ export function AppearanceModal({
                               kind={previewSymbol}
                               footprint={resolveFootprint(preview)}
                               count={symbolCount(preview, previewSymbol)}
+                              flowers={
+                                previewSymbol === "flowers" || previewSymbol === "centerpiece"
+                                  ? flowerDrawSpecOf(preview, resolveFootprint(preview), preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill)
+                                  : undefined
+                              }
                               tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
                               overhead={preview.layer === "ceiling"}
                               chairStyle={chairStyleOf(preview)}
+                              rise={climbRise(preview)}
                             />
                           ) : (
                             <PlanContent
@@ -1179,6 +1359,7 @@ export function AppearanceModal({
                           onToggleWallLock={partEd.toggleWallLock}
                           onClose={() => partEd.setSelected([])}
                           edgeNoun="צלע"
+                          lengthUnit="cm"
                         />
                       )}
                       <Bar icon={PenLine} title={drawingPart.isNew ? "צורה חופשית חדשה" : "עריכת קווי הצורה"} facts={partEd.mode === "draw" ? "ציור" : "עריכה"}>
@@ -1196,10 +1377,18 @@ export function AppearanceModal({
                   <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
                     <div className="pointer-events-auto max-w-full">
                       <PartBar
-                        part={selectedPartRow}
+                        // Shown relative to the base, as the row stores it ("מיקום" reads so); a
+                        // typed place comes back onto the canvas.
+                        part={shifted(selectedPartRow, -anchor.x, -anchor.y)}
                         color={itemColor}
                         onRedraw={() => startDrawingPart(selectedPartRow)}
-                        onChange={(p) => patchPart(selectedPartRow.id, p)}
+                        onChange={(p) =>
+                          patchPart(selectedPartRow.id, {
+                            ...p,
+                            ...(p.x !== undefined ? { x: Math.round(p.x + anchor.x) } : {}),
+                            ...(p.y !== undefined ? { y: Math.round(p.y + anchor.y) } : {}),
+                          })
+                        }
                         onDuplicate={() => paste(selectedPartRow)}
                         onRemove={() => removePart(selectedPartRow.id)}
                         onToFront={() => setParts([...parts.filter((x) => x.id !== selectedPartRow.id), selectedPartRow])}
@@ -1218,15 +1407,16 @@ export function AppearanceModal({
                         outline={canvasOutline}
                         edgeCurves={canvasCurves}
                         lockedEdges={canvasLocked}
-                        onRemoveVertex={free(ed.removeVertex)}
-                        onRemoveSelection={free(ed.removeSelection)}
-                        onInsertVertexOnWall={free(ed.insertVertexOnWall)}
+                        onRemoveVertex={free(removeVertexReblocking)}
+                        onRemoveSelection={free(removeSelectionReblocking)}
+                        onInsertVertexOnWall={free(insertVertexReblocking)}
                         onSetWallLength={free(ed.setWallLength)}
                         onSetWallAngle={free(ed.setWallAngle)}
                         onSetWallBulgeDepth={free(ed.setWallBulgeDepth)}
                         onToggleWallLock={free(ed.toggleWallLock)}
                         onClose={() => setSelected([])}
                         edgeNoun="צלע"
+                        lengthUnit="cm"
                       />
                     </div>
                   </div>
@@ -1324,6 +1514,22 @@ export function AppearanceModal({
                         <RingFields
                           idPrefix="a-ring"
                           shape={ringShape}
+                          widthMm={draft.dimensions.widthMm ?? 0}
+                          depthMm={draft.dimensions.depthMm ?? 0}
+                          ring={draft.appearance?.ring}
+                          onChange={(ring) => setAppearance({ ring })}
+                        />
+                      </Popover>
+                    )}
+                    {shape === "u-shape" && !stretch && (
+                      <Popover
+                        label="ח"
+                        icon={Donut}
+                        value={`דלפק ${mmToCm(uShapeBandOf(draft.dimensions.widthMm || DEFAULT_PRESET_MM.w, draft.dimensions.depthMm || DEFAULT_PRESET_MM.h, draft.appearance?.ring))}`}
+                        panelClassName="w-72"
+                      >
+                        <CounterFields
+                          idPrefix="a-counter"
                           widthMm={draft.dimensions.widthMm ?? 0}
                           depthMm={draft.dimensions.depthMm ?? 0}
                           ring={draft.appearance?.ring}
@@ -1472,6 +1678,53 @@ export function AppearanceModal({
               </div>
             )}
 
+            {/* Which form an arrangement takes — a dome, a low cushion, a wild garden, a cascade, a
+                runner, bud vases (lib/catalog/flower-draw.ts). Absent = by its height: a 25cm one is
+                a cushion, a taller one a dome, a strip a runner. The flowers in each tile are the
+                row's own spec in its first shade, so the tiles show THIS arrangement six ways. */}
+            {(draft.category === "flower-arrangements" || draft.category === "centerpieces") && previewSymbol && (
+              <div>
+                <span className={fieldLabelClassName}>צורת הסידור</span>
+                <div className="grid grid-cols-3 gap-1" role="radiogroup" aria-label="צורת הסידור">
+                  {[undefined, ...FLOWER_FORMS].map((form) => {
+                    const chosen = preview.appearance?.symbolStyle;
+                    const on = form === undefined ? !isFlowerForm(chosen) : chosen === form;
+                    const f = resolveFootprint(preview);
+                    const b = footprintBounds(f);
+                    const shown = form ?? defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
+                    const wide = shown === "runner";
+                    const spec: FlowerDrawSpec = {
+                      form: shown,
+                      w: wide ? 1600 : 600,
+                      h: wide ? 360 : 600,
+                      lines: drawLinesOf(preview),
+                      shade: preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill,
+                      seed: 11,
+                    };
+                    return (
+                      <button
+                        key={form ?? "auto"}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        title={form ? FLOWER_FORM_HINT[form] : "לפי גובה הסידור"}
+                        onClick={() => setAppearance({ symbolStyle: form })}
+                        className={
+                          "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
+                          (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
+                        }
+                      >
+                        <svg viewBox={wide ? "-840 -340 1680 680" : "-340 -340 680 680"} className="h-10 w-full" aria-hidden>
+                          <FlowerDrawing spec={spec} />
+                        </svg>
+                        <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{form ? FLOWER_FORM_LABEL[form] : `אוטומטי (${FLOWER_FORM_LABEL[shown]})`}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* What it is made of — the venue floors' textures, timber and marble, or a picture of the
                 designer's own — as its fill on the plan and in its catalog picture. The MAIN shape's;
                 each added shape picks its own on its bar. Not offered where the picture is its own fill. */}
@@ -1524,7 +1777,8 @@ export function AppearanceModal({
                   ...(custom
                     ? { shape: "custom" as const, content, ...draft.appearance, outline, edgeCurves: padCurves(curves, outline.length) }
                     : { content, ...draft.appearance, shape }),
-                  ...(drawingPart ? { parts: partsWithDrawing() } : {}),
+                  // Relative to the base again — the editor held them at their place on the canvas.
+                  parts: storedParts(drawingPart ? partsWithDrawing() : parts),
                 },
               });
               onClose();

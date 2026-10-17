@@ -68,8 +68,12 @@ export function AppointmentDialog({
 
   // Reseed on each opening, not on every prop change: the dialog stays mounted between uses, so
   // without this the second meeting booked in a session opens holding the first one's answers.
-  useEffect(() => {
-    if (!open) return;
+  // Adjusted during render (React's pattern for state that follows a prop), never in an effect.
+  const [seededOpen, setSeededOpen] = useState(false);
+  if (open !== seededOpen) {
+    setSeededOpen(open);
+  }
+  if (open && !seededOpen) {
     // Booking from an event's drawer arrives with that event named; the couple's details come off it
     // so the designer isn't retyping what the system already knows.
     const seed = appointment ? undefined : events.find((e) => e.id === defaultEventId);
@@ -84,8 +88,7 @@ export function AppointmentDialog({
     setDone(appointment?.done ?? false);
     setError(null);
     setSaving(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
 
   useEffect(() => {
     const d = ref.current;

@@ -18,7 +18,6 @@ import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import { resolveZones, zonesBounds, type ResolvedZone } from "@/lib/venues/zone";
 import { outlineBounds, type Bounds } from "@/lib/studio/geometry";
 import type { VenueAccessState, VenueGeometry } from "@/lib/venues/types";
-import type { Zone } from "@/lib/venues/zone";
 import type { EventSummary } from "./types";
 
 export interface EventPlan {
@@ -52,7 +51,9 @@ function structureBounds(structure: VenueStructure): Bounds {
   return outlineBounds(structure.nodes.map((n) => ({ x: n.x, y: n.y })));
 }
 
-export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): EventPlan {
+/** Reads only which venue and which zones — so the client's sketch, which has no studio
+ *  EventSummary, builds its plan through the same function. */
+export function eventPlan(event: Pick<EventSummary, "venueId" | "zoneIds"> | null, geometry: VenueGeometry): EventPlan {
   // An event with no venue has no plan and nothing to explain — but one WITH a venue that came back
   // denied still has no geometry to draw, and that difference has to survive this function rather
   // than collapsing into the same EMPTY_PLAN both used to return.
@@ -60,7 +61,9 @@ export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): 
   if (geometry.access === "denied") return { ...EMPTY_PLAN, venueId: event.venueId, access: "denied" };
   const { structure, zones: allZones, mmPerUnit } = geometry;
   const faces = detectFaces(structure);
-  const all = resolveZones(allZones, faces);
+  // The VENUE's features, not this event's arrangement of them: a zone is the property's, and one
+  // made of a stage stays where the venue has the stage when a sketch nudges it for one evening.
+  const all = resolveZones(allZones, faces, structure.features);
   // Ordered by the event's own list, not the venue's: the first zone is the one the designer
   // reached for first, and a picker that reorders behind their back is its own small bug.
   const zones = event.zoneIds
@@ -85,7 +88,7 @@ export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): 
 }
 
 /** The label stored on the event (EventSummary.zonesLabel) — one place builds it, so the details
- *  form and any later caller can't disagree about the separator. */
-export function labelForZones(zones: Zone[]): string {
-  return zones.map((z) => z.name).join(" · ");
-}
+ *  form and any later caller can't disagree about the separator. It moved next to the rule that
+ *  decides WHICH zones get saved (zone-selection.ts), which has a node self-check this geometry
+ *  module does not; re-exported here so the old import path still answers. */
+export { labelForZones } from "./zone-selection";

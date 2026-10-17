@@ -38,7 +38,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <MeetingFlowProvider flow={flow}>
       <VenuesProvider initialVenues={venues}>
-        <AppShell user={{ name: session.name, email: session.email }}>{children}</AppShell>
+        <AppShell user={{ name: session.name, email: session.email, orgKind: session.organizationKind ?? "studio" }}>
+          {children}
+        </AppShell>
       </VenuesProvider>
     </MeetingFlowProvider>
   );

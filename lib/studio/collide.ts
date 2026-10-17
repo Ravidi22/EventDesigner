@@ -80,6 +80,25 @@ export function pushApart(movers: SolidBox[], obstacles: SolidBox[], ignore?: Ig
   return { x: Math.round(dx), y: Math.round(dy) };
 }
 
+/**
+ * The same rule as a MAGNET, for a drag in progress: the push is honoured only while it is small —
+ * the drag has just touched something and is being held flush against it — and given up the moment
+ * it would take more than `reachMm` to put right, at which point the item simply goes where the
+ * pointer is.
+ *
+ * Why a drag gets this and not the wall: a hard pushApart holds the dragged item against whatever it
+ * touched until the pointer is past that thing's middle, and then throws it out the far side. On a
+ * room of tables that is "the drag gets stuck on everything", which is exactly what designers
+ * reported. Held only within a few screen pixels, flush is still the easy answer — two decks still
+ * butt into one platform — but nothing is ever trapped: push on past the edge and the item follows.
+ * An overlap the designer chose is theirs to fix (the clearance halos say so); a drop from the rail
+ * still uses the hard rule, since nothing was pushing it.
+ */
+export function nudgeApart(movers: SolidBox[], obstacles: SolidBox[], reachMm: number, ignore?: Ignore): Point {
+  const push = pushApart(movers, obstacles, ignore);
+  return Math.hypot(push.x, push.y) <= reachMm ? push : { x: 0, y: 0 };
+}
+
 /** The pairs that were ALREADY overlapping — a gesture must not resolve those. You may leave a bad
  *  arrangement, and you may not enter one: a plan drawn before this rule existed (or one a designer
  *  built deliberately) can still be picked up and dragged without the first pixel of movement
@@ -159,6 +178,14 @@ if (isMain(import.meta.url)) {
   // A pile it cannot untangle: it keeps whatever it managed and stops, rather than looping.
   const pile = pushApart([deck(0, 0)], [deck(0, 0), deck(10, 0), deck(-10, 0)], undefined, 3);
   assert(Number.isFinite(pile.x) && Number.isFinite(pile.y), "an impossible pile still returns an answer");
+
+  // The magnet: a shallow overlap is held flush, a deep one is let through.
+  const touching = nudgeApart([deck(3900, 0)], [deck(0, 0)], 150);
+  assert(touching.x === 100 && touching.y === 0, "just touching, the dragged deck is held flush");
+  const pushedOn = nudgeApart([deck(2500, 0)], [deck(0, 0)], 150);
+  assert(pushedOn.x === 0 && pushedOn.y === 0, "pushed well past the edge, it is no longer held — it follows the pointer");
+  assert(nudgeApart([deck(9000, 0)], [deck(0, 0)], 150).x === 0, "clear of everything, nothing to say");
+  assert(nudgeApart([deck(1000, 0)], [deck(0, 0)], 150, overlappingAtStart([deck(1000, 0)], [deck(0, 0)])).x === 0, "…and a pair already overlapping is still ignored");
 
   console.log("collide self-check passed");
 }

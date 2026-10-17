@@ -73,6 +73,8 @@ export function toProduct(row: ProductRow, variantRows: VariantRow[]): Product {
     stockQty: orUndefined(row.stockQty),
     orderUnit: orUndefined(row.orderUnit),
     orderFactor: toNumber(row.orderFactor),
+    sourceProductId: orUndefined(row.sourceProductId),
+    sourceOrgId: orUndefined(row.sourceOrgId),
     variants: variantRows
       .slice()
       .sort((a, b) => a.position - b.position)
@@ -127,6 +129,8 @@ export function toProductRow(p: Product, organizationId: string): ProductInsert 
     stockQty: p.stockQty ?? null,
     orderUnit: p.orderUnit ?? null,
     orderFactor: toNumeric(p.orderFactor),
+    sourceProductId: p.sourceProductId ?? null,
+    sourceOrgId: p.sourceOrgId ?? null,
   };
 }
 

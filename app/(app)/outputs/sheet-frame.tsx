@@ -125,6 +125,9 @@ export interface SheetFrameProps {
    *  millimetres: a table number authored in room millimetres is 6mm tall at 1:100 and a 1mm smudge
    *  at 1:500, and the crew reads the page, not the room. */
   children: ReactNode | ((denominator: number) => ReactNode);
+  /** The drawing alone — no border, scale bar, legend or title block. For a plan shown to a CLIENT
+   *  (the quote's sketch page), where a drafting frame reads as a construction document. */
+  bare?: boolean;
 }
 
 /** The scale a drawing would print at on this paper — the same frame arithmetic SheetFrame lays
@@ -159,6 +162,7 @@ export function SheetFrame({
   notes,
   summary,
   children,
+  bare = false,
 }: SheetFrameProps) {
   const rows = legend ?? [];
   const clipId = `sheet-clip-${useId().replace(/:/g, "")}`;
@@ -166,7 +170,7 @@ export function SheetFrame({
   // The usable frame: paper, minus the printed margin on every edge, minus the bottom strip.
   const frame: Extent = {
     widthMm: Math.max(0, paper.widthMm - marginMm * 2 - (notes ? NOTES_MM + 4 : 0)),
-    heightMm: Math.max(0, paper.heightMm - marginMm * 2 - TITLE_BLOCK_MM),
+    heightMm: Math.max(0, paper.heightMm - marginMm * 2 - (bare ? 0 : TITLE_BLOCK_MM)),
   };
   const { denominator, paperMm } = fitScale(world, frame);
   const scale = 1 / denominator;
@@ -254,6 +258,7 @@ export function SheetFrame({
       </defs>
 
       {/* The border — the drafting frame's printed edge, one line inside the paper margin. */}
+      {!bare && (
       <rect
         x={left}
         y={marginMm}
@@ -264,6 +269,7 @@ export function SheetFrame({
         strokeWidth={LINE_WEIGHTS.feature}
         vectorEffect="non-scaling-stroke"
       />
+      )}
 
       {/* The drawing itself — world millimetres, scaled to the sheet's fitted denominator. Callers
           draw walls, tables, hatched features and dashed overhead items in here, all authored at
@@ -272,6 +278,8 @@ export function SheetFrame({
         <g transform={`translate(${drawX} ${drawY}) scale(${scale})`}>{typeof children === "function" ? children(denominator) : children}</g>
       </g>
 
+      {!bare && (
+      <>
       {/* North arrow — top-end, and only when the venue plan actually states an orientation. */}
       {north !== undefined && (
         <g transform={`translate(${northX + NORTH_BOX_MM / 2} ${northY + NORTH_BOX_MM / 2}) rotate(${north})`}>
@@ -377,6 +385,8 @@ export function SheetFrame({
           );
         })}
       </g>
+      </>
+      )}
     </svg>
   );
 }
