@@ -19,11 +19,14 @@ export function JoinScreen({
   email,
   name: invitedName,
   studioName,
+  kind,
 }: {
   token: string;
   email: string;
   name: string;
   studioName: string;
+  /** studio = joining the team; client = an event owner being let in to see their event. */
+  kind: "studio" | "client";
 }) {
   const router = useRouter();
   const [name, setName] = useState(invitedName);
@@ -60,8 +63,12 @@ export function JoinScreen({
 
   return (
     <AuthShell
-      title={`הצטרפות ל${studioName}`}
-      lede="הוזמנתם לסטודיו. נשאר רק לבחור סיסמה — התפקיד וההרשאות כבר נקבעו."
+      title={kind === "client" ? "האירוע שלכם" : `הצטרפות ל${studioName}`}
+      lede={
+        kind === "client"
+          ? `נפתחה לכם גישה לסקיצה ולתוכנית של האירוע ב${studioName}. נשאר רק לבחור סיסמה.`
+          : "הוזמנתם לסטודיו. נשאר רק לבחור סיסמה — התפקיד וההרשאות כבר נקבעו."
+      }
       footer={
         <Link href="/login" className="font-semibold text-accent hover:underline">
           כבר הצטרפתם? כניסה

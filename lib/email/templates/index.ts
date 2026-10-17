@@ -1,11 +1,13 @@
 // Every message the app sends, in one place — and `npm run check:email`, which renders each of them.
 export { invitationEmail } from "./invitation";
+export { clientInvitationEmail } from "./client-invitation";
 export { resetPasswordEmail } from "./reset-password";
 export { verifyEmailEmail } from "./verify-email";
 export type { RenderedEmail } from "./layout";
 
 import { isMain } from "@/lib/self-check";
 import { invitationEmail } from "./invitation";
+import { clientInvitationEmail } from "./client-invitation";
 import { resetPasswordEmail } from "./reset-password";
 import { verifyEmailEmail } from "./verify-email";
 import type { RenderedEmail } from "./layout";
@@ -19,6 +21,7 @@ if (isMain(import.meta.url)) {
   const rendered: [string, RenderedEmail][] = [
     ["invitation", invitationEmail({ studioName: "סטודיו לילך", inviterName: "לילך", url: URL_, expiresInDays: 14 })],
     ["invitation, no inviter", invitationEmail({ studioName: "", inviterName: null, url: URL_, expiresInDays: 14 })],
+    ["client invitation", clientInvitationEmail({ studioName: "סטודיו לילך", url: URL_, expiresInDays: 14 })],
     ["reset", resetPasswordEmail({ url: URL_, expiresInMinutes: 60 })],
     ["verify", verifyEmailEmail({ url: URL_, expiresInHours: 24 })],
   ];

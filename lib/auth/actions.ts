@@ -20,7 +20,7 @@ import { redirectUriBlocks } from "@/lib/google/types";
 import { emailEnabled } from "@/lib/email/config";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { revalidateSettings } from "@/lib/db/revalidate";
-import { authAccounts, organizations, studioSettings, users } from "@/lib/db/schema";
+import { authAccounts, eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { callAuth } from "./auth-call";
 import { hashInviteToken } from "./invite-token";
@@ -112,7 +112,7 @@ export async function signUp(input: {
     return {
       error:
         existing.state === "pending" && existing.inviteTokenHash
-          ? "הכתובת הזו הוזמנה לסטודיו. הצטרפו דרך קישור ההזמנה שקיבלתם"
+          ? "הכתובת הזו קיבלה הזמנה. הצטרפו דרך קישור ההזמנה שקיבלתם"
           : "כבר קיים חשבון עם האימייל הזה",
       field: "email",
     };
@@ -319,14 +319,16 @@ export async function startGoogleSignIn(input: {
  */
 export async function inviteInfo(
   token: string,
-): Promise<{ email: string; name: string | null; studioName: string } | null> {
+): Promise<{ email: string; name: string | null; studioName: string; kind: AccountKind } | null> {
   const value = String(token ?? "");
   if (!value) return null;
 
-  const [row] = await db()
-    .select({ email: users.email, name: users.name, studioName: organizations.name })
+  const database = db();
+  const [row] = await database
+    .select({ id: users.id, email: users.email, name: users.name, kind: users.kind, studioName: organizations.name })
     .from(users)
-    .innerJoin(organizations, eq(organizations.id, users.organizationId))
+    // LEFT: an event owner belongs to no studio; their inviting studio is the one whose event it is.
+    .leftJoin(organizations, eq(organizations.id, users.organizationId))
     .where(
       and(
         eq(users.inviteTokenHash, hashInviteToken(value)),
@@ -335,7 +337,19 @@ export async function inviteInfo(
       ),
     )
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  if (row.kind === "studio") {
+    return row.studioName ? { email: row.email, name: row.name, studioName: row.studioName, kind: "studio" } : null;
+  }
+  const [shared] = await database
+    .select({ studioName: organizations.name })
+    .from(eventClients)
+    .innerJoin(events, eq(events.id, eventClients.eventId))
+    .innerJoin(organizations, eq(organizations.id, events.organizationId))
+    .where(eq(eventClients.userId, row.id))
+    .limit(1);
+  // An invited client with no event shared any more has nothing to join.
+  return shared ? { email: row.email, name: row.name, studioName: shared.studioName, kind: "client" } : null;
 }
 
 /**
@@ -368,7 +382,8 @@ export async function acceptInvite(input: {
         name,
         state: "active",
         emailVerified: true,
-        joinedAt: today(),
+        // The day they joined a STUDIO; an event owner joined none.
+        joinedAt: sql`case when ${users.kind} = 'studio' then ${today()}::date else null end`,
         // The link is spent. A used invitation must not still be a way into the account it created.
         inviteTokenHash: null,
         inviteExpiresAt: null,

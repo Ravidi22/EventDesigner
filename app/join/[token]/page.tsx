@@ -17,7 +17,7 @@ export default async function JoinPage({ params }: { params: Promise<{ token: st
     return (
       <AuthShell
         title="הקישור אינו בתוקף"
-        lede="ההזמנה הזו פגה, כבר נוצלה, או שהקישור הועתק חלקית. בקשו מהסטודיו קישור חדש — זו פעולה של לחיצה אחת אצלם."
+        lede="ההזמנה הזו פגה, כבר נוצלה, או שהקישור הועתק חלקית. בקשו מהסטודיו קישור חדש, זו פעולה של לחיצה אחת אצלם."
         footer={
           <Link href="/login" className="font-semibold text-accent hover:underline">
             יש לכם כבר חשבון? כניסה
@@ -29,5 +29,5 @@ export default async function JoinPage({ params }: { params: Promise<{ token: st
     );
   }
 
-  return <JoinScreen token={token} email={invite.email} name={invite.name ?? ""} studioName={invite.studioName} />;
+  return <JoinScreen token={token} email={invite.email} name={invite.name ?? ""} studioName={invite.studioName} kind={invite.kind} />;
 }
