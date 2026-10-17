@@ -45,7 +45,7 @@ import { snapPoint, constrainAngleDeg, gridStepMm, type GapGuide, type SnapBox, 
 import { insidePolys } from "@/lib/studio/proximity";
 import { addTape, anchorAt, pruneTape, removeTape, resolveTape, tapeId, tapeReadout, type TapeAnchor, type TapeLookup, type TapeMeasurement, type TapeSegment } from "@/lib/studio/tape";
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
-import { startPointerGesture } from "@/lib/studio/gesture";
+import { cancelAllGestures, startPointerGesture, swallowNextClick } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
 import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
@@ -913,6 +913,78 @@ export function PlanCanvas({
     setLive({ cx: v.cx + dxPx * v.mmPerPx, cy: v.cy + dyPx * v.mmPerPx });
   };
 
+  // TWO FINGERS ARE THE VIEW — a phone or a tablet has no wheel, no Space and no middle button, and a
+  // client looking at their sketch on one is the reason this exists (the client side, 2026-10).
+  // Pinch zooms about the fingers and moving them both pans, in one gesture, through the same live
+  // camera as the wheel: setLive per move, one commitView when a finger lifts — nothing re-renders
+  // per frame. The second finger is taken in the capture phase (onPointerDownCapture below) before
+  // any item sees it, and whatever the first finger had started — a table's drag, a marquee, a pan —
+  // lets go where it stands.
+  const touches = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ ids: [number, number]; d0: number; world: Point; mm0: number; left: number; top: number; w: number; h: number } | null>(null);
+  /** A finger came down. True when it started a pinch — the press is the view's then, not the item's. */
+  const touchDown = (e: React.PointerEvent): boolean => {
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const svg = svgRef.current;
+    if (touches.current.size !== 2 || pinch.current || !svg) return false;
+    cancelAllGestures();
+    pan.current = null;
+    marquee.current = null;
+    setMarqueeBox(null);
+    cancelFocus();
+    const [[ia, a], [ib, b]] = [...touches.current.entries()];
+    const r = svg.getBoundingClientRect();
+    const v = live.current;
+    const mx = (a.x + b.x) / 2 - r.left;
+    const my = (a.y + b.y) / 2 - r.top;
+    pinch.current = {
+      ids: [ia, ib],
+      d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      world: { x: v.cx + (mx - r.width / 2) * v.mmPerPx, y: v.cy + (my - r.height / 2) * v.mmPerPx },
+      mm0: v.mmPerPx,
+      left: r.left,
+      top: r.top,
+      w: r.width,
+      h: r.height,
+    };
+    return true;
+  };
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !touches.current.has(e.pointerId)) return;
+      touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const p = pinch.current;
+      if (!p) return;
+      e.preventDefault();
+      const a = touches.current.get(p.ids[0]);
+      const b = touches.current.get(p.ids[1]);
+      if (!a || !b) return;
+      const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const mmPerPx = Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, (p.mm0 * p.d0) / d));
+      const mx = (a.x + b.x) / 2 - p.left;
+      const my = (a.y + b.y) / 2 - p.top;
+      setLive({ cx: p.world.x - (mx - p.w / 2) * mmPerPx, cy: p.world.y - (my - p.h / 2) * mmPerPx, mmPerPx });
+    };
+    const up = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touches.current.delete(e.pointerId);
+      const p = pinch.current;
+      if (p && p.ids.includes(e.pointerId)) {
+        pinch.current = null;
+        swallowNextClick(); // the lift is not a tap on whatever is under it
+        commitView();
+      }
+    };
+    window.addEventListener("pointermove", move, { capture: true, passive: false });
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    return () => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+    };
+  }, [setLive, commitView]);
+
   // World mm → container px against the SETTLED view. The overlays are positioned by this during
   // render and carried to the live view by hudTransform in between commits.
   const worldToPx = (p: Point) => ({ x: (p.x - vb.minX) / mmPerPx, y: (p.y - vb.minY) / mmPerPx });
@@ -1542,6 +1614,12 @@ export function PlanCanvas({
       // of the view, not of the palm. Without this a press on anything draggable stopped the event
       // on its way up, and the view could only be moved from the few bare patches between things.
       onPointerDownCapture={(e) => {
+        // A second finger is a pinch of the view (touchDown, above) — taken before any item sees it.
+        if (e.pointerType === "touch" && touchDown(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         // Alt+press with the tape armed measures FROM whatever is under the pointer — taken here, in
         // the capture phase, so an item's own press handler (which would start dragging it) never
         // sees it. Without Alt an item's press is the item's: the tape takes only the empty floor.
@@ -1573,7 +1651,7 @@ export function PlanCanvas({
           // press on an item never gets here (its node stops it) and drags the item as it always
           // did; Alt+press on one is taken in the capture phase above.
           beginTape(e);
-        } else if (mode === "edit" && canMarquee) {
+        } else if (mode === "edit" && canMarquee && e.pointerType !== "touch") {
           // A PLAIN drag on empty canvas rubber-bands. It spent one release behind the additive
           // modifier, with a plain drag panning instead, and that trade was the wrong way round for
           // this app: panning has two dedicated gestures that cost nothing (Space above, the middle
@@ -1596,6 +1674,10 @@ export function PlanCanvas({
           const p = clientToMm(e.clientX, e.clientY);
           marquee.current = { anchorClientX: e.clientX, anchorClientY: e.clientY, x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
         } else if (mode === "edit") {
+          // A FINGER on empty canvas moves the view, even where a mouse would rubber-band: on a phone
+          // or a tablet that is what a one-finger drag means everywhere, and a box drawn under a
+          // finger hides what it is selecting. Two fingers pinch (touchDown, above).
+          //
           // No marquee to draw here — this host takes no multi-selection (the studio's event sketch
           // is the one, see canMarquee) — so a drag on empty canvas means the only other thing it
           // could mean: move the view. A surface with nothing to rubber-band would otherwise answer

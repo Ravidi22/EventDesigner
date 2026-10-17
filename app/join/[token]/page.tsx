@@ -29,5 +29,5 @@ export default async function JoinPage({ params }: { params: Promise<{ token: st
     );
   }
 
-  return <JoinScreen token={token} email={invite.email} name={invite.name ?? ""} studioName={invite.studioName} />;
+  return <JoinScreen token={token} email={invite.email} name={invite.name ?? ""} studioName={invite.studioName} client={invite.client} />;
 }

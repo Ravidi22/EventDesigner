@@ -13,6 +13,7 @@ import { Button } from "@/components/button";
 import { Menu } from "@/components/menu";
 import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
 import { EventBookingCard } from "./event-booking-card";
+import { ClientAccessCard } from "./client-access-card";
 
 // The shell — the floating left-anchored <dialog>, its header and its one scrollbar — is
 // components/drawer.tsx now, shared with the catalog's product form. The geometry notes that used
@@ -215,6 +216,8 @@ export function EventDetailDrawer({
           </div>
 
           <EventBookingCard key={event.id} event={event} onConfirmed={onEventChanged} />
+
+          <ClientAccessCard key={`clients-${event.id}`} event={event} />
 
           <div>
             <h3 className="mb-2 text-xs font-semibold text-muted">פרטים ליצירת קשר</h3>

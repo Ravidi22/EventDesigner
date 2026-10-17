@@ -12,7 +12,6 @@ import {
   Truck,
   Store,
   Inbox,
-  Bell,
   LogOut,
   type LucideIcon,
 } from "lucide-react";
@@ -21,7 +20,7 @@ import { setActiveVenueId } from "@/lib/venues/storage";
 import { useVenues } from "@/lib/venues/use-venues";
 import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
-import { IconButton } from "@/components/icon-button";
+import { NotificationBell } from "@/components/notification-bell";
 import { HeaderSearchProvider } from "@/components/header-search-context";
 import { EventDialog } from "@/components/event-dialog";
 import { SidePanel } from "@/components/side-panel";
@@ -104,8 +103,10 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
 
   const meta = TITLES.find((t) => t.test(pathname));
   const settingsActive = pathname.startsWith("/settings");
-  // The "new event" CTA and the notification bell are dashboard/events actions — everywhere else
-  // (the venue plan, the catalog, the gallery, settings…) they're chrome with nothing to act on.
+  // The "new event" CTA is a dashboard/events action — everywhere else (the venue plan, the
+  // catalog, the gallery, settings…) it is chrome with nothing to act on. The BELL is on every studio
+  // page since it has something to say (components/notification-bell.tsx): a client's changes to a
+  // sketch arrive while the designer is anywhere.
   const showHeaderActions =
     user.orgKind === "studio" && (pathname.startsWith("/dashboard") || pathname.startsWith("/production"));
   const nav = GENERAL.filter((item) => (item.for ?? ["studio"]).includes(user.orgKind));
@@ -259,11 +260,12 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
           <div className="flex-1" />
 
-          {showHeaderActions && (
+          {(showHeaderActions || user.orgKind === "studio") && (
             <div className="flex shrink-0 items-center gap-1.5">
               {/* Opens the details form in place rather than navigating to /meeting?new: answering
                   six questions is not worth losing the screen you were on. The dialog walks into
                   the meeting itself once the event exists — see components/event-dialog.tsx. */}
+              {showHeaderActions && (
               <button
                 type="button"
                 onClick={() => setCreating(true)}
@@ -271,9 +273,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               >
                 + יצירת אירוע חדש
               </button>
-              <IconButton label="התראות">
-                <Bell className="h-4 w-4" strokeWidth={1.75} />
-              </IconButton>
+              )}
+              <NotificationBell />
             </div>
           )}
         </header>

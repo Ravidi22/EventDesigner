@@ -113,6 +113,9 @@ import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
 import { AlignCenterVertical, BringToFront, Copy, Group, SendToBack, Trash2, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
+import { ProposalReview } from "./proposal-review";
+import { fetchSubmittedProposal, resolveProposal, type SubmittedProposal } from "@/lib/proposals/actions";
+import { diffDocuments } from "@/lib/design-document/delta";
 // A plain import now that the canvas is the app's shared SVG one: it renders on the server like any
 // other component, so there is nothing left to defer and no "loading the studio" flash to cover.
 import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } from "./canvas-stage";
@@ -373,6 +376,39 @@ export function StudioScreen({
   useEffect(() => {
     primeEventShades(workspace?.event?.shades);
     return () => primeEventShades(undefined);
+  }, [workspace]);
+
+  // A CLIENT'S PROPOSAL waiting on this event (lib/proposals/, the client side): read when the event
+  // resolves and whenever the window comes back into focus — the bell tells the designer, this is
+  // what opens on the event itself. `?review=<id>` (the bell's link) opens the review straight away.
+  const [proposal, setProposal] = useState<SubmittedProposal | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  useEffect(() => {
+    const id = workspace?.event?.id;
+    if (!id) return;
+    let live = true;
+    const read = () =>
+      fetchSubmittedProposal(id)
+        .then((p) => {
+          if (!live) return;
+          setProposal(p);
+          // Withdrawn or answered elsewhere while this screen was away: nothing left to review.
+          if (!p) setReviewing(false);
+          // The URL is read here, once, rather than through useSearchParams: an effect keyed on that
+          // object re-runs after every revalidating action (see CLAUDE.md, the meeting's stage).
+          const want = new URLSearchParams(window.location.search).get("review");
+          if (p && want === p.id) {
+            setReviewing(true);
+            window.history.replaceState(null, "", window.location.pathname);
+          }
+        })
+        .catch(() => {});
+    void read();
+    window.addEventListener("focus", read);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", read);
+    };
   }, [workspace]);
 
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only claims "saved" when
@@ -3967,6 +4003,48 @@ export function StudioScreen({
             onExitDressing={() => setDressing(null)}
             onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
           />
+          {/* A client sent changes: the line that says so, and the review over the canvas. */}
+          {proposal && !reviewing && !dressingTable && (
+            <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-center">
+              <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-accent-line bg-surface py-1.5 ps-4 pe-1.5 shadow-floating">
+                <span className="text-[13px] text-ink">
+                  <span className="font-bold">{proposal.submittedBy}</span> הציע/ה {diffDocuments(proposal.base, proposal.content).length} שינויים בסקיצה
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReviewing(true)}
+                  className="rounded-pill bg-accent px-4 py-1.5 text-[13px] font-bold text-canvas transition-colors hover:bg-accent-hover"
+                >
+                  לסקירה
+                </button>
+              </div>
+            </div>
+          )}
+          {proposal && reviewing && (
+            <ProposalReview
+              proposal={proposal}
+              current={doc}
+              plan={plan}
+              onClose={() => setReviewing(false)}
+              onApply={async (merged, accepted, rejected, reply) => {
+                // Answered FIRST — resolveProposal writes the merged drawing before it marks the
+                // proposal, and refuses one the client withdrew or a colleague answered meanwhile —
+                // and only then into this screen's history, as ONE entry (Ctrl+Z takes the approval
+                // back). The other way round, a refused answer left the drawing changed anyway.
+                const r = await resolveProposal(proposal.id, { accepted, rejected, reply, ...(accepted.length ? { content: merged } : {}) }).catch(
+                  () => ({ error: "השינויים לא נשמרו — ההצעה עדיין ממתינה, נסו שוב" }),
+                );
+                if ("error" in r) {
+                  showHint(r.error);
+                } else {
+                  if (accepted.length) act({ type: "loadDocument", content: merged });
+                  showHint(accepted.length ? "השינויים נכנסו לסקיצה · Ctrl+Z מבטל" : "התשובה נשלחה ללקוח");
+                }
+                setProposal(null);
+                setReviewing(false);
+              }}
+            />
+          )}
           {/* The table being dressed: how its items stand, and which tables should look like it. */}
           {dressingTable && (
             <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center">

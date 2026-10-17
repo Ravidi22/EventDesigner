@@ -47,6 +47,8 @@ export function Popover({
   trigger: triggerKind = "chip",
   panelClassName = "w-72",
   side = "top",
+  badge,
+  onOpenChange,
   children,
 }: {
   /** What the button opens, spelled out — it is the trigger's accessible name and its tooltip, and
@@ -73,10 +75,26 @@ export function Popover({
   /** Which way the panel opens. Upwards by default — these chips live in bars along the BOTTOM of
    *  a canvas; "bottom" is for a bar along its top. */
   side?: "top" | "bottom";
+  /** A count on the icon trigger — the bell's unread. Nothing is drawn for 0 or absent. */
+  badge?: number;
+  /** Told when the panel opens or closes — the bell reads its feed on open. */
+  onOpenChange?: (open: boolean) => void;
   /** The body. A function gets `close`, for a panel whose main button is also its last step. */
   children: ReactNode | ((close: () => void) => ReactNode);
 }) {
   const [open, setOpen] = useState(false);
+  // Told after the fact, from an effect, so every way the panel closes (✕, Escape, a press outside,
+  // the trigger) reports the same way without each one remembering to.
+  const notifyOpen = useRef(onOpenChange);
+  useEffect(() => {
+    notifyOpen.current = onOpenChange;
+  });
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
+    notifyOpen.current?.(open);
+  }, [open]);
   // Where the clamp put it: a horizontal nudge from centred, and a height cap when the room above
   // (or below) the trigger is shorter than the panel. Reset on every open.
   const [place, setPlace] = useState<{ dx: number; maxH?: number }>({ dx: 0 });
@@ -189,11 +207,16 @@ export function Popover({
           title={label}
           onClick={toggle}
           className={
-            "rounded-pill p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-35 " +
+            "relative rounded-pill p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-35 " +
             (open ? "bg-accent-tint text-accent hover:bg-accent-wash" : "text-muted hover:bg-accent-tint hover:text-accent-hover")
           }
         >
           {Icon && <Icon className="h-4 w-4" strokeWidth={2} />}
+          {!!badge && badge > 0 && (
+            <span className="nums absolute -end-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-pill bg-alert px-1 text-[10px] font-bold leading-none text-canvas">
+              {badge > 99 ? "99+" : badge}
+            </span>
+          )}
         </button>
       ) : (
         <button

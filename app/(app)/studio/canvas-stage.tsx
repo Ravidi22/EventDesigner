@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
@@ -245,6 +245,7 @@ export function CanvasStage({
   onExitDressing,
   onArrangeDressing,
   showTableNumbers = false,
+  extraOverlay,
 }: {
   doc: DesignDocumentContent;
   plan: EventPlan;
@@ -371,6 +372,9 @@ export function CanvasStage({
   /** Write each table's number and its `seated/seats` on it (a block's once, on the block) — the
    *  hall pass and the full studio. The design pass draws the room clean: one switch for both lines. */
   showTableNumbers?: boolean;
+  /** Drawn over the plan, in world mm, above everything this stage draws and taking no pointer —
+   *  the delta of a client's proposal (components/sketch-delta.tsx), for its two hosts. */
+  extraOverlay?: (ctx: CanvasLayerContext) => ReactNode;
 }) {
   // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
   // off the gesture: dragging a table (or a stage, a rug — anything standing on the floor) holds
@@ -1743,6 +1747,7 @@ export function CanvasStage({
       overlay={(ctx) => (
         <>
           <StructureDoors structure={plan.structure} />
+          {extraOverlay?.(ctx)}
 
           {/* The alignment KEY of a multi-selection: the one יישור lines the rest up with, and the
               one that stays put. A dashed frame a little outside its box and the word on it — drawn

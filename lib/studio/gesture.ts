@@ -120,6 +120,14 @@ export function startPointerGesture(down: AnyPointerEvent, g: PointerGesture, op
 
 /** Is any gesture holding the pointer right now? The canvas reads it to know a move with the
  *  button down is a drag and not a hover. */
+/** End every gesture in flight, where it stands — a second finger landing on the plan turns the
+ *  first finger's drag of a table into a pinch of the view (PlanCanvas), and the table must let go
+ *  rather than ride along with the zoom. Each one ends through its own onEnd, so the host closes its
+ *  history entry exactly as it would for a release. */
+export function cancelAllGestures(): void {
+  for (const end of [...live.values()]) end();
+}
+
 export function gestureActive(): boolean {
   return live.size > 0;
 }
