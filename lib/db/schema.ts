@@ -59,6 +59,7 @@ import type { ElementStyle } from "@/lib/element-style";
 import type { MeetingStepId } from "@/lib/meeting/steps";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { QuoteLayout } from "@/lib/quotes/layout";
+import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -130,6 +131,11 @@ export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supp
  *  is why it is allowed on a screen that otherwise derives everything: "the supplier said yes" is
  *  derivable from nothing, the same reasoning as events.confirmed_at. */
 export const orderStatusEnum = pgEnum("order_status", ["sent", "confirmed", "partial", "delivered", "declined"]);
+/** A client's standing on one event's sketch (event_clients.role). */
+export const clientRoleEnum = pgEnum("client_role", ["viewer", "editor"]);
+/** A sketch proposal's life (sketch_proposals): the client is editing it, it waits for the
+ *  designer, or the designer has answered. Withdrawing a sent one puts it back to `draft`. */
+export const proposalStatusEnum = pgEnum("proposal_status", ["draft", "submitted", "resolved"]);
 
 // ── Column helpers ─────────────────────────────────────────────────────────────────────────────
 const orgId = () => uuid("organization_id").notNull();
@@ -656,6 +662,10 @@ export const eventClients = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     /** When it was shared. There is no separate createdAt: the row IS the sharing. */
     sharedAt: created(),
+    /** What this person may do with the event's sketch: `editor` proposes changes (a sketch
+     *  proposal, below), `viewer` only looks — the parent paying for it who should see the plan but
+     *  not move the tables. Per PERSON, because the couple is two logins and the answer differs. */
+    role: clientRoleEnum("role").notNull().default("editor"),
   },
   (t) => [
     primaryKey({ columns: [t.eventId, t.userId] }),
@@ -1232,4 +1242,88 @@ export const eventCrew = pgTable(
     organizationId: orgId(),
   },
   (t) => [primaryKey({ columns: [t.eventId, t.userId] }), index("event_crew_user_idx").on(t.organizationId, t.userId)],
+);
+
+// ── The client side (lib/client-portal/, lib/proposals/, lib/notifications/) ────────────────────
+
+/** A client's changes to an event's sketch, waiting for the designer (docs/superpowers/specs/
+ *  2026-10-16-client-side-design.md).
+ *
+ *  A COPY, never a write into design_documents. The designer's drawing feeds the quote, the packing
+ *  list, procurement and the runway; a client moving a table in it would reprice the event with
+ *  nobody having decided anything. So the client edits `content` here, forked from `base` — the
+ *  drawing as it stood when they began — and the designer approves the difference
+ *  (lib/design-document/delta.ts), which is a three-way merge onto whatever the drawing is by then.
+ *
+ *  `base` is stored, not referenced: the working design_documents row is updated in place by
+ *  autosave, so the version number alone cannot say what the client saw.
+ *
+ *  `content` is never what the browser sent. Every save is re-derived on the server as
+ *  merge(base, base, sent, allowed), so a field a client may not change cannot be in this row.
+ *
+ *  One OPEN proposal per event (draft or submitted — the partial unique index): the couple shares
+ *  one, and `revision` turns two phones saving at once into a refused write rather than a lost one.
+ *  Resolved rows are kept: they are the record of what was asked and what was agreed. */
+export const sketchProposals = pgTable(
+  "sketch_proposals",
+  {
+    id: id(),
+    organizationId: orgId(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    status: proposalStatusEnum("status").notNull().default("draft"),
+    base: jsonb("base").$type<DesignDocumentContent>().notNull(),
+    /** design_documents.version of the base — for the record ("based on version 3"). */
+    baseVersion: integer("base_version").notNull(),
+    /** design_documents.updated_at of the base. A newer one means the designer has moved on and an
+     *  open draft is rebased when the client next opens it. Null = the event had no drawing yet. */
+    baseUpdatedAt: timestamp("base_updated_at", { withTimezone: true }),
+    content: jsonb("content").$type<DesignDocumentContent>().notNull(),
+    revision: integer("revision").notNull().default(0),
+    /** The client's message with it. */
+    note: text("note").notNull().default(""),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    submittedBy: uuid("submitted_by").references(() => users.id, { onDelete: "set null" }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    resolvedBy: uuid("resolved_by").references(() => users.id, { onDelete: "set null" }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    /** The designer's answer to the client. */
+    reply: text("reply").notNull().default(""),
+    /** Change keys (delta.ts `table:<id>`) the designer took, and the ones they did not. */
+    accepted: text("accepted").array().notNull().default([]),
+    rejected: text("rejected").array().notNull().default([]),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [
+    index("sketch_proposals_org_idx").on(t.organizationId),
+    index("sketch_proposals_event_idx").on(t.eventId, t.createdAt),
+    uniqueIndex("sketch_proposals_open_key")
+      .on(t.eventId)
+      .where(sql`${t.status} in ('draft', 'submitted')`),
+  ],
+);
+
+/** The bell (lib/notifications/). One row per RECIPIENT, written when the thing happens.
+ *
+ *  `organizationId` is the studio whose event it is about — for a client recipient too, who has no
+ *  organisation of their own. It keeps ADR-2's "every table carries organizationId" true and lets a
+ *  studio's data be removed whole; the READ scope is the recipient (`user_id`), never the org. */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    organizationId: orgId(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id").references(() => events.id, { onDelete: "cascade" }),
+    /** NotificationKind (lib/notifications/types.ts). Text, not an enum: new kinds are expected. */
+    kind: text("kind").$type<NotificationKind>().notNull(),
+    payload: jsonb("payload").$type<NotificationPayload>().notNull().default({}),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)],
 );

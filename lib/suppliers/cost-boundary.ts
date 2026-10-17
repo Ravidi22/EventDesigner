@@ -25,6 +25,10 @@ export const CLIENT_FACING = [
   "app/meeting",
   "app/(app)/outputs",
   "lib/client-portal",
+  // What the client's sketch draws its delta and its change list with — shared with the studio's
+  // review, and read on a client's phone.
+  "lib/proposals",
+  "lib/notifications",
 ];
 
 /** What none of them may reference. Import paths and identifiers, not loose words: matching the

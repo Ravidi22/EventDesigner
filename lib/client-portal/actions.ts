@@ -1,5 +1,5 @@
 "use server";
-// What a CLIENT may see: their own events, and nothing else.
+// What a CLIENT may see and do: their own events, and nothing else.
 //
 // This is the mirror of the studio's actions and the rules are inverted. Those start with
 // currentOrg() and scope by organisation; a client has no organisation, so currentOrg() throws for
@@ -8,27 +8,56 @@
 // so there is no version of these queries that forgets it.
 //
 // ⚠ WHAT IS RETURNED IS CLIENT-FACING. The same rule as /present and meeting mode: no prices, no
-// costs, no quantities on hand, no other client's anything. That is why this returns a hand-built
-// shape rather than the EventSummary the studio uses — the studio's type carries a quote timestamp
-// and a meeting-flow step, which are facts about the designer's process and none of the client's
-// business. A narrower type cannot leak a field nobody remembered to strip.
-import { and, asc, eq } from "drizzle-orm";
+// costs, no quantities on hand, no other client's anything. That is why this returns hand-built
+// shapes (./types.ts) rather than the studio's EventSummary, and products through clientProduct()
+// (./safe-product.ts), an allow-list.
+//
+// ⚠ AND WHAT IS WRITTEN IS A PROPOSAL, never the drawing. A client's edits land in sketch_proposals
+// (see the schema note); the designer's design_documents row is not touched by anything here.
+// Every save is re-derived through the delta filter (lib/design-document/delta.ts), so a field a
+// client may not change cannot reach the row whatever the browser sent.
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { currentSession } from "@/lib/auth/session";
-import { eventClients, events, organizations, venues } from "@/lib/db/schema";
+import { currentSession, type Session } from "@/lib/auth/session";
+import {
+  designDocuments,
+  eventClients,
+  eventZones,
+  events,
+  organizations,
+  productVariants,
+  products,
+  sketchProposals,
+  studioSettings,
+  venueStructures,
+  venues,
+  zones,
+} from "@/lib/db/schema";
+import { toProducts } from "@/lib/catalog/db-mapping";
+import { toZone } from "@/lib/venues/db-mapping";
+import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
+import type { VenueGeometry } from "@/lib/venues/types";
+import { emptyDocument, type DesignDocumentContent } from "@/lib/design-document/types";
+import { diffDocuments, mergeChanges, rebaseDraft } from "@/lib/design-document/delta";
+import { notify, studioRecipients } from "@/lib/notifications/write";
+import { clientProduct } from "./safe-product";
+import type { ClientError, ClientEvent, ClientEventDetail, ClientRole, ClientSketch, ProposalOutcome, ProposalView } from "./types";
 
-/** One event, as its client sees it. */
-export interface ClientEvent {
-  id: string;
-  /** "" until the designer sets one — the client's own event may genuinely have no date yet. */
-  date: string;
-  time?: string;
-  /** The zones, already joined into a label by the studio. */
-  where: string;
-  guests: number;
-  venueName?: string;
-  /** Which studio is designing it. A client can, in principle, have events with two. */
-  studioName: string;
+export type { ClientEvent } from "./types";
+
+/** Categories a client's canvas needs whole, whatever the plan uses today: the table types they may
+ *  pick from, the studio's chairs (the default chair round every table is its first row), and the
+ *  pieces a stage is laid from — the canvas lays a stage's decks from the primed catalog. */
+const WHOLE_CATEGORIES = ["tables", "chairs", "stages", "stage-decks", "stage-stairs", "stage-skirts", "stage-benches", "stage-barriers", "stage-ramps", "stage-surfaces"];
+
+/** A client may add at most this many tables in one proposal — a hall, not a stress test. */
+const MAX_ADDED_TABLES = 200;
+const MAX_NOTE = 2000;
+const MAX_CONTENT_BYTES = 2_000_000;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function assertId(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || !UUID_RE.test(value)) throw new Error(`${field} must be a uuid`);
 }
 
 /**
@@ -70,4 +99,369 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
     venueName: r.venueName ?? undefined,
     studioName: r.studioName ?? "",
   }));
+}
+
+// ── access ──────────────────────────────────────────────────────────────────────────────────────
+
+interface Shared {
+  session: Session;
+  event: {
+    id: string;
+    organizationId: string;
+    venueId: string | null;
+    clientName: string;
+    detail: Omit<ClientEventDetail, "studio">;
+  };
+}
+
+/** The event, if it is shared with the signed-in client. THROWS otherwise — an authorization
+ *  failure is not something the client can correct, so it is not returned as `{ error }`. */
+async function sharedEvent(eventId: string): Promise<Shared> {
+  assertId(eventId, "eventId");
+  const session = await currentSession();
+  if (!session || session.kind !== "client") throw new Error("not a client account");
+  const [row] = await db()
+    .select({
+      id: events.id,
+      organizationId: events.organizationId,
+      venueId: events.venueId,
+      clientName: events.clientName,
+      date: events.eventDate,
+      time: events.startTime,
+      where: events.zonesLabel,
+      guests: events.guests,
+      role: eventClients.role,
+      venueName: venues.name,
+      studioName: organizations.name,
+    })
+    .from(eventClients)
+    .innerJoin(events, eq(events.id, eventClients.eventId))
+    .leftJoin(venues, eq(venues.id, events.venueId))
+    .leftJoin(organizations, eq(organizations.id, events.organizationId))
+    .where(and(eq(eventClients.userId, session.userId), eq(eventClients.eventId, eventId), eq(events.archived, false)))
+    .limit(1);
+  if (!row) throw new Error("this event is not shared with you");
+  return {
+    session,
+    event: {
+      id: row.id,
+      organizationId: row.organizationId,
+      venueId: row.venueId,
+      clientName: row.clientName,
+      detail: {
+        id: row.id,
+        date: row.date ?? "",
+        time: row.time ? row.time.slice(0, 5) : undefined,
+        where: row.where,
+        guests: row.guests,
+        venueName: row.venueName ?? undefined,
+        studioName: row.studioName ?? "",
+        role: row.role as ClientRole,
+      },
+    },
+  };
+}
+
+async function studioContact(organizationId: string, fallbackName: string) {
+  const [s] = await db()
+    .select({ name: studioSettings.businessName, phone: studioSettings.phone, email: studioSettings.email, instagram: studioSettings.instagram })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+  return { name: s?.name || fallbackName, phone: s?.phone ?? "", email: s?.email ?? "", instagram: s?.instagram ?? "" };
+}
+
+// ── the reads a sketch needs ────────────────────────────────────────────────────────────────────
+
+/** The designer's current drawing — the highest version, sealed or not; an empty one before any. */
+async function designerDocument(organizationId: string, eventId: string) {
+  const [row] = await db()
+    .select({ content: designDocuments.content, version: designDocuments.version, updatedAt: designDocuments.updatedAt })
+    .from(designDocuments)
+    .where(and(eq(designDocuments.eventId, eventId), eq(designDocuments.organizationId, organizationId)))
+    .orderBy(desc(designDocuments.version))
+    .limit(1);
+  return row ?? { content: emptyDocument(), version: 0, updatedAt: null };
+}
+
+/** The event's venue as a plan: walls, doors, features, zones. Only ever the event's own venue, in
+ *  the event's own studio — the join that got us here is what entitles the client to it. */
+async function eventGeometry(organizationId: string, venueId: string | null): Promise<VenueGeometry> {
+  if (!venueId) return { structure: emptyStructure(), zones: [], mmPerUnit: 1, access: "none" };
+  const database = db();
+  const [[venueRow], [structureRow], zoneRows] = await Promise.all([
+    database.select({ plan: venues.plan }).from(venues).where(and(eq(venues.id, venueId), eq(venues.organizationId, organizationId))).limit(1),
+    database
+      .select({ structure: venueStructures.structure })
+      .from(venueStructures)
+      .where(and(eq(venueStructures.venueId, venueId), eq(venueStructures.organizationId, organizationId)))
+      .limit(1),
+    database.select().from(zones).where(and(eq(zones.venueId, venueId), eq(zones.organizationId, organizationId))).orderBy(asc(zones.createdAt)),
+  ]);
+  return {
+    structure: (structureRow?.structure as VenueStructure) ?? emptyStructure(),
+    zones: zoneRows.map(toZone),
+    mmPerUnit: (venueRow?.plan as { mmPerUnit?: number } | undefined)?.mmPerUnit ?? 1,
+    access: "granted",
+  };
+}
+
+/** Every variant id a drawing names. */
+function variantIdsOf(...docs: DesignDocumentContent[]): Set<string> {
+  const ids = new Set<string>();
+  for (const d of docs) {
+    for (const t of d.tables) {
+      if (t.variantId) ids.add(t.variantId);
+      if (t.chairVariantId) ids.add(t.chairVariantId);
+    }
+    for (const p of d.placements) ids.add(p.variantId);
+  }
+  return ids;
+}
+
+/** The studio's catalog, server-side, by organisation — the caller has already proven access. */
+async function catalogOf(organizationId: string) {
+  const database = db();
+  const rows = await database.select().from(products).where(eq(products.organizationId, organizationId));
+  if (rows.length === 0) return [];
+  const variantRows = await database
+    .select()
+    .from(productVariants)
+    .where(and(eq(productVariants.organizationId, organizationId), inArray(productVariants.productId, rows.map((r) => r.id))));
+  return toProducts(rows, variantRows);
+}
+
+/** What the client's canvas is sent: the rows the drawings use, plus WHOLE_CATEGORIES — each one
+ *  through the allow-list. */
+async function clientCatalog(organizationId: string, ...docs: DesignDocumentContent[]) {
+  const used = variantIdsOf(...docs);
+  return (await catalogOf(organizationId))
+    // A row with no variants is placed under its OWN id (defaultVariantId), so both are looked for.
+    .filter((p) => used.has(p.id) || p.variants.some((v) => used.has(v.id)) || (WHOLE_CATEGORIES.includes(p.category) && !p.archived))
+    .map(clientProduct);
+}
+
+// ── proposals ───────────────────────────────────────────────────────────────────────────────────
+
+type ProposalRow = typeof sketchProposals.$inferSelect;
+
+async function openProposal(eventId: string): Promise<ProposalRow | undefined> {
+  const [row] = await db()
+    .select()
+    .from(sketchProposals)
+    .where(and(eq(sketchProposals.eventId, eventId), inArray(sketchProposals.status, ["draft", "submitted"])))
+    .limit(1);
+  return row;
+}
+
+function toView(row: ProposalRow, dropped: ProposalView["dropped"] = []): ProposalView {
+  return {
+    id: row.id,
+    status: row.status === "submitted" ? "submitted" : "draft",
+    base: row.base,
+    content: row.content,
+    revision: row.revision,
+    note: row.note,
+    submittedAt: row.submittedAt?.toISOString() ?? null,
+    dropped,
+  };
+}
+
+/**
+ * Everything the client's event page needs to draw the sketch and edit it.
+ *
+ * An open DRAFT forked from an older drawing is carried onto the designer's current one here (the
+ * spec's "drift" rule): what still applies is kept, a change to something the designer has since
+ * changed is dropped and returned in `proposal.dropped` so the page can say which. A SUBMITTED
+ * proposal is never rebased — the designer reviews it against what the client actually saw.
+ */
+export async function fetchClientSketch(eventId: string): Promise<ClientSketch> {
+  const { event } = await sharedEvent(eventId);
+  const [designer, geometry, zoneRows, studio, open, [last]] = await Promise.all([
+    designerDocument(event.organizationId, event.id),
+    eventGeometry(event.organizationId, event.venueId),
+    db().select({ id: eventZones.zoneId }).from(eventZones).where(eq(eventZones.eventId, event.id)).orderBy(asc(eventZones.position)),
+    studioContact(event.organizationId, event.detail.studioName),
+    openProposal(event.id),
+    db()
+      .select()
+      .from(sketchProposals)
+      .where(and(eq(sketchProposals.eventId, event.id), eq(sketchProposals.status, "resolved")))
+      .orderBy(desc(sketchProposals.resolvedAt))
+      .limit(1),
+  ]);
+
+  let proposal: ProposalView | null = open ? toView(open) : null;
+  const moved = designer.updatedAt && (!open?.baseUpdatedAt || designer.updatedAt.getTime() > open.baseUpdatedAt.getTime());
+  if (open && open.status === "draft" && moved) {
+    const { content, dropped } = rebaseDraft(open.base, open.content, designer.content);
+    const [row] = await db()
+      .update(sketchProposals)
+      .set({
+        base: designer.content,
+        baseVersion: designer.version,
+        baseUpdatedAt: designer.updatedAt,
+        content,
+        revision: open.revision + 1,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(sketchProposals.id, open.id), eq(sketchProposals.revision, open.revision)))
+      .returning();
+    // Another device rebased it first: what it wrote is as good, minus the note about what dropped.
+    proposal = row ? toView(row, dropped) : toView((await openProposal(event.id)) ?? open);
+  }
+
+  const outcome: ProposalOutcome | null = last
+    ? { id: last.id, resolvedAt: last.resolvedAt?.toISOString() ?? "", accepted: last.accepted.length, total: last.accepted.length + last.rejected.length, reply: last.reply }
+    : null;
+
+  return {
+    event: { ...event.detail, studio },
+    venueId: event.venueId,
+    geometry,
+    zoneIds: zoneRows.map((z) => z.id),
+    designer: { content: designer.content, version: designer.version },
+    products: await clientCatalog(event.organizationId, designer.content, ...(proposal ? [proposal.content] : [])),
+    proposal,
+    outcome,
+  };
+}
+
+/** Open a draft on the designer's current drawing — or hand back the one already open. */
+export async function startProposal(eventId: string): Promise<ProposalView | ClientError> {
+  const { session, event } = await sharedEvent(eventId);
+  if (event.detail.role !== "editor") return { error: "אפשר לצפות בסקיצה, אבל לא להציע בה שינויים. בקשו מהמעצב הרשאת עריכה." };
+  const existing = await openProposal(event.id);
+  if (existing) return toView(existing);
+  const designer = await designerDocument(event.organizationId, event.id);
+  await db()
+    .insert(sketchProposals)
+    .values({
+      organizationId: event.organizationId,
+      eventId: event.id,
+      base: designer.content,
+      baseVersion: designer.version,
+      baseUpdatedAt: designer.updatedAt,
+      content: designer.content,
+      createdBy: session.userId,
+    })
+    // The partner opened one on the other phone a moment ago: theirs is the one.
+    .onConflictDoNothing();
+  const row = await openProposal(event.id);
+  if (!row) throw new Error("could not open a proposal");
+  return toView(row);
+}
+
+function assertContent(value: unknown): asserts value is DesignDocumentContent {
+  if (!value || typeof value !== "object") throw new Error("content must be an object");
+  const doc = value as Partial<DesignDocumentContent>;
+  if (!Array.isArray(doc.tables) || !Array.isArray(doc.placements)) throw new Error("content must have tables and placements");
+  if (JSON.stringify(value).length > MAX_CONTENT_BYTES) throw new Error("content is too large");
+}
+
+/**
+ * What of `sent` a client may keep, carried onto `base`: every table change the delta knows, minus
+ * a table of a type that is not one of the studio's own tables and an added table whose dressing
+ * names anything the base drawing does not already use (a client copies a dressed table; they never
+ * pick a centrepiece). The merge then copies only the fields of the aspects it applies.
+ */
+function sanitize(base: DesignDocumentContent, sent: DesignDocumentContent, tableVariants: Set<string>): DesignDocumentContent {
+  const baseVariants = variantIdsOf(base);
+  const okTable = (variantId: string | undefined) => !variantId || tableVariants.has(variantId) || baseVariants.has(variantId);
+  let added = 0;
+  const accept = diffDocuments(base, sent)
+    .filter((c) => {
+      if (c.kind === "group") return true;
+      if (c.op === "remove") return true;
+      if (!okTable(c.after?.variantId)) return false;
+      if (c.op === "add") {
+        if (++added > MAX_ADDED_TABLES) return false;
+        return sent.placements.filter((p) => p.tableId === c.id || p.over === c.id).every((p) => baseVariants.has(p.variantId));
+      }
+      return true;
+    })
+    .map((c) => c.key);
+  return mergeChanges(base, base, sent, { accept }).doc;
+}
+
+/** Autosave the client's draft. `revision` is the one this device last saw. */
+export async function saveProposal(eventId: string, content: unknown, revision: number): Promise<{ revision: number } | ClientError> {
+  const { event } = await sharedEvent(eventId);
+  if (event.detail.role !== "editor") return { error: "אין לכם הרשאה להציע שינויים בסקיצה הזאת" };
+  assertContent(content);
+  const open = await openProposal(event.id);
+  if (!open) return { error: "ההצעה כבר לא פתוחה", stale: true };
+  if (open.status === "submitted") return { error: "השינויים נשלחו למעצב וממתינים לאישור", stale: true };
+  if (open.revision !== revision) return { error: "השינויים נשמרו ממכשיר אחר", stale: true };
+
+  const tableVariants = new Set(
+    // A row with no variants is placed under its own id (defaultVariantId) — both count.
+    (await catalogOf(event.organizationId)).filter((p) => p.category === "tables" && !p.archived).flatMap((p) => [p.id, ...p.variants.map((v) => v.id)]),
+  );
+  const [row] = await db()
+    .update(sketchProposals)
+    .set({ content: sanitize(open.base, content, tableVariants), revision: revision + 1, updatedAt: new Date() })
+    .where(and(eq(sketchProposals.id, open.id), eq(sketchProposals.revision, revision), eq(sketchProposals.status, "draft")))
+    .returning({ revision: sketchProposals.revision });
+  if (!row) return { error: "השינויים נשמרו ממכשיר אחר", stale: true };
+  return { revision: row.revision };
+}
+
+/** Send the draft to the designer. */
+export async function submitProposal(eventId: string, note: string, revision: number): Promise<ProposalView | ClientError> {
+  const { session, event } = await sharedEvent(eventId);
+  if (event.detail.role !== "editor") return { error: "אין לכם הרשאה להציע שינויים בסקיצה הזאת" };
+  const open = await openProposal(event.id);
+  if (!open || open.status !== "draft") return { error: "אין טיוטה פתוחה לשליחה", stale: true };
+  if (open.revision !== revision) return { error: "השינויים נשמרו ממכשיר אחר", stale: true };
+  const changes = diffDocuments(open.base, open.content).length;
+  if (changes === 0) return { error: "עדיין לא שיניתם דבר בסקיצה" };
+
+  const [row] = await db()
+    .update(sketchProposals)
+    .set({
+      status: "submitted",
+      note: String(note ?? "").trim().slice(0, MAX_NOTE),
+      submittedBy: session.userId,
+      submittedAt: new Date(),
+      revision: revision + 1,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(sketchProposals.id, open.id), eq(sketchProposals.revision, revision), eq(sketchProposals.status, "draft")))
+    .returning();
+  if (!row) return { error: "השינויים נשמרו ממכשיר אחר", stale: true };
+
+  await notify(await studioRecipients(event.organizationId), {
+    kind: "proposal.submitted",
+    organizationId: event.organizationId,
+    eventId: event.id,
+    payload: { proposalId: row.id, actorName: session.name || session.email, eventLabel: event.clientName, changes },
+  });
+  return toView(row);
+}
+
+/** Take a sent proposal back to a draft, before the designer has answered it. */
+export async function withdrawProposal(eventId: string): Promise<ProposalView | ClientError> {
+  const { event } = await sharedEvent(eventId);
+  if (event.detail.role !== "editor") return { error: "אין לכם הרשאה להציע שינויים בסקיצה הזאת" };
+  const [row] = await db()
+    .update(sketchProposals)
+    .set({ status: "draft", submittedAt: null, submittedBy: null, updatedAt: new Date() })
+    .where(and(eq(sketchProposals.eventId, event.id), eq(sketchProposals.status, "submitted")))
+    .returning();
+  if (!row) return { error: "המעצב כבר השיב על ההצעה", stale: true };
+  // The bump makes any device still holding the submitted copy re-read before it saves.
+  const [bumped] = await db()
+    .update(sketchProposals)
+    .set({ revision: row.revision + 1 })
+    .where(eq(sketchProposals.id, row.id))
+    .returning();
+  return toView(bumped ?? row);
+}
+
+/** Throw the draft away — back to the designer's sketch. */
+export async function discardProposal(eventId: string): Promise<void> {
+  const { event } = await sharedEvent(eventId);
+  if (event.detail.role !== "editor") return;
+  await db().delete(sketchProposals).where(and(eq(sketchProposals.eventId, event.id), eq(sketchProposals.status, "draft")));
 }

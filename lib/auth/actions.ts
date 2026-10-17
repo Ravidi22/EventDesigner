@@ -11,7 +11,8 @@ import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { ORG_HOME, isOrgKind, type OrgKind } from "./kinds";
-import { organizations, studioSettings, users } from "@/lib/db/schema";
+import { eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
+import { notify, studioRecipients } from "@/lib/notifications/write";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, isAccountKind, type AccountKind } from "./kinds";
@@ -274,14 +275,16 @@ export async function signIn(input: { email: string; password: string }): Promis
  */
 export async function inviteInfo(
   token: string,
-): Promise<{ email: string; name: string | null; studioName: string } | null> {
+): Promise<{ email: string; name: string | null; studioName: string; client?: true } | null> {
   const value = String(token ?? "");
   if (!value) return null;
 
   const [row] = await db()
-    .select({ email: users.email, name: users.name, studioName: organizations.name })
+    .select({ id: users.id, kind: users.kind, email: users.email, name: users.name, studioName: organizations.name })
     .from(users)
-    .innerJoin(organizations, eq(organizations.id, users.organizationId))
+    // A LEFT join: a client's invitation has no organisation — they are invited to an EVENT, and
+    // the studio's name is read through the event it was shared (lib/events/client-actions.ts).
+    .leftJoin(organizations, eq(organizations.id, users.organizationId))
     .where(
       and(
         eq(users.inviteTokenHash, hashInviteToken(value)),
@@ -290,7 +293,18 @@ export async function inviteInfo(
       ),
     )
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  if (row.kind === "studio") return row.studioName === null ? null : { email: row.email, name: row.name, studioName: row.studioName };
+  const [shared] = await db()
+    .select({ studioName: organizations.name })
+    .from(eventClients)
+    .innerJoin(events, eq(events.id, eventClients.eventId))
+    .innerJoin(organizations, eq(organizations.id, events.organizationId))
+    .where(eq(eventClients.userId, row.id))
+    .limit(1);
+  // A client invitation whose every event was taken back since is not an invitation to anything.
+  if (!shared) return null;
+  return { email: row.email, name: row.name, studioName: shared.studioName, client: true };
 }
 
 /**
@@ -337,6 +351,25 @@ export async function acceptInvite(input: {
     .returning({ id: users.id, kind: users.kind });
 
   if (!row) return { error: "קישור ההזמנה פג או כבר נוצל. בקשו מהסטודיו קישור חדש." };
+
+  // A client joining is news for the studio that shared with them — the designer sent a link over
+  // WhatsApp and otherwise has no way to know it was opened. One line per event, to each studio's
+  // owner and designers.
+  if (row.kind === "client") {
+    const shared = await db()
+      .select({ eventId: events.id, organizationId: events.organizationId, clientName: events.clientName })
+      .from(eventClients)
+      .innerJoin(events, eq(events.id, eventClients.eventId))
+      .where(eq(eventClients.userId, row.id));
+    for (const e of shared) {
+      await notify(await studioRecipients(e.organizationId), {
+        kind: "client.joined",
+        organizationId: e.organizationId,
+        eventId: e.eventId,
+        payload: { actorName: name, eventLabel: e.clientName },
+      });
+    }
+  }
 
   await createSession(row.id);
   return { home: await homeOf(row.id) };

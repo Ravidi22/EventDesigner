@@ -79,27 +79,41 @@ export async function createSession(userId: string): Promise<void> {
  * the route guard and then runs three server actions asks the database once, not five times. It is
  * per-request, so it can never serve one user's session to another.
  */
-export const currentSession = cache(async (): Promise<Session | null> => {
-  const store = await cookies();
-  const token = store.get(COOKIE)?.value;
-  if (!token) return null;
+/** A command-line script signed in as one person — the twin of actAsOrgForScript (lib/db/org.ts),
+ *  for the actions that ask WHO rather than which studio: the client side has no organisation to
+ *  act as (lib/client-portal/verify.ts walks a client's whole round trip through it). Refused in
+ *  production; null signs the script out again. */
+let scriptUser: string | null = null;
+export function actAsUserForScript(userId: string | null): void {
+  if (process.env.NODE_ENV === "production") throw new Error("actAsUserForScript is not available in production");
+  scriptUser = userId;
+}
 
-  const [row] = await db()
-    .select({
-      userId: users.id,
-      kind: users.kind,
-      organizationId: users.organizationId,
-      email: users.email,
-      name: users.name,
-      role: users.role,
-      state: users.state,
-      organizationKind: organizations.kind,
-    })
-    .from(sessions)
-    .innerJoin(users, eq(users.id, sessions.userId))
-    .leftJoin(organizations, eq(organizations.id, users.organizationId))
-    .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, new Date())))
-    .limit(1);
+export const currentSession = cache(async (): Promise<Session | null> => {
+  // Checked BEFORE cookies(): outside a request there is no cookie store to ask.
+  const asUser = scriptUser;
+  const token = asUser ? null : (await cookies()).get(COOKIE)?.value;
+  if (!asUser && !token) return null;
+
+  const fields = {
+    userId: users.id,
+    kind: users.kind,
+    organizationId: users.organizationId,
+    email: users.email,
+    name: users.name,
+    role: users.role,
+    state: users.state,
+    organizationKind: organizations.kind,
+  };
+  const [row] = asUser
+    ? await db().select(fields).from(users).leftJoin(organizations, eq(organizations.id, users.organizationId)).where(eq(users.id, asUser)).limit(1)
+    : await db()
+        .select(fields)
+        .from(sessions)
+        .innerJoin(users, eq(users.id, sessions.userId))
+        .leftJoin(organizations, eq(organizations.id, users.organizationId))
+        .where(and(eq(sessions.tokenHash, hashToken(token!)), gt(sessions.expiresAt, new Date())))
+        .limit(1);
 
   if (!row) return null;
   // A member who was invited but never accepted has a row and no usable account. Belt and braces —

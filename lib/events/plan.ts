@@ -51,7 +51,9 @@ function structureBounds(structure: VenueStructure): Bounds {
   return outlineBounds(structure.nodes.map((n) => ({ x: n.x, y: n.y })));
 }
 
-export function eventPlan(event: EventSummary | null, geometry: VenueGeometry): EventPlan {
+/** Reads only which venue and which zones — so the client's sketch, which has no studio
+ *  EventSummary, builds its plan through the same function. */
+export function eventPlan(event: Pick<EventSummary, "venueId" | "zoneIds"> | null, geometry: VenueGeometry): EventPlan {
   // An event with no venue has no plan and nothing to explain — but one WITH a venue that came back
   // denied still has no geometry to draw, and that difference has to survive this function rather
   // than collapsing into the same EMPTY_PLAN both used to return.

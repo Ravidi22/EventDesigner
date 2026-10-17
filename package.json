@@ -94,7 +94,10 @@
     "check:appointments": "tsx lib/appointments/types.ts",
     "check:marketplace": "tsx lib/marketplace/boundary.ts",
     "check:google": "tsx lib/google/types.ts && tsx lib/google/config.ts && tsx lib/google/secret-box.ts && tsx lib/google/mapping.ts && tsx lib/google/oauth.ts && tsx lib/google/api.ts",
-    "gen:calendar": "tsx lib/calendar/generate.mts"
+    "gen:calendar": "tsx lib/calendar/generate.mts",
+    "check:delta": "tsx lib/design-document/delta.ts",
+    "db:verify:client": "tsx lib/client-portal/verify.ts",
+    "check:client-product": "tsx lib/client-portal/safe-product.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
