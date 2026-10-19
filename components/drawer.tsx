@@ -56,7 +56,13 @@ export function Drawer({
     // top layer, where its height does not stretch to fill top+bottom offsets on its own.
     <dialog
       ref={ref}
-      onClose={onClose}
+      // Its OWN close only. `close` does not bubble in the DOM, but React dispatches it up the fiber
+      // tree, so a ConfirmDialog opened inside the drawer (the client-access card's "הסרת הגישה")
+      // shut the whole drawer when it was answered — the appearance editor carried its own guard
+      // against exactly this; every drawer needs it.
+      onClose={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       style={{ left: "8px", right: "auto", top: "4px", bottom: "4px", height: "calc(100dvh - 8px)" }}
       className="drawer fixed m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
     >

@@ -346,7 +346,7 @@ export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "
 
           `no-print` on the whole rail. What is left when it goes is the sheet column, which is the
           deliverable. */}
-      <aside className="no-print flex w-[212px] shrink-0 flex-col border-s border-border bg-surface">
+      <aside className="no-print flex w-[212px] shrink-0 flex-col border-e border-border bg-surface">
         <nav className="flex min-h-0 shrink flex-col gap-[3px] overflow-y-auto p-2.5" aria-label="מסמכי האירוע">
           {VIEWS.map(({ id, icon: Icon }) => (
             <div key={id}>

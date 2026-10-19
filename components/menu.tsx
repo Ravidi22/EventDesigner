@@ -24,6 +24,9 @@ export interface MenuItem {
   /** Destructive — drawn in the alert ink so it reads as different from the rows above it before
    *  it is read as a word. */
   danger?: boolean;
+  /** Starts a new group of rows — a hairline above it. A long "…" reads as its subjects (how it is
+   *  drawn, what to select, its catalog row) rather than as one list of verbs. */
+  separated?: boolean;
 }
 
 export function Menu({
@@ -157,7 +160,7 @@ export function Menu({
             // A hairline wherever the list turns destructive — no flag to pass, and it means the
             // last ordinary row and the one that destroys something are never flush against each
             // other under a moving cursor.
-            const separated = item.danger && index > 0 && !items[index - 1].danger;
+            const separated = index > 0 && (item.separated || (item.danger && !items[index - 1].danger));
             return (
               // A Fragment, not a wrapper element: role="menu" wants its menuitems as direct
               // children, and a div in between is a div in between.

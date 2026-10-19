@@ -22,6 +22,7 @@ import { Wordmark } from "@/components/wordmark";
 import { VenueSwitcher } from "@/components/venue-switcher";
 import { NotificationBell } from "@/components/notification-bell";
 import { HeaderSearchProvider } from "@/components/header-search-context";
+import { HeaderSlotProvider } from "@/components/header-slot";
 import { EventDialog } from "@/components/event-dialog";
 import { SidePanel } from "@/components/side-panel";
 import { OrgKindProvider } from "@/components/org-kind-context";
@@ -61,9 +62,11 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/orders"), title: "הזמנות" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ומצגות" },
   { test: (p) => p.startsWith("/settings"), title: "הגדרות" },
-  { test: (p) => p.startsWith("/studio"), title: "סטודיו עיצוב" },
-  { test: (p) => p.startsWith("/outputs"), title: "פלטים" },
 ];
+
+/** The surfaces OF an event (components/event-surface.tsx): their top bar names the event, not the
+ *  page, so the shell leaves its title out and lends them the bar (components/header-slot.tsx). */
+const isEventSurface = (p: string) => p.startsWith("/studio") || p.startsWith("/outputs");
 
 /** Who is signed in. Handed down from the (app) layout, which has already resolved the session
  *  server-side — the shell does not re-fetch it, and cannot be rendered without one. */
@@ -82,6 +85,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // Keyed by the page it was typed on, so a page never reads the previous page's text.
   const [search, setSearch] = useState({ pathname: "", value: "" });
   const [creating, setCreating] = useState(false);
+  // The top bar's own node, for a page that fills it (HeaderSlot). A callback ref into state, so the
+  // page renders into it on the pass after the bar mounts.
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
   // Venues come from the (app) layout's server-side read, through VenuesProvider — the switcher does
   // not fetch them, and neither does anything else that needs them. The selection itself still lives
   // in this browser; the provider resolves it against the list and publishes one answer.
@@ -102,6 +108,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   const setHeaderSearch = useCallback((value: string) => setSearch({ pathname, value }), [pathname]);
 
   const meta = TITLES.find((t) => t.test(pathname));
+  const surface = isEventSurface(pathname);
   const settingsActive = pathname.startsWith("/settings");
   // The "new event" CTA is a dashboard/events action — everywhere else (the venue plan, the
   // catalog, the gallery, settings…) it is chrome with nothing to act on. The BELL is on every studio
@@ -249,16 +256,24 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           (outputs-screen, event-surface, quote-sheet); the shell around them never did. */}
       <div className="flex min-w-0 flex-1 flex-col gap-3 print:block">
         <header className="no-print flex h-16 shrink-0 items-center gap-4 rounded-md bg-surface px-8 shadow-floating">
-          {meta ? (
-            <h1 className="shrink-0 font-display text-h2 text-ink">{meta.title}</h1>
+          {surface ? (
+            // Filled by the event surface (EventSurface → HeaderSlot): the event's name, the way
+            // between its studio and its outputs, and into the meeting.
+            <div ref={setSlot} className="flex min-w-0 flex-1 items-center gap-4" />
           ) : (
-            <Wordmark tone="mono" className="shrink-0 text-[22px]" />
-          )}
+            <>
+              {meta ? (
+                <h1 className="shrink-0 font-display text-h2 text-ink">{meta.title}</h1>
+              ) : (
+                <Wordmark tone="mono" className="shrink-0 text-[22px]" />
+              )}
 
-          {/* No visible search box or icon here anymore — the catalog's own search box lives in
-              its control bar instead (app/(app)/catalog/filters.tsx), still fed by the same
-              shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
-          <div className="flex-1" />
+              {/* No visible search box or icon here anymore — the catalog's own search box lives in
+                  its control bar instead (app/(app)/catalog/filters.tsx), still fed by the same
+                  shared value (HeaderSearchProvider) so this spacer keeps the header's own layout. */}
+              <div className="flex-1" />
+            </>
+          )}
 
           {(showHeaderActions || user.orgKind === "studio") && (
             <div className="flex shrink-0 items-center gap-1.5">
@@ -281,7 +296,9 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
 
         <main className="min-h-0 flex-1 overflow-auto print:block print:overflow-visible">
           <OrgKindProvider value={user.orgKind}>
-            <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+            <HeaderSlotProvider value={surface ? slot : null}>
+              <HeaderSearchProvider value={{ value: headerSearch, setValue: setHeaderSearch }}>{children}</HeaderSearchProvider>
+            </HeaderSlotProvider>
           </OrgKindProvider>
         </main>
 

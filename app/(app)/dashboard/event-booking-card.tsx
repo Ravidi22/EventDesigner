@@ -8,6 +8,8 @@ import { formatEventDate } from "@/lib/events/types";
 import { fetchIssuedQuote, type IssuedQuote } from "@/lib/quotes/actions";
 import { formatPrice } from "@/lib/catalog/format";
 import { Button } from "@/components/button";
+import { DrawerSection } from "./drawer-section";
+import { toISODate } from "./dashboard-view-utils";
 
 // The money the CLIENT sees, and the one answer the client gives — in one card, because they are
 // one conversation: you send a number, and then you find out.
@@ -65,9 +67,7 @@ export function EventBookingCard({ event, onConfirmed }: { event: EventSummary; 
   };
 
   return (
-    <div>
-      <h3 className="mb-2 text-xs font-semibold text-muted">הצעת מחיר</h3>
-      <div className="rounded-md border border-border bg-surface p-4 text-sm">
+    <DrawerSection title="הצעת מחיר ואישור">
         <div className="flex items-center justify-between gap-2.5 text-ink-soft">
           <span className="flex items-center gap-2.5">
             <ReceiptText className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
@@ -80,7 +80,7 @@ export function EventBookingCard({ event, onConfirmed }: { event: EventSummary; 
 
         {quote && (
           <p className="nums mt-1.5 text-xs text-muted">
-            הונפקה {formatEventDate(new Date(quote.issuedAt).toISOString().slice(0, 10))} · גרסה{" "}
+            הונפקה {formatEventDate(toISODate(new Date(quote.issuedAt)))} · גרסה{" "}
             {quote.documentVersion}
           </p>
         )}
@@ -92,7 +92,7 @@ export function EventBookingCard({ event, onConfirmed }: { event: EventSummary; 
           <p className="mt-3 flex items-center gap-2 border-t border-border-soft pt-3 font-medium text-success-ink">
             <BadgeCheck className="h-4 w-4 shrink-0" strokeWidth={2} />
             <span className="nums">
-              ההזמנה אושרה · {formatEventDate(new Date(confirmedAt).toISOString().slice(0, 10))}
+              ההזמנה אושרה · {formatEventDate(toISODate(new Date(confirmedAt)))}
             </span>
           </p>
         ) : (
@@ -111,7 +111,6 @@ export function EventBookingCard({ event, onConfirmed }: { event: EventSummary; 
             {error}
           </p>
         )}
-      </div>
-    </div>
+    </DrawerSection>
   );
 }

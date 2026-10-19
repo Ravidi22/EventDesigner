@@ -18,6 +18,7 @@ import { TodayFocus } from "./today-focus";
 import { EventStats } from "./event-stats";
 import { EventDetailDrawer } from "./event-detail-drawer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { EventDialog } from "@/components/event-dialog";
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { AppointmentDialog } from "./appointment-dialog";
 import { toISODate } from "./dashboard-view-utils";
@@ -61,7 +62,14 @@ export function DashboardScreen({
   const mounted = useMounted();
   const hour = new Date().getHours();
   const greeting = !mounted ? "שלום" : hour < 12 ? "בוקר טוב" : hour < 18 ? "צהריים טובים" : "ערב טוב";
-  const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
+  // The drawer's event, by id and read off the live list: an edit made from the drawer, a
+  // confirmation, a delete — each re-reads the list, and the drawer shows (or leaves with) the row
+  // as it now is rather than the snapshot it was opened on.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedEvent = useMemo(() => events.find((e) => e.id === selectedId) ?? null, [events, selectedId]);
+  const setSelectedEvent = (e: EventSummary | null) => setSelectedId(e?.id ?? null);
+  // The details form, opened over the drawer to edit the event in place.
+  const [editingEvent, setEditingEvent] = useState<EventSummary | null>(null);
   // The event the drawer has asked to delete. ONE dialog for the whole screen, and it is here
   // rather than inside the drawer because this is where the delete itself lives — the same split
   // the catalog makes between its card menu, its edit drawer and its one ConfirmDialog.
@@ -195,6 +203,7 @@ export function DashboardScreen({
         appointments={selectedEventAppointments}
         onClose={() => setSelectedEvent(null)}
         onContinue={openEvent}
+        onEdit={setEditingEvent}
         onOpenAppointment={editAppointment}
         onCreateAppointment={bookForEvent}
         onDelete={setDeleting}
@@ -214,6 +223,13 @@ export function DashboardScreen({
         confirmLabel="מחיקת האירוע"
         onConfirm={confirmDelete}
         onClose={() => setDeleting(null)}
+      />
+
+      <EventDialog
+        open={editingEvent !== null}
+        event={editingEvent}
+        onClose={() => setEditingEvent(null)}
+        onSaved={() => void reloadEvents()}
       />
 
       <AppointmentDialog

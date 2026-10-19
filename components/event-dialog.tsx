@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { reachStep } from "@/lib/events/actions";
+import type { EventSummary } from "@/lib/events/types";
 import { EventForm } from "./event-form";
 
 /**
@@ -16,8 +17,24 @@ import { EventForm } from "./event-form";
  * `details` STAYS in the flow — lib/meeting/steps.ts marks it required and first, and jumping back
  * to it mid-meeting is how the couple's phone number gets fixed. This dialog only takes over the
  * CREATE half, which is why it hands the meeting an event already stepped past that stage.
+ *
+ * Handed an `event`, it EDITS that one in place instead — the dashboard's event drawer opens it for
+ * "עריכת פרטי האירוע", so fixing a phone number no longer means walking into the client-facing
+ * stepper. It saves, closes and tells the caller; it goes nowhere.
  */
-export function EventDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function EventDialog({
+  open,
+  onClose,
+  event = null,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** The event to edit. Absent = create a new one and walk into its meeting. */
+  event?: EventSummary | null;
+  /** Edit only: the saved row, so the caller can re-read its list. */
+  onSaved?: (ev: EventSummary) => void;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   const router = useRouter();
 
@@ -47,9 +64,15 @@ export function EventDialog({ open, onClose }: { open: boolean; onClose: () => v
           itself stays put for showModal(), but its contents do not survive a close. */}
       {open && (
         <EventForm
-          event={null}
+          event={event}
           onCancel={onClose}
+          submitLabel={event ? "שמירה" : undefined}
           onSaved={async (ev) => {
+            if (event) {
+              onClose();
+              onSaved?.(ev);
+              return;
+            }
             // AWAITED, not fired off. /meeting resumes at `event.step`, so a step write still in
             // flight when the route changes drops the designer back onto the details form they
             // just filled in. Step 1 is whatever the studio put after `details`; the meeting screen

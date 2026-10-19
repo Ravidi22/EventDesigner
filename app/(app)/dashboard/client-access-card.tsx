@@ -30,6 +30,7 @@ import { Switch } from "@/components/toggle";
 import { Menu } from "@/components/menu";
 import { CloseButton } from "@/components/close-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { DrawerSection } from "./drawer-section";
 
 /** wa.me wants the number in international form, digits only: 050-1234567 → 972501234567. */
 function waNumber(phone: string): string | null {
@@ -95,9 +96,7 @@ export function ClientAccessCard({ event }: { event: EventSummary }) {
   };
 
   return (
-    <div>
-      <h3 className="mb-2 text-xs font-semibold text-muted">שיתוף עם הלקוח</h3>
-      <div className="rounded-md border border-border bg-surface p-4 text-sm">
+    <DrawerSection title="שיתוף הסקיצה עם הלקוח">
         {invite && (
           <InviteLink key={invite.url} invite={invite} eventId={event.id} phone={event.phone} emailEnabled={emailEnabled} onDone={() => setInvite(null)} />
         )}
@@ -143,7 +142,7 @@ export function ClientAccessCard({ event }: { event: EventSummary }) {
             {error && <p className="text-[13px] font-semibold text-alert-ink">{error}</p>}
             <div className="flex gap-2">
               <Button size="sm" onClick={() => void share()} disabled={busy || !email.trim()} className="flex-1">
-                שיתוף האירוע
+                שליחת הזמנה
               </Button>
               <Button size="sm" variant="outline" onClick={() => setAdding(false)}>
                 ביטול
@@ -152,10 +151,9 @@ export function ClientAccessCard({ event }: { event: EventSummary }) {
           </div>
         ) : (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)} className="mt-3 w-full">
-            {clients && clients.length > 0 ? "+ שיתוף עם עוד מישהו" : "שיתוף הסקיצה עם הלקוח"}
+            {clients && clients.length > 0 ? "+ שיתוף עם עוד מישהו" : "שיתוף עם הלקוח"}
           </Button>
         )}
-      </div>
 
       <ConfirmDialog
         open={removing !== null}
@@ -169,7 +167,7 @@ export function ClientAccessCard({ event }: { event: EventSummary }) {
         }}
         onClose={() => setRemoving(null)}
       />
-    </div>
+    </DrawerSection>
   );
 }
 

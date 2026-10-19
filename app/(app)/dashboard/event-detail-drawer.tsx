@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowLeft, Calendar, CheckCircle2, Clock, MapPin, PenTool, Phone, Plus, Printer, Trash2, User, Users } from "lucide-react";
+import type { ReactNode } from "react";
+import { ArrowLeft, CheckCircle2, PenTool, Pencil, Phone, Plus, Printer, Trash2, User } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { stepAt } from "@/lib/meeting/steps";
@@ -12,18 +13,30 @@ import { Drawer } from "@/components/drawer";
 import { Button } from "@/components/button";
 import { Menu } from "@/components/menu";
 import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
+import { DrawerSection, SectionAction } from "./drawer-section";
 import { EventBookingCard } from "./event-booking-card";
 import { ClientAccessCard } from "./client-access-card";
 
 // The shell — the floating left-anchored <dialog>, its header and its one scrollbar — is
-// components/drawer.tsx now, shared with the catalog's product form. The geometry notes that used
-// to sit here live in that file; what stays here is what this drawer is ABOUT.
+// components/drawer.tsx, shared with the catalog's product form. What stays here is what this
+// drawer is ABOUT, in the order an event happens:
+//
+//   where it stands and the way on   (status, the meeting to continue, its studio and outputs)
+//   the brief                         (פרטי האירוע — everything the details form asks — and who to call)
+//   the sittings                      (פגישות)
+//   the client's side                 (the sketch shared with them, then the quote and their yes)
+//
+// It used to run status → details → meetings → quote → sharing → contacts: the phone number last,
+// the sketch the client looks at AFTER the quote they agree to, and no way to fix a detail without
+// walking into the client-facing stepper. The details are edited in place now (onEdit), and each
+// section is the same DrawerSection.
 export function EventDetailDrawer({
   event,
   venueName,
   appointments,
   onClose,
   onContinue,
+  onEdit,
   onOpenAppointment,
   onCreateAppointment,
   onDelete,
@@ -35,16 +48,17 @@ export function EventDetailDrawer({
    *  collects several (docs/01 §מצב פגישה), which is why `meetingDate` stopped being a column. */
   appointments: Appointment[];
   onClose: () => void;
-  /** Opens the event on one of its own surfaces — the meeting flow by default, the print
-   *  screen when the footer asks for it. Both need the same "this device has this event open"
-   *  pointer set first, so it is one prop with a destination, not two. */
+  /** Opens the event on one of its own surfaces — the meeting flow by default, its studio or its
+   *  outputs from the two buttons beside it. All three need the same "this device has this event
+   *  open" pointer set first, so it is one prop with a destination. */
   onContinue: (e: EventSummary, to?: "/meeting" | "/outputs" | "/studio") => void;
+  /** Opens the details form on this event (the screen's EventDialog), over the drawer. */
+  onEdit: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
   onCreateAppointment: (e: EventSummary) => void;
-  /** Asks the screen to delete this event. The QUESTION is not asked here — the drawer hands the
-   *  event over and closes, and the screen's own ConfirmDialog is what appears, exactly as the
-   *  catalog's edit drawer hands its מחיקה to the catalog screen. One dialog per surface, so the
-   *  same delete cannot be worded two ways. */
+  /** Asks the screen to delete this event. The QUESTION is the screen's (one ConfirmDialog per
+   *  surface), and it opens OVER the drawer — the drawer leaves when the event does, so answering
+   *  "ביטול" leaves you where you were. */
   onDelete: (e: EventSummary) => void;
   /** The client answered. The card writes `confirmedAt` itself and shows it immediately; this asks
    *  the screen to re-read the list, so the calendar and the statistics agree with the drawer. */
@@ -58,10 +72,12 @@ export function EventDetailDrawer({
   if (!event) return null;
 
   const status = eventStatus(event, flow);
+  // The meeting's progress means something while the event is being SOLD. Once the client has
+  // answered (or it is archived) the chip says the thing that matters, and "מאושר · 50%" said two
+  // contradicting things at once.
+  const selling = status !== "confirmed" && status !== "lost" && status !== "archived";
   const progress = eventProgress(event, flow);
   // The stage the event is actually parked on, so the primary action can NAME where it resumes.
-  // "מעבר לסקיצה" was a promise the button could not keep — it went to /meeting, which lands on
-  // whatever stage this event left off at, and for a fresh one that is the details form.
   const resumeAt = stepAt(flow, event.step);
   // The event's zones under the venue that owns them — "חוות רונית אמארה · אולם גדול · חופה".
   const venueZones = venueName ? `${venueName} · ${zonesLabelOf(event)}` : zonesLabelOf(event);
@@ -71,189 +87,188 @@ export function EventDetailDrawer({
     onClose();
   };
 
+  const contacts = [
+    { name: event.contactName || event.clientName, phone: event.phone },
+    ...(event.contact2Name || event.contact2Phone ? [{ name: event.contact2Name || "איש קשר נוסף", phone: event.contact2Phone ?? "" }] : []),
+  ];
+
   return (
     <Drawer
       title={event.clientName}
       onClose={onClose}
-      // The rest of what you can do to an event, folded behind the one trigger this codebase uses
-      // everywhere else for exactly that (components/menu.tsx). The studio is here rather than
-      // beside the two buttons below because it is the THIRD destination — redrawing a plan between
-      // meetings, which is not what this drawer gets opened for. מחיקה is `danger`, and the drawer
-      // closes on the way out: the question belongs to the screen, which owns the one dialog.
+      // What you do TO the event, behind the one trigger this codebase uses for it everywhere
+      // (components/menu.tsx). Where you GO with it is on the card below, in plain sight.
       actions={
         <Menu
           label={`אפשרויות לאירוע של ${event.clientName}`}
           items={[
-            { label: "פתיחה בסטודיו", icon: PenTool, onSelect: () => go("/studio") },
-            {
-              label: "מחיקת האירוע",
-              icon: Trash2,
-              danger: true,
-              onSelect: () => {
-                onDelete(event);
-                onClose();
-              },
-            },
+            { label: "עריכת פרטי האירוע", icon: Pencil, onSelect: () => onEdit(event) },
+            { label: "מחיקת האירוע", icon: Trash2, danger: true, onSelect: () => onDelete(event) },
           ]}
         />
       }
     >
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          {/* ⚠ THE ACTIONS ARE AT THE TOP, and inside the progress card rather than under the
-              panel. They were a footer of three buttons pinned below a scrolling body, which put the
-              two things a designer opens this drawer to DO underneath the client's phone number and
-              read as chrome. Here they finish the sentence the card starts: this event is 60%
-              through and parked on the design sketch — continue it, or print its sheets. */}
+          {/* Where it stands, and the way on. The meeting is the one filled button; the event's two
+              working screens sit under it as equals — the studio used to be hidden in the "…" while
+              the outputs had a button. */}
           <div className="rounded-md border border-border bg-surface p-4">
             <div className="flex items-center justify-between">
               <StatusChip tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</StatusChip>
-              <span className="nums text-sm font-semibold text-ink-soft">{progress}%</span>
+              {selling && <span className="nums text-sm font-semibold text-ink-soft">{progress}%</span>}
             </div>
 
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full border border-border bg-canvas">
-              <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
-            </div>
+            {selling && (
+              <div className="mt-3 h-1.5 overflow-hidden rounded-full border border-border bg-canvas">
+                <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
+              </div>
+            )}
 
-            <div className="mt-4 flex items-center gap-2">
-              {/* Names where it lands. "מעבר לסקיצה" was a promise this button could not keep: it
-                  goes to /meeting, which resumes at whatever stage the event was left on — the
-                  details form, for one nobody has drawn yet. */}
-              <Button className="min-w-0 flex-1" onClick={() => go()}>
-                <span className="truncate">{event.step === 0 ? "התחלת פגישה" : `המשך · ${resumeAt.label}`}</span>
-                <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={2.5} />
+            {/* Names where it lands: /meeting resumes at whatever stage the event was left on. */}
+            <Button className="mt-4 w-full" onClick={() => go()}>
+              <span className="truncate">{event.step === 0 ? "התחלת פגישה" : `המשך · ${resumeAt.label}`}</span>
+              <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={2.5} />
+            </Button>
+            {/* The event's own frames, not the meeting's stages — a designer redrawing between
+                sittings or preparing the crew's sheets is not running a meeting. */}
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => go("/studio")}>
+                <PenTool className="h-4 w-4" strokeWidth={2} />
+                סטודיו
               </Button>
-              {/* Outputs in its OWN frame, not the meeting's closing stage. A designer preparing a
-                  crew's sheets the week before is not running a meeting, and routing them through
-                  the client-facing stepper to reach a packing list is the same mistake in the other
-                  direction. Same screen either way — see app/(app)/outputs/outputs-screen.tsx. */}
-              <Button variant="outline" className="shrink-0" onClick={() => go("/outputs")}>
+              <Button variant="outline" onClick={() => go("/outputs")}>
                 <Printer className="h-4 w-4" strokeWidth={2} />
                 פלטים
               </Button>
             </div>
           </div>
 
-          <div>
-            <h3 className="mb-2 text-xs font-semibold text-muted">פרטי האירוע</h3>
-            <div className="space-y-3 rounded-md border border-border bg-surface p-4 text-sm">
-              <div className="flex items-center gap-2.5 text-ink-soft">
-                <Calendar className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span className="font-medium text-ink">
-                  {formatEventDate(event.date)}
-                  {event.time && ` · ${event.time}`}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2.5 text-ink-soft">
-                <MapPin className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span>{venueZones}</span>
-              </div>
-
-              <div className="flex items-center gap-2.5 text-ink-soft">
-                <Users className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span className="nums">{event.guests || "—"} אורחים</span>
-              </div>
-
-              <div className="flex items-center gap-2.5 text-ink-soft">
-                <Clock className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span>נוצר בתאריך: {new Date(event.createdAt).toLocaleDateString("he-IL", { day: "numeric", month: "short" })}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Where a single "פגישה: 1 ביוני" line used to sit, reading a column nothing wrote. The
-              whole diary for this event, plus the way to add to it — a second meeting is part of the
-              process, not an exception (docs/01 §מצב פגישה). */}
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-muted">פגישות</h3>
-              <button
-                type="button"
-                onClick={() => onCreateAppointment(event)}
-                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
-              >
-                <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
-                קביעת פגישה
-              </button>
-            </div>
-            <div className="rounded-md border border-border bg-surface text-sm">
-              {appointments.length === 0 ? (
-                <p className="px-4 py-3.5 text-ink-soft">לא נקבעו פגישות לאירוע הזה.</p>
-              ) : (
-                // Same glyph and same ink the day cell gives this kind (KIND_CARD_THEME) — the
-                // colour has to mean one thing in both places or it teaches nothing. There is no
-                // tint fill here: these rows are a list on white, and eight fills stacked in a
-                // hairline-ruled table is a paint chart, not a diary.
-                appointments.map((a, i) => {
-                  const theme = kindTheme(a.kind, a.done);
-                  const KindIcon = a.done ? CheckCircle2 : KIND_ICON[a.kind];
-                  return (
-                    <button
-                      key={a.id}
-                      type="button"
-                      onClick={() => onOpenAppointment(a)}
-                      className={
-                        "flex w-full items-center gap-2.5 px-4 py-3 text-start transition-colors hover:bg-accent-tint " +
-                        (i > 0 ? "border-t border-border-soft" : "")
-                      }
-                    >
-                      <KindIcon className={"h-4 w-4 shrink-0 " + theme.text} strokeWidth={1.75} />
-                      <span className={"min-w-0 flex-1 truncate " + (a.done ? "text-muted" : "text-ink")}>
-                        {formatEventDate(a.date)}
-                        <span className={"font-medium " + theme.text}> · {APPOINTMENT_KIND_LABEL[a.kind]}</span>
-                      </span>
-                      {a.time && (
-                        <span className="nums shrink-0 text-xs font-semibold text-ink-soft" dir="ltr">
-                          {appointmentTimeLabel(a)}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })
+          {/* Everything the details form asks, read back with its own words — the form's סוג, יום
+              ההקמה and גוונים were never shown here, and the event's created-at was (it moved to the
+              foot of the drawer, where record-keeping goes). */}
+          <DrawerSection
+            title="פרטי האירוע"
+            action={
+              <SectionAction icon={Pencil} onClick={() => onEdit(event)}>
+                עריכה
+              </SectionAction>
+            }
+          >
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <Fact label="תאריך">
+                {formatEventDate(event.date)}
+                {event.time && <span className="nums"> · {event.time}</span>}
+              </Fact>
+              <Fact label="יום ההקמה">{event.setupDate ? formatEventDate(event.setupDate) : "ביום האירוע"}</Fact>
+              <Fact label="מקום" wide>
+                {venueZones}
+              </Fact>
+              <Fact label="סוג האירוע">{event.eventType || "לא צוין"}</Fact>
+              <Fact label="אורחים">
+                <span className="nums">{event.guests || "—"}</span>
+              </Fact>
+              {!!event.shades?.length && (
+                <Fact label="גווני האירוע" wide>
+                  {event.shades.join(" · ")}
+                </Fact>
               )}
-            </div>
-          </div>
+            </dl>
+          </DrawerSection>
+
+          <DrawerSection title="אנשי קשר">
+            <ul className="space-y-3">
+              {contacts.map((c, i) => (
+                <li
+                  key={i}
+                  className={"flex items-center justify-between gap-2.5 " + (i > 0 ? "border-t border-border-soft pt-3" : "")}
+                >
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <User className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
+                    <span className="truncate font-medium text-ink">{c.name}</span>
+                  </span>
+                  {/* A link: the drawer is opened to make exactly this call, often from a phone. */}
+                  {c.phone && (
+                    <a
+                      href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
+                      dir="ltr"
+                      className="nums flex shrink-0 items-center gap-1.5 rounded-sm px-1 text-ink-soft transition-colors hover:text-accent-hover"
+                    >
+                      <Phone className="h-3.5 w-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+                      {c.phone}
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </DrawerSection>
+
+          {/* The whole diary for this event, plus the way to add to it — a second meeting is part of
+              the process, not an exception (docs/01 §מצב פגישה). */}
+          <DrawerSection
+            title="פגישות"
+            flush
+            action={
+              <SectionAction icon={Plus} onClick={() => onCreateAppointment(event)}>
+                קביעת פגישה
+              </SectionAction>
+            }
+          >
+            {appointments.length === 0 ? (
+              <p className="px-4 py-3.5 text-ink-soft">לא נקבעו פגישות לאירוע הזה.</p>
+            ) : (
+              // Same glyph and same ink the day cell gives this kind (KIND_CARD_THEME) — the colour
+              // has to mean one thing in both places or it teaches nothing.
+              appointments.map((a, i) => {
+                const theme = kindTheme(a.kind, a.done);
+                const KindIcon = a.done ? CheckCircle2 : KIND_ICON[a.kind];
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => onOpenAppointment(a)}
+                    className={
+                      "flex w-full items-center gap-2.5 px-4 py-3 text-start transition-colors hover:bg-accent-tint " +
+                      (i > 0 ? "border-t border-border-soft" : "")
+                    }
+                  >
+                    <KindIcon className={"h-4 w-4 shrink-0 " + theme.text} strokeWidth={1.75} />
+                    <span className={"min-w-0 flex-1 truncate " + (a.done ? "text-muted" : "text-ink")}>
+                      {formatEventDate(a.date)}
+                      <span className={"font-medium " + theme.text}> · {APPOINTMENT_KIND_LABEL[a.kind]}</span>
+                    </span>
+                    {a.time && (
+                      <span className="nums shrink-0 text-xs font-semibold text-ink-soft" dir="ltr">
+                        {appointmentTimeLabel(a)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </DrawerSection>
+
+          {/* The client's side, in the order it happens: they see the sketch, then the price, then
+              they say yes. */}
+          <ClientAccessCard key={`clients-${event.id}`} event={event} />
 
           <EventBookingCard key={event.id} event={event} onConfirmed={onEventChanged} />
 
-          <ClientAccessCard key={`clients-${event.id}`} event={event} />
-
-          <div>
-            <h3 className="mb-2 text-xs font-semibold text-muted">פרטים ליצירת קשר</h3>
-            <div className="space-y-3 rounded-md border border-border bg-surface p-4 text-sm">
-              <div className="flex items-center justify-between gap-2.5 text-ink-soft">
-                <span className="flex items-center gap-2.5">
-                  <User className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                  <span className="font-medium text-ink">{event.contactName || event.clientName}</span>
-                </span>
-                {event.phone && (
-                  <span className="nums flex items-center gap-1.5" dir="ltr">
-                    <Phone className="h-3.5 w-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-                    {event.phone}
-                  </span>
-                )}
-              </div>
-
-              {(event.contact2Name || event.contact2Phone) && (
-                <div className="flex items-center justify-between gap-2.5 border-t border-border-soft pt-3 text-ink-soft">
-                  <span className="flex items-center gap-2.5">
-                    <User className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                    <span className="font-medium text-ink">{event.contact2Name || "איש קשר נוסף"}</span>
-                  </span>
-                  {event.contact2Phone && (
-                    <span className="nums flex items-center gap-1.5" dir="ltr">
-                      <Phone className="h-3.5 w-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-                      {event.contact2Phone}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
+          <p className="nums text-center text-caption text-faint">
+            נוצר ב־{new Date(event.createdAt).toLocaleDateString("he-IL", { day: "numeric", month: "short", year: "numeric" })}
+          </p>
         </div>
-
       </div>
     </Drawer>
+  );
+}
+
+/** One fact of the brief: its name over its value. */
+function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <div className={"min-w-0 " + (wide ? "col-span-2" : "")}>
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-0.5 font-medium text-ink">{children}</dd>
+    </div>
   );
 }

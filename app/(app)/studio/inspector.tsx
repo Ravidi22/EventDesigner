@@ -683,6 +683,32 @@ export function Inspector({
         ])}
         onClose={onClose}
       >
+        {swap && (
+          <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />
+        )}
+        {group.tables > 0 && (
+          <Popover label="מספר שולחן" icon={Hash} value={group.unnumbered ? "ללא" : ltr(`#${group.number ?? 0}`)}>
+            {!group.unnumbered && (
+              <PanelRow>
+                <NumberField
+                  id="group-number"
+                  aria-label="מספר שולחן"
+                  decimals={0}
+                  min={0}
+                  value={group.number ?? 0}
+                  onChange={(v) => onRenumberGroup(group.id, v)}
+                  className="w-20"
+                />
+              </PanelRow>
+            )}
+            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number) && <DuplicateNumber />}
+            <div className="mt-2">
+              <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
+            </div>
+            <Note>השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו.</Note>
+          </Popover>
+        )}
+
         {/* One block, one chair count and one occupancy. What is typed here is spread back over the
             tables underneath (chairs evenly; occupancy filling each to its own seat count, in order)
             so that breaking the block up later leaves each table holding a number that is true of
@@ -720,11 +746,7 @@ export function Inspector({
                   value={blockChair === null ? "__mixed" : blockChair}
                   options={[
                     ...(blockChair === null ? [{ value: "__mixed", label: "כיסאות שונים" }] : []),
-                    { value: "", label: `ברירת מחדל${(() => {
-                      const d = defaultChair();
-                      const name = d ? chairOptions().find((o) => o.value === d)?.label : undefined;
-                      return name ? ` — ${name}` : "";
-                    })()}` },
+                    { value: "", label: defaultChairLabel() },
                     ...chairOptions(),
                   ]}
                   onChange={(v) => v !== "__mixed" && onChairForSelection(v || null)}
@@ -734,34 +756,6 @@ export function Inspector({
             <Note>הכסאות מסודרים סביב הבלוק כולו ומתחלקים בין השולחנות שבו; התפוסה ממלאת כל שולחן עד מלוא הכסאות שלו.</Note>
           </Popover>
         )}
-
-        {group.tables > 0 && (
-          <Popover label="מספר שולחן" icon={Hash} value={group.unnumbered ? "ללא" : ltr(`#${group.number ?? 0}`)}>
-            {!group.unnumbered && (
-              <PanelRow>
-                <NumberField
-                  id="group-number"
-                  aria-label="מספר שולחן"
-                  decimals={0}
-                  min={0}
-                  value={group.number ?? 0}
-                  onChange={(v) => onRenumberGroup(group.id, v)}
-                  className="w-20"
-                />
-              </PanelRow>
-            )}
-            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number) && <DuplicateNumber />}
-            <div className="mt-2">
-              <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
-            </div>
-            <Note>השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו.</Note>
-          </Popover>
-        )}
-
-        {swap && (
-          <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />
-        )}
-        {onEditProduct && blockVariant && resolve(blockVariant) && <BarButton icon={Pencil} label="עריכת סוג השולחנות בקטלוג" onClick={() => onEditProduct(blockVariant)} />}
 
         {blockCloth && onBlockCloth && (
           <Popover label="מפה" leading={<Swatch color={blockShades.find((s) => s.id === blockCloth.variantId)?.swatch} size={14} />} value={resolve(blockCloth.variantId)?.product.name ?? "מפה"}>
@@ -795,16 +789,17 @@ export function Inspector({
         {group.tables > 0 && onDressTable && lead && (
           <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים על הבלוק · לחיצה כפולה" onClick={() => onDressTable(lead.id)} />
         )}
-        {group.tables > 0 && lead && (
+        {group.tables > 0 && lead && onDressTable && (
           <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
             {renderDesigns(lead.id)}
           </Popover>
         )}
-        {group.tables > 0 && lead && blockDressed && (
+        {group.tables > 0 && lead && blockDressed && onDressTable && (
           <Popover label="החלת עיצוב הבלוק על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
             {renderPattern(lead.id, undefined, true)}
           </Popover>
         )}
+        <Rotation value={facing} onChange={onFace} />
         {group.tables > 0 && lead && onStyleTables && (
           <Popover label="מראה" icon={Palette} panelClassName="w-72">
             <StyleFields
@@ -815,22 +810,24 @@ export function Inspector({
           </Popover>
         )}
 
-        <Rotation value={facing} onChange={onFace} />
-        <MirrorMenu onMirror={onMirror} />
-
-        <Menu
+        <MoreMenu
           label="עוד פעולות לקבוצה"
-          side="top"
-          items={[
-            ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
-            { label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup },
+          sections={[
+            mirrorItems(onMirror),
+            [
+              ...(onEditProduct && blockVariant && resolve(blockVariant)
+                ? [{ label: "עריכת סוג השולחנות בקטלוג", icon: Pencil, onSelect: () => onEditProduct(blockVariant) }]
+                : []),
+              ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+            ],
+            [{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup }],
           ]}
         />
         <Actions
           onDuplicate={onDuplicate}
           duplicateLabel="שכפול הקבוצה"
           onDelete={onDelete}
-          deleteLabel="מחיקה של הקבוצה"
+          deleteLabel="מחיקת הקבוצה"
         />
       </Bar>
     );
@@ -1054,29 +1051,27 @@ export function Inspector({
           />
         )}
         <Rotation value={facing} onChange={onFace} />
-        <MirrorMenu onMirror={onMirror} />
-        {sg.whole && onGroupExplode && <BarButton icon={Blocks} label="פירוק כל הבמות לפלטות נפרדות" onClick={onGroupExplode} />}
-        {stageGroup.grouped ? (
-          <BarButton icon={Ungroup} label="פירוק הקבוצה" onClick={onUngroup} />
-        ) : (
-          <BarButton icon={Group} label="קיבוץ · Ctrl+G" onClick={onGroup} />
-        )}
+        {/* Grouping and taking apart in the "…", apart from each other: "פירוק הקבוצה" lets go of the
+            group, "פירוק לפלטות" turns every stage into loose decks — they sat side by side as two
+            icons that both read "פירוק". */}
+        <MoreMenu
+          label="עוד פעולות לבמות"
+          sections={[
+            mirrorItems(onMirror),
+            [stageGroup.grouped ? { label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup } : { label: "קיבוץ · Ctrl+G", icon: Group, onSelect: onGroup }],
+            sg.whole && onGroupExplode ? [{ label: "פירוק כל הבמות לפלטות נפרדות", icon: Blocks, onSelect: onGroupExplode }] : [],
+          ]}
+        />
         <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הבמות" onDelete={onDelete} deleteLabel="מחיקת הבמות" />
       </Bar>
     );
   }
 
   if (selectedCount > 1) {
-    const more: MenuItem[] = [
-      // Equal air between things along whichever axis the selection spans more — the two ends stay
-      // put. Left out entirely, not disabled, once the selection holds anything without a free
-      // position to move (see canDistribute).
-      ...(canDistribute
-        ? [{ label: "פיזור אחיד", icon: AlignHorizontalDistributeCenter, onSelect: onDistribute }]
-        : []),
-      { label: "קיבוץ · Ctrl+G", icon: Group, onSelect: onGroup },
-      ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
-    ];
+    // Equal air between things along whichever axis the selection spans more — the two ends stay
+    // put. Only where the align menu does not already offer it (it spreads along either axis once
+    // there are three units); left out, not disabled, when something has no free position to move.
+    const distribute: MenuItem[] = canDistribute && !(align && align.units >= 3) ? [{ label: "פיזור אחיד", icon: AlignHorizontalDistributeCenter, onSelect: onDistribute }] : [];
     return (
       <Bar icon={Boxes} title={`${selectedCount} פריטים נבחרו`} facts="גרירה מזיזה את כולם יחד" onClose={onClose}>
         {/* One number of chairs over the whole selection. A room of forty tables going from ten
@@ -1109,7 +1104,7 @@ export function Inspector({
                 <Select
                   aria-label="סוג הכיסא לשולחנות שנבחרו"
                   value=""
-                  options={[{ value: "", label: "—" }, { value: "__default", label: "ברירת המחדל של הסטודיו" }, ...chairOptions()]}
+                  options={[{ value: "", label: "—" }, { value: "__default", label: defaultChairLabel() }, ...chairOptions()]}
                   onChange={(v) => v && onChairForSelection(v === "__default" ? null : v)}
                 />
               </PanelRow>
@@ -1121,48 +1116,6 @@ export function Inspector({
         {swap && (
           <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות שנבחרו" : "החלפת הפריטים שנבחרו"} />
         )}
-
-        {/* "1.5m between them" — typed, rather than nudged until the tape agrees. */}
-        {spacing && <SpacingPopover key={spacing.key} spacing={spacing} onSpace={onSpace} />}
-        <AlignMenu align={align} />
-
-        {/* Each turns about its OWN centre here, which is how a scattered handful is squared to the
-            room. */}
-        {/* Stages pushed together into one platform: the gaps closed and near-lines lined up, or
-            merged outright so the skirt and stairs are worked out for the whole — not for the parts,
-            which would skirt the seam between them. */}
-        {onStickStages && <BarButton icon={Magnet} label="הצמדת הבמות — סגירת הרווחים ויישור" onClick={onStickStages} />}
-        {onMergeStages && <BarButton icon={Combine} label="איחוד לבמה אחת" onClick={onMergeStages} />}
-
-        <Rotation value={facing} onChange={onFace} />
-        {/* …and turned over together, about the middle of the lot: the left side of a room mirrored
-            onto the right. */}
-        <MirrorMenu onMirror={onMirror} />
-
-        {/* …and this is what the HANDLE does, which is the other gesture entirely and until now had
-            only one answer. Swinging the lot about one shared centre is right for a block being
-            aimed at the room — it is one object and it turns like one. It is wrong, and wrong in a
-            way that ruins a plan, for twelve tables scattered across a hall: they all orbit the
-            middle of the room and every one of them ends up somewhere else. "כל אחד סביב עצמו"
-            leaves every item exactly where it stands and turns it on the spot. */}
-        <Popover
-          label="מה הידית מסובבת"
-          icon={Orbit}
-          value={spin === "each" ? "כל אחד סביב עצמו" : "סביב מרכז משותף"}
-        >
-          <Segmented
-            label="הידית שמעל הבחירה"
-            value={spin}
-            options={[
-              ["together", "סביב מרכז משותף"],
-              ["each", "כל אחד סביב עצמו"],
-            ] as const}
-            onChange={onSpin}
-          />
-        </Popover>
-
-        <StackMenu show={canRestack} onRestack={onRestack} />
-        <SelectionMenu items={selectItems} />
 
         {/* One table's whole dressing, worn onto the rest of this selection — the bulk form of
             "החל על כל שולחנות X", for whatever tables happen to be selected rather than a whole
@@ -1189,12 +1142,43 @@ export function Inspector({
           </Popover>
         )}
 
-        <Menu label="עוד פעולות לנבחרים" side="top" items={more} />
+        {/* "1.5m between them" — typed, rather than nudged until the tape agrees. */}
+        {spacing && <SpacingPopover key={spacing.key} spacing={spacing} onSpace={onSpace} />}
+        <AlignMenu align={align} />
+
+        {/* Each turns about its OWN centre here, which is how a scattered handful is squared to the
+            room. */}
+        {/* Stages pushed together into one platform: the gaps closed and near-lines lined up, or
+            merged outright so the skirt and stairs are worked out for the whole — not for the parts,
+            which would skirt the seam between them. */}
+        {onStickStages && <BarButton icon={Magnet} label="הצמדת הבמות — סגירת הרווחים ויישור" onClick={onStickStages} />}
+        {onMergeStages && <BarButton icon={Combine} label="איחוד לבמה אחת" onClick={onMergeStages} />}
+
+        <Rotation value={facing} onChange={onFace} />
+
+        {/* What the rotate HANDLE does over several things — swing the lot about one shared centre (a
+            block aimed at the room), or turn each where it stands (twelve tables scattered across a
+            hall, which would otherwise all orbit the middle of the room) — is the "…"'s last
+            section, with a tick on the current answer: it is set once per selection, not edited. */}
+        <MoreMenu
+          label="עוד פעולות לנבחרים"
+          sections={[
+            mirrorItems(onMirror),
+            stackItems(canRestack, onRestack),
+            selectItems,
+            [...distribute, { label: "קיבוץ · Ctrl+G", icon: Group, onSelect: onGroup }],
+            onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : [],
+            [
+              { label: "ידית הסיבוב: סביב מרכז משותף", icon: spin === "together" ? Check : Orbit, onSelect: () => onSpin("together") },
+              { label: "ידית הסיבוב: כל אחד סביב עצמו", icon: spin === "each" ? Check : Orbit, onSelect: () => onSpin("each") },
+            ],
+          ]}
+        />
         <Actions
           onDuplicate={onDuplicate}
           duplicateLabel="שכפול הנבחרים"
           onDelete={onDelete}
-          deleteLabel="מחיקה של הנבחרים"
+          deleteLabel="מחיקת הנבחרים"
         />
 
         <ConfirmDialog
@@ -1222,7 +1206,7 @@ export function Inspector({
   if (selectedCount === 0 && (zoneFocused || layerActive)) {
     return (
       <Bar icon={ListChecks} title="בחירה" facts={scopeLabel} onClose={onClearScope}>
-        <Menu label="דרכים לבחור" side="top" items={selectItems} />
+        <Menu label="דרכים לבחור" side="top" items={selectionItems({ zoneFocused, onSelectInZone, layerActive, onSelectLayer })} />
       </Bar>
     );
   }
@@ -1243,14 +1227,13 @@ export function Inspector({
         facts={`${FEATURE_KIND_LABEL[feature.kind]} · תוכנית המתחם`}
         onClose={onClose}
       >
-        <Rotation value={facing} onChange={onFace} />
-
         <BarButton
           icon={Undo2}
           label={feature.moved ? "החזרה למקום בתוכנית" : "נמצא במקומו המקורי"}
           disabled={!feature.moved}
           onClick={() => onResetFeature(feature.id)}
         />
+        <Rotation value={facing} onChange={onFace} />
         <Popover label="פריט של המתחם" icon={Info}>
           <Note>
             אפשר להזיז, לסובב ולהסיר אותו לאירוע הזה בלבד. הגודל והמקום הקבוע נקבעים במסך האולמות,
@@ -1434,7 +1417,10 @@ export function Inspector({
                 </Note>
               </Popover>
             )}
-            <BarButton icon={Trash2} label={`מחיקת ה${EDGE_KIND_LABEL[it.kind]}`} tone="danger" onClick={() => onRemoveStair(it.id)} />
+            <div className="ms-auto flex items-center gap-1">
+              <InspectorDivider />
+              <BarButton icon={Trash2} label={`מחיקת ה${EDGE_KIND_LABEL[it.kind]} · Delete`} tone="danger" onClick={() => onRemoveStair(it.id)} />
+            </div>
           </Bar>
         );
       }
@@ -1454,7 +1440,10 @@ export function Inspector({
           onClose={onClose}
         >
           {/* One stage picked out of its group: its own bar, with the group a click away. */}
-          {onBackToGroup && <BarButton icon={Group} label="חזרה לקבוצת הבמות · Esc" onClick={onBackToGroup} />}
+          {onBackToGroup && <BarButton icon={ArrowRight} label="חזרה לקבוצת הבמות · Esc" onClick={onBackToGroup} />}
+          {/* What is wrong first — pieces the catalog lacks, a safety distance — then what it is. */}
+          <MissingPieces missing={sp.missing} types={sp.pieceTypes} chosen={sp.chosen} onUse={onUseStagePieces} onAdd={onAddStagePieces} />
+          <BreachPopover breaches={breaches} />
           {sp.size && (
             <Popover label="מידות" icon={Ruler} value={ltr(`${m(sp.size.widthMm)}×${m(sp.size.depthMm)} מ׳`)} panelClassName="w-72">
               <PanelRow label="חזית (ס״מ)" htmlFor="stage-w">
@@ -1493,8 +1482,6 @@ export function Inspector({
               </Note>
             </Popover>
           )}
-
-          <MissingPieces missing={sp.missing} types={sp.pieceTypes} chosen={sp.chosen} onUse={onUseStagePieces} onAdd={onAddStagePieces} />
 
           <Popover label="בנויה מ" icon={Blocks} value={`${sp.deckCount} פלטות`} panelClassName="w-72">
             {sp.decks.length > 0 ? (
@@ -1685,15 +1672,16 @@ export function Inspector({
             </Note>
           </Popover>
 
-          <SaveTemplatePopover onSave={onSaveTemplate} />
-
-          <BreachPopover breaches={breaches} />
-          <Rotation value={facing} onChange={onFace} />
-          <MirrorMenu onMirror={onMirror} />
-          <StackMenu show={canRestack} onRestack={onRestack} />
           <BarButton icon={PenLine} label="עריכת הבמה — צורה, חזית ופלטות" onClick={onEditStage} />
-          <BarButton icon={Blocks} label="פירוק לפלטות נפרדות" onClick={onExplodeStage} />
-          <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הבמה" onDelete={onDelete} deleteLabel="מחיקה של הבמה" />
+          <Rotation value={facing} onChange={onFace} />
+          <SaveTemplatePopover onSave={onSaveTemplate} />
+          {/* Taking it apart into loose decks is one way, so it is a row in the "…", not an icon
+              beside "עריכת הבמה" a slip away from it. */}
+          <MoreMenu
+            label="עוד פעולות לבמה"
+            sections={[mirrorItems(onMirror), stackItems(canRestack, onRestack), [{ label: "פירוק לפלטות נפרדות", icon: Blocks, onSelect: onExplodeStage }]]}
+          />
+          <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הבמה" onDelete={onDelete} deleteLabel="מחיקת הבמה" />
         </Bar>
       );
     }
@@ -1716,6 +1704,14 @@ export function Inspector({
     const editClimb = (edit: ClimbEdit | null) => {
       if (edit && onClimb) onClimb(p.id, edit);
     };
+
+    const hungOverDressing = overTable
+      ? doc.placements.filter((x) => {
+          if (x.layer !== "table" || x.tableId !== overTable.id) return false;
+          const rx = resolve(x.variantId);
+          return !!rx && rx.anchor !== "table" && !isRunner(rx.product);
+        }).length
+      : 0;
 
     const bench = benchPanel?.layout;
     const benchNumber = benchPanel?.spec?.number;
@@ -1740,6 +1736,7 @@ export function Inspector({
           .join(" · ")}
         onClose={onClose}
       >
+        <BreachPopover breaches={breaches} />
         {/* A STANDALONE BANQUETTE is set like a table: its number (optional — clearing it leaves the
             banquette seated but unnumbered), its two sides and their counts, and its occupancy.
             Its row is still quoted by the metre; nothing here touches that. */}
@@ -1816,7 +1813,6 @@ export function Inspector({
         )}
 
         {swap && <SwapPopover swap={swap} onSwap={onSwap} label="החלפה בפריט אחר" />}
-        {onEditProduct && r && <BarButton icon={Pencil} label="עריכת הפריט בקטלוג" onClick={() => onEditProduct(p.variantId)} />}
 
         {shades.length > 0 && (
           <Popover label="גוון" leading={<Swatch color={shade?.swatch} size={14} />} value={shade?.name ?? "ברירת מחדל"}>
@@ -1880,34 +1876,6 @@ export function Inspector({
         {p.layer === "ceiling" && !drape && onHang && (
           <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
         )}
-        {overTable && (
-          <>
-            {onCentreOver && <BarButton icon={Crosshair} label="למרכז השולחן — התלייה מעל אמצע השולחן" onClick={() => onCentreOver(p.id)} />}
-            {onSpreadRow && (
-              <RowSpreadPopover
-                doc={doc}
-                sourceId={overTable.id}
-                name={r?.product.name ?? "הפריט"}
-                heightMm={hangHeightOf(p, r?.product)}
-                onSpread={(opts) => onSpreadRow(p.id, opts)}
-              />
-            )}
-            {onHangOverDressing &&
-              (() => {
-                const dressed = doc.placements.filter((x) => {
-                  if (x.layer !== "table" || x.tableId !== overTable.id) return false;
-                  const rx = resolve(x.variantId);
-                  return !!rx && rx.anchor !== "table" && !isRunner(rx.product);
-                }).length;
-                return dressed > 0 ? <BarButton icon={ArrowUpFromLine} label={`אחד מעל כל פריט שעל השולחן (${dressed})`} onClick={() => onHangOverDressing(p.id)} /> : null;
-              })()}
-            <Popover label="החלת הפריט מעל שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
-              {renderPattern(overTable.id, p.id)}
-            </Popover>
-            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב מעל השולחן — סידור ופיזור של מה שתלוי מעליו · לחיצה כפולה" onClick={() => onDressTable(overTable.id)} />}
-          </>
-        )}
-        <BreachPopover breaches={breaches} />
 
         {/* A drape covers its whole wall by default; this puts it back after it was shortened. */}
         {drape && (
@@ -1926,26 +1894,67 @@ export function Inspector({
           </Popover>
         )}
 
-        <Rotation value={facing} onChange={onFace} />
-        {!table && !drape && <MirrorMenu onMirror={onMirror} />}
-        <StackMenu show={canRestack} onRestack={onRestack} />
-        <SelectionMenu items={selectItems} />
+        {/* Hung over a table: arranged in that table's focus mode, strung along its row, hung over
+            other tables in a pattern. Centring it and "one over each item" are one-press verbs, in
+            the "…". */}
+        {overTable && (
+          <>
+            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב מעל השולחן — סידור ופיזור של מה שתלוי מעליו · לחיצה כפולה" onClick={() => onDressTable(overTable.id)} />}
+            {onSpreadRow && (
+              <RowSpreadPopover
+                doc={doc}
+                sourceId={overTable.id}
+                name={r?.product.name ?? "הפריט"}
+                heightMm={hangHeightOf(p, r?.product)}
+                onSpread={(opts) => onSpreadRow(p.id, opts)}
+              />
+            )}
+            <Popover label="החלת הפריט מעל שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+              {renderPattern(overTable.id, p.id)}
+            </Popover>
+          </>
+        )}
 
-        {/* On a table: put it on others in a pattern, and move it about its own table. */}
+        {/* On a table: move it about its own table, and put it on others in a pattern — the table
+            bar's order, focus mode first. */}
         {table && (
           <>
+            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />}
             <Popover label="החלת הפריט על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
               {renderPattern(table.id, p.id)}
             </Popover>
-            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />}
           </>
         )}
-        {onMakeStage && <BarButton icon={Grid2x2} label="הפיכה לבמה — מדרגות, גובה ומפלסים" onClick={onMakeStage} />}
+
+        <Rotation value={facing} onChange={onFace} />
+        <MoreMenu
+          label="עוד פעולות לפריט"
+          sections={[
+            !table && !drape ? mirrorItems(onMirror) : [],
+            stackItems(canRestack, onRestack),
+            selectItems,
+            overTable
+              ? [
+                  ...(onCentreOver ? [{ label: "למרכז השולחן", icon: Crosshair, onSelect: () => onCentreOver(p.id) }] : []),
+                  ...(onHangOverDressing && hungOverDressing > 0
+                    ? [{ label: `אחד מעל כל פריט שעל השולחן (${hungOverDressing})`, icon: ArrowUpFromLine, onSelect: () => onHangOverDressing(p.id) }]
+                    : []),
+                ]
+              : [],
+            [
+              ...(onEditProduct && r ? [{ label: "עריכת הפריט בקטלוג", icon: Pencil, onSelect: () => onEditProduct(p.variantId) }] : []),
+              // What stands on a table (or hangs over one) saved as a TABLE SET — the one case where
+              // a single item makes a catalog item worth having (lib/catalog/composition.ts).
+              ...(onSaveComposite && (table || overTable) ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+            ],
+            onMakeStage ? [{ label: "הפיכה לבמה — מדרגות, גובה ומפלסים", icon: Grid2x2, onSelect: onMakeStage }] : [],
+          ]}
+        />
         <Actions
           onDuplicate={onDuplicate}
           duplicateLabel="שכפול הפריט"
           onDelete={onDelete}
-          deleteLabel="מחיקה של הפריט"
+          deleteLabel="מחיקת הפריט"
         />
       </Bar>
     );
@@ -1969,9 +1978,43 @@ export function Inspector({
     <Bar
       icon={TableIcon}
       title={tableLabel(doc, t)}
-      facts={[t.type, `${count} פריטים`].join(" · ")}
+      // How full the top is, read off the title row — the chip below appears only when it overflows.
+      facts={[t.type, count > 0 ? `${count} פריטים · ${pct}% מהשטח` : "0 פריטים"].join(" · ")}
       onClose={onClose}
     >
+      {/* What is wrong first: a safety distance, a top that holds more than it has room for. */}
+      <BreachPopover breaches={breaches} />
+      {/* How full the top is. At rest the percentage rides the title row ("6 פריטים · 42% מהשטח");
+          the chip is here only when the items hold more than the top has room for. */}
+      {overflow && (
+        <Popover label="ניצול שטח" icon={Boxes} tone="warn" value={ltr(`${pct}%`)}>
+          <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted">{count} פריטים על השולחן</span>
+            <span className={"nums font-semibold " + (overflow ? "text-warn-ink" : "text-ink")}>{pct}%</span>
+          </div>
+          <div
+            role="progressbar"
+            aria-label="ניצול שטח"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="h-1.5 overflow-hidden rounded-full bg-border"
+          >
+            <div
+              className={"h-full rounded-full " + (overflow ? "bg-warn" : "bg-accent")}
+              style={{ width: `${Math.min(100, pct)}%` }}
+            />
+          </div>
+          {overflow && (
+            <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn-ink">
+              <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+              הפריטים חורגים משטח השולחן
+            </p>
+          )}
+        </Popover>
+      )}
+
+      {swap?.kind === "tables" && <SwapPopover swap={swap} onSwap={onSwap} label="סוג שולחן" />}
       {/* F-3.3: auto-running numbering, editable per table */}
       <Popover label="מספר שולחן" icon={Hash} value={t.unnumbered ? "ללא" : ltr(`#${t.number}`)}>
         {!t.unnumbered && (
@@ -1993,9 +2036,6 @@ export function Inspector({
         </div>
         <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש.</Note>
       </Popover>
-
-      {swap?.kind === "tables" && <SwapPopover swap={swap} onSwap={onSwap} label="סוג שולחן" />}
-      {onEditProduct && t.variantId && resolve(t.variantId) && <BarButton icon={Pencil} label="עריכת סוג השולחן בקטלוג" onClick={() => onEditProduct(t.variantId!)} />}
 
       {/* The chairs on the plan ARE this number — it came from the catalog row when the table was
           dropped, and a head table that seats six rather than the standard twelve says so here.
@@ -2020,11 +2060,7 @@ export function Inspector({
               aria-label="סוג הכיסא"
               value={t.chairVariantId ?? ""}
               options={[
-                { value: "", label: `ברירת מחדל${(() => {
-                  const d = defaultChair();
-                  const name = d ? chairOptions().find((o) => o.value === d)?.label : undefined;
-                  return name ? ` — ${name}` : "";
-                })()}` },
+                { value: "", label: defaultChairLabel() },
                 ...chairOptions(),
               ]}
               onChange={(v) => onChair(t.id, v || null)}
@@ -2080,33 +2116,7 @@ export function Inspector({
         )}
       </Popover>
 
-      {/* How full the top is, and what is standing on it — one subject, because the count is what the
-          bar is measuring. */}
-      <Popover label="ניצול שטח" icon={Boxes} tone={overflow ? "warn" : "default"} value={ltr(`${pct}%`)}>
-        <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
-          <span className="text-muted">{count} פריטים על השולחן</span>
-          <span className={"nums font-semibold " + (overflow ? "text-warn-ink" : "text-ink")}>{pct}%</span>
-        </div>
-        <div
-          role="progressbar"
-          aria-label="ניצול שטח"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          className="h-1.5 overflow-hidden rounded-full bg-border"
-        >
-          <div
-            className={"h-full rounded-full " + (overflow ? "bg-warn" : "bg-accent")}
-            style={{ width: `${Math.min(100, pct)}%` }}
-          />
-        </div>
-        {overflow && (
-          <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn-ink">
-            <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-            הפריטים חורגים משטח השולחן
-          </p>
-        )}
-      </Popover>
+      {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
 
       {cloth && (
         <Popover label="מפה" leading={<Swatch color={clothShade?.swatch} size={14} />} value={clothName ?? "מפה"}>
@@ -2138,26 +2148,24 @@ export function Inspector({
         </Popover>
       )}
 
-      {/* Dressing: the table's focus mode, and its whole dressing onto others in a pattern. */}
-      {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />}
-      <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
-        {renderDesigns(t.id)}
-      </Popover>
-      {count > 0 && (
-        <Popover label="החלת עיצוב השולחן על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
-          {renderPattern(t.id)}
-        </Popover>
+      {/* Dressing: the table's focus mode, the designs saved from tables before it, and its whole
+          dressing onto others in a pattern. The design pass's — the hall pass lays tables out and
+          does not dress them, so none of the three is offered there. */}
+      {onDressTable && (
+        <>
+          <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />
+          <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
+            {renderDesigns(t.id)}
+          </Popover>
+          {count > 0 && (
+            <Popover label="החלת עיצוב השולחן על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+              {renderPattern(t.id)}
+            </Popover>
+          )}
+        </>
       )}
-      {/* The table with everything on it, as a catalog item of its own — placed again, dressed, at
-          the next event. */}
-      {onSaveComposite && <BarButton icon={PackagePlus} label="שמירת השולחן עם העיצוב כפריט מורכב בקטלוג" onClick={onSaveComposite} />}
-
-      {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
-      <BreachPopover breaches={breaches} />
 
       <Rotation value={facing} onChange={onFace} />
-      <MirrorMenu onMirror={onMirror} />
-
       <Popover label="מראה" icon={Palette} panelClassName="w-72">
         <StyleFields
           style={t.style}
@@ -2168,17 +2176,28 @@ export function Inspector({
         />
       </Popover>
 
-      {/* Tables are in the floor stack too — a head table stands on a staging deck, and two pushed
-          together overlap. That could not be said at all until the three fixed paint passes became
-          one (lib/design-document/stacking.ts). */}
-      <StackMenu show={canRestack} onRestack={onRestack} />
-      <SelectionMenu items={selectItems} />
+      {/* The rest, in the "…": flipping and the floor stack (a head table stands on a staging deck,
+          two pushed together overlap — lib/design-document/stacking.ts), building a selection from
+          it, and its catalog row — edited, or the table with everything on it saved as an item of
+          its own, to place again, dressed, at the next event. */}
+      <MoreMenu
+        label="עוד פעולות לשולחן"
+        sections={[
+          mirrorItems(onMirror),
+          stackItems(canRestack, onRestack),
+          selectItems,
+          [
+            ...(onEditProduct && t.variantId && resolve(t.variantId) ? [{ label: "עריכת סוג השולחן בקטלוג", icon: Pencil, onSelect: () => onEditProduct(t.variantId!) }] : []),
+            ...(onSaveComposite ? [{ label: "שמירת השולחן עם העיצוב כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+          ],
+        ]}
+      />
 
       <Actions
         onDuplicate={onDuplicate}
         duplicateLabel="שכפול השולחן"
         onDelete={onDelete}
-        deleteLabel="מחיקה של השולחן"
+        deleteLabel="מחיקת השולחן"
       />
     </Bar>
   );
@@ -2393,20 +2412,29 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
 const cm = (mm: number) => Math.round(mm / 10);
 const metres = (mm: number) => `${(mm / 1000).toFixed(2)} מ׳`;
 
-/** Mirror the selection side to side, or top to bottom. */
-function MirrorMenu({ onMirror }: { onMirror?: (axis: MirrorAxis) => void }) {
-  if (!onMirror) return null;
-  return (
-    <Menu
-      label="היפוך"
-      icon={FlipHorizontal2}
-      side="top"
-      items={[
-        { label: "היפוך מצד לצד", icon: FlipHorizontal2, onSelect: () => onMirror("horizontal") },
-        { label: "היפוך מלמעלה למטה", icon: FlipVertical2, onSelect: () => onMirror("vertical") },
-      ]}
-    />
-  );
+/** THE BAR'S "…" — one on every bar, holding what a selection CAN be asked but seldom is, in the
+ *  same sections in the same order wherever it appears: how it is drawn (flip, the floor stack),
+ *  ways to build a selection from it, its catalog row (edit it; save the selection as an item), and
+ *  what it can be made into or taken apart to. Each section is its own group of rows.
+ *
+ *  It replaced three icon menus (היפוך, סדר בערימה, בחירה) and four loose icons (the catalog's
+ *  pencil, the composite save, "הפיכה לבמה", "פירוק לפלטות") that stood among the subjects a bar is
+ *  ABOUT — a dressed table's bar ran to nineteen controls, and the rare ones sat between the common
+ *  ones in no order a hand could learn. */
+function MoreMenu({ label, sections }: { label: string; sections: MenuItem[][] }) {
+  const items: MenuItem[] = [];
+  for (const section of sections) section.forEach((it, i) => items.push(i === 0 && items.length > 0 ? { ...it, separated: true } : it));
+  if (items.length === 0) return null;
+  return <Menu label={label} side="top" items={items} />;
+}
+
+/** Turn the selection over, side to side or top to bottom. Empty where nothing selected can be. */
+function mirrorItems(onMirror?: (axis: MirrorAxis) => void): MenuItem[] {
+  if (!onMirror) return [];
+  return [
+    { label: "היפוך מצד לצד", icon: FlipHorizontal2, onSelect: () => onMirror("horizontal") },
+    { label: "היפוך מלמעלה למטה", icon: FlipVertical2, onSelect: () => onMirror("vertical") },
+  ];
 }
 
 /** The size of a stretchable item, in the module it is built in. Commits on blur — a stage built in
@@ -2565,19 +2593,12 @@ function SpacingPopover({ spacing, onSpace }: { spacing: Spacing; onSpace: (gapM
 /** Bring to front / send to back, across the whole floor stack — a table over a stage, a plinth under
  *  a rug (lib/design-document/stacking.ts). Also Ctrl+] / Ctrl+[ and the canvas's right-click menu;
  *  the shortcuts are written between LRMs so the brackets are not mirrored by the Hebrew around them. */
-function StackMenu({ show, onRestack }: { show: boolean; onRestack: (to: "front" | "back") => void }) {
-  if (!show) return null;
-  return (
-    <Menu
-      label="סדר בערימה — מה מצויר מעל מה"
-      icon={Layers}
-      side="top"
-      items={[
-        { label: "לחזית · \u200eCtrl+]\u200e", icon: BringToFront, onSelect: () => onRestack("front") },
-        { label: "לאחור · \u200eCtrl+[\u200e", icon: SendToBack, onSelect: () => onRestack("back") },
-      ]}
-    />
-  );
+function stackItems(show: boolean, onRestack: (to: "front" | "back") => void): MenuItem[] {
+  if (!show) return [];
+  return [
+    { label: "לחזית · \u200eCtrl+]\u200e", icon: BringToFront, onSelect: () => onRestack("front") },
+    { label: "לאחור · \u200eCtrl+[\u200e", icon: SendToBack, onSelect: () => onRestack("back") },
+  ];
 }
 
 /** Ways to BUILD a selection, rather than a one-off "apply to…" per operation — every operation this
@@ -2604,9 +2625,11 @@ function selectionItems({
   ];
 }
 
-function SelectionMenu({ items }: { items: MenuItem[] }) {
-  if (items.length === 0) return null;
-  return <Menu label="בחירה" icon={ListChecks} side="top" items={items} />;
+/** "ברירת מחדל — כיסא אבירים": the studio's default chair, named, in every chair list on the bars. */
+function defaultChairLabel(): string {
+  const d = defaultChair();
+  const name = d ? chairOptions().find((o) => o.value === d)?.label : undefined;
+  return name ? `ברירת מחדל — ${name}` : "ברירת מחדל";
 }
 
 /** "4 שולחנות · 12 פריטים · 40 כסאות" — the parts that are actually there, in Hebrew that reads right

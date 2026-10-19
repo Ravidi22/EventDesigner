@@ -39,6 +39,7 @@ export function EventForm({
   onCancel,
   className = "",
   bodyClassName = "",
+  submitLabel,
 }: {
   /** null = create. Anything else = edit that event in place. */
   event: EventSummary | null;
@@ -51,6 +52,9 @@ export function EventForm({
    *  hairlines; the meeting's card lets the page scroll instead. */
   className?: string;
   bodyClassName?: string;
+  /** What the submit button says when saving goes nowhere next (the dashboard's edit dialog).
+   *  Absent = "פתיחת האירוע" / "שמירה והמשך", with the arrow onward. */
+  submitLabel?: string;
 }) {
   const [venues, setVenues] = useState<Venue[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
@@ -246,27 +250,54 @@ export function EventForm({
       </header>
 
       {/* SIX ROWS, AND IT HAS TO STAY THAT SHORT. In the dialog frame anything taller than the
-          window scrolls, and a details form that scrolls hides its own submit button. So every row
-          is a PAIR, and they read as a brief in order — when · what · where · look · who — and
-          nothing stays on screen whose only job is to explain: what the hints under הקמה and the
+          window scrolls, and a details form that scrolls hides its own submit button. So rows are
+          PAIRS, and they read as a brief in order — who · when · where · how many · look · contacts —
+          and nothing stays on screen whose only job is to explain: what the hints under הקמה and the
           zones used to say is in their placeholders now, the sketch's note appears only when it
           applies (a sketch from another venue), and the second contact waits behind its own link
           until somebody needs it. Add a field to an existing row before adding a row.
 
-          ⚠ THE POPOVER FIELDS STILL LEAD. DateField, Select and MultiSelect each open a fixed-size
+          THE CLIENT LEADS. The name is the one required field and the event's title on every screen
+          (the drawer, the meeting's header, the calendar); it sat fifth, under the palette, so the
+          form opened on a date and its submit stayed disabled for a reason four rows down. It is
+          focused when creating.
+
+          ⚠ THE POPOVER FIELDS STAY HIGH. DateField, Select and MultiSelect each open a fixed-size
           popover DOWNWARD out of an absolutely-positioned box and none of them flips, so they sit
           in the top rows, where the rest of the form's height is underneath them to open into —
           the same reason the booking dialog leads with its date/time row
           (app/(app)/dashboard/appointment-dialog.tsx). תאריך sitting fourth is what once cut the
-          calendar off. The plain text fields go last because they open nothing.
+          calendar off; it is second now, below a row of one text field and one short Select. The
+          saved-sketch Select keeps the fourth row it always had. The palette floats (`fixed`) and
+          flips, so it can sit anywhere, and the contacts open nothing.
 
-          הקמה shares the first row with תאריך. Its calendar is a fixed 288px, and the end column is
+          הקמה shares its row with תאריך. Its calendar is a fixed 288px, and the end column is
           narrower than that once the dialog is (it is 92vw up to max-w-2xl, so just above `sm` a
           column is ~265px), so from there it hangs off the field's END edge (`align="end"`), back
           across the row, instead of past the frame. */}
       <div className={`flex flex-col gap-4 px-5 py-5 ${bodyClassName}`}>
         {/* One column until there is room for two — below `sm` a two-up row puts a date picker in
             ~120px and wraps a Hebrew label onto three lines. */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" autoFocus={!event} />
+          {/* סוג האירוע: what the quote's title and cover say ("הצעת מחיר לעיצוב חתונה"). An event
+              saved with a word that is not on the list keeps it as an option of its own. */}
+          <div>
+            <span className={fieldLabelClassName}>סוג האירוע</span>
+            <Select
+              value={eventType}
+              onChange={setEventType}
+              aria-label="סוג האירוע"
+              className="w-full"
+              options={[
+                { value: "", label: "לא צוין" },
+                ...(eventType && !EVENT_TYPES.includes(eventType) ? [{ value: eventType, label: eventType }] : []),
+                ...EVENT_TYPES.map((t) => ({ value: t, label: t })),
+              ]}
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <DateField label="תאריך האירוע" value={date} onChange={setDate} />
           {/* An event is a WINDOW, not a day. The truck is at the hall the afternoon before, so two
@@ -287,28 +318,6 @@ export function EventForm({
             placeholder="ביום האירוע"
             align="end"
           />
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {/* סוג האירוע: what the quote's title and cover say ("הצעת מחיר לעיצוב חתונה"). An event
-              saved with a word that is not on the list keeps it as an option of its own. */}
-          <div>
-            <span className={fieldLabelClassName}>סוג האירוע</span>
-            <Select
-              value={eventType}
-              onChange={setEventType}
-              aria-label="סוג האירוע"
-              className="w-full"
-              options={[
-                { value: "", label: "לא צוין" },
-                ...(eventType && !EVENT_TYPES.includes(eventType) ? [{ value: eventType, label: eventType }] : []),
-                ...EVENT_TYPES.map((t) => ({ value: t, label: t })),
-              ]}
-            />
-          </div>
-          {/* hideZero: a fresh event has no estimate yet, and "0" in the box read as one. The
-              placeholder is the suggestion; the stored value is still 0 until something is typed. */}
-          <NumberField label="אומדן אורחים" min={0} hideZero value={guests} onChange={setGuests} placeholder="200" />
         </div>
 
         {/* More than one zone is the normal case — the ceremony at the חופה, the dinner in the hall it
@@ -337,51 +346,49 @@ export function EventForm({
           </div>
         </div>
 
-        {(offerSketch || offerShades) && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {/* Open the event on a saved sketch (lib/studio/sketch-actions.ts) rather than a blank
-                plan. Sketches drawn in THIS venue lead and the rest say so: a sketch from another
-                property still loads, at its own millimetres, less what hung on that property's
-                walls — and the note under the field says that only when it is the one picked.
-                Create only — an event that exists has its drawing, and the studio's own menu loads
-                into that. */}
-            {offerSketch && (
-              <div>
-                <span className={fieldLabelClassName}>התחלה מסקיצה שמורה</span>
-                <Select
-                  value={sketchId}
-                  onChange={setSketchId}
-                  aria-label="התחלה מסקיצה שמורה"
-                  options={[
-                    { value: "", label: "סקיצה ריקה" },
-                    ...[...sketches]
-                      .sort((a, b) => Number(!!venueId && b.venueId === venueId) - Number(!!venueId && a.venueId === venueId))
-                      .map((sk) => ({
-                        value: sk.id,
-                        label: `${sk.name} · ${sk.tables} שולחנות${venueId && sk.venueId && sk.venueId !== venueId ? " · מתחם אחר" : ""}`,
-                      })),
-                  ]}
-                  className="w-full"
-                />
-                {sketchElsewhere && (
-                  <p className="mt-1.5 text-xs leading-relaxed text-muted">
-                    הסקיצה צוירה במתחם אחר ומגיעה בלי הווילונות שלה.
-                  </p>
-                )}
-              </div>
-            )}
-            {offerShades && (
-              <ShadePicker
-                offered={catalogShades}
-                value={shades}
-                onChange={setShades}
-                className={offerSketch ? "" : "sm:col-span-2"}
+        {/* How many, and what the drawing starts from — or, when there is no saved sketch to offer
+            (always, when editing), how many and the palette. */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {/* hideZero: a fresh event has no estimate yet, and "0" in the box read as one. The
+              placeholder is the suggestion; the stored value is still 0 until something is typed. */}
+          <NumberField label="אומדן אורחים" min={0} hideZero value={guests} onChange={setGuests} placeholder="200" />
+          {/* Open the event on a saved sketch (lib/studio/sketch-actions.ts) rather than a blank
+              plan. Sketches drawn in THIS venue lead and the rest say so: a sketch from another
+              property still loads, at its own millimetres, less what hung on that property's
+              walls — and the note under the field says that only when it is the one picked.
+              Create only — an event that exists has its drawing, and the studio's own menu loads
+              into that. */}
+          {offerSketch ? (
+            <div>
+              <span className={fieldLabelClassName}>התחלה מסקיצה שמורה</span>
+              <Select
+                value={sketchId}
+                onChange={setSketchId}
+                aria-label="התחלה מסקיצה שמורה"
+                options={[
+                  { value: "", label: "סקיצה ריקה" },
+                  ...[...sketches]
+                    .sort((a, b) => Number(!!venueId && b.venueId === venueId) - Number(!!venueId && a.venueId === venueId))
+                    .map((sk) => ({
+                      value: sk.id,
+                      label: `${sk.name} · ${sk.tables} שולחנות${venueId && sk.venueId && sk.venueId !== venueId ? " · מתחם אחר" : ""}`,
+                    })),
+                ]}
+                className="w-full"
               />
-            )}
-          </div>
-        )}
+              {sketchElsewhere && (
+                <p className="mt-1.5 text-xs leading-relaxed text-muted">
+                  הסקיצה צוירה במתחם אחר ומגיעה בלי הווילונות שלה.
+                </p>
+              )}
+            </div>
+          ) : (
+            offerShades && <ShadePicker offered={catalogShades} value={shades} onChange={setShades} />
+          )}
+        </div>
 
-        <TextField label="שם הלקוח" required value={clientName} onChange={setClientName} placeholder="נועה ואיתי" />
+        {offerSketch && offerShades && <ShadePicker offered={catalogShades} value={shades} onChange={setShades} />}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <TextField label="איש קשר" value={contactName} onChange={setContactName} placeholder="נועה" />
           <TextField label="טלפון" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="052-0000000" className="text-end" />
@@ -424,8 +431,8 @@ export function EventForm({
           </Button>
         )}
         <Button type="submit" size="sm" disabled={saving || !clientName.trim()}>
-          {saving ? "שומר…" : event ? "שמירה והמשך" : "פתיחת האירוע"}
-          {!saving && <ArrowLeft className="h-4 w-4" strokeWidth={2.2} />}
+          {saving ? "שומר…" : (submitLabel ?? (event ? "שמירה והמשך" : "פתיחת האירוע"))}
+          {!saving && !submitLabel && <ArrowLeft className="h-4 w-4" strokeWidth={2.2} />}
         </Button>
       </footer>
     </form>

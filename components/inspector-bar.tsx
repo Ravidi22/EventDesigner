@@ -49,7 +49,7 @@ export function Bar({
         )}
         {onClose && (
           <div className="ms-auto ps-2">
-            <BarButton icon={X} label="סגור · Esc" onClick={onClose} />
+            <BarButton icon={X} label="סגירה · Esc" onClick={onClose} />
           </div>
         )}
       </div>
