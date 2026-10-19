@@ -790,7 +790,7 @@ export function Inspector({
           <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים על הבלוק · לחיצה כפולה" onClick={() => onDressTable(lead.id)} />
         )}
         {group.tables > 0 && lead && onDressTable && (
-          <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
+          <Popover label="עיצובי שולחן" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
             {renderDesigns(lead.id)}
           </Popover>
         )}
@@ -2154,7 +2154,7 @@ export function Inspector({
       {onDressTable && (
         <>
           <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />
-          <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
+          <Popover label="עיצובי שולחן" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
             {renderDesigns(t.id)}
           </Popover>
           {count > 0 && (

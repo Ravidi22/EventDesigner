@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
+import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
 import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { emptyDocument } from "@/lib/design-document/types";
@@ -90,8 +90,8 @@ import {
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
-import { deleteStageTemplate, deleteTableDesign, fetchStageRules, fetchStageTemplates, fetchTableDesigns, saveStageTemplate, saveTableDesign } from "@/lib/settings/actions";
-import { TableDesignsPanel } from "./table-designs-panel";
+import { deleteStageTemplate, fetchStageRules, fetchStageTemplates, saveStageTemplate } from "@/lib/settings/actions";
+import { TableDesignsPanel, type WearMode } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/studio/stage-draw";
 import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide } from "@/lib/design-document/stage";
 import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
@@ -248,7 +248,7 @@ export function StudioScreen({
 }) {
   // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
   // that the canvas's resolver and dropProduct() read during render and mid-drag.
-  const { products: catalog, installStageBasics, installStageParts, save: saveProduct } = useCatalog(initialProducts);
+  const { products: catalog, installStageBasics, installStageParts, save: saveProduct, remove: removeCatalogRow } = useCatalog(initialProducts);
   // A new catalog item made from the rail (its "+"), so a client asking for something the catalog
   // lacks does not end the meeting. The form is the catalog's own drawer; in the meeting's passes it
   // opens without anything a client must not see, and offers only the categories this pass's rail
@@ -674,6 +674,18 @@ export function StudioScreen({
     return true;
   };
 
+  /** A table set saved off a whole table (Composition.frame — an "עיצוב שולחן"), let go over a
+   *  table: worn by it, its whole block, in place of what it wore — the panel's "במקום מה שעליו".
+   *  Ctrl+Z gives the old dressing back. */
+  const dropDesign = (product: Product, x: number, y: number): boolean => {
+    const t = tableUnder(doc.tables, { x, y });
+    if (!t) {
+      showHint(`״${product.name}״ הוא עיצוב שולחן — מניחים אותו על שולחן`);
+      return false;
+    }
+    return wearSet(product, t.id, "replace");
+  };
+
   const dropProduct = (productId: string, x: number, y: number): boolean => {
     // The rail's "שורות כיסאות" card carries its chair behind a prefix (lib/studio/drag-payload.ts).
     const tool = rowsTool(productId);
@@ -705,7 +717,8 @@ export function StudioScreen({
     // go at, re-id'd, renumbered and regrouped exactly as a copied selection pastes. From here on they
     // are ordinary tables and items: dressed, moved, quoted and packed like any other, and nothing on
     // the plan remembers the catalog row they came from.
-    if (product.composition && isTableSet(product.composition)) return dropTableSet(product, product.composition, x, y);
+    if (product.composition && isTableSet(product.composition))
+      return product.composition.frame ? dropDesign(product, x, y) : dropTableSet(product, product.composition, x, y);
     if (product.composition) {
       const fresh = pasteInto(clipOf(product.composition), { dx: Math.round(x), dy: Math.round(y), firstNumber: nextNumber(), newId: uid });
       if (clipCount(fresh) === 0) {
@@ -4183,81 +4196,113 @@ export function StudioScreen({
     if (n > 0) showHint(mode === "replace" ? `${tablesWord(n)} עוצבו מחדש` : `העיצוב הוחל על ${tablesWord(n)}`);
   };
 
-  // ── saved table designs (TableDesign) ──────────────────────────────────────────────────────────
-  const [designs, setDesigns] = useState<TableDesign[]>([]);
-  useEffect(() => {
-    let live = true;
-    fetchTableDesigns()
-      .then((d) => live && setDesigns(d))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
+  // ── עיצובי שולחן: the catalog's TABLE SETS (lib/catalog/composition.ts isTableSet) ─────────────
+  // They were a studio setting of their own (studio_settings.table_designs, adopted into the catalog
+  // by lib/catalog/actions.ts) beside the catalog's table sets; one thing now, saved from the panel or
+  // from a selection, worn from the panel or dragged off the rail.
+  const tableSets = useMemo(() => catalog.filter((p) => !p.archived && !!p.composition && isTableSet(p.composition)), [catalog]);
 
-  /** Everything on a table — or on every table of its block — saved under a name: ONE cloth, and each
-   *  item where it stands in the unit's own frame, with the unit's size (TableDesign.frame), so it is
-   *  worn by relative spot on any table or block. */
+  /** Everything on a table — or on every table of its block — and what hangs over it, saved under a
+   *  name as a table set: ONE cloth, each item where it stands in the unit's own frame, and the unit's
+   *  size (Composition.frame), so it is worn by relative spot on any table or block. */
   const saveDesign = async (tableId: string, name: string) => {
     const unit = unitOf(units, tableId);
     if (!unit) return;
     const frameTable = { position: unit.frame.position, rotation: unit.frame.rotation ?? 0, mirrored: unit.frame.mirrored };
-    const items: TableDesign["items"] = [];
+    const placements: Placement[] = [];
+    const keep = (p: Placement, position: DocPoint, rotation = p.rotation) => {
+      const { id: _i, tableId: _t, over: _o, groupId: _g, order: _r, ...rest } = p;
+      void _i; void _t; void _o; void _g; void _r;
+      placements.push({ ...rest, id: uid(), position: { x: Math.round(position.x), y: Math.round(position.y) }, rotation });
+    };
     const firstCover = unit.ids.map((id) => coverOf(doc, id)).find((c) => !!c);
-    const keep = (p: Placement, position: DocPoint) =>
-      items.push({ variantId: p.variantId, quantity: p.quantity, position: { x: Math.round(position.x), y: Math.round(position.y) }, rotation: p.rotation, scale: p.scale || 1, ...(p.sizeMm ? { sizeMm: p.sizeMm } : {}), ...(p.mirrored ? { mirrored: true } : {}), ...(p.vessel !== undefined ? { vessel: p.vessel } : {}) });
     if (firstCover) keep(firstCover, { x: 0, y: 0 });
     for (const id of unit.ids) {
       const t = doc.tables.find((x) => x.id === id);
       if (!t) continue;
       for (const sp of spotsOn(t)) keep(sp.p, toTableFrame(frameTable, sp.at));
     }
-    if (items.length === 0) return;
+    // What hangs over it, by its place and facing in the same frame — hangCopies carries it back out.
+    for (const p of hungOver(unit)) keep(p, toTableFrame(frameTable, p.position), p.rotation - (unit.frame.rotation ?? 0));
+    if (!placements.some((p) => p.layer === "table")) return;
     const arranged = unit.ids.some((id) => doc.tables.find((x) => x.id === id)?.arranged);
-    const res = await saveTableDesign({ id: uid(), name, ...(arranged ? { arranged: true } : {}), frame: { widthMm: Math.round(unit.frame.widthMm), depthMm: Math.round(unit.frame.depthMm) }, items });
-    if ("error" in res) {
-      showHint(res.error);
-      return;
-    }
-    setDesigns(res);
-    showHint(`העיצוב ״${name}״ נשמר — אפשר להלביש בו כל שולחן, בכל אירוע`);
+    const lone = !isBlock(unit) ? doc.tables.find((x) => x.id === unit.ids[0]) : undefined;
+    const round = !!lone && ["circle", "ellipse"].includes(tableFootprint(lone).kind);
+    const frame = { widthMm: Math.round(unit.frame.widthMm), depthMm: Math.round(unit.frame.depthMm), ...(round ? { round: true } : {}) };
+    const product: Product = {
+      id: uid(),
+      name,
+      styleTags: [],
+      ...compositeShell(frame.widthMm, frame.depthMm),
+      layer: "table",
+      composition: { tables: [], placements, groups: [], frame, ...(arranged ? { arranged: true } : {}) },
+    };
+    if (await saveProduct(product)) showHint(`״${name}״ נשמר בקטלוג — מלבישים בו כל שולחן מכאן, או גוררים אותו מהקטלוג`);
+    else showHint("השמירה בקטלוג נכשלה — נסו שוב");
   };
 
-  /** A saved design onto a table — the whole block, for a grouped one — in place of what it wears. */
-  const wearDesign = (tableId: string, designId: string) => {
-    const d = designs.find((x) => x.id === designId);
+  /** A table set onto a table — the whole block, for a grouped one. A set saved off a whole table
+   *  (`frame`) lands spot for spot at the same RELATIVE places, so it fits a round as well as the head
+   *  table it was dressed on; a set of a few pieces keeps its own size, about the table's middle.
+   *  "replace" makes the table exactly the set (what hangs over it too, when the set hangs anything);
+   *  "add" gives it what it lacks — its cloth recoloured, never a second one. One history entry. */
+  const wearSet = (product: Product, tableId: string, mode: WearMode): boolean => {
+    const set = product.composition;
     const unit = unitOf(units, tableId);
-    if (!d || !unit) return;
-    if (!d.frame) {
-      // Saved before designs had a frame: its positions are a table's own — worn as they are, by
-      // every table of the block.
-      act({ type: "dressTables", tableIds: unit.ids, design: { items: d.items, arranged: d.arranged }, mode: "replace", replaces: coverIds });
-    } else {
-      const from: OverFrame = { position: { x: 0, y: 0 }, rotation: 0, widthMm: d.frame.widthMm, depthMm: d.frame.depthMm };
-      const per = new Map<string, Omit<Placement, "id" | "tableId">[]>(unit.ids.map((id) => [id, []]));
-      for (const it of d.items) {
-        const worn: Omit<Placement, "id" | "tableId"> = { ...it, layer: "table" };
-        if (resolve(it.variantId)?.anchor === "table") {
-          for (const id of unit.ids) per.get(id)!.push({ ...worn, position: { x: 0, y: 0 } });
-          continue;
-        }
-        const landed = landOn(doc, from, unit, it.position, chipBox({ ...worn, id: "_" }));
-        if (landed) per.get(landed.table.id)?.push({ ...worn, position: landed.local });
+    if (!set || !unit) return false;
+    const from: OverFrame = {
+      position: { x: 0, y: 0 },
+      rotation: 0,
+      widthMm: set.frame?.widthMm ?? unit.frame.widthMm,
+      depthMm: set.frame?.depthMm ?? unit.frame.depthMm,
+    };
+    const per = new Map<string, Omit<Placement, "id" | "tableId">[]>(unit.ids.map((id) => [id, []]));
+    const hung: Placement[] = [];
+    for (const part of set.placements) {
+      if (part.layer === "ceiling") {
+        hung.push(part);
+        continue;
       }
-      batch([...per].map(([id, items]): Action => ({ type: "wearItems", tableId: id, items, arranged: d.arranged, mode: "replace", replaces: coverIds })));
+      const { id: _i, tableId: _t, over: _o, groupId: _g, order: _r, ...rest } = part;
+      void _i; void _t; void _o; void _g; void _r;
+      const worn: Omit<Placement, "id" | "tableId"> = { ...rest, layer: "table" };
+      if (resolve(part.variantId)?.anchor === "table") {
+        for (const id of unit.ids) per.get(id)!.push({ ...worn, position: { x: 0, y: 0 } });
+        continue;
+      }
+      const landed = landOn(doc, from, unit, part.position, chipBox({ ...worn, id: "_" }));
+      if (landed) per.get(landed.table.id)?.push({ ...worn, position: landed.local });
     }
-    showHint(`${isBlock(unit) ? "הבלוק הולבש" : "השולחן הולבש"} ב״${d.name}״ — להחלה על שולחנות נוספים: ״דפוס״`);
+    // A set of pieces stands where it was put; a whole table's design as that table did.
+    const arranged = set.frame ? !!set.arranged : true;
+    const actions: Action[] = [...per].map(([id, items]): Action => ({ type: "wearItems", tableId: id, items, arranged, mode, replaces: coverIds }));
+    if (hung.length) actions.push(...hangCopies(hung, from, [{ unit }], mode));
+    batch(actions);
+    showHint(
+      mode === "replace"
+        ? `${isBlock(unit) ? "הבלוק הולבש" : "השולחן הולבש"} ב״${product.name}״ — להחלה על שולחנות נוספים: ״דפוס״`
+        : `״${product.name}״ נוסף ל${isBlock(unit) ? "בלוק" : "שולחן"} — להחלה על שולחנות נוספים: ״דפוס״`,
+    );
+    return true;
   };
 
   const renderDesigns = (tableId: string) => {
     const unit = unitOf(units, tableId);
     return (
       <TableDesignsPanel
-        designs={designs}
+        sets={tableSets}
         canSave={!!unit && doc.placements.some((p) => p.layer === "table" && !!p.tableId && unit.ids.includes(p.tableId))}
         onSave={(name) => void saveDesign(tableId, name)}
-        onApply={(id) => wearDesign(tableId, id)}
-        onDelete={(id) => void deleteTableDesign(id).then(setDesigns)}
+        onApply={(id, mode) => {
+          const set = tableSets.find((x) => x.id === id);
+          if (set) wearSet(set, tableId, mode);
+        }}
+        onDelete={(id) => {
+          const name = tableSets.find((x) => x.id === id)?.name ?? "העיצוב";
+          void removeCatalogRow(id)
+            .then(() => showHint(`״${name}״ נמחק מהקטלוג`))
+            .catch(() => showHint("המחיקה נכשלה — נסו שוב"));
+        }}
       />
     );
   };

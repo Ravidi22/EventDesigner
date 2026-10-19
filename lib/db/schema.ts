@@ -360,9 +360,10 @@ export const studioSettings = pgTable("studio_settings", {
    *  levels and edges, its finishes, placed again from the stage tool. jsonb for the reason
    *  checkpointOffsets is: a short list rewritten whole and never queried into. Null = none saved. */
   stageTemplates: jsonb("stage_templates").$type<StageTemplate[]>(),
-  /** The studio's saved table designs (TableDesign[], lib/design-document/types.ts) — a table's
-   *  whole dressing under a name, put on any table of any event in one press. jsonb for the reason
-   *  stageTemplates is. Null = none saved. */
+  /** LEGACY: the studio's saved table designs (TableDesign[]) from before they were TABLE SETS in the
+   *  catalog. Adopted into `products` and set to null on the studio's next catalog read
+   *  (lib/catalog/actions.ts adoptTableDesigns); nothing writes it any more. The column can be
+   *  dropped once every environment has been read past that point. */
   tableDesigns: jsonb("table_designs").$type<TableDesign[]>(),
   updatedAt: updated(),
 });

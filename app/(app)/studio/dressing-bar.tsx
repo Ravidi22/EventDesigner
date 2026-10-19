@@ -102,7 +102,7 @@ export function DressingBar({
       </button>
       {onSpread && <SpreadPopover spread={spread ?? null} onSpread={onSpread} onAbove={onAbove} />}
       <InspectorDivider />
-      <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72" side="bottom">
+      <Popover label="עיצובי שולחן" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72" side="bottom">
         {designs}
       </Popover>
       <Popover label="החלת העיצוב על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72" side="bottom" disabled={any === 0}>

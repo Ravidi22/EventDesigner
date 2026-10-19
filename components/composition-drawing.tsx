@@ -73,7 +73,12 @@ export function CompositionPieces({
 
   const onTable = (tableId: string) => composition.placements.filter((p) => p.layer === "table" && p.tableId === tableId && resolve(p.variantId)?.anchor !== "table");
   const coverOf = (tableId: string) => composition.placements.find((p) => p.layer === "table" && p.tableId === tableId && resolve(p.variantId)?.anchor === "table");
-  const floor = composition.placements.filter((p) => !p.tableId && p.layer !== "ceiling" && resolve(p.variantId)?.anchor !== "wall");
+  // A table set saved off a whole table (Composition.frame) is drawn ON that table — its size and
+  // shape, wearing the set's cloth — so the card shows a dressed table, not a cloth lying loose.
+  const ghost = setTable(composition);
+  const ghostCloth = ghost ? composition.placements.find((p) => !p.tableId && p.layer === "table" && resolve(p.variantId)?.anchor === "table") : undefined;
+  const ghostColour = ghostCloth ? (resolve(ghostCloth.variantId)?.swatch ?? "var(--color-accent-tint)") : undefined;
+  const floor = composition.placements.filter((p) => !p.tableId && p.layer !== "ceiling" && resolve(p.variantId)?.anchor !== "wall" && p !== ghostCloth);
   const overhead = composition.placements.filter((p) => !p.tableId && p.layer === "ceiling");
 
   return (
@@ -87,6 +92,20 @@ export function CompositionPieces({
           ))}
         </g>
       ))}
+      {ghost && (
+        <g>
+          {ghostColour && <ClothDrape footprint={ghost} colour={ghostColour} />}
+          <FootprintShape
+            footprint={ghost}
+            fill={ghostColour ?? "var(--color-surface)"}
+            stroke="var(--color-ink)"
+            strokeOpacity={ghostColour ? 0.22 : 0.35}
+            strokeWidth={1}
+            strokeDasharray={ghostColour ? undefined : "4 3"}
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      )}
       {floor.map((p) => (
         <Piece key={p.id} placement={p} at={p.position} rotation={p.rotation} />
       ))}
@@ -188,10 +207,26 @@ function Piece({ placement: p, at, rotation, footprint, overhead }: { placement:
   );
 }
 
+/** The table a whole-table set (Composition.frame) was dressed on, as a footprint at the origin. */
+function setTable(c: Composition): Footprint | null {
+  const f = c.tables.length === 0 ? c.frame : undefined;
+  if (!f) return null;
+  if (!f.round) return { kind: "rect", widthMm: f.widthMm, depthMm: f.depthMm };
+  return f.widthMm === f.depthMm ? { kind: "circle", diameterMm: f.widthMm } : { kind: "ellipse", widthMm: f.widthMm, depthMm: f.depthMm };
+}
+
 /** The box the pieces stand in — tables by their turned footprints, free items by theirs — without
  *  the chairs, which is how the plan measures a table and what a drop is centred on. */
 export function compositionBox(c: Composition): { minX: number; minY: number; maxX: number; maxY: number } {
   const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  const ghost = setTable(c);
+  if (ghost) {
+    const b = footprintBounds(ghost);
+    box.minX = -b.w / 2;
+    box.maxX = b.w / 2;
+    box.minY = -b.h / 2;
+    box.maxY = b.h / 2;
+  }
   const take = (at: Point, f: Footprint, rotation: number) => {
     const b = footprintBounds(f);
     const t = (rotation * Math.PI) / 180;

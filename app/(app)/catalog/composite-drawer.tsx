@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type { CompositionLine, Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, styleTagsOf } from "@/lib/catalog/categories";
-import { canBePart, compositeShell, compositionCounts, layoutRecipe } from "@/lib/catalog/composition";
+import { canBePart, compositeShell, compositionCounts, isTableSet, layoutRecipe } from "@/lib/catalog/composition";
 import { loadProducts, productById } from "@/lib/catalog/storage";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { formatPrice } from "@/lib/catalog/format";
@@ -98,6 +98,9 @@ export function CompositeDrawer({
   };
 
   const counted = compositionCounts(composition);
+  // A TABLE SET — "עיצוב שולחן" (lib/catalog/composition.ts): worn by a table already on the plan,
+  // never placed on the floor; named as what it is.
+  const tableSet = isTableSet(composition);
   const total = internal ? compositeTotal(composition) : null;
   const toggleTag = (t: string) => setDraft((d) => ({ ...d, styleTags: d.styleTags.includes(t) ? d.styleTags.filter((x) => x !== t) : [...d.styleTags, t] }));
   const addTag = () => {
@@ -107,7 +110,7 @@ export function CompositeDrawer({
   };
 
   return (
-    <Drawer title={isEdit ? "עריכת פריט מורכב" : "פריט מורכב חדש"} onClose={onClose}>
+    <Drawer title={tableSet ? (isEdit ? "עריכת עיצוב שולחן" : "עיצוב שולחן חדש") : isEdit ? "עריכת פריט מורכב" : "פריט מורכב חדש"} onClose={onClose}>
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -210,7 +213,9 @@ export function CompositeDrawer({
                   )}
                 </ul>
                 <p className="text-[13px] leading-relaxed text-muted">
-                  הסידור נשמר מהסקיצה, בדיוק כפי שעמד. כדי לשנות אותו — מניחים את הפריט בסקיצה, משנים, בוחרים הכול ושומרים שוב כפריט מורכב.
+                  {tableSet
+                    ? "עיצוב שולחן מלביש שולחן שכבר בסקיצה: גוררים אותו מהקטלוג אל שולחן, או בוחרים אותו ב״עיצובי שולחן״ שבסרגל השולחן. כדי לשנות אותו — מלבישים בו שולחן, משנים ושומרים שוב."
+                    : "הסידור נשמר מהסקיצה, בדיוק כפי שעמד. כדי לשנות אותו — מניחים את הפריט בסקיצה, משנים, בוחרים הכול ושומרים שוב כפריט מורכב."}
                 </p>
               </div>
             )}

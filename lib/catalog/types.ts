@@ -482,4 +482,15 @@ export interface Composition {
   placements: Placement[];
   groups: DesignGroup[];
   recipe?: CompositionLine[];
+  /** A TABLE SET (no tables — what stands on a table and hangs over it) saved off a WHOLE table: the
+   *  size of the table or block it was dressed on, and the parts' positions are in that table's own
+   *  frame, centred. Worn, each part goes to the same RELATIVE spot on whatever table or block wears
+   *  it (app/(app)/studio/dressing-units.ts), so a design dressed on a 2.4m head table lands on a ⌀1.5
+   *  round. `round` when that table was round — the card draws it under the parts. Absent = a set
+   *  of a few pieces, kept at its own size and laid about the point it is let go at. This is what
+   *  "עיצובי שולחן" were before they were catalog rows (studio_settings.table_designs). */
+  frame?: { widthMm: number; depthMm: number; round?: boolean };
+  /** With `frame`: whether the parts stand where they were saved (the table was arranged by hand)
+   *  or are laid out automatically on whatever wears it — see DesignTable.arranged. */
+  arranged?: boolean;
 }

@@ -1,6 +1,6 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
-import type { BenchSpec, ChairRows, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild, TableDesign } from "./types";
+import type { BenchSpec, ChairRows, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild } from "./types";
 import { chairRowsCount, cleanRows } from "./chair-rows";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
@@ -142,9 +142,6 @@ export type Action =
   // before (a candlestick slid across the seam of a head table belongs to the half it is on now).
   // Every table named is marked arranged; the caller sends every item on them, as above.
   | { type: "arrangeOnTables"; positions: { id: string; tableId: string; position: Point }[] }
-  // A saved table design (TableDesign) put on these tables — "add" or "replace", exactly as
-  // copyDressing, with the design's own items standing in for a source table's.
-  | { type: "dressTables"; tableIds: string[]; design: Pick<TableDesign, "items" | "arranged">; mode: "add" | "replace"; replaces?: string[] }
   // These items worn by this ONE table, each already placed by the caller in the table's own frame —
   // what a block's dressing comes to on each of its members when it is carried onto another table or
   // block (app/(app)/studio/dressing-units.ts). The same rules as copyDressing; and "replace" with
@@ -641,14 +638,6 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
       return wearDressing(doc, source, fromArranged, targets, action.mode, action.replaces);
     }
 
-    case "dressTables": {
-      // A saved design worn by tables: the same rules as copying one table onto others, with no
-      // table on the plan to copy from.
-      const targets = action.tableIds.filter((id) => doc.tables.some((t) => t.id === id));
-      const source = action.design.items.map((it) => ({ ...it, layer: "table" as const }));
-      return wearDressing(doc, source, action.design.arranged, targets, action.mode, action.replaces);
-    }
-
     case "wearItems": {
       if (!doc.tables.some((t) => t.id === action.tableId)) return doc;
       if (action.items.length > 0) return wearDressing(doc, action.items, action.arranged, [action.tableId], action.mode, action.replaces);
@@ -875,7 +864,7 @@ function pruneGroups(doc: DesignDocumentContent): DesignDocumentContent {
   };
 }
 
-/** The body of copyDressing and dressTables: these tables put on this dressing. `source` is the
+/** The body of copyDressing and wearItems: these tables put on this dressing. `source` is the
  *  items as they stand on the table they come from (or in the saved design); `fromArranged` is
  *  whether that table was arranged by hand, which a replace carries onto every target. */
 function wearDressing(
@@ -1271,11 +1260,12 @@ if (isMain(import.meta.url)) {
     assert(apply(base, { type: "arrangeDressing", tableId: "gone", positions: [] }) === base, "arranging a missing table is not an edit");
     assert(apply(base, { type: "arrangeDressing", tableId: "t2", positions: [{ id: "a", position: { x: 9, y: 9 } }] }).placements[0].position.x === 0, "an item on another table is not moved");
 
-    const design = { arranged: true, items: [{ variantId: "candle", quantity: 2, position: { x: 600, y: 0 }, rotation: 0, scale: 1 }] };
-    const worn = apply(base, { type: "dressTables", tableIds: ["t1", "t2", "gone"], design, mode: "replace" });
-    assert(worn.placements.filter((p) => p.variantId === "candle").length === 2 && !worn.placements.some((p) => p.variantId === "flowers"), "a saved design replaces what each table wore");
+    // A table set worn by tables (the studio's wearSet: one wearItems per table it lands on).
+    const items: Omit<Placement, "id" | "tableId">[] = [{ variantId: "candle", layer: "table", quantity: 2, position: { x: 600, y: 0 }, rotation: 0, scale: 1 }];
+    const worn = ["t1", "t2", "gone"].reduce((d, tableId) => apply(d, { type: "wearItems", tableId, items, arranged: true, mode: "replace" }), base);
+    assert(worn.placements.filter((p) => p.variantId === "candle").length === 2 && !worn.placements.some((p) => p.variantId === "flowers"), "a table set worn in place replaces what each table wore");
     assert(worn.tables.every((t) => t.arranged) && worn.placements.every((p) => p.position.x === 600 && p.quantity === 2), "…standing where it was saved, as many as it was");
-    const added = apply(base, { type: "dressTables", tableIds: ["t1"], design, mode: "add" });
+    const added = apply(base, { type: "wearItems", tableId: "t1", items, arranged: true, mode: "add" });
     assert(added === base, "add gives a table only what it lacks — t1 already has its candle");
 
     const vased = apply(base, { type: "setPlacementVessel", ids: ["a"], vessel: "jug" });

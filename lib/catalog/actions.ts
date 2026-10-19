@@ -12,14 +12,15 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { revalidateCatalog } from "@/lib/db/revalidate";
-import { products, productVariants, designDocuments } from "@/lib/db/schema";
+import { products, productVariants, designDocuments, studioSettings } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
 import { catalogShades, type CatalogShade } from "./shades";
 import { toProducts, toProductRow, toVariantRows } from "./db-mapping";
 import { STANDARD_ITEMS, STANDARD_STAGE_KEYS, STANDARD_STAGE_PART_KEYS } from "./standard/items";
 import { installStandardCatalog } from "./standard/install";
-import { standardProductId } from "./standard/id";
+import { standardProductId, uuidV5 } from "./standard/id";
+import { compositeShell, fromTableDesign } from "./composition";
 
 // ── Input guards ───────────────────────────────────────────────────────────────────────────────
 //
@@ -77,6 +78,7 @@ function assertProduct(value: unknown): asserts value is Product {
  *  simply less code and less garbage. */
 export async function fetchProducts(): Promise<Product[]> {
   const organizationId = await currentOrg();
+  await adoptTableDesigns(organizationId);
   const database = db();
 
   const rows = await database.select().from(products).where(eq(products.organizationId, organizationId));
@@ -96,6 +98,40 @@ export async function fetchProducts(): Promise<Product[]> {
     );
 
   return toProducts(rows, variantRows);
+}
+
+/** The studio's saved table designs from before they were catalog rows (studio_settings.table_designs)
+ *  adopted as the TABLE SETS they are now (lib/catalog/composition.ts fromTableDesign) — once, the
+ *  first time this studio's catalog is read, and then the setting is emptied. Ids are UUIDv5 over the
+ *  design's own id, and the insert does nothing on a conflict, so two reads racing each other (or a
+ *  second run after a failure between the two writes) add nothing twice. A read of one small row
+ *  when there is nothing left to adopt. */
+async function adoptTableDesigns(organizationId: string): Promise<void> {
+  const [row] = await db()
+    .select({ designs: studioSettings.tableDesigns })
+    .from(studioSettings)
+    .where(eq(studioSettings.organizationId, organizationId))
+    .limit(1);
+  const designs = (row?.designs ?? []).filter((d) => d && typeof d.id === "string" && typeof d.name === "string" && Array.isArray(d.items) && d.items.length > 0);
+  if (!row?.designs) return;
+  const rows = designs.map((d) => {
+    const composition = fromTableDesign(d, (i) => uuidV5(`table-design/${d.id}/${i}`, organizationId));
+    // A design with a frame measures the table it was dressed on; one without, the spread of its items.
+    const reach = (axis: "x" | "y") => Math.max(...d.items.map((it) => Math.abs(it.position[axis]))) * 2 + 400;
+    const product: Product = {
+      id: uuidV5(`table-design/${d.id}`, organizationId),
+      name: d.name,
+      styleTags: [],
+      ...compositeShell(composition.frame?.widthMm ?? reach("x"), composition.frame?.depthMm ?? reach("y")),
+      layer: "table",
+      composition,
+    };
+    return toProductRow(product, organizationId);
+  });
+  await db().transaction(async (tx) => {
+    if (rows.length) await tx.insert(products).values(rows).onConflictDoNothing();
+    await tx.update(studioSettings).set({ tableDesigns: null, updatedAt: new Date() }).where(eq(studioSettings.organizationId, organizationId));
+  });
 }
 
 /** The distinct shades the catalog's live rows carry — what the event details offer as גווני

@@ -15,7 +15,7 @@
 // Placing either on a plan is a paste (lib/studio/clipboard.ts pasteInto), done by the studio.
 //
 // Pure: no I/O, no React. `npm run check:composition`.
-import type { DesignGroup, DesignTable, Placement, Point } from "../design-document/types";
+import type { DesignGroup, DesignTable, Placement, Point, TableDesign } from "../design-document/types";
 import type { Clip } from "../studio/clipboard";
 import type { Composition, CompositionLine, Product } from "./types";
 import { anchorOf } from "./categories";
@@ -82,12 +82,46 @@ export function fromSelection(clip: Clip, box: Box): Composition {
   return { tables, placements, groups };
 }
 
-/** A TABLE SET: a composite made only of what stands on a table (and what hangs over it) — a
- *  centrepiece with its candlesticks, saved without the table. Its parts' positions are offsets in
- *  a TABLE's frame about the set's middle; it is placed ONTO the table it is dropped on (the studio's
- *  dropTableSet), never onto the floor. */
+/** A TABLE SET: a composite made only of what stands on a table (and what hangs over it), saved
+ *  without the table — "עיצוב שולחן". Placed ONTO a table, never onto the floor. Two kinds, one row:
+ *
+ *   • saved off a WHOLE table (`frame` set — the studio's "עיצובי שולחן" panel): the parts are in that
+ *     table's frame, and wearing it puts each at the same RELATIVE spot on the table or block that
+ *     wears it, in place of what it wore (or beside it);
+ *   • a few PIECES (no frame — a centrepiece and its candlesticks, selected and saved): the parts are
+ *     offsets about the set's middle, laid about the point they are let go at (the studio's
+ *     dropTableSet), added to what is there.
+ *
+ *  These used to be two features — "עיצובים שמורים" in the studio's settings, table sets in the
+ *  catalog — that each did half of the other's job (2026-10-19, the user: "yes merge them"). */
 export function isTableSet(c: Composition): boolean {
   return c.tables.length === 0 && c.placements.some((p) => p.layer === "table") && c.placements.every((p) => p.layer === "table" || p.layer === "ceiling");
+}
+
+/** A saved table design from before the merge (studio_settings.table_designs) as the table set it
+ *  is now. One that had a frame keeps it; one saved before designs had frames held a table's own
+ *  offsets, worn as they were — a set of pieces about its middle says exactly that. `newId` mints
+ *  the parts' ids (the server passes a deterministic one, so adopting twice adds nothing). */
+export function fromTableDesign(d: TableDesign, newId: (index: number) => string): Composition {
+  const placements: Placement[] = d.items.map((it, i) => ({
+    id: newId(i),
+    variantId: it.variantId,
+    layer: "table",
+    quantity: it.quantity,
+    position: it.position,
+    rotation: it.rotation,
+    scale: it.scale,
+    ...(it.sizeMm ? { sizeMm: it.sizeMm } : {}),
+    ...(it.mirrored ? { mirrored: true } : {}),
+    ...(it.vessel !== undefined ? { vessel: it.vessel } : {}),
+  }));
+  return {
+    tables: [],
+    placements,
+    groups: [],
+    ...(d.frame ? { frame: { widthMm: d.frame.widthMm, depthMm: d.frame.depthMm } } : {}),
+    ...(d.arranged ? { arranged: true } : {}),
+  };
 }
 
 /** What a composite is made of, counted: each catalog variant with how many of it, tables first,
@@ -419,5 +453,24 @@ if (isMain(import.meta.url)) {
   assert(isTableSet({ tables: [], placements: [chip("vase", "table"), chip("pendant", "ceiling")], groups: [] }), "…with what hangs over them");
   assert(!isTableSet({ tables: [], placements: [chip("sofa", "floor"), chip("vase", "table")], groups: [] }), "a set with a sofa in it stands on the floor");
   assert(!isTableSet({ tables: [], placements: [chip("pendant", "ceiling")], groups: [] }), "nothing on a table, no table set");
+
+  // A saved design from before the merge becomes the table set it always was.
+  const legacy: TableDesign = {
+    id: "d1",
+    name: "גולד רומנטי",
+    arranged: true,
+    frame: { widthMm: 2400, depthMm: 1200 },
+    items: [
+      { variantId: "cloth-gold", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+      { variantId: "candle", quantity: 3, position: { x: -600, y: 0 }, rotation: 0, scale: 1.2, mirrored: true, vessel: null },
+    ],
+  };
+  const adopted = fromTableDesign(legacy, (i) => `d1-${i}`);
+  assert(isTableSet(adopted), "a saved design is a table set");
+  assert(adopted.frame?.widthMm === 2400 && adopted.arranged === true, "…keeping the table it was dressed on, and that it was arranged");
+  const c3 = adopted.placements[1];
+  assert(c3.id === "d1-1" && c3.quantity === 3 && c3.position.x === -600 && c3.scale === 1.2 && c3.mirrored === true && c3.vessel === null, "…each item as it was saved");
+  const older = fromTableDesign({ ...legacy, frame: undefined, arranged: undefined }, (i) => `x${i}`);
+  assert(!older.frame && !older.arranged, "a design saved before frames is a set of pieces, worn about the middle as before");
   console.log("composition: ok");
 }

@@ -331,10 +331,13 @@ export interface StageTemplate {
   dressing?: { itemId: string; variantId: string; quantity: number }[];
 }
 
-/** A table's dressing saved under the studio's own name for it — "גולד רומנטי": the cloth, the
- *  centrepiece, the candlesticks, how many of each and where each stood — to be put on any table of
- *  any event in one press. Stored per studio (studio_settings.table_designs). The items name catalog
- *  VARIANTS, like every placement; one archived since is still placed and still counted. */
+/** LEGACY — what studio_settings.table_designs held before a saved table design became a TABLE SET in
+ *  the catalog (2026-10-19; lib/catalog/composition.ts isTableSet, fromTableDesign). Read only to
+ *  adopt the old rows into the catalog (lib/catalog/actions.ts adoptTableDesigns); nothing writes one.
+ *
+ *  A table's dressing saved under the studio's own name for it — "גולד רומנטי": the cloth, the
+ *  centrepiece, the candlesticks, how many of each and where each stood. The items name catalog
+ *  VARIANTS, like every placement. */
 export interface TableDesign {
   id: string;
   name: string;
