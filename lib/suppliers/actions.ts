@@ -36,6 +36,7 @@ import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { nearestWall } from "@/lib/studio/anchor";
 import { climbKindOf } from "@/lib/studio/climb-item";
+import { vesselOf } from "@/lib/catalog/vessel";
 import { deckTypeOf } from "@/lib/design-document/stage";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
@@ -426,6 +427,8 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
     },
     wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
     climbOf: (variantId) => climbKindOf(byVariant.get(variantId)),
+    // An arrangement's vase is stock on the day it stands in (lib/catalog/vessel.ts).
+    vesselOf: (p) => vesselOf(p, (id) => byVariant.get(id)),
   };
 }
 

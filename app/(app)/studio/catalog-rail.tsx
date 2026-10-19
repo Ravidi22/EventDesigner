@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Heart, MousePointerClick, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { Copy, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { Menu } from "@/components/menu";
 import type { ChairRows } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { catalogBox } from "@/lib/studio/footprint";
 import { ChairBlock } from "@/components/chair-block";
+import { CompositionPieces, compositionBox } from "@/components/composition-drawing";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
@@ -40,6 +42,8 @@ export function CatalogRail({
   hint,
   mmPerPx,
   onAddProduct,
+  onEditProduct,
+  onDuplicateProduct,
   addedIds = [],
   armedId = null,
   onArm,
@@ -54,6 +58,12 @@ export function CatalogRail({
   /** Opens the product form over the studio — so an item the client asks for that the catalog does
    *  not have yet is made here, mid-meeting, instead of by leaving the meeting for /catalog. */
   onAddProduct?: () => void;
+  /** Opens a row in that same form to EDIT it — the "…" on each row — so a wrong price or size is put
+   *  right from here rather than by leaving the sketch for /catalog and coming back. */
+  onEditProduct?: (productId: string) => void;
+  /** Opens a copy of a row in the form as a new item (the "…"'s שכפול) — the shade or size the
+   *  catalog is one step away from. */
+  onDuplicateProduct?: (product: Product) => void;
   /** Products added from this rail since the screen opened, newest first. They are pinned above
    *  everything, because the reason one was just made is to drag it onto the plan. */
   addedIds?: string[];
@@ -222,7 +232,7 @@ export function CatalogRail({
             </SectionLabel>
             <ul className="mb-4 flex flex-col gap-1">
               {added.map((p) => (
-                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
               ))}
             </ul>
           </>
@@ -236,7 +246,7 @@ export function CatalogRail({
             </SectionLabel>
             <ul className="flex flex-col gap-1">
               {liked.map((p) => (
-                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
               ))}
             </ul>
             <SectionLabel className="mt-4">כל הקטלוג</SectionLabel>
@@ -246,7 +256,7 @@ export function CatalogRail({
         <ul className="flex flex-col gap-1">
           {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
           {rest.map((p) => (
-            <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} />
+            <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
           ))}
         </ul>
         {empty && <p className="p-4 text-center text-sm text-muted">אין תוצאות</p>}
@@ -287,8 +297,11 @@ function showPlanGlyph(e: React.DragEvent, product: Product, mmPerPx: number) {
   document.body.appendChild(host);
   const root = createRoot(host);
   try {
-    flushSync(() => root.render(<PlanGlyph product={product} mmPerPx={mmPerPx} />));
-    const { w, h } = glyphSize(product, mmPerPx);
+    // A composite carries its parts, held by its ORIGIN — the point a drop pastes them about — so the
+    // picture is laid out symmetric about it (compositeGlyph).
+    const glyph = product.composition ? compositeGlyph(product, mmPerPx) : null;
+    flushSync(() => root.render(glyph ? glyph.node : <PlanGlyph product={product} mmPerPx={mmPerPx} />));
+    const { w, h } = glyph ?? glyphSize(product, mmPerPx);
     e.dataTransfer.setDragImage(host, w / 2, h / 2);
   } catch {
     // A drag that cannot be given a custom image is still a perfectly good drag — the browser falls
@@ -299,6 +312,31 @@ function showPlanGlyph(e: React.DragEvent, product: Product, mmPerPx: number) {
     root.unmount();
     host.remove();
   }, 0);
+}
+
+/** A composite's drag image: its parts at the canvas's zoom, kept between 30 and 320 px on its longest
+ *  side, in a box symmetric about the item's origin so the pointer holds it where it will land. */
+function compositeGlyph(product: Product, mmPerPx: number): { node: React.ReactNode; w: number; h: number } | null {
+  const c = product.composition;
+  if (!c) return null;
+  const b = compositionBox(c);
+  const hw = Math.max(-b.minX, b.maxX, 100);
+  const hh = Math.max(-b.minY, b.maxY, 100);
+  let pxPerMm = 1 / Math.max(0.01, mmPerPx);
+  const longest = Math.max(hw, hh) * 2 * pxPerMm;
+  if (longest < 30) pxPerMm *= 30 / longest;
+  else if (longest > 320) pxPerMm *= 320 / longest;
+  const w = Math.max(8, Math.round(hw * 2 * pxPerMm));
+  const h = Math.max(8, Math.round(hh * 2 * pxPerMm));
+  return {
+    w,
+    h,
+    node: (
+      <svg width={w} height={h} viewBox={`${-hw} ${-hh} ${hw * 2} ${hh * 2}`} style={{ overflow: "visible", filter: "drop-shadow(0 4px 10px rgb(109 85 189 / 0.35))" }}>
+        <CompositionPieces composition={c} outline />
+      </svg>
+    ),
+  };
 }
 
 const ROWS_WORDS = ["שורות", "כיסא", "כיסאות", "חופה", "טקס"];
@@ -417,15 +455,22 @@ function ProductRow({
   mmPerPx,
   armed,
   onArm,
+  onEdit,
+  onDuplicate,
 }: {
   product: Product;
   mmPerPx?: RefObject<number>;
   armed: boolean;
   onArm?: (productId: string | null) => void;
+  onEdit?: (productId: string) => void;
+  onDuplicate?: (product: Product) => void;
 }) {
   const toggle = () => onArm?.(armed ? null : p.id);
+  // The open panel hangs over the rows below, which come later in the DOM: lifted while it is open
+  // (the catalog card's rule, app/(app)/catalog/product-card.tsx).
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <li>
+    <li className={menuOpen ? "relative z-30" : undefined}>
       <div
         draggable
         // A button as well as a drag source: a click arms the row and the plan places it, click after
@@ -474,7 +519,21 @@ function ProductRow({
             מניחים
           </span>
         ) : (
-          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">{LAYER_LABEL[p.layer]}</span>
+          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">{p.composition ? "מורכב" : LAYER_LABEL[p.layer]}</span>
+        )}
+        {(onEdit || onDuplicate) && (
+          // The row is itself a button (it arms): the menu's clicks and keys stop here, so opening
+          // it, or choosing from it with Enter, never arms the item as well.
+          <span className="-me-1 shrink-0" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <Menu
+              label={`אפשרויות ל${p.name}`}
+              onOpenChange={setMenuOpen}
+              items={[
+                ...(onEdit ? [{ label: "עריכת הפריט", icon: Pencil, onSelect: () => onEdit(p.id) }] : []),
+                ...(onDuplicate ? [{ label: "שכפול לפריט חדש", icon: Copy, onSelect: () => onDuplicate(p) }] : []),
+              ]}
+            />
+          </span>
         )}
       </div>
     </li>

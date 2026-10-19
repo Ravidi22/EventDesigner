@@ -112,6 +112,10 @@ export interface Placement {
   scale: number;
   /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. */
   span?: WallSpan;
+  /** For an arrangement (lib/catalog/vessel.ts): the vase or jug it stands in, a `vases` variant id;
+   *  null = none on this plan, whatever its row says; absent = its row's own (`categoryFields.vessel`).
+   *  Packed and counted beside it, drawn under it. */
+  vessel?: string | null;
   /** Stretch items sized on the plan rather than in the catalog (a carpet), and resizable ones
    *  (Product.resize) stretched to this event's size. Overrides the product's footprint — for a
    *  shaped item it is the BOUNDING BOX the shape is redrawn into; absent means "the size the
@@ -337,7 +341,13 @@ export interface TableDesign {
   /** Whether the items stand where they were saved (`position`, in the table's frame) or are laid
    *  out automatically on whatever table wears it — see DesignTable.arranged. */
   arranged?: boolean;
-  items: { variantId: string; quantity: number; position: Point; rotation: number; scale: number }[];
+  /** The size of what it was saved from — a table's box, or a whole BLOCK of grouped tables' — and
+   *  the items' `position` is then in THAT frame (centred, before its turn): worn, each goes to the
+   *  same relative spot on whatever table or block wears it (app/(app)/studio/dressing-units.ts), so
+   *  a design saved off a 2.4m head table stays on a ⌀1.5 round. Absent on a design saved before
+   *  blocks were one table: its positions are a table's own, worn as they are. */
+  frame?: { widthMm: number; depthMm: number };
+  items: { variantId: string; quantity: number; position: Point; rotation: number; scale: number; sizeMm?: { widthMm: number; depthMm: number }; mirrored?: boolean; vessel?: string | null }[];
 }
 
 /** A raised part of a stage, in the stage's own frame. */

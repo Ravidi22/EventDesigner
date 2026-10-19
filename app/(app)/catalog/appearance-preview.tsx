@@ -12,9 +12,12 @@ import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { CATEGORY_BY_ID, anchorOf } from "@/lib/catalog/categories";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
-import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
+import { vesselOf } from "@/lib/catalog/vessel";
+import { VesselMark } from "@/components/vessel-mark";
+import { resolve } from "@/lib/studio/catalog-resolver";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
@@ -45,6 +48,8 @@ export function AppearancePreview({ product, className }: { product: Product; cl
   // The category's picture, when it has one — the card shows the item the way the plan will.
   const symbol = symbolOf(product, f);
   const surfaced = !symbol && anySurface(product.appearance);
+  // The vase its row is made in (lib/catalog/vessel.ts), drawn with it, as the plan will.
+  const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf({ variantId: product.id }, (id) => (id === product.id ? product : resolve(id)?.product)) : undefined;
   const cloth = anchorOf(product) === "table"; // a runner is drawn as itself, not as a cloth
   const shape = (
     <FootprintShape
@@ -74,6 +79,8 @@ export function AppearancePreview({ product, className }: { product: Product; cl
         </g>
       ))}
       {symbol ? (
+        <>
+        {vessel && <VesselMark variantId={vessel} pass="under" holder={f} />}
         <ItemSymbol
           kind={symbol}
           footprint={f}
@@ -82,8 +89,11 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           tone={swatch ?? product.appearance?.style?.fill}
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
+          drawStyle={drawStyleOf(product)}
           rise={climbRise(product)}
         />
+        {vessel && <VesselMark variantId={vessel} pass="over" holder={f} />}
+        </>
       ) : (
         <>
           {cloth && <ClothDrape footprint={f} colour={resolved.fill} />}

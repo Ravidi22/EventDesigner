@@ -32,6 +32,8 @@ import {
   Flower,
   Leaf,
   Wheat,
+  Combine,
+  Lamp,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
@@ -65,7 +67,8 @@ export type CategoryGroupId =
   | "grp-table-design"
   | "grp-ceiling-design"
   | "grp-flowers"
-  | "grp-accessories";
+  | "grp-accessories"
+  | "grp-composites";
 
 export interface CategoryGroup {
   id: CategoryGroupId;
@@ -83,6 +86,9 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
   // publishes on the marketplace, and what an arrangement's spec rows are picked from.
   { id: "grp-flowers", label: "פרחים וירק" },
   { id: "grp-accessories", label: "מוצרים נלווים" },
+  // Items MADE OF other items (lib/catalog/composition.ts) — a dressed head table, a lounge corner.
+  // A department of their own: they are found by what they are for, not by any one of their parts.
+  { id: "grp-composites", label: "פריטים מורכבים" },
 ];
 
 // What a placed item of this category attaches to, and therefore how it is drawn and moved:
@@ -188,6 +194,9 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
+  // Table lamps — a turned base under a linen shade, set along a knights table like candlesticks.
+  // Not a candlestick: nothing burns and nothing is packed per arm, so no count-multiplier.
+  { id: "lamps", label: "מנורות ואהילים", group: "grp-table-design", defaultLayer: "table", icon: Lamp, dims: "round", fields: [] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
   { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [], placeOnce: true },
   // The loose modules a stage is built from — a 244×122 sheet, the 244×80/60/40 strips that finish a row's depth.
@@ -240,6 +249,9 @@ export const CATEGORIES: CategoryDef[] = [
   // packing list rather than left off both for want of a category. Both shapes, because it is
   // whatever it is.
   { id: "other", label: "אחר", group: "grp-accessories", defaultLayer: "floor", icon: Shapes, dims: "both", fields: [] },
+  // A composite (Product.composition): never placed itself — placing one pastes its parts — so it
+  // has no height, no price of its own and nothing that multiplies.
+  { id: "composites", label: "פריטים מורכבים", group: "grp-composites", defaultLayer: "floor", icon: Combine, dims: "box", fields: [], needsHeight: false },
 ];
 
 export const CATEGORY_BY_ID: Record<string, CategoryDef> = Object.fromEntries(
@@ -274,13 +286,17 @@ export function anchorOf(p: { category: string; name: string; dimensions: { widt
 //
 // Chuppahs sit in the design pass on purpose: it is the object the client picked out of the gallery
 // a moment earlier, not a piece of furniture the seating plan works around.
-export const HALL_PASS_GROUPS: CategoryGroupId[] = ["grp-seating", "grp-stages", "grp-bars"];
+//
+// Composites are in both: a dressed head table is the hall pass's table and the design pass's
+// dressing at once, and placing one never leaves a composite row on the plan to be filtered by pass.
+export const HALL_PASS_GROUPS: CategoryGroupId[] = ["grp-seating", "grp-stages", "grp-bars", "grp-composites"];
 export const DESIGN_PASS_GROUPS: CategoryGroupId[] = [
   "grp-table-design",
   "grp-ceiling-design",
   "grp-chuppahs",
   "grp-flowers",
   "grp-accessories",
+  "grp-composites",
 ];
 
 export const LAYERS: { id: Layer; label: string }[] = [

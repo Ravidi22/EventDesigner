@@ -1,5 +1,6 @@
 import type { Product } from "@/lib/catalog/types";
 import { AppearancePreview } from "./appearance-preview";
+import { CompositionDrawing } from "@/components/composition-drawing";
 
 // The product photo is the card hero. Until the designer uploads one, the card shows the item AS THE
 // PLAN DRAWS IT — the table with its chairs, the stage in its decks' timber, the candelabrum with its
@@ -20,7 +21,12 @@ export function ProductImage({ product, className = "" }: { product: Product; cl
       }}
       aria-hidden="true"
     >
-      <AppearancePreview product={product} className="h-full w-full" />
+      {/* A composite is drawn as its parts standing together — its own box is only their outline. */}
+      {product.composition ? (
+        <CompositionDrawing composition={product.composition} className="h-full w-full" />
+      ) : (
+        <AppearancePreview product={product} className="h-full w-full" />
+      )}
     </div>
   );
 }

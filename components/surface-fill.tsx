@@ -13,7 +13,7 @@
 import { memo, useId, useMemo } from "react";
 import type { SurfaceMaterial } from "@/lib/venues/structure";
 import type { Point } from "@/lib/studio/hall";
-import { footprintBounds, type Footprint } from "@/lib/studio/footprint";
+import { footprintBounds, pieceOf, type Footprint } from "@/lib/studio/footprint";
 import { TEXTURE_TILE_MM, TEXTURE_TILE_RANGE, hasSurface, surfaceLayers, type Surface, type Texture, type TextureImage } from "@/lib/catalog/textures";
 import { FootprintShape, sameDrawProps } from "@/components/footprint-shape";
 
@@ -410,7 +410,9 @@ export function ItemSurface({
   return (
     <g className="pointer-events-none">
       {footprint.parts.map((piece, i) => {
-        const s = layers[i];
+        // By the SHAPE the piece belongs to: a hollow shape opened in two places is two pieces of
+        // one shape, and both wear its surface (BuiltOutline.of).
+        const s = layers[pieceOf(piece, i)];
         if (!hasSurface(s)) return null;
         // Laid in units from the ITEM's corner, so a material running across two shapes lines up;
         // a picture spread over its own shape.

@@ -13,7 +13,11 @@
 import type { Point } from "@/lib/design-document/types";
 import { isMain } from "@/lib/self-check";
 
-export type TablePattern = "all" | "type" | "checker" | "alternate" | "rows" | "columns" | "selected";
+// A BLOCK of grouped tables is ONE table here (app/(app)/studio/dressing-units.ts hands the patterns
+// one PatternTable per lone table or block) — a zig-zag lights a head table whole or not at all.
+// "block" is the one pattern that looks INSIDE a block: the other tables of the source's own block,
+// offered only when the source is one of them.
+export type TablePattern = "all" | "type" | "checker" | "alternate" | "rows" | "columns" | "selected" | "block";
 
 export const PATTERN_LABEL: Record<TablePattern, string> = {
   all: "כל השולחנות",
@@ -23,16 +27,18 @@ export const PATTERN_LABEL: Record<TablePattern, string> = {
   rows: "שורות לסירוגין",
   columns: "טורים לסירוגין",
   selected: "השולחנות שנבחרו",
+  block: "שאר הבלוק",
 };
 
 export const PATTERN_HINT: Record<TablePattern, string> = {
-  all: "כל שולחן בתוכנית.",
+  all: "כל שולחן בתוכנית — שולחנות מקובצים נספרים כשולחן אחד.",
   type: "כל השולחנות מאותו סוג כמו השולחן הזה.",
   checker: "כמו לוח שחמט — אף שני שכנים לא זהים. לחצי השני: עיצוב אחר באותו דפוס.",
   alternate: "כל שולחן שני לפי המספור.",
   rows: "שורה כן, שורה לא.",
   columns: "טור כן, טור לא.",
   selected: "רק השולחנות שמסומנים עכשיו על התוכנית.",
+  block: "השולחנות האחרים בקבוצה של השולחן הזה — כל אחד מקבל את מה שעל השולחן הזה, באותו מקום.",
 };
 
 /** Whether a pattern has two halves worth choosing between. */
@@ -44,6 +50,7 @@ export const PATTERN_HALVES: Record<TablePattern, boolean> = {
   rows: true,
   columns: true,
   selected: false,
+  block: false,
 };
 
 export interface PatternTable {
@@ -95,6 +102,8 @@ export function patternTables(
   opts: { sourceId?: string; selectedIds?: string[]; invert?: boolean } = {},
 ): string[] {
   const source = tables.find((t) => t.id === opts.sourceId);
+  // Inside a block is the caller's to answer (it knows the block); nothing here is a block.
+  if (pattern === "block") return [];
   if (pattern === "all") return tables.map((t) => t.id);
   if (pattern === "selected") return tables.filter((t) => opts.selectedIds?.includes(t.id)).map((t) => t.id);
   if (pattern === "type") return source ? tables.filter((t) => t.type === source.type).map((t) => t.id) : tables.map((t) => t.id);

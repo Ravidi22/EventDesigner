@@ -1,6 +1,6 @@
 "use client";
 
-import { FileDown, FileUp, Grid3x3, List, Plus } from "lucide-react";
+import { Combine, FileDown, FileUp, Grid3x3, List, Plus } from "lucide-react";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
 import { styleTagsOf } from "@/lib/catalog/categories";
 import type { Layer, Product } from "@/lib/catalog/types";
@@ -54,6 +54,7 @@ export function Filters({
   viewMode,
   onViewModeChange,
   onAddProduct,
+  onAddComposite,
   onImportCsv,
   onExportCsv,
   searchValue,
@@ -68,6 +69,8 @@ export function Filters({
   viewMode: "grid" | "list";
   onViewModeChange: (mode: "grid" | "list") => void;
   onAddProduct: () => void;
+  /** A composite item — tables and the things on them, as one catalog row (lib/catalog/composition.ts). */
+  onAddComposite?: () => void;
   onImportCsv: () => void;
   onExportCsv: () => void;
   searchValue: string;
@@ -136,6 +139,11 @@ export function Filters({
           <IconButton label="הוספת מוצר חדש" onClick={onAddProduct}>
             <Plus className="h-4 w-4" strokeWidth={2.5} />
           </IconButton>
+          {onAddComposite && (
+            <IconButton label="פריט מורכב חדש — כמה פריטים מהקטלוג כפריט אחד" onClick={onAddComposite}>
+              <Combine className="h-4 w-4" strokeWidth={2} />
+            </IconButton>
+          )}
         </div>
 
         <div className="ms-auto flex shrink-0 gap-1 rounded-pill bg-bg p-1">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Minus,
   Plus,
@@ -53,12 +53,14 @@ import {
   PaintRoller,
   ArrowDownUp,
   Rows3,
+  Pencil,
+  PackagePlus,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, isRunner } from "@/lib/catalog/categories";
 import { tableLine } from "@/lib/studio/table-patterns";
-import { patternTablesOf } from "./table-pattern-picker";
+import { patternUnits, unitOf, unitsOf } from "./dressing-units";
 import { WaveFields, waveOf } from "./dressing-bar";
 import type { HeightWave } from "@/lib/studio/hang-over";
 import { ArrowUpFromLine } from "lucide-react";
@@ -107,6 +109,10 @@ import { Menu, type MenuItem } from "@/components/menu";
 import { AlignMenu, type AlignPanel } from "./align-menu";
 import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
+import { productVessel, takesVessel } from "@/lib/catalog/vessel";
+import { VesselPicker, vesselChoices } from "../catalog/vessel-picker";
+import { loadProducts } from "@/lib/catalog/storage";
+import { Amphora } from "lucide-react";
 import { benchOf, chairBlockOf, coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
 import { catalogBox } from "@/lib/studio/footprint";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
@@ -343,6 +349,7 @@ export function Inspector({
   onCentreOver,
   onSpreadRow,
   onHangOverDressing,
+  onVessel,
   onClimb,
   onApplyToAllTables,
   onVariant,
@@ -409,6 +416,10 @@ export function Inspector({
   onSwap,
   clothOptions,
   onReplaceCloth,
+  onEditProduct,
+  onSaveComposite,
+  onBlockCloth,
+  onStyleTables,
 }: {
   /** The one thing being edited — null when nothing, or several things, are selected. */
   selection: Selection;
@@ -468,7 +479,7 @@ export function Inspector({
   onTablesNumbered: (tableIds: string[], numbered: boolean) => void;
   /** The "which tables" panel (TablePatternPicker), bound to a source table and — when one item is
    *  being applied rather than the table's whole dressing — that item. */
-  renderPattern: (sourceTableId: string, placementId?: string) => ReactNode;
+  renderPattern: (sourceTableId: string, placementId?: string, asBlock?: boolean) => ReactNode;
   /** The saved table designs panel (TableDesignsPanel), bound to a table. */
   renderDesigns: (tableId: string) => ReactNode;
   /** How big one placed item is DRAWN (Placement.scale) — not what it costs or how many there are. */
@@ -482,6 +493,9 @@ export function Inspector({
   onSpreadRow?: (placementId: string, opts: { axis: "row" | "column"; count: number; wave?: HeightWave | null }) => void;
   /** One of a ceiling item above each item set out on the table it hangs over. */
   onHangOverDressing?: (placementId: string, wave?: HeightWave | null) => void;
+  /** The vase an arrangement stands in (lib/catalog/vessel.ts): a variant, null = none, undefined =
+   *  its catalog row's own. */
+  onVessel?: (placementIds: string[], vessel: string | null | undefined) => void;
   /** A rented flight or ramp standing on its own: its rise, steps or direction, with the run that
    *  follows and where it now stands (lib/studio/climb-item.ts builds the edit). */
   onClimb?: (placementId: string, edit: ClimbEdit) => void;
@@ -623,6 +637,17 @@ export function Inspector({
   /** The studio's tablecloths, for swapping the one a table wears for another. */
   clothOptions: { value: string; label: string }[];
   onReplaceCloth: (placementId: string, productId: string) => void;
+  /** Open the catalog row behind the one selected item (or table) in the catalog's own drawer, over
+   *  the sketch — given the placed variant. Absent = no such button. */
+  onEditProduct?: (variantId: string) => void;
+  /** What is selected, saved as ONE catalog item made of its parts (lib/catalog/composition.ts) — a
+   *  dressed head table to place again at the next event. Absent = not offered. */
+  onSaveComposite?: () => void;
+  /** A BLOCK's cloth — every table of it at once, as the one table it is: another shade, another
+   *  cloth, or off. */
+  onBlockCloth?: (tableIds: string[], op: { variantId: string } | { productId: string } | "remove") => void;
+  /** One look over several tables (a block's), in one history entry. */
+  onStyleTables?: (tableIds: string[], style: ElementStyle | undefined) => void;
 }) {
   // Local to the one bar that offers it — a copy of another table's dressing has exactly one entry
   // point on this screen, so there is no second dialog to keep in sync (contrast the catalog's
@@ -636,10 +661,21 @@ export function Inspector({
   // one number for the lot, so the number field here edits the group and not any table inside it.
   // (A group made only of stages is a STAGE group — its own bar, below, with the stage tools.)
   if (group && !(selectedCount > 1 && stageGroup)) {
+    // A block of TABLES is one table — the bar gives it what a table's bar gives a table: its cloth,
+    // its chair, its look, its focus mode, its saved designs and its pattern, each over every table
+    // of it at once. The cloth shown is the first table's that has one; a change goes on them all.
+    const members = group.tableIds.map((id) => doc.tables.find((x) => x.id === id)).filter((x): x is DesignTable => !!x);
+    const covers = members.map((m) => coverOn(doc, m.id)).filter((c): c is NonNullable<typeof c> => !!c);
+    const blockCloth = covers[0];
+    const blockShades = blockCloth ? shadesOf(blockCloth.variantId) : [];
+    const blockVariant = members.length > 0 && members.every((m) => m.variantId && m.variantId === members[0].variantId) ? members[0].variantId : undefined;
+    const blockChair = members.length > 0 && members.every((m) => (m.chairVariantId ?? "") === (members[0].chairVariantId ?? "")) ? (members[0].chairVariantId ?? "") : null;
+    const blockDressed = doc.placements.some((p) => (p.layer === "table" && !!p.tableId && group.tableIds.includes(p.tableId)) || (p.layer === "ceiling" && !!p.over && group.tableIds.includes(p.over)));
+    const lead = members[0];
     return (
       <Bar
         icon={Group}
-        title={group.tables > 0 ? (group.unnumbered ? "שולחן ללא מספר" : group.number ? `שולחן ${group.number}` : "קבוצה") : "קבוצה"}
+        title={group.tables > 0 ? (group.unnumbered ? "שולחן ללא מספר" : group.number ? `שולחן ${group.number}` : group.number === 0 ? "שולחן ראש" : "קבוצה") : "קבוצה"}
         facts={countLine([
           [group.tables, "שולחן אחד", "שולחנות"],
           [group.items, "פריט אחד", "פריטים"],
@@ -677,6 +713,24 @@ export function Inspector({
                 <span className={"text-xs " + occupancyInk(group.seated, group.seats)}>מתוך {group.seats}</span>
               </PanelRow>
             )}
+            {group.seats > 0 && onChairForSelection && chairOptions().length > 0 && (
+              <PanelRow label="כיסא" stack>
+                <Select
+                  aria-label="סוג הכיסא סביב הבלוק"
+                  value={blockChair === null ? "__mixed" : blockChair}
+                  options={[
+                    ...(blockChair === null ? [{ value: "__mixed", label: "כיסאות שונים" }] : []),
+                    { value: "", label: `ברירת מחדל${(() => {
+                      const d = defaultChair();
+                      const name = d ? chairOptions().find((o) => o.value === d)?.label : undefined;
+                      return name ? ` — ${name}` : "";
+                    })()}` },
+                    ...chairOptions(),
+                  ]}
+                  onChange={(v) => v !== "__mixed" && onChairForSelection(v || null)}
+                />
+              </PanelRow>
+            )}
             <Note>הכסאות מסודרים סביב הבלוק כולו ומתחלקים בין השולחנות שבו; התפוסה ממלאת כל שולחן עד מלוא הכסאות שלו.</Note>
           </Popover>
         )}
@@ -707,6 +761,59 @@ export function Inspector({
         {swap && (
           <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />
         )}
+        {onEditProduct && blockVariant && resolve(blockVariant) && <BarButton icon={Pencil} label="עריכת סוג השולחנות בקטלוג" onClick={() => onEditProduct(blockVariant)} />}
+
+        {blockCloth && onBlockCloth && (
+          <Popover label="מפה" leading={<Swatch color={blockShades.find((s) => s.id === blockCloth.variantId)?.swatch} size={14} />} value={resolve(blockCloth.variantId)?.product.name ?? "מפה"}>
+            {clothOptions.length > 1 && (
+              <Select
+                aria-label="סוג המפה"
+                value={resolve(blockCloth.variantId)?.product.id ?? ""}
+                options={clothOptions}
+                onChange={(v) => v && onBlockCloth(group.tableIds, { productId: v })}
+                className="mb-2 w-full"
+              />
+            )}
+            {blockShades.length > 0 && (
+              <SwatchPicker options={blockShades} value={blockCloth.variantId} onChange={(v) => onBlockCloth(group.tableIds, { variantId: v })} label="גוון המפה" />
+            )}
+            {covers.length < members.length && <Note>{`${members.length - covers.length} מהשולחנות בבלוק בלי מפה — שינוי כאן חל על מי שיש לו. להלבשת כולם: גוררים מפה מהסרגל על הבלוק.`}</Note>}
+            <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(blockCloth.id)}>
+              <Copy className="h-3.5 w-3.5" strokeWidth={2} />
+              על כל השולחנות
+            </Button>
+            <Button size="sm" variant="danger" className="mt-1 w-full" onClick={() => onBlockCloth(group.tableIds, "remove")}>
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
+              הסרת המפה
+            </Button>
+          </Popover>
+        )}
+
+        {/* The block's design, as a table's: its focus mode, its saved designs, and its whole
+            dressing onto other tables in a pattern — a block landing on a block, a round or a
+            rectangle at the same relative places. */}
+        {group.tables > 0 && onDressTable && lead && (
+          <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים על הבלוק · לחיצה כפולה" onClick={() => onDressTable(lead.id)} />
+        )}
+        {group.tables > 0 && lead && (
+          <Popover label="עיצובים שמורים" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
+            {renderDesigns(lead.id)}
+          </Popover>
+        )}
+        {group.tables > 0 && lead && blockDressed && (
+          <Popover label="החלת עיצוב הבלוק על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+            {renderPattern(lead.id, undefined, true)}
+          </Popover>
+        )}
+        {group.tables > 0 && lead && onStyleTables && (
+          <Popover label="מראה" icon={Palette} panelClassName="w-72">
+            <StyleFields
+              style={lead.style}
+              onChange={(style) => onStyleTables(group.tableIds, style)}
+              strokeWidthDefault={(lead.variantId ? resolve(lead.variantId)?.product.appearance?.style?.strokeWidthPx : undefined) ?? 2.5}
+            />
+          </Popover>
+        )}
 
         <Rotation value={facing} onChange={onFace} />
         <MirrorMenu onMirror={onMirror} />
@@ -714,7 +821,10 @@ export function Inspector({
         <Menu
           label="עוד פעולות לקבוצה"
           side="top"
-          items={[{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup }]}
+          items={[
+            ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+            { label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup },
+          ]}
         />
         <Actions
           onDuplicate={onDuplicate}
@@ -965,6 +1075,7 @@ export function Inspector({
         ? [{ label: "פיזור אחיד", icon: AlignHorizontalDistributeCenter, onSelect: onDistribute }]
         : []),
       { label: "קיבוץ · Ctrl+G", icon: Group, onSelect: onGroup },
+      ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
     ];
     return (
       <Bar icon={Boxes} title={`${selectedCount} פריטים נבחרו`} facts="גרירה מזיזה את כולם יחד" onClose={onClose}>
@@ -1705,6 +1816,7 @@ export function Inspector({
         )}
 
         {swap && <SwapPopover swap={swap} onSwap={onSwap} label="החלפה בפריט אחר" />}
+        {onEditProduct && r && <BarButton icon={Pencil} label="עריכת הפריט בקטלוג" onClick={() => onEditProduct(p.variantId)} />}
 
         {shades.length > 0 && (
           <Popover label="גוון" leading={<Swatch color={shade?.swatch} size={14} />} value={shade?.name ?? "ברירת מחדל"}>
@@ -1713,6 +1825,11 @@ export function Inspector({
             <SwatchPicker options={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} label="גוון הפריט" />
             <p className="mt-2 text-xs text-muted">{shade?.name ?? "ברירת מחדל"}</p>
           </Popover>
+        )}
+
+        {/* The vase or jug an arrangement stands in — packed and counted with it. */}
+        {onVessel && r && takesVessel(r.product) && (
+          <VesselPopover own={p.vessel} rowVessel={productVessel(r.product)} onVessel={(v) => onVessel([p.id], v)} />
         )}
 
         {/* A carpet is sized here as well as by its corners — a number is faster when the client
@@ -1768,7 +1885,7 @@ export function Inspector({
             {onCentreOver && <BarButton icon={Crosshair} label="למרכז השולחן — התלייה מעל אמצע השולחן" onClick={() => onCentreOver(p.id)} />}
             {onSpreadRow && (
               <RowSpreadPopover
-                tables={doc.tables}
+                doc={doc}
                 sourceId={overTable.id}
                 name={r?.product.name ?? "הפריט"}
                 heightMm={hangHeightOf(p, r?.product)}
@@ -1878,6 +1995,7 @@ export function Inspector({
       </Popover>
 
       {swap?.kind === "tables" && <SwapPopover swap={swap} onSwap={onSwap} label="סוג שולחן" />}
+      {onEditProduct && t.variantId && resolve(t.variantId) && <BarButton icon={Pencil} label="עריכת סוג השולחן בקטלוג" onClick={() => onEditProduct(t.variantId!)} />}
 
       {/* The chairs on the plan ARE this number — it came from the catalog row when the table was
           dropped, and a head table that seats six rather than the standard twelve says so here.
@@ -2030,6 +2148,9 @@ export function Inspector({
           {renderPattern(t.id)}
         </Popover>
       )}
+      {/* The table with everything on it, as a catalog item of its own — placed again, dressed, at
+          the next event. */}
+      {onSaveComposite && <BarButton icon={PackagePlus} label="שמירת השולחן עם העיצוב כפריט מורכב בקטלוג" onClick={onSaveComposite} />}
 
       {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
       <BreachPopover breaches={breaches} />
@@ -2510,13 +2631,13 @@ function occupancyInk(seated: number, seats: number): string {
  *  the last, through every table's middle on the way (lib/studio/table-patterns.ts tableLine).
  *  The count starts at one per table. */
 function RowSpreadPopover({
-  tables,
+  doc,
   sourceId,
   name,
   heightMm,
   onSpread,
 }: {
-  tables: DesignTable[];
+  doc: DesignDocumentContent;
   sourceId: string;
   name: string;
   heightMm?: number;
@@ -2528,7 +2649,9 @@ function RowSpreadPopover({
   const base = Math.round((heightMm ?? 3000) / 10);
   const [a, setA] = useState<number | null>(null);
   const [b, setB] = useState<number | null>(null);
-  const line = tableLine(patternTablesOf(tables), sourceId, axis);
+  // A block in the row is one table of it (./dressing-units.ts), as the run itself reads it.
+  const units = useMemo(() => unitsOf(doc), [doc]);
+  const line = tableLine(patternUnits(units), unitOf(units, sourceId)?.key ?? sourceId, axis);
   const n = typed ?? Math.max(1, line.length);
   const aCm = a ?? base;
   const bCm = b ?? Math.max(30, base - 40);
@@ -2665,6 +2788,37 @@ function ClimbPopover({
 
 /** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
  *  the quote, the packing list and the order still count it as the row it is. */
+/** "כלי" — which vase or jug an arrangement stands in: the catalog's vessels (`vases`), each shade
+ *  its own option, plus "as its catalog row" and "none on this plan". */
+function VesselPopover({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
+  const ROW = "__row";
+  const NONE = "__none";
+  const choices = vesselChoices(loadProducts());
+  const nameOf = (id?: string) => (id ? (choices.find((o) => o.value === id)?.label ?? resolve(id)?.label) : undefined);
+  const current = own === null ? undefined : (own ?? rowVessel);
+  const value = own === null ? NONE : own === undefined ? ROW : own;
+  return (
+    <Popover label="כלי" icon={Amphora} value={nameOf(current) ?? "ללא כלי"} panelClassName="w-80">
+      {/* Typed to narrow, and listed INSIDE the panel — a Select's list dropped off the canvas card. */}
+      <VesselPicker
+        autoFocus
+        value={value}
+        onChange={(v) => onVessel(v === ROW ? undefined : v === NONE ? null : v)}
+        choices={choices}
+        lead={[
+          { value: ROW, label: rowVessel ? `כמו בקטלוג — ${nameOf(rowVessel) ?? "כלי"}` : "כמו בקטלוג — ללא כלי" },
+          { value: NONE, label: "ללא כלי" },
+        ]}
+      />
+      <Note>
+        {choices.length === 0
+          ? "אין עדיין כלים בקטלוג — מוסיפים אותם בקטגוריה ״אגרטלים וכלים״."
+          : "הכלי מצויר מתחת לסידור, נספר ונארז איתו. אפשר גם לגרור סידור אל כלי שכבר מונח על השולחן."}
+      </Note>
+    </Popover>
+  );
+}
+
 function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
   const pct = Math.round(scale * 100);
   return (

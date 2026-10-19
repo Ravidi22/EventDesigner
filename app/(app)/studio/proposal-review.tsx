@@ -18,7 +18,7 @@ import { Check, MessageSquareText } from "lucide-react";
 import { CanvasStage } from "./canvas-stage";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import type { EventPlan } from "@/lib/events/plan";
-import { diffDocuments, mergeChanges } from "@/lib/design-document/delta";
+import { changeRows, diffDocuments, mergeChanges } from "@/lib/design-document/delta";
 import { CONFLICT_WORD, describeChange } from "@/lib/proposals/describe";
 import { deltaMarks } from "@/lib/proposals/marks";
 import type { SubmittedProposal } from "@/lib/proposals/actions";
@@ -45,6 +45,9 @@ export function ProposalReview({
   onClose: () => void;
 }) {
   const changes = useMemo(() => diffDocuments(proposal.base, proposal.content), [proposal]);
+  // One row per BLOCK: a head table of two the client moved is one decision, not two that could
+  // be answered apart (the merge decides a block whole either way — lib/design-document/delta.ts).
+  const rows = useMemo(() => changeRows(changes), [changes]);
   // What the designer has ALSO changed since the fork — read once, merging everything unforced.
   const conflicts = useMemo(() => {
     const r = mergeChanges(current, proposal.base, proposal.content);
@@ -68,13 +71,17 @@ export function ProposalReview({
   }, [changes, ticked, conflicts, merged, focused]);
   const extraOverlay = useCallback((ctx: { mm: (px: number) => number }) => <SketchDelta marks={marks} mm={ctx.mm} />, [marks]);
 
-  const toggle = (key: string) =>
+  const toggle = (keys: string[]) =>
     setTicked((cur) => {
       const next = new Set(cur);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      const on = keys.some((k) => next.has(k));
+      for (const k of keys) {
+        if (on) next.delete(k);
+        else next.add(k);
+      }
       return next;
     });
+  const tickedRows = rows.filter((r) => r.keys.some((k) => ticked.has(k))).length;
 
   const answer = async (accept: boolean) => {
     setBusy(true);
@@ -150,7 +157,7 @@ export function ProposalReview({
           )}
 
           <div className="mt-4 flex items-center justify-between">
-            <h3 className="text-[13px] font-bold text-ink">{changes.length === 1 ? "שינוי אחד" : `${changes.length} שינויים`}</h3>
+            <h3 className="text-[13px] font-bold text-ink">{rows.length === 1 ? "שינוי אחד" : `${rows.length} שינויים`}</h3>
             <div className="flex gap-3 text-xs font-semibold">
               <button type="button" className="text-accent hover:underline" onClick={() => setTicked(new Set(changes.map((c) => c.key)))}>
                 סימון הכל
@@ -161,18 +168,18 @@ export function ProposalReview({
             </div>
           </div>
           <ul className="mt-1 flex flex-col">
-            {changes.map((c) => {
+            {rows.map(({ key, keys, change: c }) => {
               const w = describeChange(c, proposal.base, proposal.content);
-              const why = conflicts.get(c.key);
-              const on = ticked.has(c.key);
+              const why = keys.map((k) => conflicts.get(k)).find((x) => !!x);
+              const on = keys.some((k) => ticked.has(k));
               return (
-                <li key={c.key} className="border-b border-border-soft last:border-b-0">
+                <li key={key} className="border-b border-border-soft last:border-b-0">
                   <label
                     className="flex cursor-pointer items-start gap-2.5 py-2"
                     onPointerEnter={() => setFocused(c.key)}
                     onPointerLeave={() => setFocused((f) => (f === c.key ? null : f))}
                   >
-                    <input type="checkbox" checked={on} onChange={() => toggle(c.key)} className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)]" />
+                    <input type="checkbox" checked={on} onChange={() => toggle(keys)} className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)]" />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-semibold text-ink">{w.title}</span>
                       <span className="block text-xs text-muted">{w.detail}</span>
@@ -203,7 +210,7 @@ export function ProposalReview({
         <div className="flex flex-col gap-2 border-t border-border-soft p-4">
           <Button onClick={() => void answer(true)} disabled={busy || ticked.size === 0} className="w-full">
             <Check className="h-4 w-4" strokeWidth={2} />
-            {ticked.size === changes.length ? "אישור כל השינויים" : `אישור ${ticked.size} מתוך ${changes.length}`}
+            {tickedRows === rows.length ? "אישור כל השינויים" : `אישור ${tickedRows} מתוך ${rows.length}`}
           </Button>
           <Button variant="outline" size="sm" onClick={() => void answer(false)} disabled={busy} className="w-full">
             לא לאשר אף שינוי

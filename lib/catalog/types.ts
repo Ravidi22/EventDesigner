@@ -1,6 +1,6 @@
 // UI-facing catalog types. This is the seam: today it feeds a seed array, later the
 // same shapes come from mapping Drizzle rows (lib/db/schema.ts) — swap happens here only.
-import type { Layer, Point } from "../design-document/types";
+import type { DesignGroup, DesignTable, Layer, Placement, Point } from "../design-document/types";
 import type { EdgeCurve } from "../studio/hall";
 import type { Texture, TextureImage } from "./textures";
 import type { ElementStyle } from "../element-style";
@@ -40,7 +40,8 @@ export type MapShape =
 
 /** The order the drawer offers them in: the three a catalog is mostly made of, then the curved
  *  tables a hall actually owns, then the polygons, then the ח — the one shape here that is a run of
- *  furniture rather than a single top — then "draw it yourself". */
+ *  furniture rather than a single top — then "draw it yourself". (A picker offers PICKER_SHAPES:
+ *  these less the hollow ones a solid shape now draws.) */
 export const MAP_SHAPES: MapShape[] = [
   "rect",
   "circle",
@@ -61,6 +62,24 @@ export const MAP_SHAPES: MapShape[] = [
   "rounded-u",
   "custom",
 ];
+
+/** The shapes a PICKER offers — MAP_SHAPES less the three hollow ones that were shapes of their own
+ *  before any shape could be drawn hollow (HollowSpec): a קשת חלולה is a half circle hollowed with
+ *  its chord left open, a צורת ח a rectangle hollowed with its bottom open, an אליפסה חלולה a
+ *  capsule hollowed with an entrance. One switch on every solid shape draws all three and the
+ *  shapes nobody had a name for (a hollow hexagon, a triangle open on one side), so they no longer
+ *  earn a card each.
+ *
+ *  They stay in MapShape and in every resolver: a row saved as one draws and edits exactly as it
+ *  did, and its picker shows its card while it is the current value. The פרסה and the ח מעוגלת stay
+ *  on offer — they are halves of an oval cut where no solid shape has a side to open. */
+export const PICKER_SHAPES: MapShape[] = MAP_SHAPES.filter((s) => s !== "arc" && s !== "u-shape" && s !== "oval-ring");
+
+/** The shapes that may be drawn hollow (MapAppearance.hollow): every solid one. The serpentine, the
+ *  arc, the oval ring, the horseshoe and both ח are a band already — a band of a band is not a thing
+ *  anybody builds, and their own numbers (RingSpec, ArcSpec) already say how deep it is. */
+export const canHollow = (shape: MapShape): boolean =>
+  shape !== "crescent" && shape !== "arc" && shape !== "oval-ring" && shape !== "horseshoe" && shape !== "u-shape" && shape !== "rounded-u";
 
 export const SHAPE_LABEL: Record<MapShape, string> = {
   rect: "מלבן",
@@ -146,6 +165,34 @@ export interface RingSpec {
 
 export const RING_GAP = { min: 600, default: 900 } as const;
 
+/** A shape drawn HOLLOW — a band `bandMm` deep (עומק הרצועה) running round the inside of its own
+ *  outline, the middle left open floor. A bar counter round a bartender, a ring of tables round a
+ *  dance floor, a frame of decks round a pool: the same band whatever the shape, which is why it is
+ *  one spec on every solid shape (canHollow) rather than a hollow twin of each.
+ *
+ *  The outline itself does not change — the band is cut INSIDE it — so the box is still the shape's
+ *  width × depth and every number the drawer asks still means what it meant (lib/studio/footprint.ts,
+ *  buildHollow). Like the curved bars (RingSpec), the band is a depth in millimetres, not a share of
+ *  the shape: stretching a hollow item on the plan adds floor in the middle and leaves the band the
+ *  depth of the modules it is built from.
+ *
+ *  A side may be left OPEN: the band then runs right up to that side's line and stops square on it —
+ *  a rectangle open along its bottom is a ח, a half circle open along its chord is the old קשת. A
+ *  band that runs all the way round is a ring, and may have one entrance cut through it instead (an
+ *  opening only makes sense in a band that is closed; with a side open, the side IS the way in). */
+export interface HollowSpec {
+  bandMm: number;
+  /** Sides left OPEN — indices of the shape's outline EDGES (hollowSides in lib/studio/footprint.ts).
+   *  Absent/empty = the band runs all the way round (a ring). */
+  openSides?: number[];
+  /** An entrance cut through a band that runs all the way round: its width (0/absent = closed; a
+   *  closed ring still shows a hairline "hatch" where its two caps meet), on edge `gapSide`
+   *  (absent = the bottom-most edge), at its start / centre / end. Ignored when a side is open. */
+  gapMm?: number;
+  gapSide?: number;
+  gapAt?: "start" | "center" | "end";
+}
+
 /** A shape added to an item beside its base shape — a bar that is a counter with a round end, a
  *  head table with a piece set against it. The item is still ONE catalog row, dragged, priced and
  *  counted once; the parts only change what the plan draws.
@@ -166,6 +213,9 @@ export interface ShapePart {
   diameterMm?: number;
   arc?: ArcSpec;
   ring?: RingSpec;
+  /** Drawn hollow, by the base shape's rule (MapAppearance.hollow). Only read for a shape that
+   *  canHollow. */
+  hollow?: HollowSpec;
   x: number;
   y: number;
   rotation: number;
@@ -206,6 +256,10 @@ export interface MapAppearance {
   style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
   arc?: ArcSpec; // iff shape === "arc"; absent = a half ring (ARC_SWEEP.default) with a default band
   ring?: RingSpec; // iff shape is a hollow curved one (RingShape, lib/studio/footprint.ts); absent = defaults (ringSpecOf)
+  /** The shape drawn as a band round an open middle (see HollowSpec) — a hand-drawn outline too, whose
+   *  drawing is then the OUTSIDE of the band. Absent = solid. Read only for a shape that canHollow;
+   *  a row switched to one that cannot keeps nothing of it (the editor drops it). */
+  hollow?: HollowSpec;
   parts?: ShapePart[]; // shapes drawn beside the base one, as one item (see ShapePart)
   /** The sides nobody sits on — a head table facing the room, a table against a wall. Indices into
    *  seatSides() (lib/studio/seating.ts) of the item's resolved footprint. The chairs are not lost:
@@ -392,4 +446,40 @@ export interface Product {
   stockQty?: number;
   orderUnit?: string; // what the SUPPLIER sells in ("גבעולים") when it isn't the placed unit
   orderFactor?: number; // order-units per placed unit; absent = 1
+
+  /** Set on a COMPOSITE item (category "composites", lib/catalog/composition.ts): what it is made
+   *  of, as the pieces stand together. Absent on every ordinary row. */
+  composition?: Composition;
+}
+
+/** One line of a composite put together in the catalog: this many of this row (in this shade). */
+export interface CompositionLine {
+  id: string;
+  productId: string;
+  /** The shade; absent = the row's first. */
+  variantId?: string;
+  quantity: number;
+}
+
+/** A catalog item MADE OF other catalog items — two tables pushed into a head table with their
+ *  cloths and candlesticks, a lounge corner, a bar and its stools — kept as the pieces stand together.
+ *
+ *  It is a fragment of a design document in the item's own frame (its middle at 0,0), the same shape
+ *  as the studio's clipboard (lib/studio/clipboard.ts Clip). Putting one on a plan is a PASTE: the
+ *  pieces are re-id'd, renumbered and regrouped into real tables and placements (pasteInto), so from
+ *  that moment the plan holds ordinary tables and items — the quote, the packing list and procurement
+ *  count what is on the plan exactly as they always did, and the composite row itself is never placed,
+ *  priced or counted. That is the whole reason it is not a "bundle" with a price of its own: two
+ *  places to keep a price true is one too many (the same argument procurement makes for deriving
+ *  usage from drawings).
+ *
+ *  `recipe` is set when the item was put together in the catalog from a list of parts rather than
+ *  saved off a sketch: the list is what the designer edits, and the tables and placements are laid
+ *  out from it again whenever it changes (layoutRecipe). Absent = the arrangement came from a sketch
+ *  and IS the item. */
+export interface Composition {
+  tables: DesignTable[];
+  placements: Placement[];
+  groups: DesignGroup[];
+  recipe?: CompositionLine[];
 }

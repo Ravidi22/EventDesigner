@@ -61,6 +61,12 @@ function assertProduct(value: unknown): asserts value is Product {
   if (!Array.isArray(p.styleTags)) throw new Error("product.styleTags must be an array");
   if (!Array.isArray(p.variants)) throw new Error("product.variants must be an array");
   for (const v of p.variants) assertId(v?.id, "variant.id");
+  if (p.composition !== undefined && p.composition !== null) {
+    const c = p.composition;
+    if (typeof c !== "object" || !Array.isArray(c.tables) || !Array.isArray(c.placements) || !Array.isArray(c.groups)) {
+      throw new Error("product.composition must hold tables, placements and groups");
+    }
+  }
 }
 
 /** The whole catalog for this studio, archived items included — the caller filters.
@@ -110,6 +116,9 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   const organizationId = await currentOrg();
   const row = toProductRow(product, organizationId);
   const variantRows = toVariantRows(product, organizationId);
+  // A composite names this studio's own rows (lib/catalog/composition.ts): another studio could
+  // place nothing it is made of, so it is never published, whatever the request says.
+  if (row.composition) row.visibility = "private";
 
   // The product photograph is an uploaded object now, not a URL somebody typed, so it gets the two
   // guarantees every such column needs (lib/files/owned.ts): only a URL this studio uploaded may be
@@ -185,12 +194,54 @@ export async function isPlacedAnywhere(variantIds: string[]): Promise<boolean> {
         sql`exists (
           select 1
           from jsonb_array_elements(${designDocuments.content} -> 'placements') as placement
-          where placement ->> 'variantId' in (${idList})
+          where placement ->> 'variantId' in (${idList}) or placement ->> 'vessel' in (${idList})
         )`,
       ),
     )
     .limit(1);
 
+  // …or the vase an arrangement row is made in (lib/catalog/vessel.ts) — deleted, every arrangement
+  // would lose its vase on the plan, the packing list and the quote, issued ones included.
+  const [vessel] = await db()
+    .select({ one: sql<number>`1` })
+    .from(products)
+    .where(and(eq(products.organizationId, organizationId), eq(products.archived, false), sql`${products.categoryFields} ->> 'vessel' in (${idList})`))
+    .limit(1);
+
+  // …or a part of a composite, which is a design waiting to be placed (isPartOfComposite).
+  return !!hit || !!vessel || (await isPartOfComposite(variantIds, organizationId));
+}
+
+/** Is any of these variants a PART of one of this studio's live composites (lib/catalog/
+ *  composition.ts) — a table, the chair round it, or an item on, over or beside it? A composite is a
+ *  drawing waiting to be placed, so a part of one is as much in use as a placed row: deleting it
+ *  would leave the composite pasting items that resolve to nothing. */
+async function isPartOfComposite(variantIds: string[], organizationId: string): Promise<boolean> {
+  if (variantIds.length === 0) return false;
+  const idList = sql.join(
+    variantIds.map((v) => sql`${v}`),
+    sql`, `,
+  );
+  const [hit] = await db()
+    .select({ one: sql<number>`1` })
+    .from(products)
+    .where(
+      and(
+        eq(products.organizationId, organizationId),
+        eq(products.archived, false),
+        sql`${products.composition} is not null`,
+        sql`(
+          exists (
+            select 1 from jsonb_array_elements(${products.composition} -> 'placements') as part
+            where part ->> 'variantId' in (${idList}) or part ->> 'vessel' in (${idList})
+          ) or exists (
+            select 1 from jsonb_array_elements(${products.composition} -> 'tables') as part
+            where part ->> 'variantId' in (${idList}) or part ->> 'chairVariantId' in (${idList})
+          )
+        )`,
+      ),
+    )
+    .limit(1);
   return !!hit;
 }
 

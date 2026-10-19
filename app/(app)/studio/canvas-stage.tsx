@@ -8,10 +8,11 @@ import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/sea
 import { blockSeats } from "@/lib/design-document/block";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock } from "@/components/chair-block";
+import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
-import { toLocalFrame, fromLocalFrame, rotatedExtent, tableAt } from "@/lib/studio/geometry";
+import { toLocalFrame, fromLocalFrame, rotatedExtent } from "@/lib/studio/geometry";
 import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
 import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
@@ -21,8 +22,10 @@ import { zoneBounds } from "@/lib/venues/zone";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
-import { FootprintShape, dressingSpots, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
+import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, pointOnTable, type DressBlock, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, tableUnder, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
 import { startPointerGesture } from "@/lib/studio/gesture";
+import { vesselOf } from "@/lib/catalog/vessel";
+import { VesselMark } from "@/components/vessel-mark";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
@@ -30,7 +33,7 @@ import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
-import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
@@ -68,7 +71,6 @@ import { itemGeometry } from "./plan-geometry";
 import { constrainAngleDeg, type SnapBox } from "@/lib/studio/snap";
 import { carriedItem, carriedOf, type CarriedItem } from "@/lib/studio/drag-payload";
 import type { Product } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { floorStack, type StackKind } from "@/lib/design-document/stacking";
@@ -118,7 +120,10 @@ import { HangAxes, HangTies, type HangAxisGuide } from "./hang-ties";
 const EMPTY_CHIPS: Placement[] = [];
 const sameItems = <T,>(a: readonly T[], b: readonly T[]) => a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
 const spotsCache = new WeakMap<DesignTable, { version: number; chips: Placement[]; spots: DressingSpot[] }>();
-function cachedSpots(t: DesignTable, chips: Placement[]): DressingSpot[] {
+function cachedSpots(t: DesignTable, chips: Placement[], block?: DressBlock): DressingSpot[] {
+  // A table of a block laid out as one depends on its block-mates too: its block keeps the layout
+  // (footprint-shape.tsx blockLayout), and the per-table memo would miss a block-mate's change.
+  if (block) return dressingSpots(t, chips, block);
   const hit = spotsCache.get(t);
   if (hit && hit.version === catalogVersion && sameItems(hit.chips, chips)) return hit.spots;
   const spots = dressingSpots(t, chips);
@@ -246,6 +251,7 @@ export function CanvasStage({
   onFocusTable,
   onExitDressing,
   onArrangeDressing,
+  onArrangeBlock,
   showTableNumbers = false,
   extraOverlay,
 }: {
@@ -365,7 +371,10 @@ export function CanvasStage({
    *  it was not), or the whole selection when it was one of them or the click landed on floor. */
   onContextMenu?: (refs: SelectionRef[]) => ContextMenuItem[];
   /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
-   *  items on it free to be dragged about its top. Null = the whole plan, as usual. */
+   *  items on it free to be dragged about its top. Null = the whole plan, as usual. A table in a
+   *  GROUP brings the whole block with it — framed as the one table the block is, every member and
+   *  its items in front of the scrim and in hand — and this id names the member the bar's arrange
+   *  actions are about (its centre lines are the ones drawn). */
   dressingTableId?: string | null;
   /** A double-click on a table (or on an item on it): dress THAT table. */
   onFocusTable?: (tableId: string) => void;
@@ -374,6 +383,8 @@ export function CanvasStage({
   /** Items dragged on the table being dressed: where every item on it now stands, in the table's own
    *  frame — one frame of a gesture, closed by onEndDrag. */
   onArrangeDressing?: (tableId: string, positions: { id: string; position: Point }[]) => void;
+  /** The same over a BLOCK being dressed — each item on the table of the block it now stands on. */
+  onArrangeBlock?: (positions: { id: string; tableId: string; position: Point }[]) => void;
   /** Write each table's number and its `seated/seats` on it (a block's once, on the block) — the
    *  hall pass and the full studio. The design pass draws the room clean: one switch for both lines. */
   showTableNumbers?: boolean;
@@ -447,10 +458,21 @@ export function CanvasStage({
   // it, and back out to the event when it is let go — the same two moves a designer makes by hand,
   // made for them, so a candlestick 25cm across is something the pointer can actually take hold of.
   const dressingTable = dressingTableId ? doc.tables.find((t) => t.id === dressingTableId) : undefined;
+  // A grouped table is dressed AS ITS BLOCK: two tables pushed together for a head table are one
+  // table to the designer, and opening one half of it alone — the other half and the block's chairs
+  // gone behind the scrim — was opening a table nobody sits at.
+  const dressingGroupId = dressingTable?.groupId;
+  const dressingMembers = useMemo(
+    () => (!dressingTable ? [] : dressingGroupId ? doc.tables.filter((t) => t.groupId === dressingGroupId) : [dressingTable]),
+    [doc.tables, dressingTable, dressingGroupId],
+  );
+  const dressingIds = useMemo(() => new Set(dressingMembers.map((t) => t.id)), [dressingMembers]);
+  // What is framed: the block, not the member — so picking another member of it to arrange does not
+  // fly the view across to it.
+  const dressingFrame = dressingTable ? (dressingGroupId ? `group:${dressingGroupId}` : `table:${dressingTable.id}`) : null;
   const wasDressing = useRef(false);
   useEffect(() => {
-    const t = dressingTableId ? doc.tables.find((x) => x.id === dressingTableId) : undefined;
-    if (!t) {
+    if (!dressingTable) {
       if (!wasDressing.current) return;
       wasDressing.current = false;
       if (!widthMm && !heightMm) return;
@@ -459,14 +481,16 @@ export function CanvasStage({
       return;
     }
     wasDressing.current = true;
-    const b = tableBox(t);
+    const blk = dressingGroupId ? tableBlock(dressingMembers) : null;
+    const b = blk ?? tableBox(dressingTable);
+    const at = blk ? blk.centre : dressingTable.position;
     const reach = Math.max(b.widthMm, b.depthMm) / 2 + 900; // the chairs, and a little room round them
     nonce.current += 1;
-    setFocus({ minX: t.position.x - reach, minY: t.position.y - reach, maxX: t.position.x + reach, maxY: t.position.y + reach, nonce: nonce.current });
-    // Only when the table being dressed changes — not every time the document does, or every drag
-    // on the table would re-frame it under the pointer.
+    setFocus({ minX: at.x - reach, minY: at.y - reach, maxX: at.x + reach, maxY: at.y + reach, nonce: nonce.current });
+    // Only when what is being dressed changes — not every time the document does, or every drag on
+    // the table would re-frame it under the pointer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dressingTableId]);
+  }, [dressingFrame]);
 
   // The property as THIS event has arranged it. Every reference to the venue's geometry below goes
   // through this rather than through plan.structure, so a bar the designer pushed across the room is
@@ -565,7 +589,10 @@ export function CanvasStage({
   // Where each table's items stand — laid out once per change of the plan, not once per frame of a
   // pan or a zoom (the layer below re-renders on every one).
   const spotsByTable = useMemo(
-    () => new Map(doc.tables.map((t) => [t.id, cachedSpots(t, sorted.chipsByTable.get(t.id) ?? EMPTY_CHIPS)])),
+    () => {
+      const chipsOf = (id: string) => sorted.chipsByTable.get(id) ?? EMPTY_CHIPS;
+      return new Map(doc.tables.map((t) => [t.id, cachedSpots(t, chipsOf(t.id), dressBlockOf(doc.tables, t, chipsOf))]));
+    },
     [doc.tables, sorted],
   );
 
@@ -582,9 +609,12 @@ export function CanvasStage({
     }
     return used;
   }, [doc.placements]);
+  // A table of a BLOCK is as full as its block: its items may be drawn over the other half (a block
+  // laid out as one), and four arrangements on one half of a head table are not an overflowing half.
   const utilOf = (t: DesignTable) => {
-    const area = tableAreaMm2(t);
-    return area === 0 ? 0 : (usedByTable.get(t.id) ?? 0) / area;
+    const members = t.groupId ? doc.tables.filter((x) => x.groupId === t.groupId) : [t];
+    const area = members.reduce((n, m) => n + tableAreaMm2(m), 0);
+    return area === 0 ? 0 : members.reduce((n, m) => n + (usedByTable.get(m.id) ?? 0), 0) / area;
   };
 
   // Everything with a free position of its own, boxed — the list a rubber-band catches from, the one
@@ -731,7 +761,7 @@ export function CanvasStage({
       const b = polysBox(t.polys);
       return { position: t.centre, rotation: 0, widthMm: b.maxX - b.minX, depthMm: b.maxY - b.minY };
     };
-    if (dressingTableId && p.over === dressingTableId) return frameOf(overKeyOf(doc, dressingTableId));
+    if (p.over && dressingIds.has(p.over)) return frameOf(overKeyOf(doc, p.over));
     const under = targetUnder(hang, hangTargets);
     return under ? frameOf(under.key) : null;
   };
@@ -1111,6 +1141,14 @@ export function CanvasStage({
           id: g.id,
           number: numbered.length === 0 ? null : (g.number ?? Math.min(...numbered.map((t) => t.number))),
           centre: block.centre,
+          /** Where its ONE number goes: on the tables, not the box's middle (blockLabelRoom). */
+          label: blockLabelRoom(block),
+          // The number is sized by a TABLE's short side, not the block's box: the box of a ח of three
+          // is two metres deep and its band is ninety centimetres.
+          shortMm: Math.max(...tables.map((t) => {
+            const b = footprintBounds(tableFootprint(t));
+            return Math.min(b.w, b.h);
+          })),
           rotation: block.rotation,
           widthMm: block.widthMm,
           depthMm: block.depthMm,
@@ -1192,6 +1230,35 @@ export function CanvasStage({
   // put against a wall or in line with anything. Snapping the BOX cannot shear anything — it yields
   // one delta, every member takes it, and the arrangement inside the box is untouched.
   const groupDrag = useRef<{ start: Point; box: SnapBox; snapshot: { ref: SelectionRef; origin: Point }[] } | null>(null);
+
+  /** What a drag of `cargo` lines up WITH: everything on screen but the cargo itself — and nothing
+   *  OVERHEAD unless overhead things are being carried. A chandelier is not on the floor: a table has
+   *  no business squaring up to one, and the one hung over the table being dragged is carried to the
+   *  table's new place every frame (the reducer's settleHung), so as a reference it stood exactly
+   *  where the table had just been and held it there — the table moved in 6px jumps and landed short
+   *  of where it was let go. A pendant over a table in the cargo is never a reference either. */
+  const snapBoxesFor = (cargo: readonly SelectionRef[]): SnapBox[] => {
+    const inCargo = (r: SelectionRef) => cargo.some((x) => sameRef(x, r));
+    const overheadCargo = cargo.some((r) => r.kind === "placement" && placementById.get(r.id)?.layer === "ceiling");
+    const cargoTables = new Set(cargo.filter((r) => r.kind === "table").map((r) => r.id));
+    return alignTo
+      .filter((m) => {
+        if (inCargo(m.ref)) return false;
+        if (m.ref.kind !== "placement") return true;
+        const p = placementById.get(m.ref.id);
+        if (p?.layer !== "ceiling") return true;
+        return overheadCargo && !(p.over && cargoTables.has(p.over));
+      })
+      .map((m) => m.box);
+  };
+
+  /** Whether this gesture has travelled far enough to be a deliberate move: until then nothing
+   *  snaps, pulls or magnets. A click is rarely still — a few pixels of wobble crossed the drag
+   *  threshold, and the snap then pulled the item up to 6px (the hang pull 14px) onto the line of
+   *  the table next to it, so a click on a chandelier relinked it to another table. Latched: once
+   *  past, the snaps stay on for the rest of the gesture, even back near where it started. */
+  const travelled = useRef(false);
+  const TRAVEL_PX = 10;
 
   /** THE NO-OVERLAP RULE, frozen for one gesture: the movers as they stood when it began, the
    *  obstacles they must stay out of, and the pairs that were already overlapping and are therefore
@@ -1323,10 +1390,13 @@ export function CanvasStage({
       // off the others. The rest of the selection is dropped from the references, or the block would
       // align to itself and never move at all.
       const moved = { x: box.x + (p.x - start.x), y: box.y + (p.y - start.y) };
-      const snapped = snapUnlessFree(ctx, moved, {
-        boxes: alignTo.filter((m) => !isSel(m.ref.kind, m.ref.id)).map((m) => m.box),
-        self: { widthMm: box.widthMm, depthMm: box.depthMm },
-      });
+      if (!travelled.current && Math.hypot(p.x - start.x, p.y - start.y) >= ctx.mm(TRAVEL_PX)) travelled.current = true;
+      const snapped = travelled.current
+        ? snapUnlessFree(ctx, moved, {
+            boxes: snapBoxesFor(snapshot.map((sn) => sn.ref)),
+            self: { widthMm: box.widthMm, depthMm: box.depthMm },
+          })
+        : (ctx.endSnap(), { x: Math.round(moved.x), y: Math.round(moved.y) });
       // …and then held flush against anything solid it has only just touched. The snap already
       // offers flush; this keeps it there for the last few pixels without trapping the drag.
       const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
@@ -1345,17 +1415,21 @@ export function CanvasStage({
     // itself excluded, or it would align to where it already is and could never be pulled off. Its
     // own extent goes along too: that is what lets the gap either side of it be measured.
     const self = alignTo.find((m) => sameRef(m.ref, ref))?.box;
-    const snapped = snapUnlessFree(ctx, p, {
-      boxes: alignTo.filter((m) => !sameRef(m.ref, ref)).map((m) => m.box),
-      self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
-    });
+    if (!travelled.current && (!self || Math.hypot(p.x - self.x, p.y - self.y) >= ctx.mm(TRAVEL_PX))) travelled.current = true;
+    const early = !travelled.current;
+    const snapped = early
+      ? (ctx.endSnap(), { x: Math.round(p.x), y: Math.round(p.y) })
+      : snapUnlessFree(ctx, p, {
+          boxes: snapBoxesFor([ref]),
+          self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
+        });
     // Two of a kind touching are held FLUSH rather than one sliding a pixel into the other — but
     // only within a few pixels (nudgeApart): push on and the item follows the pointer, overlap and
     // all. Same-kind only, and an overlap that was already there when the drag began is left alone
     // (lib/studio/collide.ts). `self` is this item's box as it stood when the gesture began:
     // beginSolids runs on the first move frame only (??=), before any of this drag's writes landed.
     solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : snapped);
-    const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
+    const clear = early ? { x: 0, y: 0 } : clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
     let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
     // A ceiling item carried over a table is held on the table's AXES: its hang point pulls onto
@@ -1365,7 +1439,7 @@ export function CanvasStage({
     // lets go, as it does every other pull.
     if (hangSubject && ref.kind === "placement" && ref.id === hangSubject.id) {
       let guide: HangAxisGuide | null = null;
-      if (!mods?.alt && !freeDrag.current) {
+      if (!mods?.alt && !freeDrag.current && !early) {
         const hang = hangPointOf({ ...hangSubject, position: p });
         const frame = hangFrameAt(hangSubject, hang);
         if (frame) {
@@ -1395,6 +1469,7 @@ export function CanvasStage({
     const moved = draggingRefs.current;
     groupDrag.current = null;
     solids.current = null;
+    travelled.current = false;
     draggingRefs.current = [];
     setGesturePlane(null);
     setLifted([]);
@@ -1476,6 +1551,15 @@ export function CanvasStage({
         if (u && box) unitBoxes.set(u, [...(unitBoxes.get(u) ?? []), box]);
       }
       const unitPivot = new Map([...unitBoxes].map(([u, boxes]) => [u, (({ x, y }) => ({ x, y }))(unionBox(boxes))]));
+      // What a TABLE turns about — so a pendant hung over it, turned with it, turns about the same
+      // point and stays over it, rather than spinning where it hangs and ending over the floor.
+      const tablePivot = new Map<string, Point>();
+      for (const ref of rotatableRefs) {
+        if (ref.kind !== "table") continue;
+        const box = movable.find((m) => sameRef(m.ref, ref))?.box;
+        const u = unitOf(ref);
+        if (box) tablePivot.set(ref.id, (u && unitPivot.get(u)) || { x: box.x, y: box.y });
+      }
       return {
         pivot: rotatable.pivot,
         startDeg: mods.raw,
@@ -1483,7 +1567,9 @@ export function CanvasStage({
           const box = movable.find((m) => sameRef(m.ref, ref))!.box;
           const origin = { x: box.x, y: box.y };
           const u = unitOf(ref);
-          return { ref, origin, rotation: facingOf(ref), own: (u && unitPivot.get(u)) || origin };
+          const hungOver = ref.kind === "placement" ? placementById.get(ref.id) : undefined;
+          const overPivot = hungOver?.layer === "ceiling" && hungOver.over ? tablePivot.get(hungOver.over) : undefined;
+          return { ref, origin, rotation: facingOf(ref), own: overPivot ?? ((u && unitPivot.get(u)) || origin) };
         }),
       };
     })();
@@ -1552,6 +1638,31 @@ export function CanvasStage({
     },
     /** An arrow-key step. Discrete, so it closes its own history entry immediately. */
     nudge: (ref: SelectionRef, pos: Point) => {
+      // A step of something in a selection of several steps the whole selection — a block of
+      // tables is one thing, and an arrow that moved only the focused half pulled it apart.
+      const at = (r: SelectionRef): Point | undefined =>
+        r.kind === "table"
+          ? tableById.get(r.id)?.position
+          : r.kind === "placement"
+            ? placementById.get(r.id)?.position
+            : (() => {
+                const f = structure.features.find((x) => x.id === r.id);
+                return f ? { x: f.x, y: f.y } : undefined;
+              })();
+      const from = at(ref);
+      if (from && selection.length > 1 && isSel(ref.kind, ref.id)) {
+        const dx = pos.x - from.x;
+        const dy = pos.y - from.y;
+        const moves = movable
+          .filter((m) => isSel(m.ref.kind, m.ref.id))
+          .flatMap((m) => {
+            const p = at(m.ref);
+            return p ? [{ kind: m.ref.kind, id: m.ref.id, position: { x: Math.round(p.x + dx), y: Math.round(p.y + dy) } }] : [];
+          });
+        onMoveMany(moves);
+        onEndDrag(moves.map((m) => ({ kind: m.kind, id: m.id })));
+        return;
+      }
       if (ref.kind === "table") onMoveTable(ref.id, pos);
       else if (ref.kind === "feature") onMoveFeature(ref.id, pos);
       else onMovePlacement(ref.id, pos);
@@ -1597,6 +1708,26 @@ export function CanvasStage({
               onNudge: (pos: Point) => hostRef.current.nudge(r, pos),
             }
           : {}),
+      };
+      dragCache.current.set(key, d);
+    }
+    return d;
+  };
+
+  /** An item on a table, outside its focus mode: pressed, it takes hold of its table; clicked, it is
+   *  picked itself (see the chips layer). One object per item for its lifetime, like nodeProps. */
+  const chipProps = (chipId: string, tableId: string): DragProps => {
+    const key = `chip:${chipId}:${tableId}`;
+    let d = dragCache.current.get(key);
+    if (!d) {
+      const chip: SelectionRef = { kind: "placement", id: chipId };
+      const table: SelectionRef = { kind: "table", id: tableId };
+      d = {
+        onPress: (additive) => hostRef.current.press(table)(additive),
+        onClick: (additive) => hostRef.current.click(chip)(additive),
+        onContext: () => hostRef.current.context(chip)(),
+        onMove: (p: Point, mods?: { alt: boolean }) => hostRef.current.move(table, p, mods),
+        onEnd: () => hostRef.current.end(),
       };
       dragCache.current.set(key, d);
     }
@@ -1694,8 +1825,12 @@ export function CanvasStage({
       }}
       dropSnap={() => {
         const carried = carriedItem();
+        // An item that lands ON a table (or on a wall) is placed by what is under the pointer, so the
+        // raw point is the one to hand over — the click-to-place pane does the same (ArmedPane).
+        // Snapped, a candlestick let go by a table's edge was pulled onto the next table's line.
+        if (carried && carried.landing !== "free") return null;
         return {
-          boxes: alignTo.map((m) => m.box),
+          boxes: snapBoxesFor([]),
           self: carried ? { widthMm: carried.widthMm, depthMm: carried.depthMm } : undefined,
         };
       }}
@@ -1766,7 +1901,9 @@ export function CanvasStage({
               coherent to turn, so the handle stays away rather than turning half of it.
               Not while a tool owns every click (placing, drawing an area, picking a stage's side):
               those panes used to cover the knob, and above them it would steal their click. */}
-          {rotatable && !placeGhost && !drawArea && !stairPick && !(armed && onPlaceArmed) && (
+          {/* Nor while a table is being dressed: in front of the scrim the tables stand still, and
+              the knob above the block turned it from inside its own focus mode. */}
+          {rotatable && !placeGhost && !drawArea && !stairPick && !(armed && onPlaceArmed) && !dressingTable && (
             <RotateHandle
               pivot={rotatable.pivot}
               reachMm={rotatable.reachMm}
@@ -1963,12 +2100,12 @@ export function CanvasStage({
                   tables meet and a seam would run through the digits. */}
               {showTableNumbers && (
                 <TableLabel
-                  x={g.centre.x}
-                  y={g.centre.y}
+                  x={g.label.x}
+                  y={g.label.y}
                   number={g.number !== null && g.number > 0 ? g.number : null}
                   seated={g.seated}
                   seats={g.seats}
-                  shortSideMm={Math.min(g.widthMm, g.depthMm)}
+                  shortSideMm={Math.min(g.widthMm, g.depthMm, g.shortMm)}
                   ctx={ctx}
                   ink={g.selected ? "var(--color-accent)" : "var(--color-muted)"}
                   halo
@@ -2002,10 +2139,15 @@ export function CanvasStage({
             {layerVisible.table &&
               layerVisible.tables &&
               doc.tables.map((t) => {
-                // The table being dressed draws its items over the scrim, below — not twice.
-                if (t.id === dressingTableId) return null;
+                // The table being dressed (its whole block) draws its items over the scrim, below —
+                // not twice.
+                if (dressingIds.has(t.id)) return null;
                 // Where each stands on its table (lib/design-document/dressing.ts): as the designer
                 // arranged it, or laid out automatically — and turned with the table.
+                // A press on an item standing on a table is a press on the TABLE — the drag moves
+                // the table (its whole block) from where it stands — and a click that never moved
+                // picks the item. Not draggable on their own outside the focus mode, the items used
+                // to catch every press on a table's middle and move nothing.
                 return (spotsByTable.get(t.id) ?? []).map(({ p, at, rotation, footprint }) => (
                   <PlacementNode
                     key={p.id}
@@ -2015,7 +2157,10 @@ export function CanvasStage({
                     y={at.y}
                     selected={isSel("placement", p.id)}
                     ctx={ctx}
-                    drag={nodeProps({ kind: "placement", id: p.id }, false)}
+                    // …unless the tables plane is held back (only the dressing worked in): then the
+                    // item is picked and the table stays where it is.
+                    drag={isLive("tables") ? chipProps(p.id, t.id) : nodeProps({ kind: "placement", id: p.id }, false)}
+                    dragOrigin={isLive("tables") ? t.position : undefined}
                     onOpen={focusTable}
                     openId={t.id}
                   />
@@ -2039,22 +2184,30 @@ export function CanvasStage({
 
           {dressingTable && (
             <DressingOverlay
-              table={dressingTable}
-              chips={sorted.chipsByTable.get(dressingTable.id) ?? []}
-              cloth={sorted.coverByTable.get(dressingTable.id)}
-              ring={seatRingByTable.get(dressingTable.id)}
-              util={utilOf(dressingTable)}
+              members={dressingMembers.map((t) => ({
+                table: t,
+                chips: sorted.chipsByTable.get(t.id) ?? [],
+                cloth: sorted.coverByTable.get(t.id),
+                ring: seatRingByTable.get(t.id),
+                util: utilOf(t),
+                drag: nodeProps({ kind: "table", id: t.id }, false),
+              }))}
+              activeId={dressingTable.id}
+              // A block's chairs go round the block, not round any one of its tables.
+              groupRing={dressingGroupId ? groupRingById.get(dressingGroupId) : undefined}
               ctx={ctx}
               isSelected={(id) => isSel("placement", id)}
               selectedIds={selection.filter((r) => r.kind === "placement").map((r) => r.id)}
-              tableDrag={nodeProps({ kind: "table", id: dressingTable.id }, false)}
               chipDrag={(id) => nodeProps({ kind: "placement", id }, false)}
-              onArrange={(positions) => onArrangeDressing?.(dressingTable.id, positions)}
+              onArrange={(tableId, positions) => onArrangeDressing?.(tableId, positions)}
+              onArrangeBlock={(positions) => onArrangeBlock?.(positions)}
               onEnd={() => {
                 ctx.endSnap();
                 onEndDrag();
               }}
               onExit={() => onExitDressing?.()}
+              hung={doc.placements.filter((p) => p.layer === "ceiling" && !!p.over && dressingIds.has(p.over))}
+              onBand={(ids, mode) => onSelectMany(ids.map((id) => ({ kind: "placement" as const, id })), mode !== "replace", mode)}
             />
           )}
 
@@ -2143,7 +2296,7 @@ export function CanvasStage({
               sorted.ceiling.map((p) => {
                 // Dressing a table: what hangs over THAT table stays in front of the scrim and in
                 // hand; the rest of the room's ceiling is held back with the room.
-                const held = !!dressingTableId && p.over !== dressingTableId;
+                const held = !!dressingTable && !(p.over && dressingIds.has(p.over));
                 return (
                   <g key={p.id} {...(held ? { opacity: 0.25, style: { pointerEvents: "none" as const } } : {})}>
                     <PlacementNode
@@ -2153,6 +2306,10 @@ export function CanvasStage({
                       selected={isSel("placement", p.id)}
                       ctx={ctx}
                       drag={nodeProps({ kind: "placement", id: p.id })}
+                      // Whole-body only when it is what is being worked on — and never in front of a
+                      // dressed table, where the centrepiece under it must stay in reach.
+                      grabbable={activeLayer === "ceiling" || (!dressingTable && isSel("placement", p.id))}
+                      rimOnly={!!dressingTable && activeLayer !== "ceiling"}
                       overhead
                       // A double-click on a chandelier opens the table it hangs over, as one on a
                       // centrepiece opens the table it stands on.
@@ -2224,7 +2381,7 @@ export function CanvasStage({
               })}
               clear={clearedDrop}
               onPlace={onPlaceArmed}
-              dressingTableId={dressingTableId}
+              dressingTableIds={dressingIds}
               onDisarm={onDisarm}
             />
           )}
@@ -3313,6 +3470,12 @@ function CapacityLabel({
  *  goes back to the plan) and the table is drawn again above it, with its chairs, its two centre
  *  lines, and its items free to be dragged about its top.
  *
+ *  A table in a GROUP is dressed as its block: every member is drawn above the scrim with its items,
+ *  the block's one ring of chairs round the lot, and each member's items dragged in THAT member's
+ *  frame. The centre lines are the ACTIVE member's — the one the bar's arrange actions act on — and
+ *  it is outlined, so the designer can see which half of a head table the bar is about; a click on
+ *  another member (or on an item on it) makes that one the active one.
+ *
  *  A drag here moves items IN THE TABLE'S OWN FRAME (lib/design-document/dressing.ts): the pointer's
  *  room point is carried into the frame, clamped to the table top, and pulled onto a centre line
  *  within a few pixels of it — which is how a pair of candlesticks ends up exactly symmetric without
@@ -3320,38 +3483,268 @@ function CapacityLabel({
  *  item's place, so the first drag on an automatically laid-out table freezes the others where they
  *  were drawn instead of letting them jump. */
 function DressingOverlay({
-  table,
-  chips,
-  cloth,
-  ring,
-  util,
+  members,
+  activeId,
+  groupRing,
   ctx,
   isSelected,
   selectedIds,
-  tableDrag,
   chipDrag,
   onArrange,
+  onArrangeBlock,
   onEnd,
   onExit,
+  hung = [],
+  onBand,
 }: {
-  table: DesignTable;
-  chips: Placement[];
-  cloth?: Placement;
-  ring?: { transform: string; seats: Seat[] };
-  util: number;
+  members: { table: DesignTable; chips: Placement[]; cloth?: Placement; ring?: { transform: string; seats: Seat[] }; util: number; drag: DragProps }[];
+  activeId: string;
+  groupRing?: { transform: string; seats: Seat[] };
   ctx: CanvasLayerContext;
   isSelected: (placementId: string) => boolean;
   selectedIds: string[];
-  tableDrag: DragProps;
+  chipDrag: (placementId: string) => DragProps;
+  onArrange: (tableId: string, positions: { id: string; position: Point }[]) => void;
+  onArrangeBlock: (positions: { id: string; tableId: string; position: Point }[]) => void;
+  onEnd: () => void;
+  onExit: () => void;
+  /** What hangs over the tables being dressed — a band catches it too. */
+  hung?: Placement[];
+  /** A band drawn on the table top or the scrim finished: the items it touched. */
+  onBand?: (ids: string[], mode: MarqueeMode) => void;
+}) {
+  const grouped = members.length > 1;
+  // The block the items are laid out in, when it is laid out automatically as one (dressBlockOf).
+  const dressBlock: DressBlock | undefined = grouped
+    ? { members: members.map((m) => m.table), chipsOf: (id) => members.find((m) => m.table.id === id)?.chips ?? EMPTY_CHIPS }
+    : undefined;
+  // A BAND across the table: a plain drag from the table top or the room behind the scrim selects
+  // every item it touches (Shift adds, Ctrl toggles — the plan's own marquee rules), so several
+  // candlesticks are taken at once without Ctrl-clicking each. A press that never travels is still
+  // the click it was: on the scrim it leaves, on a table it picks that table. The box is written
+  // straight onto its <rect> — no render per pointer move.
+  const bandRef = useRef<SVGRectElement>(null);
+  const startBand = (e: React.PointerEvent) => {
+    if (!onBand || e.button !== 0 || e.pointerType === "touch") return;
+    const a = ctx.clientToMm(e.clientX, e.clientY);
+    const box = (b: Point) => ({ minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y) });
+    startPointerGesture(
+      e,
+      {
+        onMove: (ev) => {
+          const r = bandRef.current;
+          if (!r) return;
+          const b = box(ctx.clientToMm(ev.clientX, ev.clientY));
+          r.setAttribute("x", String(b.minX));
+          r.setAttribute("y", String(b.minY));
+          r.setAttribute("width", String(b.maxX - b.minX));
+          r.setAttribute("height", String(b.maxY - b.minY));
+          r.style.display = "";
+        },
+        onEnd: (ev, moved) => {
+          if (bandRef.current) bandRef.current.style.display = "none";
+          if (!moved) return;
+          const b = box(ctx.clientToMm(ev.clientX, ev.clientY));
+          // Each item's box in the room — its size on the table turned with the table — TOUCHED by
+          // the band, as on the plan.
+          const touches = (at: Point, w: number, d: number, deg: number) => {
+            const r = (deg * Math.PI) / 180;
+            const hx = Math.abs((w / 2) * Math.cos(r)) + Math.abs((d / 2) * Math.sin(r));
+            const hy = Math.abs((w / 2) * Math.sin(r)) + Math.abs((d / 2) * Math.cos(r));
+            return at.x + hx >= b.minX && at.x - hx <= b.maxX && at.y + hy >= b.minY && at.y - hy <= b.maxY;
+          };
+          const ids = [
+            ...members.flatMap((m) =>
+              dressingSpots(m.table, m.chips, dressBlock)
+                .filter((sp) => touches(sp.at, sp.box.widthMm, sp.box.depthMm, m.table.rotation ?? 0))
+                .map((sp) => sp.p.id),
+            ),
+            ...hung
+              .filter((p) => {
+                const f = footprintBounds(placementFootprint(p));
+                const k = p.scale || 1;
+                return touches(p.position, f.w * k, f.h * k, p.rotation ?? 0);
+              })
+              .map((p) => p.id),
+          ];
+          const mode: MarqueeMode = ev.ctrlKey || ev.metaKey ? "toggle" : ev.shiftKey ? "add" : "replace";
+          if (ids.length || mode !== "replace") onBand(ids, mode);
+        },
+      },
+      // No capture: a press that stays a click must still reach the table (or the scrim) it was on.
+      { thresholdPx: 4, capture: null },
+    );
+  };
+  // A BLOCK is dressed as the one table it is: an item is dragged in the BLOCK's frame, kept on the
+  // block's top (not its own half's — a centrepiece belongs on the seam of a head table), snapped to
+  // the block's centre lines and to its mirror across the whole block, and handed to whichever table
+  // of the block it is let go over. Held to its own half, nothing could sit in the middle of a head
+  // table, and a candlestick could not be slid from one half to the other.
+  const blk = grouped ? tableBlock(members.map((m) => m.table)) : null;
+  const bf = blk ? { position: blk.centre, rotation: blk.rotation, mirrored: false } : null;
+  const gesture = useRef<{ pressed: string; origins: Map<string, { local: Point; own: Point; box: { widthMm: number; depthMm: number }; tableId: string }>; moving: Set<string> } | null>(null);
+  const [snapped, setSnapped] = useState<{ x?: number; y?: number } | null>(null);
+  const snapMm = ctx.mm(8);
+  const blockMove =
+    blk && bf
+      ? (pressed: string) => (world: Point) => {
+          if (!gesture.current) {
+            const spots = members.flatMap((m) => dressingSpots(m.table, m.chips, dressBlock).map((sp) => ({ sp, tableId: m.table.id })));
+            const picked = selectedIds.filter((id) => spots.some((s) => s.sp.p.id === id));
+            gesture.current = {
+              pressed,
+              origins: new Map(spots.map((s) => [s.sp.p.id, { local: toTableFrame(bf, s.sp.at), own: s.sp.local, box: s.sp.box, tableId: s.tableId }])),
+              moving: new Set(picked.includes(pressed) ? picked : [pressed]),
+            };
+          }
+          const g = gesture.current;
+          const o = g.origins.get(pressed)?.local ?? { x: 0, y: 0 };
+          const local = toTableFrame(bf, world);
+          let dx = local.x - o.x;
+          let dy = local.y - o.y;
+          const still = [...g.origins].filter(([id]) => !g.moving.has(id)).map(([, v]) => v.local);
+          const nearest = (v: number, options: number[]) => {
+            let best: number | undefined;
+            for (const c of options) if (Math.abs(v - c) < snapMm && (best === undefined || Math.abs(v - c) < Math.abs(v - best))) best = c;
+            return best;
+          };
+          const sx = nearest(o.x + dx, [0, ...still.flatMap((a) => [a.x, -a.x])]);
+          const sy = nearest(o.y + dy, [0, ...still.flatMap((a) => [a.y, -a.y])]);
+          if (sx !== undefined) dx = sx - o.x;
+          if (sy !== undefined) dy = sy - o.y;
+          setSnapped(sx === undefined && sy === undefined ? null : { x: sx, y: sy });
+          const top = { widthMm: blk.widthMm, depthMm: blk.depthMm, round: false };
+          onArrangeBlock(
+            [...g.origins].map(([id, v]) => {
+              if (!g.moving.has(id)) return { id, tableId: v.tableId, position: v.own };
+              const room = fromTableFrame(bf, clampToTable(top, v.box, { x: v.local.x + dx, y: v.local.y + dy }));
+              const on = members.find((m) => pointOnTable(m.table, room))?.table;
+              if (on) return { id, tableId: on.id, position: toTableFrame(on, room) };
+              // In the air of the block (the hollow of a ח, the pinch between two rounds): onto the
+              // nearest table's top — the block's box is not its shape.
+              const near = [...members].sort((a, b) => Math.hypot(a.table.position.x - room.x, a.table.position.y - room.y) - Math.hypot(b.table.position.x - room.x, b.table.position.y - room.y))[0].table;
+              return { id, tableId: near.id, position: clampToTable(tableBox(near), v.box, toTableFrame(near, room)) };
+            }),
+          );
+        }
+      : undefined;
+  const endBlockMove = () => {
+    gesture.current = null;
+    setSnapped(null);
+    onEnd();
+  };
+  const guide = { stroke: "var(--color-accent)", strokeOpacity: 0.4, strokeWidth: 1, strokeDasharray: "4 4", vectorEffect: "non-scaling-stroke" as const };
+  return (
+    <g>
+      {/* The room, held back. Pan (Space, the middle button) is taken before this sees the press. */}
+      <rect
+        x={-1e7}
+        y={-1e7}
+        width={2e7}
+        height={2e7}
+        fill="var(--color-canvas)"
+        fillOpacity={0.8}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          startBand(e);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onExit();
+        }}
+        aria-hidden
+      />
+      {groupRing && <SeatRing transform={groupRing.transform} seats={groupRing.seats} />}
+      {members.map((m) => m.ring && <SeatRing key={`ring-${m.table.id}`} transform={m.ring.transform} seats={m.ring.seats} />)}
+      {/* The tables take the press first (a click picks one), and a drag from their top draws the band. */}
+      <g onPointerDownCapture={startBand}>
+        {members.map((m) => (
+          <TableNode key={`table-${m.table.id}`} table={m.table} selected={false} util={m.util} cloth={m.cloth} ctx={ctx} drag={m.drag} />
+        ))}
+      </g>
+      {/* The BLOCK's centre lines, and what the held item snapped to — in the block's frame. */}
+      {blk && bf && (
+        <g transform={`translate(${bf.position.x} ${bf.position.y})${bf.rotation ? ` rotate(${bf.rotation})` : ""}`} className="pointer-events-none">
+          <line x1={-blk.widthMm / 2} y1={0} x2={blk.widthMm / 2} y2={0} {...guide} />
+          <line x1={0} y1={-blk.depthMm / 2} x2={0} y2={blk.depthMm / 2} {...guide} />
+          {snapped?.x !== undefined && (
+            <line x1={snapped.x} y1={-blk.depthMm / 2} x2={snapped.x} y2={blk.depthMm / 2} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          )}
+          {snapped?.y !== undefined && (
+            <line x1={-blk.widthMm / 2} y1={snapped.y} x2={blk.widthMm / 2} y2={snapped.y} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          )}
+        </g>
+      )}
+      {members.map((m) => (
+        <DressedTable
+          key={`dressed-${m.table.id}`}
+          table={m.table}
+          chips={m.chips}
+          active={m.table.id === activeId}
+          grouped={grouped}
+          ctx={ctx}
+          isSelected={isSelected}
+          selectedIds={selectedIds}
+          chipDrag={chipDrag}
+          onArrange={(positions) => onArrange(m.table.id, positions)}
+          onEnd={onEnd}
+          blockMove={blockMove}
+          onBlockEnd={endBlockMove}
+          block={dressBlock}
+        />
+      ))}
+      <rect
+        ref={bandRef}
+        style={{ display: "none" }}
+        fill="var(--color-accent)"
+        fillOpacity={0.08}
+        stroke="var(--color-accent)"
+        strokeWidth={1}
+        strokeDasharray="4 3"
+        vectorEffect="non-scaling-stroke"
+        className="pointer-events-none"
+      />
+    </g>
+  );
+}
+
+/** One table of what is being dressed: its centre lines when it is the active one (outlined too,
+ *  inside a block), and its items, dragged in its own frame. */
+function DressedTable({
+  table,
+  chips,
+  active,
+  grouped,
+  ctx,
+  isSelected,
+  selectedIds,
+  chipDrag,
+  onArrange,
+  onEnd,
+  blockMove,
+  onBlockEnd,
+  block,
+}: {
+  table: DesignTable;
+  chips: Placement[];
+  active: boolean;
+  grouped: boolean;
+  ctx: CanvasLayerContext;
+  isSelected: (placementId: string) => boolean;
+  selectedIds: string[];
   chipDrag: (placementId: string) => DragProps;
   onArrange: (positions: { id: string; position: Point }[]) => void;
   onEnd: () => void;
-  onExit: () => void;
+  /** Inside a block: the drag is the block's (DressingOverlay), and so are the lines. */
+  blockMove?: (pressed: string) => (world: Point) => void;
+  onBlockEnd?: () => void;
+  /** The block it is laid out in (dressBlockOf). */
+  block?: DressBlock;
 }) {
   const gesture = useRef<{ pressed: string; origins: Map<string, Point>; moving: Set<string> } | null>(null);
   /** The lines the held item has just snapped to, in the table's frame — drawn while it is held. */
   const [snapped, setSnapped] = useState<{ x?: number; y?: number } | null>(null);
-  const spots = dressingSpots(table, chips);
+  const spots = dressingSpots(table, chips, block);
   const box = tableBox(table);
   const sizes = new Map(spots.map((sp) => [sp.p.id, sp.box]));
   const transform = `translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`;
@@ -3395,27 +3788,18 @@ function DressingOverlay({
 
   const guide = { stroke: "var(--color-accent)", strokeOpacity: 0.4, strokeWidth: 1, strokeDasharray: "4 4", vectorEffect: "non-scaling-stroke" as const };
   return (
-    <g>
-      {/* The room, held back. Pan (Space, the middle button) is taken before this sees the press. */}
-      <rect
-        x={-1e7}
-        y={-1e7}
-        width={2e7}
-        height={2e7}
-        fill="var(--color-canvas)"
-        fillOpacity={0.8}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onExit();
-        }}
-        aria-hidden
-      />
-      {ring && <SeatRing transform={ring.transform} seats={ring.seats} />}
-      <TableNode table={table} selected={false} util={util} cloth={cloth} ctx={ctx} drag={tableDrag} />
+    <>
       <g transform={transform} className="pointer-events-none">
-        <line x1={-box.widthMm / 2} y1={0} x2={box.widthMm / 2} y2={0} {...guide} />
-        <line x1={0} y1={-box.depthMm / 2} x2={0} y2={box.depthMm / 2} {...guide} />
+        {active && (
+          <>
+            {!blockMove && <line x1={-box.widthMm / 2} y1={0} x2={box.widthMm / 2} y2={0} {...guide} />}
+            {!blockMove && <line x1={0} y1={-box.depthMm / 2} x2={0} y2={box.depthMm / 2} {...guide} />}
+            {/* Which member of the block the bar is about, said by its outline as well. */}
+            {grouped && (
+              <FootprintShape footprint={tableFootprint(table)} fill="none" stroke="var(--color-accent)" strokeOpacity={0.7} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            )}
+          </>
+        )}
         {/* What the held item snapped to, solid, for as long as it is held. */}
         {snapped?.x !== undefined && (
           <line x1={snapped.x} y1={-box.depthMm / 2} x2={snapped.x} y2={box.depthMm / 2} stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
@@ -3437,17 +3821,19 @@ function DressingOverlay({
             ctx={ctx}
             drag={{
               ...d,
-              onMove: moveFrom(p.id),
-              onEnd: () => {
-                gesture.current = null;
-                setSnapped(null);
-                onEnd();
-              },
+              onMove: blockMove ? blockMove(p.id) : moveFrom(p.id),
+              onEnd: blockMove && onBlockEnd
+                ? onBlockEnd
+                : () => {
+                    gesture.current = null;
+                    setSnapped(null);
+                    onEnd();
+                  },
             }}
           />
         );
       })}
-    </g>
+    </>
   );
 }
 
@@ -3484,8 +3870,23 @@ function PlacementNodeView({
   openId,
   shape,
   showLabel,
+  grabbable = true,
+  rimOnly = false,
+  dragOrigin,
 }: {
   placement: Placement;
+  /** An OVERHEAD item takes the pointer on its whole footprint only when this is set — selected, or
+   *  the ceiling plane worked in. Otherwise it is taken by its outline and its hang point alone, so
+   *  a press on the table under a chandelier is a press on the TABLE: the halo covered the table's
+   *  middle, a drag of the table picked up the chandelier instead, and the drag's end relinked it to
+   *  whatever table it was dropped near. */
+  grabbable?: boolean;
+  /** …and not by its hang point either — in a table's focus mode, where the dot sits on the
+   *  centrepiece under it and would take every press meant for it. */
+  rimOnly?: boolean;
+  /** What the drag is measured from, when it moves something else — an item on a table drags its
+   *  table, from the table's own place. */
+  dragOrigin?: Point;
   /** Draw it with this shape rather than its catalog footprint — a runner trimmed to its table. */
   shape?: Footprint;
   /** Write a standalone banquette's number and `seated/seats` — the passes that write the tables'
@@ -3579,10 +3980,13 @@ function PlacementNodeView({
   const bench = symbol === "bench" ? standaloneBench(placement, benchOf) : null;
   const benchNumber = benchIsNumbered(placement, bench) ? placement.bench!.number! : null;
   const benchSeats = bench?.seats ?? 0;
+  // The vase or jug an arrangement stands in (lib/catalog/vessel.ts) — under the flowers, its rim
+  // dashed over them where they hide it.
+  const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf(placement, (id) => resolve(id)?.product) : undefined;
 
   return (
     <g
-      {...draggable({ x, y }, ctx, drag)}
+      {...draggable(dragOrigin ?? { x, y }, ctx, drag)}
       transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${placement.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
       tabIndex={0}
       role="button"
@@ -3596,6 +4000,20 @@ function PlacementNodeView({
             }
           : undefined
       }
+      // The arrows step it, as they step a table (TableNode) — 10cm, Shift 50cm. Only what moves on
+      // its own takes them: an item on a table is moved in its table's focus mode.
+      onKeyDown={(e) => {
+        const onNudge = drag.onNudge;
+        if (!onNudge || dragOrigin) return;
+        const step = e.shiftKey ? 500 : 100;
+        const at = placement.position;
+        if (e.key === "ArrowLeft") onNudge({ x: at.x - step, y: at.y });
+        else if (e.key === "ArrowRight") onNudge({ x: at.x + step, y: at.y });
+        else if (e.key === "ArrowUp") onNudge({ x: at.x, y: at.y - step });
+        else if (e.key === "ArrowDown") onNudge({ x: at.x, y: at.y + step });
+        else return;
+        e.preventDefault();
+      }}
     >
       {/* OVERHEAD: a halo under the drawing, and the hang point. The convention draws a ceiling
           item unfilled (FootprintShape `overhead`) — which also meant it took the pointer on its
@@ -3606,10 +4024,28 @@ function PlacementNodeView({
           the HANG POINT — the shape's visual centre, where the rigger's mark goes (lib/studio/hang.ts). */}
       {overhead && !placement.stage && (
         <>
-          <FootprintShape footprint={footprint} fill="var(--color-surface)" fillOpacity={0.62} stroke="var(--color-ink)" strokeOpacity={0.09} strokeWidth={7} vectorEffect="non-scaling-stroke" />
+          <FootprintShape
+            footprint={footprint}
+            fill="var(--color-surface)"
+            fillOpacity={0.62}
+            stroke="var(--color-ink)"
+            strokeOpacity={0.09}
+            strokeWidth={7}
+            vectorEffect="non-scaling-stroke"
+            className={grabbable ? undefined : "pointer-events-none"}
+          />
+          {/* Not grabbable by its body: a band along its outline and a disc round its hang point are
+              what take it, a finger's width each — enough to pick it up, never the table under it. */}
+          {!grabbable && (
+            <>
+              <FootprintShape footprint={footprint} fill="none" stroke="transparent" strokeWidth={14} vectorEffect="non-scaling-stroke" style={{ pointerEvents: "stroke" }} />
+              {!rimOnly && <circle cx={labelAnchor(footprint).x} cy={labelAnchor(footprint).y} r={ctx.mm(9)} fill="transparent" />}
+            </>
+          )}
           <circle cx={labelAnchor(footprint).x} cy={labelAnchor(footprint).y} r={ctx.mm(2.6)} fill={selected ? "var(--color-accent)" : "var(--color-ink-soft)"} className="pointer-events-none" />
         </>
       )}
+      {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} />}
       {symbol && product && (
         <ItemSymbol
           kind={symbol}
@@ -3621,6 +4057,7 @@ function PlacementNodeView({
           tone={own}
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
+          drawStyle={drawStyleOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}
           mirrored={rise ? placement.mirrored : undefined}
@@ -3628,6 +4065,7 @@ function PlacementNodeView({
           bench={bench ?? undefined}
         />
       )}
+      {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
       {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
         <g transform={upright || undefined} className="pointer-events-none">
           <TableLabel
@@ -3651,6 +4089,7 @@ function PlacementNodeView({
           overhead={overhead}
           fill="#ffffff"
           fillOpacity={0}
+          className={overhead && !grabbable ? "pointer-events-none" : undefined}
           stroke={selected ? "var(--color-accent)" : overhead ? style.stroke : "none"}
           strokeOpacity={selected ? 1 : style.strokeOpacity}
           strokeWidth={selected ? 2 : 1}
@@ -4344,7 +4783,7 @@ function ArmedPane({
   clear,
   onPlace,
   onDisarm,
-  dressingTableId,
+  dressingTableIds,
 }: {
   product: Product;
   /** Lands at this size, not the catalog's (a block of chairs in rows). */
@@ -4358,15 +4797,17 @@ function ArmedPane({
   clear: (p: Point, item: CarriedItem) => Point;
   onPlace: (at: Point, keep: boolean) => void;
   onDisarm?: () => void;
-  /** The table being dressed, if any — it takes items where they are put. */
-  dressingTableId?: string | null;
+  /** The tables being dressed, if any (a grouped one's whole block) — they take items where they
+   *  are put. */
+  dressingTableIds?: ReadonlySet<string>;
 }) {
   const item = size ? { ...carriedOf(product), ...size } : carriedOf(product);
-  const onWall = CATEGORY_BY_ID[product.category]?.anchor === "wall";
-  const onTable = !onWall && product.layer === "table";
   // Table and wall items are hit-tested on the raw point (which table, which wall); pulling that
-  // point toward an alignment line could carry it off the table the pointer is plainly over.
-  const free = !onWall && !onTable;
+  // point toward an alignment line could carry it off the table the pointer is plainly over. The
+  // same reading the rail's drop makes (CarriedItem.landing).
+  const onWall = item.landing === "wall";
+  const onTable = item.landing === "table";
+  const free = item.landing === "free";
   const landing = (e: React.PointerEvent | React.MouseEvent): Point => {
     const raw = ctx.clientToMm(e.clientX, e.clientY);
     const p = free ? clear(ctx.snap(raw, snapOptions(item)), item) : raw;
@@ -4374,11 +4815,17 @@ function ArmedPane({
   };
 
   const footprint: Footprint = size ? { kind: "rect", ...size } : resolveFootprint(product);
-  const table = onTable && at ? tableAt(doc, at.x, at.y) : undefined;
+  const table = onTable && at ? tableUnder(doc.tables, at) : undefined;
   const near = onWall && at ? nearestWall(structure, at) : null;
   const wall = near ? wallSegment(structure, near.wallId) : null;
   const ghost = (p: Point, faint = false) => (
     <g className="pointer-events-none" transform={`translate(${p.x} ${p.y})`} opacity={faint ? 0.45 : 1}>
+      {/* A composite lands as its parts, about this point: they are what follows the pointer. */}
+      {product.composition && (
+        <g opacity={0.8}>
+          <CompositionPieces composition={product.composition} />
+        </g>
+      )}
       <FootprintShape
         footprint={footprint}
         overhead={product.layer === "ceiling"}
@@ -4426,7 +4873,7 @@ function ArmedPane({
         <>
           <g
             className="pointer-events-none"
-            transform={`translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}`}
+            transform={`translate(${table.position.x} ${table.position.y})${table.rotation ? ` rotate(${table.rotation})` : ""}${table.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}
           >
             <FootprintShape
               footprint={tableFootprint(table)}
@@ -4438,7 +4885,7 @@ function ArmedPane({
           </g>
           {/* A table dressed by hand takes the item where it is let go (the studio's dropProduct); one
               laid out automatically finds it a place, so the ghost waits at its centre. */}
-          {ghost(table.arranged || table.id === dressingTableId ? at : table.position)}
+          {ghost(table.arranged || dressingTableIds?.has(table.id) ? at : table.position)}
         </>
       )}
       {at && onTable && !table && ghost(at, true)}
@@ -4456,7 +4903,7 @@ function ArmedPane({
           vectorEffect="non-scaling-stroke"
         />
       )}
-      {at && free && ghost(at)}
+      {at && (free || item.landing === "hang") && ghost(at)}
     </g>
   );
 }

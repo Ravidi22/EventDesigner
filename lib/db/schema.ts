@@ -52,7 +52,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { DesignDocumentContent, StageTemplate, TableDesign } from "@/lib/design-document/types";
-import type { FlowerLine, MapAppearance, ResizeSpec } from "@/lib/catalog/types";
+import type { Composition, FlowerLine, MapAppearance, ResizeSpec } from "@/lib/catalog/types";
 import type { VenuePlan } from "@/lib/venues/types";
 import type { VenueStructure } from "@/lib/venues/structure";
 import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
@@ -477,6 +477,11 @@ export const products = pgTable(
     /** The clear floor this item needs around it, in mm — the studio's safety-distance warning.
      *  NULL = no rule, which is not the same as 0 and must not be collapsed into it. */
     clearanceMm: integer("clearance_mm"),
+    /** A COMPOSITE item's parts as they stand together — a fragment of a drawing in the item's own
+     *  frame (Composition, lib/catalog/types.ts). JSON for the reason `appearance` is: it is only ever
+     *  read whole, with its row, and placing the item copies it into a design document, where its
+     *  pieces become ordinary tables and placements. NULL on every ordinary row. */
+    composition: jsonb("composition").$type<Composition>(),
 
     // ── Procurement (lib/suppliers/) ───────────────────────────────────────────────────────────
     /** Who this item is bought or rented from. ONE supplier, not a join table: a many-to-many with

@@ -132,8 +132,10 @@ export function tableShapeWords(type: string): [string, string] {
 /** "17 שולחנות מלבניים", "שולחן אביר", "שולחן ראש", "שולחן עגול". */
 export function kitName(units: readonly NumberedUnit[], tables: readonly DesignTable[]): string {
   const n = units.length;
-  if (units.every((u) => u.tableIds.length > 1)) return n === 1 ? "שולחן אביר" : `${n} שולחנות אביר`;
+  // A head table first: two tables pushed together for the couple are their head table, not a
+  // knights' table.
   if (n === 1 && !units[0].unnumbered && units[0].number === 0) return "שולחן ראש";
+  if (units.every((u) => u.tableIds.length > 1)) return n === 1 ? "שולחן אביר" : `${n} שולחנות אביר`;
   const [one, many] = tableShapeWords(tables[0]?.type ?? "");
   if (n === 1) return one ? `שולחן ${one}` : "שולחן";
   return many ? `${n} שולחנות ${many}` : `${n} שולחנות`;
@@ -243,7 +245,7 @@ function roomSections(doc: DesignDocumentContent, opts: SectionOptions, chairs: 
   // rectangular table carrying the same centrepiece are two different things to a client. Split by
   // the shape WORD, not the catalog row — a 240 and a 480 rectangle are both "מלבניים" to a couple.
   const dressed = new Set<string>();
-  for (const kit of tableKits(doc)) {
+  for (const kit of tableKits(doc, opts.ctx?.vesselOf)) {
     const byShape = new Map<string, NumberedUnit[]>();
     for (const u of kit.units) {
       const members = u.tableIds.map((id) => tableById.get(id)).filter((t): t is DesignTable => !!t);

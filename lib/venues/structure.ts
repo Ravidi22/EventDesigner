@@ -12,6 +12,7 @@
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import type { ElementStyle } from "@/lib/element-style";
 import type { ArcSpec, MapShape, Product, RingSpec } from "@/lib/catalog/types";
+import { canHollow } from "@/lib/catalog/types";
 import { footprintBounds, resolveFootprint, shapeFootprint, uShapeBandOf, type Footprint } from "@/lib/studio/footprint";
 import {
   absoluteControlPoints,
@@ -742,10 +743,20 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
   const stated = product.appearance?.shape ?? (product.dimensions.diameterMm ? "circle" : "rect");
   // A feature holds ONE outline, so an item made of several shapes comes across as its base shape
   // alone — the parts (MapAppearance.parts) are the catalog's, not the property's.
-  const base = resolveFootprint({ ...product, appearance: product.appearance && { ...product.appearance, parts: undefined } });
+  const drawn = resolveFootprint({ ...product, appearance: product.appearance && { ...product.appearance, parts: undefined } });
+  // A feature has no hollow spec of its own. A hollow item is ONE outline for almost every spec — a
+  // keyhole, or a band open on one side — and that outline comes across baked, like the arc's
+  // below. A band opened in two places is several outlines, which no single feature outline can
+  // say: it comes across as its outer shape, solid — where the thing stands, which is what the
+  // property's plan has to know about it.
+  const hollow = !!product.appearance?.hollow && canHollow(stated);
+  const base =
+    drawn.kind === "multi"
+      ? resolveFootprint({ ...product, appearance: product.appearance && { ...product.appearance, parts: undefined, hollow: undefined } })
+      : drawn;
   // An arc is sized by its circle and a feature by its box, so it comes across as the outline it
   // resolves to: a drawn shape, which the feature then scales to its two numbers like any other.
-  const baked = stated === "arc" && base.kind === "custom";
+  const baked = (stated === "arc" || hollow) && base.kind === "custom";
   const shape = baked ? "custom" : stated;
   const b = footprintBounds(base);
   const outline = baked ? base.outline : shape === "custom" ? product.appearance?.outline : undefined;
@@ -996,6 +1007,21 @@ if (isMain(import.meta.url)) {
   const roundBar = newFeatureFromProduct("bar", { ...uBar, id: "p-round", dimensions: { diameterMm: 1500, heightMm: 1100 }, appearance: undefined }, { x: 0, y: 0 });
   assert(roundBar.shape === "circle" && roundBar.widthMm === 1500 && roundBar.depthMm === 1500, "a round bar is as wide as it is across");
   assert(featureFootprint(roundBar).kind === "circle", "…and draws as a circle of that width");
+
+  // A row drawn hollow comes across as the outline it resolves to — one keyhole, baked like the
+  // arc — and a band opened into two pieces as its outer shape, solid: a feature is one outline.
+  {
+    const ringBar = newFeatureFromProduct("bar", { ...uBar, id: "p-ring", appearance: { shape: "rect", content: "none", hollow: { bandMm: 600 } } }, { x: 0, y: 0 });
+    assert(ringBar.shape === "custom" && (ringBar.outline?.length ?? 0) > 4, "a hollow bar lands on the plan as its band, baked into an outline");
+    assert(ringBar.widthMm === 3600 && ringBar.depthMm === 1800, "…at the row's own box");
+    const ringArea = (f: Footprint) => {
+      const o = f.kind === "custom" ? f.outline : [];
+      return Math.abs(o.reduce((s, p, i) => s + p.x * o[(i + 1) % o.length].y - o[(i + 1) % o.length].x * p.y, 0)) / 2;
+    };
+    assert(Math.abs(ringArea(featureFootprint(ringBar)) - (3600 * 1800 - 2400 * 600)) < 1, "…the middle left open on the hall plan too");
+    const twoBars = newFeatureFromProduct("bar", { ...uBar, id: "p-two", appearance: { shape: "rect", content: "none", hollow: { bandMm: 600, openSides: [1, 3] } } }, { x: 0, y: 0 });
+    assert(twoBars.shape === "rect" && !twoBars.outline && twoBars.widthMm === 3600 && twoBars.depthMm === 1800, "a band opened in two comes across as its outer shape");
+  }
 
   // A feature saved before any of this drew a plain box, and still does.
   assert(

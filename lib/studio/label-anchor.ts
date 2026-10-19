@@ -65,6 +65,11 @@ interface Box {
   h: number;
 }
 
+/** How deep, as a share of the deepest, still counts as "that deep" (see pole). */
+const DEPTH_SHARE = 0.85;
+/** How far above the centroid the label's target sits, as a share of the shape's height (see pole). */
+const TIE_LIFT = 0.02;
+
 export function pole(ring: Point[]): Point {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of ring) {
@@ -81,9 +86,20 @@ export function pole(ring: Point[]): Point {
   const slack = Math.max(0.5, span / 400);
   const deep = deepest(ring, box, slack);
   const c = polygonCentroid(ring);
-  const minDepth = deep.d - slack;
-  const near = nearestAsDeep(ring, box, c, minDepth, deep, Math.max(0.1, span / 4000));
-  return polish(ring, c, minDepth, near, span);
+  // "That deep" within a share of the depth, not only within the search's slack: the CORNER of a
+  // band runs deeper than its runs (the circle in it touches both outer sides and the inner corner —
+  // 44cm against 37.5 in a 75cm ח), so a strict depth pulled the number of a ח, or of a ring of
+  // tables, into one corner of a shape that is symmetric about its middle. Within 15% the runs count
+  // as deep too, and the centroid picks among them: the middle of the closed side, the top run of a
+  // ring. A shape with one clear deepest region (an L's elbow, an arc's apex) is unchanged.
+  const minDepth = Math.min(deep.d - slack, deep.d * DEPTH_SHARE);
+  // Nearest a point a hair ABOVE the centroid: on a ring that is round, hexagonal or triangular every
+  // point of its band is equally near the centroid itself, and the label landed wherever the search
+  // happened to stop. Lifted, the tie breaks toward the top of the shape — where a reader looks for a
+  // table's number — and a shape with one nearest stretch moves by nothing anyone can see.
+  const target = { x: c.x, y: c.y - box.h * TIE_LIFT };
+  const near = nearestAsDeep(ring, box, target, minDepth, deep, Math.max(0.1, span / 4000));
+  return polish(ring, target, minDepth, near, span);
 }
 
 /** The last few millimetres. `nearestAsDeep` is exact to its precision in DISTANCE, and at the apex

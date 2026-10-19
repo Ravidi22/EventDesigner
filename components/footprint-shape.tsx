@@ -4,14 +4,17 @@ import type { ElementStyle } from "@/lib/element-style";
 import { chairBlockOf, resolve } from "@/lib/studio/catalog-resolver";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { customShapeBounds, footprintBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
-import { blockFrame, type BlockFrame } from "@/lib/design-document/block";
-import { dressingLayout, fromTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
-import { outlinePathD } from "@/lib/studio/geometry";
+import { blockFrame, blockLabelPoint, blockOutline, blockSpine, type BlockFrame } from "@/lib/design-document/block";
+import { autoLayout, dressingLayout, fromTableFrame, toTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
+import { footprintPolygons } from "@/lib/studio/proximity";
+import { pointInPolygon } from "@/lib/venues/faces";
+import { outlinePathD, outlineStrokeD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { footprintSpine } from "@/lib/studio/spine";
 import { isRunner } from "@/lib/catalog/categories";
 import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
 import { climbKindOf } from "@/lib/studio/climb-item";
+import { catalogVersion } from "@/lib/catalog/storage";
 
 // The one place a catalog footprint turns into SVG. Three surfaces draw the same shapes — the
 // studio canvas, the drag image that leaves the rail, and the placement map the crew is handed on
@@ -22,6 +25,21 @@ import { climbKindOf } from "@/lib/studio/climb-item";
 // wherever it is used.
 
 type ShapeProps = Omit<React.SVGProps<SVGPathElement>, "d" | "ref">;
+
+/** One closed outline: filled whole, its LINE drawn without seams (outlineStrokeD) — a closed band's
+ *  two caps lie on top of each other, and stroked they drew a line across a band whose entrance is
+ *  0. Anything with no seam is the one path it always was. */
+export function OutlinePath({ outline, edgeCurves, ...props }: { outline: Point[]; edgeCurves?: Parameters<typeof outlinePathD>[1] } & ShapeProps) {
+  const d = outlinePathD(outline, edgeCurves);
+  const line = props.stroke === "none" ? null : outlineStrokeD(outline, edgeCurves);
+  if (!line) return <path d={d} {...props} />;
+  return (
+    <>
+      <path d={d} {...props} stroke="none" />
+      <path d={line} {...props} fill="none" />
+    </>
+  );
+}
 
 /** The dash pattern for anything overhead, in world millimetres — 12cm on, 9cm off, which reads as
  *  a dashed line from a whole-hall zoom down to one table. The architectural convention for
@@ -62,7 +80,7 @@ export function FootprintShape({
     return (
       <g>
         {footprint.parts.map((p, i) => (
-          <path key={i} d={outlinePathD(p.outline, p.edgeCurves)} {...props} />
+          <OutlinePath key={i} outline={p.outline} edgeCurves={p.edgeCurves} {...props} />
         ))}
       </g>
     );
@@ -72,7 +90,7 @@ export function FootprintShape({
     // so a shape with one side bowed out stands on its visual centre, not its corners'.
     const b = customShapeBounds(footprint.outline, footprint.edgeCurves);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
-    return <path d={outlinePathD(centered, footprint.edgeCurves)} {...props} />;
+    return <OutlinePath outline={centered} edgeCurves={footprint.edgeCurves} {...props} />;
   }
   const { widthMm: w, depthMm: d } = footprint;
   // Square corners. A rect footprint is a MEASUREMENT — a stage is a run of 100×200 modules, a
@@ -128,6 +146,18 @@ export function tableLabelPoint(table: DesignTable): Point {
   return { x: table.position.x + x * cos - a.y * sin, y: table.position.y + x * sin + a.y * cos };
 }
 
+/** Where a BLOCK's one number is written, in plan millimetres: the visual centre of the one outline
+ *  its tables make together (lib/design-document/block.ts blockLabelPoint — mid-run on top of a ח of
+ *  three, on a table rather than on the kiss of two rounds), carried by the block's turn. The box
+ *  centre it used to be is in the air between the legs of every odd-shaped block. */
+export function blockLabelRoom(block: BlockFrame): Point {
+  const a = blockLabelPoint(block);
+  const rad = (block.rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: block.centre.x + a.x * cos - a.y * sin, y: block.centre.y + a.x * sin + a.y * cos };
+}
+
 /** A table's own extent in its frame, for laying items out on it (lib/design-document/dressing.ts). */
 export function tableBox(table: DesignTable): TableBox {
   const f = tableFootprint(table);
@@ -136,6 +166,32 @@ export function tableBox(table: DesignTable): TableBox {
   // The line its items are laid along (lib/studio/spine.ts) — only a SHAPED table needs one; a
   // rectangle's or a round's is its axis, which the layout already assumes.
   return { widthMm: b.w, depthMm: b.h, round, ...(f.kind === "custom" || f.kind === "multi" ? { spine: footprintSpine(f) } : {}) };
+}
+
+/** Whether a room point is on a table — tested against the outline the table is DRAWN with
+ *  (tableFootprint: its stretched size, its catalog shape), in its own frame (turn and flip). The old
+ *  test (lib/studio/geometry.ts pointInTable) read the stored width/depth, so a table stretched on
+ *  the plan was hit at its catalog size and a centrepiece let go on its far end fell through to the
+ *  floor — or onto the table beside it — and a shaped table was hit over its whole box. */
+export function pointOnTable(t: DesignTable, p: Point): boolean {
+  const f = tableFootprint(t);
+  const local = toTableFrame(t, p);
+  switch (f.kind) {
+    case "circle":
+      return local.x * local.x + local.y * local.y <= (f.diameterMm / 2) ** 2;
+    case "ellipse":
+      return f.widthMm > 0 && f.depthMm > 0 && (local.x / (f.widthMm / 2)) ** 2 + (local.y / (f.depthMm / 2)) ** 2 <= 1;
+    case "rect":
+      return Math.abs(local.x) <= f.widthMm / 2 && Math.abs(local.y) <= f.depthMm / 2;
+    default:
+      return footprintPolygons(f, { x: 0, y: 0 }).some((poly) => pointInPolygon(local, poly));
+  }
+}
+
+/** The table under a room point, the last drawn winning (as the old tableAt did). */
+export function tableUnder(tables: readonly DesignTable[], p: Point): DesignTable | undefined {
+  for (let i = tables.length - 1; i >= 0; i--) if (pointOnTable(tables[i], p)) return tables[i];
+  return undefined;
 }
 
 /** An item's box on a table — its footprint at its scale. */
@@ -164,9 +220,62 @@ export interface DressingSpot {
   footprint?: Footprint;
 }
 
+/** The BLOCK a table's dressing is laid out in — every table of its group, and what stands on each. */
+export interface DressBlock {
+  members: readonly DesignTable[];
+  chipsOf: (tableId: string) => readonly Placement[];
+}
+
+/** The block `t` belongs to among `tables`, for dressingSpots — undefined for a lone table. */
+export function dressBlockOf(tables: readonly DesignTable[], t: DesignTable, chipsOf: (tableId: string) => readonly Placement[]): DressBlock | undefined {
+  if (!t.groupId) return undefined;
+  const members = tables.filter((x) => x.groupId === t.groupId);
+  return members.length > 1 ? { members, chipsOf } : undefined;
+}
+
+// A block laid out automatically is laid out as ONE table: its items in a run along the whole head
+// table (its spine, lib/design-document/block.ts), not each half's in a run along that half — three
+// candlesticks dropped on one half of a 4.8m head table crowded that half and left the other bare.
+// Each item still belongs to the table it was put on (what it is packed, quoted and dragged as);
+// only where it is DRAWN comes from the block. Kept per block by its shape and items, since every
+// table of it asks for the same answer.
+const blockLayoutCache = new Map<string, Map<string, Point>>();
+const NO_BLOCK_LAYOUT = new Map<string, Point>();
+function blockLayout(block: DressBlock): Map<string, Point> | null {
+  const items = block.members.flatMap((m) => block.chipsOf(m.id).filter((p) => !isRunnerChip(p)));
+  const key = JSON.stringify([
+    catalogVersion,
+    block.members.map((m) => [m.id, m.position.x, m.position.y, m.rotation ?? 0, m.mirrored ? 1 : 0, m.variantId, m.sizeMm?.widthMm, m.sizeMm?.depthMm, m.widthMm, m.depthMm, m.diameterMm]),
+    items.map((p) => [p.id, p.variantId, p.scale, p.sizeMm?.widthMm, p.sizeMm?.depthMm]),
+  ]);
+  const hit = blockLayoutCache.get(key);
+  if (hit) return hit === NO_BLOCK_LAYOUT ? null : hit;
+  const blk = tableBlock(block.members);
+  // Tables that make no ONE outline (two rounds that only kiss, a hollow square, tables apart) are
+  // laid out each on its own: run as one, a centrepiece stood on the point where two rims touch.
+  if (!blk || !blockOutline(blk)) {
+    blockLayoutCache.set(key, NO_BLOCK_LAYOUT);
+    return null;
+  }
+  const box: TableBox = { widthMm: blk.widthMm, depthMm: blk.depthMm, round: false, spine: blockSpine(blk) };
+  const frame = { position: blk.centre, rotation: blk.rotation, mirrored: false };
+  const out = new Map<string, Point>();
+  for (const [id, local] of autoLayout(box, items.map(chipBox))) out.set(id, fromTableFrame(frame, local));
+  if (blockLayoutCache.size > 200) blockLayoutCache.clear();
+  blockLayoutCache.set(key, out);
+  return out;
+}
+const isRunnerChip = (p: Placement) => {
+  const product = resolve(p.variantId)?.product;
+  return !!product && !p.stage && isRunner(product);
+};
+
 export function dressingSpots(
   table: DesignTable,
-  chips: Placement[],
+  chips: readonly Placement[],
+  /** The block it stands in (dressBlockOf): laid out by hand, every table keeps its own places; laid
+   *  out automatically, the block is one table and its items run along all of it. */
+  block?: DressBlock,
 ): DressingSpot[] {
   // A RUNNER (isRunner) is not one of the things set out on the table — it is what they are set on.
   // It lies down the middle along the table's long side, out of the layout the others share, and it
@@ -179,6 +288,7 @@ export function dressingSpots(
   };
   const runners = chips.filter((p) => runnerOf(p));
   const items = chips.filter((p) => !runnerOf(p));
+  const asOne = block && block.members.length > 1 && !block.members.some((m) => m.arranged) ? blockLayout(block) : null;
   const layout = dressingLayout(table.arranged, box, items.map((p) => ({ ...chipBox(p), position: p.position })));
   const laid = runners.map((p) => {
     const b = footprintBounds(placementFootprint(p));
@@ -204,8 +314,9 @@ export function dressingSpots(
   return [
     ...laid,
     ...items.map((p) => {
-      const local = layout.get(p.id) ?? { x: 0, y: 0 };
-      return { p, local, at: fromTableFrame(table, local), rotation: (table.rotation ?? 0) + (p.rotation ?? 0), box: chipBox(p), runner: false };
+      const room = asOne?.get(p.id);
+      const local = room ? toTableFrame(table, room) : (layout.get(p.id) ?? { x: 0, y: 0 });
+      return { p, local, at: room ?? fromTableFrame(table, local), rotation: (table.rotation ?? 0) + (p.rotation ?? 0), box: chipBox(p), runner: false };
     }),
   ];
 }

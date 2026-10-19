@@ -11,7 +11,8 @@ import { resolve } from "@/lib/studio/catalog-resolver";
 import { anchorOffset, blockTarget, centreOver, hangTarget, targetUnder, type HangTarget } from "@/lib/studio/hang";
 import { footprintPolygons, insidePolys } from "@/lib/studio/proximity";
 import { featureFootprint, type VenueStructure } from "@/lib/venues/structure";
-import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
+import { placementFootprint, tableBlock, tableFootprint } from "@/components/footprint-shape";
+import { fromLocalFrame } from "@/lib/studio/geometry";
 
 /** `structure` is the ARRANGED one (lib/design-document/features.ts) — the bar where this event put it. */
 export function hangTargetsOf(doc: DesignDocumentContent, structure: VenueStructure): HangTarget[] {
@@ -22,7 +23,17 @@ export function hangTargetsOf(doc: DesignDocumentContent, structure: VenueStruct
   for (const g of doc.groups ?? []) {
     const members = doc.tables.filter((t) => t.groupId === g.id);
     if (members.length === 0) continue; // a group of stages is not a table; its stages are placements below
-    out.push(blockTarget(`group:${g.id}`, members.map((t) => ({ f: tableFootprint(t), at: t.position, rotationDeg: t.rotation ?? 0 }))));
+    // The block's OWN box — in its frame (block.ts: its first member's facing, every member through
+    // its turn and mirror), round the seams — and its middle: the same frame and middle the drag's
+    // axis pull and the copies over other tables use. A box squared to the room instead stood off a
+    // turned block, claimed floor beside it and put its middle somewhere else.
+    const blk = tableBlock(members);
+    if (!blk) {
+      out.push(blockTarget(`group:${g.id}`, members.map((t) => ({ f: tableFootprint(t), at: t.position, rotationDeg: t.rotation ?? 0 }))));
+      continue;
+    }
+    const corner = (sx: number, sy: number) => fromLocalFrame({ x: (sx * blk.widthMm) / 2, y: (sy * blk.depthMm) / 2 }, blk.centre, blk.rotation);
+    out.push({ key: `group:${g.id}`, polys: [[corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)]], centre: blk.centre });
   }
   for (const p of doc.placements) {
     // Only what stands on the floor with a shape of its own: not a ceiling item, not anything on a

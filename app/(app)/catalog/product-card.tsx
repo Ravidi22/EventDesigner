@@ -8,6 +8,7 @@ import { formatDimensions, formatPrice } from "@/lib/catalog/format";
 import { flowerSummary } from "@/lib/catalog/flowers";
 import { Menu, type MenuItem } from "@/components/menu";
 import { ProductImage } from "./product-image";
+import { compositeLine, compositeTotal } from "./composite-summary";
 
 // The whole card is one click target (opens the drawer), but the actions need their own click
 // handlers — nesting a <button> in a <button> isn't valid HTML, so the "whole card clickable"
@@ -38,7 +39,12 @@ export function ProductCard({
   const category = CATEGORY_BY_ID[product.category];
   const tags = product.styleTags;
   // An arrangement's spec, as one line — the thing that tells two "סידור נמוך" cards apart.
-  const flowers = flowerSummary(product.flowers);
+  // …and a composite's, what it is made of — its parts are what tell two head tables apart.
+  const flowers = product.composition ? compositeLine(product.composition) : flowerSummary(product.flowers);
+  // A composite has no price of its own: the card shows what its parts add up to, and says so.
+  const parts = product.composition ? compositeTotal(product.composition) : null;
+  const price = parts ? (parts.total > 0 ? parts.total : undefined) : product.unitPrice;
+  const priceNote = parts ? (parts.partial && parts.total > 0 ? "לפי הרכיבים, לפחות" : "לפי הרכיבים") : product.unitPrice != null ? "ליחידה" : null;
   // The open panel hangs past the bottom of the card, and the next card in the grid is later in the
   // DOM — so without lifting this one out of the flow the menu is painted underneath its neighbour.
   // (The card also becomes its own stacking context while hovered, because of the -translate-y, so
@@ -108,8 +114,8 @@ export function ProductCard({
         </div>
 
         <span className="pointer-events-none relative flex shrink-0 items-baseline gap-1">
-          <span className="nums text-lg font-bold text-ink">{formatPrice(product.unitPrice)}</span>
-          {product.unitPrice != null && <span className="text-xs text-muted">ליחידה</span>}
+          <span className="nums text-lg font-bold text-ink">{formatPrice(price)}</span>
+          {priceNote && <span className="text-xs text-muted">{priceNote}</span>}
         </span>
 
         {menu}
@@ -163,11 +169,16 @@ export function ProductCard({
 
         <div className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
           <span>{category?.label}</span>
-          <span className="text-border" aria-hidden="true">·</span>
-          <span className="inline-flex items-center gap-1">
-            <Layers className="h-3.5 w-3.5" strokeWidth={2} />
-            {LAYER_LABEL[product.layer]}
-          </span>
+          {/* A composite stands on no one layer — its parts each have their own. */}
+          {!product.composition && (
+            <>
+              <span className="text-border" aria-hidden="true">·</span>
+              <span className="inline-flex items-center gap-1">
+                <Layers className="h-3.5 w-3.5" strokeWidth={2} />
+                {LAYER_LABEL[product.layer]}
+              </span>
+            </>
+          )}
         </div>
 
         {tags.length > 0 && (
@@ -182,8 +193,8 @@ export function ProductCard({
         )}
 
         <div className="-mx-2 mt-3 flex items-baseline justify-between gap-1 border-t border-border px-4 pb-1 pt-2.5">
-          {product.unitPrice != null && <span className="text-xs text-muted">מחיר ליחידה</span>}
-          <span className="nums text-lg font-bold text-ink">{formatPrice(product.unitPrice)}</span>
+          {priceNote && <span className="text-xs text-muted">{parts ? priceNote : "מחיר ליחידה"}</span>}
+          <span className="nums text-lg font-bold text-ink">{formatPrice(price)}</span>
         </div>
       </div>
     </div>

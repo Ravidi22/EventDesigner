@@ -2,27 +2,39 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BringToFront, Check, Donut, Move, Paintbrush, PenLine, Rainbow, Ruler, SendToBack, Shapes, Trash2, X } from "lucide-react";
-import type { ArcSpec, MapAppearance, MapShape, Product, RingSpec, ShapePart } from "@/lib/catalog/types";
-import { ARC_SWEEP, MAP_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, usesDiameter } from "@/lib/catalog/types";
+import type { ArcSpec, HollowSpec, MapAppearance, MapShape, Product, RingSpec, ShapePart } from "@/lib/catalog/types";
+import { ARC_SWEEP, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import {
   arcSpecOf,
+  buildHollow,
   customShapeBounds,
+  defaultHollowBand,
   footprintBounds,
   footprintOutlines,
+  hollowGapSide,
+  hollowOuter,
+  hollowSideNames,
+  pieceOf,
+  piecesFootprint,
   resolveContent,
   resolveFootprint,
   placedPartOutline,
   ringSpecOf,
   roundSizeMm,
+  sampledBounds,
   shapeFootprint,
+  shapePieces,
   uShapeBandOf,
   type BuiltOutline,
+  type Footprint,
   type RingShape,
 } from "@/lib/studio/footprint";
+import { Select } from "@/components/select";
+import { TagToggle } from "@/components/tag-toggle";
 import { seatSides } from "@/lib/studio/seating";
-import { FootprintShape } from "@/components/footprint-shape";
+import { FootprintShape, OutlinePath } from "@/components/footprint-shape";
 import { SeatChairs, SeatSidesPicker } from "@/components/seat-sides-picker";
 import { seatsAround } from "@/lib/studio/seating";
 import { AddElementFlyout, type FlyoutItem } from "@/components/add-element-flyout";
@@ -49,7 +61,20 @@ import { ItemSurface } from "@/components/surface-fill";
 import { hasSurface, type Surface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
-import { CHAIR_STYLES, CHAIR_STYLE_LABEL, categoryHasSymbol, chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import {
+  CANDLE_STYLES,
+  CANDLE_STYLE_HINT,
+  CANDLE_STYLE_LABEL,
+  CHAIR_STYLES,
+  CHAIR_STYLE_LABEL,
+  CHUPPAH_STYLES,
+  CHUPPAH_STYLE_LABEL,
+  categoryHasSymbol,
+  chairStyleOf,
+  drawStyleOf,
+  symbolCount,
+  symbolOf,
+} from "@/lib/catalog/symbols";
 import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { FlowerDrawing } from "@/components/flower-symbol";
@@ -246,6 +271,125 @@ function CounterFields({ idPrefix, widthMm, depthMm, ring, onChange }: { idPrefi
   );
 }
 
+const FILL_OPTIONS = [
+  ["solid", "מלא"],
+  ["hollow", "חלול"],
+] as const;
+
+const GAP_ALONG = [
+  ["start", "התחלה"],
+  ["center", "מרכז"],
+  ["end", "סוף"],
+] as const;
+
+/** What the "מילוי" chip reads on a bar. */
+const hollowValue = (h: HollowSpec | undefined) => (h ? `חלול · ${mmToCm(h.bandMm)} ס״מ` : "מלא");
+
+/** A hollow spec carried to a DIFFERENT outline (another shape picked, or a drawing found where it
+ *  was left): the band and the entrance's width and place mean the same on any shape, but open sides
+ *  and the entrance's side are edge numbers of the outline they were chosen on — on another one they
+ *  would open some other side, so they go. Nothing at all for a shape that cannot be hollow. */
+const hollowAcross = (h: HollowSpec | undefined, next: MapShape): HollowSpec | undefined =>
+  h && canHollow(next) ? { bandMm: h.bandMm, ...(h.gapMm ? { gapMm: h.gapMm } : {}), ...(h.gapAt ? { gapAt: h.gapAt } : {}) } : undefined;
+
+/** Solid or hollow (HollowSpec), and how hollow: the band's depth, the sides left open, and — on a
+ *  band that runs all the way round — an entrance cut through it. Shared by the base shape and a
+ *  part. `outer` is the shape's own outline drawn SOLID, as it stands on the canvas: its edges are
+ *  the sides, named by the way they face there. */
+function HollowFields({
+  idPrefix,
+  outer,
+  hollow,
+  defaultBand,
+  onChange,
+}: {
+  idPrefix: string;
+  outer: BuiltOutline;
+  hollow?: HollowSpec;
+  defaultBand: number;
+  onChange: (hollow: HollowSpec | undefined) => void;
+}) {
+  const names = hollowSideNames(outer);
+  // Only sides this outline has — a spec from before a corner was taken away may name one that is gone.
+  const open = (hollow?.openSides ?? []).filter((i) => i < names.length);
+  const gap = hollow?.gapMm ?? 0;
+  return (
+    <div className="space-y-2">
+      <Segmented
+        label="מילוי"
+        value={hollow ? "hollow" : "solid"}
+        options={FILL_OPTIONS}
+        onChange={(v) => onChange(v === "hollow" ? (hollow ?? { bandMm: defaultBand }) : undefined)}
+      />
+      {hollow && (
+        <>
+          <PanelRow label="עומק הרצועה (ס״מ)" htmlFor={`${idPrefix}-band`}>
+            <NumberField
+              id={`${idPrefix}-band`}
+              decimals={0}
+              min={1}
+              commitOnBlur
+              value={mmToCm(hollow.bandMm)}
+              onChange={(v) => {
+                if (v > 0) onChange({ ...hollow, bandMm: Math.round(v * 10) });
+              }}
+              className="w-20"
+            />
+          </PanelRow>
+          <PanelRow label="צדדים פתוחים" stack>
+            <div className="flex flex-wrap gap-1">
+              {names.map((name, i) => (
+                <TagToggle
+                  key={i}
+                  active={open.includes(i)}
+                  onClick={() => {
+                    const next = open.includes(i) ? open.filter((x) => x !== i) : [...open, i].sort((a, b) => a - b);
+                    onChange({ ...hollow, openSides: next.length ? next : undefined });
+                  }}
+                >
+                  {name}
+                </TagToggle>
+              ))}
+            </div>
+          </PanelRow>
+          {/* An entrance only makes sense in a band that runs all the way round — with a side open,
+              that side IS the way in. */}
+          {open.length === 0 && (
+            <>
+              <PanelRow label="כניסה (ס״מ, 0 = סגורה)" htmlFor={`${idPrefix}-gap`}>
+                <NumberField
+                  id={`${idPrefix}-gap`}
+                  decimals={0}
+                  min={0}
+                  commitOnBlur
+                  value={mmToCm(gap)}
+                  onChange={(v) => onChange({ ...hollow, gapMm: v > 0 ? Math.round(v * 10) : undefined })}
+                  className="w-20"
+                />
+              </PanelRow>
+              {gap > 0 && (
+                <>
+                  <PanelRow label="בצד" stack>
+                    <Select
+                      value={String(hollowGapSide(outer, hollow))}
+                      onChange={(v) => onChange({ ...hollow, gapSide: Number(v) })}
+                      options={names.map((label, i) => ({ value: String(i), label }))}
+                      aria-label="הצד שבו הכניסה"
+                      className="w-full"
+                    />
+                  </PanelRow>
+                  <Segmented label="מיקום הכניסה בצד" value={hollow.gapAt ?? "center"} options={GAP_ALONG} onChange={(gapAt) => onChange({ ...hollow, gapAt })} />
+                </>
+              )}
+            </>
+          )}
+          <Note>צד פתוח — הרצועה מגיעה עד קו הצד ונעצרת בו, כמו ח׳. כניסה — פתח ברצועה סגורה.</Note>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Added shapes, placed like the hall plan's elements ─────────────────────────────────────────
 //
 // A shape beside the base one is added exactly the way /halls adds a bar or a pool: pick a card in
@@ -268,7 +412,9 @@ function ShapeCard({ shape }: { shape: Exclude<MapShape, "custom"> }) {
   );
 }
 
-const SHAPE_ITEMS: FlyoutItem[] = MAP_SHAPES.filter((s): s is Exclude<MapShape, "custom"> => s !== "custom").map((s) => ({
+// The picker's shapes (PICKER_SHAPES): a קשת חלולה, a צורת ח and an אליפסה חלולה are a half circle,
+// a rectangle and a capsule made hollow on the new part's bar.
+const SHAPE_ITEMS: FlyoutItem[] = PICKER_SHAPES.filter((s): s is Exclude<MapShape, "custom"> => s !== "custom").map((s) => ({
   id: s,
   label: SHAPE_LABEL[s],
   section: "shapes",
@@ -378,11 +524,12 @@ const shifted = (p: ShapePart, dx: number, dy: number): ShapePart => ({ ...p, x:
 
 /** The base shape's picker: every shape as its own picture, plus "draw it yourself". A grid of cards
  *  rather than a Select — the bar sits on the bottom edge of the canvas, and a list that opens
- *  downward from there opens off it. */
+ *  downward from there opens off it. The three hollow shapes a solid one now draws (PICKER_SHAPES)
+ *  show a card only on a row that already is one, so the grid still says what it is. */
 function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShape) => void }) {
   return (
     <div className="grid grid-cols-4 gap-1.5" role="group" aria-label="צורה">
-      {MAP_SHAPES.map((s) => (
+      {MAP_SHAPES.filter((s) => PICKER_SHAPES.includes(s) || s === value).map((s) => (
         <button
           key={s}
           type="button"
@@ -503,6 +650,21 @@ function PartBar({
       {part.shape === "u-shape" && (
         <Popover label="ח" icon={Donut} value={`דלפק ${cm(uShapeBandOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring))}`} panelClassName="w-72">
           <CounterFields idPrefix={id} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
+        </Popover>
+      )}
+      {canHollow(part.shape) && (
+        <Popover label="מילוי" icon={Donut} value={hollowValue(part.hollow)} panelClassName="w-80">
+          {/* The part's sides named as it stands on the canvas, turn included. */}
+          <HollowFields
+            idPrefix={`${id}-hollow`}
+            outer={placedPartOutline(part)}
+            hollow={part.hollow}
+            defaultBand={(() => {
+              const b = sampledBounds([hollowOuter(part.shape, part)]);
+              return defaultHollowBand(b.w, b.h);
+            })()}
+            onChange={(hollow) => onChange({ hollow })}
+          />
         </Popover>
       )}
       <BarButton icon={PenLine} label={drawn ? "עריכת הקווים" : "עיצוב חופשי — עריכת הקווים ביד"} onClick={onRedraw} />
@@ -670,12 +832,18 @@ export function AppearanceModal({
       // it is. (Rebuilding it from the item's numbers is how a quarter circle doubled here: its one
       // number is a diameter, and the rebuild read it as the quarter's width, which is a radius.) A
       // drawing left behind by an earlier switch away from מותאם is found where it was left.
+      // A hollow shape stays hollow: the outline handed over is its OUTSIDE (derived is drawn solid),
+      // edge for edge, so its open sides are still the same sides — unless an earlier drawing stands
+      // in for it, whose edges are other ones.
+      const hollow = draft.appearance?.hollow;
       if (outline.length >= 3) {
         // the earlier drawing stands
+        setAppearance({ shape: "custom", blockedSides: undefined, hollow: hollowAcross(hollow, "custom") });
+        return;
       } else if (derived) {
         ed.setAll({ mode: "edit", outline: derived.outline, edgeCurves: derived.edgeCurves, lockedEdges: derived.outline.map(() => false) });
       } else insertPreset("rect");
-      setAppearance({ shape: "custom", blockedSides: undefined });
+      setAppearance({ shape: "custom", blockedSides: undefined, hollow: derived ? hollow : hollowAcross(hollow, "custom") });
       return;
     }
     // Leaving a custom outline: its bounding box is the size it was, so the number fields it is
@@ -705,8 +873,9 @@ export function AppearanceModal({
         // The outline is kept, not dropped — resolveFootprint reads it only for `custom`, so a
         // designer who switches away and back finds the drawing where they left it. Blocked sides
         // are NOT kept: they are indices into this shape's sides, and a different shape's second
-        // side is a different place altogether.
-        appearance: { content: contentOf(d), ...d.appearance, shape: next, blockedSides: undefined },
+        // side is a different place altogether. Neither are the open sides of a hollow spec, for
+        // the same reason; its band comes across, and none of it to a shape that cannot be hollow.
+        appearance: { content: contentOf(d), ...d.appearance, shape: next, blockedSides: undefined, hollow: next === shapeOf(d) ? d.appearance?.hollow : hollowAcross(d.appearance?.hollow, next) },
       };
       if (next === "arc" && seated) {
         next_.appearance = { ...next_.appearance!, blockedSides: arcCaps(next_) };
@@ -756,10 +925,12 @@ export function AppearanceModal({
 
   // ── Every shape is editable on the canvas ────────────────────────────────────────────────────
   // A derived shape is shown as the outline it resolves to (the base alone — the parts are their own
-  // layer). Nothing is stored for it while it stays derived: its numbers still drive it.
+  // layer). Nothing is stored for it while it stays derived: its numbers still drive it. Drawn SOLID
+  // — a hollow shape's outline is the outside of its band, and that is what is dragged and reshaped;
+  // the band is drawn inside it (`band` below).
   const derived = (() => {
     if (custom || stretch) return null;
-    const base = resolveFootprint({ ...draft, appearance: { shape, content, ...draft.appearance, parts: undefined } });
+    const base = resolveFootprint({ ...draft, appearance: { shape, content, ...draft.appearance, parts: undefined, hollow: undefined } });
     const o = footprintOutlines(base)[0];
     return o ? { outline: o.outline, edgeCurves: padCurves(o.edgeCurves, o.outline.length) } : null;
   })();
@@ -773,6 +944,27 @@ export function AppearanceModal({
   const storedParts = (list: readonly ShapePart[]): ShapePart[] | undefined => (list.length ? list.map((p) => shifted(p, -anchor.x, -anchor.y)) : undefined);
   const withStoredParts = (p: Product): Product =>
     p.appearance?.parts?.length ? { ...p, appearance: { ...p.appearance, parts: storedParts(p.appearance.parts) } } : p;
+
+  // ── Hollow: the band inside the outline ───────────────────────────────────────────────────────
+  // The canvas edits the shape's OUTSIDE; the band (buildHollow) is cut inside it here, in the
+  // canvas's own coordinates, and drawn under the outline the editor strokes — so a corner dragged
+  // is the band re-cut in the same breath, and a hand-drawn outline is hollow the moment it closes.
+  const hollowSpec = canHollow(shape) && !stretch ? draft.appearance?.hollow : undefined;
+  const outerShown: BuiltOutline | null =
+    canvasOutline.length >= 3 && (derived || mode === "edit") ? { outline: canvasOutline, edgeCurves: canvasCurves } : null;
+  const band = hollowSpec && outerShown ? buildHollow(outerShown, hollowSpec) : null;
+  // Its sides are numbered, and a hollow edit can add, drop or join them: the blocked ones go.
+  const setHollow = (h: HollowSpec | undefined) => setAppearance({ hollow: h, blockedSides: undefined });
+  /** The base as the plan draws it — band or whole outline — and where its box's centre sits on the
+   *  canvas: what its surface fills and its name is written in. */
+  const baseDrawn: { footprint: Footprint; at: { x: number; y: number } } | null = !canvasBounds
+    ? null
+    : band
+      ? (() => {
+          const b = sampledBounds(band);
+          return { footprint: piecesFootprint(band), at: { x: b.cx, y: b.cy } };
+        })()
+      : { footprint: { kind: "custom", outline: canvasOutline, edgeCurves: canvasCurves }, at: { x: canvasBounds.cx, y: canvasBounds.cy } };
 
   /** Wrap an edit so that grabbing a DERIVED shape first turns it into a hand-drawn one — seeded
    *  with the outline the designer is looking at, then the edit applied to it. The seed replaces the
@@ -803,27 +995,49 @@ export function AppearanceModal({
   // blockedSides index the outline's sides; a corner added or removed renumbers them (lib/studio/
   // use-outline-editor.ts). Not while a derived shape is being freed — `free` has just dropped them.
   const reblock = (next: number[]) => setAppearance({ blockedSides: next.length ? next : undefined });
+  // A hollow outline's open sides and its entrance's side are side numbers too, and follow the same
+  // way — derived or not, since freeing a derived shape hands over the very outline they were chosen
+  // on (and keeps its hollow spec). A side split in two stays open on both halves; two sides joined
+  // into one are new geometry nobody opened, and an entrance on either goes back to the default side.
+  const hollowNow = draft.appearance?.hollow;
+  const rehollow = (open: (ix: number[]) => number[], side: (g: number) => number | undefined) => {
+    if (!hollowNow || (!hollowNow.openSides?.length && hollowNow.gapSide === undefined)) return;
+    const next = hollowNow.openSides?.length ? open(hollowNow.openSides) : [];
+    const gapSide = hollowNow.gapSide === undefined ? undefined : side(hollowNow.gapSide);
+    setAppearance({ hollow: { ...hollowNow, openSides: next.length ? next : undefined, gapSide } });
+  };
+  const sideAfterRemove = (g: number, k: number, n: number) => (n <= 3 ? g : g === k || g === (k - 1 + n) % n ? undefined : g < k ? g : g - 1);
   const insertVertexReblocking = (edgeIdx: number) => {
     ed.insertVertexOnWall(edgeIdx);
     if (!derived && blocked.length) reblock(sideIndicesAfterInsert(blocked, edgeIdx));
+    rehollow((ix) => sideIndicesAfterInsert(ix, edgeIdx), (g) => (g > edgeIdx ? g + 1 : g));
   };
   const removeVertexReblocking = (idx: number) => {
     ed.removeVertex(idx);
     if (!derived && blocked.length) reblock(sideIndicesAfterRemove(blocked, idx, canvasOutline.length));
+    rehollow((ix) => sideIndicesAfterRemove(ix, idx, canvasOutline.length), (g) => sideAfterRemove(g, idx, canvasOutline.length));
   };
   const removeSelectionReblocking = (refs: SelectedRef[]) => {
     ed.removeSelection(refs);
-    if (derived || !blocked.length) return;
     // Highest corner first, the way the editor takes them out, so each index is read against the
     // outline as it stands at that step.
-    let next = blocked;
-    let n = canvasOutline.length;
-    for (const k of refs.filter((r) => r.kind === "vertex").map((r) => Number(r.id)).sort((a, b) => b - a)) {
-      if (n <= 3) break;
-      next = sideIndicesAfterRemove(next, k, n);
-      n -= 1;
-    }
-    reblock(next);
+    const corners = refs.filter((r) => r.kind === "vertex").map((r) => Number(r.id)).sort((a, b) => b - a);
+    const walk = <T,>(start: T, step: (v: T, k: number, n: number) => T): T => {
+      let v = start;
+      let n = canvasOutline.length;
+      for (const k of corners) {
+        if (n <= 3) break;
+        v = step(v, k, n);
+        n -= 1;
+      }
+      return v;
+    };
+    rehollow(
+      (ix) => walk(ix, sideIndicesAfterRemove),
+      (g) => walk<number | undefined>(g, (v, k, n) => (v === undefined ? undefined : sideAfterRemove(v, k, n))),
+    );
+    if (derived || !blocked.length) return;
+    reblock(walk(blocked, sideIndicesAfterRemove));
   };
 
   // ── Parts on the canvas ─────────────────────────────────────────────────────────────────────
@@ -861,11 +1075,12 @@ export function AppearanceModal({
       ...(p.ring ? { ring: p.ring } : {}),
       rotationDeg: p.rotation || 0,
       // Solid, like the base shape — the feature layer's default dash says "built into the room".
-      // A shape with a surface of its own shows it (drawn under this one) through a clear fill.
+      // A shape with a surface of its own shows it (drawn under this one) through a clear fill, and
+      // so does a hollow one its band: the feature here is the shape's outside, solid.
       style: {
         ...draft.appearance?.style,
         dash: draft.appearance?.style?.dash ?? "solid",
-        ...(hasSurface(p) ? { fillOpacity: 0 } : {}),
+        ...(hasSurface(p) || (p.hollow && canHollow(p.shape)) ? { fillOpacity: 0 } : {}),
       },
     };
   });
@@ -912,7 +1127,13 @@ export function AppearanceModal({
       ring: undefined,
     };
     const old = parts.find((p) => p.id === drawingPart.id);
-    return old ? parts.map((p) => (p.id === old.id ? { ...old, ...drawn } : p)) : [...parts, { id: drawingPart.id, ...drawn }];
+    if (!old) return [...parts, { id: drawingPart.id, ...drawn }];
+    // A hollow part redrawn stays hollow — the redraw started from the outside of its band
+    // (placedPartOutline) — but its open sides are corner-numbered: with corners added or taken
+    // away they would open other sides, so only the band and the entrance come across.
+    const sameSides = old.hollow && placedPartOutline(old).outline.length === partEd.outline.length;
+    const hollow = old.hollow && !sameSides ? hollowAcross(old.hollow, "custom") : old.hollow;
+    return parts.map((p) => (p.id === old.id ? { ...old, ...drawn, hollow } : p));
   };
   const finishDrawingPart = () => {
     if (!drawingPart) return;
@@ -1027,21 +1248,22 @@ export function AppearanceModal({
   // Drawn as its category's picture (a candelabrum, a sofa) rather than outline + content?
   const previewSymbol = stretch ? null : symbolOf(preview, resolveFootprint(preview));
 
+  // Where the item's footprint is centred on this canvas. It is centred on the box of ALL its shapes;
+  // the base's own pieces — one outline, or a hollow base's several (BuiltOutline.of) — are drawn at
+  // `baseDrawn` here, which ties the one frame to the other.
+  const itemFootprint = !stretch && canvasBounds ? resolveFootprint(preview) : null;
+  const itemAt = (() => {
+    if (!itemFootprint || !baseDrawn) return null;
+    const pieces = footprintOutlines(itemFootprint);
+    const own = itemFootprint.kind === "multi" ? pieces.filter((p, i) => pieceOf(p, i) === 0) : pieces;
+    if (!own.length) return null;
+    const c = sampledBounds(own);
+    return { x: baseDrawn.at.x - c.cx, y: baseDrawn.at.y - c.cy };
+  })();
   // The chairs, drawn on the canvas itself (tables only) — the same ring the plan will draw, so a
   // blocked side is seen emptying where the designer is looking, not in a thumbnail off to the side.
-  // The item's footprint is centred on the box of ALL its shapes; its base piece tells us where that
-  // centre sits on this canvas.
-  const itemFootprint = !stretch && canvasBounds ? resolveFootprint(preview) : null;
-  const chairs = (() => {
-    if (!seated || !itemFootprint || seatCount <= 0) return null;
-    const basePiece = footprintOutlines(itemFootprint)[0];
-    if (!basePiece) return null;
-    const c = customShapeBounds(basePiece.outline, basePiece.edgeCurves);
-    return {
-      at: { x: anchor.x - c.cx, y: anchor.y - c.cy },
-      seats: seatsAround(itemFootprint, seatCount, undefined, blocked),
-    };
-  })();
+  const chairs =
+    seated && itemFootprint && itemAt && seatCount > 0 ? { at: itemAt, seats: seatsAround(itemFootprint, seatCount, undefined, blocked) } : null;
 
   // Which measurements this shape is made of — see the drawer's note: the shape is asked first and
   // the fields follow from it, so a diameter can never sit unread under a מלבן.
@@ -1206,13 +1428,30 @@ export function AppearanceModal({
                           <SeatChairs seats={chairs.seats} />
                         </g>
                       )}
+                      {/* A hollow shape's band, filled, inside the outline the canvas strokes — the
+                          hole is the canvas showing through; a closed ring has no line across its band. */}
+                      {band && (
+                        <g className="pointer-events-none">
+                          {band.map((p, i) => (
+                            <OutlinePath
+                              key={i}
+                              outline={p.outline}
+                              edgeCurves={p.edgeCurves}
+                              fill={draft.appearance?.style?.fill ?? "var(--color-inset)"}
+                              stroke="var(--color-ink-soft)"
+                              strokeWidth={1.25}
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ))}
+                        </g>
+                      )}
                       {/* The main shape's surface, under its outline — the material or picture the
-                          plan will fill it with, seen where it is being edited. */}
-                      {canvasBounds && (
-                        <g transform={`translate(${canvasBounds.cx} ${canvasBounds.cy})`} className="pointer-events-none">
+                          plan will fill it with, seen where it is being edited. A hollow one's band. */}
+                      {baseDrawn && (
+                        <g transform={`translate(${baseDrawn.at.x} ${baseDrawn.at.y})`} className="pointer-events-none">
                           <ItemSurface
                             appearance={{ texture: draft.appearance?.texture, textureImage: draft.appearance?.textureImage }}
-                            footprint={{ kind: "custom", outline: canvasOutline, edgeCurves: canvasCurves }}
+                            footprint={baseDrawn.footprint}
                             color={itemColor}
                             seed={`${draft.id}-base`}
                           />
@@ -1242,6 +1481,28 @@ export function AppearanceModal({
                   overlay={(ctx) =>
                     canvasBounds && (
                       <>
+                        {/* Each hollow added shape's band, under its (clear-filled) outline — the
+                            feature layer drags and sizes the shape's outside, as the canvas does the
+                            main shape's. */}
+                        {parts.filter((p) => p.id !== drawingPart?.id && p.hollow && canHollow(p.shape)).map((p) => (
+                          <g
+                            key={`band-${p.id}`}
+                            transform={`translate(${p.x} ${p.y})${p.rotation ? ` rotate(${p.rotation})` : ""}`}
+                            className="pointer-events-none"
+                          >
+                            {shapePieces(p.shape, p).map((o, i) => (
+                              <OutlinePath
+                                key={i}
+                                outline={o.outline}
+                                edgeCurves={o.edgeCurves}
+                                fill={draft.appearance?.style?.fill ?? "var(--color-inset)"}
+                                stroke="var(--color-ink-soft)"
+                                strokeWidth={1.25}
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            ))}
+                          </g>
+                        ))}
                         {/* Each added shape's own surface, under its (clear-filled) outline. */}
                         {parts.filter((p) => p.id !== drawingPart?.id && hasSurface(p)).map((p) => (
                           <g
@@ -1309,8 +1570,17 @@ export function AppearanceModal({
                         />
                         {/* What the plan writes inside the outline, drawn on the outline itself.
                             Without it, picking an icon changed nothing on the surface the designer
-                            is looking at. */}
-                        <g transform={`translate(${canvasBounds.cx} ${canvasBounds.cy})`} className="pointer-events-none text-ink-soft">
+                            is looking at. The category's picture is drawn over the whole item, so it
+                            stands where the item's footprint is centred (itemAt); a name or an icon
+                            goes on the base as drawn, band and all. */}
+                        <g
+                          transform={
+                            previewSymbol
+                              ? `translate(${(itemAt ?? anchor).x} ${(itemAt ?? anchor).y})`
+                              : `translate(${(baseDrawn?.at ?? anchor).x} ${(baseDrawn?.at ?? anchor).y})`
+                          }
+                          className="pointer-events-none text-ink-soft"
+                        >
                           {/* At the outline's own label point, as the plan will write it — on the
                               band of an arc, not at the box centre the <g> above sits on. */}
                           {previewSymbol ? (
@@ -1326,6 +1596,7 @@ export function AppearanceModal({
                               tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
                               overhead={preview.layer === "ceiling"}
                               chairStyle={chairStyleOf(preview)}
+                              drawStyle={drawStyleOf(preview)}
                               rise={climbRise(preview)}
                             />
                           ) : (
@@ -1333,7 +1604,7 @@ export function AppearanceModal({
                               content={resolveContent(preview)}
                               w={canvasBounds.w}
                               h={canvasBounds.h}
-                              at={labelAnchor({ kind: "custom", outline: canvasOutline, edgeCurves: canvasCurves })}
+                              at={labelAnchor(baseDrawn?.footprint ?? { kind: "custom", outline: canvasOutline, edgeCurves: canvasCurves })}
                             />
                           )}
                         </g>
@@ -1382,13 +1653,16 @@ export function AppearanceModal({
                         part={shifted(selectedPartRow, -anchor.x, -anchor.y)}
                         color={itemColor}
                         onRedraw={() => startDrawingPart(selectedPartRow)}
-                        onChange={(p) =>
+                        onChange={(p) => {
                           patchPart(selectedPartRow.id, {
                             ...p,
                             ...(p.x !== undefined ? { x: Math.round(p.x + anchor.x) } : {}),
                             ...(p.y !== undefined ? { y: Math.round(p.y + anchor.y) } : {}),
-                          })
-                        }
+                          });
+                          // The seat sides run base first, then each part's: a part's band re-cut
+                          // renumbers them from there on.
+                          if ("hollow" in p) setAppearance({ blockedSides: undefined });
+                        }}
                         onDuplicate={() => paste(selectedPartRow)}
                         onRemove={() => removePart(selectedPartRow.id)}
                         onToFront={() => setParts([...parts.filter((x) => x.id !== selectedPartRow.id), selectedPartRow])}
@@ -1537,6 +1811,19 @@ export function AppearanceModal({
                         />
                       </Popover>
                     )}
+                    {/* Solid or a band round an open middle — every solid shape, a hand-drawn one
+                        once it is closed. The sides offered are the outline's on the canvas. */}
+                    {canHollow(shape) && !stretch && outerShown && canvasBounds && (
+                      <Popover label="מילוי" icon={Donut} value={hollowValue(hollowSpec)} panelClassName="w-80">
+                        <HollowFields
+                          idPrefix="a-hollow"
+                          outer={outerShown}
+                          hollow={hollowSpec}
+                          defaultBand={defaultHollowBand(canvasBounds.w, canvasBounds.h)}
+                          onChange={setHollow}
+                        />
+                      </Popover>
+                    )}
                     {(custom || derived) && (
                       <div className="ms-auto flex items-center gap-1">
                         <InspectorDivider />
@@ -1671,6 +1958,89 @@ export function AppearanceModal({
                           />
                         </svg>
                         <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{CHAIR_STYLE_LABEL[st]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Which candle piece it is — a ring of arms, a planar row, crystal tiers, a solitaire
+                cluster, floating candles, a fire trough… (CandleStyle). Each tile draws THIS row's
+                count of candles in that style; "אוטומטי" is what it drew before there was a choice. */}
+            {draft.category === "candlesticks" && previewSymbol && (
+              <div>
+                <span className={fieldLabelClassName}>סוג הפמוט</span>
+                <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="סוג הפמוט">
+                  {[undefined, ...CANDLE_STYLES].map((st) => {
+                    const chosen = drawStyleOf(preview);
+                    const on = st === chosen;
+                    const n = symbolCount(preview, "candlestick");
+                    const own = footprintBounds(resolveFootprint(preview));
+                    const f: Footprint =
+                      st === undefined
+                        ? resolveFootprint(preview)
+                        : st === "fire"
+                          ? { kind: "rect", widthMm: 640, depthMm: 180 }
+                          : st === "row"
+                            ? { kind: "rect", widthMm: 520, depthMm: 200 }
+                            : { kind: "circle", diameterMm: 420 };
+                    const b = st === undefined ? own : footprintBounds(f);
+                    const pad = Math.max(b.w, b.h) * 0.08;
+                    return (
+                      <button
+                        key={st ?? "auto"}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        title={st ? CANDLE_STYLE_HINT[st] : "לפי הצורה: פריט ארוך — נרות בשורה, אחרת קנים במעגל"}
+                        onClick={() => setAppearance({ symbolStyle: st })}
+                        className={
+                          "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
+                          (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
+                        }
+                      >
+                        <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-9 w-full" aria-hidden>
+                          <ItemSymbol
+                            kind="candlestick"
+                            footprint={f}
+                            count={st === "tiered" ? Math.max(n, 13) : st === "lantern" ? 1 : n}
+                            tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
+                            drawStyle={st}
+                          />
+                        </svg>
+                        <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{st ? CANDLE_STYLE_LABEL[st] : "אוטומטי"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* A chuppah: four poles under a canopy, or a round colonnade (ChuppahStyle). */}
+            {draft.category === "chuppahs" && previewSymbol && (
+              <div>
+                <span className={fieldLabelClassName}>סוג החופה</span>
+                <div className="grid grid-cols-2 gap-1" role="radiogroup" aria-label="סוג החופה">
+                  {CHUPPAH_STYLES.map((st) => {
+                    const on = (drawStyleOf(preview) ?? "canopy") === st;
+                    return (
+                      <button
+                        key={st}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        title={CHUPPAH_STYLE_LABEL[st]}
+                        onClick={() => setAppearance({ symbolStyle: st === "canopy" ? undefined : st })}
+                        className={
+                          "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
+                          (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
+                        }
+                      >
+                        <svg viewBox="-2300 -2300 4600 4600" className="h-10 w-10" aria-hidden>
+                          <ItemSymbol kind="chuppah" footprint={{ kind: "circle", diameterMm: 4200 }} count={1} drawStyle={st} />
+                        </svg>
+                        <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{CHUPPAH_STYLE_LABEL[st]}</span>
                       </button>
                     );
                   })}

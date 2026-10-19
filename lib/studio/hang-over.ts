@@ -79,11 +79,19 @@ export function carryHung<P extends Pick<Placement, "position" | "rotation" | "m
  *  Over the middle stays over the middle; a pendant over the end of a 2.4m table goes over the end
  *  of a 4.8m one; a pair over a round lands as a pair over the next round. Same facing relative to
  *  the table. */
-export function hungCopy<P extends Pick<Placement, "position" | "rotation" | "mirrored">>(p: P, from: OverFrame, to: OverFrame): P {
-  const local = toTableFrame(asTable(from), p.position);
+/** A room point over one frame, carried to the SAME RELATIVE SPOT over another — its offset from the
+ *  first's middle as fractions of its half-extents, laid over the second's. What hungCopy hangs a
+ *  copy by, and what a table's dressing is carried across tables and blocks by
+ *  (app/(app)/studio/dressing-units.ts). */
+export function relativeSpot(from: OverFrame, to: OverFrame, room: Point): Point {
+  const local = toTableFrame(asTable(from), room);
   const fx = from.widthMm > 0 ? local.x / (from.widthMm / 2) : 0;
   const fy = from.depthMm > 0 ? local.y / (from.depthMm / 2) : 0;
-  const at = fromTableFrame(asTable(to), { x: (fx * to.widthMm) / 2, y: (fy * to.depthMm) / 2 });
+  return fromTableFrame(asTable(to), { x: (fx * to.widthMm) / 2, y: (fy * to.depthMm) / 2 });
+}
+
+export function hungCopy<P extends Pick<Placement, "position" | "rotation" | "mirrored">>(p: P, from: OverFrame, to: OverFrame): P {
+  const at = relativeSpot(from, to, p.position);
   const rotation = worldRotation(localRotation(p.rotation, from), to);
   const flipped = !!from.mirrored !== !!to.mirrored;
   const next: P = { ...p, position: { x: Math.round(at.x), y: Math.round(at.y) }, rotation };

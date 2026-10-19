@@ -99,7 +99,9 @@ function onRing(items: ChipBox[], table: TableBox, radiusFrac = 0.55): Map<strin
 /** Where items stand on a table nobody has arranged. */
 export function autoLayout(table: TableBox, chips: ChipBox[]): Map<string, Point> {
   if (chips.length === 0) return new Map();
-  if (chips.length === 1) return new Map([[chips[0].id, { x: 0, y: 0 }]]);
+  // One item: the middle of the TABLE, which on a shaped one (a crescent, a ח of grouped tables) is
+  // the middle of its spine — its box centre is the air the band curves round.
+  if (chips.length === 1) return new Map([[chips[0].id, table.spine ? alongSpine(table.spine, 1)[0] : { x: 0, y: 0 }]]);
   const bySize = [...chips].sort((a, b) => area(b) - area(a));
   const long = Math.max(table.widthMm, table.depthMm) / Math.max(1, Math.min(table.widthMm, table.depthMm));
   // A long table (a banquet run, a 240×100, a crescent): a run along it — along its SPINE, so on an
@@ -123,7 +125,10 @@ export function arrange(kind: ArrangeKind | "auto", table: TableBox, chips: Chip
     return out;
   }
   if (kind === "center") {
-    for (const c of moving) out.set(c.id, { x: 0, y: 0 });
+    // The middle of the TABLE — of its spine on a shaped one (a crescent, a ח of grouped tables),
+    // whose box centre is the air the band curves round.
+    const mid = table.spine ? alongSpine(table.spine, 1)[0] : { x: 0, y: 0 };
+    for (const c of moving) out.set(c.id, mid);
     return out;
   }
   if (kind === "ring") {

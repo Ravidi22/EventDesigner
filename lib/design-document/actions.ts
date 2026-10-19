@@ -69,6 +69,9 @@ export type Action =
   // round. A drawing size, not a different product: the quote, the packing list and the order count
   // it as the row it is. Held to 30%–300%; 1 = the catalog's size.
   | { type: "setPlacementScale"; id: string; scale: number }
+  /** The vase these arrangements stand in (lib/catalog/vessel.ts): a variant id, null = none on this
+   *  plan, undefined = back to what their catalog row says. */
+  | { type: "setPlacementVessel"; ids: string[]; vessel: string | null | undefined }
   // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
   // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
   | { type: "setPlacementHang"; id: string; heightMm: number | null }
@@ -134,9 +137,20 @@ export type Action =
   // then on it is drawn as placed rather than laid out automatically. The caller sends every item on
   // the table, so freezing the automatic layout and moving one item are the same single action.
   | { type: "arrangeDressing"; tableId: string; positions: { id: string; position: Point }[] }
+  // The same across a BLOCK of tables, which is dressed as the one table it is: each item where it
+  // stands, in the frame of the table it now stands on — which may be another table of the block than
+  // before (a candlestick slid across the seam of a head table belongs to the half it is on now).
+  // Every table named is marked arranged; the caller sends every item on them, as above.
+  | { type: "arrangeOnTables"; positions: { id: string; tableId: string; position: Point }[] }
   // A saved table design (TableDesign) put on these tables — "add" or "replace", exactly as
   // copyDressing, with the design's own items standing in for a source table's.
   | { type: "dressTables"; tableIds: string[]; design: Pick<TableDesign, "items" | "arranged">; mode: "add" | "replace"; replaces?: string[] }
+  // These items worn by this ONE table, each already placed by the caller in the table's own frame —
+  // what a block's dressing comes to on each of its members when it is carried onto another table or
+  // block (app/(app)/studio/dressing-units.ts). The same rules as copyDressing; and "replace" with
+  // nothing to wear leaves the table bare, which is what "make it match" means for a member of a
+  // block nothing lands on.
+  | { type: "wearItems"; tableId: string; items: Omit<Placement, "id" | "tableId">[]; arranged?: boolean; mode: "add" | "replace"; replaces?: string[] }
   // Back to the automatic layout: the table forgets it was arranged, and its items' offsets go.
   | { type: "resetDressing"; tableId: string }
   // Several things become one: selecting any of them selects all, dragging any drags all, and a set
@@ -392,8 +406,9 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         ...doc,
         tables: doc.tables.map((t) => (t.id === action.id ? { ...t, style: action.style } : t)),
       };
-    case "removeTable":
-      return pruneGroups({
+    case "removeTable": {
+      const gone = doc.tables.find((t) => t.id === action.id);
+      const next = pruneGroups({
         ...doc,
         tables: doc.tables.filter((t) => t.id !== action.id),
         // What stood ON it goes with it; what hung OVER it stays, hanging free where it is.
@@ -406,6 +421,16 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
             return rest;
           }),
       });
+      // Half of a block of two taken away: the other half is a lone table again, and it shows the
+      // number the BLOCK showed (the one the crew was reading) when nobody else does — not the
+      // number it carried hidden underneath, which a renumber may since have handed to another table.
+      const survivor = gone?.groupId ? next.tables.find((t) => !t.groupId && doc.tables.find((o) => o.id === t.id)?.groupId === gone.groupId) : undefined;
+      if (!survivor || survivor.unnumbered) return next;
+      const shown = numberedUnits(doc).find((u) => u.kind === "group" && u.id === gone!.groupId)?.number;
+      const named = shown !== undefined && shown !== survivor.number ? { ...next, tables: next.tables.map((t) => (t.id === survivor.id ? { ...t, number: shown } : t)) } : next;
+      const renum = freeNumbers(named, [survivor.id]);
+      return renum.size ? { ...named, tables: named.tables.map((t) => (renum.has(t.id) ? { ...t, number: renum.get(t.id)! } : t)) } : named;
+    }
     case "addPlacement": {
       // Manually placing a variant back on a table clears its smart-apply exception (F-5.3).
       const p = action.placement;
@@ -435,6 +460,18 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         ...doc,
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, scale } : p)),
       };
+    }
+    case "setPlacementVessel": {
+      const ids = new Set(action.ids);
+      let changed = false;
+      const placements = doc.placements.map((p) => {
+        if (!ids.has(p.id) || p.vessel === action.vessel) return p;
+        changed = true;
+        const { vessel: _old, ...rest } = p;
+        void _old;
+        return action.vessel === undefined ? rest : { ...rest, vessel: action.vessel };
+      });
+      return changed ? { ...doc, placements } : doc;
     }
     case "setPlacementHang": {
       // Whole centimetres, inside a room; 0 or null clears it back to the row's default.
@@ -612,6 +649,24 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
       return wearDressing(doc, source, action.design.arranged, targets, action.mode, action.replaces);
     }
 
+    case "wearItems": {
+      if (!doc.tables.some((t) => t.id === action.tableId)) return doc;
+      if (action.items.length > 0) return wearDressing(doc, action.items, action.arranged, [action.tableId], action.mode, action.replaces);
+      if (action.mode !== "replace") return doc;
+      // Bare: what it wore goes, its exceptions with it, and it is laid out automatically again.
+      const bare = doc.placements.filter((p) => !(p.layer === "table" && p.tableId === action.tableId));
+      const table = doc.tables.find((t) => t.id === action.tableId)!;
+      if (bare.length === doc.placements.length && !table.arranged) return doc;
+      const { arranged: _a, ...plain } = table;
+      void _a;
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => (t.id === action.tableId ? plain : t)),
+        placements: bare,
+        exceptions: doc.exceptions?.filter((e) => e.tableId !== action.tableId),
+      };
+    }
+
     case "arrangeDressing": {
       const table = doc.tables.find((t) => t.id === action.tableId);
       if (!table) return doc;
@@ -622,6 +677,21 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         placements: doc.placements.map((p) =>
           p.tableId === action.tableId && at.has(p.id) ? { ...p, position: { x: Math.round(at.get(p.id)!.x), y: Math.round(at.get(p.id)!.y) } } : p,
         ),
+      };
+    }
+
+    case "arrangeOnTables": {
+      const tableIds = new Set(action.positions.map((m) => m.tableId).filter((id) => doc.tables.some((t) => t.id === id)));
+      if (tableIds.size === 0) return doc;
+      const at = new Map(action.positions.map((m) => [m.id, m]));
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => (tableIds.has(t.id) && !t.arranged ? { ...t, arranged: true } : t)),
+        placements: doc.placements.map((p) => {
+          const m = at.get(p.id);
+          if (!m || p.layer !== "table" || !p.tableId || !tableIds.has(m.tableId)) return p;
+          return { ...p, tableId: m.tableId, position: { x: Math.round(m.position.x), y: Math.round(m.position.y) } };
+        }),
       };
     }
 
@@ -782,7 +852,13 @@ function withoutFeatures(doc: DesignDocumentContent): DesignDocumentContent {
  *  can do the same to the group it left. A lone member with a groupId is worse than untidy — it
  *  would draw no number of its own, waiting for a group that is no longer there to draw one for it. */
 function pruneGroups(doc: DesignDocumentContent): DesignDocumentContent {
-  if (!doc.groups?.length) return doc;
+  // No groups at all: still let go of any `groupId` left pointing at nothing — a table carrying one
+  // draws no number and no chairs, waiting for a block that is not there.
+  if (!doc.groups?.length) {
+    if (!doc.tables.some((t) => t.groupId) && !doc.placements.some((p) => p.groupId)) return doc;
+    const drop = <T extends { groupId?: string }>(x: T): T => (x.groupId ? { ...x, groupId: undefined } : x);
+    return { ...doc, tables: doc.tables.map(drop), placements: doc.placements.map(drop) };
+  }
   const count = new Map<string, number>();
   for (const x of [...doc.tables, ...doc.placements]) {
     if (x.groupId) count.set(x.groupId, (count.get(x.groupId) ?? 0) + 1);
@@ -848,7 +924,7 @@ function wearDressing(
       const has = based.some((p) => p.layer === "table" && p.tableId === tableId && p.variantId === s.variantId);
       const excepted =
         mode === "add" &&
-        doc.exceptions?.some((e) => e.tableId === tableId && e.variantId === s.variantId);
+        doc.exceptions?.some((e) => e.tableId === tableId && (e.variantId === s.variantId || (s === cover && swap.has(e.variantId))));
       if (has || excepted) continue;
       // groupId goes too. A group means "select one and you have selected all of them, drag one
       // and they all move" — copying the source's membership onto twenty-three copies would
@@ -918,7 +994,10 @@ function spreadOverTables(
     const has = placements.some(
       (p) => p.layer === "table" && p.tableId === t.id && p.variantId === placement.variantId,
     );
-    const excepted = doc.exceptions?.some((e) => e.tableId === t.id && e.variantId === placement.variantId);
+    // F-5.3: a table the designer took this item off keeps it off — in this shade or ANOTHER of the
+    // ones it replaces (spreading cream after table 5's gold cloth was removed on purpose is the
+    // same divergence, and it used to put a cloth back on table 5).
+    const excepted = doc.exceptions?.some((e) => e.tableId === t.id && (e.variantId === placement.variantId || swap.has(e.variantId)));
     if (!has && !excepted) added.push({ ...placement, id: crypto.randomUUID(), tableId: t.id });
   }
 
@@ -1199,6 +1278,11 @@ if (isMain(import.meta.url)) {
     const added = apply(base, { type: "dressTables", tableIds: ["t1"], design, mode: "add" });
     assert(added === base, "add gives a table only what it lacks — t1 already has its candle");
 
+    const vased = apply(base, { type: "setPlacementVessel", ids: ["a"], vessel: "jug" });
+    assert(vased.placements[0].vessel === "jug", "an arrangement is set in the vase it is given");
+    assert(apply(vased, { type: "setPlacementVessel", ids: ["a"], vessel: null }).placements[0].vessel === null, "…taken out of every vase with null");
+    assert(!("vessel" in apply(vased, { type: "setPlacementVessel", ids: ["a"], vessel: undefined }).placements[0]), "…and back to its row's own with undefined");
+    assert(apply(vased, { type: "setPlacementVessel", ids: ["a"], vessel: "jug" }) === vased, "the same vase again changes nothing");
     const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
     assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
     const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });
@@ -1535,6 +1619,41 @@ if (isMain(import.meta.url)) {
     assert(apply(g.present, { type: "hangOverTables", hangs: [{ tableId: "nope", items: [] }], mode: "add" }) === g.present, "no target, no edit");
     g = dispatch(g, { type: "removeTable", id: "t7" });
     assert(at("ch").over === undefined && at("ch").position.x === 1234, "a removed table leaves its chandelier hanging free where it was");
+  }
+
+  // ── blocks: one half removed, stray group ids, items worn and moved across a block ──────────────
+  {
+    const T = (id: string, number: number, x: number, groupId?: string): DesignTable => ({ id, type: "rect", number, position: { x, y: 0 }, rotation: 0, widthMm: 1800, depthMm: 900, ...(groupId ? { groupId } : {}) });
+    const item = (id: string, tableId: string, variantId: string): Placement => ({ id, variantId, layer: "table", quantity: 1, tableId, position: { x: 0, y: 0 }, rotation: 0, scale: 1 });
+    // A block shown as 1 over members carrying 3 and 4; another table has since been renumbered 4.
+    const base: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [T("a", 3, 0, "blk"), T("b", 4, 1800, "blk"), T("c", 4, 6000)],
+      placements: [item("i1", "a", "candle"), item("i2", "b", "candle")],
+      groups: [{ id: "blk", number: 1 }],
+    };
+    const one = apply(base, { type: "removeTable", id: "a" });
+    const b = one.tables.find((t) => t.id === "b")!;
+    assert(!b.groupId && !one.groups?.length, "half a block of two removed: the other half is a lone table");
+    assert(b.number === 1, `…showing the number the block showed, not the hidden 4 table c also shows (${b.number})`);
+
+    // A table pointing at a group that is not there loses the pointer on the next prune.
+    const stray = apply({ ...base, groups: [], tables: [T("x", 7, 0, "ghost"), T("y", 8, 3000)] }, { type: "removeTable", id: "y" });
+    assert(stray.tables[0].groupId === undefined, "a groupId naming no group is let go");
+
+    // wearItems: placed as given; "replace" with nothing to wear leaves the table bare and automatic.
+    const worn = apply(base, { type: "wearItems", tableId: "c", items: [{ variantId: "vase", layer: "table", quantity: 1, position: { x: 300, y: 0 }, rotation: 0, scale: 1 }], arranged: true, mode: "replace" });
+    const onC = worn.placements.filter((p) => p.tableId === "c");
+    assert(onC.length === 1 && onC[0].position.x === 300 && worn.tables.find((t) => t.id === "c")?.arranged === true, "worn items stand where the caller put them, the table arranged");
+    const bare = apply({ ...base, tables: base.tables.map((t) => (t.id === "b" ? { ...t, arranged: true } : t)) }, { type: "wearItems", tableId: "b", items: [], mode: "replace" });
+    assert(!bare.placements.some((p) => p.tableId === "b") && !bare.tables.find((t) => t.id === "b")?.arranged, "replace with nothing to wear strips the table");
+    assert(apply(base, { type: "wearItems", tableId: "b", items: [], mode: "add" }) === base, "…and add with nothing is no edit");
+
+    // arrangeOnTables: an item slid across the seam belongs to the half it is on now.
+    const slid = apply(base, { type: "arrangeOnTables", positions: [{ id: "i1", tableId: "b", position: { x: -400, y: 0 } }, { id: "i2", tableId: "b", position: { x: 400, y: 0 } }] });
+    assert(slid.placements.find((p) => p.id === "i1")?.tableId === "b" && slid.placements.find((p) => p.id === "i1")?.position.x === -400, "an item moves to the table it was put on");
+    assert(slid.tables.find((t) => t.id === "b")?.arranged === true, "…which is arranged from then on");
+    assert(apply(base, { type: "arrangeOnTables", positions: [{ id: "i1", tableId: "nope", position: { x: 0, y: 0 } }] }) === base, "no such table, no edit");
   }
 
   console.log("actions self-check passed");

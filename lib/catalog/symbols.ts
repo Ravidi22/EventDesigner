@@ -37,11 +37,14 @@ export type SymbolKind =
   | "runner"
   | "stairs"
   | "ramp"
-  | "bench";
+  | "bench"
+  | "lamp";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   candlesticks: "candlestick",
+  // A table lamp: its shade seen from above, lit from inside.
+  lamps: "lamp",
   "flower-arrangements": "flowers",
   centerpieces: "centerpiece",
   // A stem on its own — the marketplace's cut flowers, greens and dried plumes — is one head of
@@ -117,6 +120,64 @@ export function chairStyleOf(product: Product | undefined): ChairStyle | undefin
   if (!product || product.category !== "chairs") return undefined;
   const s = product.appearance?.symbolStyle;
   return s && (CHAIR_STYLES as string[]).includes(s) ? (s as ChairStyle) : "dining";
+}
+
+/** What KIND of candle piece a candlestick is, seen from above (components/item-symbol.tsx) — set in
+ *  the appearance editor (MapAppearance.symbolStyle). Absent = by its footprint: a long piece is a row
+ *  of candles on a bar, anything else its candles round a stem, which is what every row drew before
+ *  there was a choice. The count is still the row's `arms` — candles, cylinders, glasses — so the
+ *  plan and the packing list agree on how many there are. */
+export type CandleStyle = "ring" | "row" | "tiered" | "sleeves" | "cluster" | "floating" | "pillars" | "powder" | "lantern" | "fire";
+
+export const CANDLE_STYLES: CandleStyle[] = ["ring", "row", "tiered", "sleeves", "cluster", "floating", "pillars", "powder", "lantern", "fire"];
+
+export const CANDLE_STYLE_LABEL: Record<CandleStyle, string> = {
+  ring: "קנים במעגל",
+  row: "קנים בשורה",
+  tiered: "קומות (קריסטל)",
+  sleeves: "שרוולי זכוכית",
+  cluster: "מקבץ צילינדרים",
+  floating: "נר צף",
+  pillars: "נרות עמוד במגש",
+  powder: "נרות אבקה",
+  lantern: "פנס",
+  fire: "תעלת אש",
+};
+
+export const CANDLE_STYLE_HINT: Record<CandleStyle, string> = {
+  ring: "קנים שיוצאים מעמוד מרכזי לכל הכיוונים — פמוט פלורידה, קנדלברה עגולה",
+  row: "קנים במישור אחד, כמו פמוט 5 קנים קלאסי — מלמעלה הם קו",
+  tiered: "שתי טבעות נרות ונר במרכז, עם נטיפי קריסטל — פמוט 13 או 25 קנים",
+  sleeves: "כל נר בתוך שרוול/הוריקן זכוכית",
+  cluster: "צילינדרי זכוכית בגדלים שונים, נר עמוד בכל אחד — מקבץ סוליטר",
+  floating: "צילינדר זכוכית עם מים ונר צף",
+  pillars: "נרות עמוד על מגש או צלחת",
+  powder: "כוסות מלאות שעווה גרגירית ופתיל",
+  lantern: "פנס מרובע עם נר בתוכו",
+  fire: "מבער אש לאורך השולחן — שולחן אש",
+};
+
+export const isCandleStyle = (s: string | undefined): s is CandleStyle => !!s && (CANDLE_STYLES as string[]).includes(s);
+
+/** What KIND of chuppah, seen from above: four poles under a canopy (the default), or a round
+ *  colonnade — columns on a ring under an entablature, draped at the back (a rotunda / "קוליסאום"). */
+export type ChuppahStyle = "canopy" | "rotunda";
+
+export const CHUPPAH_STYLES: ChuppahStyle[] = ["canopy", "rotunda"];
+
+export const CHUPPAH_STYLE_LABEL: Record<ChuppahStyle, string> = {
+  canopy: "4 עמודים וגגון",
+  rotunda: "עמודים במעגל (רוטונדה)",
+};
+
+/** The drawing style of a candlestick or a chuppah (the two pictures with more than one version
+ *  besides a chair, which has chairStyleOf). Undefined = the category's default picture. */
+export function drawStyleOf(product: Product | undefined): CandleStyle | ChuppahStyle | undefined {
+  const s = product?.appearance?.symbolStyle;
+  if (!product || !s) return undefined;
+  if (product.category === "candlesticks") return isCandleStyle(s) ? s : undefined;
+  if (product.category === "chuppahs") return (CHUPPAH_STYLES as string[]).includes(s) ? (s as ChuppahStyle) : undefined;
+  return undefined;
 }
 
 /** How far a cloth shows past the tabletop seen from above — the fall of the fabric, not its full

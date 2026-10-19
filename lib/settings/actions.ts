@@ -383,15 +383,27 @@ function cleanDesign(input: unknown): TableDesign | null {
   for (const it of d.items) {
     if (!it || typeof it !== "object" || typeof it.variantId !== "string" || it.variantId.length > 64) return null;
     const at = it.position as Point | undefined;
+    const size = it.sizeMm as { widthMm?: unknown; depthMm?: unknown } | undefined;
+    const sw = num(size?.widthMm, 0);
+    const sd = num(size?.depthMm, 0);
     items.push({
       variantId: it.variantId,
       quantity: Math.max(1, Math.round(num(it.quantity, 1))),
       position: { x: Math.round(num(at?.x, 0)), y: Math.round(num(at?.y, 0)) },
       rotation: num(it.rotation, 0),
       scale: Math.min(3, Math.max(0.3, num(it.scale, 1))),
+      // A runner stretched to its table's length, a flipped piece: kept, or worn it would come back
+      // at the catalog's length and the right way round.
+      ...(sw > 0 && sd > 0 && sw <= 100000 && sd <= 100000 ? { sizeMm: { widthMm: Math.round(sw), depthMm: Math.round(sd) } } : {}),
+      ...(it.mirrored === true ? { mirrored: true } : {}),
+      // The vase an arrangement stands in on that table (lib/catalog/vessel.ts) — or none.
+      ...(it.vessel === null ? { vessel: null } : typeof it.vessel === "string" && it.vessel.length <= 64 ? { vessel: it.vessel } : {}),
     });
   }
-  return { id: d.id, name: d.name.trim().slice(0, 60), ...(d.arranged ? { arranged: true } : {}), items };
+  const fw = num(d.frame?.widthMm, 0);
+  const fd = num(d.frame?.depthMm, 0);
+  const frame = fw > 0 && fd > 0 && fw <= 100000 && fd <= 100000 ? { frame: { widthMm: Math.round(fw), depthMm: Math.round(fd) } } : {};
+  return { id: d.id, name: d.name.trim().slice(0, 60), ...(d.arranged ? { arranged: true } : {}), ...frame, items };
 }
 
 export async function fetchTableDesigns(): Promise<TableDesign[]> {

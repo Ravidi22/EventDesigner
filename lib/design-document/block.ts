@@ -19,6 +19,9 @@
 import type { Point } from "./types";
 import { flattenEdge, footprintOutlines, type BuiltOutline, type Footprint } from "../studio/footprint";
 import { CHAIR_D_MM, CHAIR_OFFSET_MM, seatSides, seatsAround, type Seat } from "../studio/seating";
+import { flatRing, labelAnchor, signedDistance } from "../studio/label-anchor";
+import { footprintSpine } from "../studio/spine";
+import { unionShapes } from "../studio/stage-draw";
 import { isMain } from "../self-check";
 
 export interface BlockMember {
@@ -125,6 +128,99 @@ export function blockSeats(block: BlockFrame, count: number, offsetMm = CHAIR_OF
   return seatsAround(block.footprint, count, offsetMm, block.blocked);
 }
 
+// ── The block as ONE shape ─────────────────────────────────────────────────────────────────────
+//
+// `footprint` is the members side by side — right for the chairs, whose seams it must know. For the
+// NUMBER and for a run of items it is wrong: the label point and the spine read a composite's
+// LARGEST PART (label-anchor.ts, spine.ts — the counter, not the round end set against it), so a
+// head table of two had its number on one half and "פיזור" laid the candles along one half. Read as
+// the one outline its members make together, the block is labelled and spread like a table.
+
+type OneShape = { footprint: Footprint; at: Point };
+const outlineCache = new Map<string, OneShape | null>();
+
+/** The members as one shape, and where its box centre is in the block's frame (a footprint is drawn
+ *  about its own box centre; the union's is the block's to within the curves' sampling). */
+function oneShape(block: BlockFrame): OneShape | null {
+  const f = block.footprint;
+  if (f.kind !== "multi") return { footprint: f, at: { x: 0, y: 0 } };
+  const key = JSON.stringify(f);
+  if (outlineCache.has(key)) return outlineCache.get(key)!;
+  const rings = f.parts.map(flatRing).filter((r) => r.length >= 3);
+  const u = rings.length === 1 ? { outline: rings[0] } : unionShapes(rings.map((outline) => ({ outline })), 6);
+  let out: OneShape | null = null;
+  if (u && u.outline.length >= 3) {
+    const xs = u.outline.map((p) => p.x);
+    const ys = u.outline.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const w = Math.max(...xs) - minX;
+    const h = Math.max(...ys) - minY;
+    const at = { x: minX + w / 2, y: minY + h / 2 };
+    // Four square corners filling the box: the plain rectangle it is (exact label, exact spine).
+    const square =
+      u.outline.length === 4 &&
+      u.outline.every((p, i) => {
+        const q = u.outline[(i + 1) % 4];
+        return Math.abs(p.x - q.x) < 2 || Math.abs(p.y - q.y) < 2;
+      });
+    out = { footprint: square ? { kind: "rect", widthMm: w, depthMm: h } : { kind: "custom", outline: u.outline }, at };
+  }
+  if (outlineCache.size > 300) outlineCache.clear();
+  outlineCache.set(key, out);
+  return out;
+}
+
+/** The members' outlines as ONE, in the block's frame (curves sampled), drawn about its own box
+ *  centre: a rectangle when they make a rectangle, else a hand-drawn outline. Null when they do not
+ *  make one piece without a hole — pushed apart, touching at a point (two rounds), or round a void
+ *  (a hollow square). */
+export function blockOutline(block: BlockFrame): Footprint | null {
+  return oneShape(block)?.footprint ?? null;
+}
+
+/** Where the block's ONE number goes, in its frame: the visual centre of the outline its members
+ *  make together (labelAnchor) — mid-run on top of a ח of three, the middle of a straight head
+ *  table. Members that make no single outline: the label point of the member nearest the block's
+ *  middle, unless the middle is on a table already. */
+export function blockLabelPoint(block: BlockFrame): Point {
+  const one = oneShape(block);
+  if (one) {
+    const a = labelAnchor(one.footprint);
+    return { x: one.at.x + a.x, y: one.at.y + a.y };
+  }
+  const parts = block.footprint.kind === "multi" ? block.footprint.parts : [];
+  const rings = parts.map(flatRing).filter((r) => r.length >= 3);
+  const origin = { x: 0, y: 0 };
+  // Well inside a member (not on the point where two rounds kiss): the middle is on a table.
+  if (rings.length === 0 || rings.some((r) => signedDistance(0, 0, r) >= 150)) return origin;
+  let best = origin;
+  let bestD = Infinity;
+  for (const r of rings) {
+    // Each member's own label point, in the block's frame.
+    const xs = r.map((p) => p.x);
+    const ys = r.map((p) => p.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const own = labelAnchor({ kind: "custom", outline: r });
+    const p = { x: cx + own.x, y: cy + own.y };
+    const d = Math.hypot(p.x, p.y);
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/** The block's spine in its frame — the line a run of items is laid along: the ridge of its one
+ *  outline (a head table end to end, round a ח of three), else its box's long axis. */
+export function blockSpine(block: BlockFrame): Point[] {
+  const one = oneShape(block);
+  if (one) return footprintSpine(one.footprint).map((p) => ({ x: one.at.x + p.x, y: one.at.y + p.y }));
+  return footprintSpine({ kind: "rect", widthMm: block.widthMm, depthMm: block.depthMm });
+}
+
 // ponytail: self-check. Run: npm run check:block
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -207,5 +303,27 @@ if (isMain(import.meta.url)) {
   assert(blockSeats(lone, 8).length === 8, "…and seats as itself");
 
   assert(blockFrame([]) === null, "no members, no block");
+
+  // ONE shape: the number and the spine read the block, never its largest member.
+  const pairOne = blockOutline(pair);
+  assert(pairOne?.kind === "rect" && near(pairOne.widthMm, 4800) && near(pairOne.depthMm, 1200), "two 240×120 end to end are one 480×120 rectangle");
+  const pairLabel = blockLabelPoint(pair);
+  assert(near(pairLabel.x, 0) && near(pairLabel.y, 0), "…numbered at its middle, on the seam");
+  const pairSpine = blockSpine(pair);
+  assert(near(pairSpine[0].x, -2400) && near(pairSpine[pairSpine.length - 1].x, 2400), "…and spread along its whole length, not one half");
+  // A ח of three: the number goes mid-run on the top table, not in the air between the legs.
+  const het = blockFrame([
+    { id: "top", footprint: rect(3000, 900), position: { x: 0, y: -600 } },
+    { id: "l", footprint: rect(900, 1200), position: { x: -1050, y: 450 } },
+    { id: "r", footprint: rect(900, 1200), position: { x: 1050, y: 450 } },
+  ])!;
+  assert(blockOutline(het)?.kind === "custom", "a ח of three is one outline");
+  const hetLabel = blockLabelPoint(het);
+  const hetTop = { x: 0 - het.centre.x, y: -600 - het.centre.y };
+  assert(Math.abs(hetLabel.x - hetTop.x) < 300 && Math.abs(hetLabel.y - hetTop.y) < 400, "…numbered on its top run, not between its legs");
+  // Rounds that only touch make no one outline: the number stands on a table, never on the kiss.
+  assert(blockOutline(rounds) === null, "two rounds touching at a point are not one outline");
+  const roundLabel = blockLabelPoint(rounds);
+  assert(near(Math.abs(roundLabel.x), 900, 30) && near(roundLabel.y, 0, 30), "…numbered at the middle of one of them");
   console.log("block self-check passed");
 }

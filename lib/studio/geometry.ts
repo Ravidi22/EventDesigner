@@ -68,6 +68,59 @@ export function outlinePathD(outline: Point[], edgeCurves?: (EdgeCurve | null)[]
   return d + " Z";
 }
 
+// The LINE of a closed outline, without its seams: a straight edge walked once each way (a closed
+// band's keyhole — lib/studio/footprint.ts buildHollow and the oval ring — whose two caps lie on top
+// of each other) is where the outline meets itself, not a side of the shape, and stroked it drew a
+// line across a band whose entrance is 0. Null when the outline has no seam, so a caller strokes the
+// ordinary closed path. Fill with outlinePathD, stroke this.
+export function outlineStrokeD(outline: Point[], edgeCurves?: (EdgeCurve | null)[]): string | null {
+  const n = outline.length;
+  if (n < 3) return null;
+  const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
+  const seam = new Set<number>();
+  for (let i = 0; i < n; i++) {
+    if (edgeCurves?.[i]) continue;
+    const a = outline[i];
+    const b = outline[(i + 1) % n];
+    if (near(a, b)) continue;
+    for (let j = 0; j < n; j++) {
+      if (j === i || edgeCurves?.[j]) continue;
+      if (near(outline[j], b) && near(outline[(j + 1) % n], a)) {
+        seam.add(i);
+        break;
+      }
+    }
+  }
+  if (seam.size === 0) return null;
+  // Start just after a seam, so each loop it separates is one unbroken run.
+  const first = [...seam][0];
+  let d = "";
+  let pen: Point | null = null;
+  let runStart: Point | null = null;
+  for (let k = 1; k <= n; k++) {
+    const i = (first + k) % n;
+    if (seam.has(i)) {
+      if (pen && runStart && near(pen, runStart)) d += " Z";
+      pen = null;
+      continue;
+    }
+    const a = outline[i];
+    const b = outline[(i + 1) % n];
+    if (!pen || !near(pen, a)) {
+      d += `${d ? " " : ""}M ${a.x} ${a.y}`;
+      runStart = a;
+    }
+    const curve = edgeCurves?.[i];
+    if (curve) {
+      const { c1, c2 } = absoluteControlPoints(a, b, curve);
+      d += ` C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${b.x} ${b.y}`;
+    } else d += ` L ${b.x} ${b.y}`;
+    pen = b;
+  }
+  if (pen && runStart && near(pen, runStart)) d += " Z";
+  return d;
+}
+
 // Open (non-closed) SVG path for a single edge — used to give each wall its own clickable/
 // draggable element in the interactive editor, instead of one combined closed path.
 export function edgePathD(a: Point, b: Point, curve?: EdgeCurve | null): string {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { amend, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
+import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
 import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate, TableDesign } from "@/lib/design-document/types";
@@ -12,14 +12,14 @@ import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
 import { loadScratch, saveScratch } from "@/lib/studio/storage";
-import { fromLocalFrame, tableAt, toLocalFrame } from "@/lib/studio/geometry";
+import { fromLocalFrame, toLocalFrame } from "@/lib/studio/geometry";
 import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { benchIsNumbered, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
 import { productById } from "@/lib/catalog/storage";
-import type { Product } from "@/lib/catalog/types";
+import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, anchorOf, isRunner, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
 import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
@@ -44,7 +44,7 @@ import { arrangedFeature, arrangedStructure, isFeatureMoved, isFeatureRemoved, r
 import { FEATURE_KIND_LABEL, featureMovable } from "@/lib/venues/structure";
 import { ALIGN_LABEL, alignedCentres, alignUnits, needsThree, type AlignOp } from "@/lib/studio/align";
 import { mirrorFlips, type MirrorAxis, type MirrorSubject } from "@/lib/design-document/mirror";
-import { axisGap, clearanceIssues, distributedCentres, placeAtGap, polysGap, spacedCentres, spreadAxis, type CentredBox } from "@/lib/studio/proximity";
+import { axisGap, clearanceIssues, distributedCentres, footprintPolygons, placeAtGap, polysGap, spacedCentres, spreadAxis, type CentredBox } from "@/lib/studio/proximity";
 import { defaultFront, lengthSnapper, polygonsOverlap, resizeRect, signedArea, type DeckType } from "@/lib/studio/stage-fill";
 import type { PieceInfo } from "@/lib/studio/stage-rim";
 import {
@@ -96,13 +96,16 @@ import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/
 import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide } from "@/lib/design-document/stage";
 import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
-import { chipBox, dressingSpots, tableBlock, tableBox, tableFootprint } from "@/components/footprint-shape";
-import { arrange, clampToTable, fromTableFrame, spineOf, toTableFrame, type ArrangeKind } from "@/lib/design-document/dressing";
+import { chipBox, dressBlockOf, dressingSpots, tableBlock, tableBox, tableFootprint, tableUnder } from "@/components/footprint-shape";
+import { arrange, clampToTable, fromTableFrame, spineOf, toTableFrame, type ArrangeKind, type TableBox } from "@/lib/design-document/dressing";
 import { alongSpine, spanAlong, spineParam } from "@/lib/studio/spine";
-import { hungCopy, type HeightWave, type OverFrame } from "@/lib/studio/hang-over";
+import { blockSpine } from "@/lib/design-document/block";
+import { isVessel, takesVessel, vesselOf } from "@/lib/catalog/vessel";
+import { hungCopy, relativeSpot, type HeightWave, type OverFrame } from "@/lib/studio/hang-over";
 import { tableLine } from "@/lib/studio/table-patterns";
 import { DressingBar } from "./dressing-bar";
-import { TablePatternPicker, patternTablesOf } from "./table-pattern-picker";
+import { TablePatternPicker, type PatternGroup } from "./table-pattern-picker";
+import { carriedDressing, coverOf, isBlock, landOn, memberAt, patternUnits, tableFrame, unitOf, unitsOf, type DressUnit } from "./dressing-units";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
 import { adoptHung, hangCentreOf, hangPointOf, hangTargetsOf, positionHungAt, tableUnderHang } from "./hang-targets";
 import { centreOver, hangHeightOf } from "@/lib/studio/hang";
@@ -112,8 +115,9 @@ import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
+import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
 import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
-import { AlignCenterVertical, BringToFront, Copy, Group, SendToBack, Trash2, X } from "lucide-react";
+import { AlignCenterVertical, BringToFront, Copy, Group, PackagePlus, SendToBack, Trash2, Ungroup, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
 import { ProposalReview } from "./proposal-review";
 import { fetchSubmittedProposal, resolveProposal, type SubmittedProposal } from "@/lib/proposals/actions";
@@ -192,7 +196,7 @@ const classifyStack = (p: Placement): StackKind | undefined => {
 };
 
 /** Never swap targets: tables have their own swap, and stages are built, not picked. */
-const unswappable = (p: Product) => p.category === "tables" || CATEGORY_BY_ID[p.category]?.group === "grp-stages";
+const unswappable = (p: Product) => p.category === "tables" || CATEGORY_BY_ID[p.category]?.group === "grp-stages" || !!p.composition;
 
 /** One thing the spacing command moves: a loose item, or a whole group as one block. */
 type SpacingUnit = {
@@ -203,6 +207,15 @@ type SpacingUnit = {
   polysAt: ItemGeometry["polysAt"];
   members: ItemGeometry[];
 };
+
+/** Where a table stands in its block, counted the way Hebrew reads — from the right, along the
+ *  block's own length — so the dressing bar can say "שולחן 1 מתוך 2" of a head table's right half. */
+function blockMemberIndex(doc: DesignDocumentContent, t: DesignTable): number {
+  const members = doc.tables.filter((x) => x.groupId === t.groupId);
+  const rad = ((tableBlock(members)?.rotation ?? 0) * Math.PI) / 180;
+  const along = (x: DesignTable) => x.position.x * Math.cos(rad) + x.position.y * Math.sin(rad);
+  return [...members].sort((a, b) => along(b) - along(a)).findIndex((x) => x.id === t.id);
+}
 
 /** A stage, or a piece of one: anything from "במות" / "פלטות במה" standing free on the floor —
  *  archived rows included, so an old platform still on a plan can still become a stage — of ANY
@@ -240,12 +253,44 @@ export function StudioScreen({
   // lacks does not end the meeting. The form is the catalog's own drawer; in the meeting's passes it
   // opens without anything a client must not see, and offers only the categories this pass's rail
   // shows. `addedIds` pins what was made here to the top of the rail, newest first.
-  const [adding, setAdding] = useState<Product | null>(null);
+  //
+  // The same drawer EDITS a row too — from the rail's "…" or the selected item's bar — so a price, a
+  // shade or a size wrong on the plan is fixed where it was noticed, not by leaving for /catalog and
+  // coming back. `mode` says what a save means: a NEW row is pinned and armed, an EDITED one is
+  // simply saved, and a COMPOSITE made from the selection (lib/catalog/composition.ts) is pinned to
+  // the rail for the next placing — not armed, since what it was made of is already on the plan. The
+  // drawer offers no delete from here (a row placed on this very plan is archived, not deleted — that
+  // question belongs to /catalog).
+  const [drawer, setDrawer] = useState<{ product: Product; mode: "new" | "edit" | "composite" } | null>(null);
   const [addedIds, setAddedIds] = useState<string[]>([]);
   const railCategories = useMemo(() => {
     const groups = RAIL[mode].groups;
     return groups ? CATEGORIES.filter((c) => groups.includes(c.group)) : CATEGORIES;
   }, [mode]);
+  /** The categories the drawer offers: the pass's own, plus whatever the row being edited already is —
+   *  a row edited from the bar may sit in a department this pass's rail does not show. */
+  const drawerCategories = useMemo(() => {
+    const own = drawer?.product.category;
+    if (!own || railCategories.some((c) => c.id === own)) return railCategories;
+    const extra = CATEGORIES.find((c) => c.id === own);
+    return extra ? [...railCategories, extra] : railCategories;
+  }, [drawer, railCategories]);
+  /** Open a catalog row in the drawer — by its product id, or by a variant placed on the plan. */
+  const editProduct = useCallback(
+    (id: string) => {
+      const product = catalog.find((p) => p.id === id) ?? resolve(id)?.product;
+      if (product) setDrawer({ product, mode: "edit" });
+    },
+    [catalog],
+  );
+  /** A copy of a row, opened as a NEW one: fresh ids for it and every shade (see the catalog
+   *  screen's duplicateProduct — a copy must never alias the original's variants). */
+  const duplicateProduct = useCallback((p: Product) => {
+    setDrawer({
+      product: { ...p, id: "", name: `${p.name} (עותק)`, variants: p.variants.map((v) => ({ ...v, id: uid() })) },
+      mode: p.composition ? "composite" : "new",
+    });
+  }, []);
   // Resolved once for this whole event surface — the event, its document and its venue geometry.
   const { workspace, ready } = useEventWorkspace();
   // An EMPTY document, not a fabricated one. The studio used to open on a sample plan built out of
@@ -272,7 +317,9 @@ export function StudioScreen({
   // case and still the only one the inspector has fields for.
   const [selected, setSelected] = useState<SelectionRef[]>([]);
   /** The table being dressed — its focus mode (see DressingOverlay in canvas-stage.tsx). Screen state,
-   *  not the document's: it is where the designer is looking, not a fact about the event. */
+   *  not the document's: it is where the designer is looking, not a fact about the event. A grouped
+   *  table opens its whole BLOCK (`dressingIds`); this is then the member of it the dressing bar is
+   *  about, and it follows the selection from one member to the next. */
   const [dressing, setDressing] = useState<string | null>(null);
   // FOUR PLANES, not three: the tables are one of their own (lib/studio/planes.ts). A table and a
   // stage both stand on the floor, so "work in the floor layer" used to name them both at once —
@@ -528,7 +575,14 @@ export function StudioScreen({
   const batch = useCallback((actions: Action[]) => {
     if (actions.length === 0) return;
     gestureOpen.current = false;
-    setHistory((h) => actions.reduce((acc, a, i) => (i === 0 ? dispatch(acc, a) : amend(acc, a)), h));
+    // Every action run over the document first, and ONE entry pushed if anything changed. Opening
+    // the entry with the first action's dispatch folded the whole batch into the PREVIOUS edit
+    // whenever that first action happened to change nothing (a copy onto a table already wearing it,
+    // a ceiling-only design): one Ctrl+Z then took back both, or — on an empty history — nothing did.
+    setHistory((h) => {
+      const next = actions.reduce((doc, a) => applyAction(doc, a), h.present);
+      return next === h.present ? h : { present: next, past: [...h.past, h.present], future: [] };
+    });
   }, []);
 
   const showHint = (msg: string) => {
@@ -569,11 +623,98 @@ export function StudioScreen({
   /** Put one of `productId` down at (x, y). True when something landed — false when the item said
    *  why it could not (a cloth over bare floor, a drape with no wall), which click-to-place needs
    *  to tell a placement from a refusal. */
+  /** A TABLE SET (isTableSet) let go over a table: its parts set out on that table — its whole block —
+   *  about the point it was let go at, in the table's frame (so a row saved along one table runs
+   *  along the next), each kept on the top; a cloth becomes the table's one cloth; what hung over the
+   *  table it was saved from hangs over this one. The table is frozen where it was drawn first, so
+   *  nothing already on it jumps. One entry; the set is left selected. */
+  const dropTableSet = (product: Product, set: Composition, x: number, y: number): boolean => {
+    const t = tableUnder(doc.tables, { x, y });
+    const s = t ? dressSurface(t.id) : null;
+    if (!t || !s) {
+      showHint(`״${product.name}״ הוא סט לשולחן — מניחים אותו על שולחן`);
+      return false;
+    }
+    const at = toTableFrame(s.frame, { x, y });
+    const actions: Action[] = [];
+    const picked: SelectionRef[] = [];
+    const placed: { id: string; local: DocPoint }[] = [];
+    for (const part of set.placements) {
+      const { id: _i, tableId: _t, over: _o, groupId: _g, order: _r, ...rest } = part;
+      void _i; void _t; void _o; void _g; void _r;
+      const local = { x: at.x + part.position.x, y: at.y + part.position.y };
+      if (part.layer === "ceiling") {
+        const room = fromTableFrame(s.frame, local);
+        const over = tableUnder(s.members, room)?.id ?? t.id;
+        const id = uid();
+        actions.push({ type: "addPlacement", placement: { ...rest, id, layer: "ceiling", over, position: positionHungAt(part, room) } });
+        picked.push({ kind: "placement", id });
+        continue;
+      }
+      if (resolve(part.variantId)?.anchor === "table") {
+        for (const m of s.members) {
+          const worn = coverOf(doc, m.id);
+          if (worn) {
+            if (worn.variantId !== part.variantId) actions.push({ type: "setPlacementVariant", id: worn.id, variantId: part.variantId });
+          } else actions.push({ type: "addPlacement", placement: { ...rest, id: uid(), layer: "table", tableId: m.id, position: { x: 0, y: 0 } } });
+        }
+        continue;
+      }
+      const id = uid();
+      const size = chipBox(part);
+      const kept = clampToTable(s.box, size, local);
+      actions.push({ type: "addPlacement", placement: { ...rest, id, layer: "table", tableId: s.place(kept, size).tableId, position: { x: 0, y: 0 } } });
+      placed.push({ id, local: kept });
+      picked.push({ kind: "placement", id });
+    }
+    if (placed.length) actions.push(s.write([...s.chips.map((sp) => ({ id: sp.p.id, local: sp.local })), ...placed]));
+    batch(actions);
+    setSelected(picked);
+    showHint(`״${product.name}״ הונח על ${tableLabel(doc, t)}`);
+    return true;
+  };
+
   const dropProduct = (productId: string, x: number, y: number): boolean => {
     // The rail's "שורות כיסאות" card carries its chair behind a prefix (lib/studio/drag-payload.ts).
     const tool = rowsTool(productId);
     const product = productById(tool.productId);
     if (!product) return false;
+
+    // Dressing a table: what is let go lands on IT (its block) or hangs over it — never on a table or
+    // the floor behind the scrim, where it was added unseen and became the selection.
+    if (dressingIds.size > 0) {
+      const onDressed =
+        product.layer === "table"
+          ? (() => {
+              const t = tableUnder(doc.tables, { x, y });
+              return !!t && dressingIds.has(t.id);
+            })()
+          : product.layer === "ceiling" && !CATEGORY_BY_ID[product.category]?.anchor
+            ? (() => {
+                const under = tableUnderHang(doc, hangTargetsOf(doc, arrangedStructure(plan.structure, doc)), { x, y });
+                return !!under && dressingIds.has(under);
+              })()
+            : false;
+      if (!onDressed) {
+        showHint(product.layer === "table" || product.layer === "ceiling" ? "בעיצוב שולחן — מניחים על השולחן שבעיצוב (Esc ליציאה)" : "בעיצוב שולחן — לצאת (Esc) כדי להניח על התוכנית");
+        return false;
+      }
+    }
+
+    // A COMPOSITE (lib/catalog/composition.ts) lands as its PARTS — pasted about the point it was let
+    // go at, re-id'd, renumbered and regrouped exactly as a copied selection pastes. From here on they
+    // are ordinary tables and items: dressed, moved, quoted and packed like any other, and nothing on
+    // the plan remembers the catalog row they came from.
+    if (product.composition && isTableSet(product.composition)) return dropTableSet(product, product.composition, x, y);
+    if (product.composition) {
+      const fresh = pasteInto(clipOf(product.composition), { dx: Math.round(x), dy: Math.round(y), firstNumber: nextNumber(), newId: uid });
+      if (clipCount(fresh) === 0) {
+        showHint(`ב${product.name} אין רכיבים להניח`);
+        return false;
+      }
+      addClip(fresh);
+      return true;
+    }
     const cat = CATEGORY_BY_ID[product.category];
     const id = uid();
     const variantId = defaultVariantId(product);
@@ -617,7 +758,7 @@ export function StudioScreen({
         placement: { ...base, position: { x, y }, span: { wallId: near.wallId, ...WHOLE_WALL } },
       });
     } else if (product.layer === "table") {
-      const t = tableAt(doc, x, y);
+      const t = tableUnder(doc.tables, { x, y });
       if (!t) {
         // Not on a table — on a stage's banquette, then? It is a surface to dress, like a table.
         const bench = benchAt(x, y);
@@ -633,21 +774,85 @@ export function StudioScreen({
       // already there rather than stacking. Not a remove+add — that would record the removal as a
       // deliberate divergence and make the next "on all tables" skip this table (F-5.3).
       // (A runner is not a cloth — it lies on top of one: isRunner, lib/catalog/categories.ts.)
-      const worn = anchorOf(product) === "table" ? coverOn(doc, t.id) : undefined;
-      if (worn) {
-        act({ type: "setPlacementVariant", id: worn.id, variantId });
-        setSelected([{ kind: "table", id: t.id }]);
+      // A CLOTH goes on the whole table the designer sees — every half of a grouped head table, not
+      // the one under the pointer — and in place of whatever cloth each half already wears, of this
+      // product or another: recoloured, never a second one (a second cloth is billed and packed, and
+      // never drawn). A drop is explicit, so it lands on a table a smart-apply was told to skip too
+      // (addPlacement clears that exception).
+      if (anchorOf(product) === "table") {
+        const members = t.groupId ? doc.tables.filter((x) => x.groupId === t.groupId) : [t];
+        batch(
+          members.flatMap((m): Action[] => {
+            const worn = coverOn(doc, m.id);
+            if (worn) return worn.variantId === variantId ? [] : [{ type: "setPlacementVariant", id: worn.id, variantId }];
+            return [{ type: "addPlacement", placement: { ...base, id: uid(), tableId: m.id, position: { x: 0, y: 0 } } }];
+          }),
+        );
+        setSelected(expandToGroups(doc, [{ kind: "table", id: t.id }]));
         return true;
+      }
+      // AN ARRANGEMENT AND ITS VESSEL (lib/catalog/vessel.ts): an arrangement let go over a vase
+      // already on the table goes INTO it — the vase's placement becomes the arrangement standing in
+      // that vase, at its place — and a vase let go over an arrangement goes under it. One item
+      // either way, packed and counted as the two it is.
+      {
+        const members = t.groupId ? doc.tables.filter((x) => x.groupId === t.groupId) : [t];
+        const under = (ok: (q: Placement) => boolean): Placement | undefined => {
+          let best: { p: Placement; d: number } | undefined;
+          for (const m of members) {
+            const local = toTableFrame(m, { x, y });
+            for (const sp of spotsOn(m)) {
+              if (!ok(sp.p)) continue;
+              const d = Math.hypot(local.x - sp.local.x, local.y - sp.local.y);
+              if (d <= Math.max(sp.box.widthMm, sp.box.depthMm) / 2 + 40 && (!best || d < best.d)) best = { p: sp.p, d };
+            }
+          }
+          return best?.p;
+        };
+        if (takesVessel(product)) {
+          const vase = under((q) => isVessel(resolve(q.variantId)?.product));
+          if (vase) {
+            batch([
+              { type: "setPlacementVariant", id: vase.id, variantId },
+              { type: "setPlacementVessel", ids: [vase.id], vessel: vase.variantId },
+              ...((vase.scale || 1) !== 1 ? [{ type: "setPlacementScale" as const, id: vase.id, scale: 1 }] : []),
+            ]);
+            setSelected([{ kind: "placement", id: vase.id }]);
+            showHint(`${product.name} — בתוך ${resolve(vase.variantId)?.label ?? "הכלי"}`);
+            return true;
+          }
+        }
+        if (isVessel(product)) {
+          const holder = under((q) => takesVessel(resolve(q.variantId)?.product));
+          if (holder) {
+            act({ type: "setPlacementVessel", ids: [holder.id], vessel: variantId });
+            setSelected([{ kind: "placement", id: holder.id }]);
+            showHint(`${resolve(holder.variantId)?.label ?? "הסידור"} — בתוך ${product.name}`);
+            return true;
+          }
+        }
       }
       // On the table being dressed, or one already arranged by hand, it stands WHERE IT WAS LET GO —
       // in the table's own frame, kept on its top. The first such drop onto a table still laid out
       // automatically freezes the items already there where they were drawn, in the same history
       // entry, so nothing jumps. Anywhere else the automatic layout finds it a place.
-      if (t.id === dressing || t.arranged) {
+      // A block arranged by hand (any table of it) takes a drop where it is let go too, on the block's
+      // top — dropped onto its one still-automatic table, it used to be laid out on that table alone.
+      const blockArranged = !!t.groupId && doc.tables.some((x) => x.groupId === t.groupId && x.arranged);
+      const surface = (dressingIds.size > 1 && dressingIds.has(t.id)) || blockArranged ? dressSurface(t.id) : null;
+      if (surface?.isBlock) {
+        // Dressing a BLOCK: it stands where it was let go on the block's top — the seam of a head
+        // table included — on the table of the block under it; the block's items freeze in place.
+        const local = clampToTable(surface.box, catalogBox(product), toTableFrame(surface.frame, { x, y }));
+        batch([
+          { type: "addPlacement", placement: { ...base, tableId: surface.place(local).tableId, position: { x: 0, y: 0 } } },
+          surface.write([...surface.chips.map((sp) => ({ id: sp.p.id, local: sp.local })), { id, local }]),
+        ]);
+      } else if (dressingIds.has(t.id) || t.arranged) {
         const position = clampToTable(tableBox(t), catalogBox(product), toTableFrame(t, { x, y }));
         const freeze: Action[] = t.arranged
           ? []
-          : [{ type: "arrangeDressing", tableId: t.id, positions: dressingSpots(t, chipsOn(t.id)).map((sp) => ({ id: sp.p.id, position: sp.local })) }];
+          : [{ type: "arrangeDressing", tableId: t.id, positions: spotsOn(t).map((sp) => ({ id: sp.p.id, position: sp.local })) }];
         batch([...freeze, { type: "addPlacement", placement: { ...base, tableId: t.id, position } }]);
       } else {
         act({ type: "addPlacement", placement: { ...base, tableId: t.id, position: { x: 0, y: 0 } } });
@@ -667,9 +872,15 @@ export function StudioScreen({
       // it. Over bare floor, where it was let go, free.
       const plain: Placement = { ...base, position: { x, y } };
       const targets = hangTargetsOf(doc, arrangedStructure(plan.structure, doc));
-      const over = centreOver({ x, y }, targets);
-      const hung = over ? { ...plain, position: positionHungAt(plain, over.point) } : plain;
-      const tableId = tableUnderHang(doc, targets, hangPointOf(hung));
+      // Over the table being DRESSED it hangs where it was let go — three pendants placed along a
+      // head table are three places, not three on its middle — and is that table's.
+      const dressed = (() => {
+        const under = tableUnderHang(doc, targets, { x, y });
+        return under && dressingIds.has(under) ? under : null;
+      })();
+      const over = dressed ? null : centreOver({ x, y }, targets);
+      const hung = dressed ? { ...plain, position: positionHungAt(plain, { x, y }) } : over ? { ...plain, position: positionHungAt(plain, over.point) } : plain;
+      const tableId = dressed ?? tableUnderHang(doc, targets, hangPointOf(hung));
       act({ type: "addPlacement", placement: tableId ? { ...hung, over: tableId } : hung });
     } else if (product.category === "stage-benches") {
       // A banquette on its own is set like a table (lib/design-document/bench.ts): chairs along its
@@ -723,6 +934,40 @@ export function StudioScreen({
   const selectedNow = useRef(selected);
   selectedNow.current = selected;
   const pressExpanded = useRef<string | null>(null);
+  // Derived, so a table deleted (or undone away) while it was being dressed simply ends the mode.
+  const dressingTable = dressing ? doc.tables.find((t) => t.id === dressing) : undefined;
+  /** Every table in front of the scrim: the one being dressed, or — a grouped one — its whole block.
+   *  Two tables pushed together for a head table are one table to the designer, and opening half of
+   *  it alone (its other half and the block's chairs gone behind the scrim) was opening a table
+   *  nobody sits at. */
+  const dressingIds = useMemo(() => {
+    if (!dressingTable) return new Set<string>();
+    if (!dressingTable.groupId) return new Set([dressingTable.id]);
+    return new Set(doc.tables.filter((t) => t.groupId === dressingTable.groupId).map((t) => t.id));
+  }, [doc.tables, dressingTable]);
+  // …and which member of the block the bar is about: the one last picked — the table itself (pick
+  // sets it directly: the selection is the whole block, see below), or an item standing on it or
+  // hanging over it. Set while rendering (the rail's pattern for derived state), so a click on the
+  // other half of a head table hands the bar to that half at once.
+  const pickedMember = (() => {
+    if (dressingIds.size < 2) return null;
+    for (const r of selected) {
+      if (r.kind !== "placement") continue;
+      const p = doc.placements.find((x) => x.id === r.id);
+      const owner = p?.layer === "table" ? p.tableId : p?.layer === "ceiling" ? p.over : undefined;
+      if (owner && dressingIds.has(owner)) return owner;
+    }
+    return null;
+  })();
+  if (pickedMember && pickedMember !== dressing) setDressing(pickedMember);
+  // What a replace, an undo or a removal took off the plan leaves the selection too — a stale id
+  // made the next Ctrl+C say it had copied nothing. Set while rendering, like the line above.
+  const goneFromPlan = selected.some((r) =>
+    r.kind === "table" ? !doc.tables.some((t) => t.id === r.id) : r.kind === "placement" ? !doc.placements.some((p) => p.id === r.id) : false,
+  );
+  if (goneFromPlan)
+    setSelected(selected.filter((r) => (r.kind === "table" ? doc.tables.some((t) => t.id === r.id) : r.kind === "placement" ? doc.placements.some((p) => p.id === r.id) : true)));
+
   const pick = useCallback(
     (ref: SelectionRef | null, additive: boolean) => {
       let collapse = false;
@@ -735,6 +980,10 @@ export function StudioScreen({
         else if (pressExpanded.current === key) pressExpanded.current = null;
         else collapse = whole.every((w) => w.kind === "placement" && isStagePiece(doc.placements.find((p) => p.id === w.id)));
       } else pressExpanded.current = null;
+      // Dressing a block: a click on one of its tables hands the dressing bar to THAT table — but the
+      // selection stays the whole block. Selecting the half alone put the single-table bar up for it,
+      // and its rotate, mirror, size, swap, duplicate and delete each acted on half a head table.
+      if (ref && !additive && ref.kind === "table" && dressingIds.size > 1 && dressingIds.has(ref.id)) setDressing(ref.id);
       setSelected((cur) => {
         if (!ref) return cur.length ? [] : cur;
         if (collapse) return [ref];
@@ -752,7 +1001,7 @@ export function StudioScreen({
         return merged;
       });
     },
-    [doc],
+    [doc, dressingIds],
   );
 
   // A placement on a HIDDEN layer never enters a selection made here — every selection command
@@ -818,6 +1067,17 @@ export function StudioScreen({
    *  comes along with it; a drape is in, since a drape can be selected. Hidden planes stay out, as
    *  with every other way of building a selection here. */
   const selectAll = useCallback(() => {
+    // Dressing a table: everything on it and over it (its whole block's) — not the room behind the
+    // scrim, where a drag of one pendant then moved every table in the hall unseen.
+    if (dressingIds.size > 0) {
+      pickMany(
+        doc.placements
+          .filter((p) => (p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId) && resolve(p.variantId)?.anchor !== "table") || (p.layer === "ceiling" && !!p.over && dressingIds.has(p.over)))
+          .map((p) => ({ kind: "placement" as const, id: p.id })),
+        false,
+      );
+      return;
+    }
     pickMany(
       [
         ...doc.tables.map((t) => ({ kind: "table" as const, id: t.id })),
@@ -827,7 +1087,7 @@ export function StudioScreen({
       ],
       false,
     );
-  }, [doc, plan.structure.features, pickMany, shownInPass]);
+  }, [doc, plan.structure.features, pickMany, shownInPass, dressingIds]);
 
   // --- selection commands -------------------------------------------------------------------------
   // BULK IS A SELECTION PROBLEM. Every operation this screen has -- drag, rotate, delete, style,
@@ -889,23 +1149,32 @@ export function StudioScreen({
   /** The design items standing on a table — not its cloth, which is the table's surface. */
   const chipsOn = (tableId: string) =>
     doc.placements.filter((p) => p.layer === "table" && p.tableId === tableId && resolve(p.variantId)?.anchor !== "table");
+  /** Where what stands on a table is DRAWN — its own places, or its block's automatic layout when
+   *  the block is laid out as one (dressBlockOf). Every reader of positions goes through this. */
+  const spotsOn = (t: DesignTable) => dressingSpots(t, chipsOn(t.id), dressBlockOf(doc.tables, t, chipsOn));
   /** What hangs OVER a table (Placement.over) — its ceiling design, arranged and applied like its dressing. */
   const hungOn = (tableId: string) => doc.placements.filter((p) => p.layer === "ceiling" && p.over === tableId);
+  /** Every table as the designer sees it — a lone table, or a whole BLOCK (./dressing-units.ts) — for
+   *  every "make these look like that one": the pattern picker, the applies, the saved designs. Keyed
+   *  on the tables and groups (and the catalog the frames are measured from), so dragging a
+   *  centrepiece does not rebuild it. */
+  const units = useMemo(
+    () => unitsOf(doc),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.tables, doc.groups, catalog],
+  );
+  /** Every CLOTH in the catalog, every shade — what an incoming cloth recolours in place of adding a
+   *  second one. A table wears one cloth, whatever product it is: spreading cream over a room where
+   *  table 5 wears a different product's gold gave table 5 two cloths, both billed and packed. (A
+   *  variantless row is placed under its own product id, so that is in the list too.) */
+  const coverIds = useMemo(() => catalog.filter((p) => anchorOf(p) === "table").flatMap((p) => [p.id, ...p.variants.map((v) => v.id)]), [catalog]);
+  /** What a placement is replaced BY on a table it is applied to: any cloth, for a cloth; the
+   *  product's other shades, for anything else. */
+  const replacesFor = (variantId: string): string[] => (resolve(variantId)?.anchor === "table" ? coverIds : shadesOf(variantId).map((sh) => sh.id));
   /** A table as a thing to hang over, for carrying a ceiling design across tables
    *  (lib/studio/hang-over.ts hungCopy): a grouped table answers with its BLOCK's frame, so two
    *  halves of a head table are one thing to hang the same chandelier over. */
-  const overFrameOf = (tableId: string): OverFrame | null => {
-    const t = doc.tables.find((x) => x.id === tableId);
-    if (!t) return null;
-    if (t.groupId) {
-      const blk = tableBlock(doc.tables.filter((x) => x.groupId === t.groupId));
-      if (blk) return { position: blk.centre, rotation: blk.rotation, widthMm: blk.widthMm, depthMm: blk.depthMm };
-    }
-    const b = tableBox(t);
-    return { position: t.position, rotation: t.rotation ?? 0, mirrored: t.mirrored, widthMm: b.widthMm, depthMm: b.depthMm };
-  };
-  // Derived, so a table deleted (or undone away) while it was being dressed simply ends the mode.
-  const dressingTable = dressing ? doc.tables.find((t) => t.id === dressing) : undefined;
+  const overFrameOf = (tableId: string): OverFrame | null => unitOf(units, tableId)?.frame ?? null;
 
 
   // One undo puts the whole selection back, however many things were in it.
@@ -951,7 +1220,19 @@ export function StudioScreen({
     if (selected.length === 0) return null;
     // The venue's own features are dropped here: a copy of the property's bar is not a second bar,
     // and pasting one could only mean adding a row to a venue this screen does not edit.
-    const clip = copySelection(doc, docRefs(selected), (variantId) => resolve(variantId)?.anchor === "wall");
+    const raw = copySelection(doc, docRefs(selected), (variantId) => resolve(variantId)?.anchor === "wall");
+    // An item copied off a table without it carries where it is DRAWN (its table's frame), so a paste
+    // after a cut — the original gone — still knows its spot on an automatically laid-out table.
+    const copiedTables = new Set(raw.tables.map((t) => t.id));
+    const clip: Clip = {
+      ...raw,
+      placements: raw.placements.map((p) => {
+        if (!p.tableId || copiedTables.has(p.tableId)) return p;
+        const t = doc.tables.find((x) => x.id === p.tableId);
+        const sp = t ? spotsOn(t).find((x) => x.p.id === p.id) : undefined;
+        return sp ? { ...p, position: { x: Math.round(sp.local.x), y: Math.round(sp.local.y) } } : p;
+      }),
+    };
     const n = clipCount(clip);
     // Nothing copyable means the selection was drapes and only drapes — say so rather than leaving
     // the old clip in place to be pasted later under the impression it was this one.
@@ -962,6 +1243,8 @@ export function StudioScreen({
     holdClip(clip);
     showHint(n === 1 ? "הועתק פריט" : `הועתקו ${n} פריטים`);
     return clip;
+    // spotsOn reads only `doc` and the catalog.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, selected, docRefs]);
 
   /** Every floor thing's turned box, keyed the way the stacker keys them — what tells it which thing
@@ -994,9 +1277,8 @@ export function StudioScreen({
     [stackBoxes],
   );
 
-  /** A re-id'd fragment put on the plan and selected — what a paste and a loaded sketch share. */
-  const addClip = useCallback((fresh: Clip) => {
-    batch([
+  /** The actions that put a re-id'd fragment on the plan — one batch, so one undo entry. */
+  const clipActions = (fresh: Clip): Action[] => [
       ...fresh.tables.map((table) => ({ type: "addTable" as const, table })),
       ...fresh.placements.map((placement) => ({ type: "addPlacement" as const, placement })),
       // The members already carry their new groupId, but the group ROW only exists once something
@@ -1012,7 +1294,10 @@ export function StudioScreen({
         ],
         ...(g.number === undefined ? {} : { number: g.number }),
       })),
-    ]);
+    ];
+  /** A re-id'd fragment put on the plan and selected — what a paste and a loaded sketch share. */
+  const addClip = useCallback((fresh: Clip, extra: { actions: Action[]; selected: SelectionRef[] } = { actions: [], selected: [] }) => {
+    batch([...clipActions(fresh), ...extra.actions]);
     // On top of what they land on, like anything new (landNew) — a pasted table is not pasted under
     // the stage it was copied from.
     const added = [
@@ -1021,9 +1306,64 @@ export function StudioScreen({
     ];
     landNew(added);
     // Selected, and ready to be dragged where it is actually wanted. Table-layer items are left out:
-    // they follow their table, so a group drag would carry them twice.
-    setSelected(added);
+    // they follow their table, so a group drag would carry them twice — unless they ARE the paste
+    // (`extra`: design items pasted onto a table on their own).
+    setSelected([...added, ...extra.selected]);
   }, [batch, landNew]);
+
+  /** DESIGN ITEMS PASTED ON THEIR OWN — copied off a table without it — land like a pasted table
+   *  does: a step further along each time, on a table top, and selected. Onto the table being
+   *  dressed (its whole block), else the one table selected, else the table they came from. On the
+   *  table they came from they are offset from their originals; on another, at the same RELATIVE
+   *  spot (a third of the way along, a third of the way along). The table is frozen where it was
+   *  drawn first (its surface `write` sends every item), so nothing else on it jumps. A cloth goes
+   *  on as the table's ONE cloth: recolouring what it wears. */
+  const pasteDressing = (pairs: { src: Placement; fresh: Placement }[], step: number, unitPx: number): { actions: Action[]; selected: SelectionRef[] } => {
+    const out: Action[] = [];
+    const picked: SelectionRef[] = [];
+    const tablesPicked = selected.filter((r) => r.kind === "table");
+    const pickedUnits = new Set(tablesPicked.map((r) => unitOf(units, r.id)?.key ?? r.id));
+    const chosen = dressing ?? (tablesPicked.length && pickedUnits.size === 1 && selected.every((r) => r.kind === "table") ? tablesPicked[0].id : null);
+    const byTarget = new Map<string, { src: Placement; fresh: Placement }[]>();
+    for (const pr of pairs) {
+      const target = chosen ?? (doc.tables.some((t) => t.id === pr.src.tableId) ? pr.src.tableId! : null);
+      if (!target) continue;
+      byTarget.set(target, [...(byTarget.get(target) ?? []), pr]);
+    }
+    for (const [target, list] of byTarget) {
+      const s = dressSurface(target);
+      const toUnit = unitOf(units, target);
+      if (!s || !toUnit) continue;
+      const placed: { id: string; local: DocPoint }[] = [];
+      for (const { src, fresh } of list) {
+        // A cloth: the target's one cloth, on every table of it.
+        if (resolve(fresh.variantId)?.anchor === "table") {
+          s.members.forEach((m, i) => {
+            const worn = coverOf(doc, m.id);
+            if (worn) {
+              if (worn.variantId !== fresh.variantId) out.push({ type: "setPlacementVariant", id: worn.id, variantId: fresh.variantId });
+            } else out.push({ type: "addPlacement", placement: { ...fresh, id: i === 0 ? fresh.id : uid(), tableId: m.id, position: { x: 0, y: 0 } } });
+          });
+          continue;
+        }
+        const srcT = doc.tables.find((t) => t.id === src.tableId);
+        const srcSpot = srcT ? spotsOn(srcT).find((sp) => sp.p.id === src.id) : undefined;
+        let room = srcSpot?.at ?? (srcT ? fromTableFrame(srcT, src.position) : s.frame.position);
+        const fromUnit = srcT ? unitOf(units, srcT.id) : undefined;
+        const same = !!fromUnit && fromUnit.key === toUnit.key;
+        if (fromUnit && !same) room = relativeSpot(fromUnit.frame, toUnit.frame, room);
+        // A thumb's width on screen per paste, the way a table steps — the first paste onto another
+        // table lands on the spot itself.
+        const d = (same ? step : step - 1) * unitPx;
+        const local = clampToTable(s.box, chipBox(fresh), toTableFrame(s.frame, { x: room.x + d, y: room.y + d }));
+        out.push({ type: "addPlacement", placement: { ...fresh, tableId: s.place(local).tableId, position: { x: 0, y: 0 } } });
+        placed.push({ id: fresh.id, local });
+        picked.push({ kind: "placement", id: fresh.id });
+      }
+      if (placed.length) out.push(s.write([...s.chips.map((sp) => ({ id: sp.p.id, local: sp.local })), ...placed]));
+    }
+    return { actions: out, selected: picked };
+  };
 
   const paste = useCallback(() => {
     const clip = heldClip();
@@ -1031,12 +1371,21 @@ export function StudioScreen({
     // A screen-relative step, so a paste lands a thumb's width away whether the whole hall is on
     // screen or one table fills it — and each repeat steps one further out, fanning a run of pastes
     // instead of stacking them.
-    const step = nextPasteStep() * PASTE_STEP_PX * mmPerPx.current;
+    const k = nextPasteStep();
+    const step = k * PASTE_STEP_PX * mmPerPx.current;
     const fresh = pasteInto(clip, { dx: step, dy: step, firstNumber: nextNumber(), newId: uid });
-    addClip(fresh);
+    // What stood on a table that was NOT copied with it is pasted onto a table top (pasteDressing),
+    // not back over its original where nobody could see it, and not left unselected.
+    const pastedTables = new Set(fresh.tables.map((t) => t.id));
+    const loose = (p: Placement) => !!p.tableId && !pastedTables.has(p.tableId);
+    const pairs = fresh.placements.flatMap((p, i) => (loose(p) ? [{ src: clip.placements[i], fresh: p }] : []));
+    const extra = pairs.length ? pasteDressing(pairs, k, PASTE_STEP_PX * mmPerPx.current) : undefined;
+    addClip({ ...fresh, placements: fresh.placements.filter((p) => !loose(p)) }, extra);
     const n = clipCount(fresh);
     showHint(n === 1 ? "הודבק פריט" : `הודבקו ${n} פריטים`);
-  }, [addClip, nextNumber]);
+    // pasteDressing reads the document, the selection and the table being dressed — all here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addClip, nextNumber, doc, selected, dressing, units]);
 
   // A cut removes exactly what it TOOK, not what was selected. The two differ by a drape, which
   // copySelection refuses to copy — deleting the selection wholesale would take a curtain off the
@@ -1072,6 +1421,100 @@ export function StudioScreen({
     if (copy()) paste();
   }, [copy, paste]);
 
+  /** "שמירה כפריט מורכב": what is selected — tables with everything they wear and what hangs over
+   *  them, and what stands free beside them — as ONE catalog row made of its parts
+   *  (lib/catalog/composition.ts), opened in the drawer to be named. Copied exactly as Ctrl+C copies
+   *  (copySelection: a drape stays on its wall), and centred on the box the pieces stand in. */
+  const composeFromSelection = useCallback(() => {
+    const clip = copySelection(doc, docRefs(selected), (variantId) => resolve(variantId)?.anchor === "wall");
+    // Only things that stand ON a table, without the table — a centrepiece and its candlesticks:
+    // a TABLE SET (isTableSet), each part's place an offset in the table's frame about the set's
+    // middle, so it is laid onto whatever table it is dropped on. They used to count for nothing
+    // here (an item on a table left behind dangles), and the save said there was nothing to save.
+    const copied = new Set(clip.tables.map((t) => t.id));
+    const loose = clip.placements.filter((p) => p.layer === "table" && !!p.tableId && !copied.has(p.tableId));
+    if (clip.tables.length === 0 && loose.length > 0) {
+      const s = dressSurface(loose[0].tableId!);
+      if (!s) return;
+      const mine = new Set(s.members.map((m) => m.id));
+      const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+      const grow = (at: DocPoint, w: number, d: number) => {
+        box.minX = Math.min(box.minX, at.x - w / 2);
+        box.maxX = Math.max(box.maxX, at.x + w / 2);
+        box.minY = Math.min(box.minY, at.y - d / 2);
+        box.maxY = Math.max(box.maxY, at.y + d / 2);
+      };
+      const parts: { p: Placement; local: DocPoint }[] = [];
+      for (const p of loose) {
+        if (!mine.has(p.tableId!)) continue;
+        if (resolve(p.variantId)?.anchor === "table") {
+          parts.push({ p, local: { x: 0, y: 0 } }); // a cloth: the table's own, wherever it lands
+          continue;
+        }
+        const sp = s.chips.find((x) => x.p.id === p.id);
+        if (!sp) continue;
+        grow(sp.local, sp.box.widthMm, sp.box.depthMm);
+        parts.push({ p, local: sp.local });
+      }
+      for (const p of clip.placements) {
+        if (p.layer !== "ceiling" || !p.over || !mine.has(p.over)) continue;
+        const local = toTableFrame(s.frame, hangPointOf(p));
+        const b = chipBox(p);
+        grow(local, b.widthMm, b.depthMm);
+        parts.push({ p, local });
+      }
+      if (!Number.isFinite(box.minX)) {
+        showHint("אין כאן מה לשמור כפריט — בחרו שולחנות, או פריטים שעומדים בעצמם או על שולחן");
+        return;
+      }
+      const skipped = clip.placements.length - parts.length;
+      const cx = Math.round((box.minX + box.maxX) / 2);
+      const cy = Math.round((box.minY + box.maxY) / 2);
+      const placements: Placement[] = parts.map(({ p, local }) => {
+        const { tableId: _t, over: _o, groupId: _g, order: _r, ...rest } = p;
+        void _t; void _o; void _g; void _r;
+        const cloth = resolve(p.variantId)?.anchor === "table";
+        return { ...rest, position: cloth ? { x: 0, y: 0 } : { x: Math.round(local.x - cx), y: Math.round(local.y - cy) } };
+      });
+      if (skipped > 0) showHint("נשמרים רק הפריטים שעל השולחן ומעליו — השאר לא נכנסו לסט");
+      setDrawer({
+        product: {
+          id: "",
+          name: "",
+          styleTags: [],
+          ...compositeShell(Math.round(box.maxX - box.minX), Math.round(box.maxY - box.minY)),
+          layer: "table",
+          composition: { tables: [], placements, groups: [] },
+        },
+        mode: "composite",
+      });
+      return;
+    }
+    const arranged = arrangedStructure(plan.structure, doc);
+    const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    const take = (ref: { kind: "table" | "placement"; id: string }) => {
+      const g = itemGeometry(doc, arranged, plan.structure, ref);
+      if (!g) return;
+      box.minX = Math.min(box.minX, g.box.x - g.box.widthMm / 2);
+      box.maxX = Math.max(box.maxX, g.box.x + g.box.widthMm / 2);
+      box.minY = Math.min(box.minY, g.box.y - g.box.depthMm / 2);
+      box.maxY = Math.max(box.maxY, g.box.y + g.box.depthMm / 2);
+    };
+    for (const t of clip.tables) take({ kind: "table", id: t.id });
+    for (const p of clip.placements) if (!p.tableId && !p.perch) take({ kind: "placement", id: p.id });
+    if (!Number.isFinite(box.minX)) {
+      showHint("אין כאן מה לשמור כפריט — בחרו שולחנות, או פריטים שעומדים בעצמם או על שולחן");
+      return;
+    }
+    const composition = fromSelection(clip, box);
+    setDrawer({
+      product: { id: "", name: "", styleTags: [], ...compositeShell(Math.round(box.maxX - box.minX), Math.round(box.maxY - box.minY)), composition },
+      mode: "composite",
+    });
+    // dressSurface reads the document and the units, both of which change with `doc`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, selected, docRefs, plan.structure, units]);
+
   // --- grouping ----------------------------------------------------------------------------------
   // The one group this selection exactly is, if it is one — what the inspector needs in order to
   // show a group's panel rather than a list of things that happen to be selected together.
@@ -1085,7 +1528,9 @@ export function StudioScreen({
     const { tables, placements } = membersOf(doc, soleGroup);
     return {
       id: soleGroup,
-      number: doc.groups?.find((g) => g.id === soleGroup)?.number,
+      // The number it SHOWS — a block nobody numbered shows its lowest member's, a block of head
+      // tables 0 — not only a number stored on the group.
+      number: numberedUnits(doc).find((u) => u.kind === "group" && u.id === soleGroup)?.number,
       tables: tables.length,
       items: placements.length,
       seats: groupSeats(doc, soleGroup),
@@ -1111,17 +1556,36 @@ export function StudioScreen({
       .filter((r) => r.kind === "table")
       .map((r) => doc.tables.find((t) => t.id === r.id))
       .filter((t): t is DesignTable => !!t && !t.unnumbered)
-      .map((t) => tableNumber(doc, t))
-      .filter((n) => n > 0);
-    act({ type: "group", groupId, refs, ...(numbers.length ? { number: Math.min(...numbers) } : {}) });
-    showHint(numbers.length ? `קובצו לשולחן ${Math.min(...numbers)}` : "הפריטים קובצו");
+      .map((t) => tableNumber(doc, t));
+    const positive = numbers.filter((n) => n > 0);
+    // Head tables pushed together are the head table still (0), not a block with no name.
+    const number = positive.length ? Math.min(...positive) : numbers.length ? 0 : undefined;
+    act({ type: "group", groupId, refs, ...(number === undefined ? {} : { number }) });
+    // Tables grouped are ONE table — one number, one ring of chairs, one top to dress. Grouped while
+    // standing apart, that is rarely what was meant, so it is said.
+    const tables = refs.filter((r) => r.kind === "table").map((r) => doc.tables.find((t) => t.id === r.id)).filter((t): t is DesignTable => !!t);
+    const polys = tables.map((t) => footprintPolygons(tableFootprint(t), t.position, t.rotation ?? 0, t.mirrored));
+    const apart = tables.length > 1 && polys.some((a, i) => polys.every((b, j) => j === i || polysGap(a, b).distance > 50));
+    showHint(
+      apart
+        ? "השולחנות לא צמודים — קובצו בכל זאת לשולחן אחד (מספר אחד, כיסאות סביב כולם). Ctrl+Shift+G מפרק"
+        : number === undefined ? "הפריטים קובצו" : number === 0 ? "קובצו לשולחן הראש" : `קובצו לשולחן ${number}`,
+    );
   }, [selected, doc, act, docRefs]);
 
   const ungroupSelection = useCallback(() => {
     if (!soleGroup) return;
-    act({ type: "ungroup", groupId: soleGroup });
-    showHint("הקבוצה פורקה");
-  }, [soleGroup, act]);
+    // A block laid out as ONE (dressBlockOf) draws its items over every table of it; taken apart,
+    // each table would lay out only its own and they would jump. So each item is first handed to
+    // the table it is DRAWN over, at that place, in the same entry.
+    const member = doc.tables.find((t) => t.groupId === soleGroup);
+    const s = member ? dressSurface(member.id) : null;
+    const freeze: Action[] = s?.isBlock && s.chips.length ? [s.write(s.chips.map((sp) => ({ id: sp.p.id, local: sp.local })))] : [];
+    batch([...freeze, { type: "ungroup", groupId: soleGroup }]);
+    showHint("הקבוצה פורקה — הפריטים נשארו במקומם");
+    // dressSurface reads the document and the units, both of which change with `doc`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleGroup, batch, doc, units]);
 
   // --- the venue's own features ------------------------------------------------------------------
   // The canvas reports every position in absolute world millimetres, because that is what every
@@ -1281,9 +1745,25 @@ export function StudioScreen({
           .filter((p): p is Placement => !!p && p.layer === "ceiling");
         if (hungMoved.length) {
           const targets = hangTargetsOf(next.present, arrangedStructure(plan.structure, next.present));
+          const movedTables = new Set(refs.filter((r) => r.kind === "table").map((r) => r.id));
+          // Still over its own table's reach — let go a little past the rim, as a pendant ring round a
+          // round is. Its table's box (its block's), grown by 40cm each way.
+          const nearOwn = (p: Placement): boolean => {
+            const t = p.over ? next.present.tables.find((x) => x.id === p.over) : undefined;
+            if (!t) return false;
+            const blk = t.groupId ? tableBlock(next.present.tables.filter((x) => x.groupId === t.groupId)) : null;
+            const f = blk ? { position: blk.centre, rotation: blk.rotation, widthMm: blk.widthMm, depthMm: blk.depthMm } : tableFrame(t);
+            const local = toTableFrame({ position: f.position, rotation: f.rotation ?? 0, mirrored: f.mirrored }, hangPointOf(p));
+            return Math.abs(local.x) <= f.widthMm / 2 + 400 && Math.abs(local.y) <= f.depthMm / 2 + 400;
+          };
           for (const p of hungMoved) {
-            if (dressing && p.over === dressing) continue;
+            if (p.over && dressingIds.has(p.over)) continue;
+            // Carried WITH the table it hangs over (both in the drag): it is that table's still.
+            if (p.over && movedTables.has(p.over)) continue;
             const over = tableUnderHang(next.present, targets, hangPointOf(p));
+            // Over nothing else, and still by its own table: kept. Over ANOTHER table, it was
+            // moved to that one.
+            if (p.over && over === null && nearOwn(p)) continue;
             if ((p.over ?? null) !== over) next = amend(next, { type: "setPlacementOver", id: p.id, over });
           }
         }
@@ -1291,7 +1771,7 @@ export function StudioScreen({
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [endDrag, docRefs, plan.structure, stackBoxes, dressing],
+    [endDrag, docRefs, plan.structure, stackBoxes, dressingIds],
   );
 
   // --- bulk edits --------------------------------------------------------------------------------
@@ -1362,6 +1842,15 @@ export function StudioScreen({
       const turns: { kind: "table" | "placement"; id: string; position: Point; rotation: number }[] = [];
       const features: Action[] = [];
       const byGroup = new Map<string, { kind: "table" | "placement"; id: string }[]>();
+      const loose: Placement[] = [];
+      // How each table being turned turns — about its own middle, or its block's — so what HANGS
+      // over it can turn the same way about the same point. A pendant turned "about its own centre"
+      // beside a table turned about the table's span round on the spot and ended up over the floor.
+      const tableTurn = new Map<string, { pivot: Point; delta: number }>();
+      const turned = (kind: "table" | "placement", m: { id: string; position: Point; rotation?: number }, pivot: Point, delta: number) => {
+        const moved = fromLocalFrame(toLocalFrame(m.position, pivot, 0), pivot, delta);
+        turns.push({ kind, id: m.id, position: { x: Math.round(moved.x), y: Math.round(moved.y) }, rotation: (m.rotation || 0) + delta });
+      };
       for (const r of refs) {
         if (r.kind === "feature") {
           features.push({ type: "arrangeFeature", featureId: r.id, ...featureOffset(r.id, arrangedFeatureAt(r.id)), rotationDeg: featureTurn(r.id, deg) });
@@ -1371,23 +1860,32 @@ export function StudioScreen({
         const it = kind === "table" ? doc.tables.find((t) => t.id === r.id) : doc.placements.find((p) => p.id === r.id);
         if (!it) continue;
         if (it.groupId) byGroup.set(it.groupId, [...(byGroup.get(it.groupId) ?? []), { kind, id: r.id }]);
-        else turns.push({ kind, id: r.id, position: it.position, rotation: deg });
+        else if (kind === "table") {
+          turns.push({ kind, id: r.id, position: it.position, rotation: deg });
+          tableTurn.set(r.id, { pivot: it.position, delta: deg - (it.rotation || 0) });
+        } else loose.push(it as Placement);
       }
       for (const members of byGroup.values()) {
-        const tables = members.flatMap((m) => (m.kind === "table" ? doc.tables.filter((t) => t.id === m.id) : []));
-        const items = members.flatMap((m) => (m.kind === "placement" ? doc.placements.filter((p) => p.id === m.id) : []));
+        // In the DOCUMENT's order, not the selection's: the block's facing is its first member's,
+        // and the member that happened to be clicked must not decide which way the block turns.
+        const tables = doc.tables.filter((t) => members.some((m) => m.kind === "table" && m.id === t.id));
+        const items = doc.placements.filter((p) => members.some((m) => m.kind === "placement" && m.id === p.id));
         const all: { id: string; position: Point; rotation?: number }[] = [...tables, ...items];
         if (all.length === 0) continue;
         const block = tables.length ? tableBlock(tables) : null;
         const facing = block?.rotation ?? (all[0].rotation || 0);
         const pivot = block?.centre ?? { x: all.reduce((t, m) => t + m.position.x, 0) / all.length, y: all.reduce((t, m) => t + m.position.y, 0) / all.length };
         const delta = deg - facing;
-        const turned = (kind: "table" | "placement", m: { id: string; position: Point; rotation?: number }) => {
-          const moved = fromLocalFrame(toLocalFrame(m.position, pivot, 0), pivot, delta);
-          turns.push({ kind, id: m.id, position: { x: Math.round(moved.x), y: Math.round(moved.y) }, rotation: (m.rotation || 0) + delta });
-        };
-        tables.forEach((t) => turned("table", t));
-        items.forEach((p) => turned("placement", p));
+        tables.forEach((t) => {
+          turned("table", t, pivot, delta);
+          tableTurn.set(t.id, { pivot, delta });
+        });
+        items.forEach((p) => turned("placement", p, pivot, delta));
+      }
+      for (const p of loose) {
+        const with_ = p.layer === "ceiling" && p.over ? tableTurn.get(p.over) : undefined;
+        if (with_) turned("placement", p, with_.pivot, with_.delta);
+        else turns.push({ kind: "placement", id: p.id, position: p.position, rotation: deg });
       }
       batch([...(turns.length ? [{ type: "rotateMany" as const, turns }] : []), ...features]);
     },
@@ -1399,6 +1897,13 @@ export function StudioScreen({
    *  field shows, and what stops it from claiming a room of differently-angled items is all at 0°. */
   const sharedFacing = useMemo(() => {
     if (selected.length === 0) return null;
+    // A block of tables faces the way the block does — its first table's way, the frame its chairs
+    // are laid in — whatever angles its members stand at inside it (a T of two tables).
+    const g = soleGroupId(doc, docRefs(selected));
+    if (g && !selected.some((r) => r.kind === "feature")) {
+      const blk = tableBlock(doc.tables.filter((t) => t.groupId === g));
+      if (blk) return Math.round(blk.rotation * 100) / 100;
+    }
     const angles = selected.map((r) =>
       r.kind === "table"
         ? (doc.tables.find((t) => t.id === r.id)?.rotation ?? 0)
@@ -1410,7 +1915,7 @@ export function StudioScreen({
             })(),
     );
     return angles.every((a) => a === angles[0]) ? angles[0] : null;
-  }, [selected, doc, plan.structure]);
+  }, [selected, doc, plan.structure, docRefs]);
 
   // --- geometry: safety distance, mirroring, spacing, size ---------------------------------------
   // Every one of these measures things by the outline they are drawn with (./plan-geometry.ts), so
@@ -3204,41 +3709,91 @@ export function StudioScreen({
 
   /** Open a table to dress it: framed, with the table itself selected so its bar (the cloth, the
    *  chairs) is the one along the bottom. */
-  const dressTable = useCallback((tableId: string) => {
-    setDressing(tableId);
-    setSelected([{ kind: "table", id: tableId }]);
-  }, []);
+  const dressTable = useCallback(
+    (tableId: string) => {
+      setDressing(tableId);
+      // A grouped table is selected as its block — the block's bar, with the block's design actions.
+      setSelected(expandToGroups(doc, [{ kind: "table", id: tableId }]));
+    },
+    [doc],
+  );
 
-  /** An arrange action on the table being dressed — on the selected items when there are some (two
-   *  or more; one is enough for "to the centre"), on all of them otherwise. One history entry. */
+  /** The table being dressed as ONE surface in one frame — the table itself, or its whole BLOCK
+   *  (lib/design-document/block.ts's frame and box): what stands on every table of it, where in that
+   *  frame, and the action that writes places in that frame back onto the tables. On a block an item
+   *  goes to whichever table is under its new place — slid across the seam of a head table, a
+   *  candlestick belongs to the other half — and is not held to its own half's top: the block's is
+   *  its top, so a centrepiece may stand on the seam. */
+  const dressSurface = (tableId: string) => {
+    const t = doc.tables.find((x) => x.id === tableId);
+    if (!t) return null;
+    const unit = unitOf(units, tableId);
+    const block = unit && isBlock(unit) ? unit : null;
+    const members = block ? block.ids.map((id) => doc.tables.find((x) => x.id === id)).filter((x): x is DesignTable => !!x) : [t];
+    const blk = block ? tableBlock(members) : null;
+    const frame = blk ? { position: blk.centre, rotation: blk.rotation, mirrored: false } : { position: t.position, rotation: t.rotation, mirrored: t.mirrored };
+    // The block's spine is the ridge of the ONE outline its tables make (lib/design-document/block.ts)
+    // — read off its footprint it was the largest member's, and פיזור spread along half a head table.
+    const box: TableBox = blk ? { widthMm: blk.widthMm, depthMm: blk.depthMm, round: false, spine: blockSpine(blk) } : tableBox(t);
+    const chips = members.flatMap((m) => spotsOn(m).map((sp) => ({ ...sp, tableId: m.id, local: blk ? toTableFrame(frame, sp.at) : sp.local })));
+    const hung = members.flatMap((m) => hungOn(m.id));
+    /** A point in the surface's frame: the table it is on, and its place in THAT table's frame. A
+     *  point in the AIR of a block — the hollow of a ח, the pinch between two rounds, where its box
+     *  says there is table — goes onto the nearest table's top (for an item of `size`): only the
+     *  block's box keeps what is held, and its box is not its shape. */
+    const place = (local: DocPoint, size?: { widthMm: number; depthMm: number }): { tableId: string; position: DocPoint } => {
+      if (!block) return { tableId: t.id, position: local };
+      const room = fromTableFrame(frame, local);
+      const on = tableUnder(members, room);
+      if (on) return { tableId: on.id, position: toTableFrame(on, room) };
+      const m = memberAt(doc, block, room) ?? t;
+      return { tableId: m.id, position: clampToTable(tableBox(m), size ?? { widthMm: 0, depthMm: 0 }, toTableFrame(m, room)) };
+    };
+    const sizeOf = (id: string) => {
+      const p = doc.placements.find((x) => x.id === id);
+      return p ? chipBox(p) : undefined;
+    };
+    /** The one action that puts these items at these places (surface frame) — send every item. */
+    const write = (positions: { id: string; local: DocPoint }[]): Action =>
+      blk
+        ? { type: "arrangeOnTables", positions: positions.map(({ id, local }) => ({ id, ...place(local, sizeOf(id)) })) }
+        : { type: "arrangeDressing", tableId: t.id, positions: positions.map(({ id, local }) => ({ id, position: local })) };
+    return { t, members, frame, box, chips, hung, place, write, isBlock: !!blk };
+  };
+
+  /** An arrange action on the table being dressed (its whole block) — on the selected items when
+   *  there are some (two or more; one is enough for "to the centre"), on all of them otherwise. One
+   *  history entry. */
   const arrangeDressed = (kind: ArrangeKind | "auto") => {
-    const t = doc.tables.find((x) => x.id === dressing);
-    if (!t) return;
+    const s = dressing ? dressSurface(dressing) : null;
+    if (!s) return;
+    // Back to the automatic layout is about what stands ON the tables, whatever is selected — it
+    // used to do nothing at all while a chandelier over the table was the selection.
+    if (kind === "auto") {
+      batch(s.members.filter((m) => m.arranged).map((m) => ({ type: "resetDressing" as const, tableId: m.id })));
+      return;
+    }
     // What hangs OVER the table is arranged in its frame the way what stands on it is — when hung
     // items are what is selected, or when nothing stands on the table at all. By each item's HANG
     // POINT (its visual centre), never clamped to the top: the ceiling may reach past the rim.
-    const hung = hungOn(t.id);
-    const pickedHung = hung.filter((p) => selected.some((r) => r.kind === "placement" && r.id === p.id));
-    if (hung.length && (pickedHung.length || chipsOn(t.id).length === 0)) {
-      if (kind === "auto") return;
-      const current = new Map(hung.map((p) => [p.id, toTableFrame(t, hangPointOf(p))]));
+    const pickedHung = s.hung.filter((p) => selected.some((r) => r.kind === "placement" && r.id === p.id));
+    // The ceiling only when NOTHING on the table is selected too — a band across the candlesticks
+    // that also caught the chandelier over them is about the candlesticks (the arrows' rule).
+    const pickedChip = s.chips.some((sp) => selected.some((r) => r.kind === "placement" && r.id === sp.p.id));
+    if (s.hung.length && ((pickedHung.length && !pickedChip) || s.chips.length === 0)) {
+      const current = new Map(s.hung.map((p) => [p.id, toTableFrame(s.frame, hangPointOf(p))]));
       const subset = pickedHung.length >= (kind === "center" ? 1 : 2) ? pickedHung.map((p) => p.id) : undefined;
-      const next = arrange(kind, tableBox(t), hung.map(chipBox), current, subset);
-      act({ type: "moveMany", moves: hung.map((p) => ({ kind: "placement" as const, id: p.id, position: positionHungAt(p, fromTableFrame(t, next.get(p.id)!)) })) });
+      const next = arrange(kind, s.box, s.hung.map(chipBox), current, subset);
+      act({ type: "moveMany", moves: s.hung.map((p) => ({ kind: "placement" as const, id: p.id, position: positionHungAt(p, fromTableFrame(s.frame, next.get(p.id)!)) })) });
       return;
     }
-    if (kind === "auto") {
-      act({ type: "resetDressing", tableId: t.id });
-      return;
-    }
-    const spots = dressingSpots(t, chipsOn(t.id));
-    const current = new Map(spots.map((sp) => [sp.p.id, sp.local]));
+    const current = new Map(s.chips.map((sp) => [sp.p.id, sp.local]));
     // A runner stays where it lies — the arrangement is of what is set out ON it.
-    const laid = spots.filter((sp) => !sp.runner);
+    const laid = s.chips.filter((sp) => !sp.runner);
     const picked = selected.filter((r) => r.kind === "placement" && laid.some((sp) => sp.p.id === r.id)).map((r) => r.id);
     const subset = picked.length >= (kind === "center" ? 1 : 2) ? picked : undefined;
-    const next = arrange(kind, tableBox(t), laid.map((sp) => sp.box), current, subset);
-    act({ type: "arrangeDressing", tableId: t.id, positions: [...next].map(([id, position]) => ({ id, position })) });
+    const next = arrange(kind, s.box, laid.map((sp) => sp.box), current, subset);
+    act(s.write(s.chips.map((sp) => ({ id: sp.p.id, local: next.get(sp.p.id) ?? sp.local }))));
   };
 
   /** "פיזור": N of the one selected item — standing on the table, or hung over it — run evenly
@@ -3287,28 +3842,30 @@ export function StudioScreen({
   };
 
   const spreadDressed = (count: number, wave?: HeightWave | null) => {
-    const t = doc.tables.find((x) => x.id === dressing);
+    const s = dressing ? dressSurface(dressing) : null;
     const sel = selected.filter((r) => r.kind === "placement");
-    if (!t || sel.length !== 1) return;
+    if (!s || sel.length !== 1) return;
     const src = doc.placements.find((p) => p.id === sel[0].id);
     if (!src) return;
-    const overhead = src.layer === "ceiling" && src.over === t.id;
-    const onTop = src.layer === "table" && src.tableId === t.id && resolve(src.variantId)?.anchor !== "table";
+    const ids0 = new Set(s.members.map((m) => m.id));
+    const overhead = src.layer === "ceiling" && !!src.over && ids0.has(src.over);
+    const onTop = src.layer === "table" && !!src.tableId && ids0.has(src.tableId) && resolve(src.variantId)?.anchor !== "table";
     if (!overhead && !onTop) return;
     const n = Math.max(1, Math.min(24, Math.round(count)));
-    const line = spineOf(tableBox(t));
+    // Along the SURFACE's spine: a block's whole length, not one half of it.
+    const line = spineOf(s.box);
     const pts = alongSpine(line, n, 0.08);
     const name = resolve(src.variantId)?.product.name ?? "הפריט";
+    const label = tableLabel(doc, s.t);
     if (overhead) {
-      const same = hungOn(t.id)
+      const same = s.hung
         .filter((p) => p.variantId === src.variantId && p.id !== src.id)
-        .sort((a, b) => spineParam(line, toTableFrame(t, hangPointOf(a))) - spineParam(line, toTableFrame(t, hangPointOf(b))));
-      layHung(src, [src, ...same], pts.map((local) => ({ at: fromTableFrame(t, local), over: t.id })), wave, `${n} × ${name} מעל ${tableLabel(doc, t)}`);
+        .sort((a, b) => spineParam(line, toTableFrame(s.frame, hangPointOf(a))) - spineParam(line, toTableFrame(s.frame, hangPointOf(b))));
+      layHung(src, [src, ...same], pts.map((local) => ({ at: fromTableFrame(s.frame, local), over: s.place(local).tableId })), wave, `${n} × ${name} מעל ${label}`);
       return;
     }
-    const spots = dressingSpots(t, chipsOn(t.id));
-    const localOf = (p: Placement) => spots.find((sp) => sp.p.id === p.id)?.local ?? { x: 0, y: 0 };
-    const same = chipsOn(t.id).filter((p) => p.variantId === src.variantId && p.id !== src.id);
+    const localOf = (p: Placement) => s.chips.find((sp) => sp.p.id === p.id)?.local ?? { x: 0, y: 0 };
+    const same = s.chips.map((sp) => sp.p).filter((p) => p.variantId === src.variantId && p.id !== src.id);
     const ordered = [src, ...same.sort((a, b) => spineParam(line, localOf(a)) - spineParam(line, localOf(b)))];
     const keep = ordered.slice(0, n);
     const drop = ordered.slice(n);
@@ -3317,23 +3874,21 @@ export function StudioScreen({
     const { id: _i, tableId: _t, over: _o, groupId: _g, position: _p, quantity: _q, ...rest } = src;
     void _i; void _t; void _o; void _g; void _p; void _q;
     const actions: Action[] = [];
-    for (const id of ids.slice(keep.length)) {
-      actions.push({ type: "addPlacement", placement: { ...rest, id, layer: "table", tableId: t.id, quantity: 1, position: { x: 0, y: 0 } } });
-    }
+    ids.slice(keep.length).forEach((id, k) => {
+      actions.push({ type: "addPlacement", placement: { ...rest, id, layer: "table", tableId: s.place(pts[keep.length + k]).tableId, quantity: 1, position: { x: 0, y: 0 } } });
+    });
     for (const p of drop) actions.push({ type: "removePlacement", id: p.id });
     for (const p of keep) if (p.quantity !== 1) actions.push({ type: "setPlacementQuantity", id: p.id, quantity: 1 });
     const dropped = new Set(drop.map((p) => p.id));
-    actions.push({
-      type: "arrangeDressing",
-      tableId: t.id,
-      positions: [
-        ...spots.filter((sp) => !dropped.has(sp.p.id) && !ids.includes(sp.p.id)).map((sp) => ({ id: sp.p.id, position: sp.local })),
-        ...ids.map((id, i) => ({ id, position: pts[i] })),
-      ],
-    });
+    actions.push(
+      s.write([
+        ...s.chips.filter((sp) => !dropped.has(sp.p.id) && !ids.includes(sp.p.id)).map((sp) => ({ id: sp.p.id, local: sp.local })),
+        ...ids.map((id, i) => ({ id, local: pts[i] })),
+      ]),
+    );
     batch(actions);
     setSelected(ids.map((id) => ({ kind: "placement" as const, id })));
-    showHint(`${n} × ${name} לאורך ${tableLabel(doc, t)}`);
+    showHint(`${n} × ${name} לאורך ${label}`);
   };
 
   /** One of this ceiling item above EACH item set out on the table it hangs over — a pendant over
@@ -3343,14 +3898,17 @@ export function StudioScreen({
     const src = doc.placements.find((x) => x.id === id);
     const t = src?.over ? doc.tables.find((x) => x.id === src.over) : undefined;
     if (!src || !t) return;
-    const spots = dressingSpots(t, chipsOn(t.id)).filter((sp) => !sp.runner);
+    // Over every item of the whole table — a block's, for a grouped one — each linked to the table
+    // of the block it stands on.
+    const s = dressSurface(t.id);
+    const spots = (s?.chips ?? []).filter((sp) => !sp.runner);
     if (spots.length === 0) {
       showHint("אין פריטים על השולחן לתלות מעליהם");
       return;
     }
-    const same = hungOn(t.id).filter((p) => p.variantId === src.variantId && p.id !== src.id);
+    const same = (s?.hung ?? hungOn(t.id)).filter((p) => p.variantId === src.variantId && p.id !== src.id);
     const name = resolve(src.variantId)?.product.name ?? "הפריט";
-    layHung(src, [src, ...same], spots.map((sp) => ({ at: fromTableFrame(t, sp.local), over: t.id })), wave, `${spots.length} × ${name} — אחד מעל כל פריט על ${tableLabel(doc, t)}`);
+    layHung(src, [src, ...same], spots.map((sp) => ({ at: sp.at, over: sp.tableId })), wave, `${spots.length} × ${name} — אחד מעל כל פריט על ${tableLabel(doc, t)}`);
   };
 
   /** N of this ceiling item in a run along the ROW (or column) of tables its table stands in — a
@@ -3363,16 +3921,33 @@ export function StudioScreen({
     const src = doc.placements.find((x) => x.id === id);
     const t = src?.over ? doc.tables.find((x) => x.id === src.over) : undefined;
     if (!src || !t) return;
-    const line = tableLine(patternTablesOf(doc.tables), t.id, opts.axis);
+    // A block in the row is ONE table of it, strung through its middle (./dressing-units.ts).
+    const mine = unitOf(units, t.id);
+    const line = mine ? tableLine(patternUnits(units), mine.key, opts.axis) : [];
     if (line.length < 2) {
       showHint(opts.axis === "row" ? "השולחן עומד לבדו בשורה שלו" : "השולחן עומד לבדו בטור שלו");
       return;
     }
     const n = Math.max(1, Math.min(48, Math.round(opts.count)));
     const targets = hangTargetsOf(doc, arrangedStructure(plan.structure, doc));
-    const points = spanAlong(line.map((r) => r.position), n).map((at) => ({ at, over: tableUnderHang(doc, targets, at) }));
-    const inLine = new Set(line.map((r) => r.id));
-    const same = doc.placements.filter((p) => p.layer === "ceiling" && !!p.over && inLine.has(p.over) && p.variantId === src.variantId && p.id !== src.id);
+    const path = line.map((r) => r.position);
+    const points = spanAlong(path, n).map((at) => ({ at, over: tableUnderHang(doc, targets, at) }));
+    const inLine = new Set(line.flatMap((r) => unitByKey(r.id)?.ids ?? []));
+    // What the last run left: over the row's tables, AND the ones it hung free between two tables —
+    // left out, a second run with the same count doubled every pendant in the gaps.
+    const nearPath = (q: DocPoint) =>
+      path.some((a, i) => {
+        const b = path[i + 1];
+        if (!b) return false;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const l2 = dx * dx + dy * dy || 1;
+        const k = Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / l2));
+        return Math.hypot(q.x - (a.x + k * dx), q.y - (a.y + k * dy)) <= 300;
+      });
+    const same = doc.placements.filter(
+      (p) => p.layer === "ceiling" && p.variantId === src.variantId && p.id !== src.id && (p.over ? inLine.has(p.over) : nearPath(hangPointOf(p))),
+    );
     const name = resolve(src.variantId)?.product.name ?? "הפריט";
     layHung(src, [src, ...same], points, opts.wave, `${n} × ${name} לאורך ${opts.axis === "row" ? "השורה" : "הטור"} — ${line.length} שולחנות`);
   };
@@ -3391,114 +3966,221 @@ export function StudioScreen({
    *  moved, so the key is spent. */
   const nudgeDressing = useCallback(
     (key: string, big: boolean): boolean => {
-      const t = dressing ? doc.tables.find((x) => x.id === dressing) : undefined;
-      if (!t) return false;
+      const s = dressing ? dressSurface(dressing) : null;
+      if (!s) return false;
       const step = big ? 50 : 10;
       const d = key === "ArrowLeft" ? { x: -step, y: 0 } : key === "ArrowRight" ? { x: step, y: 0 } : key === "ArrowUp" ? { x: 0, y: -step } : key === "ArrowDown" ? { x: 0, y: step } : null;
       if (!d) return false;
-      const chips = doc.placements.filter((p) => p.layer === "table" && p.tableId === t.id && resolve(p.variantId)?.anchor !== "table");
       const picked = new Set(selected.filter((r) => r.kind === "placement").map((r) => r.id));
       // Hung over the table: a room step, the ceiling is not clamped to the top.
-      const hung = doc.placements.filter((p) => p.layer === "ceiling" && p.over === t.id && picked.has(p.id));
-      if (hung.length && !chips.some((c) => picked.has(c.id))) {
+      const hung = s.hung.filter((p) => picked.has(p.id));
+      const chipsPicked = s.chips.some((sp) => picked.has(sp.p.id));
+      if (hung.length && !chipsPicked) {
         act({ type: "moveMany", moves: hung.map((p) => ({ kind: "placement" as const, id: p.id, position: { x: p.position.x + d.x, y: p.position.y + d.y } })) });
         return true;
       }
-      if (!chips.some((c) => picked.has(c.id))) return false;
-      const local = toTableFrame({ position: { x: 0, y: 0 }, rotation: t.rotation, mirrored: t.mirrored }, d);
-      const box = tableBox(t);
-      act({
-        type: "arrangeDressing",
-        tableId: t.id,
-        positions: dressingSpots(t, chips).map((sp) => ({
-          id: sp.p.id,
-          position: picked.has(sp.p.id) ? clampToTable(box, sp.box, { x: sp.local.x + local.x, y: sp.local.y + local.y }) : sp.local,
-        })),
-      });
+      if (!chipsPicked) return false;
+      // In the SURFACE's frame (a block's, for a block — an item may step across its seam), from the
+      // screen direction of the key.
+      const local = toTableFrame({ position: { x: 0, y: 0 }, rotation: s.frame.rotation, mirrored: s.frame.mirrored }, d);
+      act(s.write(s.chips.map((sp) => ({ id: sp.p.id, local: picked.has(sp.p.id) ? clampToTable(s.box, sp.box, { x: sp.local.x + local.x, y: sp.local.y + local.y }) : sp.local }))));
       return true;
     },
-    [dressing, doc, selected, act],
+    // dressSurface reads only `doc`, `units` and the catalog, all of which are here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dressing, doc, units, selected, act],
   );
 
-  /** One item onto a set of tables. It recolours a table already wearing another shade of the same
-   *  product rather than giving it a second one, and keeps its place on the table — on a target that
-   *  is arranged by hand; an automatic one lays it out itself. */
-  const applyItemTo = (placementId: string, groups: { tableIds: string[]; variantId?: string }[]) => {
-    const p = doc.placements.find((x) => x.id === placementId);
-    const count = groups.reduce((n, g) => n + g.tableIds.length, 0);
-    if (!p || count === 0) return;
-    // A ceiling item: hung over each target at the same relative spot (lib/studio/hang-over.ts), a
-    // block once rather than once per member. "add": a target already wearing this product above
-    // it keeps its one.
-    if (p.layer === "ceiling" && p.over) {
-      const from = overFrameOf(p.over);
-      if (!from) return;
-      const { id: _i, over: _o, tableId: _t, groupId: _g, ...rest } = p;
-      void _i; void _o; void _t; void _g;
-      const seen = new Set<string>();
-      const hangs = groups.flatMap((g) =>
-        g.tableIds.flatMap((tableId) => {
-          const t = doc.tables.find((x) => x.id === tableId);
-          const unit = t?.groupId ? `group:${t.groupId}` : tableId;
-          if (!t || seen.has(unit)) return [];
-          seen.add(unit);
-          const to = overFrameOf(tableId);
-          return to ? [{ tableId, items: [{ ...hungCopy(rest, from, to), variantId: g.variantId ?? p.variantId }] }] : [];
-        }),
-      );
-      act({ type: "hangOverTables", hangs, mode: "add" });
-      showHint(`${resolve(p.variantId)?.product.name ?? "הפריט"} נתלה מעל ${hangs.length} שולחנות${groups.length > 1 ? " בשני גוונים" : ""}`);
-      return;
+  // ── putting a design on other tables ───────────────────────────────────────────────────────────
+  // Every one of these reads tables as UNITS (./dressing-units.ts): a block of grouped tables is one
+  // table — one centrepiece at its middle, one zig-zag square, one count on the button — and a design
+  // is carried by RELATIVE SPOT, so what stood a third of the way along a head table stands a third of
+  // the way along a round, on its top, rather than at the same millimetre offset off its rim.
+
+  /** A placement as worn on another table: everything but its id, its table and its group. */
+  const wornOf = (p: Placement): Omit<Placement, "id" | "tableId"> => {
+    const { id: _i, tableId: _t, groupId: _g, ...rest } = p;
+    void _i; void _t; void _g;
+    return rest;
+  };
+  /** One table on its own as a unit — the source and targets of "שאר הבלוק", member by member. */
+  const soloUnit = (t: DesignTable): DressUnit => ({ key: t.id, ids: [t.id], frame: tableFrame(t), number: t.number, type: t.type });
+  const unitByKey = (key: string) => units.find((u) => u.key === key);
+  /** A pattern's targets as units: the units it named, or — inside the source's block — its tables. */
+  const targetUnits = (keys: string[], inBlock: boolean): DressUnit[] =>
+    inBlock
+      ? keys.map((id) => doc.tables.find((t) => t.id === id)).filter((t): t is DesignTable => !!t).map(soloUnit)
+      : keys.map(unitByKey).filter((u): u is DressUnit => !!u);
+  const tablesWord = (n: number) => (n === 1 ? "שולחן אחד" : `${n} שולחנות`);
+  /** What hangs over any table of a unit. */
+  const hungOver = (u: DressUnit) => doc.placements.filter((p) => p.layer === "ceiling" && !!p.over && u.ids.includes(p.over));
+
+  /** Ceiling items hung again over other units at the same relative spot (lib/studio/hang-over.ts),
+   *  each linked to the table of the unit under its hang point. "add" gives a unit what it lacks: a
+   *  variant already above any of its tables is not hung twice, and another shade of the same
+   *  product above it is RECOLOURED rather than joined by a second chandelier. "replace" takes down
+   *  what hung over every table of the target first. */
+  const hangCopies = (items: Placement[], from: OverFrame, targets: { unit: DressUnit; variantId?: string }[], mode: "add" | "replace"): Action[] => {
+    const actions: Action[] = [];
+    const hangs: { tableId: string; items: Omit<Placement, "id" | "over" | "tableId">[] }[] = [];
+    for (const { unit, variantId } of targets) {
+      const above = hungOver(unit);
+      if (mode === "replace") for (const id of unit.ids) hangs.push({ tableId: id, items: [] });
+      for (const p of items) {
+        const v = variantId ?? p.variantId;
+        if (mode === "add") {
+          if (above.some((x) => x.variantId === v)) continue;
+          const shades = new Set(shadesOf(v).map((sh) => sh.id));
+          const other = above.find((x) => shades.has(x.variantId));
+          if (other) {
+            actions.push({ type: "setPlacementVariant", id: other.id, variantId: v });
+            continue;
+          }
+        }
+        const { id: _i, over: _o, tableId: _t, groupId: _g, ...rest } = p;
+        void _i; void _o; void _t; void _g;
+        const copy = { ...hungCopy(rest, from, unit.frame), variantId: v };
+        const over = memberAt(doc, unit, hangPointOf({ ...p, ...copy }))?.id ?? unit.ids[0];
+        hangs.push({ tableId: over, items: [copy] });
+      }
     }
-    // One action per shade, in one history entry: two shades in alternation are one thing done.
-    batch(
-      groups.map((g) => ({
-        type: "applyToTables" as const,
-        tableIds: g.tableIds,
-        placement: { variantId: g.variantId ?? p.variantId, layer: "table" as const, quantity: p.quantity, position: p.position, rotation: p.rotation, scale: p.scale },
-        replaces: shadesOf(p.variantId).map((sh) => sh.id),
-      })),
-    );
-    showHint(`${resolve(p.variantId)?.product.name ?? "הפריט"} הוחל על ${count} שולחנות${groups.length > 1 ? " בשני גוונים" : ""}`);
+    if (hangs.length) actions.push({ type: "hangOverTables", hangs, mode });
+    return actions;
   };
 
-  /** A table's whole dressing onto a set of tables. */
-  const applyDressingFrom = (fromTableId: string, toTableIds: string[], mode: "add" | "replace") => {
-    if (toTableIds.length === 0) return;
-    // The shades of whatever the source is wearing, so a target already in cream is recoloured to the
-    // source's gold rather than handed a second cloth. A table wears one cloth; the quote sums every
-    // placement, so the second one would be billed.
-    const replaces = doc.placements
-      .filter((p) => p.layer === "table" && p.tableId === fromTableId)
-      .flatMap((p) => shadesOf(p.variantId).map((sh) => sh.id));
-    // What hangs over the source goes too — a table's design is what is on it AND above it — each
-    // copy at the same relative spot over its target (lib/studio/hang-over.ts), a block once.
-    const hung = hungOn(fromTableId);
-    const from = hung.length ? overFrameOf(fromTableId) : null;
-    const seen = new Set<string>();
-    const hangs = from
-      ? toTableIds.flatMap((tableId) => {
-          const t = doc.tables.find((x) => x.id === tableId);
-          const unit = t?.groupId ? `group:${t.groupId}` : tableId;
-          if (!t || seen.has(unit)) return [];
-          seen.add(unit);
-          const to = overFrameOf(tableId);
-          if (!to) return [];
-          return [{
-            tableId,
-            items: hung.map((p) => {
-              const { id: _i, over: _o, tableId: _t, groupId: _g, ...rest } = p;
-              void _i; void _o; void _t; void _g;
-              return hungCopy(rest, from, to);
-            }),
-          }];
-        })
-      : [];
-    batch([
-      { type: "copyDressing", fromTableId, toTableIds, mode, replaces },
-      ...(hangs.length ? [{ type: "hangOverTables" as const, hangs, mode }] : []),
-    ]);
-    showHint(mode === "replace" ? `${toTableIds.length} שולחנות עוצבו מחדש` : `העיצוב הוחל על ${toTableIds.length} שולחנות`);
+  /** One item onto a set of tables. A unit already showing it is left alone; one showing another
+   *  shade of the same product is recoloured; a CLOTH goes on every table of a block (each in place
+   *  of the cloth it wore); anything else lands ONCE per unit, at the same relative spot it has on
+   *  its own table, on the member under that spot. A table the designer took it off (an exception,
+   *  F-5.3) keeps it off. Two shades in alternation are one history entry. */
+  /** An arrangement that stands in a vase, applied to tables that already have that vase standing
+   *  loose: it goes INTO the vase — the vase's placement becomes the arrangement in it, as a drop does
+   *  — rather than bringing a second vase (two drawn, two packed). Takes the vase out of `pool`.
+   *  True when it went in. */
+  const intoLooseVase = (item: Pick<Placement, "variantId" | "vessel">, variantId: string, pool: Placement[], actions: Action[]): boolean => {
+    const v = vesselOf({ ...item, variantId }, (id) => resolve(id)?.product);
+    const i = v ? pool.findIndex((x) => x.variantId === v) : -1;
+    if (i < 0) return false;
+    const vase = pool.splice(i, 1)[0];
+    actions.push({ type: "setPlacementVariant", id: vase.id, variantId });
+    if (item.vessel !== undefined) actions.push({ type: "setPlacementVessel", ids: [vase.id], vessel: item.vessel });
+    if ((vase.scale || 1) !== 1) actions.push({ type: "setPlacementScale", id: vase.id, scale: 1 });
+    return true;
+  };
+  const looseVasesOn = (ids: readonly string[]) =>
+    doc.placements.filter((x) => x.layer === "table" && !!x.tableId && ids.includes(x.tableId) && isVessel(resolve(x.variantId)?.product));
+
+  const applyItemTo = (placementId: string, groups: PatternGroup[], inBlock: boolean) => {
+    const p = doc.placements.find((x) => x.id === placementId);
+    if (!p) return;
+    const name = resolve(p.variantId)?.product.name ?? "הפריט";
+    const two = groups.length > 1 ? " בשני גוונים" : "";
+    // A ceiling item: hung over each target at the same relative spot, a block once.
+    if (p.layer === "ceiling" && p.over) {
+      const fromTable = doc.tables.find((t) => t.id === p.over);
+      const from = fromTable ? (inBlock ? tableFrame(fromTable) : overFrameOf(fromTable.id)) : null;
+      if (!from) return;
+      const targets = groups.flatMap((g) => targetUnits(g.keys, inBlock).map((unit) => ({ unit, variantId: g.variantId })));
+      const actions = hangCopies([p], from, targets, "add");
+      if (actions.length === 0) {
+        showHint(`${name} כבר תלוי מעל השולחנות האלה`);
+        return;
+      }
+      batch(actions);
+      showHint(`${name} נתלה מעל ${tablesWord(targets.length)}${two}`);
+      return;
+    }
+    const fromTable = p.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
+    if (!fromTable) return;
+    const from = inBlock ? tableFrame(fromTable) : overFrameOf(fromTable.id);
+    const spot = spotsOn(fromTable).find((sp) => sp.p.id === p.id);
+    const cover = resolve(p.variantId)?.anchor === "table";
+    if (!from || (!cover && !spot)) return;
+    const replaces = new Set(replacesFor(p.variantId));
+    const excepted = (tableId: string, v: string) => !!doc.exceptions?.some((e) => e.tableId === tableId && (e.variantId === v || replaces.has(e.variantId)));
+    const actions: Action[] = [];
+    let reached = 0;
+    for (const g of groups) {
+      const v = g.variantId ?? p.variantId;
+      for (const u of targetUnits(g.keys, inBlock)) {
+        const on = doc.placements.filter((x) => x.layer === "table" && !!x.tableId && u.ids.includes(x.tableId));
+        if (cover) {
+          let touched = false;
+          for (const id of u.ids) {
+            const worn = on.find((x) => x.tableId === id && replaces.has(x.variantId));
+            if (worn) {
+              if (worn.variantId !== v) {
+                actions.push({ type: "setPlacementVariant", id: worn.id, variantId: v });
+                touched = true;
+              }
+              continue;
+            }
+            if (excepted(id, v)) continue;
+            actions.push({ type: "addPlacement", placement: { ...wornOf(p), variantId: v, id: uid(), tableId: id, position: { x: 0, y: 0 } } });
+            touched = true;
+          }
+          if (touched) reached++;
+          continue;
+        }
+        if (on.some((x) => x.variantId === v)) continue;
+        const shade = on.find((x) => replaces.has(x.variantId));
+        if (shade) {
+          actions.push({ type: "setPlacementVariant", id: shade.id, variantId: v });
+          reached++;
+          continue;
+        }
+        if (intoLooseVase(p, v, looseVasesOn(u.ids), actions)) {
+          reached++;
+          continue;
+        }
+        const landed = landOn(doc, from, u, spot!.at, spot!.box);
+        if (!landed || excepted(landed.table.id, v)) continue;
+        actions.push({ type: "addPlacement", placement: { ...wornOf(p), variantId: v, id: uid(), tableId: landed.table.id, position: landed.local } });
+        reached++;
+      }
+    }
+    if (actions.length === 0) {
+      showHint(`${name} כבר על השולחנות האלה`);
+      return;
+    }
+    batch(actions);
+    showHint(`${name} הוחל על ${tablesWord(reached)}${two}`);
+  };
+
+  /** A unit's whole dressing — what stands on every table of it and what hangs over them — onto other
+   *  units (carriedDressing). "replace" makes each target match; "add" gives it what it lacks, a
+   *  block judged as one: a candlestick the head table already has on either half is not added to
+   *  the other. */
+  const applyUnitDressing = (from: DressUnit, targets: DressUnit[], mode: "add" | "replace"): number => {
+    const actions: Action[] = [];
+    // Never onto itself — nor onto the block its source table stands in, which holds it.
+    const to = targets.filter((u) => !u.ids.some((id) => from.ids.includes(id)));
+    for (const u of to) {
+      const has = mode === "add" ? new Set(doc.placements.filter((x) => x.layer === "table" && !!x.tableId && u.ids.includes(x.tableId)).map((x) => x.variantId)) : null;
+      // An arrangement in a vase goes into the vase a target already has standing loose (add only —
+      // a replace makes the target match the source exactly anyway).
+      const pool = mode === "add" ? looseVasesOn(u.ids) : [];
+      for (const [tableId, { items, arranged }] of carriedDressing(doc, from, u)) {
+        const wear = (has ? items.filter((it) => resolve(it.variantId)?.anchor === "table" || !has.has(it.variantId)) : items).filter(
+          (it) => !pool.length || !intoLooseVase(it, it.variantId, pool, actions),
+        );
+        actions.push({ type: "wearItems", tableId, items: wear, arranged, mode, replaces: coverIds });
+      }
+    }
+    const hung = hungOver(from);
+    if (hung.length) actions.push(...hangCopies(hung, from.frame, to.map((unit) => ({ unit })), mode));
+    batch(actions);
+    return to.length;
+  };
+
+  /** A table's whole dressing onto the units a pattern picked — the source being the table's whole
+   *  block — or, inside its block, onto the block's other tables, each its own. */
+  const applyDressingFrom = (fromTableId: string, groups: PatternGroup[], mode: "add" | "replace", inBlock: boolean) => {
+    const fromTable = doc.tables.find((t) => t.id === fromTableId);
+    const from = fromTable ? (inBlock ? soloUnit(fromTable) : unitOf(units, fromTableId)) : undefined;
+    if (!from) return;
+    const n = applyUnitDressing(from, targetUnits(groups.flatMap((g) => g.keys), inBlock), mode);
+    if (n > 0) showHint(mode === "replace" ? `${tablesWord(n)} עוצבו מחדש` : `העיצוב הוחל על ${tablesWord(n)}`);
   };
 
   // ── saved table designs (TableDesign) ──────────────────────────────────────────────────────────
@@ -3513,14 +4195,26 @@ export function StudioScreen({
     };
   }, []);
 
-  /** Everything on a table — its cloth too — saved under a name, standing where it stands. */
+  /** Everything on a table — or on every table of its block — saved under a name: ONE cloth, and each
+   *  item where it stands in the unit's own frame, with the unit's size (TableDesign.frame), so it is
+   *  worn by relative spot on any table or block. */
   const saveDesign = async (tableId: string, name: string) => {
-    const t = doc.tables.find((x) => x.id === tableId);
-    const items = doc.placements
-      .filter((p) => p.layer === "table" && p.tableId === tableId)
-      .map((p) => ({ variantId: p.variantId, quantity: p.quantity, position: p.position, rotation: p.rotation, scale: p.scale || 1 }));
-    if (!t || items.length === 0) return;
-    const res = await saveTableDesign({ id: uid(), name, ...(t.arranged ? { arranged: true } : {}), items });
+    const unit = unitOf(units, tableId);
+    if (!unit) return;
+    const frameTable = { position: unit.frame.position, rotation: unit.frame.rotation ?? 0, mirrored: unit.frame.mirrored };
+    const items: TableDesign["items"] = [];
+    const firstCover = unit.ids.map((id) => coverOf(doc, id)).find((c) => !!c);
+    const keep = (p: Placement, position: DocPoint) =>
+      items.push({ variantId: p.variantId, quantity: p.quantity, position: { x: Math.round(position.x), y: Math.round(position.y) }, rotation: p.rotation, scale: p.scale || 1, ...(p.sizeMm ? { sizeMm: p.sizeMm } : {}), ...(p.mirrored ? { mirrored: true } : {}), ...(p.vessel !== undefined ? { vessel: p.vessel } : {}) });
+    if (firstCover) keep(firstCover, { x: 0, y: 0 });
+    for (const id of unit.ids) {
+      const t = doc.tables.find((x) => x.id === id);
+      if (!t) continue;
+      for (const sp of spotsOn(t)) keep(sp.p, toTableFrame(frameTable, sp.at));
+    }
+    if (items.length === 0) return;
+    const arranged = unit.ids.some((id) => doc.tables.find((x) => x.id === id)?.arranged);
+    const res = await saveTableDesign({ id: uid(), name, ...(arranged ? { arranged: true } : {}), frame: { widthMm: Math.round(unit.frame.widthMm), depthMm: Math.round(unit.frame.depthMm) }, items });
     if ("error" in res) {
       showHint(res.error);
       return;
@@ -3529,51 +4223,69 @@ export function StudioScreen({
     showHint(`העיצוב ״${name}״ נשמר — אפשר להלביש בו כל שולחן, בכל אירוע`);
   };
 
-  /** A saved design onto one table, in place of what it wears. */
+  /** A saved design onto a table — the whole block, for a grouped one — in place of what it wears. */
   const wearDesign = (tableId: string, designId: string) => {
     const d = designs.find((x) => x.id === designId);
-    if (!d) return;
-    act({
-      type: "dressTables",
-      tableIds: [tableId],
-      design: { items: d.items, arranged: d.arranged },
-      mode: "replace",
-      replaces: d.items.flatMap((it) => shadesOf(it.variantId).map((sh) => sh.id)),
-    });
-    showHint(`השולחן הולבש ב״${d.name}״ — להחלה על שולחנות נוספים: ״דפוס״`);
+    const unit = unitOf(units, tableId);
+    if (!d || !unit) return;
+    if (!d.frame) {
+      // Saved before designs had a frame: its positions are a table's own — worn as they are, by
+      // every table of the block.
+      act({ type: "dressTables", tableIds: unit.ids, design: { items: d.items, arranged: d.arranged }, mode: "replace", replaces: coverIds });
+    } else {
+      const from: OverFrame = { position: { x: 0, y: 0 }, rotation: 0, widthMm: d.frame.widthMm, depthMm: d.frame.depthMm };
+      const per = new Map<string, Omit<Placement, "id" | "tableId">[]>(unit.ids.map((id) => [id, []]));
+      for (const it of d.items) {
+        const worn: Omit<Placement, "id" | "tableId"> = { ...it, layer: "table" };
+        if (resolve(it.variantId)?.anchor === "table") {
+          for (const id of unit.ids) per.get(id)!.push({ ...worn, position: { x: 0, y: 0 } });
+          continue;
+        }
+        const landed = landOn(doc, from, unit, it.position, chipBox({ ...worn, id: "_" }));
+        if (landed) per.get(landed.table.id)?.push({ ...worn, position: landed.local });
+      }
+      batch([...per].map(([id, items]): Action => ({ type: "wearItems", tableId: id, items, arranged: d.arranged, mode: "replace", replaces: coverIds })));
+    }
+    showHint(`${isBlock(unit) ? "הבלוק הולבש" : "השולחן הולבש"} ב״${d.name}״ — להחלה על שולחנות נוספים: ״דפוס״`);
   };
 
-  const renderDesigns = (tableId: string) => (
-    <TableDesignsPanel
-      designs={designs}
-      canSave={doc.placements.some((p) => p.layer === "table" && p.tableId === tableId)}
-      onSave={(name) => void saveDesign(tableId, name)}
-      onApply={(id) => wearDesign(tableId, id)}
-      onDelete={(id) => void deleteTableDesign(id).then(setDesigns)}
-    />
-  );
+  const renderDesigns = (tableId: string) => {
+    const unit = unitOf(units, tableId);
+    return (
+      <TableDesignsPanel
+        designs={designs}
+        canSave={!!unit && doc.placements.some((p) => p.layer === "table" && !!p.tableId && unit.ids.includes(p.tableId))}
+        onSave={(name) => void saveDesign(tableId, name)}
+        onApply={(id) => wearDesign(tableId, id)}
+        onDelete={(id) => void deleteTableDesign(id).then(setDesigns)}
+      />
+    );
+  };
 
   /** The "which tables" panel, bound to a source table — and to one item on it, when that is what
-   *  is being applied rather than the whole table. */
-  const renderPattern = (sourceTableId: string, placementId?: string) => (
+   *  is being applied rather than the whole table. `asBlock`: the source is the WHOLE block (its bar)
+   *  rather than one table of it, so "שאר הבלוק" is not offered. */
+  const renderPattern = (sourceTableId: string, placementId?: string, asBlock = false) => (
     <TablePatternPicker
       tables={doc.tables}
+      units={units}
       sourceId={sourceTableId}
+      noBlockMates={asBlock}
       selectedTableIds={selected.filter((r) => r.kind === "table").map((r) => r.id)}
       whole={!placementId}
       item={(() => {
         const p = placementId ? doc.placements.find((x) => x.id === placementId) : undefined;
         return p ? { variantId: p.variantId, shades: shadesOf(p.variantId) } : undefined;
       })()}
-      onApply={(groups, mode) =>
-        placementId ? applyItemTo(placementId, groups) : applyDressingFrom(sourceTableId, groups.flatMap((g) => g.tableIds), mode)
+      onApply={(groups, mode, inBlock) =>
+        placementId ? applyItemTo(placementId, groups, inBlock) : applyDressingFrom(sourceTableId, groups, mode, inBlock)
       }
     />
   );
 
-  // "על כל השולחנות" — the whole room in one cloth, whatever each table's type. `replaces` carries
-  // the product's other shades, so tables already dressed in gold are recoloured rather than given
-  // a second cloth: a table wears one.
+  // "על כל השולחנות" — the whole room in one cloth, whatever each table's type. `replaces` is every
+  // cloth in the catalog, so a table already dressed — in another shade or in another cloth
+  // altogether — is recoloured rather than given a second one: a table wears one.
   const spreadCloth = (placementId: string) => {
     const p = doc.placements.find((x) => x.id === placementId);
     if (!p) return;
@@ -3581,26 +4293,37 @@ export function StudioScreen({
       type: "applyToTables",
       tableIds: doc.tables.map((t) => t.id),
       placement: { variantId: p.variantId, layer: "table", quantity: p.quantity, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
-      replaces: shadesOf(p.variantId).map((s) => s.id),
+      replaces: coverIds,
     });
     showHint(`${resolve(p.variantId)?.product.name ?? "המפה"} הוחלה על כל השולחנות`);
   };
 
-  /** "החל את עיצוב השולחן הזה" — the clipboard's one copied table, worn onto every other table now
-   *  selected. `copyDressing` already no-ops on a stale source (a table copied in an event that is
-   *  no longer open) by finding no dressing to copy, so there is nothing to re-check here. */
-  const copyDressingToSelection = (mode: "add" | "replace") => {
+  /** The design the clipboard holds a table (or a whole block) of — the source of "החל על הנבחרים" —
+   *  or null when it holds none: no tables, tables from another event, or a table with nothing on it. */
+  const copiedDesign = (() => {
     const clip = heldClip();
-    if (clip.tables.length !== 1) return;
-    const fromTableId = clip.tables[0].id;
-    const toTableIds = docRefs(selected)
-      .filter((r) => r.kind === "table" && r.id !== fromTableId)
-      .map((r) => r.id);
-    if (toTableIds.length === 0) return;
-    // The shades of whatever the source table is wearing, so a target already in cream is
-    // recoloured to the source's gold rather than handed a second cloth. A table wears one cloth;
-    // the quote sums every placement, so the second one would be billed.
-    applyDressingFrom(fromTableId, toTableIds, mode);
+    if (clip.tables.length === 0) return null;
+    const live = clip.tables.map((t) => doc.tables.find((x) => x.id === t.id));
+    if (live.some((t) => !t)) return null;
+    const first = live[0]!;
+    const unit = unitOf(units, first.id);
+    // The clip is exactly one unit — a lone table, or a block copied whole — or one table of a block.
+    const from = unit && unit.ids.length === clip.tables.length && unit.ids.every((id) => clip.tables.some((t) => t.id === id)) ? unit : clip.tables.length === 1 ? soloUnit(first) : null;
+    if (!from) return null;
+    const dressed = doc.placements.some((p) => (p.layer === "table" && !!p.tableId && from.ids.includes(p.tableId)) || (p.layer === "ceiling" && !!p.over && from.ids.includes(p.over)));
+    return dressed ? from : null;
+  })();
+  /** The units the copied design would land on: the selected tables', the source's own left out. */
+  const copyTargets = copiedDesign
+    ? [...new Set(docRefs(selected).filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)).filter((u): u is DressUnit => !!u && !u.ids.some((id) => copiedDesign.ids.includes(id))).map((u) => u.key))]
+    : [];
+
+  /** "החל את עיצוב השולחן הזה" — the clipboard's copied table (or block), worn by every other table
+   *  (or block) now selected. */
+  const copyDressingToSelection = (mode: "add" | "replace") => {
+    if (!copiedDesign || copyTargets.length === 0) return;
+    const n = applyUnitDressing(copiedDesign, targetUnits(copyTargets, false), mode);
+    if (n > 0) showHint(mode === "replace" ? `${tablesWord(n)} עוצבו מחדש` : `העיצוב הוחל על ${tablesWord(n)}`);
   };
 
   // --- swapping for another catalog row ------------------------------------------------------------
@@ -3785,8 +4508,8 @@ export function StudioScreen({
   // button goes down, before React has re-rendered with whatever the canvas just selected under it
   // — so each row reaches for the LATEST handlers through a ref rather than closing over this
   // render's, which would act on the selection as it was a click ago.
-  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, align: alignPanel });
-  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, align: alignPanel };
+  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection });
+  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection };
   const contextItems = useCallback(
     (refs: SelectionRef[]): ContextMenuItem[] => {
       const own = docRefs(refs);
@@ -3799,7 +4522,13 @@ export function StudioScreen({
             ]
           : []),
         ...(own.length > 0 ? [{ label: "שכפול", icon: Copy, onSelect: () => latest.current.duplicate() }] : []),
-        ...(own.length > 1 ? [{ label: "קיבוץ", icon: Group, onSelect: () => latest.current.groupSelection() }] : []),
+        // A selection that IS one group is taken apart, not grouped into itself again.
+        ...(own.length > 1 && own.length === refs.length && soleGroupId(doc, own)
+          ? [{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: () => latest.current.ungroup() }]
+          : own.length > 1
+            ? [{ label: "קיבוץ", icon: Group, onSelect: () => latest.current.groupSelection() }]
+            : []),
+        ...(own.length > 0 ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: () => latest.current.compose() }] : []),
         // יישור, as the bar offers it — over the selection the menu was opened on, which is the
         // current one whenever more than one thing is in it (a right-click off the selection picks
         // the one thing under the pointer). Each row reaches for the latest panel when it is chosen.
@@ -3823,7 +4552,7 @@ export function StudioScreen({
         ...(own.length > 0 ? [{ label: "מחיקה", icon: Trash2, onSelect: () => latest.current.deleteSelection() }] : []),
       ];
     },
-    [docRefs, stackRefs],
+    [docRefs, stackRefs, doc],
   );
 
   // What the eye offers: the zones this event occupies, or — for an event still being booked into
@@ -3841,11 +4570,7 @@ export function StudioScreen({
   // because copy() also sets the hint. What the inspector's dressing button needs beyond `canPaste`
   // is whether the one held table actually brought dressing along, and how many of the currently
   // selected tables that dressing would land on.
-  const dressClip = heldClip();
-  const dressedSourceTableId = dressClip.tables.length === 1 && dressClip.placements.length > 0 ? dressClip.tables[0].id : null;
-  const dressCandidateCount = dressedSourceTableId
-    ? docRefs(selected).filter((r) => r.kind === "table" && r.id !== dressedSourceTableId).length
-    : 0;
+  const dressCandidateCount = copyTargets.length;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -3890,7 +4615,9 @@ export function StudioScreen({
           groups={RAIL[mode].groups}
           hint={RAIL[mode].hint}
           mmPerPx={mmPerPx}
-          onAddProduct={() => setAdding(blankProduct(railCategories[0]))}
+          onAddProduct={() => setDrawer({ product: blankProduct(railCategories[0]), mode: "new" })}
+          onEditProduct={editProduct}
+          onDuplicateProduct={duplicateProduct}
           addedIds={addedIds}
           armedId={armed ? armedId : null}
           onArm={arm}
@@ -4057,6 +4784,7 @@ export function StudioScreen({
             showTableNumbers={mode !== "design"}
             onExitDressing={() => setDressing(null)}
             onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
+            onArrangeBlock={(positions) => drag({ type: "arrangeOnTables", positions })}
           />
           {/* A client sent changes: the line that says so, and the review over the canvas. */}
           {proposal && !reviewing && !dressingTable && (
@@ -4105,27 +4833,35 @@ export function StudioScreen({
             <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center">
               <div className="pointer-events-auto flex min-w-0 justify-center">
                 <DressingBar
-                  title={`עיצוב ${tableLabel(doc, dressingTable)}`}
-                  count={chipsOn(dressingTable.id).length}
-                  hungCount={hungOn(dressingTable.id).length}
-                  selectedCount={selected.filter((r) => r.kind === "placement" && (chipsOn(dressingTable.id).some((c) => c.id === r.id) || hungOn(dressingTable.id).some((c) => c.id === r.id))).length}
-                  arranged={!!dressingTable.arranged}
+                  title={dressingIds.size > 1 ? `עיצוב ${tableLabel(doc, dressingTable)} · שולחן ${blockMemberIndex(doc, dressingTable) + 1} מתוך ${dressingIds.size}` : `עיצוב ${tableLabel(doc, dressingTable)}`}
+                  // What the bar counts, arranges and spreads is the WHOLE block being dressed.
+                  count={[...dressingIds].reduce((n, id) => n + chipsOn(id).length, 0)}
+                  hungCount={[...dressingIds].reduce((n, id) => n + hungOn(id).length, 0)}
+                  selectedCount={
+                    selected.filter((r) => {
+                      if (r.kind !== "placement") return false;
+                      const p = doc.placements.find((x) => x.id === r.id);
+                      return !!p && ((p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId)) || (p.layer === "ceiling" && !!p.over && dressingIds.has(p.over)));
+                    }).length
+                  }
+                  arranged={doc.tables.some((t) => dressingIds.has(t.id) && t.arranged)}
                   onArrange={arrangeDressed}
                   onAuto={() => arrangeDressed("auto")}
                   spread={(() => {
                     const sel = selected.filter((r) => r.kind === "placement");
                     const p = sel.length === 1 ? doc.placements.find((x) => x.id === sel[0].id) : undefined;
                     if (!p) return null;
-                    const overhead = p.layer === "ceiling" && p.over === dressingTable.id;
-                    const onTop = p.layer === "table" && p.tableId === dressingTable.id && resolve(p.variantId)?.anchor !== "table";
+                    const overhead = p.layer === "ceiling" && !!p.over && dressingIds.has(p.over);
+                    const onTop = p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId) && resolve(p.variantId)?.anchor !== "table";
                     if (!overhead && !onTop) return null;
-                    const same = (overhead ? hungOn(dressingTable.id) : chipsOn(dressingTable.id)).filter((x) => x.variantId === p.variantId);
+                    const pool = [...dressingIds].flatMap((id) => (overhead ? hungOn(id) : chipsOn(id)));
+                    const same = pool.filter((x) => x.variantId === p.variantId);
                     return {
                       name: resolve(p.variantId)?.product.name ?? "הפריט",
                       count: same.reduce((n, x) => n + x.quantity, 0),
                       overhead,
                       heightMm: hangHeightOf(p, resolve(p.variantId)?.product),
-                      dressed: dressingSpots(dressingTable, chipsOn(dressingTable.id)).filter((sp) => !sp.runner).length,
+                      dressed: doc.tables.filter((t) => dressingIds.has(t.id)).reduce((n, t) => n + spotsOn(t).filter((sp) => !sp.runner).length, 0),
                     };
                   })()}
                   onSpread={spreadDressed}
@@ -4220,7 +4956,8 @@ export function StudioScreen({
                 onSpin={setSpin}
                 canRestack={stackRefs(selected).length > 0}
                 onRestack={restack}
-                selectedTables={selected.filter((r) => r.kind === "table").length}
+                // A block is one table to the seat count's "ל־N שולחנות", as to setSeatsForSelection.
+                selectedTables={new Set(selected.filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)?.key ?? r.id)).size}
                 onSeatsForSelection={setSeatsForSelection}
                 onChairForSelection={setChairForSelection}
                 onChair={(id, variantId) => act({ type: "setTableChair", ids: [id], variantId })}
@@ -4253,6 +4990,7 @@ export function StudioScreen({
                 onCentreOver={centreHung}
                 onSpreadRow={spreadAlongRow}
                 onHangOverDressing={hangOverDressing}
+                onVessel={(ids, vessel) => act({ type: "setPlacementVessel", ids, vessel })}
                 onClimb={(id, edit) => act({ type: "setPlacementClimb", id, ...edit })}
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
@@ -4331,11 +5069,23 @@ export function StudioScreen({
                 onMakeStage={makeStage}
                 swap={swapPanel}
                 onSwap={swapSelection}
+                onEditProduct={editProduct}
+                onSaveComposite={composeFromSelection}
                 clothOptions={clothOptions}
                 onReplaceCloth={(id, productId) => {
                   const product = productById(productId);
                   if (product) replaceItems([id], product);
                 }}
+                onBlockCloth={(tableIds, op) => {
+                  const covers = tableIds.map((id) => coverOn(doc, id)).filter((c): c is Placement => !!c);
+                  if (op === "remove") batch(covers.map((c) => ({ type: "removePlacement" as const, id: c.id })));
+                  else if ("variantId" in op) batch(covers.filter((c) => c.variantId !== op.variantId).map((c) => ({ type: "setPlacementVariant" as const, id: c.id, variantId: op.variantId })));
+                  else {
+                    const product = productById(op.productId);
+                    if (product) replaceItems(covers.map((c) => c.id), product);
+                  }
+                }}
+                onStyleTables={(ids, style) => batch(ids.map((id) => ({ type: "styleTable" as const, id, style })))}
               />
               )}
             </div>
@@ -4430,16 +5180,32 @@ export function StudioScreen({
         </div>
       </div>
       <ProductDrawer
-        product={adding}
+        product={drawer?.product ?? null}
         internal={mode === "full"}
-        categories={railCategories}
-        onSave={(p) => void addProduct(p)}
-        // Only ever a NEW product here, so the drawer never shows its delete.
-        onDelete={() => {}}
-        onClose={() => setAdding(null)}
+        categories={drawerCategories}
+        onSave={(p) => void (drawer?.mode === "new" ? addProduct(p) : drawer?.mode === "composite" ? addComposite(p) : updateProduct(p))}
+        // No onDelete: the drawer shows no delete from the studio (see `drawer`).
+        onClose={() => setDrawer(null)}
       />
     </div>
   );
+
+  /** An existing row saved from the drawer. The canvas and the rail redraw from the catalog cache the
+   *  save updates, so a new size or shade is on the plan the moment the drawer closes. */
+  async function updateProduct(p: Product) {
+    showHint((await saveProduct(p)) ? `${p.name} עודכן בקטלוג` : "השמירה בקטלוג נכשלה — נסו שוב");
+  }
+
+  /** A composite saved from the drawer: pinned to the head of the rail, to be dragged onto the next
+   *  plan — dressed — whenever it is wanted. */
+  async function addComposite(p: Product) {
+    if (await saveProduct(p)) {
+      setAddedIds((ids) => [p.id, ...ids]);
+      showHint(`${p.name} נשמר בקטלוג כפריט מורכב — גוררים אותו מהרשימה כדי להניח אותו שוב`);
+    } else {
+      showHint("השמירה בקטלוג נכשלה — נסו שוב");
+    }
+  }
 
   async function addProduct(p: Product) {
     if (await saveProduct(p)) {

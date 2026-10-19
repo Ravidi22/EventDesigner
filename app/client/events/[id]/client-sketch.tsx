@@ -17,7 +17,7 @@ import { ArrowRight, Eye, EyeOff, Plus, Redo2, RotateCcw, Send, Table2, Trash2, 
 import { CanvasStage, type SelectionRef } from "@/app/(app)/studio/canvas-stage";
 import { amend, dispatch, initHistory, redo, undo, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { diffDocuments, mergeChanges, type DocChange } from "@/lib/design-document/delta";
-import { expandToGroups, nextTableNumber, tableLabel, duplicateNumbers } from "@/lib/design-document/groups";
+import { expandToGroups, nextTableNumber, tableLabel, tableNumber, duplicateNumbers } from "@/lib/design-document/groups";
 import type { DesignDocumentContent, DesignTable, Point } from "@/lib/design-document/types";
 import { eventPlan } from "@/lib/events/plan";
 import { primeCatalog } from "@/lib/catalog/storage";
@@ -649,7 +649,8 @@ function TableBar({
   const label = tableLabel(doc, table);
   const members = block ? doc.tables.filter((t) => t.groupId === block) : [table];
   const seats = members.reduce((n, t) => n + (t.seats ?? 0), 0);
-  const number = block ? (doc.groups?.find((g) => g.id === block)?.number ?? table.number) : table.number;
+  // The number the plan SHOWS (a block's, else its lowest numbered member's) — the title says the same.
+  const number = tableNumber(doc, table);
   const facts = block ? `${members.length} שולחנות מחוברים · ${seats} מקומות` : `${table.type}${table.seats ? ` · ${table.seats} מקומות` : ""}`;
   if (!editing) {
     return <Bar icon={Table2} title={label} facts={facts} onClose={onClose}>{null}</Bar>;

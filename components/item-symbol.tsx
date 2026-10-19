@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from "react";
 import type { Footprint } from "@/lib/studio/footprint";
-import { CLOTH_DROP_MM, type ChairStyle, type SymbolKind } from "@/lib/catalog/symbols";
+import { CLOTH_DROP_MM, type CandleStyle, type ChairStyle, type ChuppahStyle, type SymbolKind } from "@/lib/catalog/symbols";
 
 export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
@@ -58,6 +58,8 @@ const DEFAULT_TONE: Record<SymbolKind, string> = {
   ramp: "#FAF9FD",
   // A banquette's top: the same quiet upholstery a sofa is.
   bench: "#ECE7F5",
+  // A linen shade.
+  lamp: "#FBF6EC",
 };
 
 export interface ItemSymbolProps {
@@ -84,6 +86,8 @@ export interface ItemSymbolProps {
   overhead?: boolean;
   /** Which chair, for a chair (symbolStyleOf). Absent = a dining chair, or a stool when round. */
   chairStyle?: ChairStyle;
+  /** Which version of a candlestick or a chuppah (drawStyleOf). Absent = the category's default. */
+  drawStyle?: CandleStyle | ChuppahStyle;
   /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
   rise?: PlacementClimb & { heightMm: number };
   /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
@@ -99,7 +103,7 @@ export interface ItemSymbolProps {
   chairs?: boolean;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
@@ -121,7 +125,10 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
   let body: ReactNode;
   switch (kind) {
     case "candlestick":
-      body = candlestick(w, h, round, count, c, line);
+      body = candlestick(w, h, round, count, c, line, drawStyle as CandleStyle | undefined);
+      break;
+    case "lamp":
+      body = lamp(w, h, round, c, line);
       break;
     case "flowers":
       body = <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />;
@@ -165,7 +172,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = along(w, h, (L, D) => arch(L, D, c, line, ink, detail));
       break;
     case "chuppah":
-      body = chuppah(w, h, round, c, line, ink, detail);
+      body = drawStyle === "rotunda" ? rotunda(w, h, c, line) : chuppah(w, h, round, c, line, ink, detail);
       break;
     case "bar":
       body = shaped ? shapedBar(footprint, c, line) : round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
@@ -304,51 +311,355 @@ function plainFlowers(w: number, h: number, tone: string | undefined, form?: Flo
 
 // ── the pictures ────────────────────────────────────────────────────────────────────────────────
 
-/** A candelabrum: its candles round a central stem, joined to it by its arms — or, on a long piece,
- *  a row of candles on a bar. Each candle wears its flame, which is what makes it read as light. */
-function candlestick(w: number, h: number, round: boolean, n: number, c: Colours, line: Line) {
-  const candle = (key: string, x: number, y: number, r: number) => (
+/** A candle piece, in its style (CandleStyle, lib/catalog/symbols.ts) — or, with none chosen, by its
+ *  footprint: a long piece a row of candles on a bar, anything else its candles round a stem. Each
+ *  candle wears its flame, which is what makes it read as light. `n` is the row's arms: candles,
+ *  cylinders or glasses, whichever the style is made of. */
+function candlestick(w: number, h: number, round: boolean, n: number, c: Colours, line: Line, style?: CandleStyle) {
+  const long = !round && Math.max(w, h) / Math.min(w, h) >= 1.8;
+  switch (style ?? (long ? "row" : "ring")) {
+    case "row":
+      return candleRow(w, h, n, long, false, c, line);
+    case "sleeves":
+      return long ? candleRow(w, h, n, long, true, c, line) : candleRing(w, h, n, true, c, line);
+    case "tiered":
+      return candleTiers(w, h, n, c, line);
+    case "cluster":
+      return glassCluster(w, h, n, "pillar", c, line);
+    case "floating":
+      return glassCluster(w, h, n, "float", c, line);
+    case "powder":
+      return glassCluster(w, h, n, "powder", c, line);
+    case "pillars":
+      return pillarTray(w, h, round, n, long, c, line);
+    case "lantern":
+      return lanterns(w, h, n, long, c, line);
+    case "fire":
+      return fireBurner(w, h, round, c, line);
+    default:
+      return candleRing(w, h, n, false, c, line);
+  }
+}
+
+/** The arms of a candelabrum: the metal itself where it has a colour, a faint ink line where it is
+ *  clear glass or white (drawn in its own near-white tone, the arms of a crystal piece vanished). */
+function armLine(c: Colours, line: Line, width: number) {
+  if (c.print) return { ...line, stroke: c.ink, strokeOpacity: 1, strokeWidth: width };
+  return paleTone(c.tone) ? { ...line, strokeOpacity: 0.4, strokeWidth: width * 0.7 } : { ...line, stroke: c.tone, strokeOpacity: 1, strokeWidth: width };
+}
+
+/** Near-white — glass, white porcelain, crystal. */
+function paleTone(t: string): boolean {
+  const hex = t.trim().replace("#", "");
+  const full = hex.length === 3 ? hex.split("").map((x) => x + x).join("") : hex;
+  if (!/^[0-9a-f]{6}$/i.test(full)) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+  return (r * 299 + g * 587 + b * 114) / 1000 > 225;
+}
+
+/** One candle seen from above: its wax, the flame, the bright heart of it — and, in a sleeve, the
+ *  glass round it a little wider than the candle. */
+function candleAt(key: string, x: number, y: number, r: number, c: Colours, line: Line, sleeve = false) {
+  return (
     <g key={key}>
+      {sleeve && <circle cx={x} cy={y} r={r * 1.75} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.4} {...line} strokeOpacity={line.strokeOpacity * 0.6} />}
       <circle cx={x} cy={y} r={r} fill={c.tone} {...line} />
       <circle cx={x} cy={y} r={r * 0.5} fill={c.print ? "none" : FLAME} {...(c.print ? line : {})} />
       {!c.print && <circle cx={x} cy={y} r={r * 0.2} fill="#ffffff" fillOpacity={0.85} />}
     </g>
   );
-  // A long piece: candles in a row along a bar.
-  if (!round && Math.max(w, h) / Math.min(w, h) >= 1.8) {
-    return along(w, h, (L, D) => {
-      const r = Math.min(D * 0.34, L / (n * 2.3));
-      const xs = Array.from({ length: n }, (_, i) => (n === 1 ? 0 : -L * 0.42 + (i * L * 0.84) / (n - 1)));
-      return (
-        <>
-          <rect x={-L * 0.46} y={-D * 0.12} width={L * 0.92} height={D * 0.24} rx={D * 0.12} fill={c.tone} {...line} />
-          {xs.map((x, i) => candle(`c${i}`, x, 0, r))}
-        </>
-      );
-    });
-  }
+}
+
+/** Candles in a line — a long piece's bar, or a candelabrum whose arms stand in one plane (a classic
+ *  five-arm piece is a line seen from above), standing on its round foot. */
+function candleRow(w: number, h: number, n: number, long: boolean, sleeves: boolean, c: Colours, line: Line) {
+  return along(w, h, (L, D) => {
+    const r = Math.min(D * (sleeves ? 0.2 : 0.34), L / (n * (sleeves ? 3.8 : 2.3)));
+    const span = L * (sleeves ? 0.78 : 0.84);
+    const xs = Array.from({ length: n }, (_, i) => (n === 1 ? 0 : -span / 2 + (i * span) / (n - 1)));
+    const bar = long ? D * 0.24 : Math.min(D * 0.12, L * 0.05);
+    return (
+      <>
+        {!long && <circle r={Math.min(D * 0.36, L * 0.16)} fill={c.tone} fillOpacity={c.print ? 1 : 0.35} {...line} />}
+        <rect x={-L * 0.46} y={-bar / 2} width={L * 0.92} height={bar} rx={bar / 2} fill={c.tone} {...line} />
+        {xs.map((x, i) => candleAt(`c${i}`, x, 0, r, c, line, sleeves))}
+      </>
+    );
+  });
+}
+
+/** Candles round a central stem, joined to it by its arms — a centre candle on an odd count. */
+function candleRing(w: number, h: number, n: number, sleeves: boolean, c: Colours, line: Line) {
   const R = Math.min(w, h) / 2;
   if (n <= 1) {
     return (
       <>
         <circle r={R * 0.92} fill={c.tone} fillOpacity={c.print ? 1 : 0.35} {...line} />
-        {candle("c", 0, 0, R * 0.5)}
+        {candleAt("c", 0, 0, R * (sleeves ? 0.32 : 0.5), c, line, sleeves)}
       </>
     );
   }
-  // A centre candle on an odd count; the rest round it.
   const ring = n % 2 === 1 ? n - 1 : n;
-  const reach = R * 0.68;
-  const r = Math.min(R * 0.21, ((Math.PI * reach) / ring) * 0.55);
+  const reach = R * (sleeves ? 0.62 : 0.68);
+  const r = Math.min(R * 0.21, ((Math.PI * reach) / ring) * 0.55) / (sleeves ? 1.6 : 1);
   const arms = Array.from({ length: ring }, (_, i) => polar(reach, -90 + (i * 360) / ring));
   return (
     <>
       {arms.map((p, i) => (
-        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} stroke={c.print ? c.ink : c.tone} strokeOpacity={1} strokeWidth={2.5} />
+        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...armLine(c, line, 2.5)} />
       ))}
       <circle r={R * 0.2} fill={c.tone} {...line} />
-      {arms.map((p, i) => candle(`c${i}`, p.x, p.y, r))}
-      {n % 2 === 1 && candle("cc", 0, 0, r * 0.95)}
+      {arms.map((p, i) => candleAt(`c${i}`, p.x, p.y, r, c, line, sleeves))}
+      {n % 2 === 1 && candleAt("cc", 0, 0, r * 0.95, c, line, sleeves)}
+    </>
+  );
+}
+
+/** A tall crystal piece in tiers — the 13- and 25-arm candelabra: an outer ring of candles on its
+ *  arms, a smaller ring above them turned half a step, one candle crowning the middle, and the
+ *  crystal drops hanging between the outer arms. Too few candles for two rings is one ring. */
+function candleTiers(w: number, h: number, n: number, c: Colours, line: Line) {
+  if (n < 7) return candleRing(w, h, n, false, c, line);
+  const R = Math.min(w, h) / 2;
+  const rest = n - 1;
+  const outer = Math.ceil(rest * 0.6);
+  const inner = rest - outer;
+  const outerAt = Array.from({ length: outer }, (_, i) => polar(R * 0.76, -90 + (i * 360) / outer));
+  const innerAt = Array.from({ length: inner }, (_, i) => polar(R * 0.4, -90 + ((i + 0.5) * 360) / inner));
+  const ro = Math.min(R * 0.13, ((Math.PI * R * 0.76) / outer) * 0.42);
+  const ri = Math.min(R * 0.11, ((Math.PI * R * 0.4) / inner) * 0.42);
+  const drops = Array.from({ length: outer }, (_, i) => polar(R * 0.9, -90 + ((i + 0.5) * 360) / outer));
+  const arm = armLine(c, line, 2);
+  return (
+    <>
+      {outerAt.map((p, i) => (
+        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...arm} />
+      ))}
+      <circle r={R * 0.4} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.5} strokeDasharray="3 3" />
+      {drops.map((p, i) => (
+        <circle key={`d${i}`} cx={p.x} cy={p.y} r={R * 0.035} fill={c.print ? "none" : "#ffffff"} {...line} strokeOpacity={line.strokeOpacity * 0.6} />
+      ))}
+      <circle r={R * 0.16} fill={c.tone} {...line} />
+      {outerAt.map((p, i) => candleAt(`o${i}`, p.x, p.y, ro, c, line))}
+      {innerAt.map((p, i) => candleAt(`i${i}`, p.x, p.y, ri, c, line))}
+      {candleAt("cc", 0, 0, ro, c, line)}
+    </>
+  );
+}
+
+/** `n` circles of uneven sizes packed tight round the middle of a unit circle — a cluster of glass as
+ *  a designer sets one: the biggest in the middle, the rest close round it, nothing overlapping.
+ *  Kept per count, so a room of identical clusters packs once. */
+const packs = new Map<number, { x: number; y: number; r: number }[]>();
+const PACK_SIZES = [1, 0.84, 0.74, 0.92, 0.68, 0.8, 0.62, 0.88, 0.7, 0.78];
+function packCircles(count: number): { x: number; y: number; r: number }[] {
+  const n = Math.max(1, Math.min(24, Math.round(count)));
+  const hit = packs.get(n);
+  if (hit) return hit;
+  const base = 1 / Math.sqrt(n);
+  const gap = base * 0.06;
+  const placed: { x: number; y: number; r: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = base * PACK_SIZES[i % PACK_SIZES.length];
+    if (!placed.length) {
+      placed.push({ x: 0, y: 0, r });
+      continue;
+    }
+    let best = { x: 0, y: 0 };
+    let bestScore = Infinity;
+    for (const p of placed) {
+      for (let a = 0; a < 360; a += 7.5) {
+        const d = p.r + r + gap;
+        const x = p.x + d * Math.cos((a * Math.PI) / 180);
+        const y = p.y + d * Math.sin((a * Math.PI) / 180);
+        if (placed.some((q) => Math.hypot(q.x - x, q.y - y) < q.r + r + gap - 1e-9)) continue;
+        const score = Math.hypot(x, y);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x, y };
+        }
+      }
+    }
+    placed.push({ ...best, r });
+  }
+  // Centred on its own box, and grown or shrunk to fill the unit circle.
+  const minX = Math.min(...placed.map((p) => p.x - p.r));
+  const maxX = Math.max(...placed.map((p) => p.x + p.r));
+  const minY = Math.min(...placed.map((p) => p.y - p.r));
+  const maxY = Math.max(...placed.map((p) => p.y + p.r));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const reach = Math.max(...placed.map((p) => Math.hypot(p.x - cx, p.y - cy) + p.r));
+  const k = 0.96 / reach;
+  const out = placed.map((p) => ({ x: (p.x - cx) * k, y: (p.y - cy) * k, r: p.r * k }));
+  packs.set(n, out);
+  return out;
+}
+
+/** Glass cylinders packed in a cluster, each holding its candle: a pillar candle (a solitaire
+ *  cluster), a floating candle on water, or powdered wax round a wick. The glass is the item's tone,
+ *  see-through; its rim a second line inside the first. */
+function glassCluster(w: number, h: number, n: number, fill: "pillar" | "float" | "powder", c: Colours, line: Line) {
+  const m = Math.min(w, h) / 2;
+  const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.45 };
+  return (
+    <>
+      {packCircles(n).map((g, i) => {
+        const x = (g.x * w) / 2;
+        const y = (g.y * h) / 2;
+        const r = g.r * m;
+        return (
+          <g key={i}>
+            <circle cx={x} cy={y} r={r} fill={c.print ? "#ffffff" : c.tone} fillOpacity={c.print ? 1 : 0.5} {...line} />
+            <circle cx={x} cy={y} r={r * 0.86} fill="none" {...faint} />
+            {fill === "pillar" && (
+              <>
+                <circle cx={x} cy={y} r={r * 0.56} fill={c.print ? "#ffffff" : "#FBF4E4"} {...faint} />
+                <circle cx={x} cy={y} r={r * 0.22} fill={c.print ? "none" : FLAME} {...(c.print ? line : {})} />
+              </>
+            )}
+            {fill === "float" && (
+              <>
+                <circle cx={x} cy={y} r={r * 0.86} fill={c.print ? "none" : WATER} fillOpacity={0.75} />
+                <circle cx={x} cy={y} r={r * 0.64} fill="none" stroke={c.print ? c.ink : "#ffffff"} strokeOpacity={c.print ? 0.4 : 0.9} strokeWidth={1} vectorEffect="non-scaling-stroke" strokeDasharray="3 3" />
+                <circle cx={x} cy={y} r={r * 0.4} fill="#ffffff" {...faint} />
+                <circle cx={x} cy={y} r={r * 0.17} fill={c.print ? "none" : FLAME} {...(c.print ? line : {})} />
+              </>
+            )}
+            {fill === "powder" && (
+              <>
+                <circle cx={x} cy={y} r={r * 0.86} fill={c.print ? "#ffffff" : "#F3EADB"} />
+                {Array.from({ length: 9 }, (_, j) => {
+                  const p = polar(r * 0.72 * Math.sqrt((j + 0.5) / 9), j * 137.5 + i * 41);
+                  return <circle key={j} cx={x + p.x} cy={y + p.y} r={r * 0.05} fill={c.ink} fillOpacity={c.print ? 0.6 : 0.22} />;
+                })}
+                <circle cx={x} cy={y} r={r * 0.18} fill={c.print ? "none" : FLAME} {...(c.print ? line : {})} />
+              </>
+            )}
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+/** Pillar candles standing on a tray — round, or a long one for a runner of them. */
+function pillarTray(w: number, h: number, round: boolean, n: number, long: boolean, c: Colours, line: Line) {
+  const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.45 };
+  const tray = round ? (
+    <>
+      <ellipse rx={w / 2} ry={h / 2} fill={c.tone} {...line} />
+      <ellipse rx={w * 0.44} ry={h * 0.44} fill="none" {...faint} />
+    </>
+  ) : (
+    <>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={Math.min(w, h) * 0.14} fill={c.tone} {...line} />
+      <rect x={-w * 0.44} y={-h * 0.44} width={w * 0.88} height={h * 0.88} rx={Math.min(w, h) * 0.1} fill="none" {...faint} />
+    </>
+  );
+  const pillar = (key: string, x: number, y: number, r: number) => (
+    <g key={key}>
+      <circle cx={x} cy={y} r={r} fill={c.print ? "#ffffff" : "#FBF4E4"} {...line} />
+      <circle cx={x} cy={y} r={r * 0.3} fill={c.print ? "none" : FLAME} {...(c.print ? line : {})} />
+    </g>
+  );
+  if (long) {
+    return (
+      <>
+        {tray}
+        {along(w, h, (L, D) => {
+          const r = Math.min(D * 0.3, (L * 0.8) / (n * 2.3));
+          const span = L * 0.8 - r * 2;
+          return Array.from({ length: n }, (_, i) => pillar(`p${i}`, n === 1 ? 0 : -span / 2 + (i * span) / (n - 1), 0, r));
+        })}
+      </>
+    );
+  }
+  return (
+    <>
+      {tray}
+      {packCircles(n).map((g, i) => pillar(`p${i}`, (g.x * w) / 2 * 0.74, (g.y * h) / 2 * 0.74, g.r * (Math.min(w, h) / 2) * 0.74))}
+    </>
+  );
+}
+
+/** A lantern from above: its frame, the glass inside it, a post at each corner, the ring it is
+ *  carried by — and the candle it holds. A long piece is a row of them. */
+function lanterns(w: number, h: number, n: number, long: boolean, c: Colours, line: Line) {
+  const one = (key: string, x: number, s: number) => (
+    <g key={key} transform={`translate(${x} 0)`}>
+      <rect x={-s / 2} y={-s / 2} width={s} height={s} rx={s * 0.06} fill={c.tone} {...line} />
+      <rect x={-s * 0.39} y={-s * 0.39} width={s * 0.78} height={s * 0.78} fill={c.print ? "#ffffff" : "#ffffff"} fillOpacity={c.print ? 1 : 0.55} {...line} strokeOpacity={line.strokeOpacity * 0.5} />
+      {[-1, 1].flatMap((sx) => [-1, 1].map((sy) => <rect key={`${sx}${sy}`} x={sx * s * 0.39 - s * 0.06} y={sy * s * 0.39 - s * 0.06} width={s * 0.12} height={s * 0.12} fill={c.tone} {...line} />))}
+      {candleAt("c", 0, 0, s * 0.16, { ...c, tone: c.print ? "#ffffff" : "#FBF4E4" }, line)}
+      <circle r={s * 0.27} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.4} strokeDasharray="3 3" />
+    </g>
+  );
+  if (!long) return one("l", 0, Math.min(w, h) * 0.94);
+  return along(w, h, (L, D) => {
+    const s = Math.min(D * 0.94, (L / Math.max(1, n)) * 0.86);
+    const span = L - s;
+    return <>{Array.from({ length: Math.max(1, n) }, (_, i) => one(`l${i}`, n <= 1 ? 0 : -span / 2 + (i * span) / (n - 1), s))}</>;
+  });
+}
+
+/** A fire feature: a burner trough down a long piece (a "שולחן אש" — the slot, its tongues of
+ *  flame along it), or a fire bowl when round. Its count is not candles — the flames follow its length. */
+function fireBurner(w: number, h: number, round: boolean, c: Colours, line: Line) {
+  const burner = c.print ? "#ffffff" : "#3B3431";
+  const tongue = (key: string, x: number, y: number, rx: number, ry: number, deg: number) => (
+    <g key={key} transform={`translate(${x} ${y}) rotate(${deg})`}>
+      <ellipse rx={rx} ry={ry} fill={c.print ? "none" : FLAME} fillOpacity={0.9} {...(c.print ? line : {})} />
+      {!c.print && <ellipse rx={rx * 0.5} ry={ry * 0.45} fill="#FFE7A6" />}
+    </g>
+  );
+  if (round) {
+    const R = Math.min(w, h) / 2;
+    const k = Math.max(6, Math.round((2 * Math.PI * R * 0.46) / 90));
+    return (
+      <>
+        <ellipse rx={w / 2} ry={h / 2} fill={c.tone} {...line} />
+        <ellipse rx={w * 0.36} ry={h * 0.36} fill={burner} {...line} />
+        {Array.from({ length: k }, (_, i) => {
+          const a = (i * 360) / k;
+          const p = polar(R * 0.46, a);
+          return tongue(`f${i}`, p.x * (w / 2 / R), p.y * (h / 2 / R), Math.min(R * 0.12, (Math.PI * R * 0.46) / k * 0.6), R * 0.07, a + 90);
+        })}
+      </>
+    );
+  }
+  return along(w, h, (L, D) => {
+    const slotL = L - D * 0.6;
+    const k = Math.max(3, Math.floor(slotL / 130));
+    const step = slotL / k;
+    return (
+      <>
+        <rect x={-L / 2} y={-D / 2} width={L} height={D} rx={D * 0.2} fill={c.tone} {...line} />
+        <rect x={-slotL / 2} y={-D * 0.2} width={slotL} height={D * 0.4} rx={D * 0.1} fill={burner} {...line} />
+        {Array.from({ length: k }, (_, i) => tongue(`f${i}`, -slotL / 2 + step * (i + 0.5), (i % 2 ? 1 : -1) * D * 0.03, step * (i % 3 === 1 ? 0.48 : 0.4), D * (i % 2 ? 0.19 : 0.23), 0))}
+      </>
+    );
+  });
+}
+
+/** A table lamp from above: the bottom rim of its shade, the smaller top rim, the light inside, the
+ *  spider that holds the shade and the finial at its middle. A square shade is a square. */
+function lamp(w: number, h: number, round: boolean, c: Colours, line: Line) {
+  const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  const R = Math.min(w, h) / 2;
+  const ring = (k: number, props: object) =>
+    round ? <ellipse rx={(w / 2) * k} ry={(h / 2) * k} {...props} /> : <rect x={(-w / 2) * k} y={(-h / 2) * k} width={w * k} height={h * k} rx={R * 0.08 * k} {...props} />;
+  return (
+    <>
+      {ring(1, { fill: c.tone, ...line })}
+      {!c.print && ring(0.8, { fill: "#F6D98E", fillOpacity: 0.3 })}
+      {ring(0.64, { fill: "none", ...faint })}
+      {[45, 135, 225, 315].map((deg) => {
+        const p = polar(R * 0.6, deg);
+        return <line key={deg} x1={0} y1={0} x2={p.x * (round ? w / 2 / R : 1)} y2={p.y * (round ? h / 2 / R : 1)} {...faint} />;
+      })}
+      {!c.print && <circle r={R * 0.18} fill="#FFF4C9" fillOpacity={0.9} />}
+      <circle r={R * 0.07} fill={c.tone} {...line} />
     </>
   );
 }
@@ -743,6 +1054,53 @@ function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line, i
       {post(poles[1], 1)}
       {posy(poles[2], "f0")}
       {posy(poles[3], "f1")}
+    </>
+  );
+}
+
+/** A round colonnade — a rotunda chuppah: its floor, the entablature overhead (dashed, as anything
+ *  above the cut is drawn), eight columns on their plinths standing under it, the opening between
+ *  the two front columns (+y, toward the guests), and the drapes hanging between the columns at the
+ *  back, let fall rather than gathered. */
+function rotunda(w: number, h: number, c: Colours, line: Line) {
+  const rx = w / 2;
+  const ry = h / 2;
+  const m = Math.min(rx, ry);
+  const N = 8;
+  // Columns half a step either side of the front, so the front is an opening, not a column.
+  const at = (deg: number, k: number) => ({ x: rx * k * Math.cos((deg * Math.PI) / 180), y: ry * k * Math.sin((deg * Math.PI) / 180) });
+  const angles = Array.from({ length: N }, (_, i) => 90 + (360 / N) * (i + 0.5));
+  const col = m * 0.075;
+  const overhead = { ...line, strokeOpacity: line.strokeOpacity * 0.7, strokeDasharray: "6 4" };
+  // A drape between two neighbouring back columns: the fabric's wave along the ring between them.
+  const drape = (a0: number, a1: number, key: string) => {
+    const steps = 18;
+    let d = "";
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const k = 0.92 + 0.03 * Math.sin(t * Math.PI * 6);
+      const p = at(a0 + (a1 - a0) * t, k);
+      d += `${i ? " L" : "M"} ${p.x} ${p.y}`;
+    }
+    return <path key={key} d={d} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.8} strokeLinejoin="round" />;
+  };
+  const back = angles.map((a, i) => [a, angles[(i + 1) % N] + (i === N - 1 ? 360 : 0)] as const).filter(([a0, a1]) => Math.sin((((a0 + a1) / 2) * Math.PI) / 180) < -0.2);
+  return (
+    <>
+      <ellipse rx={rx} ry={ry} fill={c.print ? "#ffffff" : c.tone} fillOpacity={c.print ? 1 : 0.55} {...line} strokeOpacity={line.strokeOpacity * 0.5} />
+      <ellipse rx={rx * 0.99} ry={ry * 0.99} fill="none" {...overhead} />
+      <ellipse rx={rx * 0.84} ry={ry * 0.84} fill="none" {...overhead} />
+      {back.map(([a0, a1], i) => drape(a0, a1, `d${i}`))}
+      {angles.map((a, i) => {
+        const p = at(a, 0.92);
+        return (
+          <g key={`c${i}`}>
+            <rect x={p.x - col * 1.25} y={p.y - col * 1.25} width={col * 2.5} height={col * 2.5} fill={c.print ? "#ffffff" : c.tone} {...line} />
+            <circle cx={p.x} cy={p.y} r={col} fill={c.print ? "#ffffff" : "#FFFFFF"} {...line} />
+            <circle cx={p.x} cy={p.y} r={col * 0.6} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.4} />
+          </g>
+        );
+      })}
     </>
   );
 }

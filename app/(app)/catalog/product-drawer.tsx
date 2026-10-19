@@ -40,6 +40,9 @@ import { Drawer } from "@/components/drawer";
 import { TagToggle } from "@/components/tag-toggle";
 import { SwitchRow } from "@/components/toggle";
 import { Select } from "@/components/select";
+import { loadProducts } from "@/lib/catalog/storage";
+import { VESSEL_HOLDERS } from "@/lib/catalog/vessel";
+import { VesselPicker, vesselChoices } from "./vessel-picker";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
 import { ImageField } from "@/components/image-field";
@@ -48,6 +51,8 @@ import { SwatchField } from "@/components/swatch-field";
 import { Segmented } from "@/components/segmented";
 import { AppearancePreview } from "./appearance-preview";
 import { AppearanceModal } from "./appearance-modal";
+import { CompositeDrawer } from "./composite-drawer";
+import { COMPOSITE_CATEGORY } from "@/lib/catalog/composition";
 
 const uid = () => crypto.randomUUID();
 /** The built-in vocabulary alone, made once — a default made per render would re-memo every row. */
@@ -226,6 +231,25 @@ function FlowerIcon({ kind, colour }: { kind: FlowerKindId; colour?: string }) {
   );
 }
 
+/** "כלי" — the vase or jug an arrangement is made in: one of the catalog's vessels (`vases`), each
+ *  shade its own choice, or none. */
+function VesselField({ value, onChange }: { value: string; onChange: (variantId: string) => void }) {
+  const options = vesselChoices(loadProducts());
+  return (
+    <div>
+      <p className="mb-1 block text-sm font-semibold text-ink">
+        כלי{value ? ` — ${options.find((o) => o.value === value)?.label ?? ""}` : ""}
+      </p>
+      <VesselPicker value={value} onChange={onChange} choices={options} lead={[{ value: "", label: "ללא כלי" }]} listClassName="max-h-44" />
+      <p className="mt-1 text-xs leading-relaxed text-muted">
+        {options.length === 0
+          ? "אין עדיין כלים בקטלוג — מוסיפים אותם בקטגוריה ״אגרטלים וכלים״."
+          : "האגרטל או הכד שהסידור עומד בו: מצויר מתחתיו בסקיצה, נספר ונארז איתו. בסקיצה אפשר להחליף אותו לכל סידור."}
+      </p>
+    </div>
+  );
+}
+
 /** "מפרט פרחים" — what an arrangement is made of, as rows that multiply (Product.flowers): a flower
  *  and how many stems of it, per arrangement. The stem total every other surface reads is their sum,
  *  shown here and never typed while there are rows; an arrangement with no rows may still type a bare
@@ -377,7 +401,9 @@ export function ProductDrawer({
 }: {
   product: Product | null;
   onSave: (p: Product) => void;
-  onDelete: (id: string) => void;
+  /** Absent = no delete in this drawer — the studio opens it to add or edit a row mid-sketch, and a
+   *  row placed on that very plan is a question for /catalog, not for the bar it was opened from. */
+  onDelete?: (id: string) => void;
   onClose: () => void;
   /** The flowers to suggest in the spec rows — the catalog passes knownFlowersOf(its products, the
    *  marketplace's stems) so one studio spells "ורד" one way and a supplier's stem brings its
@@ -448,6 +474,12 @@ export function ProductDrawer({
   const sourceStatus = source && source.id === productId ? source.status : null;
 
   if (!product) return null;
+  // A composite is its parts, not a thing with a shape, a price and shades: its own form, in the same
+  // drawer shell (lib/catalog/composition.ts). Mounted fresh per opening — the drawer is unmounted
+  // between them (product null) — so its draft is always the row it was opened on.
+  if (product.composition) {
+    return <CompositeDrawer product={product} onSave={onSave} onDelete={onDelete} onClose={onClose} internal={internal} />;
+  }
 
   const category = CATEGORY_BY_ID[draft.category];
   const isEdit = draft.id !== "";
@@ -632,7 +664,8 @@ export function ProductDrawer({
                 id="p-cat"
                 value={draft.category}
                 onChange={changeCategory}
-                options={categories.map((c) => ({ value: c.id, label: c.label }))}
+                // A composite is made in its own form, never by re-filing an ordinary row.
+                options={categories.filter((c) => c.id !== COMPOSITE_CATEGORY).map((c) => ({ value: c.id, label: c.label }))}
                 className="w-full"
               />
             </div>
@@ -778,6 +811,21 @@ export function ProductDrawer({
                 onTypedStems={(v) => setField("stems", v)}
               />
             </>
+          )}
+
+          {/* The vase or jug it is made in (lib/catalog/vessel.ts) — drawn under it on the plan,
+              packed and counted with it. A placement may set it in another, or in none. */}
+          {VESSEL_HOLDERS.has(draft.category) && (
+            <VesselField
+              value={typeof draft.categoryFields.vessel === "string" ? draft.categoryFields.vessel : ""}
+              onChange={(v) =>
+                setDraft((d) => {
+                  const { vessel: _old, ...rest } = d.categoryFields;
+                  void _old;
+                  return { ...d, categoryFields: v ? { ...rest, vessel: v } : rest };
+                })
+              }
+            />
           )}
 
           {/* What the plan may do with it beyond drawing it: stretch it, and keep room round it.
@@ -1165,7 +1213,7 @@ export function ProductDrawer({
           <Button variant="ghost" onClick={onClose}>
             ביטול
           </Button>
-          {isEdit && (
+          {isEdit && onDelete && (
             <Button
               variant="danger"
               className="ms-auto"

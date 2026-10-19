@@ -10,9 +10,12 @@ import { FootprintShape, productStyle } from "@/components/footprint-shape";
 import { ItemSymbol } from "@/components/item-symbol";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
-import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
+import { vesselOf } from "@/lib/catalog/vessel";
+import { resolve } from "@/lib/studio/catalog-resolver";
+import { VesselMark } from "@/components/vessel-mark";
 
 // The thing under the pointer while an item is being dragged off the rail — the same picture that
 // lands when it is let go.
@@ -61,6 +64,8 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
   // the row sets none of its own — that is what says "being carried" rather than "already down".
   const style = resolveStyle(productStyle(product), "screen", { fill: "var(--color-surface)", stroke: "var(--color-accent)", strokeWidth: 2 });
   const dark = !!product.appearance?.style?.fill && style.fillOpacity > 0.5 && isDark(style.fill);
+  // The vase its row is made in (lib/catalog/vessel.ts), drawn with it as the plan will.
+  const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf({ variantId: product.id }, (id) => (id === product.id ? product : resolve(id)?.product)) : undefined;
 
   return (
     <svg
@@ -73,6 +78,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
       style={{ overflow: "visible", filter: "drop-shadow(0 4px 10px rgb(109 85 189 / 0.35))" }}
       aria-hidden
     >
+      {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} />}
       {symbol && (
         <ItemSymbol
           kind={symbol}
@@ -82,9 +88,11 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           tone={product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill}
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
+          drawStyle={drawStyleOf(product)}
           rise={climbRise(product)}
         />
       )}
+      {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
       <FootprintShape
         footprint={footprint}
         fill={style.fill}

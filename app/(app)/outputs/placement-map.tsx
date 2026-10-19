@@ -24,10 +24,10 @@ import { isDark, resolveStyle } from "@/lib/element-style";
 import { anySurface } from "@/lib/catalog/textures";
 import { PlantGlyph } from "@/components/plant-glyph";
 import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill";
-import { FootprintShape, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
+import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
-import { chairStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { arrangedStructure } from "@/lib/design-document/features";
@@ -69,6 +69,8 @@ import { tablesPhrase, type TableKit } from "@/lib/outputs/table-kits";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { pointInPolygon } from "@/lib/venues/faces";
 import type { Extent } from "@/lib/outputs/scale";
+import { vesselOf } from "@/lib/catalog/vessel";
+import { VesselMark } from "@/components/vessel-mark";
 import { sheetById, type PlanSheet } from "@/lib/outputs/sheets";
 import { SheetFrame, LINE_WEIGHTS, type SheetFrameProps, type LegendRow } from "./sheet-frame";
 
@@ -689,17 +691,16 @@ export function PlacementMap({
               const bench = benchP ? standaloneBench(benchP, benchOf) : null;
               const members = doc.tables.filter((x) => unit.tableIds.includes(x.id));
               if (members.length === 0 && !bench) return null;
-              // A lone table is numbered where the studio numbers it — the shape's own label point
-              // (tableLabelPoint): the middle of the band on an arc, not the box centre out in the
-              // air the ring curves round. A block keeps the middle of the block.
+              // Numbered where the studio numbers it — a lone table at its shape's own label point
+              // (tableLabelPoint: the middle of the band on an arc, not the box centre out in the air
+              // the ring curves round), a block at the visual centre of the one outline its tables
+              // make (blockLabelRoom — on the top run of a ח of three, not between its legs).
+              const blk = members.length > 1 ? tableBlock(members) : null;
               const at = benchP
                 ? benchP.position
-                : members.length === 1
-                  ? tableLabelPoint(members[0])
-                  : {
-                      x: members.reduce((n, x) => n + x.position.x, 0) / members.length,
-                      y: members.reduce((n, x) => n + x.position.y, 0) / members.length,
-                    };
+                : blk
+                  ? blockLabelRoom(blk)
+                  : tableLabelPoint(members[0]);
               // As big as the table allows, between 2.4mm (still legible held at arm's length) and
               // 4mm on paper (a numeral the crew can find across the room once the sheet is taped
               // to a wall). The table's own short side is the ceiling, so a number stays inside it.
@@ -801,7 +802,8 @@ export function PlacementMap({
           {[...chipsByTable.entries()].flatMap(([tableId, chips]) => {
             const t = tableById.get(tableId);
             if (!t) return [];
-            return dressingSpots(t, chips).map(({ p, at, rotation, footprint }) => (
+            // A block laid out automatically is laid out as one, as on screen (dressBlockOf).
+            return dressingSpots(t, chips, dressBlockOf(doc.tables, t, (id) => chipsByTable.get(id) ?? [])).map(({ p, at, rotation, footprint }) => (
               <PlacementGlyph key={p.id} placement={{ ...p, rotation }} x={at.x} y={at.y} shape={footprint} colour={colour} />
             ));
           })}
@@ -1495,6 +1497,8 @@ export function PlacementGlyph({
     r && (symbol === "flowers" || symbol === "centerpiece")
       ? { flowers: flowerDrawSpecOf(r.product, footprint, r.swatch ?? r.product.appearance?.style?.fill), detail: textMm === undefined || textMm <= 2.6 * 50 }
       : {};
+  // The vase it stands in (lib/catalog/vessel.ts): under the flowers, its rim dashed over them.
+  const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf(placement, (id) => resolve(id)?.product) : undefined;
   if (colour) {
     // The studio's PlacementNode, without the pointer: the shade picked for this placement over the
     // row's own fill, the category's picture in that shade, a material where the row has one.
@@ -1505,7 +1509,9 @@ export function PlacementGlyph({
     return (
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+        {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+        {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
         {!symbol && !block && (
           <FootprintShape
             footprint={footprint}
@@ -1528,7 +1534,9 @@ export function PlacementGlyph({
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+      {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+      {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
       <FootprintShape

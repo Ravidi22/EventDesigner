@@ -131,12 +131,8 @@ export function TableDetail({
   // spot of its own; everything else is laid by dressingSpots, exactly where the studio lays it.
   const onUnit = doc.placements.filter((p) => p.layer === "table" && p.tableId && unit.tableIds.includes(p.tableId));
   const cloths = onUnit.filter((p) => resolve(p.variantId)?.anchor === "table");
-  const spots = members.flatMap((t) =>
-    dressingSpots(
-      t,
-      onUnit.filter((p) => p.tableId === t.id && !cloths.includes(p)),
-    ),
-  );
+  const chipsOf = (id: string) => onUnit.filter((p) => p.tableId === id && !cloths.includes(p));
+  const spots = members.flatMap((t) => dressingSpots(t, chipsOf(t.id), block ? { members, chipsOf } : undefined));
 
   const { centre, ringW, ringH, world, offset } = detailFrame(members);
 

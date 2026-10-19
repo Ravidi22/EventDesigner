@@ -21,6 +21,8 @@ import { PAGE_GUTTER } from "@/components/page-gutter";
 import { ProductCard } from "./product-card";
 import { Filters, EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState } from "./filters";
 import { ProductDrawer, blankProduct } from "./product-drawer";
+import { blankComposite } from "./composite-drawer";
+import { COMPOSITE_CATEGORY } from "@/lib/catalog/composition";
 import { knownFlowersOf, type KnownFlower } from "@/lib/catalog/flowers";
 
 export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initialProducts: Product[]; marketFlowers?: KnownFlower[] }) {
@@ -55,7 +57,7 @@ export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initial
   const saveProduct = (p: Product) => void save(p);
   const deleteProduct = async (id: string) => {
     const { archived } = await remove(id);
-    setNotice(archived ? "המוצר משובץ באירועים ולכן הועבר לארכיון — ההצבות נשמרו." : null);
+    setNotice(archived ? "המוצר משובץ באירועים או בפריט מורכב ולכן הועבר לארכיון — ההצבות נשמרו." : null);
   };
   const confirmDelete = () => {
     // Closed first, and the delete is not awaited: the row is gone from the list the moment the
@@ -80,7 +82,9 @@ export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initial
 
   const importCsv = async (file: File | undefined) => {
     if (!file) return;
-    const added = parseCsvProducts(await file.text(), CATEGORIES, () => crypto.randomUUID());
+    // A composite is made of other rows (lib/catalog/composition.ts) and a spreadsheet line cannot say
+    // which: its category is not one a row can be imported into.
+    const added = parseCsvProducts(await file.text(), CATEGORIES.filter((c) => c.id !== COMPOSITE_CATEGORY), () => crypto.randomUUID());
     if (added.length === 0) {
       setNotice("לא נמצאו שורות תקינות בקובץ. עמודות: שם, קטגוריה, קוטר/רוחב/עומק/גובה (ס״מ), מחיר.");
       return;
@@ -103,8 +107,11 @@ export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initial
     } catch {
       // Empty ספק column; the stock counts are what the designer came for.
     }
+    // Stock is what the sheet is for, and a composite is no stock of its own — its parts are rows of
+    // their own on the same sheet.
+    const stock = filtered.filter((p) => !p.composition);
     const url = URL.createObjectURL(
-      new Blob([CSV_BOM + productsToCsv(filtered, CATEGORIES, suppliers)], { type: "text/csv;charset=utf-8" }),
+      new Blob([CSV_BOM + productsToCsv(stock, CATEGORIES, suppliers)], { type: "text/csv;charset=utf-8" }),
     );
     const a = document.createElement("a");
     a.href = url;
@@ -112,7 +119,7 @@ export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initial
     a.click();
     URL.revokeObjectURL(url);
     const scope = hasActiveFilters({ ...filters, search }) ? " (לפי הסינון הפעיל)" : "";
-    setNotice(`יוצאו ${filtered.length} מוצרים לקובץ${scope}. הקובץ כולל עלויות — פנימי בלבד.`);
+    setNotice(`יוצאו ${stock.length} מוצרים לקובץ${scope}. הקובץ כולל עלויות — פנימי בלבד.`);
   };
 
   // "No products yet" and "not loaded yet" look identical in the data and mean opposite things —
@@ -174,6 +181,7 @@ export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initial
             viewMode={viewMode}
             onViewModeChange={setViewMode}
             onAddProduct={() => setEditing(blankProduct())}
+            onAddComposite={() => setEditing(blankComposite())}
             onImportCsv={() => fileRef.current?.click()}
             onExportCsv={() => void exportInventory()}
             searchValue={search}

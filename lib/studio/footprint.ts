@@ -1,12 +1,12 @@
 // Pure appearance resolver (no window/localStorage) — shared by the Konva map renderer
 // and the drawer preview. Absence of `appearance` is derived from `dimensions` so every
 // legacy/seed product keeps rendering (name-in-a-shape = today's behavior).
-import type { ArcSpec, MapShape, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
-import { ARC_SWEEP, RESIZE_DEFAULT_STEP_MM, RING_GAP, usesDiameter } from "@/lib/catalog/types";
+import type { ArcSpec, HollowSpec, MapShape, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
+import { ARC_SWEEP, MAP_SHAPES, RESIZE_DEFAULT_STEP_MM, RING_GAP, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
-import { absoluteControlPoints, outlineBounds } from "@/lib/studio/geometry";
+import { absoluteControlPoints, edgeMidpoint, outlineBounds } from "@/lib/studio/geometry";
 import { isMain } from "../self-check";
 
 export const MIN_FOOTPRINT_MM = 600; // floor so missing/zero dims never render at zero size
@@ -56,7 +56,17 @@ const K = 0.5523;
 export interface BuiltOutline {
   outline: Point[];
   edgeCurves?: (EdgeCurve | null)[];
+  /** Which of the item's shapes this outline is a piece of, in a composite — 0 the base shape, k the
+   *  k-th added part (MapAppearance.parts). Set only once some shape is drawn as SEVERAL outlines (a
+   *  hollow shape with sides open, buildHollow), when an outline's index among the pieces stops
+   *  being the index of its shape; absent = its index, which is what every composite was before.
+   *  Read through pieceOf — the surfaces (ItemSurface) and the bar's back counters (bar-draw) both
+   *  ask "which shape is this", not "which outline". */
+  of?: number;
 }
+
+/** Which of the item's shapes the `i`-th piece of a composite draws (BuiltOutline.of). */
+export const pieceOf = (p: BuiltOutline, i: number): number => p.of ?? i;
 
 const RAD = Math.PI / 180;
 
@@ -480,25 +490,647 @@ export function roundSizeMm(shape: MapShape, d: { widthMm?: number; depthMm?: nu
   return d.widthMm || d.depthMm || undefined;
 }
 
+/** What a shape is drawn from: its measurements, a hand-drawn outline, and the specs of the shapes
+ *  that have more to say than two numbers. A catalog row's dimensions + appearance, a ShapePart and a
+ *  venue feature all fit it. */
+export interface ShapeDims {
+  widthMm?: number;
+  depthMm?: number;
+  diameterMm?: number;
+  outline?: Point[];
+  edgeCurves?: (EdgeCurve | null)[];
+  arc?: Partial<ArcSpec>;
+  ring?: Partial<RingSpec>;
+  hollow?: HollowSpec;
+}
+
 /** A shape plus the measurements it is drawn from, resolved to the one footprint every surface in
  *  the app already knows how to draw.
  *
  *  Split out of resolveFootprint because a catalog product is no longer the only thing with a
  *  footprint: a venue's fixed features are placed FROM the catalog now (lib/venues/structure.ts), so
  *  a bar shaped like a ח has to be a ח on the hall plan too rather than the box its two numbers
- *  describe. One resolver, so the two cannot disagree about what a shape means. */
-export function shapeFootprint(
-  shape: MapShape,
-  d: {
-    widthMm?: number;
-    depthMm?: number;
-    diameterMm?: number;
-    outline?: Point[];
-    edgeCurves?: (EdgeCurve | null)[];
-    arc?: Partial<ArcSpec>;
-    ring?: Partial<RingSpec>;
-  },
-): Footprint {
+ *  describe. One resolver, so the two cannot disagree about what a shape means.
+ *
+ *  A shape drawn hollow (HollowSpec) is the band cut inside its own outline (buildHollow): one
+ *  outline — a keyhole, or a band open on a side — as a custom footprint, or several (a band opened
+ *  in two places) as a multi, whose pieces all say they are the one shape (BuiltOutline.of). */
+export function shapeFootprint(shape: MapShape, d: ShapeDims): Footprint {
+  return hollowOf(shape, d.hollow) ? piecesFootprint(shapePieces(shape, d)) : solidFootprint(shape, d);
+}
+
+/** The hollow spec a shape is actually drawn with — none for a shape that cannot be hollow, or a
+ *  band of nothing. */
+const hollowOf = (shape: MapShape, h: HollowSpec | undefined): HollowSpec | undefined =>
+  h && canHollow(shape) && h.bandMm > 0 ? h : undefined;
+
+/** The shape drawn SOLID, as one outline centred on its own box: the outline a hollow shape's band
+ *  is cut inside, and whose edges are the sides that may be opened (HollowSpec.openSides). For the
+ *  primitives that is footprintOutlines' four corners or four quarter arcs; for a hand-drawn one, the
+ *  drawing. What the shape editor shows and drags, hollow or not. */
+export function hollowOuter(shape: MapShape, d: ShapeDims): BuiltOutline {
+  return footprintOutlines(solidFootprint(shape, d))[0];
+}
+
+/** The outlines a shape is drawn as, in the frame of its OUTER box (hollowOuter) — one for a solid
+ *  shape, the band's pieces for a hollow one. That frame and not the pieces' own box, because it is
+ *  the frame everything else measures from: a part's x/y is its offset from the base's outer box
+ *  (the shape editor centres it there), and a band opened on a side may no longer reach every side
+ *  of that box. */
+export function shapePieces(shape: MapShape, d: ShapeDims): BuiltOutline[] {
+  const outer = hollowOuter(shape, d);
+  const h = hollowOf(shape, d.hollow);
+  return h ? buildHollow(outer, h) : [outer];
+}
+
+/** Outlines as one footprint: a single one as `custom` (which every drawer centres on its own box),
+ *  several as a `multi` centred on the box of all of them, each piece marked as the base shape's. */
+export function piecesFootprint(pieces: readonly BuiltOutline[]): Footprint {
+  if (pieces.length === 1) {
+    const p = pieces[0];
+    return { kind: "custom", outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}) };
+  }
+  const b = sampledBounds(pieces);
+  return {
+    kind: "multi",
+    parts: pieces.map((p) => ({
+      outline: p.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })),
+      ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}),
+      of: 0,
+    })),
+  };
+}
+
+// ── Hollow ─────────────────────────────────────────────────────────────────────────────────────
+//
+// Any solid shape may be drawn as a band round an open middle (HollowSpec, lib/catalog/types.ts).
+// The band is cut INSIDE the shape's own outline: every edge is moved inward by the band's depth —
+// an open side by nothing, so the band's legs run right up to its line — and the moved edges are
+// trimmed or extended until they meet at the corners. That inner loop is joined to the outline the
+// way the oval ring always was, as ONE keyhole: the outer edge walked round, a cap across the band,
+// the inner edge walked back the other way, the cap home. Under the nonzero rule the reversed inner
+// loop is the hole; a closed ring has its two caps on top of each other, the hairline that marks the
+// hatch. With sides open, each run of closed sides between two open ones is a band of its own — one
+// outline, or several.
+//
+// THE OUTLINE IS NOT TOUCHED, so the box is still width × depth (rule 1) and its extremes are still
+// vertices (rule 2): the band only ever takes floor out of the middle.
+//
+// CURVES STAY CURVES. The seating joins edges that meet smoother than 3° into one side and lays its
+// chairs along it (lib/studio/seating.ts); an inner arc sampled into a polyline would be sixteen
+// sides of a chair each. So a bowed edge is moved as a bowed edge: its ends along their own normals,
+// its control arms shortened by how sharply it bends at each end — which for a circular arc is the
+// concentric arc, exactly (offsetEdge). Where two moved edges cross, a straight one is cut
+// analytically and a curved one at the crossing found on its samples (de Casteljau, so it stays one
+// cubic). Where they part — a reflex corner, or a closed side meeting an open one that runs on
+// smoothly — a straight bevel joins them; it is the cap across the band where that is what it is.
+// A moved edge the band swallows whole (a short side of a deep band) is dropped and its neighbours
+// meet each other instead. A band so deep that nothing is left inside is the solid shape.
+
+type Cubic = [Point, Point, Point, Point];
+
+const vAdd = (a: Point, b: Point): Point => ({ x: a.x + b.x, y: a.y + b.y });
+const vSub = (a: Point, b: Point): Point => ({ x: a.x - b.x, y: a.y - b.y });
+const vMul = (a: Point, k: number): Point => ({ x: a.x * k, y: a.y * k });
+const vDot = (a: Point, b: Point): number => a.x * b.x + a.y * b.y;
+const vCross = (a: Point, b: Point): number => a.x * b.y - a.y * b.x;
+const vLen = (a: Point): number => Math.hypot(a.x, a.y);
+const vDist = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.y - b.y);
+const vUnit = (a: Point): Point => {
+  const l = vLen(a);
+  return l > 0 ? { x: a.x / l, y: a.y / l } : { x: 0, y: 0 };
+};
+const vLerp = (a: Point, b: Point, t: number): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+const clamp01 = (t: number): number => Math.min(1, Math.max(0, t));
+
+function bezAt(c: Cubic, t: number): Point {
+  const u = 1 - t;
+  const w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t;
+  return { x: w0 * c[0].x + w1 * c[1].x + w2 * c[2].x + w3 * c[3].x, y: w0 * c[0].y + w1 * c[1].y + w2 * c[2].y + w3 * c[3].y };
+}
+
+function bezTangent(c: Cubic, t: number): Point {
+  const u = 1 - t;
+  return vAdd(vAdd(vMul(vSub(c[1], c[0]), 3 * u * u), vMul(vSub(c[2], c[1]), 6 * u * t)), vMul(vSub(c[3], c[2]), 3 * t * t));
+}
+
+/** De Casteljau: the cubic cut at `t` into its two halves, each a cubic of its own. */
+function bezSplit(c: Cubic, t: number): [Cubic, Cubic] {
+  const p01 = vLerp(c[0], c[1], t), p12 = vLerp(c[1], c[2], t), p23 = vLerp(c[2], c[3], t);
+  const p012 = vLerp(p01, p12, t), p123 = vLerp(p12, p23, t);
+  const m = vLerp(p012, p123, t);
+  return [[c[0], p01, p012, m], [m, p123, p23, c[3]]];
+}
+
+/** The stretch of a cubic between parameters t0 ≤ t1, as one cubic. */
+function bezWindow(c: Cubic, t0: number, t1: number): Cubic {
+  const right = t0 > 0 ? bezSplit(c, t0)[1] : c;
+  const t = t0 >= 1 ? 0 : (t1 - t0) / (1 - t0);
+  return t >= 1 ? right : bezSplit(right, Math.max(0, t))[0];
+}
+
+/** Where two lines p + d·t and q + e·u meet, as their two parameters; null when they are parallel. */
+function lineMeet(p: Point, d: Point, q: Point, e: Point): { t: number; u: number } | null {
+  const den = vCross(d, e);
+  if (Math.abs(den) < 1e-9 * (vLen(d) * vLen(e) || 1)) return null;
+  const w = vSub(q, p);
+  return { t: vCross(w, e) / den, u: vCross(w, d) / den };
+}
+
+/** One edge of a band, in absolute coordinates — straight, or a cubic through `c` — and the edge of
+ *  the shape it runs along (-1 for a cap or a bevel). */
+interface Piece {
+  src: number;
+  from: Point;
+  to: Point;
+  c?: [Point, Point];
+}
+
+const cubicOf = (p: Piece): Cubic | null => (p.c ? [p.from, p.c[0], p.c[1], p.to] : null);
+
+function piecePoint(p: Piece, t: number): Point {
+  const c = cubicOf(p);
+  return c ? bezAt(c, t) : vLerp(p.from, p.to, t);
+}
+
+const reversedPiece = (p: Piece): Piece => ({ src: p.src, from: p.to, to: p.from, ...(p.c ? { c: [p.c[1], p.c[0]] as [Point, Point] } : {}) });
+
+/** A piece between its parameters t0 ≤ t1. */
+function cutPiece(p: Piece, t0: number, t1: number): Piece {
+  const c = cubicOf(p);
+  if (!c) return { src: p.src, from: piecePoint(p, t0), to: piecePoint(p, t1) };
+  const w = bezWindow(c, t0, t1);
+  return { src: p.src, from: w[0], to: w[3], c: [w[1], w[2]] };
+}
+
+function edgePiece(src: number, a: Point, b: Point, curve: EdgeCurve | null | undefined): Piece {
+  if (!curve) return { src, from: a, to: b };
+  const { c1, c2 } = absoluteControlPoints(a, b, curve);
+  return { src, from: a, to: b, c: [c1, c2] };
+}
+
+const SAMPLES = 64;
+
+/** The arc length along a piece at SAMPLES + 1 evenly spaced parameters — how a gap typed in mm is
+ *  found on a curved side. */
+function lengthTable(p: Piece): number[] {
+  const out = [0];
+  let prev = p.from;
+  for (let k = 1; k <= SAMPLES; k++) {
+    const q = piecePoint(p, k / SAMPLES);
+    out.push(out[k - 1] + vDist(prev, q));
+    prev = q;
+  }
+  return out;
+}
+
+function lengthAtParam(p: Piece, table: number[], t: number): number {
+  if (!p.c) return clamp01(t) * table[SAMPLES];
+  const f = clamp01(t) * SAMPLES;
+  const k = Math.min(SAMPLES - 1, Math.floor(f));
+  return table[k] + (table[k + 1] - table[k]) * (f - k);
+}
+
+function paramAtLength(p: Piece, table: number[], len: number): number {
+  const total = table[SAMPLES];
+  if (!(total > 0)) return 0;
+  if (!p.c) return clamp01(len / total);
+  if (len <= 0) return 0;
+  if (len >= total) return 1;
+  let k = 0;
+  while (k < SAMPLES - 1 && table[k + 1] < len) k++;
+  const span = table[k + 1] - table[k];
+  return (k + (span > 0 ? (len - table[k]) / span : 0)) / SAMPLES;
+}
+
+/** The parameter of the point on a piece nearest to `q`. */
+function nearestParam(p: Piece, q: Point): number {
+  if (!p.c) {
+    const d = vSub(p.to, p.from);
+    const L2 = vDot(d, d);
+    return L2 > 0 ? clamp01(vDot(vSub(q, p.from), d) / L2) : 0;
+  }
+  const dist = (t: number) => vDist(piecePoint(p, t), q);
+  let best = 0;
+  let bestD = Infinity;
+  for (let k = 0; k <= SAMPLES; k++) {
+    const d = dist(k / SAMPLES);
+    if (d < bestD) [best, bestD] = [k / SAMPLES, d];
+  }
+  let lo = Math.max(0, best - 1 / SAMPLES);
+  let hi = Math.min(1, best + 1 / SAMPLES);
+  for (let i = 0; i < 40; i++) {
+    const m1 = lo + (hi - lo) / 3;
+    const m2 = hi - (hi - lo) / 3;
+    if (dist(m1) < dist(m2)) hi = m2;
+    else lo = m1;
+  }
+  return (lo + hi) / 2;
+}
+
+/** A closed run of pieces as a polygon — for its area. */
+function piecesRing(pieces: readonly Piece[]): Point[] {
+  return pieces.flatMap((p) => {
+    const c = cubicOf(p);
+    return c ? Array.from({ length: 16 }, (_, k) => bezAt(c, k / 16)) : [p.from];
+  });
+}
+
+function shoelace(ring: readonly Point[]): number {
+  let sum = 0;
+  ring.forEach((p, i) => {
+    const q = ring[(i + 1) % ring.length];
+    sum += p.x * q.y - q.x * p.y;
+  });
+  return sum / 2;
+}
+
+/** An edge moved inward, before its ends are settled: an endless straight line (o + u·s, s in mm)
+ *  or the moved cubic (s its parameter). [s0, s1] is the stretch of it the band keeps. */
+interface Offset {
+  src: number;
+  line?: { o: Point; u: Point; len: number };
+  cubic?: Cubic;
+  s0: number;
+  s1: number;
+}
+
+const offsetAt = (g: Offset, s: number): Point => (g.line ? vAdd(g.line.o, vMul(g.line.u, s)) : bezAt(g.cubic!, s));
+const naturalEnd = (g: Offset): number => (g.line ? g.line.len : 1);
+
+/** Square to direction `u`, into an outline wound `sgn` (+1 when its shoelace area is positive). */
+const inward = (u: Point, sgn: number): Point => ({ x: -u.y * sgn, y: u.x * sgn });
+
+/** How sharply a cubic bends at its start and at its end, signed: + turning to the left of its own
+ *  direction. 2/3 · the cross of its first two arms over the first arm's length cubed (its curvature
+ *  at t = 0), and the same from the other end. */
+function bendAtStart(c: Cubic): number {
+  const arm = vSub(c[1], c[0]);
+  const l = vLen(arm);
+  return l > 1e-9 ? ((2 / 3) * vCross(arm, vSub(c[2], c[1]))) / l ** 3 : 0;
+}
+function bendAtEnd(c: Cubic): number {
+  const arm = vSub(c[3], c[2]);
+  const l = vLen(arm);
+  return l > 1e-9 ? ((2 / 3) * vCross(vSub(c[2], c[1]), arm)) / l ** 3 : 0;
+}
+
+/** One edge moved `off` mm inward. A straight one is the parallel line. A curved one has its ends
+ *  moved along their own normals and each control arm scaled by (1 − off·κ) — κ its bend at that
+ *  end, signed so an edge curving round the inside shrinks — which keeps the bow a bow. A CIRCULAR
+ *  arc (its two end normals meet at one point, as far from both ends) is scaled about that centre
+ *  instead, by (R − off)/R exactly: a cubic's curvature at its ends is only nearly 1/R, and the ring
+ *  the user asks for is concentric. */
+function offsetEdge(src: number, a: Point, b: Point, curve: EdgeCurve | null | undefined, off: number, sgn: number): Offset {
+  if (!curve) {
+    const d = vSub(b, a);
+    const u = vUnit(d);
+    return { src, line: { o: vAdd(a, vMul(inward(u, sgn), off)), u, len: vLen(d) }, s0: 0, s1: vLen(d) };
+  }
+  const { c1, c2 } = absoluteControlPoints(a, b, curve);
+  const c: Cubic = [a, c1, c2, b];
+  const firstDir = [vSub(c1, a), vSub(c2, a), vSub(b, a)].find((v) => vLen(v) > 1e-9) ?? { x: 1, y: 0 };
+  const lastDir = [vSub(b, c2), vSub(b, c1), vSub(b, a)].find((v) => vLen(v) > 1e-9) ?? { x: 1, y: 0 };
+  const n0 = inward(vUnit(firstDir), sgn);
+  const n1 = inward(vUnit(lastDir), sgn);
+  let f0 = 1;
+  let f1 = 1;
+  if (off !== 0) {
+    const centre = lineMeet(a, n0, b, n1);
+    if (centre && Math.abs(centre.t) > 1e-6 && Math.abs(centre.t - centre.u) <= 1e-3 * Math.max(Math.abs(centre.t), Math.abs(centre.u))) {
+      const R = (centre.t + centre.u) / 2;
+      f0 = f1 = (R - off) / R;
+    } else {
+      f0 = 1 - off * sgn * bendAtStart(c);
+      f1 = 1 - off * sgn * bendAtEnd(c);
+    }
+  }
+  const p0 = vAdd(a, vMul(n0, off));
+  const p3 = vAdd(b, vMul(n1, off));
+  return {
+    src,
+    cubic: [p0, vAdd(p0, vMul(vSub(c1, a), Math.max(0, f0))), vAdd(p3, vMul(vSub(c2, b), Math.max(0, f1))), p3],
+    s0: 0,
+    s1: 1,
+  };
+}
+
+/** The parameters where a line crosses a cubic, in [0, 1]: sign changes of the distance from the
+ *  line along the cubic's samples, each closed in on by halving. An end touching the line counts. */
+function lineCubicRoots(L: { o: Point; u: Point }, c: Cubic): number[] {
+  const f = (t: number) => vCross(L.u, vSub(bezAt(c, t), L.o));
+  const TOUCH = 1e-6;
+  const roots: number[] = [];
+  let tp = 0;
+  let fp = f(0);
+  if (Math.abs(fp) < TOUCH) roots.push(0);
+  for (let k = 1; k <= SAMPLES; k++) {
+    const t = k / SAMPLES;
+    const ft = f(t);
+    if (Math.abs(ft) < TOUCH) roots.push(t);
+    else if (Math.abs(fp) >= TOUCH && fp * ft < 0) {
+      let lo = tp;
+      let hi = t;
+      let flo = fp;
+      for (let i = 0; i < 50; i++) {
+        const m = (lo + hi) / 2;
+        const fm = f(m);
+        if (flo * fm <= 0) hi = m;
+        else [lo, flo] = [m, fm];
+      }
+      roots.push((lo + hi) / 2);
+    }
+    [tp, fp] = [t, ft];
+  }
+  return roots;
+}
+
+/** Where two cubics cross, nearest the corner between them (late on A, early on B): found on their
+ *  samples, then settled by Newton's method on the curves themselves. */
+function cubicMeet(A: Cubic, B: Cubic): { sA: number; sB: number } | null {
+  const N = 48;
+  const pa = Array.from({ length: N + 1 }, (_, k) => bezAt(A, k / N));
+  const pb = Array.from({ length: N + 1 }, (_, k) => bezAt(B, k / N));
+  let best: { sA: number; sB: number } | null = null;
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const m = lineMeet(pa[i], vSub(pa[i + 1], pa[i]), pb[j], vSub(pb[j + 1], pb[j]));
+      if (!m || m.t < -1e-9 || m.t > 1 + 1e-9 || m.u < -1e-9 || m.u > 1 + 1e-9) continue;
+      const hit = { sA: (i + m.t) / N, sB: (j + m.u) / N };
+      if (!best || 1 - hit.sA + hit.sB < 1 - best.sA + best.sB) best = hit;
+    }
+  }
+  if (!best) return null;
+  let { sA, sB } = best;
+  for (let k = 0; k < 8; k++) {
+    const F = vSub(bezAt(A, sA), bezAt(B, sB));
+    const dA = bezTangent(A, sA);
+    const dB = vMul(bezTangent(B, sB), -1);
+    const det = vCross(dA, dB);
+    if (Math.abs(det) < 1e-12) break;
+    const r = vMul(F, -1);
+    sA = clamp01(sA + vCross(r, dB) / det);
+    sB = clamp01(sB + vCross(dA, r) / det);
+  }
+  return { sA, sB };
+}
+
+/** Where the moved edge A (ending at a corner) and the moved edge B (leaving it) meet: their
+ *  parameters there, or null for a bevel — they part, or meet so far off (two nearly parallel edges
+ *  moved by different amounts) that the point would be a spike rather than a corner. `near` are the
+ *  shape's own corners between them. */
+function settleCorner(A: Offset, B: Offset, near: readonly Point[], limit: number): { sA: number; sB: number } | null {
+  if (vDist(offsetAt(A, naturalEnd(A)), offsetAt(B, 0)) < 0.01) return { sA: naturalEnd(A), sB: 0 }; // they already meet
+  let hit: { sA: number; sB: number } | null = null;
+  if (A.line && B.line) {
+    const m = lineMeet(A.line.o, A.line.u, B.line.o, B.line.u);
+    if (m) hit = { sA: m.t, sB: m.u };
+  } else if (A.line || B.line) {
+    const L = (A.line ?? B.line)!;
+    const c = (A.cubic ?? B.cubic)!;
+    const roots = lineCubicRoots(L, c);
+    if (roots.length) {
+      // The crossing nearest the corner: early on a cubic that leaves it, late on one that ends there.
+      const t = A.line ? Math.min(...roots) : Math.max(...roots);
+      const s = vDot(vSub(bezAt(c, t), L.o), L.u);
+      hit = A.line ? { sA: s, sB: t } : { sA: t, sB: s };
+    }
+  } else hit = cubicMeet(A.cubic!, B.cubic!);
+  if (!hit) return null;
+  const p = offsetAt(A, hit.sA);
+  return near.some((v) => vDist(v, p) <= limit) ? hit : null;
+}
+
+/** The edges of `base` moved inward by `offs`, trimmed to meet each other — the inner edge of the
+ *  band, as the moved edges that survive, in order. An edge the band swallows (its stretch comes out
+ *  empty or backwards) is dropped, the most swallowed first, and the corners are settled again
+ *  without it. Null when fewer than two survive: nothing is left inside. */
+function innerLoop(base: BuiltOutline, offs: readonly number[], sgn: number): Offset[] | null {
+  const P = base.outline;
+  const n = P.length;
+  let segs = P.map((a, i) => offsetEdge(i, a, P[(i + 1) % n], base.edgeCurves?.[i], offs[i], sgn));
+  for (let pass = 0; pass <= n; pass++) {
+    const m = segs.length;
+    if (m < 2) return null;
+    for (const g of segs) [g.s0, g.s1] = [0, naturalEnd(g)];
+    for (let k = 0; k < m; k++) {
+      const A = segs[k];
+      const B = segs[(k + 1) % m];
+      const near: Point[] = [];
+      for (let e = (A.src + 1) % n; ; e = (e + 1) % n) {
+        near.push(P[e]);
+        if (e === B.src) break;
+      }
+      const hit = settleCorner(A, B, near, 10 * Math.max(offs[A.src], offs[B.src]) + 1);
+      if (hit) [A.s1, B.s0] = [hit.sA, hit.sB];
+    }
+    let worst = -1;
+    let worstShare = 1e-4;
+    segs.forEach((g, k) => {
+      const share = (g.s1 - g.s0) / (naturalEnd(g) || 1);
+      if (share < worstShare) [worst, worstShare] = [k, share];
+    });
+    if (worst < 0) return segs;
+    segs = segs.filter((_, k) => k !== worst);
+  }
+  return null;
+}
+
+/** The settled moved edges as pieces, with a straight bevel wherever two of them part. */
+function loopPieces(segs: readonly Offset[]): Piece[] {
+  const out: Piece[] = [];
+  segs.forEach((g, k) => {
+    if (g.cubic) {
+      const w = bezWindow(g.cubic, g.s0, g.s1);
+      out.push({ src: g.src, from: w[0], to: w[3], c: [w[1], w[2]] });
+    } else out.push({ src: g.src, from: offsetAt(g, g.s0), to: offsetAt(g, g.s1) });
+    const next = segs[(k + 1) % segs.length];
+    const end = out[out.length - 1].to;
+    const start = offsetAt(next, next.s0);
+    if (vDist(end, start) > 0.01) out.push({ src: -1, from: end, to: start });
+  });
+  return out;
+}
+
+/** A closed walk of pieces as an outline. A piece of no length (a cap the bevel already drew, a gap
+ *  at a side's very end) leaves no corner behind. */
+function emitOutline(path: readonly Piece[]): BuiltOutline {
+  const outline: Point[] = [];
+  const edgeCurves: (EdgeCurve | null)[] = [];
+  for (const p of path) {
+    const curve = p.c ? { c1: vSub(p.c[0], p.from), c2: vSub(p.c[1], p.to) } : null;
+    const last = outline[outline.length - 1];
+    if (last && vDist(last, p.from) < 0.05) edgeCurves[edgeCurves.length - 1] = curve; // the piece before was nothing
+    else {
+      outline.push(p.from);
+      edgeCurves.push(curve);
+    }
+  }
+  if (outline.length > 1 && vDist(outline[outline.length - 1], outline[0]) < 0.05) {
+    outline.pop();
+    edgeCurves.pop();
+  }
+  return { outline, ...(edgeCurves.some(Boolean) ? { edgeCurves } : {}) };
+}
+
+/** The edge of a shape an entrance goes in when none was chosen: the lowest on screen (largest y at
+ *  its middle) — the bottom run of a capsule, the base of a triangle. The first of a tie. */
+function lowestEdge(outer: readonly Piece[]): number {
+  let best = 0;
+  let bestY = -Infinity;
+  outer.forEach((p, i) => {
+    const y = piecePoint(p, 0.5).y;
+    if (y > bestY + 1e-6) [best, bestY] = [i, y];
+  });
+  return best;
+}
+
+/** A band that runs all the way round, as ONE outline: the outer edge from one side of the entrance
+ *  round to the other, a cap in, the inner edge back, a cap out. Closed (no entrance) the two caps
+ *  lie on top of each other at one point — the hatch's hairline.
+ *
+ *  The entrance is placed on the stretch of its side that the band runs straight along — between
+ *  the band's INNER corners, not the shape's outer ones — so both caps cross the band square and an
+ *  entrance at the start of a rectangle's side opens beside the leg rather than cutting the corner
+ *  out from under it. On a side that runs on smoothly into the next (a capsule's bottom run) the two
+ *  are the same, which is where the oval ring always put its opening. */
+function closedBand(outer: readonly Piece[], inner: readonly Piece[], spec: HollowSpec): BuiltOutline {
+  const n = outer.length;
+  const g = spec.gapSide !== undefined && Number.isInteger(spec.gapSide) && spec.gapSide >= 0 && spec.gapSide < n ? spec.gapSide : lowestEdge(outer);
+  const e = outer[g];
+  const table = lengthTable(e);
+  let k = inner.findIndex((p) => p.src === g);
+  let lo = 0;
+  let hi = table[SAMPLES];
+  if (k >= 0) {
+    const a = lengthAtParam(e, table, nearestParam(e, inner[k].from));
+    const b = lengthAtParam(e, table, nearestParam(e, inner[k].to));
+    [lo, hi] = [Math.min(a, b), Math.max(a, b)];
+  }
+  const gap = k >= 0 ? Math.min(Math.max(0, spec.gapMm ?? 0), hi - lo) : 0;
+  const at = spec.gapAt ?? "center";
+  const x0 = at === "start" ? lo : at === "end" ? hi - gap : (lo + hi - gap) / 2;
+  const t0 = paramAtLength(e, table, x0);
+  const t1 = gap > 0 ? paramAtLength(e, table, x0 + gap) : t0;
+  const o0 = piecePoint(e, t0);
+  const o1 = piecePoint(e, t1);
+  if (k < 0) {
+    // The band swallowed this side's inner edge: the seam goes to the nearest point of what is left.
+    let bestD = Infinity;
+    inner.forEach((p, i) => {
+      const d = vDist(piecePoint(p, nearestParam(p, o0)), o0);
+      if (d < bestD) [k, bestD] = [i, d];
+    });
+  }
+  let v0 = nearestParam(inner[k], o0);
+  let v1 = gap > 0 ? nearestParam(inner[k], o1) : v0;
+  if (v1 < v0) v0 = v1 = (v0 + v1) / 2;
+  const m = inner.length;
+  const path: Piece[] = [cutPiece(e, t1, 1)];
+  for (let i = 1; i < n; i++) path.push(outer[(g + i) % n]);
+  path.push(cutPiece(e, 0, t0));
+  const back0 = reversedPiece(cutPiece(inner[k], 0, v0)); // from the entrance's near side, backwards
+  const back1 = reversedPiece(cutPiece(inner[k], v1, 1)); // …round to its far side
+  path.push({ src: -1, from: o0, to: back0.from }); // the cap in
+  path.push(back0);
+  for (let i = 1; i < m; i++) path.push(reversedPiece(inner[(k - i + m) % m]));
+  path.push(back1);
+  path.push({ src: -1, from: back1.to, to: o1 }); // the cap out
+  return emitOutline(path);
+}
+
+/** A shape's outline cut into a band `spec.bandMm` deep, inside it (see "Hollow" above) — the
+ *  outlines it is drawn as, in the outline's own frame: one keyhole for a band that runs all the way
+ *  round, one outline per run of closed sides between open ones, or the outline itself, solid, when
+ *  the band leaves nothing inside (as deep as the shape), every side is open, or there is no band. */
+export function buildHollow(base: BuiltOutline, spec: HollowSpec): BuiltOutline[] {
+  const P = base.outline;
+  const n = P.length;
+  if (n < 2 || !(spec.bandMm > 0)) return [base];
+  const outer = P.map((a, i) => edgePiece(i, a, P[(i + 1) % n], base.edgeCurves?.[i]));
+  const outerArea = shoelace(piecesRing(outer));
+  if (!(Math.abs(outerArea) > 1e-6)) return [base];
+  const sgn = outerArea > 0 ? 1 : -1;
+  const open = new Set((spec.openSides ?? []).filter((i) => Number.isInteger(i) && i >= 0 && i < n));
+  if (open.size >= n) return [base];
+  const offs = P.map((_, i) => (open.has(i) ? 0 : spec.bandMm));
+  const segs = innerLoop(base, offs, sgn);
+  if (!segs) return [base];
+  const inner = loopPieces(segs);
+  // Nothing left inside — or the inner edge turned itself inside out: the band is the whole shape.
+  if (shoelace(piecesRing(inner)) * sgn <= 0.02 * Math.abs(outerArea)) return [base];
+  // An open side the band closed off before reaching it (its moved line was swallowed) is no longer
+  // a way out: it is walked as part of the band beside it.
+  const opens = inner.flatMap((p, k) => (p.src >= 0 && open.has(p.src) ? [k] : []));
+  if (!opens.length) return [closedBand(outer, inner, spec)];
+  const m = inner.length;
+  const out: BuiltOutline[] = [];
+  opens.forEach((ka, idx) => {
+    const kb = opens[(idx + 1) % opens.length];
+    const a = inner[ka].src;
+    const b = inner[kb].src;
+    const run: Piece[] = [];
+    for (let e = (a + 1) % n; e !== b; e = (e + 1) % n) run.push(outer[e]);
+    if (!run.length) return; // two open sides side by side: nothing between them
+    const back: Piece[] = [];
+    for (let k = (kb - 1 + m) % m; k !== ka; k = (k - 1 + m) % m) back.push(reversedPiece(inner[k]));
+    // The caps across the band lie ON the open sides — the inner edge was trimmed to them — so a cap
+    // on a curved open side follows its curve rather than cutting the chord across it.
+    const capOut = outer[b].c
+      ? cutPiece(outer[b], 0, nearestParam(outer[b], inner[kb].from))
+      : { src: -1, from: run[run.length - 1].to, to: inner[kb].from };
+    const capHome = outer[a].c
+      ? cutPiece(outer[a], nearestParam(outer[a], inner[ka].to), 1)
+      : { src: -1, from: inner[ka].to, to: run[0].from };
+    out.push(emitOutline([...run, capOut, ...back, capHome]));
+  });
+  return out.length ? out : [base];
+}
+
+/** The sides of a shape that may be opened (HollowSpec.openSides): the edges of its solid outline
+ *  (hollowOuter), each with a name for the editor's chips — the direction its middle faces from the
+ *  shape's centre, measured in the shape's own box so an ellipse's quarters read as diagonals, in
+ *  eight words, with "(2)" on the second of a name. Screen y is DOWN. */
+export interface HollowSide {
+  index: number;
+  mid: Point;
+  name: string;
+}
+
+const SIDE_WORDS = ["ימין", "ימין-למטה", "למטה", "שמאל-למטה", "שמאל", "שמאל-למעלה", "למעלה", "ימין-למעלה"];
+
+export function hollowSides(base: BuiltOutline): HollowSide[] {
+  const n = base.outline.length;
+  const b = sampledBounds([base]);
+  const hw = b.w / 2 || 1;
+  const hh = b.h / 2 || 1;
+  const seen = new Map<string, number>();
+  return base.outline.map((a, i) => {
+    const mid = edgeMidpoint(a, base.outline[(i + 1) % n], base.edgeCurves?.[i]);
+    const sector = ((Math.round(Math.atan2((mid.y - b.cy) / hh, (mid.x - b.cx) / hw) / (Math.PI / 4)) % 8) + 8) % 8;
+    const word = SIDE_WORDS[sector];
+    const count = (seen.get(word) ?? 0) + 1;
+    seen.set(word, count);
+    return { index: i, mid, name: count > 1 ? `${word} (${count})` : word };
+  });
+}
+
+export const hollowSideNames = (base: BuiltOutline): string[] => hollowSides(base).map((s) => s.name);
+
+/** The side an entrance goes in when the spec names none (or names one the shape no longer has). */
+export function hollowGapSide(base: BuiltOutline, spec?: Pick<HollowSpec, "gapSide">): number {
+  const n = base.outline.length;
+  const g = spec?.gapSide;
+  if (g !== undefined && Number.isInteger(g) && g >= 0 && g < n) return g;
+  return lowestEdge(base.outline.map((a, i) => edgePiece(i, a, base.outline[(i + 1) % n], base.edgeCurves?.[i])));
+}
+
+/** A new hollow shape's band: 60cm — a bar module, a banquet table — unless the shape is too small
+ *  for that to leave a middle, when a third of its shorter side. */
+export const defaultHollowBand = (w: number, d: number): number => Math.max(10, Math.round(Math.min(600, Math.min(w, d) / 3)));
+
+/** The shape drawn solid — what shapeFootprint was before a shape could be hollow. */
+function solidFootprint(shape: MapShape, d: ShapeDims): Footprint {
   if (shape === "custom") {
     const { outline, edgeCurves } = d;
     if (outline && outline.length >= 3) return { kind: "custom", outline, ...(edgeCurves ? { edgeCurves } : {}) };
@@ -539,8 +1171,11 @@ export function resolveFootprint(product: Product): Footprint {
   const d = product.dimensions;
   const a = product.appearance;
   const shape = a?.shape ?? (d.diameterMm ? "circle" : "rect");
-  const base = shapeFootprint(shape, { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, arc: a?.arc, ring: a?.ring });
-  return a?.parts?.length ? composeFootprint(base, a.parts) : base;
+  const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
+  // With parts, the base joins the composite as its pieces in its OUTER box's frame (shapePieces) —
+  // the frame the parts' offsets are measured from — rather than re-centred on what a hollow band
+  // opened on a side leaves of it.
+  return a?.parts?.length ? composePieces(shapePieces(shape, dims), a.parts) : shapeFootprint(shape, dims);
 }
 
 // ── Outlines, for everything ───────────────────────────────────────────────────────────────────
@@ -616,19 +1251,12 @@ export function sampledBounds(pieces: readonly BuiltOutline[]) {
   return { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
 
-/** A base footprint and the parts added beside it, as one footprint. Each part is resolved by the
- *  same rule a base shape is (shapeFootprint), turned about its own centre, moved to its offset from
- *  the base's centre — and then the whole lot is re-centred on its own box, because every footprint
- *  is drawn centred on the point its item stands on. */
-/** One part as an outline in the BASE shape's frame — resolved like a base shape, turned about its
- *  own centre and moved to its offset. What the composite is built of, and what the appearance
- *  editor hands its outline editor when a part is redrawn by hand. */
-export function placedPartOutline(part: ShapePart): BuiltOutline {
+/** An outline in a part's own frame turned about its centre and moved to the part's offset. */
+function placeInPart(o: BuiltOutline, part: ShapePart): BuiltOutline {
   const t = ((part.rotation || 0) * Math.PI) / 180;
   const cos = Math.cos(t);
   const sin = Math.sin(t);
   const turn = (v: Point): Point => ({ x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos });
-  const o = footprintOutlines(shapeFootprint(part.shape, part))[0];
   return {
     outline: o.outline.map((v) => {
       const q = turn(v);
@@ -638,10 +1266,35 @@ export function placedPartOutline(part: ShapePart): BuiltOutline {
   };
 }
 
+/** One part as ONE outline in the BASE shape's frame — resolved like a base shape, turned about its
+ *  own centre and moved to its offset — and drawn SOLID: what the appearance editor hands its outline
+ *  editor when a part is redrawn by hand, and whose edges are the part's sides to open. A hollow part
+ *  redrawn by hand keeps its HollowSpec, so the redrawn outline is the outside of its band. */
+export function placedPartOutline(part: ShapePart): BuiltOutline {
+  return placeInPart(hollowOuter(part.shape, part), part);
+}
+
+/** One part as the outlines it is drawn as, in the base's frame: one, or a hollow part's pieces. */
+export function placedPartOutlines(part: ShapePart): BuiltOutline[] {
+  return shapePieces(part.shape, part).map((o) => placeInPart(o, part));
+}
+
+/** A base footprint and the parts added beside it, as one footprint. Each part is resolved by the
+ *  same rule a base shape is (shapeFootprint), turned about its own centre, moved to its offset from
+ *  the base's centre — and then the whole lot is re-centred on its own box, because every footprint
+ *  is drawn centred on the point its item stands on. */
 export function composeFootprint(base: Footprint, parts: readonly ShapePart[]): Footprint {
-  // One piece per shape, in order — the base, then each part. ItemSurface (components/surface-fill)
-  // reads a part's own texture by that index.
-  const pieces: BuiltOutline[] = [...footprintOutlines(base).slice(0, 1), ...parts.map(placedPartOutline)];
+  return composePieces(footprintOutlines(base), parts);
+}
+
+/** The base's pieces and each part's, as one multi re-centred on the lot. In order — the base's,
+ *  then each part's — and while every shape is one outline, piece k IS shape k, which is how
+ *  ItemSurface reads a part's own texture. A shape drawn as several (a hollow one opened in two
+ *  places) breaks that count, so then every piece says which shape it is (BuiltOutline.of). */
+function composePieces(basePieces: readonly BuiltOutline[], parts: readonly ShapePart[]): Footprint {
+  const groups = [basePieces, ...parts.map(placedPartOutlines)];
+  const several = groups.some((g) => g.length !== 1);
+  const pieces = groups.flatMap((g, k) => g.map((p) => (several ? { ...p, of: k } : p)));
   const b = sampledBounds(pieces);
   return {
     kind: "multi",
@@ -760,7 +1413,7 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
     case "custom":
       return { kind: "custom", outline: f.outline.map(pt), ...(f.edgeCurves ? { edgeCurves: curves(f.edgeCurves) } : {}) };
     case "multi":
-      return { kind: "multi", parts: f.parts.map((p) => ({ outline: p.outline.map(pt), ...(p.edgeCurves ? { edgeCurves: curves(p.edgeCurves) } : {}) })) };
+      return { kind: "multi", parts: f.parts.map((p) => ({ ...p, outline: p.outline.map(pt), ...(p.edgeCurves ? { edgeCurves: curves(p.edgeCurves) } : {}) })) };
   }
 }
 
@@ -775,9 +1428,21 @@ export function sizedFootprint(product: Product, sizeMm?: { widthMm: number; dep
       // The box's width IS the circle's diameter for everything cut from one except the quarter,
       // whose box is one radius across (see ROUND_FIELD).
       const diameterMm = shape === "quarter-circle" ? sizeMm.widthMm * 2 : sizeMm.widthMm;
-      return shapeFootprint(shape, { diameterMm, arc: a?.arc });
+      return shapeFootprint(shape, { diameterMm, arc: a?.arc, hollow: a?.hollow });
     }
-    return shapeFootprint(shape, { widthMm: sizeMm.widthMm, depthMm: sizeMm.depthMm, arc: a?.arc, ring: a?.ring });
+    return shapeFootprint(shape, { widthMm: sizeMm.widthMm, depthMm: sizeMm.depthMm, arc: a?.arc, ring: a?.ring, hollow: a?.hollow });
+  }
+  // A hand-drawn outline drawn hollow: the OUTLINE is stretched and the band cut inside it again, so
+  // the band stays the depth of its modules, as it does on a derived shape. (With parts the whole
+  // composite is scaled, band and all — the one reading of "bigger" a composite has.)
+  const hollow = !a?.parts?.length ? hollowOf(shape, a?.hollow) : undefined;
+  if (hollow) {
+    const outer = hollowOuter(shape, { outline: a?.outline, edgeCurves: a?.edgeCurves });
+    const ob = sampledBounds([outer]);
+    if (ob.w && ob.h) {
+      const stretched = scaleFootprint({ kind: "custom", outline: outer.outline, ...(outer.edgeCurves ? { edgeCurves: outer.edgeCurves } : {}) }, sizeMm.widthMm / ob.w, sizeMm.depthMm / ob.h);
+      return piecesFootprint(buildHollow(footprintOutlines(stretched)[0], hollow));
+    }
   }
   const base = resolveFootprint(product);
   const b = footprintBounds(base);
@@ -1054,6 +1719,101 @@ if (isMain(import.meta.url)) {
   const tallUPoly = flat(tallU);
   assert(tallUB.w === 1000 && tallUB.h === 3000 && inside({ x: 400, y: 0 }, tallUPoly) && !inside({ x: 0, y: 0 }, tallUPoly), "a tall rounded ח grows straight sides rather than a wider box");
   assert(ringSpecOf(7340, 1800, { bandMm: 600, gapMm: 800 }, "rounded-u").gapMm === 0, "a rounded ח has no opening — its sides are the arcs");
+
+  // ── Hollow: any solid shape as a band ──────────────────────────────────────────────────────
+  // The band is cut INSIDE the outline, so the box is still the shape's two numbers and the area is
+  // the outline's less what is left inside. Shoelace on the flattened outline — a keyhole's reversed
+  // inner loop subtracts itself, and its two caps cancel.
+  {
+    const fine = (o: BuiltOutline): Point[] =>
+      o.outline.flatMap((a, i) => flattenEdge(a, o.outline[(i + 1) % o.outline.length], o.edgeCurves?.[i], 64).slice(0, -1));
+    const areaOf = (f: Footprint) => footprintOutlines(f).reduce((s, o) => s + area(fine(o)), 0);
+    const near = (a: number, b: number, share: number) => Math.abs(a - b) <= share * Math.abs(b);
+    const hollow = (shape: MapShape, dims: ShapeDims, h: HollowSpec) => shapeFootprint(shape, { ...dims, hollow: h });
+
+    // A rectangle as a ring, closed: one keyhole, its box the rectangle's, the band all the way round.
+    const ring = hollow("rect", { widthMm: 1200, depthMm: 600 }, { bandMm: 100 });
+    assert(ring.kind === "custom", "a closed hollow rectangle is one outline, a keyhole");
+    assert(eq(footprintBounds(ring), { w: 1200, h: 600 }), "…measuring exactly its two numbers");
+    const ringPoly = flat(footprintOutlines(ring)[0]);
+    assert(!inside({ x: 0, y: 0 }, ringPoly) && inside({ x: 0, y: -250 }, ringPoly) && inside({ x: 550, y: 0 }, ringPoly), "its middle is floor and its sides are band");
+    assert(Math.abs(areaOf(ring) - (1200 * 600 - 1000 * 400)) < 1e-6, `…and its area is the rectangle less the middle (${areaOf(ring)})`);
+    // An entrance cut through a closed ring takes exactly its width × the band out of it.
+    const door = hollow("rect", { widthMm: 1200, depthMm: 600 }, { bandMm: 100, gapMm: 300 });
+    assert(Math.abs(areaOf(door) - (areaOf(ring) - 300 * 100)) < 1e-6, `an entrance takes gap × band out of the ring (${areaOf(door)})`);
+    assert(!inside({ x: 0, y: 250 }, flat(footprintOutlines(door)[0])) && inside({ x: 300, y: 250 }, flat(footprintOutlines(door)[0])), "…in the middle of the bottom side unless told otherwise");
+    // A band as deep as the shape leaves nothing inside: the solid shape, not an inside-out one.
+    const solid = hollow("rect", { widthMm: 1200, depthMm: 600 }, { bandMm: 400 });
+    assert(Math.abs(areaOf(solid) - 1200 * 600) < 1e-6 && footprintOutlines(solid)[0].outline.length === 4, "a band deeper than the shape is the solid shape");
+    assert(eq(hollow("crescent", { widthMm: 1200, depthMm: 600 }, { bandMm: 100 }), shapeFootprint("crescent", { widthMm: 1200, depthMm: 600 })), "a shape that is a band already ignores a hollow spec");
+    // Rule 1 holds hollow, for every shape that may be: the band only ever takes floor out of the middle.
+    for (const shape of MAP_SHAPES.filter(canHollow)) {
+      const dims: ShapeDims = { widthMm: 1200, depthMm: 600, diameterMm: 1200, outline: [{ x: 0, y: 0 }, { x: 1200, y: 0 }, { x: 900, y: 600 }, { x: 0, y: 600 }] };
+      const whole = shapeFootprint(shape, dims);
+      const cut = hollow(shape, dims, { bandMm: 100 });
+      const wb = footprintBounds(whole);
+      const cb = footprintBounds(cut);
+      assert(Math.abs(wb.w - cb.w) < 1e-6 && Math.abs(wb.h - cb.h) < 1e-6, `${shape}: hollow, it still measures what it does solid (${cb.w}×${cb.h})`);
+      assert(areaOf(cut) < areaOf(whole) - 1, `${shape}: …and is a band, not the whole of it`);
+    }
+
+    // The legacy shapes are hollow solids now. A rectangle open along its bottom IS the ח…
+    const openBottom = hollow("rect", { widthMm: 1200, depthMm: 600 }, { bandMm: 200, openSides: [2] });
+    assert(Math.abs(areaOf(openBottom) - area(buildShapeOutline("u-shape", 1200, 600, undefined, { bandMm: 200 })!.outline)) < 1e-6, `a rectangle open along its bottom is the ח (${areaOf(openBottom)})`);
+    assert(eq(footprintBounds(openBottom), { w: 1200, h: 600 }), "…and measures what the ח measured");
+    // …a capsule hollowed all the way round is the closed oval ring…
+    const capsuleRing = hollow("stadium", { widthMm: 7340, depthMm: 3600 }, { bandMm: 600 });
+    assert(near(areaOf(capsuleRing), bandArea, 0.002), `a hollow capsule is the closed oval ring (${areaOf(capsuleRing)} vs ${bandArea})`);
+    // …a half circle open along its chord is the half ring…
+    const halfRing = hollow("half-circle", { diameterMm: 4000 }, { bandMm: 750, openSides: [0] });
+    assert(near(areaOf(halfRing), area(flat(buildArcOutline(4000, { sweepDeg: 180, bandMm: 750 }))), 0.01), `a half circle open along its chord is the half ring (${areaOf(halfRing)})`);
+    assert(eq(footprintBounds(halfRing), { w: 4000, h: 2000 }), "…as wide as its circle and half as tall");
+    // …and a quarter circle open along both radii is a quarter of a ring.
+    const quarterRing = hollow("quarter-circle", { diameterMm: 4000 }, { bandMm: 500, openSides: [0, 2] });
+    assert(near(areaOf(quarterRing), (Math.PI / 4) * (2000 ** 2 - 1500 ** 2), 0.01), `a quarter circle open along both radii is a quarter ring (${areaOf(quarterRing)})`);
+    // A circle hollowed is a ring, its inner edge concentric — still four quarter arcs, not a polyline.
+    const circleRing = hollow("circle", { diameterMm: 2000 }, { bandMm: 300 });
+    assert(near(areaOf(circleRing), Math.PI * (1000 ** 2 - 700 ** 2), 0.01), `a hollow circle is a ring (${areaOf(circleRing)})`);
+    const circleInner = footprintOutlines(circleRing)[0].outline.filter((p) => Math.abs(Math.hypot(p.x, p.y) - 700) < 0.5);
+    assert(circleInner.length >= 4 && (footprintOutlines(circleRing)[0].edgeCurves?.filter(Boolean).length ?? 0) >= 8, "…its inner edge four arcs on the 70cm radius, curves and all");
+
+    // A triangle's band is the same width all round, so what is left inside is the triangle shrunk
+    // about its incentre: its area is the outer's × ((r − b)/r)², r the inradius.
+    const tri = hollow("triangle", { widthMm: 1200, depthMm: 900 }, { bandMm: 100 });
+    const triOuter = area(buildShapeOutline("triangle", 1200, 900)!.outline);
+    const inradius = (2 * triOuter) / (1200 + 2 * Math.hypot(600, 900));
+    const triInner = triOuter - areaOf(tri);
+    assert(near(triInner / triOuter, ((inradius - 100) / inradius) ** 2, 0.01), `a hollow triangle's middle is the triangle shrunk about its incentre (${triInner / triOuter})`);
+
+    // A hand-drawn L: the band follows the reflex corner inside it as well as the four outside.
+    const L: Point[] = [{ x: 0, y: 0 }, { x: 2000, y: 0 }, { x: 2000, y: 800 }, { x: 800, y: 800 }, { x: 800, y: 2000 }, { x: 0, y: 2000 }];
+    const hollowL = hollow("custom", { outline: L }, { bandMm: 200 });
+    assert(Math.abs(areaOf(hollowL) - (2000 * 800 + 800 * 1200 - (1600 * 400 + 400 * 1200))) < 1e-6, `a hollow L is a 20cm band round an L of floor (${areaOf(hollowL)})`);
+    assert(eq(footprintBounds(hollowL), { w: 2000, h: 2000 }), "…and keeps the box it was drawn in");
+
+    // Opening two opposite sides parts the band in two: a multi of two bars, each w × band.
+    const bars = hollow("rect", { widthMm: 1200, depthMm: 600 }, { bandMm: 100, openSides: [1, 3] });
+    assert(bars.kind === "multi" && bars.parts.length === 2, "a rectangle open at both ends is two bars");
+    for (const p of footprintOutlines(bars)) {
+      const b = customShapeBounds(p.outline);
+      assert(Math.abs(b.w - 1200) < 1e-6 && Math.abs(b.h - 100) < 1e-6 && p.of === 0, `…each the width by the band, and both the one shape (${b.w}×${b.h})`);
+    }
+    assert(eq(footprintBounds(bars), { w: 1200, h: 600 }), "…still standing in the rectangle's box");
+    assert(eq(hollowSideNames(hollowOuter("rect", { widthMm: 1200, depthMm: 600 })), ["למעלה", "ימין", "למטה", "שמאל"]), "a rectangle's sides are named by where they face");
+    assert(eq(hollowSideNames(hollowOuter("circle", { diameterMm: 1000 })), ["שמאל-למטה", "ימין-למטה", "ימין-למעלה", "שמאל-למעלה"]), "…a circle's four quarters by their diagonals");
+
+    // From a catalog row, through every reader: the resolver, a stretch on the plan, a composite.
+    const hollowBar: Product = { ...base, category: "bars", dimensions: { widthMm: 2400, depthMm: 1200, heightMm: 1100 }, appearance: { shape: "rect", content: "none", hollow: { bandMm: 600, openSides: [2] } } };
+    assert(Math.abs(areaOf(resolveFootprint(hollowBar)) - (2400 * 1200 - 1200 * 600)) < 1e-6, "the resolver draws a row's hollow spec");
+    const stretchedBar = sizedFootprint({ ...hollowBar, resize: { stepMm: 100, width: { minMm: 1200, maxMm: 6000 } } }, { widthMm: 4800, depthMm: 1200 });
+    assert(Math.abs(areaOf(stretchedBar) - (4800 * 1200 - 3600 * 600)) < 1e-6, "a hollow row stretched on the plan keeps its band 60cm, not stretched with it");
+    const drawnRing: Product = { ...base, appearance: { shape: "custom", content: "none", outline: [{ x: 0, y: 0 }, { x: 2000, y: 0 }, { x: 2000, y: 1000 }, { x: 0, y: 1000 }], hollow: { bandMm: 200 } } };
+    const drawnStretched = sizedFootprint({ ...drawnRing, resize: { stepMm: 100, width: { minMm: 1000, maxMm: 6000 } } }, { widthMm: 4000, depthMm: 1000 });
+    assert(Math.abs(areaOf(drawnStretched) - (4000 * 1000 - 3600 * 600)) < 1e-3, `a hand-drawn ring stretched keeps its band too (${areaOf(drawnStretched)})`);
+    const barWithBack = resolveFootprint({ ...hollowBar, appearance: { ...hollowBar.appearance!, hollow: { bandMm: 300, openSides: [1, 3] }, parts: [{ id: "b", shape: "rect", widthMm: 2400, depthMm: 300, x: 0, y: 0, rotation: 0 }] } });
+    assert(barWithBack.kind === "multi" && eq(barWithBack.parts.map((p, i) => pieceOf(p, i)), [0, 0, 1]), "in a composite, a hollow base's pieces and the part's each say which shape they are");
+    assert(eq(footprintBounds(barWithBack), { w: 2400, h: 1200 }), "…and the part stands where it was put, in the base's box");
+  }
 
   // ── Several shapes, one item ───────────────────────────────────────────────────────────────
   // A 2m counter with a 1m round butted against its right end: 2m + half the round's 1m past the

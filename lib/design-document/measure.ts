@@ -44,6 +44,9 @@ export interface MeasureContext {
    *  chairs are packed as the studio's chairs, as a stage banquette's are. Absent = none are known,
    *  and a banquette row is simply its own metres. */
   benchOf?: BenchLookup;
+  /** The vase or jug an arrangement stands in (lib/catalog/vessel.ts vesselOf) — counted beside it,
+   *  one per arrangement. Absent = no catalog to say, and none is counted. */
+  vesselOf?: (p: Placement) => string | undefined;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -156,6 +159,9 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
       const chairRow = ctx.stagePart?.("chair");
       if (chairRow) add(chairRow, bench.chairSeats * p.quantity);
     }
+    // The vessel an arrangement stands in: one of it under every one of them.
+    const vessel = ctx.vesselOf?.(p);
+    if (vessel) add(vessel, p.quantity);
     add(p.variantId, measure(p, ctx));
   }
   for (const t of doc.tables) {
@@ -340,5 +346,9 @@ if (isMain(import.meta.url)) {
   const noCatalog = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [stage(["deck"])] }, { unitOf: () => "unit" });
   assert(noCatalog.get("deck") === 1, "with no catalog to lay it with, a stage counts as itself rather than guessing");
 
+  // An arrangement in a vase: the vase is counted beside it, one per arrangement.
+  const inVase = { ...base, id: "fl", variantId: "peony", quantity: 3, layer: "table" as const, tableId: "t" };
+  const vased = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [inVase] }, { ...ctx, vesselOf: (p) => (p.variantId === "peony" ? "jug" : undefined) });
+  assert(vased.get("peony") === 3 && vased.get("jug") === 3, "three arrangements in a jug each pack three jugs");
   console.log("measure self-check passed");
 }

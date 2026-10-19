@@ -62,7 +62,9 @@ export function DressingBar({
   designs: ReactNode;
   onClose: () => void;
 }) {
-  const scope = selectedCount >= 2 ? `${selectedCount} הנבחרים` : "כל הפריטים";
+  // What each action acts on, said truly: "to the centre" takes one selected item on its own.
+  const scopeOf = (kind: ArrangeKind) =>
+    selectedCount >= 2 ? `${selectedCount} הנבחרים` : selectedCount === 1 && kind === "center" ? "הפריט הנבחר" : "כל הפריטים";
   const any = count + hungCount;
   return (
     <Bar
@@ -81,7 +83,7 @@ export function DressingBar({
           type="button"
           disabled={any === 0}
           onClick={() => onArrange(kind)}
-          title={`${label} — ${scope}`}
+          title={`${label} — ${scopeOf(kind)}`}
           className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs font-semibold text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Icon className="h-3.5 w-3.5" strokeWidth={2} />

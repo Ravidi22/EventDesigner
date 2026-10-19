@@ -10,7 +10,7 @@
 // Over numbered units, like placementLegend: a block of four pushed-together tables is one unit
 // with one number and one kit. Letters are assigned over the WHOLE event, never per zone, so kit ב
 // is kit ב on every sheet of the set.
-import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
+import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { byUnitOrder, numberedUnits, type NumberedUnit } from "../design-document/groups";
 import { isMain } from "../self-check";
 
@@ -38,7 +38,10 @@ export interface TableKit {
  *  serpentine, a ח — has a front and a back, and its dressing has to be read off a drawing. */
 const PLAIN_TYPES = new Set(["round", "rectangle", "square"]);
 
-export function tableKits(doc: DesignDocumentContent): TableKit[] {
+/** `vesselOf` (lib/catalog/vessel.ts): the vase an arrangement stands in, which the kit carries as an
+ *  item of its own — the same flowers in a gold jug and in a glass one are two kits, and the detail
+ *  sheet lists the jug. Absent = only what each placement names (`Placement.vessel`). */
+export function tableKits(doc: DesignDocumentContent, vesselOf?: (p: Placement) => string | undefined): TableKit[] {
   const byKey = new Map<string, Omit<TableKit, "letter">>();
   const tableById = new Map(doc.tables.map((t) => [t.id, t]));
   for (const unit of numberedUnits(doc)) {
@@ -49,6 +52,8 @@ export function tableKits(doc: DesignDocumentContent): TableKit[] {
       if (p.layer !== "table" || !p.tableId || !ids.has(p.tableId)) continue;
       counts.set(p.variantId, (counts.get(p.variantId) ?? 0) + p.quantity);
       pieces += 1;
+      const vessel = vesselOf ? vesselOf(p) : (p.vessel ?? undefined);
+      if (vessel) counts.set(vessel, (counts.get(vessel) ?? 0) + p.quantity);
     }
     if (counts.size === 0) continue; // an undressed table belongs to no kit and wears no letter
     const items = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([variantId, quantity]) => ({ variantId, quantity }));

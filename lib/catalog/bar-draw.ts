@@ -28,7 +28,7 @@
 // Derived from the footprint alone, so a bar stretched on the plan is drawn at its new size, and
 // cached per footprint like the spine and the label point. Pure; self-checked: npm run check:bar-draw.
 import type { Point } from "@/lib/design-document/types";
-import { customShapeBounds, footprintOutlines, resolveFootprint, type BuiltOutline, type Footprint } from "@/lib/studio/footprint";
+import { customShapeBounds, footprintOutlines, pieceOf, resolveFootprint, type BuiltOutline, type Footprint } from "@/lib/studio/footprint";
 import { flatRing, signedDistance } from "@/lib/studio/label-anchor";
 import { footprintSpine, pointAlong, spineLength } from "@/lib/studio/spine";
 import { isMain } from "../self-check";
@@ -86,11 +86,10 @@ export function barDrawing(f: Footprint): BarDrawing {
 function build(f: Footprint): BarDrawing {
   const pieces = footprintOutlines(f);
   const rings = pieces.map((p) => clean(flatRing(p)));
-  const base = rings[0];
-  if (!base || base.length < 3) return EMPTY;
-  const area = Math.abs(signedArea(base));
-  const perimeter = ringLength(base);
-  if (!(area > 0) || !(perimeter > 0)) return EMPTY;
+  // The bar's own shape is piece 0 — or, drawn hollow and opened in two places, every piece that
+  // says it is shape 0 (BuiltOutline.of). The rest are the shapes added to it.
+  const own = pieces.flatMap((p, i) => (pieceOf(p, i) === 0 ? [i] : []));
+  if (!own.length) return EMPTY;
 
   // Which edges are the outside: the hull of the WHOLE bar, parts included — the end of a
   // horseshoe's leg tucked behind the back bar added across its opening is not where guests stand.
@@ -103,6 +102,55 @@ function build(f: Footprint): BarDrawing {
   }
   const eps = Math.max(2, Math.max(maxX - minX, maxY - minY) * 0.002);
   const outside = (p: Point) => boundaryDistance(p, hull) <= eps;
+
+  const front: Strip[] = [];
+  const shelves: Strip[] = [];
+  const bottles: Bottle[] = [];
+  const wells: { piece: BuiltOutline; band: number }[] = [];
+  for (const i of own) {
+    const drawn = counter(rings[i], outside);
+    if (!drawn) {
+      if (i === own[0]) return EMPTY;
+      continue;
+    }
+    front.push(...drawn.front);
+    shelves.push(...drawn.shelf);
+    bottles.push(...drawn.bottles);
+    if (!drawn.shelf.length) wells.push({ piece: pieces[i], band: drawn.band });
+  }
+
+  // The shapes added to the bar are its back counters: a row of bottles down the middle of each.
+  const backs = pieces.filter((p, i) => pieceOf(p, i) !== 0);
+  pieces.forEach((piece, i) => {
+    if (pieceOf(piece, i) === 0) return;
+    const ring = rings[i];
+    if (ring.length < 3) return;
+    const d = (2 * Math.abs(signedArea(ring))) / ringLength(ring);
+    bottles.push(...spread(spineOf(piece), 0, Math.min(d * 0.09, 40)));
+  });
+
+  // Nothing faces in and nothing was added: guests all round, the bartender in the middle, the
+  // bottles down the well — the round bar's picture, for any outline.
+  if (shelves.length === 0 && backs.length === 0) {
+    for (const w of wells) bottles.push(...spread(spineOf(w.piece), 0, Math.min(w.band * 0.056, 45)));
+  }
+
+  return { front, shelf: shelves, backs, bottles };
+}
+
+/** A piece's spine where the piece stands in the footprint's frame (footprintSpine centres it). */
+function spineOf(piece: BuiltOutline): Point[] {
+  const b = customShapeBounds(piece.outline, piece.edgeCurves);
+  return footprintSpine({ kind: "custom", outline: piece.outline, ...(piece.edgeCurves ? { edgeCurves: piece.edgeCurves } : {}) }).map((p) => ({ x: p.x + b.cx, y: p.y + b.cy }));
+}
+
+/** One outline of the bar's own shape drawn as counter: the guests' strip along its outside edges,
+ *  the bartender's shelf and its bottles along the edges that face in. Null for a degenerate one. */
+function counter(base: Point[], outside: (p: Point) => boolean): { front: Strip[]; shelf: Strip[]; bottles: Bottle[]; band: number } | null {
+  if (!base || base.length < 3) return null;
+  const area = Math.abs(signedArea(base));
+  const perimeter = ringLength(base);
+  if (!(area > 0) || !(perimeter > 0)) return null;
 
   const band = (2 * area) / perimeter;
   const top = counterTopMm(band);
@@ -151,25 +199,7 @@ function build(f: Footprint): BarDrawing {
     bottles.push(...spread(line, shelf / 2, r));
   }
 
-  // The shapes added to the bar are its back counters: a row of bottles down the middle of each.
-  const backs = pieces.slice(1);
-  for (let i = 1; i < pieces.length; i++) {
-    const ring = rings[i];
-    if (ring.length < 3) continue;
-    const d = (2 * Math.abs(signedArea(ring))) / ringLength(ring);
-    const b = customShapeBounds(pieces[i].outline, pieces[i].edgeCurves);
-    const spine = footprintSpine({ kind: "custom", outline: pieces[i].outline, ...(pieces[i].edgeCurves ? { edgeCurves: pieces[i].edgeCurves } : {}) }).map((p) => ({ x: p.x + b.cx, y: p.y + b.cy }));
-    bottles.push(...spread(spine, 0, Math.min(d * 0.09, 40)));
-  }
-
-  // Nothing faces in and nothing was added: guests all round, the bartender in the middle, the
-  // bottles down the well — the round bar's picture, for any outline.
-  if (shelves.length === 0 && backs.length === 0) {
-    const spine = footprintSpine({ kind: "custom", outline: base });
-    bottles.push(...spread(spine, 0, Math.min(band * 0.056, 45)));
-  }
-
-  return { front, shelf: shelves, backs, bottles };
+  return { front, shelf: shelves, bottles, band };
 }
 
 /** Bottles every BOTTLE_PITCH_MM along a polyline, `inset` clear of both its ends. */
@@ -441,6 +471,15 @@ if (isMain(import.meta.url)) {
   const L = barDrawing({ kind: "custom", outline: [{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 600 }, { x: 600, y: 600 }, { x: 600, y: 2400 }, { x: 0, y: 2400 }] });
   assert(L.front.length === 1 && L.shelf.length === 1, `an L's crook is its shelf (${L.front.length}/${L.shelf.length})`);
   assert(L.bottles.length >= 6, "…and carries the bottles");
+
+  // A rectangle drawn hollow and open along its bottom is the ח, and is drawn as one.
+  const hollowU = bar({ widthMm: 2400, depthMm: 1200 }, { shape: "rect", hollow: { bandMm: 400, openSides: [2] } });
+  const hu = barDrawing(hollowU);
+  assert(hu.front.length === ud.front.length && hu.shelf.length === ud.shelf.length && hu.bottles.length === ud.bottles.length, `a hollow rectangle open at the bottom is drawn as the ח (${hu.front.length}/${hu.shelf.length}/${hu.bottles.length})`);
+  onCounter(hollowU, hu, "hollow ח");
+  // Opened at both ends it is two straight bars — both the bar's own counter, neither a back bar.
+  const twoRuns = barDrawing(bar({ widthMm: 3000, depthMm: 2400 }, { shape: "rect", hollow: { bandMm: 600, openSides: [1, 3] } }));
+  assert(twoRuns.backs.length === 0 && twoRuns.front.length >= 2 && twoRuns.shelf.length === 2, `a band opened in two is two counters, not a counter and a back bar (${twoRuns.front.length}/${twoRuns.shelf.length}/${twoRuns.backs.length})`);
 
   console.log("bar-draw: all checks passed");
 }

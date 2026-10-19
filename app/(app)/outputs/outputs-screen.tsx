@@ -10,6 +10,7 @@ import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { recordExport, type ExportType } from "@/lib/outputs/actions";
 import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
 import { resolve } from "@/lib/studio/catalog-resolver";
+import { vesselOf } from "@/lib/catalog/vessel";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { loadProducts } from "@/lib/catalog/storage";
@@ -176,7 +177,8 @@ export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "
   //
   // Kits are figured over the WHOLE event (lib/outputs/table-kits.ts), never per zone, so kit ב on
   // the garden's plan is the same ב as on the hall's.
-  const kits = useMemo(() => tableKits(doc), [doc]);
+  // The vase each arrangement stands in is part of its kit (lib/catalog/vessel.ts).
+  const kits = useMemo(() => tableKits(doc, (p) => vesselOf(p, (id) => resolve(id)?.product)), [doc]);
   const letters = useMemo(() => kitLetters(kits), [kits]);
   // Which kits get a detail sheet. Overrides over the suggestion rather than a list of ids, so a
   // kit the designer never touched follows `recommended` as the drawing changes.

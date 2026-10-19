@@ -10,6 +10,7 @@ import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure
 import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
 import { nearestWall } from "@/lib/studio/anchor";
 import { climbKindOf } from "@/lib/studio/climb-item";
+import { vesselOf } from "@/lib/catalog/vessel";
 import type { MeasureContext } from "@/lib/design-document/measure";
 import type { ItemLookup } from "./aggregate";
 import type { QuoteLookup } from "./quote";
@@ -95,5 +96,7 @@ export function measureContext(structure?: VenueStructure): MeasureContext {
     },
     wallDistance: structure ? (p) => nearestWall(structure, p)?.distanceMm ?? Infinity : undefined,
     climbOf: (variantId) => climbKindOf(resolve(variantId)?.product),
+    // An arrangement's vase is packed and counted with it (lib/catalog/vessel.ts).
+    vesselOf: (p) => vesselOf(p, (id) => resolve(id)?.product),
   };
 }

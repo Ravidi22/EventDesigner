@@ -204,6 +204,32 @@ function putTable(doc: DesignDocumentContent, table: DesignTable): DesignDocumen
   return apply(doc, { type: "loadDocument", content: { ...doc, tables: doc.tables.map((t) => (t.id === table.id ? table : t)) } });
 }
 
+/** The block a table change is about (its table's group, before or after), or null for a lone
+ *  table and a block number. A block's member changes travel TOGETHER: ticked, forced and refused as
+ *  one — half a head table moved, or removed, leaves a group whose chairs ring a gap. */
+export function blockOfChange(c: DocChange): string | null {
+  return c.kind === "table" ? ((c.before ?? c.after)?.groupId ?? null) : null;
+}
+
+/** The changes as the designer decides them: one row per block (its members' changes), one per
+ *  anything else — in the diff's order, each row keyed by its first change. */
+export function changeRows(changes: readonly DocChange[]): { key: string; keys: string[]; change: DocChange }[] {
+  const rows: { key: string; keys: string[]; change: DocChange }[] = [];
+  const byBlock = new Map<string, { key: string; keys: string[]; change: DocChange }>();
+  for (const c of changes) {
+    const g = blockOfChange(c);
+    const row = g ? byBlock.get(`${c.kind}:${(c as TableChange).op}:${g}`) : undefined;
+    if (row) {
+      row.keys.push(c.key);
+      continue;
+    }
+    const fresh = { key: c.key, keys: [c.key], change: c };
+    rows.push(fresh);
+    if (g) byBlock.set(`${c.kind}:${(c as TableChange).op}:${g}`, fresh);
+  }
+  return rows;
+}
+
 export interface MergeOptions {
   /** The changes to carry over, by key. Absent = every change in the diff. */
   accept?: Iterable<string>;
@@ -223,9 +249,56 @@ export function mergeChanges(
   proposed: DesignDocumentContent,
   options: MergeOptions = {},
 ): MergeResult {
+  // A block is decided whole: a tick or a force on any member's change is one on every member's.
   const all = diffDocuments(base, proposed);
-  const accept = options.accept ? new Set(options.accept) : null;
-  const force = new Set(options.force ?? []);
+  const wholeBlocks = (keys: Iterable<string>) => {
+    const set = new Set(keys);
+    const blocks = new Set(all.filter((c) => set.has(c.key)).map(blockOfChange).filter((g): g is string => !!g));
+    for (const c of all) {
+      const g = blockOfChange(c);
+      if (g && blocks.has(g)) set.add(c.key);
+    }
+    return set;
+  };
+  const accept = options.accept ? wholeBlocks(options.accept) : null;
+  const force = wholeBlocks(options.force ?? []);
+  const first = mergeOnce(current, base, proposed, all, accept, force);
+  // …and refused whole: a block one member of which conflicts is held back entirely, every member
+  // reported, rather than merged in half.
+  const split = new Set(
+    all
+      .filter((c) => first.conflicts.some((x) => x.key === c.key))
+      .map(blockOfChange)
+      .filter((g): g is string => !!g),
+  );
+  if (split.size === 0) return first;
+  const held = all.filter((c) => split.has(blockOfChange(c) ?? ""));
+  const heldKeys = new Set(held.map((c) => c.key));
+  const rest = mergeOnce(current, base, proposed, all, new Set([...(accept ?? all.map((c) => c.key))].filter((k) => !heldKeys.has(k))), force);
+  const reason = (k: string) => first.conflicts.find((x) => x.key === k);
+  const blockReason = (g: string) => first.conflicts.find((x) => held.some((c) => c.key === x.key && blockOfChange(c) === g))!;
+  return {
+    ...rest,
+    conflicts: [
+      ...rest.conflicts,
+      ...held
+        .filter((c) => !accept || accept.has(c.key))
+        .map((c) => {
+          const own = reason(c.key);
+          return own ?? { key: c.key, reason: blockReason(blockOfChange(c)!).reason };
+        }),
+    ],
+  };
+}
+
+function mergeOnce(
+  current: DesignDocumentContent,
+  base: DesignDocumentContent,
+  proposed: DesignDocumentContent,
+  all: DocChange[],
+  accept: Set<string> | null,
+  force: Set<string>,
+): MergeResult {
   const changes = accept ? all.filter((c) => accept.has(c.key)) : all;
 
   let doc = current;
@@ -511,6 +584,23 @@ if (isMain(import.meta.url)) {
     const re = rebaseDraft(base, proposed, newBase);
     assert(re.content.tables.find((x) => x.id === "b")!.seats === 8 && re.dropped.some((c) => c.key === "table:a"), "a rebase keeps what still applies and names what it dropped");
     assert(mergeChanges(base, base, base).applied.length === 0, "no changes, nothing applied");
+  }
+
+  // ── a block is decided whole ──
+  {
+    const grouped = doc([T("a", 1, 0, { groupId: "g" }), T("b", 1, 1800, { groupId: "g" }), T("c", 3, 6000)], [], [{ id: "g", number: 1 }]);
+    const moved = doc([T("a", 1, 0, { groupId: "g", position: { x: 0, y: 1000 } }), T("b", 1, 1800, { groupId: "g", position: { x: 1800, y: 1000 } }), T("c", 3, 6000)], [], [{ id: "g", number: 1 }]);
+    const rows = changeRows(diffDocuments(grouped, moved));
+    assert(rows.length === 1 && rows[0].keys.length === 2, "a block moved is ONE row to decide");
+    const r = mergeChanges(grouped, grouped, moved, { accept: ["table:a"] });
+    assert(r.doc.tables.filter((t) => t.groupId === "g").every((t) => t.position.y === 1000), "ticking one member moves the whole block");
+    // The designer turned one half since: the block is held back whole, both halves reported.
+    const turned = doc([T("a", 1, 0, { groupId: "g", rotation: 0 }), T("b", 1, 1800, { groupId: "g", position: { x: 1800, y: 500 } }), T("c", 3, 6000)], [], [{ id: "g", number: 1 }]);
+    const held = mergeChanges(turned, grouped, moved);
+    assert(held.doc.tables.find((t) => t.id === "a")!.position.y === 0 && held.doc.tables.find((t) => t.id === "b")!.position.y === 500, "a block one member of which conflicts is not merged in half");
+    assert(held.conflicts.some((c) => c.key === "table:a") && held.conflicts.some((c) => c.key === "table:b"), "…and both members are reported");
+    const forced = mergeChanges(turned, grouped, moved, { force: ["table:b"] });
+    assert(forced.doc.tables.filter((t) => t.groupId === "g").every((t) => t.position.y === 1000), "forcing one member forces the block");
   }
 
   console.log("delta: all checks passed");

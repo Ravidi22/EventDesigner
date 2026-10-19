@@ -148,6 +148,13 @@
       "when": 1792241108678,
       "tag": "0020_drop_hand_written_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792250999962,
+      "tag": "0021_composite_items",
+      "breakpoints": true
     }
   ]
 }

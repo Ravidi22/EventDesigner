@@ -3,6 +3,8 @@ import type { ChairRows } from "@/lib/design-document/types";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { catalogBox, footprintBounds, resolveFootprint } from "./footprint";
 import { solidKind } from "./catalog-resolver";
+import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { isTableSet } from "@/lib/catalog/composition";
 
 // What the pointer is carrying between the catalog rail and the canvas, for the length of one HTML5
 // drag.
@@ -22,6 +24,13 @@ export interface CarriedItem {
   widthMm: number;
   depthMm: number;
   solid?: string;
+  /** Where it lands is decided by what is UNDER the pointer — a centrepiece by the table, a drape by
+   *  the wall — so its drop point must not be pulled onto an alignment line first: a candlestick let
+   *  go near the seam of a head table was snapped onto the neighbouring table's edge and landed on
+   *  that table instead. Only a free-standing thing ("free") is snapped. A ceiling item ("hang")
+   *  is hung over what is under the pointer — centred on it — so it is not snapped either: a snap
+   *  onto the seam between two tables hung it over the wrong one. */
+  landing: "free" | "table" | "wall" | "hang";
 }
 
 let carried: CarriedItem | null = null;
@@ -33,7 +42,16 @@ export function carriedOf(product: Product): CarriedItem {
   // `solid` rides along for the same reason the size does: the DROP is the first moment the canvas
   // could otherwise know what it is being handed, and by then the deck has already landed on top of
   // another one (lib/studio/collide.ts).
-  return { productId: product.id, widthMm: b.w, depthMm: b.h, solid: solidKind(product) };
+  return { productId: product.id, widthMm: b.w, depthMm: b.h, solid: solidKind(product), landing: landingOf(product) };
+}
+
+/** See CarriedItem.landing. A composite lands as its parts about the point, like anything free. */
+export function landingOf(product: Product): CarriedItem["landing"] {
+  // A table set lands on the table under the pointer, like the items it is made of.
+  if (product.composition) return isTableSet(product.composition) ? "table" : "free";
+  if (CATEGORY_BY_ID[product.category]?.anchor === "wall") return "wall";
+  if (product.layer === "ceiling") return "hang";
+  return product.layer === "table" ? "table" : "free";
 }
 
 export function carryProduct(product: Product): void {
@@ -58,7 +76,7 @@ export function rowsTool(id: string): { productId: string; rows: boolean } {
 /** The block a chair lands as — the size the canvas's guides and the armed ghost measure. */
 export function carriedRowsOf(product: Product, spec: ChairRows): CarriedItem {
   const l = chairRowsLayout(spec, catalogBox(product));
-  return { productId: product.id, widthMm: l.widthMm, depthMm: l.depthMm, solid: solidKind(product) };
+  return { productId: product.id, widthMm: l.widthMm, depthMm: l.depthMm, solid: solidKind(product), landing: "free" };
 }
 
 export function carryRows(product: Product, spec: ChairRows): void {

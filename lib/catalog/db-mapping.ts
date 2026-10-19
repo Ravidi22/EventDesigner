@@ -75,6 +75,7 @@ export function toProduct(row: ProductRow, variantRows: VariantRow[]): Product {
     orderFactor: toNumber(row.orderFactor),
     sourceProductId: orUndefined(row.sourceProductId),
     sourceOrgId: orUndefined(row.sourceOrgId),
+    composition: orUndefined(row.composition),
     variants: variantRows
       .slice()
       .sort((a, b) => a.position - b.position)
@@ -131,6 +132,7 @@ export function toProductRow(p: Product, organizationId: string): ProductInsert 
     orderFactor: toNumeric(p.orderFactor),
     sourceProductId: p.sourceProductId ?? null,
     sourceOrgId: p.sourceOrgId ?? null,
+    composition: p.composition ?? null,
   };
 }
 

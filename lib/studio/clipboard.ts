@@ -70,8 +70,24 @@ export function copySelection(
     // and so does what hangs OVER the table (Placement.over).
     return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.over !== undefined && tableIds.has(p.over)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || placementIds.has(p.id);
   });
-  const grouped = new Set([...tables, ...placements].map((x) => x.groupId).filter((g): g is string => !!g));
-  return { tables, placements, groups: (doc.groups ?? []).filter((g) => grouped.has(g.id)) };
+  return wholeGroups({ tables, placements, groups: doc.groups ?? [] });
+}
+
+/** A clip's groups, only those it holds at least two members of — and the `groupId` let go on the
+ *  rest. One half of a head table copied on its own (from its focus mode, where a click selects the
+ *  half) used to paste carrying a group of one: no number of its own, no chairs (a grouped table
+ *  leaves both to its block), and out of the numbering altogether. */
+function wholeGroups(clip: Clip): Clip {
+  const count = new Map<string, number>();
+  for (const x of [...clip.tables, ...clip.placements]) if (x.groupId) count.set(x.groupId, (count.get(x.groupId) ?? 0) + 1);
+  const whole = new Set([...count].filter(([, n]) => n >= 2).map(([g]) => g));
+  const loose = <T extends { groupId?: string }>(x: T): T => {
+    if (!x.groupId || whole.has(x.groupId)) return x;
+    const { groupId: _g, ...rest } = x;
+    void _g;
+    return rest as T;
+  };
+  return { tables: clip.tables.map(loose), placements: clip.placements.map(loose), groups: (clip.groups ?? []).filter((g) => whole.has(g.id)) };
 }
 
 /**
@@ -90,6 +106,9 @@ export function pasteInto(
   clip: Clip,
   opts: { dx: number; dy: number; firstNumber: number; newId: () => string; keepNumbers?: boolean },
 ): Clip {
+  // A clip saved before copySelection let go of a group of one (a composite, a sketch) is put right
+  // on the way in.
+  clip = wholeGroups(clip);
   const remap = new Map<string, string>();
   for (const t of clip.tables) remap.set(t.id, opts.newId());
   // Placement ids are minted up front too, so an item on a copied stage's banquette can be re-pointed
@@ -340,8 +359,9 @@ if (isMain(import.meta.url)) {
     assert(pasteInto(benchClip, { dx: 0, dy: 0, firstNumber: 20, newId, keepNumbers: true }).placements[0].bench?.number === 5, "a loaded sketch keeps its banquette numbers");
   }
 
-  // A group whose other member was refused (a drape) comes through as a group of one, which the
-  // reducer's own pruning then drops — nothing here has to special-case it.
+  // A group whose other member was refused (a drape) is a group of one, and is let go HERE: pasted,
+  // the reducer's `group` refuses a group of one, and the table was left carrying a groupId that
+  // named nothing — no number, no chairs, out of the numbering.
   const halfGroup = copySelection(
     {
       ...blockDoc,
@@ -353,7 +373,18 @@ if (isMain(import.meta.url)) {
     isDrape,
   );
   assert(halfGroup.tables.length === 1 && halfGroup.placements.length === 0, "the drape is still refused");
-  assert(halfGroup.groups.length === 1, "…and the group comes along for the reducer to prune");
+  assert(halfGroup.groups.length === 0 && halfGroup.tables[0].groupId === undefined, "…and a group of one is let go, the table loose");
+  // One half of a block copied alone (from its focus mode) pastes as a table of its own.
+  const half = copySelection(
+    { ...blockDoc, tables: [{ ...table("a", 3), groupId: "b" }, { ...table("b2", 4), groupId: "b" }], placements: [], groups: [{ id: "b", number: 3 }] },
+    [{ kind: "table", id: "a" }],
+    isDrape,
+  );
+  const halfPasted = pasteInto(half, { dx: 0, dy: 0, firstNumber: 9, newId });
+  assert(halfPasted.groups.length === 0 && halfPasted.tables[0].groupId === undefined && halfPasted.tables[0].number === 9, "one half of a block pastes as a loose, numbered table");
+  // …and a clip saved with a group of one (an old composite) is put right on the way in.
+  const stale = pasteInto({ tables: [{ ...table("s", 2), groupId: "g1" }], placements: [], groups: [{ id: "g1" }] }, { dx: 0, dy: 0, firstNumber: 5, newId });
+  assert(stale.groups.length === 0 && stale.tables[0].groupId === undefined, "a stale group of one is dropped on paste");
 
   // The held clip survives, and each paste steps one further than the last.
   assert(clipCount(heldClip()) === 0, "nothing is held until something is copied");
