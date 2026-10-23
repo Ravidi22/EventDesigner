@@ -1,0 +1,461 @@
+// A body's parts → three.js geometry, in METRES. This module (and scene-nodes, through `toWorld`)
+// is where millimetres become metres; nothing else in the viewer divides by a thousand.
+//
+// Every part is built about its own base: a box/cylinder/extrude/lathe/ribbon stands on y = 0 and
+// grows up, a sphere is centred, a plane lies at y = 0 — then the part's `at`/`rotDeg` is applied
+// as a local matrix, and every part sharing one material is merged into ONE geometry (one draw call
+// per material per body, whatever the part count). The plan's (x, y) lands on three's (x, z): the
+// plan frame is left-handed (y down, z up), so a shape built in three's xy plane is mirrored in y
+// first and then turned −90° about x — a proper rotation, so winding and outward normals survive
+// (a bare axis swap would flip every face inside out).
+//
+// UVs are in METRES on every geometry — a box's and a cylinder's 0–1 faces are rescaled by their
+// real size; an extrude's and a plane's are three's own world units, which are metres here — so a
+// material's texture repeat is one number per material (1 / its repeat size) and the same wood
+// material serves every table in the room. The one exception is a stretched image, whose group's
+// UVs are normalised to 0–1 over its footprint, because "one copy over the whole shape" is a
+// per-body fact.
+import {
+  BoxGeometry,
+  BufferGeometry,
+  CylinderGeometry,
+  ExtrudeGeometry,
+  Float32BufferAttribute,
+  LatheGeometry,
+  Matrix4,
+  Quaternion,
+  Shape,
+  ShapeGeometry,
+  SphereGeometry,
+  Vector2,
+  Vector3,
+} from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import type { Point } from "@/lib/studio/hall";
+import type { BuiltOutline } from "@/lib/studio/footprint";
+import { absoluteControlPoints } from "@/lib/studio/geometry";
+import { MM_PER_M, toWorld, worldRotationY } from "@/lib/scene/frame";
+import type { BodyNode, MaterialRef, Part, Vec3 } from "@/lib/scene/types";
+
+const m = (mm: number) => mm / MM_PER_M;
+const CURVE_SEGMENTS = 8;
+const DEFAULT_RADIAL = 24;
+const DEFAULT_SPHERE = 16;
+const DEFAULT_AMPLITUDE_MM = 40;
+const UP = new Vector3(0, 1, 0);
+
+/** One merged geometry and what it is made of. */
+export interface Built {
+  geometry: BufferGeometry;
+  material: MaterialRef;
+}
+
+// --- shapes ---------------------------------------------------------------------------------------
+
+/** A closed outline as a three Shape in metres, bezier edges honoured. `ySign` mirrors the plan's
+ *  y so that the −90° turn about x afterwards lands plan +y on three +z (an up-facing face) — or
+ *  keeps it for the +90° turn that makes a down-facing one. */
+function shapeOf(o: BuiltOutline, ySign: 1 | -1): Shape | null {
+  const pts = o.outline;
+  if (pts.length < 3) return null;
+  const X = (p: Point) => m(p.x);
+  const Y = (p: Point) => ySign * m(p.y);
+  const s = new Shape();
+  s.moveTo(X(pts[0]), Y(pts[0]));
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    const curve = o.edgeCurves?.[i];
+    if (curve) {
+      const { c1, c2 } = absoluteControlPoints(a, b, curve);
+      s.bezierCurveTo(X(c1), Y(c1), X(c2), Y(c2), X(b), Y(b));
+    } else {
+      s.lineTo(X(b), Y(b));
+    }
+  }
+  s.closePath();
+  return s;
+}
+
+function scaleUv(g: BufferGeometry, f: (i: number, u: number, v: number) => [number, number]): void {
+  const uv = g.getAttribute("uv");
+  if (!uv) return;
+  for (let i = 0; i < uv.count; i++) {
+    const [u, v] = f(i, uv.getX(i), uv.getY(i));
+    uv.setXY(i, u, v);
+  }
+  uv.needsUpdate = true;
+}
+
+function boxGeometry(w: number, d: number, h: number): BufferGeometry {
+  const W = m(w);
+  const D = m(d);
+  const H = m(h);
+  const g = new BoxGeometry(W, H, D);
+  // BoxGeometry lays its faces px, nx, py, ny, pz, nz, four vertices each: metres per face.
+  const dims: [number, number][] = [[D, H], [D, H], [W, D], [W, D], [W, H], [W, H]];
+  scaleUv(g, (i, u, v) => {
+    const [su, sv] = dims[Math.min(5, Math.floor(i / 4))];
+    return [u * su, v * sv];
+  });
+  g.translate(0, H / 2, 0);
+  return g;
+}
+
+function cylinderGeometry(rTop: number, rBottom: number, h: number, segments: number): BufferGeometry {
+  const RT = m(rTop);
+  const RB = m(rBottom);
+  const H = m(h);
+  const g = new CylinderGeometry(RT, RB, H, segments, 1, false);
+  const torso = 2 * (segments + 1);
+  const around = Math.PI * (RT + RB);
+  const rMax = Math.max(RT, RB);
+  scaleUv(g, (i, u, v) => (i < torso ? [u * around, v * H] : [(u - 0.5) * 2 * rMax, (v - 0.5) * 2 * rMax]));
+  g.translate(0, H / 2, 0);
+  return g;
+}
+
+function sphereGeometry(r: number, segments: number): BufferGeometry {
+  return new SphereGeometry(m(r), segments, Math.max(6, Math.ceil(segments / 2)));
+}
+
+function extrudeGeometry(outline: BuiltOutline, h: number): BufferGeometry {
+  if (h <= 0) return planeGeometry(outline, "up");
+  const shape = shapeOf(outline, -1);
+  if (!shape) return new BufferGeometry();
+  try {
+    const g = new ExtrudeGeometry(shape, { depth: m(h), bevelEnabled: false, curveSegments: CURVE_SEGMENTS });
+    g.clearGroups();
+    g.rotateX(-Math.PI / 2);
+    return g;
+  } catch {
+    return new BufferGeometry();
+  }
+}
+
+function latheGeometry(profile: { r: number; z: number }[], segments: number): BufferGeometry {
+  if (profile.length < 2) return new BufferGeometry();
+  const pts = profile.map((p) => new Vector2(Math.max(0, m(p.r)), m(p.z)));
+  const g = new LatheGeometry(pts, segments);
+  const rMax = Math.max(...pts.map((p) => p.x));
+  const zs = pts.map((p) => p.y);
+  const span = Math.max(...zs) - Math.min(...zs);
+  scaleUv(g, (_i, u, v) => [u * 2 * Math.PI * rMax, v * span]);
+  return g;
+}
+
+function flatGeometry(outline: BuiltOutline, side: "up" | "down"): BufferGeometry {
+  const shape = shapeOf(outline, side === "up" ? -1 : 1);
+  if (!shape) return new BufferGeometry();
+  try {
+    const g = new ShapeGeometry(shape, CURVE_SEGMENTS);
+    g.rotateX(side === "up" ? -Math.PI / 2 : Math.PI / 2);
+    return g;
+  } catch {
+    return new BufferGeometry();
+  }
+}
+
+function planeGeometry(outline: BuiltOutline, side: "up" | "down" | "both"): BufferGeometry {
+  if (side !== "both") return flatGeometry(outline, side);
+  const up = flatGeometry(outline, "up");
+  const down = flatGeometry(outline, "down");
+  const both = mergeNonIndexed([up, down]);
+  up.dispose();
+  down.dispose();
+  return both;
+}
+
+/** The path, resampled every quarter-wavelength and swung perpendicular by a sine, when pleated. */
+function pleated(path: Point[], pleatMm: number, amplitudeMm: number): Point[] {
+  if (!(pleatMm > 0) || path.length < 2) return path;
+  const step = pleatMm / 4;
+  const out: Point[] = [];
+  let s = 0;
+  let last: { ux: number; uy: number } = { ux: 1, uy: 0 };
+  for (let i = 0; i + 1 < path.length; i++) {
+    const a = path[i];
+    const b = path[i + 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len === 0) continue;
+    const ux = (b.x - a.x) / len;
+    const uy = (b.y - a.y) / len;
+    last = { ux, uy };
+    const n = Math.max(1, Math.ceil(len / step));
+    for (let k = 0; k < n; k++) {
+      const d = (k / n) * len;
+      const off = amplitudeMm * Math.sin((2 * Math.PI * (s + d)) / pleatMm);
+      out.push({ x: a.x + ux * d - uy * off, y: a.y + uy * d + ux * off });
+    }
+    s += len;
+  }
+  const end = path[path.length - 1];
+  const off = amplitudeMm * Math.sin((2 * Math.PI * s) / pleatMm);
+  out.push({ x: end.x - last.uy * off, y: end.y + last.ux * off });
+  return out;
+}
+
+/** A vertical strip along the path, both faces (a skirt is seen from outside, a curtain from
+ *  inside, and the builder's path runs whichever way the edge does). UV: u metres along, v up. */
+function ribbonGeometry(path: Point[], h: number, pleatMm: number | undefined, amplitudeMm: number | undefined): BufferGeometry {
+  const pts = pleated(path, pleatMm ?? 0, amplitudeMm ?? DEFAULT_AMPLITUDE_MM);
+  const H = m(h);
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const uv: number[] = [];
+  let s = 0;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const ax = m(a.x);
+    const az = m(a.y);
+    const bx = m(b.x);
+    const bz = m(b.y);
+    const len = Math.hypot(bx - ax, bz - az);
+    if (len <= 1e-6) continue;
+    // (b0 − a0) × (b1 − a0) for the quad's front face is (−dz·h, 0, dx·h).
+    const nx = -(bz - az) / len;
+    const nz = (bx - ax) / len;
+    const u0 = s;
+    const u1 = s + len;
+    const push = (x: number, y: number, z: number, u: number, v: number, sign: number) => {
+      pos.push(x, y, z);
+      nor.push(nx * sign, 0, nz * sign);
+      uv.push(u, v);
+    };
+    push(ax, 0, az, u0, 0, 1);
+    push(bx, 0, bz, u1, 0, 1);
+    push(bx, H, bz, u1, H, 1);
+    push(ax, 0, az, u0, 0, 1);
+    push(bx, H, bz, u1, H, 1);
+    push(ax, H, az, u0, H, 1);
+    push(ax, 0, az, u0, 0, -1);
+    push(bx, H, bz, u1, H, -1);
+    push(bx, 0, bz, u1, 0, -1);
+    push(ax, 0, az, u0, 0, -1);
+    push(ax, H, az, u0, H, -1);
+    push(bx, H, bz, u1, H, -1);
+    s = u1;
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new Float32BufferAttribute(nor, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  return g;
+}
+
+/** One part, in metres, about its own base — before its `at`/`rotDeg` is applied. */
+export function partGeometry(part: Part): BufferGeometry {
+  switch (part.shape) {
+    case "box":
+      return boxGeometry(part.w, part.d, part.h);
+    case "cylinder":
+      return cylinderGeometry(part.rTop, part.rBottom, part.h, part.segments ?? DEFAULT_RADIAL);
+    case "sphere":
+      return sphereGeometry(part.r, part.segments ?? DEFAULT_SPHERE);
+    case "extrude":
+      return extrudeGeometry(part.outline, part.h);
+    case "lathe":
+      return latheGeometry(part.profile, part.segments ?? DEFAULT_RADIAL);
+    case "plane":
+      return planeGeometry(part.outline, part.side ?? "up");
+    case "ribbon":
+      return ribbonGeometry(part.path, part.h, part.pleatMm, part.amplitudeMm);
+  }
+}
+
+// --- bodies ---------------------------------------------------------------------------------------
+
+const scratchM = new Matrix4();
+const scratchP = new Vector3();
+const scratchQ = new Quaternion();
+const ONE = new Vector3(1, 1, 1);
+
+/** The part's place in its body: translate to `at` (base centre; a sphere's centre), turn `rotDeg`. */
+function partMatrix(at: Vec3, rotDeg: number | undefined): Matrix4 {
+  const [x, y, z] = toWorld(at);
+  scratchP.set(x, y, z);
+  scratchQ.setFromAxisAngle(UP, worldRotationY(rotDeg ?? 0));
+  return scratchM.compose(scratchP, scratchQ, ONE);
+}
+
+function rotDegOf(part: Part): number | undefined {
+  return "rotDeg" in part ? part.rotDeg : undefined;
+}
+
+/** Merge, with every piece made non-indexed first — ExtrudeGeometry is non-indexed and the
+ *  parametric shapes are indexed, and mergeGeometries refuses a mix. The pieces are left for the
+ *  caller to dispose. */
+function mergeNonIndexed(pieces: BufferGeometry[]): BufferGeometry {
+  const flat = pieces.map((g) => (g.index ? g.toNonIndexed() : g));
+  const live = flat.filter((g) => (g.getAttribute("position")?.count ?? 0) > 0);
+  let out: BufferGeometry;
+  if (live.length === 0) out = new BufferGeometry();
+  else if (live.length === 1) out = live[0].clone();
+  else out = mergeGeometries(live, false) ?? new BufferGeometry();
+  out.clearGroups();
+  for (let i = 0; i < flat.length; i++) if (flat[i] !== pieces[i]) flat[i].dispose();
+  return out;
+}
+
+/** The group's UVs as fractions of its own footprint, so a stretched image is one copy over it. */
+function normaliseUv(g: BufferGeometry): void {
+  g.computeBoundingBox();
+  const box = g.boundingBox;
+  if (!box) return;
+  const w = Math.max(1e-6, box.max.x - box.min.x);
+  const d = Math.max(1e-6, box.max.z - box.min.z);
+  const pos = g.getAttribute("position");
+  const uv = g.getAttribute("uv");
+  if (!pos || !uv) return;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) - box.min.x) / w, (pos.getZ(i) - box.min.z) / d);
+  uv.needsUpdate = true;
+}
+
+const isStretched = (ref: MaterialRef) => ref.image?.fit === "stretch";
+
+/** Every part placed in the body's frame and merged per effective material (a part's own, else the
+ *  body's). The caller owns the geometries. */
+export function bodyGeometry(body: BodyNode): Built[] {
+  const groups = new Map<string, { material: MaterialRef; pieces: BufferGeometry[] }>();
+  for (const part of body.parts) {
+    const material = part.material ?? body.material;
+    const key = JSON.stringify(material);
+    let group = groups.get(key);
+    if (!group) {
+      group = { material, pieces: [] };
+      groups.set(key, group);
+    }
+    const g = partGeometry(part);
+    g.applyMatrix4(partMatrix(part.at, rotDegOf(part)));
+    group.pieces.push(g);
+  }
+  const out: Built[] = [];
+  for (const { material, pieces } of groups.values()) {
+    const geometry = mergeNonIndexed(pieces);
+    for (const p of pieces) p.dispose();
+    if (isStretched(material)) normaliseUv(geometry);
+    geometry.computeBoundingSphere();
+    out.push({ geometry, material });
+  }
+  return out;
+}
+
+// --- the cache ------------------------------------------------------------------------------------
+
+/** A cheap fingerprint of what the geometry depends on — every number in every part and the
+ *  materials that decide the grouping — so a rebuilt scene reuses the geometry of a body that did
+ *  not change and rebuilds only what did. Two independent 32-bit folds plus the count. */
+export function geometrySignature(body: BodyNode): string {
+  let a = 0x811c9dc5 | 0;
+  let b = 0x1b873593 | 0;
+  let n = 0;
+  const num = (v: number) => {
+    const x = Math.round(v * 4) | 0;
+    a = Math.imul(a ^ x, 16777619);
+    b = (Math.imul(b, 31) + x) | 0;
+    n++;
+  };
+  const str = (s: string) => {
+    for (let i = 0; i < s.length; i++) num(s.charCodeAt(i));
+  };
+  const pt = (p: Point) => {
+    num(p.x);
+    num(p.y);
+  };
+  const v3 = (v: Vec3) => {
+    num(v.x);
+    num(v.y);
+    num(v.z);
+  };
+  const outline = (o: BuiltOutline) => {
+    num(o.outline.length);
+    for (const p of o.outline) pt(p);
+    if (o.edgeCurves) {
+      for (const c of o.edgeCurves) {
+        if (c) {
+          pt(c.c1);
+          pt(c.c2);
+        } else num(-1);
+      }
+    }
+  };
+  str(JSON.stringify(body.material));
+  for (const p of body.parts) {
+    str(p.shape);
+    v3(p.at);
+    if (p.material) str(JSON.stringify(p.material));
+    switch (p.shape) {
+      case "box":
+        num(p.w);
+        num(p.d);
+        num(p.h);
+        num(p.rotDeg ?? 0);
+        break;
+      case "cylinder":
+        num(p.rTop);
+        num(p.rBottom);
+        num(p.h);
+        num(p.segments ?? 0);
+        break;
+      case "sphere":
+        num(p.r);
+        num(p.segments ?? 0);
+        break;
+      case "extrude":
+        num(p.h);
+        num(p.rotDeg ?? 0);
+        outline(p.outline);
+        break;
+      case "lathe":
+        num(p.segments ?? 0);
+        for (const q of p.profile) {
+          num(q.r);
+          num(q.z);
+        }
+        break;
+      case "plane":
+        str(p.side ?? "up");
+        num(p.rotDeg ?? 0);
+        outline(p.outline);
+        break;
+      case "ribbon":
+        num(p.h);
+        num(p.pleatMm ?? 0);
+        num(p.amplitudeMm ?? 0);
+        for (const q of p.path) pt(q);
+        break;
+    }
+  }
+  return `${n}:${(a >>> 0).toString(36)}:${(b >>> 0).toString(36)}`;
+}
+
+/** Built geometries by body id, kept across rebuilds while the body's signature holds. One per
+ *  mounted viewer: `sweep` drops the bodies a new scene no longer has, `dispose` everything. */
+export class GeometryCache {
+  private entries = new Map<string, { signature: string; built: Built[] }>();
+
+  get(body: BodyNode): Built[] {
+    const signature = geometrySignature(body);
+    const hit = this.entries.get(body.id);
+    if (hit && hit.signature === signature) return hit.built;
+    if (hit) for (const b of hit.built) b.geometry.dispose();
+    const built = bodyGeometry(body);
+    this.entries.set(body.id, { signature, built });
+    return built;
+  }
+
+  sweep(live: ReadonlySet<string>): void {
+    for (const [id, entry] of this.entries) {
+      if (live.has(id)) continue;
+      for (const b of entry.built) b.geometry.dispose();
+      this.entries.delete(id);
+    }
+  }
+
+  dispose(): void {
+    for (const entry of this.entries.values()) for (const b of entry.built) b.geometry.dispose();
+    this.entries.clear();
+  }
+}

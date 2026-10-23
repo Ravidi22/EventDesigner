@@ -66,7 +66,7 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
 
 /** The surfaces OF an event (components/event-surface.tsx): their top bar names the event, not the
  *  page, so the shell leaves its title out and lends them the bar (components/header-slot.tsx). */
-const isEventSurface = (p: string) => p.startsWith("/studio") || p.startsWith("/outputs");
+const isEventSurface = (p: string) => p.startsWith("/studio") || p.startsWith("/outputs") || p.startsWith("/scene");
 
 /** Who is signed in. Handed down from the (app) layout, which has already resolved the session
  *  server-side — the shell does not re-fetch it, and cannot be rendered without one. */

@@ -252,7 +252,7 @@ function thin<T extends DrawLine>(list: T[], room: number, k: number, rng: () =>
   return list.filter(() => rng() < keep);
 }
 
-interface FormSpec {
+export interface FormSpec {
   /** The flower mass's radius as a fraction of the box's. */
   core: number;
   /** How closely the heads pack (1 = touching). */
@@ -273,7 +273,7 @@ interface FormSpec {
   reach?: number;
 }
 
-const FORMS: Record<Exclude<FlowerForm, "runner" | "bud" | "single">, FormSpec> = {
+export const FORMS: Record<Exclude<FlowerForm, "runner" | "bud" | "single">, FormSpec> = {
   dome: { core: 0.84, pack: 0.8, fore: 0.55, base: 0.86, greens: { n: 22, from: [0.62, 0.8], reach: [0.88, 1], even: true } },
   cushion: { core: 0.95, pack: 0.7, fore: 0.85, base: 0.95, greens: { n: 10, from: [0.82, 0.9], reach: [0.97, 1], even: true } },
   garden: { core: 0.66, wobble: 0.2, pack: 1.0, fore: 0.6, base: 0.64, greens: { n: 16, from: [0.3, 0.55], reach: [0.62, 1] }, reach: 3 },

@@ -37,7 +37,7 @@ const WATER_DEEP = "#B5D5E3";
 
 /** The colour an item is drawn in when its row and its shade say nothing: what the thing is usually
  *  made of. The designer's shade always wins (see `tone`). */
-const DEFAULT_TONE: Record<SymbolKind, string> = {
+export const DEFAULT_TONE: Record<SymbolKind, string> = {
   candlestick: "#C9A24A",
   flowers: "#E8BCCE",
   centerpiece: "#E8BCCE",
@@ -452,7 +452,7 @@ function candleTiers(w: number, h: number, n: number, c: Colours, line: Line) {
  *  Kept per count, so a room of identical clusters packs once. */
 const packs = new Map<number, { x: number; y: number; r: number }[]>();
 const PACK_SIZES = [1, 0.84, 0.74, 0.92, 0.68, 0.8, 0.62, 0.88, 0.7, 0.78];
-function packCircles(count: number): { x: number; y: number; r: number }[] {
+export function packCircles(count: number): { x: number; y: number; r: number }[] {
   const n = Math.max(1, Math.min(24, Math.round(count)));
   const hit = packs.get(n);
   if (hit) return hit;
@@ -680,7 +680,7 @@ function vase(w: number, h: number, round: boolean, c: Colours, line: Line) {
 }
 
 /** [radius, bearing] of each clump of a canopy, as fractions of its radius. */
-const TREE_CLUMPS: [number, number][] = [
+export const TREE_CLUMPS: [number, number][] = [
   [0.4, 0], [0.33, 44], [0.38, 80], [0.42, 122], [0.34, 166], [0.39, 204], [0.35, 246], [0.41, 284], [0.36, 326],
 ];
 

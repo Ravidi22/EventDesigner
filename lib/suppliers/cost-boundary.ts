@@ -29,6 +29,12 @@ export const CLIENT_FACING = [
   // review, and read on a client's phone.
   "lib/proposals",
   "lib/notifications",
+  // The 3D scene: built once, drawn on the designer's tab, the meeting, the client portal and the
+  // no-login share link — the same builder for all four, so the builder itself is client-facing.
+  "lib/scene",
+  "components/scene",
+  "app/(app)/scene",
+  "app/v",
 ];
 
 /** What none of them may reference. Import paths and identifiers, not loose words: matching the

@@ -2,7 +2,7 @@
 
 import { type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowRight, PenTool, Presentation, Printer } from "lucide-react";
+import { ArrowRight, Box, PenTool, Presentation, Printer } from "lucide-react";
 import { EventWorkspaceProvider, useEventWorkspace } from "@/lib/events/use-workspace";
 import { formatEventDate, zonesLabelOf } from "@/lib/events/types";
 import { HeaderSlot } from "@/components/header-slot";
@@ -19,7 +19,9 @@ import { HeaderSlot } from "@/components/header-slot";
 //
 // `no-print` throughout: the outputs underneath are the deliverable, and app chrome on a page the
 // crew carries around the hall is noise.
-export function EventSurface({ active, children }: { active: "studio" | "outputs"; children: ReactNode }) {
+export type EventSurfaceTab = "studio" | "outputs" | "scene";
+
+export function EventSurface({ active, children }: { active: EventSurfaceTab; children: ReactNode }) {
   // THE surface's one read, for the header AND for the screen inside it — see lib/events/
   // use-workspace.tsx. The header used to resolve the event for itself while the screen resolved
   // the same event again a moment later, which was two round trips for one answer.
@@ -33,7 +35,7 @@ export function EventSurface({ active, children }: { active: "studio" | "outputs
   );
 }
 
-function SurfaceHeader({ active }: { active: "studio" | "outputs" }) {
+function SurfaceHeader({ active }: { active: EventSurfaceTab }) {
   // Until the one round trip lands the bar says "אין אירוע פעיל", which is also what it says when
   // there genuinely isn't one.
   const { workspace } = useEventWorkspace();
@@ -59,13 +61,16 @@ function SurfaceHeader({ active }: { active: "studio" | "outputs" }) {
         )}
       </div>
 
-      {/* The meeting's stepper rail, holding the event's two working screens. */}
+      {/* The meeting's stepper rail, holding the event's three working screens. */}
       <nav className="flex shrink-0 items-center gap-0.5 rounded-pill bg-inset p-1" aria-label="מסכי האירוע">
         <Tab href="/studio" icon={PenTool} active={active === "studio"}>
           סטודיו
         </Tab>
         <Tab href="/outputs" icon={Printer} active={active === "outputs"}>
           פלטים
+        </Tab>
+        <Tab href="/scene" icon={Box} active={active === "scene"}>
+          תלת-ממד
         </Tab>
       </nav>
 
