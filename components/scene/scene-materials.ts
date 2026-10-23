@@ -22,6 +22,7 @@ import { TEXTURE_TILE_MM, type Texture } from "@/lib/catalog/textures";
 import { MM_PER_M } from "@/lib/scene/frame";
 import { TEXTURE_REPEAT_MM } from "@/lib/scene/materials";
 import type { MaterialRef } from "@/lib/scene/types";
+import { polygonOffsetOf } from "./scene-rules";
 
 const SIZE = 256;
 
@@ -326,9 +327,12 @@ export class MaterialCache {
   }
 
   /** The material for `ref`. A mirrored instance (negative scale) shows its back faces, so it is
-   *  drawn two-sided; a foliage material always is. */
-  get(ref: MaterialRef, mirrored: boolean): MeshStandardMaterial {
-    const key = JSON.stringify(ref) + (mirrored ? "|m" : "");
+   *  drawn two-sided; a foliage material always is. `floorRank` (scene-rules.ts floorRank, 0 =
+   *  not a ranked floor) gives a coplanar floor its polygon offset — the ground pushed back, a
+   *  surface laid on the floor pulled in — and is part of the key, because the same paving in the
+   *  same tint may be the ground under one venue and a zone's floor in the next. */
+  get(ref: MaterialRef, mirrored: boolean, floorRank = 0): MeshStandardMaterial {
+    const key = JSON.stringify(ref) + (mirrored ? "|m" : "") + (floorRank ? `|f${floorRank}` : "");
     const hit = this.materials.get(key);
     if (hit) return hit;
     const mat = baseMaterial(ref);
@@ -339,6 +343,12 @@ export class MaterialCache {
       mat.color.set("#ffffff");
     }
     if (mirrored) mat.side = DoubleSide;
+    if (floorRank) {
+      const offset = polygonOffsetOf(floorRank);
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = offset;
+      mat.polygonOffsetUnits = offset;
+    }
     this.materials.set(key, mat);
     return mat;
   }

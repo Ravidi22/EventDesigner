@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Moon, Sun, Sunset } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import { loadProducts } from "@/lib/catalog/storage";
@@ -16,6 +16,7 @@ import { LazySceneViewer } from "@/components/scene/lazy";
 import { detectDevice } from "@/components/scene/device";
 import { previewScene } from "@/components/scene/preview-scene";
 import { SidePanel } from "@/components/side-panel";
+import { fetchStageRules } from "@/lib/settings/actions";
 
 // The designer's 3D tab: the same document /studio edits and /outputs prints, built into a scene
 // (lib/scene/build.ts) and drawn by the one viewer (components/scene/). Nothing here writes the
@@ -36,6 +37,18 @@ export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "st
 
   const [settings, setSettings] = useState<SceneSettings>(DEFAULT_SETTINGS);
   const [panelCollapsed, setPanelCollapsed] = useState(frame === "meeting");
+  // The studio's railing rule (settings → במות), as /outputs reads it: off until read, and off if
+  // the read fails — a stage then simply wears no railing, which is what an unset rule means.
+  const [railingAboveMm, setRailingAboveMm] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchStageRules()
+      .then((r) => live && setRailingAboveMm(r.railingAboveMm))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const [device] = useState(() => (typeof window !== "undefined" ? detectDevice() : { shadows: true, maxDpr: 1.5, touch: false }));
 
   const doc: DesignDocumentContent = useMemo(() => {
@@ -53,9 +66,9 @@ export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "st
     // synchronous resolves see this studio's rows — catalog.products is the dependency that
     // rebuilds the scene when a row changes under the plan.
     // The builder takes no mood (that is the viewer's), so a mood switch rebuilds nothing.
-    return buildScene({ doc, plan, structure, settings: DEFAULT_SETTINGS, author: true });
+    return buildScene({ doc, plan, structure, settings: DEFAULT_SETTINGS, author: true, railingAboveMm });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, empty, doc, plan, structure, catalog.products]);
+  }, [loading, empty, doc, plan, structure, railingAboveMm, catalog.products]);
 
   return (
     <div className="flex h-full min-h-0">

@@ -32,36 +32,15 @@ import type { PlacementClimb } from "@/lib/design-document/types";
 import type { BenchLayout } from "@/lib/design-document/bench";
 import { isMain } from "../self-check";
 import { type InstanceRequest, type ItemBuild } from "./collect";
+import { type ItemContext, fallbackBody } from "./item-context";
+import { floorKindBody } from "./floor-kinds";
+import { overheadKindBody } from "./overhead";
+
+export { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, metalMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
-
-/** Everything a kind's builder may need, resolved by the caller once per item. Sizes are the
- *  item's own (its footprint's box and the row's height) — the placement's drawing scale is in
- *  its transform, never here. */
-export interface ItemContext {
-  product: Product | undefined;
-  resolved: Resolved | undefined;
-  /** In the item's own frame, centred. */
-  footprint: Footprint;
-  widthMm: number;
-  depthMm: number;
-  heightMm: number;
-  /** The resolved colour: swatch → row fill → the kind's DEFAULT_TONE. */
-  tone: string;
-  /** symbolCount: arms, bulbs, candles. */
-  count: number;
-  chairStyle?: ChairStyle;
-  drawStyle?: CandleStyle | ChuppahStyle;
-  flowers?: FlowerDrawSpec;
-  climb?: PlacementClimb & { heightMm: number };
-  bench?: BenchLayout;
-  author: boolean;
-  /** What the instanced parts (flower heads, a chair) are tagged as; absent = the kind's own tag,
-   *  labelled with the row's name. */
-  tag?: NodeTag;
-}
 
 // ── the constants the plan draws with ───────────────────────────────────────────────────────────
 
@@ -217,14 +196,6 @@ function arm(b: ItemBuild, p: Point, z: number, material: MaterialRef) {
 
 // ── the fallback ────────────────────────────────────────────────────────────────────────────────
 
-/** The ADR-5 fallback: the footprint extruded to the item's height, the row's photo on it when it
- *  has one. What an unknown category, a `symbol === false` row and "other" get. */
-export function fallbackBody(ctx: ItemContext): ItemBuild {
-  const material: MaterialRef = { colour: ctx.tone, kind: "matte" };
-  if (ctx.product?.imageUrl) material.image = { url: ctx.product.imageUrl, fit: "stretch" };
-  const parts: Part[] = footprintOutlines(ctx.footprint).map((outline) => ({ shape: "extrude", outline, h: Math.max(10, ctx.heightMm), at: vec3(0, 0, 0) }));
-  return { parts, material, instanced: [], emitters: [] };
-}
 
 // ── dispatch ────────────────────────────────────────────────────────────────────────────────────
 
@@ -247,30 +218,19 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
       return flowersBody(ctx, true);
     case "chair":
       return chairBody(ctx);
-    // TODO(B3): sofa — back min(h·0.28, 260) to heightMm, arms to 0.65 h, cushions at 450 (item-symbol.tsx:875).
     case "sofa":
-    // TODO(B3): bench — the strip to BenchLayout.heightMm with a chairs side's chairs, a sofa side's cushions (bench.ts).
     case "bench":
-    // TODO(B3): column — plinth 0.12 h, fluted shaft, capital (item-symbol.tsx:948).
     case "column":
-    // TODO(B3): fountain — basin, water disc, bowl on a stem, spout emitter (item-symbol.tsx:966).
     case "fountain":
-    // TODO(B3): arch — two feet to 0.9 h, the span bar, the garland as runner flowers (item-symbol.tsx:996).
     case "arch":
-    // TODO(B3): tree — TREE_CLUMPS lobes from 0.45 h to h, trunk min(rx, ry)·0.07 (item-symbol.tsx:689).
     case "tree":
-    // TODO(B3): bar — the band extruded to heightMm, counter strips, shelf with bottles, back bars (bar-draw.ts).
     case "bar":
-      return fallbackBody(ctx);
-    // TODO(B4): chuppah — canopy poles + sagging fabric, or the rotunda's columns and drapes (item-symbol.tsx:1011, 1065).
     case "chuppah":
-    // TODO(B4): chandelier — ring torus at R·0.74, arms, bulb emitters, a chain to the ceiling (item-symbol.tsx:923).
-    case "chandelier":
-      return fallbackBody(ctx);
-    // TODO(B2): stairs / ramp — tread boxes rising toward the head, a wedge for a ramp (lib/studio/climb-item.ts).
     case "stairs":
     case "ramp":
-      return fallbackBody(ctx);
+      return floorKindBody(kind, ctx);
+    case "chandelier":
+      return overheadKindBody(kind, ctx);
     default:
       return fallbackBody(ctx);
   }
@@ -879,9 +839,9 @@ if (isMain(import.meta.url)) {
   assert(flowers.instanced.some((r) => r.key.startsWith("flower:")) && !flowers.parts.some((p) => p.shape === "cylinder" && p.h === PLATE_MM), "an arrangement with no row still blooms, without a plate");
   assert(JSON.stringify(flowers) === JSON.stringify(itemBody("flowers", ctxOf({ kind: "circle", diameterMm: 400 }, 350, { tone: DEFAULT_TONE.flowers }))), "the same arrangement builds the same twice");
 
-  // The fallback and the kinds that wait for phase B.
+  // The floor kinds are ./floor-kinds.ts's now, and an unknown picture is the fallback.
   const sofa = itemBody("sofa", ctxOf({ kind: "rect", widthMm: 1800, depthMm: 900 }, 800, { tone: DEFAULT_TONE.sofa }));
-  assert(sofa.parts.length === 1 && sofa.parts[0].shape === "extrude" && sofa.parts[0].h === 800, "a sofa is the extruded footprint until B3");
+  assert(sofa.parts.length > 1 && !sofa.parts.some((q) => q.shape === "extrude" && q.h === 800), "a sofa is built by the floor kinds (back, arms, cushions), not the fallback box");
   assert(itemBody(null, ctxOf({ kind: "rect", widthMm: 300, depthMm: 300 }, 0)).parts[0].shape === "extrude", "no picture: the fallback");
   console.log("scene items ok");
 }

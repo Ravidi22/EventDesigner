@@ -174,6 +174,7 @@ export function previewScene(): Scene {
       wax,
       [
         { shape: "cylinder", rTop: 40, rBottom: 40, h: 8, at: vec3(0, 0, 0), material: brass },
+        { shape: "torus", r: 36, tube: 5, at: vec3(0, 0, 8), material: brass },
         { shape: "cylinder", rTop: 22, rBottom: 22, h: 240, at: vec3(0, 0, 8) },
       ],
       [transform(vec3(420, 0, TABLE_H + 10), 0)],

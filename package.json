@@ -113,7 +113,10 @@
     "check:envelope": "tsx lib/scene/envelope.ts",
     "check:tables": "tsx lib/scene/tables.ts",
     "check:items": "tsx lib/scene/items.ts",
-    "check:scene-viewer": "tsx components/scene/smoke.ts"
+    "check:scene-viewer": "tsx components/scene/smoke.ts",
+    "check:floor-kinds": "tsx lib/scene/floor-kinds.ts",
+    "check:overhead": "tsx lib/scene/overhead.ts",
+    "check:scene-stage": "tsx lib/scene/stage.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

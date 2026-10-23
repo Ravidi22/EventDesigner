@@ -57,15 +57,22 @@ export interface MaterialRef {
  *  middle, z its bottom — except a sphere's, which is its centre; a part grows UP from `at.z`.
  *  Outlines and paths are in the part's frame about `at` (a part's own rotation is `rotDeg`). */
 export type Part =
-  | { shape: "box"; w: number; d: number; h: number; at: Vec3; rotDeg?: number; material?: MaterialRef }
-  | { shape: "cylinder"; rTop: number; rBottom: number; h: number; at: Vec3; segments?: number; material?: MaterialRef }
+  /** `tiltDeg` leans a box or cylinder about its own x axis AFTER `rotDeg` turns it on the plan
+   *  (a crossback's X bar, a garden flower's leaning stem, a chuppah's sagging drape): positive
+   *  tips the top toward +y. */
+  | { shape: "box"; w: number; d: number; h: number; at: Vec3; rotDeg?: number; tiltDeg?: number; material?: MaterialRef }
+  | { shape: "cylinder"; rTop: number; rBottom: number; h: number; at: Vec3; segments?: number; rotDeg?: number; tiltDeg?: number; material?: MaterialRef }
   | { shape: "sphere"; r: number; at: Vec3; segments?: number; material?: MaterialRef }
-  /** A closed outline (bezier edges honoured) extruded `h` up from `at.z`. */
-  | { shape: "extrude"; outline: BuiltOutline; h: number; at: Vec3; rotDeg?: number; material?: MaterialRef }
+  /** A ring lying flat at `at.z`: `r` to the tube's centre line, `tube` its radius (a chandelier's
+   *  ring, a rotunda's entablature, a vase's rim). */
+  | { shape: "torus"; r: number; tube: number; at: Vec3; segments?: number; material?: MaterialRef }
+  /** A closed outline (bezier edges honoured) extruded `h` up from `at.z`; `holes` are cut out. */
+  | { shape: "extrude"; outline: BuiltOutline; holes?: BuiltOutline[]; h: number; at: Vec3; rotDeg?: number; material?: MaterialRef }
   /** A profile of (radius, height) pairs, bottom to top, revolved about the vertical axis at `at`. */
   | { shape: "lathe"; profile: { r: number; z: number }[]; at: Vec3; segments?: number; material?: MaterialRef }
-  /** A flat closed outline at `at.z`, facing up unless told otherwise (a ceiling faces down). */
-  | { shape: "plane"; outline: BuiltOutline; at: Vec3; side?: "up" | "down" | "both"; rotDeg?: number; material?: MaterialRef }
+  /** A flat closed outline at `at.z`, facing up unless told otherwise (a ceiling faces down);
+   *  `holes` are cut out (a floor round a recessed pool). */
+  | { shape: "plane"; outline: BuiltOutline; holes?: BuiltOutline[]; at: Vec3; side?: "up" | "down" | "both"; rotDeg?: number; material?: MaterialRef }
   /** A vertical strip `h` high standing on `path` (a skirt along a stage edge, a curtain along a
    *  wall): `pleatMm` is the wavelength of its pleats, absent/0 = flat. */
   | { shape: "ribbon"; path: Point[]; h: number; at: Vec3; pleatMm?: number; amplitudeMm?: number; material?: MaterialRef };
@@ -196,6 +203,9 @@ export interface SceneInput {
   settings: SceneSettings;
   /** The designer's view: labels, missing stage pieces, stats. Never true on a client surface. */
   author: boolean;
+  /** The studio's stage railing rule (settings → במות, studio_settings.stage_railing_above_mm):
+   *  a stage higher than this wears a railing on its open sides. Absent/null = off. */
+  railingAboveMm?: number | null;
 }
 
 // --- small constructors, so builders read as geometry rather than as object literals -----------

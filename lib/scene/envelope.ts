@@ -1,13 +1,16 @@
-// The venue as a room: the floors, the ground under them, the walls with their doors cut out, the
-// ceilings over the roofed zones, and the property's own fixed features. Spec §3.1.
+// The venue as a room: the floors, the ground under them, the walls with their doors cut out and
+// their leaves standing open, the ceilings over the roofed zones, and the property's own fixed
+// features — its pools recessed into the floors they lie in, its planting by species, its chairs
+// in rows. Spec §3.1 (and §3.4 for the chair rows).
 //
 // Everything is read off what the plan already resolved — `eventPlan(...).all` for the zones and
 // their boundaries, `wallPoints`/`doorOffsets`/`featureFootprint` for the structure — and nothing
 // here stores a height or a thickness of its own: walls have neither in the venue (DECIDE 6), so
 // a wall is WALL_THICK_MM thick and as tall as the tallest ROOFED zone it borders, a garden wall
 // where it borders none, and an `edge` kind is a kerb. A door is an opening the wall is split
-// round: two stretches at full height and a lintel over the gap from DOOR_HEIGHT_MM up (the leaf
-// is phase B). Plan mm, +y down the plan, z up from the floor at 0 (./types.ts).
+// round: two stretches at full height, a lintel over the gap from DOOR_HEIGHT_MM up, a trim on
+// each jamb, and a leaf (two for a double door) hinged at the jamb and standing open at 90° on the
+// side it swings to. Plan mm, +y down the plan, z up from the floor at 0 (./types.ts).
 //
 // Which zones a wall borders is decided GEOMETRICALLY, not by walking the face graph: a few points
 // along the wall are pushed one wall-thickness to either side, and a zone whose boundary polygon
@@ -16,18 +19,36 @@
 // for a face zone and ALSO the right answer for a region zone drawn freehand over open ground and
 // a zone made of features — neither of which the face graph knows about. Three probes, not one,
 // because a long wall may border a hall along part of its length and two side rooms along the
-// rest; the tallest wins.
+// rest; the tallest wins. A door's INWARD side is read the same way, at the door: the side whose
+// probe lands in a roofed zone, else in any zone, else +normal.
+//
+// A pool (and a `water` surface) is a WELL: its water plane recessed WATER_DEPTH_MM, dark walls and
+// floor under it, a coping kerb round its rim — and its footprint CUT OUT of every floor it lies in
+// (the zone's floor plane, any surface feature's plane, the ground under them all), by the one
+// rule "the well's centre is inside that floor". Nothing is cut out of a floor the pool merely
+// touches: a hole crossing the outer edge is not a hole.
+//
+// Every plant is INSTANCED per (species, size, colour): a landscaped courtyard is a hundred-odd
+// plants of a handful of kinds, so the same tree twenty times is one body with twenty transforms.
+// The shapes lift the plan's own drawings (components/plant-glyph.tsx, item-symbol.tsx TREE_CLUMPS)
+// into height: a tree's nine lobes become spheres stacked up its crown, a palm's fronds thin tilted
+// boxes radiating from the top of its trunk, a hedge a clipped box, a bed a soil slab with a grid of
+// heads kept inside its outline.
 import type { Point } from "@/lib/studio/hall";
 import { bulgeToCurve, type Bounds } from "@/lib/studio/geometry";
 import { flattenEdge, footprintOutlines, type BuiltOutline } from "@/lib/studio/footprint";
+import { TREE_CLUMPS } from "@/components/item-symbol";
 import { pointInPolygon } from "@/lib/venues/faces";
+import { seatingChair, seatingLayout, seatingOf } from "@/lib/venues/seating";
 import {
+  PLANT_DEFAULTS,
   doorOffsets,
   featureFootprint,
   nodeMap,
   plantSpecies,
   surfaceMaterial as featureSurface,
   wallPoints,
+  type PlantSpecies,
   type StructureEntrance,
   type StructureFeature,
   type VenueStructure,
@@ -38,11 +59,14 @@ import { eventPlan } from "@/lib/events/plan";
 import { emptyDocument } from "@/lib/design-document/types";
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
-import { headingDeg, roomTransform } from "./frame";
+import { applyTransform, headingDeg, roomTransform, turn } from "./frame";
+import { chairRequest } from "./items";
 import { ENVELOPE, foliageMaterial, hexOf, surfaceMaterial, waterMaterial } from "./materials";
+import { offsetOutline } from "./tables";
 import {
   DEFAULT_SETTINGS,
   DOOR_HEIGHT_MM,
+  DOOR_LEAF_MM,
   GARDEN_WALL_MM,
   GROUND_MARGIN_MM,
   KERB_MM,
@@ -63,16 +87,81 @@ const WALL_CHORD_MM = 250;
 const BORDER_PROBES = [0.25, 0.5, 0.75];
 /** A pool's floor, this far under its water surface — dark, so the water reads as deep. */
 const WELL_BELOW_MM = 600;
+/** The coping round a pool's rim: a kerb this wide standing on the floor outside the water. */
+const COPING_MM = 150;
+const COPING_HIGH_MM = 100;
+/** A door's frame: a trim this wide on each jamb, standing this far proud of both wall faces. */
+const FRAME_TRIM_MM = 40;
+const FRAME_PROUD_MM = 10;
+/** An opening narrower than this (a door clipped off the end of its wall) gets no leaf. */
+const MIN_LEAF_MM = 100;
+/** A palm's fronds: how many, how much they droop from the crown, how thick a leaf plane is. */
+const FROND_COUNT = 8;
+const FROND_TILT_DEG = 35;
+const FROND_THICK_MM = 30;
+/** A flower bed: its soil slab, the heads' size and spacing, and how many heads one bed may carry
+ *  (a long bed thins its grid rather than leaving its far end bare). */
+const BED_SOIL_MM = 80;
+const HEAD_R_MM = 40;
+const HEAD_STEP_MM = 120;
+const MAX_HEADS = 400;
+/** The venue's own chairs, when the feature says no colour: a pale ivory, like the base chair. */
+const VENUE_CHAIR_TONE = "#f7f6fc";
+
 const WELL_MATERIAL: MaterialRef = { colour: "#3b4d5a", kind: "matte" };
+/** Paving's own tone (SURFACE_BASE.paving): the stone a pool is edged in. */
+const COPING_MATERIAL: MaterialRef = { colour: "#d9d3c7", kind: "matte" };
 const WALL_MATERIAL: MaterialRef = { colour: ENVELOPE.wall, kind: "matte" };
 const KERB_MATERIAL: MaterialRef = { colour: ENVELOPE.kerb, kind: "matte" };
 const CEILING_MATERIAL: MaterialRef = { colour: ENVELOPE.ceiling, kind: "matte" };
 const TRUNK_MATERIAL: MaterialRef = { colour: ENVELOPE.trunk, kind: "matte" };
+const LEAF_MATERIAL: MaterialRef = { colour: ENVELOPE.doorLeaf, kind: "matte" };
+const FRAME_MATERIAL: MaterialRef = { colour: ENVELOPE.doorFrame, kind: "matte" };
+const POT_MATERIAL: MaterialRef = { colour: "#b06a4a", kind: "matte" };
+const SOIL_MATERIAL: MaterialRef = surfaceMaterial("soil");
 const FEATURE_FILL = "#e4e0d8";
-const FOLIAGE_FILL = "#8fae84";
+/** Each species' foliage when the feature carries no fill of its own; a bed's is its heads'. */
+const PLANT_FILL: Record<PlantSpecies, string> = {
+  tree: "#8fae84",
+  palm: "#6f9a5a",
+  shrub: "#7da36b",
+  pot: "#7da36b",
+  hedge: "#5f8a4e",
+  flowers: "#e3688c",
+};
 
 /** Bodies whose parts are already in room mm stand at the room's origin, unturned. */
 const here = (): Transform => transform(vec3(0, 0, 0));
+
+const rad = (deg: number) => (deg * Math.PI) / 180;
+
+// --- frames ---------------------------------------------------------------------------------------
+
+const featureFrame = (f: StructureFeature): Transform => roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 });
+
+/** The transform that undoes `t` (a feature's frame: a turn and a move, never a mirror or a scale),
+ *  so a room point can be carried INTO a feature's own frame. */
+function inverted(t: Transform): Transform {
+  const back = turn({ x: -t.at.x, y: -t.at.y }, -t.rotationDeg);
+  return transform(vec3(back.x, back.y, -t.at.z), -t.rotationDeg);
+}
+
+/** An outline carried through a frame: its points moved and turned, each edge's control offsets
+ *  turned with them (they are offsets from the edge's own ends — lib/studio/geometry
+ *  absoluteControlPoints — so a move leaves them alone and a turn turns them). */
+function carryOutline(o: BuiltOutline, frame: Transform): BuiltOutline {
+  const outline = o.outline.map((p) => {
+    const q = applyTransform(frame, vec3(p.x, p.y, 0));
+    return { x: q.x, y: q.y };
+  });
+  const edgeCurves = o.edgeCurves?.map((c) => (c ? { c1: turn(c.c1, frame.rotationDeg), c2: turn(c.c2, frame.rotationDeg) } : c));
+  return edgeCurves ? { outline, edgeCurves } : { outline };
+}
+
+const localPoint = (back: Transform, p: Point): Point => {
+  const q = applyTransform(back, vec3(p.x, p.y, 0));
+  return { x: q.x, y: q.y };
+};
 
 // --- walls ----------------------------------------------------------------------------------------
 
@@ -91,8 +180,9 @@ function polylineLength(poly: readonly Point[]): number {
   return len;
 }
 
-/** The point a fraction `t` along a polyline, and the unit normal of the stretch it is on. */
-function alongPolyline(poly: readonly Point[], t: number): { p: Point; n: Point } {
+/** The point a fraction `t` along a polyline, the unit direction `u` of the stretch it is on
+ *  (toward node b) and that stretch's unit normal `n` (`u` turned a quarter clockwise on the plan). */
+function alongPolyline(poly: readonly Point[], t: number): { p: Point; u: Point; n: Point } {
   const total = polylineLength(poly);
   let target = total * t;
   for (let i = 1; i < poly.length; i++) {
@@ -101,12 +191,13 @@ function alongPolyline(poly: readonly Point[], t: number): { p: Point; n: Point 
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     if (len < 1e-9) continue;
     if (target <= len || i === poly.length - 1) {
-      const u = Math.max(0, Math.min(1, target / len));
-      return { p: { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }, n: { x: -(b.y - a.y) / len, y: (b.x - a.x) / len } };
+      const k = Math.max(0, Math.min(1, target / len));
+      const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+      return { p: { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k }, u, n: { x: -u.y, y: u.x } };
     }
     target -= len;
   }
-  return { p: poly[0], n: { x: 0, y: 1 } };
+  return { p: poly[0], u: { x: 1, y: 0 }, n: { x: 0, y: 1 } };
 }
 
 /** The zones a wall (as a polyline) borders: those whose boundary holds a probe point pushed one
@@ -130,6 +221,22 @@ export function wallHeightMm(wall: Pick<Wall, "kind">, poly: readonly Point[], z
   let tallest = 0;
   for (const z of borderingZones(poly, zones)) tallest = Math.max(tallest, z.zone.ceilingHeightMm || 0);
   return tallest > 0 ? tallest : GARDEN_WALL_MM;
+}
+
+/** Which side of a wall, at `p`, is INSIDE: +1 for the `n` side, −1 for the other. The side whose
+ *  probe (one wall-thickness off the wall) lands in a roofed zone wins; failing that, in any zone;
+ *  a tie (both roofed, neither in a zone) is +n. The same probe rule as `borderingZones`. */
+export function inwardSide(p: Point, n: Point, zones: readonly ResolvedZone[]): 1 | -1 {
+  const score = (sign: number): number => {
+    const q = { x: p.x + sign * n.x * WALL_THICK_MM, y: p.y + sign * n.y * WALL_THICK_MM };
+    let best = 0;
+    for (const z of zones) {
+      if (z.boundary.length < 3 || !pointInPolygon(q, z.boundary)) continue;
+      best = Math.max(best, (z.zone.ceilingHeightMm || 0) > 0 ? 2 : 1);
+    }
+    return best;
+  };
+  return score(1) >= score(-1) ? 1 : -1;
 }
 
 /** An opening in a wall, measured along the wall from node a (the convention `distanceMm` keeps). */
@@ -186,9 +293,47 @@ function wallOpenings(entrances: readonly StructureEntrance[], chordMm: number):
   });
 }
 
+/** A door's frame and its leaf (two for a double door), on a `wall` kind wall `wallH` high. The
+ *  frame is a trim on each jamb, FRAME_PROUD_MM proud of both faces. The leaf is hinged at a jamb,
+ *  DOOR_LEAF_MM thick, the opening wide (half each for a pair), the door's height (the wall's when
+ *  it is lower — a gate in a garden wall), and stands OPEN at 90°: perpendicular to the wall, from
+ *  the wall's face on the swing side out into the room, its thickness just inside the opening so it
+ *  clears the jamb. The swing side is the inward one (`inwardSide` at the door) when `swingInward`,
+ *  the other otherwise. `o` is in mm along the wall's POLYLINE (`along` long), like a lintel's. */
+function doorBodies(e: StructureEntrance, o: WallOpening, poly: readonly Point[], along: number, wallH: number, zones: readonly ResolvedZone[], out: SceneCollector): void {
+  const s = Math.max(0, Math.min(along, o.startMm));
+  const t = Math.max(0, Math.min(along, o.endMm));
+  const width = t - s;
+  const h = Math.min(DOOR_HEIGHT_MM, wallH);
+  if (width < MIN_LEAF_MM || h < MIN_LEAF_MM) return;
+  const tag = { type: "door" as const, id: e.id };
+  const jambA = alongPolyline(poly, s / along);
+  const jambB = alongPolyline(poly, t / along);
+  const heading = (u: Point) => headingDeg({ x: 0, y: 0 }, u);
+
+  const trim = (j: ReturnType<typeof alongPolyline>): Part => ({ shape: "box", w: FRAME_TRIM_MM, d: WALL_THICK_MM + 2 * FRAME_PROUD_MM, h, at: vec3(j.p.x, j.p.y, 0), rotDeg: heading(j.u) });
+  out.body(`door-frame:${e.id}`, tag, FRAME_MATERIAL, [trim(jambA), trim(jambB)], [here()]);
+
+  const mid = alongPolyline(poly, (s + t) / 2 / along);
+  const side = inwardSide(mid.p, mid.n, zones) * (e.swingInward ? 1 : -1);
+  const leafW = e.doubleDoor ? width / 2 : width;
+  // `into` is which way along the wall the opening lies from this jamb (+u from the start jamb).
+  const leaf = (j: ReturnType<typeof alongPolyline>, into: 1 | -1): Part => {
+    const hinge = {
+      x: j.p.x + side * j.n.x * (WALL_THICK_MM / 2) + into * j.u.x * (DOOR_LEAF_MM / 2),
+      y: j.p.y + side * j.n.y * (WALL_THICK_MM / 2) + into * j.u.y * (DOOR_LEAF_MM / 2),
+    };
+    const at = vec3(hinge.x + side * j.n.x * (leafW / 2), hinge.y + side * j.n.y * (leafW / 2), 0);
+    return { shape: "box", w: leafW, d: DOOR_LEAF_MM, h, at, rotDeg: heading(j.u) + 90 };
+  };
+  const leaves = e.doubleDoor ? [leaf(jambA, 1), leaf(jambB, -1)] : [leaf(jambA, 1)];
+  out.body(`door-leaf:${e.id}`, tag, LEAF_MATERIAL, leaves, [here()]);
+}
+
 /** One wall's boxes: its stretches (and its doors' lintels) along the polyline, openings cut by
  *  distance along it — a door on a bowed wall sits where its chord distance falls along the bow,
- *  scaled by the bow's extra length, which is as exact as a door hung on a chord can be. */
+ *  scaled by the bow's extra length, which is as exact as a door hung on a chord can be. Then each
+ *  door's frame and leaves (a kerb with a gap is just a gap: no leaf on an `edge`). */
 function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly StructureEntrance[], zones: readonly ResolvedZone[], out: SceneCollector): void {
   const pts = wallPoints(structure, wall);
   if (!pts) return;
@@ -218,11 +363,17 @@ function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly S
   }
   out.body(`wall:${wall.id}`, { type: "wall", id: wall.id }, wall.kind === "edge" ? KERB_MATERIAL : WALL_MATERIAL, solids, [here()]);
   for (const [id, parts] of lintels) out.body(`door:${id}`, { type: "door", id }, WALL_MATERIAL, parts, [here()]);
+  if (wall.kind !== "wall") return;
+  for (const e of entrances) {
+    const o = openings.find((x) => x.id === e.id);
+    if (o) doorBodies(e, o, poly, along, h, zones, out);
+  }
 }
 
-// --- features -------------------------------------------------------------------------------------
+// --- wells ----------------------------------------------------------------------------------------
 
-/** An outline as one closed polyline (its curves cut into chords), for a ribbon round it. */
+/** An outline as one closed polyline (its curves cut into chords), for a ribbon round it or a
+ *  point-in-polygon test against it. */
 function closedPolyline(o: BuiltOutline): Point[] {
   const path: Point[] = [];
   const n = o.outline.length;
@@ -234,10 +385,42 @@ function closedPolyline(o: BuiltOutline): Point[] {
   return path;
 }
 
-const featureFrame = (f: StructureFeature): Transform => roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 });
+/** A pool or a water surface: what gets cut out of the floors it lies in. `room` is its footprint
+ *  carried into room mm (curves kept), `centre` what decides which floors. */
+interface Well {
+  id: string;
+  centre: Point;
+  room: BuiltOutline[];
+}
+
+const isWell = (f: StructureFeature): boolean => f.kind === "pool" || (f.kind === "surface" && featureSurface(f) === "water");
+
+function waterWells(structure: VenueStructure): Well[] {
+  const wells: Well[] = [];
+  for (const f of structure.features) {
+    if (!isWell(f)) continue;
+    const frame = featureFrame(f);
+    wells.push({ id: f.id, centre: { x: f.x, y: f.y }, room: footprintOutlines(featureFootprint(f)).map((o) => carryOutline(o, frame)) });
+  }
+  return wells;
+}
+
+/** The holes a floor polygon (room mm) takes: every well whose centre it holds, as outlines in the
+ *  frame `into` — the room's for a zone floor, a surface feature's own for its plane. */
+function holesIn(polygon: readonly Point[], wells: readonly Well[], into: Transform, except?: string): BuiltOutline[] | undefined {
+  const back = inverted(into);
+  const holes: BuiltOutline[] = [];
+  for (const w of wells) {
+    if (w.id === except || polygon.length < 3 || !pointInPolygon(w.centre, polygon as Point[])) continue;
+    for (const o of w.room) holes.push(carryOutline(o, back));
+  }
+  return holes.length ? holes : undefined;
+}
 
 /** A water surface recessed WATER_DEPTH_MM inside a well: dark matte walls (a ribbon round the
- *  outline) and floor, and the water plane at the top of the recess. */
+ *  outline) and floor, the water plane at the top of the recess, and a coping kerb — COPING_MM
+ *  wide, COPING_HIGH_MM high — standing on the floor round the rim (the rim itself is its hole, so
+ *  it covers the seam between the floor's cut edge and the well's wall). */
 function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector): void {
   const bottom = -(WATER_DEPTH_MM + WELL_BELOW_MM);
   const tint = hexOf(f.style?.fill);
@@ -247,16 +430,27 @@ function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: 
     parts.push({ shape: "ribbon", path: closedPolyline(o), h: WATER_DEPTH_MM + WELL_BELOW_MM, at: vec3(0, 0, bottom) });
     parts.push({ shape: "plane", outline: o, at: vec3(0, 0, bottom) });
     parts.push({ shape: "plane", outline: o, at: vec3(0, 0, -WATER_DEPTH_MM), material: water });
+    parts.push({ shape: "extrude", outline: { outline: offsetOutline(o, COPING_MM) }, holes: [o], h: COPING_HIGH_MM, at: vec3(0, 0, 0), material: COPING_MATERIAL });
   }
   out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, WELL_MATERIAL, parts, [featureFrame(f)], { castShadow: false });
 }
 
+// --- features -------------------------------------------------------------------------------------
+
 /** A ground material laid over the feature's footprint, a hair above the zone floor; the k-th
- *  surface a millimetre above the one before, so what the plan paints later lies on top. */
-function surfacePlane(f: StructureFeature, outlines: readonly BuiltOutline[], ordinal: number, out: SceneCollector): void {
+ *  surface a millimetre above the one before, so what the plan paints later lies on top. A well
+ *  whose centre lies on this surface is cut out of it (in the surface's own frame). */
+function surfacePlane(f: StructureFeature, outlines: readonly BuiltOutline[], ordinal: number, wells: readonly Well[], out: SceneCollector): void {
   const material = surfaceMaterial(featureSurface(f), hexOf(f.style?.fill));
-  const parts: Part[] = outlines.map((outline) => ({ shape: "plane", outline, at: vec3(0, 0, 1 + ordinal) }));
-  out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [featureFrame(f)], { castShadow: false });
+  const frame = featureFrame(f);
+  const back = inverted(frame);
+  const parts: Part[] = outlines.map((outline) => {
+    const poly = closedPolyline(outline);
+    const local = wells.map((w) => ({ ...w, centre: localPoint(back, w.centre) }));
+    const holes = holesIn(poly, local, frame, f.id);
+    return { shape: "plane", outline, ...(holes ? { holes } : {}), at: vec3(0, 0, 1 + ordinal) };
+  });
+  out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [frame], { castShadow: false });
 }
 
 /** A built thing (a column, a pergola, a permanent bar): its footprint extruded to its height. */
@@ -267,38 +461,200 @@ function extrudedFeature(f: StructureFeature, outlines: readonly BuiltOutline[],
   out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [featureFrame(f)]);
 }
 
-/** A plant as a placeholder — a trunk and one canopy ball — shared by every plant of the same
- *  species, size and colour (TODO(B5): the species' real shapes). The key carries the colour
- *  because a shared body has one material. */
+// --- plants ---------------------------------------------------------------------------------------
+
+/** Where a TREE_CLUMPS lobe stands: `frac` of the radius wide, (1 − frac) of the radius out along
+ *  its bearing — so it touches the rim — on an rx × ry crown (item-symbol.tsx `tree`). */
+function lobeAt(frac: number, deg: number, rx: number, ry: number): Point {
+  return { x: (1 - frac) * rx * Math.cos(rad(deg)), y: (1 - frac) * ry * Math.sin(rad(deg)) };
+}
+
+/** The first `count` of TREE_CLUMPS as spheres, each frac·R wide at its lobe's place, stacked
+ *  through the band z0..h with the BIGGER lobes higher (the plan draws them over the smaller): the
+ *  k-th by size stands k/(n−1) of the way up the room the band leaves it. A band too thin for a
+ *  lobe centres it. */
+function lobes(rx: number, ry: number, z0: number, h: number, count: number): Part[] {
+  const R = Math.min(rx, ry);
+  const picked = TREE_CLUMPS.slice(0, count);
+  const bySize = picked.map((_, i) => i).sort((i, j) => picked[i][0] - picked[j][0]);
+  const rank: number[] = [];
+  bySize.forEach((i, k) => (rank[i] = k));
+  return picked.map(([frac, deg], i) => {
+    const r = frac * R;
+    const p = lobeAt(frac, deg, rx, ry);
+    const lo = z0 + r;
+    const hi = h - r;
+    const t = picked.length > 1 ? rank[i] / (picked.length - 1) : 0.5;
+    const z = hi >= lo ? lo + t * (hi - lo) : (z0 + h) / 2;
+    return { shape: "sphere", r, at: vec3(p.x, p.y, z), segments: 10 };
+  });
+}
+
+/** A middle mass 0.62R wide (the plan's central ellipse) centred at `z`, held inside 0..h. */
+function middleMass(rx: number, ry: number, z: number, h: number): Part {
+  const r = 0.62 * Math.min(rx, ry);
+  const zc = h >= 2 * r ? Math.max(r, Math.min(h - r, z)) : h / 2;
+  return { shape: "sphere", r, at: vec3(0, 0, zc), segments: 12 };
+}
+
+/** A tree: a trunk to 0.55 h, the nine lobes stacked from there to the top, the middle mass at 0.72 h. */
+function treeParts(rx: number, ry: number, h: number): Part[] {
+  const R = Math.min(rx, ry);
+  const trunkR = 0.07 * R;
+  return [
+    { shape: "cylinder", rTop: trunkR, rBottom: trunkR, h: 0.55 * h, at: vec3(0, 0, 0), segments: 8, material: TRUNK_MATERIAL },
+    ...lobes(rx, ry, 0.55 * h, h, TREE_CLUMPS.length),
+    middleMass(rx, ry, 0.72 * h, h),
+  ];
+}
+
+/** A palm: a tapering trunk to 0.85 h, a small crown at its top, and FROND_COUNT fronds — thin
+ *  boxes a radius long radiating from the crown, each turned i·45° and tilted FROND_TILT_DEG so its
+ *  far end droops below the crown. `tiltDeg` is positive here because the Part contract says a
+ *  positive tilt tips a box's TOP toward its own +y — a rigid turn about its x axis — which carries
+ *  the box's +y end (where the frond's tip is: its depth runs along +y) toward −z. The box stands
+ *  with its near end on the crown: its centre (R/2)·cos(tilt) out along the bearing and (R/2)·sin(tilt)
+ *  under the crown, so the tilt about its base centre lifts the near end back up to the crown. */
+function palmParts(rx: number, ry: number, h: number): Part[] {
+  const R = Math.min(rx, ry);
+  const crownZ = 0.85 * h;
+  const parts: Part[] = [
+    { shape: "cylinder", rTop: 0.8 * 0.06 * R, rBottom: 0.06 * R, h: crownZ, at: vec3(0, 0, 0), segments: 10, material: TRUNK_MATERIAL },
+    { shape: "sphere", r: 0.12 * R, at: vec3(0, 0, crownZ), segments: 8 },
+  ];
+  const c = Math.cos(rad(FROND_TILT_DEG));
+  const s = Math.sin(rad(FROND_TILT_DEG));
+  for (let i = 0; i < FROND_COUNT; i++) {
+    const rot = (i * 360) / FROND_COUNT;
+    const mid = turn({ x: 0, y: (R / 2) * c }, rot);
+    parts.push({ shape: "box", w: 0.18 * R, d: R, h: FROND_THICK_MM, at: vec3(mid.x, mid.y, crownZ - (R / 2) * s), rotDeg: rot, tiltDeg: FROND_TILT_DEG });
+  }
+  return parts;
+}
+
+/** A shrub: one cluster of the first five lobes through z0..h and a middle mass, no trunk. */
+function shrubParts(rx: number, ry: number, z0: number, h: number): Part[] {
+  return [...lobes(rx, ry, z0, h, 5), middleMass(rx, ry, (z0 + h) / 2 + 0.1 * (h - z0), h)];
+}
+
+/** A potted plant: a terracotta pot (a lathe — a narrow foot flaring to its rim at 0.45 h) with a
+ *  shrub cluster, three quarters the pot's width as on the plan, standing in it to the top. */
+function potParts(rx: number, ry: number, h: number): Part[] {
+  const R = Math.min(rx, ry);
+  const pot: Part = {
+    shape: "lathe",
+    profile: [
+      { r: 0.32 * R, z: 0 },
+      { r: 0.34 * R, z: 0.04 * h },
+      { r: 0.9 * R, z: 0.38 * h },
+      { r: R, z: 0.45 * h },
+    ],
+    at: vec3(0, 0, 0),
+    segments: 24,
+    material: POT_MATERIAL,
+  };
+  return [pot, ...shrubParts(0.74 * rx, 0.74 * ry, 0.4 * h, h)];
+}
+
+/** A clipped hedge: its box to 0.85 h with a narrower cap over it — the rounded-off top. */
+function hedgeParts(w: number, d: number, h: number): Part[] {
+  return [
+    { shape: "box", w, d, h: 0.85 * h, at: vec3(0, 0, 0) },
+    { shape: "box", w: 0.8 * w, d: 0.8 * d, h: 0.15 * h, at: vec3(0, 0, 0.85 * h) },
+  ];
+}
+
+/** A planted bed: a soil slab BED_SOIL_MM high over its footprint, and heads — small spheres in the
+ *  body's colour — on a grid HEAD_STEP_MM apart kept INSIDE the outline (a round bed has no heads
+ *  in its corners), at heights between the soil and the bed's top. At most MAX_HEADS a bed: a long
+ *  bed widens its grid rather than running out of heads halfway. The grid is the footprint's own,
+ *  so every bed of one size and shape is the same geometry. */
+function bedParts(outlines: readonly BuiltOutline[], w: number, d: number, h: number): Part[] {
+  const parts: Part[] = outlines.map((outline) => ({ shape: "extrude", outline, h: BED_SOIL_MM, at: vec3(0, 0, 0), material: SOIL_MATERIAL }));
+  const polys = outlines.map(closedPolyline);
+  const step = Math.max(HEAD_STEP_MM, Math.sqrt((w * d) / (MAX_HEADS * 0.95)));
+  const lo = BED_SOIL_MM + HEAD_R_MM;
+  const hi = Math.max(lo, h - HEAD_R_MM);
+  const cols = Math.max(1, Math.floor(w / step));
+  const rows = Math.max(1, Math.floor(d / step));
+  let heads = 0;
+  for (let j = 0; j < rows && heads < MAX_HEADS; j++) {
+    const y = -d / 2 + (d - (rows - 1) * step) / 2 + j * step;
+    for (let i = 0; i < cols && heads < MAX_HEADS; i++) {
+      const x = -w / 2 + (w - (cols - 1) * step) / 2 + i * step;
+      if (!polys.some((poly) => pointInPolygon({ x, y }, poly))) continue;
+      // A stable scatter of heights, so a bed is not a flat sheet of spheres.
+      const t = (((i * 1103515245 + j * 12345 + 7) >>> 0) % 1000) / 1000;
+      parts.push({ shape: "sphere", r: HEAD_R_MM, at: vec3(x, y, lo + (hi - lo) * (0.4 + 0.6 * t)), segments: 6 });
+      heads++;
+    }
+  }
+  return parts;
+}
+
+function plantParts(species: PlantSpecies, f: StructureFeature, w: number, d: number, h: number): Part[] {
+  const rx = w / 2;
+  const ry = d / 2;
+  switch (species) {
+    case "tree":
+      return treeParts(rx, ry, h);
+    case "palm":
+      return palmParts(rx, ry, h);
+    case "pot":
+      return potParts(rx, ry, h);
+    case "hedge":
+      return hedgeParts(w, d, h);
+    case "flowers":
+      return bedParts(footprintOutlines(featureFootprint(f)), w, d, h);
+    default:
+      return shrubParts(rx, ry, 0, h);
+  }
+}
+
+/** A plant by its species, shared by every plant of the same species, size and colour (a shared
+ *  body has one material, so the key carries the colour). A bed's heads follow its outline, so its
+ *  key carries the shape too — and a hand-drawn bed is its own. A plant with no height stands at
+ *  its species' default. */
 function plantInstance(f: StructureFeature, out: SceneCollector): void {
+  const species = plantSpecies(f);
   const w = Math.max(1, Math.round(f.widthMm));
   const d = Math.max(1, Math.round(f.depthMm));
-  const h = Math.max(1, Math.round(f.heightMm));
-  const r = Math.min(w, d) / 2;
-  const species = plantSpecies(f);
-  const colour = hexOf(f.style?.fill) ?? FOLIAGE_FILL;
-  const parts: Part[] = [
-    { shape: "cylinder", rTop: 0.07 * r, rBottom: 0.07 * r, h: 0.7 * h, at: vec3(0, 0, 0), segments: 8, material: TRUNK_MATERIAL },
-    { shape: "sphere", r, at: vec3(0, 0, 0.7 * h), segments: 10 },
-  ];
+  const h = Math.max(1, Math.round(f.heightMm > 0 ? f.heightMm : PLANT_DEFAULTS[species].heightMm));
+  const colour = hexOf(f.style?.fill) ?? PLANT_FILL[species];
+  const shape = species === "flowers" ? `:${f.shape === "custom" ? `custom-${f.id}` : f.shape}` : "";
   out.instance({
-    key: `plant:${species}:${w}x${d}x${h}:${colour}`,
-    parts,
+    key: `plant:${species}:${w}x${d}x${h}${shape}:${colour}`,
+    parts: plantParts(species, f, w, d, h),
     material: foliageMaterial(colour),
     tag: { type: "feature", id: f.id, label: f.label },
     at: featureFrame(f),
   });
 }
 
+/** The venue's own chairs in rows (spec §3.4): one chair of the block's style and size at every
+ *  place `chairRowsLayout` gives, facing the block's +y (row 1 is the front), instanced with every
+ *  other chair of that style, size and colour in the room. */
+function seatingBodies(f: StructureFeature, out: SceneCollector): void {
+  const spec = seatingOf(f);
+  const chair = seatingChair(spec);
+  const layout = seatingLayout(f);
+  const style = spec.chairStyle ?? "dining";
+  const tone = hexOf(f.style?.fill) ?? VENUE_CHAIR_TONE;
+  const h = f.heightMm > 0 ? f.heightMm : 900;
+  const frame = featureFrame(f);
+  const tag = { type: "chair" as const, id: f.id };
+  for (const c of layout.chairs) out.instance(chairRequest(style, chair.widthMm, chair.depthMm, h, tone, transform(vec3(c.x, c.y, 0), 0), tag), frame);
+}
+
 /** The venue's own fixed things, as this event has them (moved and removed applied upstream). */
-function featureBodies(structure: VenueStructure, out: SceneCollector): void {
+function featureBodies(structure: VenueStructure, wells: readonly Well[], out: SceneCollector): void {
   let surfaces = 0;
   for (const f of structure.features) {
     switch (f.kind) {
       case "surface": {
         const outlines = footprintOutlines(featureFootprint(f));
         if (featureSurface(f) === "water") waterWell(f, outlines, out);
-        else surfacePlane(f, outlines, surfaces, out);
+        else surfacePlane(f, outlines, surfaces, wells, out);
         surfaces++;
         break;
       }
@@ -313,10 +669,12 @@ function featureBodies(structure: VenueStructure, out: SceneCollector): void {
       case "plant":
         plantInstance(f, out);
         break;
+      case "seating":
+        seatingBodies(f, out);
+        break;
       case "stage": // TODO(B1): featureStage → the stage builder (decks, flights, ramps, skirt)
       case "stairs": // TODO(B2): lib/venues/climb.ts flights as tread boxes
       case "ramp": // TODO(B2): a wedge over its run
-      case "seating": // TODO(B3): the venue's chair rows through chairRowsLayout
         break;
     }
   }
@@ -337,17 +695,23 @@ function grown(b: Bounds, byMm: number): BuiltOutline {
 export function envelopeNodes(input: SceneInput, out: SceneCollector): { roofedMm: number | null } {
   const { plan, structure } = input;
   const zones = plan.all;
+  const wells = waterWells(structure);
 
-  // Floors: every zone on the property, so the hall next door is still there through its door.
+  // Floors: every zone on the property, so the hall next door is still there through its door —
+  // each with the wells that lie in it cut out.
   for (const rz of zones) {
     if (rz.boundary.length < 3) continue;
     const z = rz.zone;
     const material = surfaceMaterial(z.surface ?? "plain", hexOf(z.style?.fill));
-    out.body(`floor:${z.id}`, { type: "floor", id: z.id, label: z.name }, material, [{ shape: "plane", outline: { outline: rz.boundary }, at: vec3(0, 0, 0) }], [here()], { castShadow: false });
+    const holes = holesIn(rz.boundary, wells, here());
+    out.body(`floor:${z.id}`, { type: "floor", id: z.id, label: z.name }, material, [{ shape: "plane", outline: { outline: rz.boundary }, ...(holes ? { holes } : {}), at: vec3(0, 0, 0) }], [here()], { castShadow: false });
   }
 
-  // Ground: a neutral plane well past the plan, a hair under the floors.
-  out.body("ground", { type: "ground" }, surfaceMaterial("paving", ENVELOPE.ground), [{ shape: "plane", outline: grown(plan.bounds, GROUND_MARGIN_MM), at: vec3(0, 0, -1) }], [here()], { castShadow: false });
+  // Ground: a neutral plane well past the plan, a hair under the floors — and under every well,
+  // so it too is cut round each one.
+  const ground = grown(plan.bounds, GROUND_MARGIN_MM);
+  const groundHoles = holesIn(ground.outline, wells, here());
+  out.body("ground", { type: "ground" }, surfaceMaterial("paving", ENVELOPE.ground), [{ shape: "plane", outline: ground, ...(groundHoles ? { holes: groundHoles } : {}), at: vec3(0, 0, -1) }], [here()], { castShadow: false });
 
   // Walls, each with the doors hung on it.
   const byWall = new Map<string, StructureEntrance[]>();
@@ -371,7 +735,7 @@ export function envelopeNodes(input: SceneInput, out: SceneCollector): { roofedM
     roofedMm = roofedMm === null ? h : Math.max(roofedMm, h);
   }
 
-  featureBodies(structure, out);
+  featureBodies(structure, wells, out);
   return { roofedMm };
 }
 
@@ -387,7 +751,8 @@ if (isMain(import.meta.url)) {
     const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
 
     // A hall (roofed, 4 m) and a terrace (open sky) sharing the wall n2–n3; the terrace's top wall
-    // bows outward, its bottom is a kerb; one door on the hall's left wall.
+    // bows outward, its bottom is a kerb; one door on the hall's left wall swinging in, a double
+    // gate in the terrace's garden wall swinging out. A pool on the terrace, in its lawn.
     //   n1 ──── n2 ──(bow)── n5
     //    │  hall │  terrace   │
     //   n4 ──── n3 ══kerb═══ n6
@@ -409,13 +774,20 @@ if (isMain(import.meta.url)) {
         { id: "w-right", a: "n5", b: "n6", kind: "wall" },
         { id: "w-bot-b", a: "n6", b: "n3", kind: "edge" },
       ],
-      entrances: [{ id: "door-1", wallId: "w-left", distanceMm: 2000, widthMm: 1000, swingInward: true, doubleDoor: false }],
+      entrances: [
+        { id: "door-1", wallId: "w-left", distanceMm: 2000, widthMm: 1000, swingInward: true, doubleDoor: false },
+        { id: "gate-1", wallId: "w-right", distanceMm: 2000, widthMm: 1200, swingInward: false, doubleDoor: true },
+      ],
       features: [
         { id: "col-1", kind: "structure", label: "עמוד", x: 1000, y: 1000, widthMm: 500, depthMm: 500, heightMm: 3000, shape: "rect", rotationDeg: 0 },
-        { id: "pool-1", kind: "pool", label: "בריכה", x: 3500, y: 2000, widthMm: 3000, depthMm: 2000, heightMm: 0, shape: "ellipse", rotationDeg: 0 },
         { id: "lawn-1", kind: "surface", label: "דשא", x: 8000, y: 2000, widthMm: 2000, depthMm: 2000, heightMm: 0, shape: "rect", rotationDeg: 0, surface: "grass" },
-        { id: "tree-1", kind: "plant", label: "עץ", x: 8000, y: 2000, widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle", rotationDeg: 0, plant: "tree" },
+        { id: "pool-1", kind: "pool", label: "בריכה", x: 8000, y: 2200, widthMm: 1600, depthMm: 1000, heightMm: 0, shape: "ellipse", rotationDeg: 0 },
+        { id: "tree-1", kind: "plant", label: "עץ", x: 7000, y: 1200, widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle", rotationDeg: 0, plant: "tree" },
         { id: "tree-2", kind: "plant", label: "עץ", x: 9000, y: 3000, widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle", rotationDeg: 0, plant: "tree" },
+        { id: "palm-1", kind: "plant", label: "דקל", x: 9000, y: 1000, widthMm: 4500, depthMm: 4500, heightMm: 6000, shape: "circle", rotationDeg: 0, plant: "palm" },
+        { id: "hedge-1", kind: "plant", label: "גדר חיה", x: 8000, y: 3600, widthMm: 4000, depthMm: 800, heightMm: 1200, shape: "rect", rotationDeg: 0, plant: "hedge" },
+        { id: "bed-1", kind: "plant", label: "ערוגה", x: 2000, y: 500, widthMm: 3000, depthMm: 1200, heightMm: 400, shape: "rect", rotationDeg: 0, plant: "flowers" },
+        { id: "seats-1", kind: "seating", label: "שורות כיסאות", x: 4500, y: 1200, widthMm: 1950, depthMm: 2400, heightMm: 900, shape: "rect", rotationDeg: 90, seating: { rows: 3, perRow: 4 } },
         { id: "stage-1", kind: "stage", label: "במה", x: 2000, y: 3000, widthMm: 4000, depthMm: 2000, heightMm: 600, shape: "rect", rotationDeg: 0 },
       ],
     };
@@ -459,6 +831,7 @@ if (isMain(import.meta.url)) {
     const shared = byId("wall:w-shared")!.parts[0];
     assert(shared.shape === "box" && shared.d === WALL_THICK_MM && near(shared.at.x, 6000) && near(shared.at.y, 2000) && near(shared.w, 4000), "a wall box is centred on its chord, WALL_THICK_MM thick, the chord long");
 
+    // The door: two jambs, a lintel, a frame of two trims, and one leaf standing open INTO the hall.
     const left = byId("wall:w-left")!;
     assert(left.parts.length === 2, `the door splits its wall into two jambs (got ${left.parts.length})`);
     assert(left.parts.every((p) => p.shape === "box" && p.h === 4000 && near(p.w, 1500)), "each jamb is full height and 1500 long (4000 − 1000, split either side of a door 2000 from n4)");
@@ -466,22 +839,129 @@ if (isMain(import.meta.url)) {
     assert(!!lintel && lintel.tag.type === "door" && lintel.parts.length === 1, "the door is one lintel body tagged door");
     const l = lintel!.parts[0];
     assert(l.shape === "box" && l.at.z === DOOR_HEIGHT_MM && l.h === 4000 - DOOR_HEIGHT_MM && near(l.w, 1000) && near(l.at.y, 2000) && near(l.at.x, 0), "the lintel spans the opening from DOOR_HEIGHT_MM to the wall top, over the door's middle");
+    const wallRot = (l as Extract<Part, { shape: "box" }>).rotDeg!;
+    const frame = byId("door-frame:door-1");
+    assert(!!frame && frame.tag.type === "door" && frame.tag.id === "door-1" && frame.parts.length === 2, "the door has a frame of two trims, tagged door");
+    assert(frame!.parts.every((p) => p.shape === "box" && p.w === FRAME_TRIM_MM && p.d === WALL_THICK_MM + 2 * FRAME_PROUD_MM && p.h === DOOR_HEIGHT_MM && near(p.at.x, 0)), "…each 40 wide, proud of both faces, door height, on the wall's line");
+    const trimYs = frame!.parts.map((p) => p.at.y).sort((a, b) => a - b);
+    assert(near(trimYs[0], 1500) && near(trimYs[1], 2500), "…one on each jamb of the opening");
+    assert(frame!.material.colour === ENVELOPE.doorFrame, "…in the frame's tone");
+    const leafBody = byId("door-leaf:door-1");
+    assert(!!leafBody && leafBody.tag.type === "door" && leafBody.parts.length === 1 && leafBody.material.colour === ENVELOPE.doorLeaf, "a single door has one leaf, tagged door, in the leaf's tone");
+    const leaf = leafBody!.parts[0] as Extract<Part, { shape: "box" }>;
+    assert(leaf.shape === "box" && leaf.d === DOOR_LEAF_MM && near(leaf.w, 1000) && leaf.h === DOOR_HEIGHT_MM, "the leaf is DOOR_LEAF_MM thick, the opening wide, the door high");
+    assert(((((leaf.rotDeg ?? 0) - wallRot) % 180) + 180) % 180 === 90, "…standing perpendicular to its wall (open at 90°)");
+    assert(leaf.at.x > WALL_THICK_MM / 2 && near(leaf.at.x, WALL_THICK_MM / 2 + 500), "…on the INWARD side — into the roofed hall, from the wall's face out");
+    assert(Math.abs(leaf.at.y - 2500) < DOOR_LEAF_MM, "…hinged at the jamb nearer node a, its thickness just inside the opening");
+    assert(inwardSide({ x: 0, y: 2000 }, { x: 1, y: 0 }, plan.all) === 1 && inwardSide({ x: 0, y: 2000 }, { x: -1, y: 0 }, plan.all) === -1, "the inward side of the hall's left wall is +x whichever way its normal is handed");
 
+    // The gate: a double door in a garden wall swinging OUT — two half leaves, the wall's height.
+    const gate = byId("door-leaf:gate-1");
+    assert(!!gate && gate.parts.length === 2, "a double door has two leaves");
+    assert(gate!.parts.every((p) => p.shape === "box" && near(p.w, 600) && p.h === GARDEN_WALL_MM && p.at.x > 10000), "…each half the opening wide, no taller than the garden wall, standing OUTSIDE the terrace (swingInward false)");
+    assert(!byId("door:gate-1") && byId("door-frame:gate-1")!.parts.every((p) => p.shape === "box" && p.h === GARDEN_WALL_MM), "a gate lower than a door has no lintel and a frame the wall's height");
+
+    // The ground: a plane past the plan's bounds, with the pool cut out of it.
     const ground = byId("ground")!;
     const g = ground.parts[0];
     assert(g.shape === "plane" && g.at.z === -1 && near(Math.min(...g.outline.outline.map((p) => p.x)), plan.bounds.minX - GROUND_MARGIN_MM), "the ground is a plane at −1 grown GROUND_MARGIN_MM past the plan's bounds");
+    assert(g.shape === "plane" && g.holes?.length === 1, "…with the one well cut out of it");
 
     const col = byId("feature:col-1")!;
     assert(col.parts[0].shape === "extrude" && col.parts[0].h === 3000 && col.instances[0].at.x === 1000, "a structure feature is its footprint extruded to its height, at its place");
+
+    // The pool: a hole in the terrace floor (not the hall's) and in the lawn it lies on, the water
+    // plane recessed in its well, a coping round its rim.
     const pool = byId("feature:pool-1")!;
     const water = pool.parts.find((p) => p.shape === "plane" && p.material?.kind === "water");
     assert(!!water && water.at.z === -WATER_DEPTH_MM, "a pool is a water plane recessed WATER_DEPTH_MM");
     assert(pool.parts.some((p) => p.shape === "ribbon") && pool.material.kind === "matte", "…inside a well with matte walls");
+    const coping = pool.parts.find((p): p is Extract<Part, { shape: "extrude" }> => p.shape === "extrude" && p.material?.colour === COPING_MATERIAL.colour);
+    assert(!!coping && coping.h === COPING_HIGH_MM && coping.at.z === 0 && coping.holes?.length === 1, "…and a coping kerb on the floor round the rim, the rim its hole");
+    assert(Math.max(...coping!.outline.outline.map((p) => p.x)) > 800 + COPING_MM - 1, "…COPING_MM wide outside the water");
+    const terrace = byId("floor:z-terrace")!.parts[0] as Extract<Part, { shape: "plane" }>;
+    assert(terrace.holes?.length === 1, "the terrace floor carries one hole");
+    const hole = terrace.holes![0];
+    const holePoly = closedPolyline(hole);
+    assert(holePoly.length >= 8 && hole.edgeCurves?.length === 4, "…an ellipse: four bowed edges, many points once flattened");
+    assert(holePoly.every((p) => Math.abs(p.x - 8000) <= 800 + 1e-6 && Math.abs(p.y - 2200) <= 500 + 1e-6), "…matching the pool's footprint, in room mm");
+    assert(holePoly.some((p) => near(p.x, 8800)) && holePoly.some((p) => near(p.y, 2700)), "…reaching the pool's rim both ways");
+    const hall = byId("floor:z-hall")!.parts[0] as Extract<Part, { shape: "plane" }>;
+    assert(!hall.holes, "the hall's floor, with no well on it, is whole");
     const lawn = byId("feature:lawn-1")!;
-    assert(lawn.parts[0].shape === "plane" && lawn.parts[0].at.z === 1 && lawn.material.texture === "grass", "a surface feature is a plane a hair above the floor in its material");
+    const lawnPlane = lawn.parts[0] as Extract<Part, { shape: "plane" }>;
+    assert(lawnPlane.shape === "plane" && lawnPlane.at.z === 1 && lawn.material.texture === "grass", "a surface feature is a plane a hair above the floor in its material");
+    assert(lawnPlane.holes?.length === 1, "…with the pool on it cut out");
+    const lawnHole = lawnPlane.holes![0].outline;
+    const cx = lawnHole.reduce((s, p) => s + p.x, 0) / lawnHole.length;
+    const cy = lawnHole.reduce((s, p) => s + p.y, 0) / lawnHole.length;
+    assert(near(cx, 0) && near(cy, 200), "…in the lawn's OWN frame (the pool stands 200 below the lawn's middle)");
+
+    // Plants: shared per species and size; each species its own shape.
     const trees = bodies.filter((b) => b.id.startsWith("i:plant:tree:"));
-    assert(trees.length === 1 && trees[0].instances.length === 2 && trees[0].parts.length === 2, "two trees of one size are one shared body with two instances, trunk + canopy");
-    assert(trees[0].parts[1].shape === "sphere" && near(trees[0].parts[1].at.z, 2800) && near(trees[0].parts[1].r, 1750), "the canopy ball is at 0.7 of the height, as wide as the plant");
+    assert(trees.length === 1 && trees[0].instances.length === 2, "two trees of one size are one shared body with two instances");
+    const tp = trees[0].parts;
+    const trunks = tp.filter((p): p is Extract<Part, { shape: "cylinder" }> => p.shape === "cylinder");
+    const crowns = tp.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere");
+    assert(trunks.length === 1 && crowns.length === TREE_CLUMPS.length + 1, `a tree is a trunk, the nine lobes and the middle mass (got ${trunks.length} + ${crowns.length})`);
+    assert(near(trunks[0].rTop, 1750 * 0.07) && near(trunks[0].h, 2200) && trunks[0].material?.colour === ENVELOPE.trunk, "the trunk is 0.07 R wide to 0.55 h, in bark");
+    const middle = crowns.find((p) => near(p.r, 0.62 * 1750));
+    assert(!!middle && near(middle.at.z, 2880), "the middle mass is 0.62 R at 0.72 h");
+    const treeLobes = crowns.filter((p) => p !== middle);
+    assert(treeLobes.every((p) => p.at.z - p.r >= 2200 - 1e-6 && p.at.z + p.r <= 4000 + 1e-6), "every lobe stands inside the crown band 0.55 h..h");
+    const sized = [...treeLobes].sort((a, b) => a.r - b.r);
+    assert(sized.every((p, i) => i === 0 || p.at.z >= sized[i - 1].at.z - 1e-6), "…the bigger lobes higher");
+    assert(treeLobes.some((p) => near(Math.hypot(p.at.x, p.at.y) + p.r, 1750, 1e-3)), "…each touching the rim");
+
+    const palm = bodies.find((b) => b.id.startsWith("i:plant:palm:"))!;
+    assert(!!palm && palm.instances.length === 1, "the palm is its own shared body");
+    const fronds = palm.parts.filter((p): p is Extract<Part, { shape: "box" }> => p.shape === "box" && p.tiltDeg !== undefined);
+    const palmTrunk = palm.parts.find((p): p is Extract<Part, { shape: "cylinder" }> => p.shape === "cylinder");
+    assert(fronds.length === FROND_COUNT && !!palmTrunk, "a palm is a trunk and eight tilted fronds");
+    assert(near(palmTrunk!.h, 5100) && palmTrunk!.rTop < palmTrunk!.rBottom, "the trunk tapers to 0.85 h");
+    assert(fronds.every((f) => f.tiltDeg === FROND_TILT_DEG && near(f.d, 2250) && f.h === FROND_THICK_MM), "each frond a radius long, FROND_THICK_MM thick, drooping FROND_TILT_DEG");
+    assert(new Set(fronds.map((f) => f.rotDeg)).size === FROND_COUNT && fronds.every((f) => (f.rotDeg ?? 0) % 45 === 0), "…turned 45° apart round the crown");
+    assert(fronds.every((f) => f.at.z < 5100 && near(Math.hypot(f.at.x, f.at.y), (2250 / 2) * Math.cos(rad(FROND_TILT_DEG)))), "…each hinged on the crown: its middle half a radius out along the bearing and under the crown by the tilt");
+
+    const hedge = bodies.find((b) => b.id.startsWith("i:plant:hedge:"))!;
+    assert(!!hedge && hedge.parts.length === 2 && hedge.parts.every((p) => p.shape === "box"), "a hedge is two boxes");
+    const [hb, hc] = hedge.parts as Extract<Part, { shape: "box" }>[];
+    assert(near(hb.h, 1020) && hb.w === 4000 && hb.d === 800 && near(hc.at.z, 1020) && near(hc.h, 180) && near(hc.w, 3200), "…its body to 0.85 h and a narrower cap over it to h");
+
+    const bed = bodies.find((b) => b.id.startsWith("i:plant:flowers:"))!;
+    assert(!!bed, "the bed is its own shared body");
+    const soil = bed.parts.find((p) => p.shape === "extrude");
+    assert(!!soil && soil.h === BED_SOIL_MM && soil.material?.texture === "soil", "a bed has a soil slab BED_SOIL_MM high");
+    const heads = bed.parts.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere");
+    assert(heads.length > 0 && heads.length <= MAX_HEADS, `…and heads, at most MAX_HEADS (got ${heads.length})`);
+    assert(heads.every((p) => Math.abs(p.at.x) <= 1500 && Math.abs(p.at.y) <= 600), "…every head inside the bed's outline");
+    assert(heads.every((p) => p.at.z >= BED_SOIL_MM && p.at.z <= 400), "…between the soil and the bed's top");
+    assert(bed.material.colour === PLANT_FILL.flowers && heads.every((p) => !p.material), "…in the bed's own colour");
+    const bigBed: StructureFeature = { id: "bed-2", kind: "plant", label: "ערוגה", x: 0, y: 0, widthMm: 12000, depthMm: 3000, heightMm: 400, shape: "rect", rotationDeg: 0, plant: "flowers" };
+    const big = new SceneCollector();
+    plantInstance(bigBed, big);
+    const bigHeads = (big.nodes()[0] as Extract<(typeof nodes)[number], { kind: "body" }>).parts.filter((p) => p.shape === "sphere");
+    assert(bigHeads.length <= MAX_HEADS && bigHeads.length > 300 && bigHeads.some((p) => p.at.x > 5000) && bigHeads.some((p) => p.at.x < -5000), "a long bed thins its grid to MAX_HEADS and still reaches both ends");
+
+    const shrubbery = new SceneCollector();
+    plantInstance({ id: "pot-1", kind: "plant", label: "עציץ", x: 0, y: 0, widthMm: 700, depthMm: 700, heightMm: 900, shape: "circle", rotationDeg: 0, plant: "pot" }, shrubbery);
+    plantInstance({ id: "shrub-1", kind: "plant", label: "שיח", x: 0, y: 0, widthMm: 1200, depthMm: 1200, heightMm: 1000, shape: "circle", rotationDeg: 0 }, shrubbery);
+    const [potBody, shrubBody] = shrubbery.nodes() as Extract<(typeof nodes)[number], { kind: "body" }>[];
+    assert(potBody.id.startsWith("i:plant:pot:") && potBody.parts[0].shape === "lathe" && potBody.parts[0].material?.colour === POT_MATERIAL.colour && potBody.parts.filter((p) => p.shape === "sphere").length === 6, "a pot is a terracotta lathe with a shrub cluster in it");
+    const rim = (potBody.parts[0] as Extract<Part, { shape: "lathe" }>).profile;
+    assert(near(rim[0].r, 0.32 * 350) && near(rim[rim.length - 1].r, 350) && near(rim[rim.length - 1].z, 0.45 * 900), "…a foot 0.32 R, a rim R at 0.45 h");
+    assert(shrubBody.id.startsWith("i:plant:shrub:") && shrubBody.parts.length === 6 && shrubBody.parts.every((p) => p.shape === "sphere"), "a plant with no species is a shrub: five lobes and a middle mass, no trunk");
+    assert(shrubBody.parts.every((p) => p.shape === "sphere" && p.at.z - p.r >= -1e-6 && p.at.z + p.r <= 1000 + 1e-6), "…standing on the floor to its height");
+
+    // The venue's chairs in rows: twelve chairs, one instanced body, facing the block's +y.
+    const seats = bodies.filter((b) => b.tag.type === "chair");
+    assert(seats.length === 1 && seats[0].id.startsWith("i:chair:dining:") && seats[0].tag.id === "seats-1", "3 × 4 venue chairs are one instanced body of the default dining chair");
+    assert(seats[0].instances.length === 12, `…twelve instances (got ${seats[0].instances.length})`);
+    assert(seats[0].instances.every((t) => near(t.rotationDeg, 90)), "…each facing the block's +y (the block is turned 90°, so every chair is)");
+    assert(seats[0].instances.every((t) => Math.abs(t.at.x - 4500) <= 1200 && Math.abs(t.at.y - 1200) <= 975), "…standing inside the turned block's box");
+    const seatXs = seats[0].instances.map((t) => Math.round(t.at.x));
+    assert(new Set(seatXs).size === 3, "…in three rows across the turned block");
+
     assert(!byId("feature:stage-1"), "a venue stage is left to phase B");
 
     const total = out.stats();

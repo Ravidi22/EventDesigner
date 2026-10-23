@@ -1,12 +1,16 @@
 // Node-side smoke test of components/scene without a GPU: geometry counts, NaN-freedom, the
 // frame mapping (plan +y → three +z, extrusion up), winding (signed volume positive = outward
-// faces), plane facing, the cache, the materials table and the camera's inverse mapping.
+// faces), plane facing, holes, the tilt rule, the torus, the cache and its far box, the materials
+// table (with the floors' polygon offset), the viewer's pure rules (lights, LOD, floor ranks) and
+// the camera's inverse mapping.
 import { DoubleSide, Vector3 } from "three";
-import { GeometryCache, bodyGeometry, geometrySignature, partGeometry } from "@/components/scene/scene-geometry";
+import { GeometryCache, bodyGeometry, geometrySignature, partGeometry, proxyGeometry } from "@/components/scene/scene-geometry";
 import { previewScene } from "@/components/scene/preview-scene";
 import { MaterialCache, tint } from "@/components/scene/scene-materials";
+import { CHAIR_BOX_MM, floorRank, intensityOf, lightDistanceM, lodVisibility, pickLit, polygonOffsetOf, renderOrderOf } from "@/components/scene/scene-rules";
+import { CAPABLE, MODEST, resolveDevice } from "@/components/scene/device";
 import { toWorld } from "@/lib/scene/frame";
-import { vec3, type BodyNode } from "@/lib/scene/types";
+import { vec3, type BodyNode, type Part } from "@/lib/scene/types";
 
 let failed = 0;
 const assert = (ok: boolean, msg: string) => {
@@ -58,6 +62,48 @@ function noNaN(g: ReturnType<typeof partGeometry>): boolean {
   return true;
 }
 
+/** The summed area of every triangle, in m². */
+function triangleArea(g: ReturnType<typeof partGeometry>): number {
+  const flat = g.index ? g.toNonIndexed() : g;
+  const p = flat.getAttribute("position");
+  const a = new Vector3();
+  const b = new Vector3();
+  const c = new Vector3();
+  let area = 0;
+  for (let i = 0; i < p.count; i += 3) {
+    a.fromBufferAttribute(p, i);
+    b.fromBufferAttribute(p, i + 1);
+    c.fromBufferAttribute(p, i + 2);
+    area += b.sub(a).cross(c.sub(a)).length() / 2;
+  }
+  return area;
+}
+
+/** The mean of the vertices `pick` accepts. */
+function centroidWhere(g: ReturnType<typeof partGeometry>, pick: (v: Vector3) => boolean): Vector3 {
+  const p = g.getAttribute("position");
+  const v = new Vector3();
+  const sum = new Vector3();
+  let n = 0;
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    if (!pick(v)) continue;
+    sum.add(v);
+    n++;
+  }
+  return n ? sum.divideScalar(n) : sum;
+}
+
+const square = (s: number, cx = 0, cy = 0) => ({
+  outline: [
+    { x: cx - s / 2, y: cy - s / 2 },
+    { x: cx + s / 2, y: cy - s / 2 },
+    { x: cx + s / 2, y: cy + s / 2 },
+    { x: cx - s / 2, y: cy + s / 2 },
+  ],
+});
+const reversed = (o: { outline: { x: number; y: number }[] }) => ({ outline: [...o.outline].reverse() });
+
 // --- parts ---
 const box = partGeometry({ shape: "box", w: 1000, d: 500, h: 200, at: vec3(0, 0, 0) });
 const bb = bbox(box);
@@ -85,6 +131,49 @@ assert(both.getAttribute("position").count === 6, "plane both: two faces");
 const cyl = partGeometry({ shape: "cylinder", rTop: 100, rBottom: 300, h: 700, at: vec3(0, 0, 0) });
 const cb = bbox(cyl);
 assert(near(cb.minY, 0) && near(cb.maxY, 0.7) && near(cb.maxX, 0.3, 1e-3), "cylinder: base at 0, bottom radius 0.3");
+
+// --- holes ---
+const solid = partGeometry({ shape: "plane", outline: square(1000), at: vec3(0, 0, 0) });
+const holed = partGeometry({ shape: "plane", outline: square(1000), holes: [square(400)], at: vec3(0, 0, 0) });
+assert(near(triangleArea(solid), 1) && near(triangleArea(holed), 0.84), "plane: a 400 square hole takes 0.16 m² off a 1000 square (0.84 left)");
+const sameWinding = partGeometry({ shape: "plane", outline: square(1000), holes: [reversed(square(400))], at: vec3(0, 0, 0) });
+assert(near(triangleArea(sameWinding), 0.84), "plane: a hole handed in the outline's own winding is normalised and still cut");
+assert(windingNormalY(holed) > 0.99 && noNaN(holed), "plane with a hole: still faces +y, finite");
+const twoHoles = partGeometry({ shape: "plane", outline: square(2000), holes: [square(400, -500, 0), square(400, 500, 0)], at: vec3(0, 0, 0), side: "down" });
+assert(near(triangleArea(twoHoles), 4 - 0.32) && windingNormalY(twoHoles) < -0.99, "plane down with two holes: both cut, still faces −y");
+const degenerateHole = partGeometry({ shape: "plane", outline: square(1000), holes: [{ outline: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }, { outline: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 200, y: 0 }] }], at: vec3(0, 0, 0) });
+assert(near(triangleArea(degenerateHole), 1), "plane: a two-point hole and a zero-area hole are ignored");
+const holedExtrude = partGeometry({ shape: "extrude", outline: square(1000), holes: [square(400)], h: 300, at: vec3(0, 0, 0) });
+assert(near(signedVolume(holedExtrude), 0.84 * 0.3, 1e-6) && noNaN(holedExtrude), "extrude with a hole: outward winding, volume = 0.84 × 0.3 m³ (the well's walls are built)");
+const holedBowed = partGeometry({ shape: "extrude", outline: square(1000), holes: [{ outline: square(400).outline, edgeCurves: [null, { c1: { x: 100, y: 0 }, c2: { x: 100, y: 0 } }, null, null] }], h: 100, at: vec3(0, 0, 0) });
+assert(signedVolume(holedBowed) < 0.084 - 1e-4 && signedVolume(holedBowed) > 0, "extrude: a hole's bezier edge bows it bigger (less volume left) — the curve is honoured on the hole");
+
+// --- the tilt rule ---
+const leaning = partGeometry({ shape: "box", w: 100, d: 100, h: 1000, at: vec3(0, 0, 0), tiltDeg: 45 });
+const topOf = centroidWhere(leaning, (v) => v.y > 0.5);
+const baseOf = centroidWhere(leaning, (v) => v.y < 0.1);
+assert(near(topOf.x, 0, 1e-3) && near(topOf.y, 0.7071, 1e-3) && near(topOf.z, 0.7071, 1e-3), "tilt: a box 1000 high leaned 45° has its top 707 up and 707 toward three +z = plan +y");
+assert(near(baseOf.x, 0, 1e-3) && near(baseOf.y, 0, 1e-3) && near(baseOf.z, 0, 1e-3), "tilt: …and its base centre stays put");
+const leaningBack = partGeometry({ shape: "cylinder", rTop: 10, rBottom: 10, h: 1000, at: vec3(0, 0, 0), segments: 8, tiltDeg: -30 });
+const topBack = centroidWhere(leaningBack, (v) => v.y > 0.5);
+assert(near(topBack.y, 0.866, 2e-3) && near(topBack.z, -0.5, 2e-3), "tilt: a negative tilt leans the top toward plan −y");
+const turnedLean = bodyGeometry({ ...previewScene().nodes.find((n): n is BodyNode => n.kind === "body" && n.id === "chairs")!, parts: [{ shape: "box", w: 100, d: 100, h: 1000, at: vec3(0, 0, 0), rotDeg: 90, tiltDeg: 45 }] })[0].geometry;
+const turnedTop = centroidWhere(turnedLean, (v) => v.y > 0.5);
+assert(near(turnedTop.x, -0.7071, 1e-3) && near(turnedTop.z, 0, 1e-3), "tilt + rotDeg 90: the lean follows the turn — the top goes toward plan −x (the part's own +y after a clockwise quarter turn)");
+assert(near(signedVolume(leaning), 0.01, 1e-6), "tilt: a proper rotation — the winding stays outward");
+
+// --- torus ---
+const ring = partGeometry({ shape: "torus", r: 500, tube: 50, at: vec3(0, 0, 0) });
+const rbx = bbox(ring);
+assert(near(rbx.maxX - rbx.minX, 1.1, 1e-3) && near(rbx.maxZ - rbx.minZ, 1.1, 1e-3), "torus: 2(r + tube) wide both ways on the floor");
+assert(near(rbx.minY, 0, 1e-6) && near(rbx.maxY, 0.1, 1e-3), "torus: 2·tube high with its BASE at 0, like every other part");
+assert(noNaN(ring) && ring.getAttribute("position").count === (12 + 1) * (48 + 1), "torus: 12 round the tube × 48 round the ring, finite");
+const uvRing = ring.getAttribute("uv");
+let uMax = 0;
+for (let i = 0; i < uvRing.count; i++) uMax = Math.max(uMax, uvRing.getX(i));
+assert(near(uMax, 2 * Math.PI * 0.5, 1e-3), "torus: u runs the ring's circumference in metres, like every other UV");
+const coarse = partGeometry({ shape: "torus", r: 500, tube: 50, at: vec3(0, 0, 0), segments: 16 });
+assert(coarse.getAttribute("position").count === 13 * 17, "torus: segments is the count round the ring");
 
 const lathe = partGeometry({ shape: "lathe", profile: [{ r: 500, z: 0 }, { r: 400, z: 700 }, { r: 0, z: 720 }], at: vec3(0, 0, 0) });
 const lb = bbox(lathe);
@@ -131,13 +220,27 @@ const sig2 = geometrySignature({ ...chairs, instances: [] });
 assert(sig1 === sig2, "signature ignores instances (they are matrices, not geometry)");
 const sig3 = geometrySignature({ ...chairs, parts: [{ ...chairs.parts[0], h: 41 } as BodyNode["parts"][number], ...chairs.parts.slice(1)] });
 assert(sig1 !== sig3, "signature changes with a part's number");
+const tiltedPart: Part = { ...(chairs.parts[0] as Extract<Part, { shape: "box" }>), tiltDeg: 10 };
+assert(geometrySignature({ ...chairs, parts: [tiltedPart, ...chairs.parts.slice(1)] }) !== sig1, "signature changes with a tilt");
+const floorPlain: BodyNode = { ...chairs, parts: [{ shape: "plane", outline: square(1000), at: vec3(0, 0, 0) }] };
+const floorHoled: BodyNode = { ...chairs, parts: [{ shape: "plane", outline: square(1000), holes: [square(300)], at: vec3(0, 0, 0) }] };
+assert(geometrySignature(floorPlain) !== geometrySignature(floorHoled), "signature changes with a hole");
+const ringBody: BodyNode = { ...chairs, parts: [{ shape: "torus", r: 300, tube: 20, at: vec3(0, 0, 0) }] };
+assert(geometrySignature(ringBody) !== geometrySignature({ ...ringBody, parts: [{ shape: "torus", r: 300, tube: 25, at: vec3(0, 0, 0) }] }), "signature changes with a torus's tube");
 const cache = new GeometryCache();
 const first = cache.get(chairs);
 assert(cache.get({ ...chairs }) === first, "cache: an equal body hits");
+const chairBox = cache.proxy(chairs);
+assert(cache.proxy({ ...chairs }) === chairBox, "cache: the far box is kept beside the geometry");
+const cbx = bbox(chairBox);
+assert(near(cbx.minX, -0.22) && near(cbx.maxX, 0.22) && near(cbx.minY, 0) && near(cbx.maxY, 0.9) && near(cbx.minZ, -0.22) && near(cbx.maxZ, 0.22), "far box: the chair's bounding box — 440 wide, 900 high, 440 deep, on the floor");
+assert(chairBox.getAttribute("position").count === 24, "far box: one BoxGeometry, twelve triangles");
 assert(cache.get({ ...chairs, parts: chairs.parts.slice(1) }) !== first, "cache: a changed body rebuilds");
+assert(cache.proxy({ ...chairs, parts: chairs.parts.slice(1) }) !== chairBox, "cache: …and its box with it");
 cache.sweep(new Set());
 assert(cache.get(chairs) !== first, "cache: sweep drops what is not live");
 cache.dispose();
+assert(proxyGeometry([]).getAttribute("position") === undefined, "far box of nothing: an empty geometry, no NaN box");
 
 // --- materials ---
 assert(tint("#ffffff", "#000000", 0.5) === "#808080", "tint: halfway to black");
@@ -150,7 +253,58 @@ const glass = materials.get({ colour: "#e8f0f5", kind: "glass", opacity: 0.35 },
 assert(glass.transparent && near(glass.opacity, 0.35) && glass.depthWrite === false, "glass: transparent, no depth write");
 const wood = materials.get({ colour: "#b98a5e", kind: "matte", texture: "wood" }, false);
 assert(wood.map === null && wood.color.getHexString() !== "ffffff", "textured ref without a document: no map, the colour kept");
+const paving = { colour: "#d9d3c7", kind: "matte", texture: "paving" } as const;
+const groundMat = materials.get(paving, false, -2);
+const floorMat = materials.get(paving, false, 0);
+const surfaceMat = materials.get(paving, false, 1);
+assert(groundMat !== floorMat && floorMat !== surfaceMat, "materials: the same paving at three floor ranks is three materials");
+assert(groundMat.polygonOffset && groundMat.polygonOffsetFactor === 2 && groundMat.polygonOffsetUnits === 2, "ground (rank −2): pushed back by a polygon offset of +2");
+assert(!floorMat.polygonOffset, "floor (rank 0): no offset — the reference plane");
+assert(surfaceMat.polygonOffset && surfaceMat.polygonOffsetFactor === -1, "a surface on the floor (rank 1): pulled toward the camera by −1");
+assert(materials.get(paving, false) === floorMat, "materials: rank 0 is the plain material");
 materials.dispose();
+
+// --- the viewer's rules ---
+assert(near(intensityOf(0.4), 0.6) && near(intensityOf(0.7), 2) && near(intensityOf(1), 3), "lights: a candle 0.6 cd, a bulb 2, a lamp 3");
+assert(near(intensityOf(0.5), 0.6 + 1.4 / 3) && near(intensityOf(0), 0) && near(intensityOf(2), 3), "lights: linear between, clamped past 1");
+assert(near(lightDistanceM(0.025), 2.15) && near(lightDistanceM(0.1), 2.6), "lights: a flame reaches 2.15 m, a lamp's bulb 2.6");
+const lit = pickLit(
+  [
+    { index: 0, lamp: false, distance: 1 },
+    { index: 1, lamp: true, distance: 50 },
+    { index: 2, lamp: false, distance: 4 },
+    { index: 3, lamp: true, distance: 9 },
+    { index: 4, lamp: false, distance: 2 },
+  ],
+  3,
+);
+assert(lit.join() === "3,1,0", "lights: both lamps first (nearest first), then the nearest candle");
+assert(pickLit([{ index: 0, lamp: false, distance: 1 }], 0).length === 0 && pickLit([], 5).length === 0, "lights: none asked or none there = none");
+assert(pickLit([{ index: 7, lamp: false, distance: 1 }], 16).join() === "7", "lights: fewer emitters than the pool = all of them");
+const fill: BodyNode["lod"] = { tier: "near", beyondMm: 15000 };
+assert(lodVisibility(fill, false, 14000, 1).main && !lodVisibility(fill, false, 16000, 1).main, "lod: a near body shows up to its threshold and hides past it");
+assert(!lodVisibility(fill, false, 8000, 0.5).main && lodVisibility(fill, false, 7000, 0.5).main, "lod: a phone's 0.5 halves the threshold");
+const farBody: BodyNode["lod"] = { tier: "far", beyondMm: 15000 };
+assert(!lodVisibility(farBody, false, 14000, 1).main && lodVisibility(farBody, false, 16000, 1).main, "lod: a far body is the complement");
+assert(lodVisibility(undefined, true, CHAIR_BOX_MM - 1, 1).main && !lodVisibility(undefined, true, CHAIR_BOX_MM - 1, 1).far, "lod: a chair within 25 m is itself");
+const boxed = lodVisibility(undefined, true, CHAIR_BOX_MM + 1, 1);
+assert(!boxed.main && boxed.far, "lod: a chair past 25 m is its box, never both");
+assert(!lodVisibility(undefined, true, 13000, 0.5).main && lodVisibility(undefined, true, 13000, 0.5).far, "lod: …at 12.5 m on a phone");
+const gone = lodVisibility(fill, true, 30000, 1);
+assert(!gone.main && !gone.far, "lod: a near body out of range shows neither itself nor a box");
+assert(lodVisibility(undefined, false, 1e9, 1).main, "lod: a body with no lod and no box is always drawn");
+const sceneBodies = previewScene().nodes.filter((n): n is BodyNode => n.kind === "body");
+const rankOf = (id: string) => floorRank(sceneBodies.find((b) => b.id === id)!);
+assert(rankOf("ground") === -2 && rankOf("floor") === 0, "floors: the ground ranks −2, a zone floor 0");
+assert(rankOf("table") === null && rankOf("ceiling") === null && rankOf("leaves") === null, "floors: a table, a ceiling and a leaf (planes, but not a floor) do not rank");
+const lawn: BodyNode = { ...sceneBodies[0], tag: { type: "feature" }, parts: [{ shape: "plane", outline: square(2000), at: vec3(0, 0, 1) }, { shape: "plane", outline: square(500), at: vec3(0, 0, 3) }] };
+assert(floorRank(lawn) === 1, "floors: a surface feature ranks by its lowest plane's height over the floor (1 mm → 1)");
+assert(floorRank({ ...lawn, parts: [{ shape: "plane", outline: square(2000), at: vec3(0, 0, 40) }] }) === 8, "floors: …capped at 8");
+assert(floorRank({ ...lawn, parts: [...lawn.parts, { shape: "box", w: 100, d: 100, h: 100, at: vec3(0, 0, 0) }] }) === null, "floors: a feature with anything but planes is not a floor");
+assert(polygonOffsetOf(-2) === 2 && polygonOffsetOf(3) === -3 && renderOrderOf(-2) < renderOrderOf(0) && renderOrderOf(0) < renderOrderOf(1) && renderOrderOf(8) < 0, "floors: offset is minus the rank; draw order follows the rank and every floor goes before the furniture");
+assert(CAPABLE.pointLights === 16 && CAPABLE.lodScale === 1 && CAPABLE.shadows && MODEST.pointLights === 0 && MODEST.lodScale === 0.5 && !MODEST.shadows && MODEST.maxDpr <= 1.25 && MODEST.fogScale < 1, "device: the two profiles as spec §8 states them");
+const partial = resolveDevice({ shadows: false, maxDpr: 1.25 });
+assert(!partial.shadows && partial.maxDpr === 1.25 && partial.pointLights === 16 && partial.lodScale === 1, "device: a partial profile is filled from CAPABLE");
 
 // --- frame round trip (the camera's inverse) ---
 const w = toWorld(vec3(1000, 2000, 750));

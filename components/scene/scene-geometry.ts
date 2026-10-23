@@ -15,6 +15,13 @@
 // material serves every table in the room. The one exception is a stretched image, whose group's
 // UVs are normalised to 0–1 over its footprint, because "one copy over the whole shape" is a
 // per-body fact.
+//
+// THE TILT RULE (box and cylinder `tiltDeg`): the part is leaned about ITS OWN x axis, about its
+// base centre, before `rotDeg` turns it on the plan — so the base stays put and the part's own x
+// axis is the turned one. Positive tilt moves the TOP toward the part's own +y: with rotDeg 0 that
+// is plan +y (down the plan), which is three's +z; a tilt of 45° on a part 1000 high puts its top
+// at 707 up and 707 toward +y. A mirrored instance (x → −x) leaves the lean alone, because a turn
+// about x commutes with a mirror across x. `check:scene-viewer` holds the 707/707 case.
 import {
   BoxGeometry,
   BufferGeometry,
@@ -23,12 +30,15 @@ import {
   Float32BufferAttribute,
   LatheGeometry,
   Matrix4,
+  Path,
   Quaternion,
   Shape,
   ShapeGeometry,
+  ShapeUtils,
   SphereGeometry,
   Vector2,
   Vector3,
+  TorusGeometry,
 } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { Point } from "@/lib/studio/hall";
@@ -38,9 +48,12 @@ import { MM_PER_M, toWorld, worldRotationY } from "@/lib/scene/frame";
 import type { BodyNode, MaterialRef, Part, Vec3 } from "@/lib/scene/types";
 
 const m = (mm: number) => mm / MM_PER_M;
+const rad = (deg: number) => (deg * Math.PI) / 180;
 const CURVE_SEGMENTS = 8;
 const DEFAULT_RADIAL = 24;
 const DEFAULT_SPHERE = 16;
+const DEFAULT_TORUS_RADIAL = 12;
+const DEFAULT_TORUS_TUBULAR = 48;
 const DEFAULT_AMPLITUDE_MM = 40;
 const UP = new Vector3(0, 1, 0);
 
@@ -52,29 +65,73 @@ export interface Built {
 
 // --- shapes ---------------------------------------------------------------------------------------
 
-/** A closed outline as a three Shape in metres, bezier edges honoured. `ySign` mirrors the plan's
- *  y so that the −90° turn about x afterwards lands plan +y on three +z (an up-facing face) — or
- *  keeps it for the +90° turn that makes a down-facing one. */
-function shapeOf(o: BuiltOutline, ySign: 1 | -1): Shape | null {
+/** Walk a closed outline into `path` in metres, bezier edges honoured, forward or — `reverse` —
+ *  backward (each edge from its end to its start, its control points swapped), so a hole can be
+ *  given the winding opposite to its outline's without touching the outline it came from. */
+function walkOutline(path: Path, o: BuiltOutline, ySign: 1 | -1, reverse: boolean): void {
   const pts = o.outline;
-  if (pts.length < 3) return null;
+  const n = pts.length;
   const X = (p: Point) => m(p.x);
   const Y = (p: Point) => ySign * m(p.y);
-  const s = new Shape();
-  s.moveTo(X(pts[0]), Y(pts[0]));
-  const n = pts.length;
-  for (let i = 0; i < n; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % n];
-    const curve = o.edgeCurves?.[i];
-    if (curve) {
-      const { c1, c2 } = absoluteControlPoints(a, b, curve);
-      s.bezierCurveTo(X(c1), Y(c1), X(c2), Y(c2), X(b), Y(b));
-    } else {
-      s.lineTo(X(b), Y(b));
+  if (!reverse) {
+    path.moveTo(X(pts[0]), Y(pts[0]));
+    for (let i = 0; i < n; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % n];
+      const curve = o.edgeCurves?.[i];
+      if (curve) {
+        const { c1, c2 } = absoluteControlPoints(a, b, curve);
+        path.bezierCurveTo(X(c1), Y(c1), X(c2), Y(c2), X(b), Y(b));
+      } else {
+        path.lineTo(X(b), Y(b));
+      }
+    }
+  } else {
+    path.moveTo(X(pts[0]), Y(pts[0]));
+    // Edge i runs pts[i] → pts[i+1]; walked backward from pts[0] the first edge taken is n−1.
+    for (let k = 0; k < n; k++) {
+      const i = (n - 1 - k + n) % n;
+      const a = pts[i];
+      const b = pts[(i + 1) % n];
+      const curve = o.edgeCurves?.[i];
+      if (curve) {
+        const { c1, c2 } = absoluteControlPoints(a, b, curve);
+        path.bezierCurveTo(X(c2), Y(c2), X(c1), Y(c1), X(a), Y(a));
+      } else {
+        path.lineTo(X(a), Y(a));
+      }
     }
   }
-  s.closePath();
+  path.closePath();
+}
+
+/** The sign of an outline's winding by its polygon's signed area (its curves bow, never cross,
+ *  so the points decide); 0 for a degenerate one. */
+function windingOf(o: BuiltOutline): number {
+  return Math.sign(ShapeUtils.area(o.outline));
+}
+
+/** A closed outline as a three Shape in metres, bezier edges honoured. `ySign` mirrors the plan's
+ *  y so that the −90° turn about x afterwards lands plan +y on three +z (an up-facing face) — or
+ *  keeps it for the +90° turn that makes a down-facing one. `holes` are cut out: each is walked
+ *  with the winding OPPOSITE to the outline's (normalised by signed area — a builder may hand the
+ *  pool's rim in either direction), which is what three's triangulation reads a hole by. A hole
+ *  with fewer than three points, or no area, is ignored. */
+function shapeOf(o: BuiltOutline, ySign: 1 | -1, holes?: BuiltOutline[]): Shape | null {
+  if (o.outline.length < 3) return null;
+  const s = new Shape();
+  walkOutline(s, o, ySign, false);
+  if (holes) {
+    const outer = windingOf(o);
+    for (const h of holes) {
+      if (h.outline.length < 3) continue;
+      const inner = windingOf(h);
+      if (inner === 0) continue;
+      const path = new Path();
+      walkOutline(path, h, ySign, outer !== 0 && inner === outer);
+      s.holes.push(path);
+    }
+  }
   return s;
 }
 
@@ -120,9 +177,22 @@ function sphereGeometry(r: number, segments: number): BufferGeometry {
   return new SphereGeometry(m(r), segments, Math.max(6, Math.ceil(segments / 2)));
 }
 
-function extrudeGeometry(outline: BuiltOutline, h: number): BufferGeometry {
-  if (h <= 0) return planeGeometry(outline, "up");
-  const shape = shapeOf(outline, -1);
+/** A ring lying flat with its BASE at y = 0: three's torus stands in the x/y plane, so it is
+ *  turned onto the floor and lifted by its tube. `segments` is the count round the ring; the
+ *  tube's own cross-section keeps 12. UVs: u metres round the ring, v metres round the tube. */
+function torusGeometry(r: number, tube: number, segments: number): BufferGeometry {
+  const R = m(r);
+  const T = m(tube);
+  const g = new TorusGeometry(R, T, DEFAULT_TORUS_RADIAL, Math.max(3, segments));
+  scaleUv(g, (_i, u, v) => [u * 2 * Math.PI * R, v * 2 * Math.PI * T]);
+  g.rotateX(Math.PI / 2);
+  g.translate(0, T, 0);
+  return g;
+}
+
+function extrudeGeometry(outline: BuiltOutline, h: number, holes?: BuiltOutline[]): BufferGeometry {
+  if (h <= 0) return planeGeometry(outline, "up", holes);
+  const shape = shapeOf(outline, -1, holes);
   if (!shape) return new BufferGeometry();
   try {
     const g = new ExtrudeGeometry(shape, { depth: m(h), bevelEnabled: false, curveSegments: CURVE_SEGMENTS });
@@ -145,8 +215,8 @@ function latheGeometry(profile: { r: number; z: number }[], segments: number): B
   return g;
 }
 
-function flatGeometry(outline: BuiltOutline, side: "up" | "down"): BufferGeometry {
-  const shape = shapeOf(outline, side === "up" ? -1 : 1);
+function flatGeometry(outline: BuiltOutline, side: "up" | "down", holes?: BuiltOutline[]): BufferGeometry {
+  const shape = shapeOf(outline, side === "up" ? -1 : 1, holes);
   if (!shape) return new BufferGeometry();
   try {
     const g = new ShapeGeometry(shape, CURVE_SEGMENTS);
@@ -157,10 +227,10 @@ function flatGeometry(outline: BuiltOutline, side: "up" | "down"): BufferGeometr
   }
 }
 
-function planeGeometry(outline: BuiltOutline, side: "up" | "down" | "both"): BufferGeometry {
-  if (side !== "both") return flatGeometry(outline, side);
-  const up = flatGeometry(outline, "up");
-  const down = flatGeometry(outline, "down");
+function planeGeometry(outline: BuiltOutline, side: "up" | "down" | "both", holes?: BuiltOutline[]): BufferGeometry {
+  if (side !== "both") return flatGeometry(outline, side, holes);
+  const up = flatGeometry(outline, "up", holes);
+  const down = flatGeometry(outline, "down", holes);
   const both = mergeNonIndexed([up, down]);
   up.dispose();
   down.dispose();
@@ -245,21 +315,31 @@ function ribbonGeometry(path: Point[], h: number, pleatMm: number | undefined, a
   return g;
 }
 
+/** The tilt (see the rule at the top): a turn about the part's own x axis through its base
+ *  centre, which is the origin the part was built about. three's rotateX is the right-handed
+ *  turn, so +tilt carries the top (0, h, 0) to (0, h·cos, h·sin): toward +z, plan +y. */
+function tilted(g: BufferGeometry, tiltDeg: number | undefined): BufferGeometry {
+  if (tiltDeg) g.rotateX(rad(tiltDeg));
+  return g;
+}
+
 /** One part, in metres, about its own base — before its `at`/`rotDeg` is applied. */
 export function partGeometry(part: Part): BufferGeometry {
   switch (part.shape) {
     case "box":
-      return boxGeometry(part.w, part.d, part.h);
+      return tilted(boxGeometry(part.w, part.d, part.h), part.tiltDeg);
     case "cylinder":
-      return cylinderGeometry(part.rTop, part.rBottom, part.h, part.segments ?? DEFAULT_RADIAL);
+      return tilted(cylinderGeometry(part.rTop, part.rBottom, part.h, part.segments ?? DEFAULT_RADIAL), part.tiltDeg);
     case "sphere":
       return sphereGeometry(part.r, part.segments ?? DEFAULT_SPHERE);
     case "extrude":
-      return extrudeGeometry(part.outline, part.h);
+      return extrudeGeometry(part.outline, part.h, part.holes);
     case "lathe":
       return latheGeometry(part.profile, part.segments ?? DEFAULT_RADIAL);
+    case "torus":
+      return torusGeometry(part.r, part.tube, part.segments ?? DEFAULT_TORUS_TUBULAR);
     case "plane":
-      return planeGeometry(part.outline, part.side ?? "up");
+      return planeGeometry(part.outline, part.side ?? "up", part.holes);
     case "ribbon":
       return ribbonGeometry(part.path, part.h, part.pleatMm, part.amplitudeMm);
   }
@@ -392,21 +472,31 @@ export function geometrySignature(body: BodyNode): string {
         num(p.d);
         num(p.h);
         num(p.rotDeg ?? 0);
+        num(p.tiltDeg ?? 0);
         break;
       case "cylinder":
         num(p.rTop);
         num(p.rBottom);
         num(p.h);
         num(p.segments ?? 0);
+        num(p.rotDeg ?? 0);
+        num(p.tiltDeg ?? 0);
         break;
       case "sphere":
         num(p.r);
+        num(p.segments ?? 0);
+        break;
+      case "torus":
+        num(p.r);
+        num(p.tube);
         num(p.segments ?? 0);
         break;
       case "extrude":
         num(p.h);
         num(p.rotDeg ?? 0);
         outline(p.outline);
+        num(p.holes?.length ?? 0);
+        for (const h of p.holes ?? []) outline(h);
         break;
       case "lathe":
         num(p.segments ?? 0);
@@ -419,6 +509,8 @@ export function geometrySignature(body: BodyNode): string {
         str(p.side ?? "up");
         num(p.rotDeg ?? 0);
         outline(p.outline);
+        num(p.holes?.length ?? 0);
+        for (const h of p.holes ?? []) outline(h);
         break;
       case "ribbon":
         num(p.h);
@@ -431,31 +523,82 @@ export function geometrySignature(body: BodyNode): string {
   return `${n}:${(a >>> 0).toString(36)}:${(b >>> 0).toString(36)}`;
 }
 
+/** The far stand-in for a body: one box over the bounding box of everything it is made of, in the
+ *  body's own frame (a chair past 25 m is its box — the shape still reads as a chair's size at
+ *  that distance, and six hundred of them are one instanced draw of twelve triangles). */
+export function proxyGeometry(built: Built[]): BufferGeometry {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (const b of built) {
+    b.geometry.computeBoundingBox();
+    const box = b.geometry.boundingBox;
+    if (!box || box.isEmpty()) continue;
+    minX = Math.min(minX, box.min.x);
+    minY = Math.min(minY, box.min.y);
+    minZ = Math.min(minZ, box.min.z);
+    maxX = Math.max(maxX, box.max.x);
+    maxY = Math.max(maxY, box.max.y);
+    maxZ = Math.max(maxZ, box.max.z);
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return new BufferGeometry();
+  const g = new BoxGeometry(Math.max(1e-3, maxX - minX), Math.max(1e-3, maxY - minY), Math.max(1e-3, maxZ - minZ));
+  g.translate((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
+  g.computeBoundingSphere();
+  return g;
+}
+
+interface CacheEntry {
+  signature: string;
+  built: Built[];
+  /** Built on first ask, by `proxy()`; disposed with the entry. */
+  proxy?: BufferGeometry;
+}
+
+function disposeEntry(entry: CacheEntry): void {
+  for (const b of entry.built) b.geometry.dispose();
+  entry.proxy?.dispose();
+}
+
 /** Built geometries by body id, kept across rebuilds while the body's signature holds. One per
  *  mounted viewer: `sweep` drops the bodies a new scene no longer has, `dispose` everything. */
 export class GeometryCache {
-  private entries = new Map<string, { signature: string; built: Built[] }>();
+  private entries = new Map<string, CacheEntry>();
 
-  get(body: BodyNode): Built[] {
+  private entry(body: BodyNode): CacheEntry {
     const signature = geometrySignature(body);
     const hit = this.entries.get(body.id);
-    if (hit && hit.signature === signature) return hit.built;
-    if (hit) for (const b of hit.built) b.geometry.dispose();
-    const built = bodyGeometry(body);
-    this.entries.set(body.id, { signature, built });
-    return built;
+    if (hit && hit.signature === signature) return hit;
+    if (hit) disposeEntry(hit);
+    const entry: CacheEntry = { signature, built: bodyGeometry(body) };
+    this.entries.set(body.id, entry);
+    return entry;
+  }
+
+  get(body: BodyNode): Built[] {
+    return this.entry(body).built;
+  }
+
+  /** The body's far box (proxyGeometry), kept beside its geometry under the same signature. */
+  proxy(body: BodyNode): BufferGeometry {
+    const entry = this.entry(body);
+    entry.proxy ??= proxyGeometry(entry.built);
+    return entry.proxy;
   }
 
   sweep(live: ReadonlySet<string>): void {
     for (const [id, entry] of this.entries) {
       if (live.has(id)) continue;
-      for (const b of entry.built) b.geometry.dispose();
+      disposeEntry(entry);
       this.entries.delete(id);
     }
   }
 
   dispose(): void {
-    for (const entry of this.entries.values()) for (const b of entry.built) b.geometry.dispose();
+    for (const entry of this.entries.values()) disposeEntry(entry);
     this.entries.clear();
   }
 }

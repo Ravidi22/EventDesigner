@@ -138,6 +138,17 @@ export const FIXTURE_PRODUCTS: Product[] = [
     styleTags: [],
     variants: [],
   },
+  // Phase B rows.
+  { id: "deck-244x122", name: "במה 244×122", category: "stage-decks", layer: "floor", dimensions: { widthMm: 2440, depthMm: 1220, heightMm: 600 }, categoryFields: {}, styleTags: [], variants: [] },
+  { id: "stage-stairs", name: "מדרגות לבמה", category: "stage-stairs", layer: "floor", dimensions: { widthMm: 1000, depthMm: 840, heightMm: 600 }, categoryFields: {}, styleTags: [], variants: [] },
+  { id: "stage-skirt", name: "חצאית במה", category: "stage-skirts", layer: "floor", dimensions: { widthMm: 1000, depthMm: 20, heightMm: 600 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-skirt-black", name: "שחור", swatch: "#2b2a2e" }] },
+  { id: "stage-bench", name: "בנקט", category: "stage-benches", layer: "floor", dimensions: { widthMm: 1000, depthMm: 450, heightMm: 750 }, categoryFields: {}, styleTags: [], variants: [] },
+  { id: "bar-straight", name: "בר ישר 300", category: "bars", layer: "floor", dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, categoryFields: {}, styleTags: [], appearance: { shape: "rect", content: "none", texture: "marble" }, variants: [] },
+  { id: "chuppah", name: "חופה", category: "chuppahs", layer: "floor", dimensions: { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, categoryFields: {}, styleTags: [], appearance: { shape: "rect", content: "none", symbolStyle: "canopy" }, variants: [{ id: "v-chuppah-cream", name: "שמנת", swatch: "#fbf7f1" }] },
+  { id: "chandelier", name: "נברשת", category: "chandeliers", layer: "ceiling", dimensions: { diameterMm: 1200, heightMm: 600 }, categoryFields: { arms: 8, hangHeightMm: 2600 }, styleTags: [], variants: [{ id: "v-chand-gold", name: "זהב", swatch: "#c9a24a" }] },
+  { id: "curtain", name: "וילון", category: "curtains", layer: "ceiling", dimensions: { widthMm: 4000, depthMm: 220, heightMm: 4000 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-curtain-ivory", name: "שנהב", swatch: "#f3ede2" }] },
+  { id: "rug", name: "שטיח", category: "rugs", layer: "floor", dimensions: { widthMm: 3000, depthMm: 2000, heightMm: 0 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-rug-plum", name: "סגול", swatch: "#4b3a6e" }] },
+  { id: "sofa", name: "ספה", category: "sofas", layer: "floor", dimensions: { widthMm: 2000, depthMm: 900, heightMm: 800 }, categoryFields: {}, styleTags: [], variants: [] },
 ];
 
 export const FIXTURE_DOC: DesignDocumentContent = {
@@ -155,6 +166,44 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-lamp", variantId: "lamp", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     { id: "p-runner", variantId: "v-runner-linen", layer: "table", tableId: "t2", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     { id: "p-tiered", variantId: "candle-tiered", layer: "table", tableId: "t3", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+    // Phase B: a stage 6×4 at the hall's south, a flight on its front (−y, toward the tables), a
+    // banquette on its back, a barrier on its +x side; a vase perched on the banquette.
+    {
+      id: "p-stage",
+      variantId: "deck-244x122",
+      layer: "floor",
+      quantity: 1,
+      position: { x: 10000, y: 9500 },
+      rotation: 0,
+      scale: 1,
+      stage: {
+        outline: [
+          { x: -3000, y: -2000 },
+          { x: 3000, y: -2000 },
+          { x: 3000, y: 2000 },
+          { x: -3000, y: 2000 },
+        ],
+        front: 0,
+        decks: ["deck-244x122"],
+        heightMm: 600,
+        stairs: [
+          { id: "flight-1", kind: "stairs", edge: 0, t: 0.5, widthMm: 1000 },
+          { id: "bench-1", kind: "bench", edge: 2, t: 0.5, widthMm: 3000 },
+          { id: "barrier-1", kind: "barrier", edge: 1, t: 0.5, widthMm: 4000, full: true },
+        ],
+        stairsVariant: "stage-stairs",
+        skirtVariant: "v-skirt-black",
+        benchVariant: "stage-bench",
+      },
+    },
+    { id: "p-perched-vase", variantId: "vase", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, perch: { stageId: "p-stage", itemId: "bench-1" } },
+    { id: "p-bar", variantId: "bar-straight", layer: "floor", quantity: 1, position: { x: 17000, y: 1500 }, rotation: 0, scale: 1 },
+    { id: "p-sofa", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 2000, y: 10000 }, rotation: 90, scale: 1 },
+    { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 } },
+    { id: "p-rows", variantId: "v-chair-ivory", layer: "floor", quantity: 10, position: { x: 25000, y: 9500 }, rotation: 0, scale: 1, rows: { rows: 2, perRow: 5 } },
+    { id: "p-chuppah", variantId: "v-chuppah-cream", layer: "floor", quantity: 1, position: { x: 25000, y: 6000 }, rotation: 0, scale: 1 },
+    { id: "p-chandelier", variantId: "v-chand-gold", layer: "ceiling", quantity: 1, position: { x: 5000, y: 5000 }, rotation: 0, scale: 1, over: "t1" },
+    { id: "p-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, span: { wallId: "w-left", from: 0.2, to: 0.6 } },
   ],
   groups: [{ id: "g1", number: 2 }],
 };
@@ -180,7 +229,13 @@ export const FIXTURE_STRUCTURE: VenueStructure = {
     { id: "w-bot-b", a: "n6", b: "n3", kind: "edge" },
   ],
   entrances: [{ id: "d1", wallId: "w-bot-a", distanceMm: 10000, widthMm: 1800, swingInward: true, doubleDoor: true }],
-  features: [],
+  // Phase B: the terrace's tree, a palm, a pool and the venue's own chair rows.
+  features: [
+    { id: "f-tree", kind: "plant", label: "עץ", x: 21500, y: 10500, widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle", rotationDeg: 0, plant: "tree" },
+    { id: "f-palm", kind: "plant", label: "דקל", x: 28500, y: 1500, widthMm: 4500, depthMm: 4500, heightMm: 6000, shape: "circle", rotationDeg: 0, plant: "palm" },
+    { id: "f-pool", kind: "pool", label: "בריכה", x: 24000, y: 2500, widthMm: 6000, depthMm: 2500, heightMm: 0, shape: "ellipse", rotationDeg: 0 },
+    { id: "f-seating", kind: "seating", label: "שורות כיסאות", x: 28000, y: 6000, widthMm: 2000, depthMm: 1500, heightMm: 900, shape: "rect", rotationDeg: 0, seating: { rows: 3, perRow: 4, chairStyle: "dining", chairWidthMm: 450, chairDepthMm: 500 } },
+  ],
 };
 
 export const FIXTURE_ZONES: Zone[] = [

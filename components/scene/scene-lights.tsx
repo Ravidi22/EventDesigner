@@ -1,15 +1,24 @@
 "use client";
-// The three moods as one rig (spec §4): a hemisphere light for the sky's ambient, a sun from the
-// south-west with one shadow map fitted to the plan's bounds, a gradient dome, and fog the colour
-// of the horizon starting past the bounds. Only DAY is finished in phase A; evening and night map
-// onto the same rig dimmed and recoloured so the mood switch is visibly wired — the emitters do
-// the glowing, and B7 refines them.
+// The three moods as one rig (spec §4): a hemisphere light for the sky's ambient, a sun with one
+// shadow map fitted to the plan's bounds, a gradient dome, and fog the colour of the horizon
+// starting past the bounds. DAY: a high warm sun, a blue-white dome. EVENING: the sun low on the
+// horizon (14°, long shadows) in gold, an orange-to-violet dome, the ambient down to a third.
+// NIGHT: no sun, a deep-blue dome with a faint horizon, a dim bluish ambient, the fog darker.
+//
+// The emitters glow in two layers. Every one wears the additive halo sprite (scene-nodes.tsx,
+// dimmed by HALO_BY_MOOD). In the evening and at night the nearest few to the camera also get a
+// REAL point light — `EmitterLights` below: a pool of `count` lights (the device profile's; a
+// phone's is 0) re-aimed at the camera's every settle (scene-settle.ts), lamps and chandelier
+// bulbs before candles, intensity by strength, reach by radius, no shadows. The pool is JSX once;
+// the re-pick writes the lights' fields and invalidates — never a render per frame.
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { BackSide, CanvasTexture, type DirectionalLight, SRGBColorSpace } from "three";
+import { BackSide, type Camera, CanvasTexture, type DirectionalLight, type PointLight, SRGBColorSpace, Vector3 } from "three";
 import { useThree } from "@react-three/fiber";
 import type { Bounds } from "@/lib/studio/geometry";
 import { toWorld } from "@/lib/scene/frame";
-import type { Mood } from "@/lib/scene/types";
+import type { EmitterNode, Mood } from "@/lib/scene/types";
+import { LAMP_CLASS, LIGHT_BY_MOOD, intensityOf, lightDistanceM, pickLit } from "./scene-rules";
+import { useCameraSettle } from "./scene-settle";
 
 interface Rig {
   sky: string;
@@ -18,6 +27,7 @@ interface Rig {
   sun: { colour: string; intensity: number; elevationDeg: number } | null;
   zenith: string;
   horizon: string;
+  fog: string;
 }
 
 const RIGS: Record<Mood, Rig> = {
@@ -28,6 +38,7 @@ const RIGS: Record<Mood, Rig> = {
     sun: { colour: "#fff2dd", intensity: 2.2, elevationDeg: 52 },
     zenith: "#8fb4e0",
     horizon: "#e8eef5",
+    fog: "#e8eef5",
   },
   evening: {
     sky: "#e6c4a8",
@@ -36,14 +47,16 @@ const RIGS: Record<Mood, Rig> = {
     sun: { colour: "#ffb070", intensity: 1.2, elevationDeg: 14 },
     zenith: "#7a6aa8",
     horizon: "#f0a070",
+    fog: "#e9a27c",
   },
   night: {
-    sky: "#3b4a78",
-    ground: "#12182a",
-    hemisphere: 0.15,
+    sky: "#334466",
+    ground: "#1a1a2a",
+    hemisphere: 0.12,
     sun: null,
     zenith: "#0b1230",
     horizon: "#27305a",
+    fog: "#151b3d",
   },
 };
 
@@ -79,7 +92,20 @@ function frameOf(bounds: Bounds) {
   return { cx, cz, diag };
 }
 
-export function SceneLights({ mood, bounds, roofedMm, shadows }: { mood: Mood; bounds: Bounds; roofedMm: number | null; shadows: boolean }) {
+export function SceneLights({
+  mood,
+  bounds,
+  roofedMm,
+  shadows,
+  fogScale = 1,
+}: {
+  mood: Mood;
+  bounds: Bounds;
+  roofedMm: number | null;
+  shadows: boolean;
+  /** Under 1 the fog closes in (a phone hides the far venue sooner). */
+  fogScale?: number;
+}) {
   const invalidate = useThree((s) => s.invalidate);
   const rig = RIGS[mood];
   const { cx, cz, diag } = frameOf(bounds);
@@ -87,7 +113,7 @@ export function SceneLights({ mood, bounds, roofedMm, shadows }: { mood: Mood; b
   const boundsKey = `${bounds.minX},${bounds.minY},${bounds.maxX},${bounds.maxY}`;
 
   // The sun stands off the south-west corner (plan: −x, +y → three: −x, +z), `distance` out and
-  // `elevation` up, looking at the plan's centre.
+  // `elevation` up, looking at the plan's centre. Low in the evening, so the shadows run long.
   const sun = useMemo(() => {
     if (!rig.sun) return null;
     const el = (rig.sun.elevationDeg * Math.PI) / 180;
@@ -122,10 +148,11 @@ export function SceneLights({ mood, bounds, roofedMm, shadows }: { mood: Mood; b
   useEffect(() => () => sky?.dispose(), [sky]);
   useEffect(() => {
     invalidate();
-  }, [mood, invalidate]);
+  }, [mood, fogScale, invalidate]);
 
-  const fogNear = diag + 10;
-  const fogFar = fogNear + Math.max(80, diag * 4);
+  const scale = Math.max(0.2, fogScale);
+  const fogNear = (diag + 10) * scale;
+  const fogFar = fogNear + Math.max(80, diag * 4) * scale;
 
   return (
     <>
@@ -141,7 +168,88 @@ export function SceneLights({ mood, bounds, roofedMm, shadows }: { mood: Mood; b
           <meshBasicMaterial color={rig.horizon} side={BackSide} depthWrite={false} fog={false} toneMapped={false} />
         )}
       </mesh>
-      <fog attach="fog" args={[rig.horizon, fogNear, fogFar]} />
+      <fog attach="fog" args={[rig.fog, fogNear, fogFar]} />
+    </>
+  );
+}
+
+// --- the emitters' real lights --------------------------------------------------------------------
+
+interface Placed {
+  node: EmitterNode;
+  /** World metres. */
+  position: Vector3;
+  radiusM: number;
+  lamp: boolean;
+}
+
+/** `count` point lights for the nearest emitters (lamps and bulbs before candles), re-picked at
+ *  every camera settle; none by day, and none at all when `count` is 0 (a phone). */
+export function EmitterLights({ emitters, mood, count }: { emitters: EmitterNode[]; mood: Mood; count: number }) {
+  const invalidate = useThree((s) => s.invalidate);
+  const get = useThree((s) => s.get);
+  const lights = useRef<(PointLight | null)[]>([]);
+  const factor = LIGHT_BY_MOOD[mood];
+  const n = factor > 0 ? Math.max(0, Math.min(count, emitters.length)) : 0;
+
+  const placed = useMemo<Placed[]>(
+    () =>
+      emitters.map((node) => {
+        const [x, y, z] = toWorld(node.at);
+        const [radiusM] = toWorld({ x: node.radiusMm, y: 0, z: 0 });
+        return { node, position: new Vector3(x, y, z), radiusM, lamp: node.strength >= LAMP_CLASS };
+      }),
+    [emitters],
+  );
+
+  const assign = (camera: Camera) => {
+    if (n === 0) return;
+    const eye = camera.position;
+    const chosen = pickLit(
+      placed.map((p, index) => ({ index, lamp: p.lamp, distance: p.position.distanceToSquared(eye) })),
+      n,
+    );
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      const light = lights.current[i];
+      if (!light) continue;
+      const pick = chosen[i] === undefined ? null : placed[chosen[i]];
+      if (!pick) {
+        if (light.visible) changed = true;
+        light.visible = false;
+        continue;
+      }
+      const intensity = intensityOf(pick.node.strength) * factor;
+      if (!light.visible || !light.position.equals(pick.position) || light.intensity !== intensity) changed = true;
+      light.visible = true;
+      light.position.copy(pick.position);
+      light.color.set(pick.node.colour);
+      light.intensity = intensity;
+      light.distance = lightDistanceM(pick.radiusM);
+    }
+    if (changed) invalidate();
+  };
+  const assignRef = useRef(assign);
+  assignRef.current = assign;
+
+  useCameraSettle((camera) => assignRef.current(camera));
+  // A new emitter list, mood or pool: re-aim against the camera where it stands.
+  useLayoutEffect(() => {
+    assignRef.current(get().camera);
+  }, [placed, factor, n, get]);
+
+  return (
+    <>
+      {Array.from({ length: n }, (_, i) => (
+        <pointLight
+          key={i}
+          ref={(light) => {
+            lights.current[i] = light;
+          }}
+          decay={2}
+          castShadow={false}
+        />
+      ))}
     </>
   );
 }
