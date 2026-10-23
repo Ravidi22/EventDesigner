@@ -13,23 +13,46 @@
 // set to "never", and back to "demand" with one invalidate when it shows again.
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, addAfterEffect, useFrame, useThree } from "@react-three/fiber";
-import { ACESFilmicToneMapping, SRGBColorSpace } from "three";
+import { NeutralToneMapping, SRGBColorSpace } from "three";
 import { Box } from "lucide-react";
-import { DEFAULT_FOV_DEG, type EmitterNode, type Scene, type SceneSettings } from "@/lib/scene/types";
+import type { ResolvedZone } from "@/lib/venues/zone";
+import { DEFAULT_FOV_DEG, type EmitterNode, type Scene, type SceneSettings, type Tour, type Viewpoint } from "@/lib/scene/types";
 import { type DeviceProfile, resolveDevice } from "./device";
-import { AuthorCamera, OverviewCamera, type CameraPose } from "./scene-camera";
+import { type CameraPose, SceneCamera } from "./scene-camera";
 import { EmitterLights, SceneLights } from "./scene-lights";
 import { SceneNodes } from "./scene-nodes";
 
 export interface SceneViewerProps {
   scene: Scene;
   settings: SceneSettings;
-  /** author: a free camera for setting viewpoints; curated: no controls (phase C adds the fly). */
+  /** author: the designer's orbit camera (a viewpoint chosen flies it there); curated: the
+   *  client's — standing at the active viewpoint, the head turned by a drag, the view zoomed by a
+   *  wheel or a pinch, moved only by a viewpoint (./scene-camera.tsx). */
   mode: "author" | "curated";
   /** The designer's view (labels). Never true on a client surface. */
   author: boolean;
   /** From ./device.ts detectDevice(); absent or partial = a capable machine for what is missing. */
   device?: Partial<DeviceProfile>;
+  /** What the chips name: the designer's saved list, else the defaults (lib/scene/viewpoints.ts
+   *  viewpointsOf). */
+  viewpoints: Viewpoint[];
+  /** Every zone on the property (EventPlan.all) — a fly between two lifts over the wall. */
+  zones: ResolvedZone[];
+  /** The viewpoint the camera should be at; changing it flies there (1.2 s). */
+  activeId: string | null;
+  /** Bump when the active viewpoint is chosen again: the head comes back to centre. */
+  recentre?: number;
+  /** The guided tour (lib/scene/viewpoints.ts tourOf) and whether it plays. */
+  tour: Tour | null;
+  playing: boolean;
+  /** A tour leg began: `index` into `tour.stops`, and that stop's viewpoint. Once per leg. */
+  onTourStep?: (index: number, viewpointId: string) => void;
+  /** The tour stopped by itself (a one-way tour ended, or the designer grabbed the camera). */
+  onTourEnd?: () => void;
+  /** Author: the designer orbited off the active viewpoint. */
+  onLeave?: () => void;
+  /** The camera's pose in plan mm, at most once per animation frame — what "save the current
+   *  view" takes. Both modes. */
   onCamera?: (pose: CameraPose) => void;
   /** Sizing for the viewer's box (the Canvas fills it). */
   className?: string;
@@ -72,7 +95,7 @@ function NoWebGL({ className }: { className: string }) {
 }
 
 /** Inside the Canvas: stop the loop while the document is hidden, resume with a frame when it
- *  shows. (A tour, phase C, pauses on the same signal.) */
+ *  shows. (A playing tour freezes its clock on the same signal — ./scene-camera.tsx.) */
 function VisibilityPause() {
   const setFrameloop = useThree((s) => s.setFrameloop);
   const invalidate = useThree((s) => s.invalidate);
@@ -125,8 +148,25 @@ function PerfProbe({ target, stats }: { target: RefObject<HTMLElement | null>; s
   return null;
 }
 
-export default function SceneViewer({ scene, settings, mode, author, device, onCamera, className = "" }: SceneViewerProps) {
-  const webgl = useMemo(hasWebGL, []);
+export default function SceneViewer({
+  scene,
+  settings,
+  mode,
+  author,
+  device,
+  viewpoints,
+  zones,
+  activeId,
+  recentre,
+  tour,
+  playing,
+  onTourStep,
+  onTourEnd,
+  onLeave,
+  onCamera,
+  className = "",
+}: SceneViewerProps) {
+  const webgl = useMemo(() => hasWebGL(), []);
   const profile = useMemo(() => resolveDevice(device), [device]);
   const [perf] = useState(perfAsked);
   const readout = useRef<HTMLSpanElement>(null);
@@ -141,14 +181,30 @@ export default function SceneViewer({ scene, settings, mode, author, device, onC
         gl={{ antialias: true, powerPreference: "high-performance" }}
         camera={{ fov: DEFAULT_FOV_DEG, near: 0.05, far: 800 }}
         onCreated={({ gl }) => {
-          gl.toneMapping = ACESFilmicToneMapping;
+          // Neutral (Khronos PBR Neutral) keeps the designer's colours true — ACES shifts a blush cloth
+          // toward salmon and crushes a dark one; this is a product shown to a client.
+          gl.toneMapping = NeutralToneMapping;
           gl.outputColorSpace = SRGBColorSpace;
         }}
       >
         <SceneLights mood={settings.mood} bounds={scene.bounds} roofedMm={scene.roofedMm} shadows={profile.shadows} fogScale={profile.fogScale} />
         <EmitterLights emitters={emitters} mood={settings.mood} count={profile.pointLights} />
         <SceneNodes scene={scene} mood={settings.mood} author={author} lodScale={profile.lodScale} />
-        {mode === "author" ? <AuthorCamera bounds={scene.bounds} roofedMm={scene.roofedMm} onCamera={onCamera} /> : <OverviewCamera bounds={scene.bounds} />}
+        <SceneCamera
+          mode={mode}
+          bounds={scene.bounds}
+          roofedMm={scene.roofedMm}
+          viewpoints={viewpoints}
+          zones={zones}
+          activeId={activeId}
+          recentre={recentre}
+          tour={tour}
+          playing={playing}
+          onTourStep={onTourStep}
+          onTourEnd={onTourEnd}
+          onLeave={onLeave}
+          onCamera={onCamera}
+        />
         <VisibilityPause />
         {perf && <PerfProbe target={readout} stats={scene.stats} />}
       </Canvas>

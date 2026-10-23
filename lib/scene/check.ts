@@ -58,8 +58,7 @@ if (isMain(import.meta.url)) {
     assert(!!b && near(b.instances[0].at.z, 750), `${id} stands on the table top`);
   }
   assert(bodies.some((b) => b.id.startsWith("i:flower:")), "the arrangement has flowers");
-  const labels = scene.nodes.filter((n) => n.kind === "label");
-  assert(labels.some((l) => l.text === "1"), "the author sees table 1's number");
+  assert(!scene.nodes.some((n) => n.kind === "label"), "no table numbers in the room, not even for the author");
 
   // ── chairs: one geometry per style × colour × size, whoever they belong to ───────────────────
   const chiavari = bodies.find((b) => b.id === "i:chair:chiavari:#f7f6fc:450x500x900");
@@ -70,6 +69,15 @@ if (isMain(import.meta.url)) {
   const onDeck = chiavari!.instances.filter((t) => near(t.at.z, 600));
   assert(onDeck.length === 5, `the banquette's chairs stand on the 600 mm deck (got ${onDeck.length})`);
   assert(!!dining && dining.instances.length === 12 && dining.instances.every((t) => near(t.at.z, 0)), "the venue's own rows: twelve dining chairs on the floor");
+
+  // ── place settings: one per TABLE seat — never at the ceremony rows or the banquette ─────────────
+  const settingsBody = bodies.find((b) => b.tag.type === "tableware");
+  assert(!!settingsBody && settingsBody.instances.length === 10 + 16, `a place setting at every table seat (got ${settingsBody?.instances.length})`);
+  assert(settingsBody!.instances.every((t) => near(t.at.z, 750)), "…on the table tops");
+  const round1 = settingsBody!.instances.filter((t) => Math.hypot(t.at.x - 5000, t.at.y - 5000) < 900);
+  assert(round1.length === 10 && round1.every((t) => Math.hypot(t.at.x - 5000, t.at.y - 5000) > 500), "…inside the rim, round the round table");
+  const off = buildScene({ ...fixtureInput(false), settings: { ...fixtureInput(false).settings, tableware: false } });
+  assert(!off.nodes.some((n) => n.kind === "body" && n.tag.type === "tableware"), "…and none when the designer switches them off");
 
   // ── the stage ─────────────────────────────────────────────────────────────────────────────────
   const stage = ofId("p-stage");

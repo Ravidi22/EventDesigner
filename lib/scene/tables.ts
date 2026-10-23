@@ -23,7 +23,7 @@ import { polygonCentroid } from "@/lib/studio/geometry";
 import { CHAIR_D_MM, CHAIR_W_MM, seatsAround, type Seat } from "@/lib/studio/seating";
 import { benchOf, coverOn, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { blockSeats, type BlockFrame } from "@/lib/design-document/block";
-import { groupSeats, isUnnumbered, tableNumber } from "@/lib/design-document/groups";
+import { groupSeats } from "@/lib/design-document/groups";
 import { standaloneBench } from "@/lib/design-document/bench";
 import { climbRise } from "@/lib/studio/climb-item";
 import { chairOf } from "@/lib/catalog/chairs";
@@ -34,6 +34,7 @@ import { dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlock
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { primeCatalog } from "@/lib/catalog/storage";
 import { isMain } from "../self-check";
+import { placeSettings } from "./tableware";
 import { SceneCollector } from "./collect";
 import { applyTransform, roomTransform, seatTransform } from "./frame";
 import { chairRequest, itemBody, type ItemContext } from "./items";
@@ -50,6 +51,10 @@ export const DEFAULT_TABLE_HEIGHT_MM = 750;
 export const DEFAULT_CHAIR_HEIGHT_MM = 900;
 /** The cloth's hem: how far past the rim the fabric falls, and how tall the hem band is. */
 export const CLOTH_HEM_MM = 10;
+/** A cloth's folds: one every this many mm along the rim, this deep at the hem, the hem flaring out. */
+export const CLOTH_FOLD_PITCH_MM = 260;
+export const CLOTH_FOLD_DEPTH_MM = 34;
+export const CLOTH_FLARE_MM = 45;
 /** The fabric's own thickness — what a covered top is shortened by, so its face and the cloth's
  *  never coincide (two faces at one height flicker in any renderer). */
 export const CLOTH_THICK_MM = 2;
@@ -58,7 +63,7 @@ export const LEG_MM = 60;
 export const LEG_INSET_MM = 80;
 /** A pedestal's radius and its foot's, as a share of the top's smaller side; the foot's height. */
 export const PEDESTAL_SHARE = 0.06;
-export const FOOT_SHARE = 0.2;
+export const FOOT_SHARE = 0.13;
 export const FOOT_MM = 30;
 /** A rectangle whose sides differ by less than this share of the longer is square: a pedestal. */
 export const SQUARE_TOLERANCE = 0.1;
@@ -247,28 +252,14 @@ export function tableTop(footprint: Footprint, heightMm: number, covered = false
 export function clothParts(footprint: Footprint, tableHeightMm: number): Part[] {
   const H = tableHeightMm;
   const D = CLOTH_DROP_MM;
-  const hem = CLOTH_HEM_MM;
-  if (footprint.kind === "circle") {
-    const R = footprint.diameterMm / 2;
-    return [
-      {
-        shape: "lathe",
-        profile: [
-          { r: 0, z: 0 },
-          { r: R + D + hem, z: 0 },
-          { r: R + D + hem, z: H - hem },
-          { r: R + D, z: H },
-          { r: 0, z: H },
-        ],
-        at: vec3(0, 0, 0),
-        segments: 64,
-      },
-    ];
-  }
   const parts: Part[] = [];
   for (const piece of footprintOutlines(footprint)) {
-    parts.push({ shape: "extrude", outline: { outline: offsetOutline(piece, D + hem) }, h: H - hem, at: vec3(0, 0, 0) });
-    parts.push({ shape: "extrude", outline: { outline: offsetOutline(piece, D) }, h: hem, at: vec3(0, 0, H - hem) });
+    const rim = offsetOutline(piece, D);
+    // The top: one sheet over the table, its edge rounded over the rim by the drop.
+    parts.push({ shape: "extrude", outline: { outline: rim }, h: CLOTH_THICK_MM, at: vec3(0, 0, H - CLOTH_THICK_MM) });
+    // The fall: from the rim to the floor, folding as it goes and flaring at the hem (spec §3.2,
+    // DECIDE 2 — to the floor). Seen on plan A in a browser: a straight-sided cloth read as a box.
+    parts.push({ shape: "drape", outline: rim, h: H, at: vec3(0, 0, 0), foldPitchMm: CLOTH_FOLD_PITCH_MM, foldDepthMm: CLOTH_FOLD_DEPTH_MM, flareMm: CLOTH_FLARE_MM });
   }
   return parts;
 }
@@ -304,8 +295,11 @@ export function chairSpecOf(table: Pick<DesignTable, "chairVariantId">): ChairSp
 
 /** One chair per seat, each turned to face the table by `seatTransform`, all sharing one geometry
  *  with every other chair of this spec in the room (the collector merges by key). */
-function placeChairs(seats: readonly Seat[], frame: Transform, spec: ChairSpec, tag: NodeTag, out: SceneCollector): void {
+/** The chairs of a ring — and, when `settingTopMm` is given (SceneSettings.tableware), a place
+ *  setting at each seat on the table top that far above the frame's floor (./tableware.ts). */
+function placeChairs(seats: readonly Seat[], frame: Transform, spec: ChairSpec, tag: NodeTag, out: SceneCollector, settingTopMm?: number): void {
   if (!seats.length) return;
+  if (settingTopMm !== undefined) placeSettings(seats, frame, settingTopMm, out);
   // The parts are built once; every instance is the same request at its own transform.
   const base = chairRequest(spec.style, spec.widthMm, spec.depthMm, spec.heightMm, spec.tone, transform(vec3(0, 0, 0)), tag);
   for (const seat of seats) out.instance({ ...base, at: seatTransform(frame, seat) });
@@ -313,23 +307,23 @@ function placeChairs(seats: readonly Seat[], frame: Transform, spec: ChairSpec, 
 
 /** The ring round one table that is in no block: `seatsAround` its footprint, through the table's
  *  turn and mirror. Returns how many chairs it placed. */
-export function chairRing(table: DesignTable, z: number, out: SceneCollector, spec: ChairSpec = chairSpecOf(table)): number {
+export function chairRing(table: DesignTable, z: number, out: SceneCollector, spec: ChairSpec = chairSpecOf(table), settingTopMm?: number): number {
   const seats = seatsAround(tableFootprint(table), table.seats ?? 0, undefined, tableBlockedSides(table));
-  placeChairs(seats, roomTransform(table, z), spec, { type: "chair", id: table.id }, out);
+  placeChairs(seats, roomTransform(table, z), spec, { type: "chair", id: table.id }, out, settingTopMm);
   return seats.length;
 }
 
 /** The ring round a BLOCK: `blockSeats` in the block's frame — its centre and rotation only, never
  *  a mirror (canvas-stage.tsx:1186) — seating what its members seat between them (`groupSeats`).
  *  The chair is the first member's, as the frame is. Returns the block, for its label. */
-export function blockChairRing(members: readonly DesignTable[], doc: DesignDocumentContent, z: number, out: SceneCollector): BlockFrame | null {
+export function blockChairRing(members: readonly DesignTable[], doc: DesignDocumentContent, z: number, out: SceneCollector, settingTopMm?: number): BlockFrame | null {
   const first = members[0];
   const groupId = first?.groupId;
   if (!first || !groupId) return null;
   const block = tableBlock(members);
   if (!block) return null;
   const seats = blockSeats(block, groupSeats(doc, groupId));
-  placeChairs(seats, transform(vec3(block.centre.x, block.centre.y, z), block.rotation), chairSpecOf(first), { type: "chair", id: groupId }, out);
+  placeChairs(seats, transform(vec3(block.centre.x, block.centre.y, z), block.rotation), chairSpecOf(first), { type: "chair", id: groupId }, out, settingTopMm);
   return block;
 }
 
@@ -419,16 +413,15 @@ export function tableHeightOf(table: Pick<DesignTable, "variantId">): number {
   return product?.dimensions.heightMm || DEFAULT_TABLE_HEIGHT_MM;
 }
 
-const numberText = (n: number) => (n > 0 ? String(n) : "ראש");
-
 /**
- * Every table of the document into `out`: top and legs, cloth, chairs, dressing, and (author only)
- * a floating number. `floorZ` is what the table stands on (./elevation.ts — a stage's deck, the
+ * Every table of the document into `out`: top and legs, cloth, chairs and dressing — never a number. `floorZ` is what the table stands on (./elevation.ts — a stage's deck, the
  * floor); the catalog must be primed (lib/catalog/storage.ts) before this is called, as for the
  * printed map.
  */
-export function tableNodes(input: Pick<SceneInput, "doc" | "author">, out: SceneCollector, floorZ: (tableId: string) => number): void {
+export function tableNodes(input: Pick<SceneInput, "doc" | "author"> & { settings?: { tableware?: boolean } }, out: SceneCollector, floorZ: (tableId: string) => number): void {
   const { doc, author } = input;
+  // Place settings at every seat unless the designer switched them off (an illustration: ./tableware.ts).
+  const tableware = input.settings?.tableware !== false;
   // The table items, bucketed as the canvas buckets them (canvas-stage.tsx:534): the COVER — the one
   // whose row is anchored to the table — kept apart from the chips that stand on it; a perched item
   // belongs to a banquette, not a table.
@@ -463,17 +456,14 @@ export function tableNodes(input: Pick<SceneInput, "doc" | "author">, out: Scene
     }
 
     // The chairs: a lone table's own ring; a block's once, the block's (never its members').
+    // No table numbers float in the room (Ravid, 2026-10-23: "remove the numbering of the tables in
+    // the 3D") — a number is a crew mark on a plan, and the room is what the client is shown.
     if (!t.groupId) {
-      chairRing(t, z, out);
-      if (author && !t.unnumbered) out.label(`t:${t.id}`, vec3(t.position.x, t.position.y, z + heightMm + LABEL_ABOVE_MM), numberText(t.number));
+      chairRing(t, z, out, undefined, tableware ? heightMm : undefined);
     } else if (!ringed.has(t.groupId)) {
       ringed.add(t.groupId);
       const members = doc.tables.filter((x) => x.groupId === t.groupId);
-      const block = blockChairRing(members, doc, z, out);
-      if (author && block && !isUnnumbered(doc, t)) {
-        const top = Math.max(...members.map((m) => floorZ(m.id) + tableHeightOf(m)));
-        out.label(`g:${t.groupId}`, vec3(block.centre.x, block.centre.y, top + LABEL_ABOVE_MM), numberText(tableNumber(doc, t)));
-      }
+      blockChairRing(members, doc, z, out, tableware ? Math.max(...members.map(tableHeightOf)) : undefined);
     }
 
     dressingOf(doc, t, chipsOf, z + heightMm, author, out);
@@ -547,10 +537,12 @@ if (isMain(import.meta.url)) {
 
     const clothBody = bodies.find((b) => b.tag.type === "cloth");
     assert(!!clothBody && clothBody.tag.id === "p-cloth" && clothBody.material.kind === "fabric" && clothBody.material.colour === "#4b3a6e", "the cloth is a fabric body in the variant's swatch, tagged by the cover placement");
-    const lathe = clothBody!.parts[0];
-    assert(lathe.shape === "lathe" && near(lathe.at.z, 0) && lathe.profile[0].z === 0, "a round table's cloth is a lathe whose lowest point is the floor (DECIDE 2)");
-    assert(lathe.shape === "lathe" && lathe.profile.some((q) => near(q.r, 900 + CLOTH_DROP_MM) && near(q.z, 750)), "…with its rim CLOTH_DROP_MM past the top at the table height");
-    assert(lathe.shape === "lathe" && lathe.profile.some((q) => near(q.r, 900 + CLOTH_DROP_MM + CLOTH_HEM_MM) && near(q.z, 740)), "…and the hem 10 out and 10 down");
+    const [sheet, fall] = clothBody!.parts;
+    assert(sheet.shape === "extrude" && near(sheet.at.z + sheet.h, 750), "a round table's cloth: a sheet over the top at the table height");
+    assert(fall.shape === "drape" && near(fall.at.z, 0) && near(fall.h, 750), "…and a drape from the rim to the floor (DECIDE 2)");
+    const rimR = fall.shape === "drape" ? Math.max(...fall.outline.map((q) => Math.hypot(q.x, q.y))) : 0;
+    assert(near(rimR, 900 + CLOTH_DROP_MM, 2), `…its rim CLOTH_DROP_MM past the top (${Math.round(rimR)})`);
+    assert(fall.shape === "drape" && fall.foldDepthMm! > 0 && fall.flareMm! > 0, "…folding and flaring as it falls");
 
     const candles = bodies.filter((b) => b.id === "p-c1" || b.id === "p-c2");
     assert(candles.length === 2, `the two candlesticks are two bodies (got ${candles.length})`);
@@ -562,7 +554,7 @@ if (isMain(import.meta.url)) {
     assert(candles[0].instances[0].at.x !== candles[1].instances[0].at.x || candles[0].instances[0].at.y !== candles[1].instances[0].at.y, "…and not on the same spot");
 
     const labels = nodes.filter(isLabel);
-    assert(labels.length === 1 && labels[0].text === "1" && labels[0].id === "t:t1" && near(labels[0].at.z, 750 + LABEL_ABOVE_MM), "the author sees the table's number floating over it");
+    assert(labels.length === 0, "no table number floats over a table, even for the author");
     const quiet = new SceneCollector();
     tableNodes({ doc, author: false }, quiet, () => 0);
     assert(!quiet.nodes().some((n) => n.kind === "label"), "…and the client sees no label");
@@ -591,25 +583,21 @@ if (isMain(import.meta.url)) {
     const leg = rects[0].parts.find((p) => p.shape === "box");
     assert(!!leg && leg.shape === "box" && near(Math.abs(leg.at.x), 1200 - LEG_INSET_MM - LEG_MM / 2) && near(Math.abs(leg.at.y), 600 - LEG_INSET_MM - LEG_MM / 2) && near(leg.h, 720), "…inset 80 from the corners, up to the top's underside");
     const labels2 = nodes2.filter(isLabel);
-    assert(labels2.length === 1 && labels2[0].text === "2" && near(labels2[0].at.x, 11200) && near(labels2[0].at.y, 5000), "a block gets ONE number, the group's, at the block's centre");
+    assert(labels2.length === 0, "…nor over a block");
     const candle3 = bodies2.find((n) => n.id === "p-c3");
     assert(!!candle3 && near(candle3.instances[0].at.z, 750) && near(candle3.instances[0].at.x, 11200, 1), "a lone item on an auto-laid block stands on the block's middle — the seam — at the top height");
 
     // A cloth on a rectangle: the outline grown by the drop, rounded at the corners, to the floor.
     const rectCloth = clothParts({ kind: "rect", widthMm: 2400, depthMm: 1200 }, 750);
-    assert(rectCloth.length === 2 && rectCloth.every((p) => p.shape === "extrude"), "a rectangle's cloth is two extrudes: the body and the top band");
-    const body = rectCloth[0];
-    const band = rectCloth[1];
-    assert(body.shape === "extrude" && near(body.at.z, 0) && near(body.h, 740), "…the body from the floor to the hem");
-    assert(band.shape === "extrude" && near(band.at.z, 740) && near(band.h, 10), "…the band the last 10 to the table height");
-    const bodySize = body.shape === "extrude" ? polySize(body.outline.outline) : { w: 0, h: 0 };
-    const bandSize = band.shape === "extrude" ? polySize(band.outline.outline) : { w: 0, h: 0 };
-    assert(near(bodySize.w, 2400 + 2 * (CLOTH_DROP_MM + CLOTH_HEM_MM)) && near(bodySize.h, 1200 + 2 * (CLOTH_DROP_MM + CLOTH_HEM_MM)), "the body is the top grown by drop + hem all round");
-    assert(near(bandSize.w, 2400 + 2 * CLOTH_DROP_MM) && near(bandSize.h, 1200 + 2 * CLOTH_DROP_MM), "the band is the top grown by the drop");
-    // Every point of the grown outline is exactly drop + hem from the top's edge — a mitred corner
-    // would stand √2 times that out at the diagonal.
-    const reach = body.shape === "extrude" ? body.outline.outline.reduce((m, p) => Math.max(m, Math.hypot(Math.max(Math.abs(p.x) - 1200, 0), Math.max(Math.abs(p.y) - 600, 0))), 0) : 0;
-    assert(near(reach, CLOTH_DROP_MM + CLOTH_HEM_MM, 0.5) && body.shape === "extrude" && body.outline.outline.length > 8, "…with corners rounded at the drop, not mitred");
+    assert(rectCloth.length === 2 && rectCloth[0].shape === "extrude" && rectCloth[1].shape === "drape", "a rectangle's cloth is a sheet over the top and a drape to the floor");
+    const fallR = rectCloth[1];
+    assert(fallR.shape === "drape" && near(fallR.at.z, 0) && near(fallR.h, 750), "…the drape from the floor to the table height");
+    const rimSize = fallR.shape === "drape" ? polySize(fallR.outline) : { w: 0, h: 0 };
+    assert(near(rimSize.w, 2400 + 2 * CLOTH_DROP_MM) && near(rimSize.h, 1200 + 2 * CLOTH_DROP_MM), "…its rim the top grown by the drop all round");
+    // Every point of the rim is exactly the drop from the top's edge — a mitred corner would stand
+    // √2 times that out at the diagonal.
+    const reach = fallR.shape === "drape" ? fallR.outline.reduce((m, p) => Math.max(m, Math.hypot(Math.max(Math.abs(p.x) - 1200, 0), Math.max(Math.abs(p.y) - 600, 0))), 0) : 0;
+    assert(near(reach, CLOTH_DROP_MM, 0.5) && fallR.shape === "drape" && fallR.outline.length > 8, "…with corners rounded at the drop, not mitred");
 
     // A hollow ח (a notch): the concave corners mitre, the convex ones round.
     const notch = offsetOutline({ outline: [{ x: -1000, y: -500 }, { x: 1000, y: -500 }, { x: 1000, y: 500 }, { x: 300, y: 500 }, { x: 300, y: 0 }, { x: -300, y: 0 }, { x: -300, y: 500 }, { x: -1000, y: 500 }] }, 90);

@@ -108,7 +108,7 @@
     "check:scene-frame": "tsx lib/scene/frame.ts",
     "check:scene-boundary": "tsx lib/scene/boundary.ts",
     "check:scene-share": "tsx lib/scene/share-boundary.ts",
-    "check:viewpoints": "tsx lib/scene/viewpoints.ts",
+    "check:viewpoints": "tsx lib/scene/viewpoints-check.ts",
     "db:verify:scene": "tsx lib/scene/verify.ts",
     "check:envelope": "tsx lib/scene/envelope.ts",
     "check:tables": "tsx lib/scene/tables.ts",
@@ -116,7 +116,8 @@
     "check:scene-viewer": "tsx components/scene/smoke.ts",
     "check:floor-kinds": "tsx lib/scene/floor-kinds.ts",
     "check:overhead": "tsx lib/scene/overhead.ts",
-    "check:scene-stage": "tsx lib/scene/stage.ts"
+    "check:scene-stage": "tsx lib/scene/stage.ts",
+    "check:scene-settings": "tsx lib/scene/clean.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

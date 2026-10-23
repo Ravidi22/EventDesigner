@@ -75,11 +75,15 @@ export type Part =
   | { shape: "plane"; outline: BuiltOutline; holes?: BuiltOutline[]; at: Vec3; side?: "up" | "down" | "both"; rotDeg?: number; material?: MaterialRef }
   /** A vertical strip `h` high standing on `path` (a skirt along a stage edge, a curtain along a
    *  wall): `pleatMm` is the wavelength of its pleats, absent/0 = flat. */
-  | { shape: "ribbon"; path: Point[]; h: number; at: Vec3; pleatMm?: number; amplitudeMm?: number; material?: MaterialRef };
+  | { shape: "ribbon"; path: Point[]; h: number; at: Vec3; pleatMm?: number; amplitudeMm?: number; material?: MaterialRef }
+  /** A cloth hanging from a closed RIM (`outline`, the cloth's edge where it leaves the table, a
+   *  flattened polygon about `at`) down `h` to the floor: folds every `foldPitchMm` that deepen to
+   *  `foldDepthMm` at the hem, the hem flaring `flareMm` out. Smooth-shaded — fabric, not facets. */
+  | { shape: "drape"; outline: Point[]; h: number; at: Vec3; foldPitchMm?: number; foldDepthMm?: number; flareMm?: number; material?: MaterialRef };
 
 export type NodeType =
   | "ground" | "floor" | "wall" | "door" | "ceiling" | "feature"
-  | "table" | "cloth" | "chair" | "item" | "flowers"
+  | "table" | "cloth" | "chair" | "item" | "flowers" | "tableware"
   | "stage" | "deck" | "edge" | "skirt" | "corner" | "railing" | "missing";
 
 /** What a body is, for the author's hover name and for the self-check's counts. `id` is the
@@ -163,6 +167,9 @@ export interface SceneSettings {
   /** Empty = the generated defaults (./viewpoints.ts defaultViewpoints). */
   viewpoints: Viewpoint[];
   tour: Tour | null;
+  /** A place setting at every seat (./tableware.ts) — an illustration, never counted or quoted.
+   *  Absent = on. */
+  tableware?: boolean;
 }
 
 export const DEFAULT_SETTINGS: SceneSettings = { mood: "evening", viewpoints: [], tour: null };

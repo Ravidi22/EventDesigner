@@ -9,6 +9,23 @@ import { previewScene } from "@/components/scene/preview-scene";
 import { MaterialCache, tint } from "@/components/scene/scene-materials";
 import { CHAIR_BOX_MM, floorRank, intensityOf, lightDistanceM, lodVisibility, pickLit, polygonOffsetOf, renderOrderOf } from "@/components/scene/scene-rules";
 import { CAPABLE, MODEST, resolveDevice } from "@/components/scene/device";
+import { COMPOSED_ASPECT, fitFov,
+  CENTRED,
+  FOV_MAX_DEG,
+  FOV_MIN_DEG,
+  HEAD_PITCH_MAX_DEG,
+  HEAD_YAW_MAX_DEG,
+  RECENTRE_MS,
+  dragHead,
+  easedHead,
+  pinchHead,
+  resumeStop,
+  samePose,
+  tourFrom,
+  turnedLook,
+  wheelHead,
+  zoomedFov,
+} from "@/components/scene/camera-rules";
 import { toWorld } from "@/lib/scene/frame";
 import { vec3, type BodyNode, type Part } from "@/lib/scene/types";
 
@@ -242,11 +259,21 @@ assert(cache.get(chairs) !== first, "cache: sweep drops what is not live");
 cache.dispose();
 assert(proxyGeometry([]).getAttribute("position") === undefined, "far box of nothing: an empty geometry, no NaN box");
 
+// --- the phone's field of view ---
+{
+  assert(fitFov(55, COMPOSED_ASPECT) === 55 && fitFov(55, 2) === 55, "fov: a canvas as wide as the view was composed for, or wider, keeps it");
+  const tall = fitFov(55, 390 / 700);
+  assert(tall > 80 && tall <= 100, `fov: a phone held upright widens it to keep the room's breadth (${tall.toFixed(1)}°)`);
+}
+
 // --- materials ---
 assert(tint("#ffffff", "#000000", 0.5) === "#808080", "tint: halfway to black");
 const materials = new MaterialCache();
 const metal = materials.get({ colour: "#ff0000", kind: "metal" }, true);
-assert(metal.side === DoubleSide && near(metal.metalness, 0.85) && near(metal.roughness, 0.35), "metal, mirrored: two-sided, the table's numbers");
+assert(metal.side === DoubleSide && near(metal.metalness, 0.92) && near(metal.roughness, 0.24), "metal, mirrored: two-sided and polished (reflects the environment)");
+const cloth = materials.get({ colour: "#4b3a6e", kind: "fabric" }, false) as { sheen?: number };
+assert((cloth.sheen ?? 0) > 0, "fabric: physical, with a sheen");
+assert(near(materials.get({ colour: "#2b2a2e", kind: "matte", texture: "tile" }, false).roughness, 0.27), "a tiled floor is polished");
 assert(materials.get({ colour: "#ff0000", kind: "metal" }, true) === metal, "materials: cached by (ref, mirrored)");
 assert(materials.get({ colour: "#ff0000", kind: "metal" }, false) !== metal, "materials: the unmirrored one is another material");
 const glass = materials.get({ colour: "#e8f0f5", kind: "glass", opacity: 0.35 }, false);
@@ -265,9 +292,9 @@ assert(materials.get(paving, false) === floorMat, "materials: rank 0 is the plai
 materials.dispose();
 
 // --- the viewer's rules ---
-assert(near(intensityOf(0.4), 0.6) && near(intensityOf(0.7), 2) && near(intensityOf(1), 3), "lights: a candle 0.6 cd, a bulb 2, a lamp 3");
-assert(near(intensityOf(0.5), 0.6 + 1.4 / 3) && near(intensityOf(0), 0) && near(intensityOf(2), 3), "lights: linear between, clamped past 1");
-assert(near(lightDistanceM(0.025), 2.15) && near(lightDistanceM(0.1), 2.6), "lights: a flame reaches 2.15 m, a lamp's bulb 2.6");
+assert(near(intensityOf(0.4), 1.5) && near(intensityOf(0.7), 5) && near(intensityOf(1), 7.5), "lights: a candle 1.5 cd, a bulb 5, a lamp 7.5");
+assert(near(intensityOf(0.5), 1.5 + 3.5 / 3) && near(intensityOf(0), 0) && near(intensityOf(2), 7.5), "lights: linear between, clamped past 1");
+assert(near(lightDistanceM(0.025), 1.6) && near(lightDistanceM(0.1), 1.9), "lights: a flame reaches 1.6 m, a lamp's bulb 1.9");
 const lit = pickLit(
   [
     { index: 0, lamp: false, distance: 1 },
@@ -309,6 +336,57 @@ assert(!partial.shadows && partial.maxDpr === 1.25 && partial.pointLights === 16
 // --- frame round trip (the camera's inverse) ---
 const w = toWorld(vec3(1000, 2000, 750));
 assert(near(w[0], 1) && near(w[1], 0.75) && near(w[2], 2), "toWorld as frame.ts states it");
+
+// --- the curated camera (./camera-rules.ts): the head, the zoom, the tour's resume ---
+{
+  const eye = vec3(0, 0, 1600);
+  const ahead = vec3(5000, 0, 1600); // facing plan +x, level
+  const same = turnedLook(eye, ahead, 0, 0);
+  assert(same.x === ahead.x && same.y === ahead.y && same.z === ahead.z, "head: a centred head looks where the viewpoint looks");
+  const left = turnedLook(eye, ahead, 90, 0);
+  assert(near(left.x, 0, 1e-6) && near(left.y, -5000, 1e-6) && near(left.z, 1600, 1e-6), "head: +90° of yaw from facing plan +x faces plan −y, at the same distance and height");
+  // …and that is a LEFT turn for the camera: three's +rotation about +y of the same direction.
+  const w0 = toWorld(vec3(ahead.x - eye.x, ahead.y - eye.y, 0));
+  const turned = new Vector3(w0[0], w0[1], w0[2]).applyAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
+  const w1 = toWorld(vec3(left.x - eye.x, left.y - eye.y, 0));
+  assert(near(turned.x, w1[0], 1e-6) && near(turned.z, w1[2], 1e-6), "head: plan yaw +θ is three's +θ about +y — a left turn, as a camera sees it");
+  const up = turnedLook(eye, ahead, 0, 20);
+  assert(up.z > ahead.z && near(Math.atan2(up.z - eye.z, up.x - eye.x), (20 * Math.PI) / 180, 1e-9), "head: +20° of pitch looks 20° up");
+  const steep = turnedLook(eye, vec3(0, 1, -100000), 0, -20);
+  assert(steep.z - eye.z < 0 && Math.hypot(steep.x - eye.x, steep.y - eye.y) > 0, "head: a tilt never flips the view over the pole");
+  // A pixel of drag is a pixel of the room: 550 px tall at 55° is 0.1° a pixel.
+  const d = dragHead(CENTRED, 10, -10, 550, 55, 55);
+  assert(near(d.yawDeg, 1, 1e-9) && near(d.pitchDeg, -1, 1e-9) && d.fovDeltaDeg === 0, "drag: right turns the head left (yaw +), up tilts it down (pitch −) — the room follows the finger");
+  const far = dragHead(CENTRED, 10000, 10000, 550, 55, 55);
+  assert(far.yawDeg === HEAD_YAW_MAX_DEG && far.pitchDeg === HEAD_PITCH_MAX_DEG, "drag: the head stops at ±35° of yaw and ±20° of pitch");
+  assert(zoomedFov(55, 100) === FOV_MAX_DEG && zoomedFov(55, -100) === FOV_MIN_DEG, "zoom: between 40° and 70°");
+  assert(zoomedFov(30, 0) === 30 && zoomedFov(30, -10) === 30 && zoomedFov(30, 100) === FOV_MAX_DEG, "zoom: a viewpoint saved at 30° keeps it, and the zoom only widens it back toward the range");
+  assert(wheelHead(CENTRED, 100, 55).fovDeltaDeg > 0 && wheelHead(CENTRED, -100, 55).fovDeltaDeg < 0, "wheel: down widens the view, up narrows it");
+  const pinched = pinchHead(CENTRED, 100, 110, 55);
+  assert(near(55 + pinched.fovDeltaDeg, 50, 1e-9), "pinch: fingers 10% apart narrow 55° to 50°");
+  assert(near(55 + pinchHead(CENTRED, 100, 1000, 55).fovDeltaDeg, FOV_MIN_DEG, 1e-9), "pinch: …and never past 40°");
+  const turnedHead = { yawDeg: 30, pitchDeg: -10, fovDeltaDeg: 6 };
+  const half = easedHead(turnedHead, RECENTRE_MS / 2);
+  assert(easedHead(turnedHead, 0).yawDeg === 30 && near(half.yawDeg, 15, 1e-9) && near(half.pitchDeg, -5, 1e-9), "recentre: eased, half way at half time");
+  const home = easedHead(turnedHead, RECENTRE_MS);
+  assert(home.yawDeg === 0 && home.pitchDeg === 0 && home.fovDeltaDeg === 0, "recentre: centred at 600 ms");
+  const vp = { id: "a", name: "a", eye: vec3(0, 0, 1600), look: vec3(1000, 0, 1000) };
+  assert(samePose(vp, { ...vp, eye: vec3(0.4, 0, 1600) }) && !samePose(vp, { ...vp, eye: vec3(5, 0, 1600) }) && !samePose(vp, { ...vp, fovDeg: 60 }), "fly: a pose within a millimetre is not worth a fly");
+
+  const stops = ["a", "b", "c"].map((viewpointId) => ({ viewpointId, dwellMs: 4000, travelMs: 1500 }));
+  const loop = { stops, loop: true };
+  assert(resumeStop(loop, { stop: 1, viewpointId: "b", arrived: true }) === 2, "tour: ▶ after ⏸ at a stop goes on to the next");
+  assert(resumeStop(loop, { stop: 1, viewpointId: "b", arrived: false }) === 1, "tour: ▶ after ⏸ mid-air finishes the leg it was on");
+  assert(resumeStop(loop, { stop: 2, viewpointId: "c", arrived: true }) === 0, "tour: from the last stop a loop goes round");
+  assert(resumeStop({ stops, loop: false }, { stop: 2, viewpointId: "c", arrived: true }) === 0, "tour: a finished one-way tour starts again");
+  assert(resumeStop(loop, { stop: null, viewpointId: "c", arrived: true }) === 0 && resumeStop(loop, { stop: null, viewpointId: "b", arrived: true }) === 2, "tour: standing at a chip's viewpoint, ▶ goes on from it");
+  assert(resumeStop(loop, { stop: null, viewpointId: null, arrived: true }) === 0, "tour: from anywhere else it starts at the first stop");
+  const r = tourFrom(loop, 1);
+  assert(r.tour.stops.map((s) => s.viewpointId).join() === "b,c,a" && r.indexOf(0) === 1 && r.indexOf(2) === 0, "tour: a loop played from stop 1 is b, c, a — and lights the designer's indices");
+  const o = tourFrom({ stops, loop: false }, 1);
+  assert(o.tour.stops.map((s) => s.viewpointId).join() === "b,c" && o.indexOf(1) === 2, "tour: a one-way tour played from stop 1 is b, c");
+  assert(tourFrom(loop, 0).tour === loop, "tour: from the first stop it is the tour itself");
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nscene viewer smoke ok");
 process.exit(failed ? 1 : 0);

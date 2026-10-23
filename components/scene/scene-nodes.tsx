@@ -24,12 +24,12 @@
 // over them) are ranked by `floorRank`: the material takes a polygon offset by rank and the mesh a
 // render order, so three planes at the same depth never z-fight at distance.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { AdditiveBlending, type BufferGeometry, type Camera, type Group, type InstancedMesh, Matrix4, Quaternion, Vector3 } from "three";
+import { AdditiveBlending, BufferGeometry, Color, type Camera, Float32BufferAttribute, type Group, type InstancedMesh, Matrix4, Quaternion, Vector3 } from "three";
 import { Html } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { fromWorld, toWorld, worldRotationY } from "@/lib/scene/frame";
 import type { BodyNode, EmitterNode, LabelNode, Mood, NodeType, Scene, Transform } from "@/lib/scene/types";
-import { GeometryCache } from "./scene-geometry";
+import { GeometryCache, geometrySignature } from "./scene-geometry";
 import { MaterialCache } from "./scene-materials";
 import { HALO_BY_MOOD, floorRank, hasFarBox, lodMatters, lodVisibility, renderOrderOf } from "./scene-rules";
 import { useCameraSettle } from "./scene-settle";
@@ -43,10 +43,9 @@ const scratchM = new Matrix4();
 const scratchP = new Vector3();
 const scratchQ = new Quaternion();
 const scratchS = new Vector3();
+const scratchC = new Color();
 
-/** A length in plan mm as metres — through the one mapping, so no second place divides. */
-const lengthM = (mm: number) => toWorld({ x: mm, y: 0, z: 0 })[0];
-/** …and back, for a camera distance read in metres. */
+/** A camera distance read in metres, back to plan mm — through the one mapping. */
 const lengthMm = (metres: number) => fromWorld(metres, 0, 0).x;
 
 function instanceMatrix(t: Transform, out: Matrix4): Matrix4 {
@@ -130,6 +129,7 @@ function Instanced({
   castShadow,
   receiveShadow,
   renderOrder,
+  vary = false,
 }: {
   geometry: BufferGeometry;
   material: ReturnType<MaterialCache["get"]>;
@@ -137,16 +137,30 @@ function Instanced({
   castShadow: boolean;
   receiveShadow: boolean;
   renderOrder?: number;
+  /** Shade each instance a little differently (flower heads): no two blooms of one variety are the
+   *  same colour, and an arrangement of identical heads reads as plastic. Deterministic by index. */
+  vary?: boolean;
 }) {
   const ref = useRef<InstancedMesh>(null);
   useLayoutEffect(() => {
     const mesh = ref.current;
     if (!mesh) return;
     instances.forEach((t, i) => mesh.setMatrixAt(i, instanceMatrix(t, scratchM)));
+    if (vary) {
+      instances.forEach((_, i) => {
+        // A hash of the index → lightness 0.82–1.06, and a faint warm/cool lean per head.
+        const h = Math.sin((i + 1) * 12.9898) * 43758.5453;
+        const f = 0.82 + 0.24 * (h - Math.floor(h));
+        const g = Math.sin((i + 1) * 78.233) * 12345.678;
+        const lean = ((g - Math.floor(g)) - 0.5) * 0.06;
+        mesh.setColorAt(i, scratchC.setRGB(f * (1 + lean), f, f * (1 - lean)));
+      });
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
     mesh.count = instances.length;
     mesh.instanceMatrix.needsUpdate = true;
     mesh.computeBoundingSphere();
-  }, [instances, geometry]);
+  }, [instances, geometry, vary]);
   return (
     <instancedMesh ref={ref} args={[geometry, material, instances.length]} castShadow={castShadow} receiveShadow={receiveShadow} renderOrder={renderOrder} />
   );
@@ -214,6 +228,7 @@ const BodyView = memo(function BodyView({ body, caches, registry }: { body: Body
             castShadow={castShadow}
             receiveShadow={receiveShadow}
             renderOrder={renderOrder}
+            vary={body.tag.type === "flowers" || body.id.includes(":flower:")}
           />
         ))}
       </group>
@@ -226,17 +241,74 @@ const BodyView = memo(function BodyView({ body, caches, registry }: { body: Body
   );
 });
 
-const EmitterView = memo(function EmitterView({ node, mood, caches }: { node: EmitterNode; mood: Mood; caches: Caches }) {
-  const opacity = HALO_BY_MOOD[mood] * node.strength;
+/** Every emitter halo of one colour, size and strength as ONE point cloud — a room of five hundred
+ *  candles is a handful of draw calls, not five hundred sprites (it was 1,364 calls on reference
+ *  plan A before this). Each point is the halo texture at the emitter's size in metres, attenuated
+ *  by distance like the sprite was; additive, so overlapping halos brighten as glow does. */
+interface Cloud {
+  key: string;
+  colour: string;
+  sizeM: number;
+  strength: number;
+  positions: Float32Array;
+}
+
+export function emitterClouds(nodes: readonly EmitterNode[]): Cloud[] {
+  const groups = new Map<string, { colour: string; sizeM: number; strength: number; pts: number[] }>();
+  for (const e of nodes) {
+    const sizeM = Math.max(0.02, Math.round((2 * e.radiusMm) / 10) / 100);
+    const strength = Math.round(e.strength * 10) / 10;
+    const key = `${e.colour}|${sizeM}|${strength}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { colour: e.colour, sizeM, strength, pts: [] }));
+    g.pts.push(...toWorld(e.at));
+  }
+  return [...groups.entries()].map(([key, g]) => ({ key, colour: g.colour, sizeM: g.sizeM, strength: g.strength, positions: new Float32Array(g.pts) }));
+}
+
+/** A halo never grows past HALO_MAX_PX on screen: attenuated by distance alone, a candle a metre
+ *  from the camera became a white blob a fifth of the frame wide (seen headless, 2026-10-23). */
+const HALO_MAX_PX = 44;
+const clampHalo = (shader: { vertexShader: string }) => {
+  shader.vertexShader = shader.vertexShader.replace("#include <fog_vertex>", `gl_PointSize = min( gl_PointSize, ${HALO_MAX_PX.toFixed(1)} );
+#include <fog_vertex>`);
+};
+
+const EmitterCloudView = memo(function EmitterCloudView({ cloud, mood, caches }: { cloud: Cloud; mood: Mood; caches: Caches }) {
+  const geometry = useMemo(() => {
+    const g = new BufferGeometry();
+    g.setAttribute("position", new Float32BufferAttribute(cloud.positions, 3));
+    g.computeBoundingSphere();
+    return g;
+  }, [cloud.positions]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  const opacity = Math.min(1, HALO_BY_MOOD[mood] * cloud.strength * 1.4);
   const map = caches.material.haloMap();
   if (opacity <= 0 || !map) return null;
-  const size = lengthM(2 * node.radiusMm);
   return (
-    <sprite position={toWorld(node.at)} scale={[size, size, 1]}>
-      <spriteMaterial map={map} color={node.colour} transparent opacity={opacity} blending={AdditiveBlending} depthWrite={false} toneMapped={false} />
-    </sprite>
+    <points geometry={geometry} frustumCulled={false} renderOrder={10}>
+      <pointsMaterial map={map} color={cloud.colour} size={cloud.sizeM * 2.2} sizeAttenuation transparent opacity={opacity} blending={AdditiveBlending} depthWrite={false} toneMapped={false} onBeforeCompile={clampHalo} />
+    </points>
   );
 });
+
+/** Bodies that would draw the same geometry in the same material with the same shadow and level-of-
+ *  detail behaviour are drawn as ONE instanced mesh: forty identical candlesticks, thirty tables of
+ *  one type. The builder keeps them apart (each has its own tag for the checks and the author's
+ *  hover name); the viewer is where the draw calls are counted. */
+export function mergeBodies(nodes: readonly BodyNode[]): BodyNode[] {
+  const out = new Map<string, BodyNode>();
+  for (const b of nodes) {
+    const key = `${geometrySignature(b)}|${b.tag.type}|${b.castShadow ?? true}|${b.lod ? `${b.lod.tier}:${b.lod.beyondMm}` : ""}`;
+    const have = out.get(key);
+    if (have) {
+      have.instances.push(...b.instances);
+      continue;
+    }
+    out.set(key, { ...b, id: `m:${key}`, instances: [...b.instances] });
+  }
+  return [...out.values()];
+}
 
 const LabelView = memo(function LabelView({ node }: { node: LabelNode }) {
   return (
@@ -255,6 +327,8 @@ export function SceneNodes({ scene, mood, author, lodScale = 1 }: { scene: Scene
   // three on its next draw, so a StrictMode double-mount costs an upload, never a blank frame.
   const caches = useMemo<Caches>(() => ({ geometry: new GeometryCache(), material: new MaterialCache(invalidate) }), [invalidate]);
   const registry = useMemo(() => new LodRegistry(), []);
+  const bodies = useMemo(() => mergeBodies(scene.nodes.filter((n): n is BodyNode => n.kind === "body")), [scene]);
+  const clouds = useMemo(() => emitterClouds(scene.nodes.filter((n): n is EmitterNode => n.kind === "emitter")), [scene]);
   useEffect(
     () => () => {
       caches.geometry.dispose();
@@ -263,11 +337,9 @@ export function SceneNodes({ scene, mood, author, lodScale = 1 }: { scene: Scene
     [caches],
   );
   useEffect(() => {
-    const live = new Set<string>();
-    for (const node of scene.nodes) if (node.kind === "body") live.add(node.id);
-    caches.geometry.sweep(live);
+    caches.geometry.sweep(new Set(bodies.map((b) => b.id)));
     invalidate();
-  }, [scene, caches, invalidate]);
+  }, [bodies, caches, invalidate]);
   useEffect(() => {
     invalidate();
   }, [mood, author, invalidate]);
@@ -284,16 +356,13 @@ export function SceneNodes({ scene, mood, author, lodScale = 1 }: { scene: Scene
 
   return (
     <>
-      {scene.nodes.map((node) => {
-        switch (node.kind) {
-          case "body":
-            return <BodyView key={`b:${node.id}`} body={node} caches={caches} registry={registry} />;
-          case "emitter":
-            return <EmitterView key={`e:${node.id}`} node={node} mood={mood} caches={caches} />;
-          case "label":
-            return author ? <LabelView key={`l:${node.id}`} node={node} /> : null;
-        }
-      })}
+      {bodies.map((body) => (
+        <BodyView key={`b:${body.id}`} body={body} caches={caches} registry={registry} />
+      ))}
+      {clouds.map((cloud) => (
+        <EmitterCloudView key={`c:${cloud.key}`} cloud={cloud} mood={mood} caches={caches} />
+      ))}
+      {author && scene.nodes.map((node) => (node.kind === "label" ? <LabelView key={`l:${node.id}`} node={node} /> : null))}
     </>
   );
 }

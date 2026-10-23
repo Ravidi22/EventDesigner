@@ -15,6 +15,7 @@ import { EventForm } from "@/components/event-form";
 import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
 import { OutputsScreen } from "@/app/(app)/outputs/outputs-screen";
+import { SceneScreen } from "@/app/(app)/scene/scene-screen";
 
 // The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every stage autosaves,
 // exiting mid-flow is always safe, and an existing event re-enters at the stage in the URL
@@ -156,7 +157,7 @@ export function MeetingScreen() {
   // The stages that fill their card edge to edge and scroll nothing — the two drawing passes, and
   // now the closing stage too, which is the outputs screen and owns its own scrolling rail and
   // sheet column. Every other stage is a document on the plane and scrolls normally.
-  const isCanvas = step.id === "hall" || step.id === "design" || step.id === "quote";
+  const isCanvas = step.id === "hall" || step.id === "design" || step.id === "scene" || step.id === "quote";
 
   return (
     <div dir="rtl" className="flex h-dvh flex-col gap-3 bg-bg p-3 print:block print:h-auto print:p-0">
@@ -214,6 +215,16 @@ export function MeetingScreen() {
         {step.id === "design" && (
           <CanvasCard>
             <StudioScreen mode="design" onSaveState={setSketchSave} />
+          </CanvasCard>
+        )}
+        {/* The room the client is about to be quoted for, from the inside (F-9.1): the designer's
+            /scene tab in its meeting frame — the curated camera and the client's bar, the
+            viewpoints a popover away. It edits nothing, so there is nothing for guarded() to keep
+            the designer from leaving with unsaved. Only in a flow that turned it on (DEFAULT_FLOW
+            does not list it). */}
+        {step.id === "scene" && event && (
+          <CanvasCard>
+            <SceneScreen frame="meeting" />
           </CanvasCard>
         )}
         {/* F-1.9 closes the meeting, and it closes it on the SAME screen /outputs is — one component

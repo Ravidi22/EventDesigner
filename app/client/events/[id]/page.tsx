@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Box } from "lucide-react";
 import { requireClient } from "@/lib/auth/guard";
 import { fetchClientSketch } from "@/lib/client-portal/actions";
 import { formatEventDate } from "@/lib/events/types";
@@ -44,6 +46,13 @@ export default async function ClientEventPage({ params }: { params: Promise<{ id
               </a>
             )}
           </span>
+          <Link
+            href={`/client/events/${event.id}/scene`}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-pill bg-accent-tint px-3 py-1.5 text-[13px] font-bold text-accent transition-colors hover:bg-accent-wash"
+          >
+            <Box className="h-4 w-4" strokeWidth={1.75} />
+            לראות בתלת-ממד
+          </Link>
           <NotificationBell />
         </div>
       </header>

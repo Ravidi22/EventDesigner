@@ -20,35 +20,22 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentSession, type Session } from "@/lib/auth/session";
 import {
-  designDocuments,
   eventClients,
   eventZones,
   events,
   organizations,
-  productVariants,
-  products,
   sketchProposals,
-  studioSettings,
-  venueStructures,
   venues,
-  zones,
 } from "@/lib/db/schema";
-import { toProducts } from "@/lib/catalog/db-mapping";
-import { toZone } from "@/lib/venues/db-mapping";
-import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
-import type { VenueGeometry } from "@/lib/venues/types";
-import { emptyDocument, type DesignDocumentContent } from "@/lib/design-document/types";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { diffDocuments, mergeChanges, rebaseDraft } from "@/lib/design-document/delta";
 import { notify, studioRecipients } from "@/lib/notifications/write";
-import { clientProduct } from "./safe-product";
+import { catalogOf, clientCatalog, designerDocument, eventGeometry, studioContact, variantIdsOf } from "./reads";
+import { clientSceneFor } from "@/lib/scene/reads";
+import type { ClientScene } from "@/lib/scene/client";
 import type { ClientError, ClientEvent, ClientEventDetail, ClientRole, ClientSketch, ProposalOutcome, ProposalView } from "./types";
 
 export type { ClientEvent } from "./types";
-
-/** Categories a client's canvas needs whole, whatever the plan uses today: the table types they may
- *  pick from, the studio's chairs (the default chair round every table is its first row), and the
- *  pieces a stage is laid from — the canvas lays a stage's decks from the primed catalog. */
-const WHOLE_CATEGORIES = ["tables", "chairs", "stages", "stage-decks", "stage-stairs", "stage-skirts", "stage-benches", "stage-barriers", "stage-ramps", "stage-surfaces"];
 
 /** A client may add at most this many tables in one proposal — a hall, not a stress test. */
 const MAX_ADDED_TABLES = 200;
@@ -162,85 +149,6 @@ async function sharedEvent(eventId: string): Promise<Shared> {
   };
 }
 
-async function studioContact(organizationId: string, fallbackName: string) {
-  const [s] = await db()
-    .select({ name: studioSettings.businessName, phone: studioSettings.phone, email: studioSettings.email, instagram: studioSettings.instagram })
-    .from(studioSettings)
-    .where(eq(studioSettings.organizationId, organizationId))
-    .limit(1);
-  return { name: s?.name || fallbackName, phone: s?.phone ?? "", email: s?.email ?? "", instagram: s?.instagram ?? "" };
-}
-
-// ── the reads a sketch needs ────────────────────────────────────────────────────────────────────
-
-/** The designer's current drawing — the highest version, sealed or not; an empty one before any. */
-async function designerDocument(organizationId: string, eventId: string) {
-  const [row] = await db()
-    .select({ content: designDocuments.content, version: designDocuments.version, updatedAt: designDocuments.updatedAt })
-    .from(designDocuments)
-    .where(and(eq(designDocuments.eventId, eventId), eq(designDocuments.organizationId, organizationId)))
-    .orderBy(desc(designDocuments.version))
-    .limit(1);
-  return row ?? { content: emptyDocument(), version: 0, updatedAt: null };
-}
-
-/** The event's venue as a plan: walls, doors, features, zones. Only ever the event's own venue, in
- *  the event's own studio — the join that got us here is what entitles the client to it. */
-async function eventGeometry(organizationId: string, venueId: string | null): Promise<VenueGeometry> {
-  if (!venueId) return { structure: emptyStructure(), zones: [], mmPerUnit: 1, access: "none" };
-  const database = db();
-  const [[venueRow], [structureRow], zoneRows] = await Promise.all([
-    database.select({ plan: venues.plan }).from(venues).where(and(eq(venues.id, venueId), eq(venues.organizationId, organizationId))).limit(1),
-    database
-      .select({ structure: venueStructures.structure })
-      .from(venueStructures)
-      .where(and(eq(venueStructures.venueId, venueId), eq(venueStructures.organizationId, organizationId)))
-      .limit(1),
-    database.select().from(zones).where(and(eq(zones.venueId, venueId), eq(zones.organizationId, organizationId))).orderBy(asc(zones.createdAt)),
-  ]);
-  return {
-    structure: (structureRow?.structure as VenueStructure) ?? emptyStructure(),
-    zones: zoneRows.map(toZone),
-    mmPerUnit: (venueRow?.plan as { mmPerUnit?: number } | undefined)?.mmPerUnit ?? 1,
-    access: "granted",
-  };
-}
-
-/** Every variant id a drawing names. */
-function variantIdsOf(...docs: DesignDocumentContent[]): Set<string> {
-  const ids = new Set<string>();
-  for (const d of docs) {
-    for (const t of d.tables) {
-      if (t.variantId) ids.add(t.variantId);
-      if (t.chairVariantId) ids.add(t.chairVariantId);
-    }
-    for (const p of d.placements) ids.add(p.variantId);
-  }
-  return ids;
-}
-
-/** The studio's catalog, server-side, by organisation — the caller has already proven access. */
-async function catalogOf(organizationId: string) {
-  const database = db();
-  const rows = await database.select().from(products).where(eq(products.organizationId, organizationId));
-  if (rows.length === 0) return [];
-  const variantRows = await database
-    .select()
-    .from(productVariants)
-    .where(and(eq(productVariants.organizationId, organizationId), inArray(productVariants.productId, rows.map((r) => r.id))));
-  return toProducts(rows, variantRows);
-}
-
-/** What the client's canvas is sent: the rows the drawings use, plus WHOLE_CATEGORIES — each one
- *  through the allow-list. */
-async function clientCatalog(organizationId: string, ...docs: DesignDocumentContent[]) {
-  const used = variantIdsOf(...docs);
-  return (await catalogOf(organizationId))
-    // A row with no variants is placed under its OWN id (defaultVariantId), so both are looked for.
-    .filter((p) => used.has(p.id) || p.variants.some((v) => used.has(v.id)) || (WHOLE_CATEGORIES.includes(p.category) && !p.archived))
-    .map(clientProduct);
-}
-
 // ── proposals ───────────────────────────────────────────────────────────────────────────────────
 
 type ProposalRow = typeof sketchProposals.$inferSelect;
@@ -325,6 +233,21 @@ export async function fetchClientSketch(eventId: string): Promise<ClientSketch> 
     proposal,
     outcome,
   };
+}
+
+/** The event in 3D, for the client it is shared with (spec §6.3): the designer's live drawing, the
+ *  venue, the allow-listed catalog and the designer's viewpoints and tour — the same assembly the
+ *  no-login link reads (lib/scene/reads.ts), so the portal and the link never differ. A viewer and
+ *  an editor see the same thing: the 3D view edits nothing. */
+export async function fetchClientScene(eventId: string): Promise<ClientScene> {
+  const { event } = await sharedEvent(eventId);
+  const d = event.detail;
+  return clientSceneFor(
+    event.organizationId,
+    event.venueId,
+    { id: event.id, title: event.clientName, date: d.date, time: d.time, where: d.where, venueName: d.venueName },
+    d.studioName,
+  );
 }
 
 /** Open a draft on the designer's current drawing — or hand back the one already open. */

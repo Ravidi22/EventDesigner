@@ -1,102 +1,665 @@
 "use client";
-// The cameras. AUTHOR: drei's OrbitControls (orbit, pan along the floor, dolly) with the eye held
-// above the floor, reporting its pose in PLAN mm through `onCamera` — throttled to one report per
-// animation frame, through refs, never a setState. CURATED (phase C fills this in): no controls,
-// the overview pose alone.
+// The camera, both modes, and everything that moves it: the fly to a viewpoint, the guided tour,
+// and the client's head-turn.
 //
-// Damping needs frames only while it damps: drei's control calls `invalidate()` on every `change`
-// it dispatches, and its `update()` dispatches `change` only while the camera still moves — so a
-// demand-rendered canvas settles by itself and a still view costs nothing. No `useFrame` here.
+// AUTHOR (the designer's tab): drei's OrbitControls (orbit, pan along the floor, dolly) with the
+// eye held above the floor. Choosing a viewpoint FLIES the orbit camera there — position, look
+// point and field of view — with the controls switched off for the flight and handed back at the
+// end, their target on the look point. A press or a wheel on the canvas mid-flight (or mid-tour)
+// lets go at once: the controls take the very press that interrupted it. When the designer moves
+// the camera off a viewpoint by hand, `onLeave` says so, so the same row can be chosen again.
 //
-// The overview is the default pose: an elevated 35° view from the plan's −y side, far enough back
-// for the bounds' diagonal to fit the vertical field of view. `fromWorld` is derived from `toWorld`
-// (the images of the three plan axes, inverted) so the viewer never states the mapping twice.
-import { useEffect, useLayoutEffect, useMemo, useRef, type ComponentRef } from "react";
-import { Vector3 } from "three";
+// CURATED (the meeting, the client): no controls. The camera stands at the active viewpoint; a drag
+// turns the head about the eye (yaw ±35°, pitch ±20°, ./camera-rules.ts), a wheel or a two-finger
+// pinch zooms the field of view between 40° and 70°, and nothing moves the eye but a viewpoint.
+// Released, the head stays turned; it eases back to centre over 600 ms only when a new viewpoint
+// is chosen (a chip, a tour leg, or `recentre` — the active chip tapped again).
+//
+// THE FLY is lib/scene/viewpoints.ts's `flyPose(from, to, t, crossesZones(from, to, zones))`, from
+// the camera's pose when the fly began (built from the camera through `fromWorld`; in curated mode
+// the pose WITHOUT the head, which eases out on its own clock), over the leg's travel time — 1.2 s
+// for a chip. THE TOUR is `tourAt(tour, elapsed)` on a clock started when ▶ is pressed, flying
+// from wherever the camera is into the first stop played, then leg to leg; ⏸ leaves the camera
+// where it is, and ▶ again carries on from the next stop (`resumeStop`). A hidden tab freezes the
+// clock and the clock is moved on by the time it was hidden, so the tour resumes where it was.
+//
+// NOTHING HERE IS REACT STATE. The pose, the head, the fly and the tour clock live in refs; a frame
+// is requested (`invalidate()`) every frame ONLY while something is in motion — flying, easing the
+// head back, or a tour leg in the air. A tour's dwell sleeps on a timer and wakes the canvas when
+// the next leg is due, so a resting tour draws nothing. The one callback per leg is `onTourStep`.
+// Every pose is in plan mm (lib/scene/types.ts) and enters three through `toWorld` alone.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from "react";
+import { type Camera, type PerspectiveCamera, Vector3 } from "three";
 import { OrbitControls } from "@react-three/drei";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import type { Bounds } from "@/lib/studio/geometry";
+import type { ResolvedZone } from "@/lib/venues/zone";
+import { startPointerGesture } from "@/lib/studio/gesture";
 import { MM_PER_M, fromWorld as planFromWorld, toWorld } from "@/lib/scene/frame";
-import { DEFAULT_FOV_DEG, vec3, type Vec3 } from "@/lib/scene/types";
+import { DEFAULT_FOV_DEG, type Tour, type Vec3, type Viewpoint } from "@/lib/scene/types";
+import { crossesZones, flyPose, overview, tourAt, tourSchedule } from "@/lib/scene/viewpoints";
+import {
+  CENTRED,
+  CHIP_TRAVEL_MS,
+  COMPOSED_ASPECT,
+  type CameraPose,
+  type Head,
+  type TourPlace,
+  dragHead,
+  easedHead,
+  isCentred,
+  pinchHead,
+  resumeStop,
+  samePose,
+  tourFrom,
+  turnedLook,
+  fitFov,
+  wheelHead,
+  zoomedFov,
+} from "./camera-rules";
 
-/** Where the eye is and what it looks at, in plan mm with z up (a Viewpoint's two points). */
-export interface CameraPose {
+export type { CameraPose } from "./camera-rules";
+
+export interface SceneCameraProps {
+  mode: "author" | "curated";
+  bounds: Bounds;
+  /** Accepted for an indoor rig; nothing reads it yet. */
+  roofedMm?: number | null;
+  viewpoints: Viewpoint[];
+  /** Every zone on the property (EventPlan.all): a fly between two of them lifts over the wall. */
+  zones: ResolvedZone[];
+  /** The viewpoint the camera should be at. Changing it flies there (unless a tour is playing —
+   *  the tour drives, and the screen echoes its steps back into this). */
+  activeId: string | null;
+  /** Bumped when the active viewpoint is chosen again: the head comes back to centre (curated), or
+   *  the camera flies back onto it (author). */
+  recentre?: number;
+  tour: Tour | null;
+  playing: boolean;
+  /** The tour reached a new leg: `index` is into `tour.stops` as it was when ▶ was pressed, and
+   *  `viewpointId` is the stop's viewpoint (so a tour edited mid-play still lights the right chip).
+   *  Once per leg, never per frame. */
+  onTourStep?: (index: number, viewpointId: string) => void;
+  /** The tour stopped by itself — a one-way tour finished, its viewpoint vanished, or the
+   *  designer grabbed the camera. The screen flips ▶ back. */
+  onTourEnd?: () => void;
+  /** Author: the designer moved the camera off the active viewpoint by hand. */
+  onLeave?: () => void;
+  /** The pose, at most once per animation frame, through refs. Both modes: the meeting saves a
+   *  view from the curated camera, head-turn and zoom included. */
+  onCamera?: (pose: CameraPose) => void;
+}
+
+interface Pose {
   eye: Vec3;
   look: Vec3;
+  fovDeg: number;
+}
+
+interface Fly {
+  from: Viewpoint;
+  to: Viewpoint;
+  start: number;
+  ms: number;
+  cross: boolean;
+}
+
+interface TourRun {
+  tour: Tour;
+  indexOf: (played: number) => number;
+  legs: ReturnType<typeof tourSchedule>["legs"];
+  totalMs: number;
+  start: number;
+  /** The played leg and loop cycle last seen, to tell a new leg from the same one. */
+  leg: number;
+  cycle: number;
+  legFrom: Viewpoint;
+  cross: boolean;
+  hiddenAt: number | null;
 }
 
 const MIN_EYE_M = 0.3;
-const OVERVIEW_ELEVATION_DEG = 35;
-const FIT_MARGIN = 1.12;
-const rad = (deg: number) => (deg * Math.PI) / 180;
+/** The smallest plan the opening view frames, so an empty or one-table plan is not seen from
+ *  a hand's breadth away. */
+const MIN_FRAME_MM = 4000;
 
 /** three metres → plan mm: the frame module's inverse of `toWorld` (lib/scene/frame.ts). */
 export function fromWorld(p: Vector3): Vec3 {
   return planFromWorld(p.x, p.y, p.z);
 }
 
-/** The default view: elevated, from the −y side, framing the bounds. */
-export function overviewPose(bounds: Bounds, fovDeg = DEFAULT_FOV_DEG): CameraPose {
-  const cx = (bounds.minX + bounds.maxX) / 2;
-  const cy = (bounds.minY + bounds.maxY) / 2;
-  const diag = Math.max(4000, Math.hypot(bounds.widthMm, bounds.heightMm));
-  const distance = ((diag / 2) / Math.tan(rad(fovDeg) / 2)) * FIT_MARGIN;
-  const el = rad(OVERVIEW_ELEVATION_DEG);
-  return { look: vec3(cx, cy, 0), eye: vec3(cx, cy - Math.cos(el) * distance, Math.sin(el) * distance) };
+const asPerspective = (c: Camera): PerspectiveCamera | null => ((c as PerspectiveCamera).isPerspectiveCamera ? (c as PerspectiveCamera) : null);
+
+/** The opening view when no viewpoint is chosen: the defaults' own "מבט על" (lib/scene/viewpoints.ts
+ *  `overview`) — from the plan's +y side, so the room reads the way the plan is drawn — over a
+ *  frame of at least MIN_FRAME_MM. */
+export function overviewPose(bounds: Bounds): CameraPose {
+  const grow = (min: number, max: number, size: number) => {
+    if (size >= MIN_FRAME_MM) return [min, max, size] as const;
+    const mid = (min + max) / 2;
+    return [mid - MIN_FRAME_MM / 2, mid + MIN_FRAME_MM / 2, MIN_FRAME_MM] as const;
+  };
+  const [minX, maxX, widthMm] = grow(bounds.minX, bounds.maxX, bounds.widthMm);
+  const [minY, maxY, heightMm] = grow(bounds.minY, bounds.maxY, bounds.heightMm);
+  const v = overview({ minX, maxX, minY, maxY, widthMm, heightMm });
+  return { eye: v.eye, look: v.look, fovDeg: v.fovDeg ?? DEFAULT_FOV_DEG };
 }
 
 const boundsKey = (b: Bounds) => `${b.minX},${b.minY},${b.maxX},${b.maxY}`;
+const poseOf = (v: Viewpoint): Pose => ({ eye: v.eye, look: v.look, fovDeg: v.fovDeg ?? DEFAULT_FOV_DEG });
+const asViewpoint = (p: Pose, id = ""): Viewpoint => ({ id, name: "", eye: p.eye, look: p.look, fovDeg: p.fovDeg });
 
-export function AuthorCamera({ bounds, roofedMm, onCamera }: { bounds: Bounds; roofedMm: number | null; onCamera?: (pose: CameraPose) => void }) {
-  const camera = useThree((s) => s.camera);
+export function SceneCamera(props: SceneCameraProps) {
+  const { mode, bounds, activeId, recentre, viewpoints, playing } = props;
+  // The camera and the renderer are read through `get()` inside the callbacks that move them — the
+  // three objects are mutated every frame, which is what they are for, and never during render.
+  const get = useThree((s) => s.get);
   const invalidate = useThree((s) => s.invalidate);
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
-  const onCameraRef = useRef(onCamera);
-  onCameraRef.current = onCamera;
-  const pending = useRef(0);
   const key = boundsKey(bounds);
   const maxDistance = useMemo(() => Math.max(40, (Math.hypot(bounds.widthMm, bounds.heightMm) / MM_PER_M) * 4), [bounds.widthMm, bounds.heightMm]);
 
-  const report = () => {
-    pending.current = 0;
-    const c = controls.current;
-    const cb = onCameraRef.current;
-    if (!c || !cb) return;
-    cb({ eye: fromWorld(camera.position), look: fromWorld(c.target) });
-  };
-
-  const onChange = () => {
-    const c = controls.current;
-    if (c && c.target.y < 0) c.target.y = 0;
-    if (camera.position.y < MIN_EYE_M) camera.position.y = MIN_EYE_M;
-    if (!pending.current && onCameraRef.current) pending.current = requestAnimationFrame(report);
-  };
-
-  // The overview when the bounds change (another event, a venue with new walls) — not on every
-  // rebuild of the same plan, which would throw the designer's camera back on every edit.
-  // roofedMm is accepted for the indoor rig phase C adds; the overview may look in from above.
+  // The latest props, for the frame loop and the DOM listeners — written after each render, read
+  // only from callbacks.
+  const latest = useRef(props);
   useLayoutEffect(() => {
-    const pose = overviewPose(bounds);
-    camera.position.set(...toWorld(pose.eye));
+    latest.current = props;
+  });
+
+  const [opening] = useState(() => overviewPose(bounds));
+  const base = useRef<Pose>(opening);
+  const head = useRef<Head>(CENTRED);
+  const recentring = useRef<{ from: Head; start: number } | null>(null);
+  const fly = useRef<Fly | null>(null);
+  const tour = useRef<TourRun | null>(null);
+  const place = useRef<TourPlace>({ stop: null, viewpointId: null, arrived: true });
+  /** The look point last put on the camera (plan mm) — what `onCamera` reports. */
+  const lookNow = useRef<Vec3>(opening.look);
+  const dirty = useRef(false);
+  const dwellTimer = useRef(0);
+  const reportFrame = useRef(0);
+  const tmp = useRef(new Vector3());
+
+  // --- the small verbs, all on refs -------------------------------------------------------------
+
+  const report = () => {
+    if (reportFrame.current || !latest.current.onCamera) return;
+    reportFrame.current = requestAnimationFrame(() => {
+      reportFrame.current = 0;
+      const cb = latest.current.onCamera;
+      const camera = get().camera;
+      const cam = asPerspective(camera);
+      if (cb) cb({ eye: fromWorld(camera.position), look: lookNow.current, fovDeg: cam?.fov ?? DEFAULT_FOV_DEG });
+    });
+  };
+
+  /** The pose the camera shows now, from the camera itself: the eye and (author) the orbit
+   *  target or (curated) the base look — the head is not part of a fly's start. */
+  const cameraPose = (): Pose => {
+    if (latest.current.mode === "curated") return { ...base.current };
     const c = controls.current;
-    if (c) {
-      c.target.set(...toWorld(pose.look));
+    const camera = get().camera;
+    const cam = asPerspective(camera);
+    return { eye: fromWorld(camera.position), look: c ? fromWorld(c.target) : lookNow.current, fovDeg: cam?.fov ?? base.current.fovDeg };
+  };
+
+  /** Put `base` + the head on the camera. In author mode the orbit target follows, so handing the
+   *  controls back finds them where the camera is. */
+  const apply = () => {
+    const b = base.current;
+    const curated = latest.current.mode === "curated";
+    const h = curated ? head.current : CENTRED;
+    const look = turnedLook(b.eye, b.look, h.yawDeg, h.pitchDeg);
+    const camera = get().camera;
+    const cam = asPerspective(camera);
+    // Widened on a canvas narrower than the view was composed for (a phone held upright).
+    const fov = fitFov(zoomedFov(b.fovDeg, h.fovDeltaDeg), cam?.aspect ?? COMPOSED_ASPECT);
+    camera.position.set(...toWorld(b.eye));
+    tmp.current.set(...toWorld(look));
+    camera.lookAt(tmp.current);
+    if (cam && Math.abs(cam.fov - fov) > 1e-6) {
+      cam.fov = fov;
+      cam.updateProjectionMatrix();
+    }
+    if (!curated) controls.current?.target.copy(tmp.current);
+    lookNow.current = look;
+    report();
+  };
+
+  // A canvas resized (a phone turned, a panel collapsed): the field of view is re-fitted to the new
+  // aspect — never the pose, which in author mode is wherever the designer orbited to.
+  const size = useThree((st) => st.size);
+  useEffect(() => {
+    const cam = asPerspective(get().camera);
+    if (!cam) return;
+    const h = latest.current.mode === "curated" ? head.current : CENTRED;
+    const fov = fitFov(zoomedFov(base.current.fovDeg, h.fovDeltaDeg), size.width / Math.max(1, size.height));
+    if (Math.abs(cam.fov - fov) > 1e-6) {
+      cam.fov = fov;
+      cam.updateProjectionMatrix();
+      invalidate();
+    }
+    // Only a size change re-fits; the refs are read as they stand.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.width, size.height]);
+
+  const holdControls = () => {
+    const c = controls.current;
+    if (c) c.enabled = false;
+  };
+
+  /** Author: give the camera back to the orbit controls, their target on the look point. */
+  const handBack = () => {
+    if (latest.current.mode !== "author") return;
+    const c = controls.current;
+    if (!c) return;
+    c.target.set(...toWorld(base.current.look));
+    c.enabled = true;
+    c.update();
+    invalidate();
+  };
+
+  const clearDwell = () => {
+    if (dwellTimer.current) window.clearTimeout(dwellTimer.current);
+    dwellTimer.current = 0;
+  };
+
+  /** Start the head's way back to centre (curated). */
+  const recentreHead = (now: number) => {
+    if (isCentred(head.current)) return;
+    recentring.current = { from: { ...head.current }, start: now };
+  };
+
+  /** Freeze an easing head where it shows now, so a grab or a zoom starts from what is seen. */
+  const settleHead = (now: number) => {
+    const r = recentring.current;
+    if (!r) return;
+    head.current = easedHead(r.from, now - r.start);
+    recentring.current = null;
+  };
+
+  /** The pose on screen: the base with the head's turn and zoom (curated), the base itself (author). */
+  const shownPose = (): Pose => {
+    const b = base.current;
+    const h = head.current;
+    if (latest.current.mode !== "curated" || isCentred(h)) return b;
+    return { eye: b.eye, look: turnedLook(b.eye, b.look, h.yawDeg, h.pitchDeg), fovDeg: zoomedFov(b.fovDeg, h.fovDeltaDeg) };
+  };
+
+  const beginFly = (to: Viewpoint, ms: number) => {
+    const now = performance.now();
+    const from = cameraPose();
+    base.current = from;
+    place.current = { stop: null, viewpointId: to.id, arrived: false };
+    // Already showing it — the designer saved or re-shot the view the camera stands at: light it
+    // without a fly that goes nowhere (and, curated, without unwinding a head that is already it).
+    const shown = latest.current.mode === "curated" ? shownPose() : from;
+    if (samePose(asViewpoint(shown), to) || ms <= 0) {
+      fly.current = null;
+      base.current = poseOf(to);
+      head.current = CENTRED;
+      recentring.current = null;
+      place.current.arrived = true;
+      dirty.current = true;
+      handBack();
+      invalidate();
+      return;
+    }
+    if (latest.current.mode === "curated") recentreHead(now);
+    holdControls();
+    fly.current = { from: asViewpoint(from), to, start: now, ms, cross: crossesZones(asViewpoint(from), to, latest.current.zones) };
+    invalidate();
+  };
+
+  /** Jump without flying — the first frame, another plan, a mode switch with nothing to fly to. */
+  const jumpTo = (pose: Pose, id: string | null) => {
+    fly.current = null;
+    head.current = CENTRED;
+    recentring.current = null;
+    base.current = pose;
+    place.current = { stop: null, viewpointId: id, arrived: true };
+    apply();
+    const c = controls.current;
+    if (c && latest.current.mode === "author") {
+      c.enabled = true;
       c.update();
-    } else {
-      camera.lookAt(...toWorld(pose.look));
     }
     invalidate();
-    if (onCameraRef.current && !pending.current) pending.current = requestAnimationFrame(report);
+  };
+
+  const endTour = (tellScreen: boolean) => {
+    if (!tour.current) return;
+    tour.current = null;
+    clearDwell();
+    handBack();
+    if (tellScreen) latest.current.onTourEnd?.();
+  };
+
+  const startTour = () => {
+    const t = latest.current.tour;
+    if (!t || !t.stops.length) {
+      latest.current.onTourEnd?.();
+      return;
+    }
+    const played = tourFrom(t, resumeStop(t, place.current));
+    const { legs, totalMs } = tourSchedule(played.tour);
+    const from = cameraPose();
+    base.current = from;
+    fly.current = null;
+    holdControls();
+    tour.current = { tour: played.tour, indexOf: played.indexOf, legs, totalMs, start: performance.now(), leg: -1, cycle: -1, legFrom: asViewpoint(from), cross: false, hiddenAt: null };
+    invalidate();
+  };
+
+  const viewpointById = (id: string) => latest.current.viewpoints.find((v) => v.id === id) ?? null;
+
+  // --- the frame: only while something moves ----------------------------------------------------
+
+  useFrame(() => {
+    const now = performance.now();
+    let moving = false;
+    let changed = dirty.current;
+    dirty.current = false;
+
+    const run = tour.current;
+    if (run) {
+      if (run.hiddenAt !== null) return; // frozen while the tab is away
+      const elapsed = now - run.start;
+      const at = tourAt(run.tour, elapsed);
+      const stop = at.index >= 0 ? run.tour.stops[at.index] : null;
+      const to = stop ? viewpointById(stop.viewpointId) : null;
+      if (!to || run.totalMs <= 0) {
+        if (to) {
+          base.current = poseOf(to);
+          place.current = { stop: run.indexOf(at.index), viewpointId: to.id, arrived: true };
+          changed = true;
+        }
+        endTour(true);
+      } else {
+        const cycle = run.tour.loop ? Math.floor(elapsed / run.totalMs) : 0;
+        if (at.index !== run.leg || cycle !== run.cycle) {
+          run.leg = at.index;
+          run.cycle = cycle;
+          run.legFrom = asViewpoint(base.current);
+          run.cross = crossesZones(run.legFrom, to, latest.current.zones);
+          recentreHead(now);
+          const index = run.indexOf(at.index);
+          place.current = { stop: index, viewpointId: to.id, arrived: false };
+          latest.current.onTourStep?.(index, to.id);
+        }
+        const p = flyPose(run.legFrom, to, at.flyT, run.cross);
+        base.current = { eye: p.eye, look: p.look, fovDeg: p.fovDeg };
+        changed = true;
+        if (at.flyT >= 1) place.current.arrived = true;
+        if (at.done) endTour(true);
+        else if (at.flyT < 1) moving = true;
+        else if (!dwellTimer.current) {
+          // Resting: sleep until this stop's dwell ends, then wake the canvas for the next leg.
+          const inCycle = elapsed - cycle * run.totalMs;
+          const wait = Math.max(16, run.legs[at.index].leaveAt - inCycle + 4);
+          dwellTimer.current = window.setTimeout(() => {
+            dwellTimer.current = 0;
+            invalidate();
+          }, wait);
+        }
+      }
+    } else if (fly.current) {
+      const f = fly.current;
+      const t = (now - f.start) / f.ms;
+      const p = flyPose(f.from, f.to, Math.min(1, t), f.cross);
+      base.current = { eye: p.eye, look: p.look, fovDeg: p.fovDeg };
+      changed = true;
+      if (t >= 1) {
+        fly.current = null;
+        base.current = poseOf(f.to);
+        place.current.arrived = true;
+        apply();
+        handBack();
+        changed = false;
+      } else moving = true;
+    }
+
+    const r = recentring.current;
+    if (r) {
+      head.current = easedHead(r.from, now - r.start);
+      changed = true;
+      if (isCentred(head.current)) recentring.current = null;
+      else moving = true;
+    }
+
+    if (changed) apply();
+    if (moving) invalidate();
+  });
+
+  // --- placement: the first frame, another plan, a mode switch ----------------------------------
+
+  const placedKey = useRef<string | null>(null);
+  const placedMode = useRef(mode);
+  useLayoutEffect(() => {
+    const active = activeId ? viewpointById(activeId) : null;
+    if (placedKey.current !== key) {
+      // The first frame, or another plan (another event, a venue with new walls) — not every
+      // rebuild of the same plan, which would throw the camera back on every edit.
+      placedKey.current = key;
+      placedMode.current = mode;
+      if (tour.current) endTour(true);
+      jumpTo(active ? poseOf(active) : overviewPose(bounds), active?.id ?? null);
+      return;
+    }
+    if (placedMode.current === mode) return;
+    placedMode.current = mode;
+    // A mode switch keeps the view where it is. Into curated: the author camera's pose becomes the
+    // base and the head starts centred (the active-viewpoint effect below then flies on if the
+    // screen chose another viewpoint). Into author: the head's turn and zoom are baked into the
+    // pose the orbit controls take over.
+    const b = base.current;
+    const h = head.current;
+    const baked: Pose = { eye: b.eye, look: turnedLook(b.eye, b.look, h.yawDeg, h.pitchDeg), fovDeg: zoomedFov(b.fovDeg, h.fovDeltaDeg) };
+    if (mode === "curated") {
+      const c = controls.current;
+      const camera = get().camera;
+      const cam = asPerspective(camera);
+      base.current = { eye: fromWorld(camera.position), look: c ? fromWorld(c.target) : lookNow.current, fovDeg: cam?.fov ?? b.fovDeg };
+    } else base.current = baked;
+    head.current = CENTRED;
+    recentring.current = null;
+    if (fly.current || tour.current) holdControls();
+    else {
+      apply();
+      handBack();
+    }
+    invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, camera, invalidate, roofedMm]);
+  }, [key, mode]);
+
+  // --- the tour: ▶ and ⏸ (before the active viewpoint, so a chip tapped mid-tour stops it first)
+
+  useEffect(() => {
+    if (playing && !tour.current) startTour();
+    else if (!playing && tour.current) endTour(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing]);
+
+  // --- the active viewpoint ---------------------------------------------------------------------
+
+  useEffect(() => {
+    if (playing || !activeId) return;
+    const to = viewpointById(activeId);
+    if (!to) return;
+    if (activeId !== place.current.viewpointId) {
+      beginFly(to, CHIP_TRAVEL_MS);
+      return;
+    }
+    // Already there (or on the way). Curated: if the viewpoint itself changed under the camera —
+    // re-shot, or a default re-derived from an edited plan — stand on its new pose, head centred.
+    // (A re-shoot takes the very pose on screen, so this is invisible.)
+    if (mode === "curated" && !fly.current && place.current.arrived && !samePose(to, asViewpoint(base.current))) {
+      jumpTo(poseOf(to), to.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, playing, viewpoints, mode]);
+
+  // The active chip tapped again: the head comes home (curated), the camera flies back (author).
+  const firstRecentre = useRef(recentre);
+  useEffect(() => {
+    if (firstRecentre.current === recentre) return;
+    firstRecentre.current = recentre;
+    if (latest.current.playing) return;
+    const to = activeId ? viewpointById(activeId) : null;
+    // Stopped mid-air (⏸ during a leg, then its chip tapped) or the designer's camera: fly on to it.
+    if (to && (mode === "author" || (!place.current.arrived && !fly.current))) {
+      beginFly(to, CHIP_TRAVEL_MS);
+      return;
+    }
+    if (mode === "curated") {
+      recentreHead(performance.now());
+      invalidate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentre]);
+
+  // --- the canvas: the client's head (curated), letting go of a fly (author) ---------------------
+
+  useEffect(() => {
+    const el = get().gl.domElement;
+    if (mode === "author") {
+      // Capture phase: this runs before OrbitControls' own listener on the same element, so the
+      // press that interrupts a fly or a tour is the press that starts the orbit.
+      const interrupt = () => {
+        if (tour.current) {
+          endTour(true);
+        } else if (fly.current) {
+          fly.current = null;
+          apply();
+          handBack();
+        }
+      };
+      el.addEventListener("pointerdown", interrupt, true);
+      el.addEventListener("wheel", interrupt, true);
+      return () => {
+        el.removeEventListener("pointerdown", interrupt, true);
+        el.removeEventListener("wheel", interrupt, true);
+      };
+    }
+
+    // Curated. touch-action none, or a phone scrolls the page under a drag and zooms it on a pinch.
+    const touchAction = el.style.touchAction;
+    el.style.touchAction = "none";
+    const pointers = new Map<number, { x: number; y: number }>();
+    let drag: { id: number; x: number; y: number; from: Head } | null = null;
+    let pinch: { dist: number; from: Head } | null = null;
+    const spread = () => {
+      const [a, b] = [...pointers.values()];
+      return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+    };
+    const baseFov = () => base.current.fovDeg;
+    const restartDrag = () => {
+      const [first] = [...pointers.entries()];
+      drag = first ? { id: first[0], x: first[1].x, y: first[1].y, from: { ...head.current } } : null;
+    };
+    const down = (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      settleHead(performance.now());
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) {
+        drag = null;
+        pinch = { dist: spread(), from: { ...head.current } };
+      } else if (pointers.size === 1) restartDrag();
+      const id = e.pointerId;
+      startPointerGesture(
+        e,
+        {
+          onMove: (m) => {
+            pointers.set(id, { x: m.clientX, y: m.clientY });
+            if (pinch && pointers.size >= 2) {
+              head.current = pinchHead(pinch.from, pinch.dist, spread(), baseFov());
+            } else if (drag && drag.id === id) {
+              const cam = asPerspective(get().camera);
+              const fov = cam?.fov ?? baseFov();
+              head.current = dragHead(drag.from, m.clientX - drag.x, m.clientY - drag.y, el.clientHeight, fov, baseFov());
+            } else return;
+            recentring.current = null;
+            dirty.current = true;
+            invalidate();
+          },
+          onEnd: () => {
+            pointers.delete(id);
+            if (pointers.size < 2) pinch = null;
+            // A pinch that lifts one finger goes on as a drag from where that finger is now.
+            if (pointers.size === 1) restartDrag();
+            else drag = null;
+          },
+        },
+        { thresholdPx: 2, capture: el },
+      );
+    };
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      settleHead(performance.now());
+      const px = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * el.clientHeight : e.deltaY;
+      head.current = wheelHead(head.current, px, baseFov());
+      dirty.current = true;
+      invalidate();
+    };
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("wheel", wheel, { passive: false });
+    return () => {
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("wheel", wheel);
+      el.style.touchAction = touchAction;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, get, invalidate]);
+
+  // A hidden tab: the tour's clock stops, and is moved on by the time away when it comes back.
+  useEffect(() => {
+    const sync = () => {
+      const run = tour.current;
+      if (!run) return;
+      const now = performance.now();
+      if (document.visibilityState === "hidden") {
+        if (run.hiddenAt === null) run.hiddenAt = now;
+        clearDwell();
+      } else if (run.hiddenAt !== null) {
+        run.start += now - run.hiddenAt;
+        run.hiddenAt = null;
+        invalidate();
+      }
+    };
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, [invalidate]);
 
   useEffect(
     () => () => {
-      if (pending.current) cancelAnimationFrame(pending.current);
-      pending.current = 0;
+      clearDwell();
+      if (reportFrame.current) cancelAnimationFrame(reportFrame.current);
+      reportFrame.current = 0;
     },
     [],
   );
+
+  if (mode !== "author") return null;
+
+  // The designer's own camera. `change` fires while the controls move (damping included) and stops
+  // when they settle, so a still view costs nothing; the eye is held above the floor.
+  const onChange = () => {
+    const c = controls.current;
+    const camera = get().camera;
+    if (c && c.target.y < 0) c.target.y = 0;
+    if (camera.position.y < MIN_EYE_M) camera.position.y = MIN_EYE_M;
+    if (c && c.enabled) {
+      lookNow.current = fromWorld(c.target);
+      base.current = cameraPose();
+    }
+    report();
+  };
+  // A press or a wheel the controls take: the camera is leaving whatever viewpoint it stood at.
+  const onStart = () => {
+    if (place.current.viewpointId === null) return;
+    place.current = { stop: null, viewpointId: null, arrived: true };
+    latest.current.onLeave?.();
+  };
 
   return (
     <OrbitControls
@@ -111,23 +674,7 @@ export function AuthorCamera({ bounds, roofedMm, onCamera }: { bounds: Bounds; r
       maxDistance={maxDistance}
       zoomSpeed={0.8}
       onChange={onChange}
+      onStart={onStart}
     />
   );
-}
-
-/** Curated mode, phase A: the overview pose and nothing to drag. Phase C replaces it with the
- *  viewpoint fly and the head-turn. */
-export function OverviewCamera({ bounds }: { bounds: Bounds }) {
-  const camera = useThree((s) => s.camera);
-  const invalidate = useThree((s) => s.invalidate);
-  const key = boundsKey(bounds);
-  useLayoutEffect(() => {
-    const pose = overviewPose(bounds);
-    camera.position.set(...toWorld(pose.eye));
-    camera.lookAt(...toWorld(pose.look));
-    camera.updateProjectionMatrix();
-    invalidate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, camera, invalidate]);
-  return null;
 }

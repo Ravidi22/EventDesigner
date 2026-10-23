@@ -12,7 +12,7 @@ import { isMain } from "../self-check";
  *  two drawing passes are both "בעיצוב" to anyone reading a status chip. */
 export type StepStatus = "details" | "gallery" | "design";
 
-export type MeetingStepId = "details" | "hall" | "gallery" | "design" | "quote";
+export type MeetingStepId = "details" | "hall" | "gallery" | "design" | "scene" | "quote";
 
 export interface MeetingStep {
   id: MeetingStepId;
@@ -52,6 +52,12 @@ export const MEETING_STEPS: MeetingStep[] = [
     status: "design",
   },
   {
+    id: "scene",
+    label: "תלת-ממד",
+    hint: "הלקוח רואה את האולם מבפנים — נקודות המבט והסיור המודרך שהוכנו מראש. לא חלק מהפגישה עד שמפעילים אותו.",
+    status: "design",
+  },
+  {
     id: "quote",
     label: "הצעת מחיר",
     hint: "סגירת הפגישה — הצעת המחיר, ולצידה מפת ההצבה ורשימת הציוד. השלב היחיד שבו מוצגים מחירים ללקוח.",
@@ -63,8 +69,15 @@ export const STEP_BY_ID: Record<MeetingStepId, MeetingStep> = Object.fromEntries
   MEETING_STEPS.map((s) => [s.id, s]),
 ) as Record<MeetingStepId, MeetingStep>;
 
-/** The flow a studio gets before it configures anything. */
+/** The flow a studio gets before it configures anything. The 3D stage (`scene`) is NOT in it: a
+ *  studio turns it on in settings (spec 2026-10-23-3d-scene-design.md DECIDE 10), so a studio that
+ *  never asked for it never meets an extra stage. */
 export const DEFAULT_FLOW: MeetingStepId[] = ["details", "hall", "gallery", "design", "quote"];
+
+/** Where a stage sits among all of them — MEETING_STEPS' order, which is where a stage turned on
+ *  lands and how the settings list sorts. Not DEFAULT_FLOW's: a stage left out of the default flow
+ *  would rank −1 there, ahead of `details`. */
+export const stepRank = (id: MeetingStepId): number => MEETING_STEPS.findIndex((s) => s.id === id);
 
 const REQUIRED_STEPS: MeetingStepId[] = MEETING_STEPS.filter((s) => s.required).map((s) => s.id);
 
@@ -100,8 +113,7 @@ export function resumeIndex(flow: readonly MeetingStepId[], furthest: number, st
 export function toggleStep(flow: readonly MeetingStepId[], id: MeetingStepId): MeetingStepId[] {
   if (STEP_BY_ID[id].required) return [...flow];
   if (flow.includes(id)) return flow.filter((s) => s !== id);
-  const rank = (s: MeetingStepId) => DEFAULT_FLOW.indexOf(s);
-  const at = flow.findIndex((s) => rank(s) > rank(id));
+  const at = flow.findIndex((s) => stepRank(s) > stepRank(id));
   return at === -1 ? [...flow, id] : [...flow.slice(0, at), id, ...flow.slice(at)];
 }
 
@@ -128,5 +140,14 @@ if (isMain(import.meta.url)) {
   assert(resumeIndex(flow, 3, "nonsense") === 3, "an unknown id falls back");
   assert(resumeIndex(["details", "design"], 4, "gallery") === 1, "a stage the flow dropped falls back, clamped");
   assert(resumeIndex(flow, -2, "hall") === 0, "a negative step clamps to the first stage");
+  // The optional 3D stage: off by default, and turned on it lands between the design and the quote.
+  assert(!flow.includes("scene"), "the 3D stage is not in the default flow");
+  const withScene = toggleStep(flow, "scene");
+  assert(withScene.join(",") === "details,hall,gallery,design,scene,quote", `turned on, it sits after the design (${withScene.join(",")})`);
+  assert(toggleStep(["details", "quote"], "scene").join(",") === "details,scene,quote", "…and before the quote in a short flow");
+  assert(toggleStep(withScene, "scene").join(",") === flow.join(","), "turned off, the flow is as it was");
+  assert(normalizeFlow(["details", "scene", "quote"]).join(",") === "details,scene,quote", "a saved flow holding it survives normalisation");
+  assert(resumeIndex(withScene, 5, "scene") === 4, "a meeting reopens on it by ?stage=scene");
+  assert(toggleStep(flow, "gallery").join(",") === "details,hall,design,quote" && toggleStep(["details", "hall", "design", "quote"], "gallery").join(",") === flow.join(","), "the other stages still go back where they were");
   console.log("meeting steps: ok");
 }

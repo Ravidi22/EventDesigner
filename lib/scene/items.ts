@@ -181,6 +181,14 @@ function candle(b: ItemBuild, x: number, y: number, r: number, from: number, top
   b.emitters.push({ at: vec3(x, y, from + height), radiusMm: FLAME_R_MM, colour: ENVELOPE.flame, strength: flame });
 }
 
+/** A candle at the size it really is. The plan draws a candelabrum's candles fat enough to see from
+ *  above at 1:100 (item-symbol.tsx candleAt — up to a fifth of the piece across); in a room they
+ *  are tapers, 2–3 cm across, or pillar candles in a glass sleeve. Seen on plan A in a browser
+ *  (2026-10-23): a candelabrum of the plan's candles read as a bundle of drainpipes. */
+export const TAPER_R_MM = 12;
+export const PILLAR_R_MM = 40;
+const real = (r: number, sleeve = false): number => Math.min(r, sleeve ? PILLAR_R_MM * 0.8 : TAPER_R_MM);
+
 /** A turned foot under a stem: `R` wide at the floor, narrowing to the stem in 45 mm. */
 function foot(b: ItemBuild, R: number, metal: MaterialRef) {
   b.parts.push(lathe([{ r: R, z: 0 }, { r: R, z: 8 }, { r: R * 0.6, z: 25 }, { r: R * 0.3, z: 45 }], vec3(0, 0, 0), metal));
@@ -449,7 +457,7 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
   if (n <= 1) {
     // item-symbol.tsx:395: a foot 0.92 R wide and one candle 0.5 R (0.32 R in its sleeve).
     b.parts.push(cyl(R * 0.92, 15, vec3(0, 0, 0), metal));
-    candle(b, 0, 0, R * (sleeves ? 0.32 : 0.5), 15, h, metal, sleeves);
+    candle(b, 0, 0, Math.min(R * (sleeves ? 0.32 : 0.5), PILLAR_R_MM), 15, h, metal, sleeves);
     return b;
   }
   const ring = n % 2 === 1 ? n - 1 : n;
@@ -463,9 +471,9 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
   for (let i = 0; i < ring; i++) {
     const p = polar(reach, -90 + (i * 360) / ring);
     arm(b, p, armZ, arms);
-    candle(b, p.x, p.y, r, armZ, h * 0.95, metal, sleeves);
+    candle(b, p.x, p.y, real(r, sleeves), armZ, h * 0.95, metal, sleeves);
   }
-  if (n % 2 === 1) candle(b, 0, 0, r * 0.95, armZ + 15, h, metal, sleeves);
+  if (n % 2 === 1) candle(b, 0, 0, real(r * 0.95, sleeves), armZ + 15, h, metal, sleeves);
   return b;
 }
 
@@ -492,7 +500,7 @@ function candleTiers(w: number, d: number, h: number, n: number, tone: string): 
   for (let i = 0; i < outer; i++) {
     const p = polar(R * 0.76, -90 + (i * 360) / outer);
     arm(b, p, zOuter, arms);
-    candle(b, p.x, p.y, ro, zOuter, h * 0.74, metal);
+    candle(b, p.x, p.y, real(ro), zOuter, h * 0.74, metal);
     // A crystal drop hanging between the arms.
     const q = polar(R * 0.9, -90 + ((i + 0.5) * 360) / outer);
     b.parts.push(sphere(R * 0.035, vec3(q.x, q.y, zOuter - h * 0.08), GLASS));
@@ -500,9 +508,9 @@ function candleTiers(w: number, d: number, h: number, n: number, tone: string): 
   for (let i = 0; i < inner; i++) {
     const p = polar(R * 0.4, -90 + ((i + 0.5) * 360) / inner);
     arm(b, p, zInner, arms);
-    candle(b, p.x, p.y, ri, zInner, h * 0.9, metal);
+    candle(b, p.x, p.y, real(ri), zInner, h * 0.9, metal);
   }
-  candle(b, 0, 0, ro, zInner + 20, h, metal);
+  candle(b, 0, 0, real(ro), zInner + 20, h, metal);
   return b;
 }
 
@@ -525,7 +533,7 @@ function candleRow(w: number, d: number, h: number, n: number, long: boolean, sl
       b.parts.push(cyl(Math.max(8, bar * 0.4), barZ, vec3(0, 0, 0), metal));
     }
     b.parts.push(box(L * 0.92, bar, barT, vec3(0, 0, barZ - barT / 2), metal));
-    for (let i = 0; i < n; i++) candle(b, n === 1 ? 0 : -span / 2 + (i * span) / (n - 1), 0, r, barZ, h, metal, sleeves);
+    for (let i = 0; i < n; i++) candle(b, n === 1 ? 0 : -span / 2 + (i * span) / (n - 1), 0, real(r, sleeves), barZ, h, metal, sleeves);
     return b;
   });
 }

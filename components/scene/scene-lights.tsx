@@ -12,7 +12,8 @@
 // bulbs before candles, intensity by strength, reach by radius, no shadows. The pool is JSX once;
 // the re-pick writes the lights' fields and invalidates — never a render per frame.
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { BackSide, type Camera, CanvasTexture, type DirectionalLight, type PointLight, SRGBColorSpace, Vector3 } from "three";
+import { BackSide, type Camera, CanvasTexture, type DirectionalLight, PMREMGenerator, type PointLight, SRGBColorSpace, Vector3 } from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { useThree } from "@react-three/fiber";
 import type { Bounds } from "@/lib/studio/geometry";
 import { toWorld } from "@/lib/scene/frame";
@@ -24,6 +25,14 @@ interface Rig {
   sky: string;
   ground: string;
   hemisphere: number;
+  /** The image-based light every material reflects (a soft studio room, RoomEnvironment) — what
+   *  makes gold read as gold, glass as glass and a polished floor as polished. */
+  environment: number;
+  /** A warm fill standing for the room's own lighting where it is roofed (the sun never reaches
+   *  inside a hall): chandeliers, uplights, the house lights an event is held under. */
+  interior: { colour: string; intensity: number };
+  /** The renderer's exposure under neutral tone mapping. */
+  exposure: number;
   sun: { colour: string; intensity: number; elevationDeg: number } | null;
   zenith: string;
   horizon: string;
@@ -35,6 +44,9 @@ const RIGS: Record<Mood, Rig> = {
     sky: "#dfe8f3",
     ground: "#b9b3a6",
     hemisphere: 0.6,
+    environment: 0.9,
+    interior: { colour: "#fff4e6", intensity: 0.55 },
+    exposure: 1.0,
     sun: { colour: "#fff2dd", intensity: 2.2, elevationDeg: 52 },
     zenith: "#8fb4e0",
     horizon: "#e8eef5",
@@ -44,6 +56,9 @@ const RIGS: Record<Mood, Rig> = {
     sky: "#e6c4a8",
     ground: "#7d6e66",
     hemisphere: 0.35,
+    environment: 0.55,
+    interior: { colour: "#ffcf98", intensity: 0.6 },
+    exposure: 1.1,
     sun: { colour: "#ffb070", intensity: 1.2, elevationDeg: 14 },
     zenith: "#7a6aa8",
     horizon: "#f0a070",
@@ -52,7 +67,10 @@ const RIGS: Record<Mood, Rig> = {
   night: {
     sky: "#334466",
     ground: "#1a1a2a",
-    hemisphere: 0.12,
+    hemisphere: 0.07,
+    environment: 0.16,
+    interior: { colour: "#ffb066", intensity: 0.36 },
+    exposure: 1.2,
     sun: null,
     zenith: "#0b1230",
     horizon: "#27305a",
@@ -114,17 +132,19 @@ export function SceneLights({
 
   // The sun stands off the south-west corner (plan: −x, +y → three: −x, +z), `distance` out and
   // `elevation` up, looking at the plan's centre. Low in the evening, so the shadows run long.
+  // The sun is always mounted (a night without one keeps it at intensity 0) for the light-count
+  // reason EmitterLights gives; at night it stands where the evening's did.
+  const sunSpec = rig.sun ?? { colour: "#000000", intensity: 0, elevationDeg: RIGS.evening.sun!.elevationDeg };
   const sun = useMemo(() => {
-    if (!rig.sun) return null;
-    const el = (rig.sun.elevationDeg * Math.PI) / 180;
+    const el = (sunSpec.elevationDeg * Math.PI) / 180;
     const distance = diag + 10;
     const flat = (distance * Math.cos(el)) / Math.SQRT2;
     return { position: [cx - flat, distance * Math.sin(el), cz + flat] as [number, number, number], distance };
-  }, [rig.sun, cx, cz, diag]);
+  }, [sunSpec.elevationDeg, cx, cz, diag]);
 
   useLayoutEffect(() => {
     const light = sunRef.current;
-    if (!light || !sun) return;
+    if (!light) return;
     const cam = light.shadow.camera;
     const half = diag / 2 + 1;
     cam.left = -half;
@@ -150,16 +170,23 @@ export function SceneLights({
     invalidate();
   }, [mood, fogScale, invalidate]);
 
+  // Exposure per mood: an evening hall is bright where the candles are, not dimmer overall.
+  const gl = useThree((st) => st.gl);
+  useEffect(() => {
+    gl.toneMappingExposure = rig.exposure;
+    invalidate();
+  }, [gl, rig.exposure, invalidate]);
+
   const scale = Math.max(0.2, fogScale);
   const fogNear = (diag + 10) * scale;
   const fogFar = fogNear + Math.max(80, diag * 4) * scale;
 
   return (
     <>
+      <StudioEnvironment intensity={rig.environment} />
       <hemisphereLight color={rig.sky} groundColor={rig.ground} intensity={rig.hemisphere} />
-      {sun && rig.sun && (
-        <directionalLight ref={sunRef} position={sun.position} color={rig.sun.colour} intensity={rig.sun.intensity} castShadow={shadows} />
-      )}
+      {roofedMm !== null && <hemisphereLight color={rig.interior.colour} groundColor="#2a2018" intensity={rig.interior.intensity} />}
+      <directionalLight ref={sunRef} position={sun.position} color={sunSpec.colour} intensity={sunSpec.intensity} castShadow={shadows} />
       <mesh position={[cx, 0, cz]} frustumCulled={false}>
         <sphereGeometry args={[SKY_RADIUS_M, 24, 12]} />
         {sky ? (
@@ -190,7 +217,10 @@ export function EmitterLights({ emitters, mood, count }: { emitters: EmitterNode
   const get = useThree((s) => s.get);
   const lights = useRef<(PointLight | null)[]>([]);
   const factor = LIGHT_BY_MOOD[mood];
-  const n = factor > 0 ? Math.max(0, Math.min(count, emitters.length)) : 0;
+  // The pool is mounted whatever the mood and lights go DARK rather than invisible: three counts the
+  // visible lights into every material's shader, so a mood switch that changed the count recompiled
+  // the whole room (seen headless on 2026-10-23: a 30 s frame) and hitches on a real GPU.
+  const n = Math.max(0, Math.min(count, emitters.length));
 
   const placed = useMemo<Placed[]>(
     () =>
@@ -215,13 +245,12 @@ export function EmitterLights({ emitters, mood, count }: { emitters: EmitterNode
       if (!light) continue;
       const pick = chosen[i] === undefined ? null : placed[chosen[i]];
       if (!pick) {
-        if (light.visible) changed = true;
-        light.visible = false;
+        if (light.intensity !== 0) changed = true;
+        light.intensity = 0;
         continue;
       }
       const intensity = intensityOf(pick.node.strength) * factor;
-      if (!light.visible || !light.position.equals(pick.position) || light.intensity !== intensity) changed = true;
-      light.visible = true;
+      if (!light.position.equals(pick.position) || light.intensity !== intensity) changed = true;
       light.position.copy(pick.position);
       light.color.set(pick.node.colour);
       light.intensity = intensity;
@@ -252,4 +281,35 @@ export function EmitterLights({ emitters, mood, count }: { emitters: EmitterNode
       ))}
     </>
   );
+}
+
+/** The image-based light: three's RoomEnvironment (a neutral studio box with soft area lights)
+ *  pre-filtered once into a PMREM and set as the scene's environment. No HDR file to fetch — it is
+ *  built from geometry on the client. Every MeshStandard/Physical material reflects it: metal
+ *  candlesticks catch highlights, glass gets an edge, the black tile floor its polish. */
+function StudioEnvironment({ intensity }: { intensity: number }) {
+  const gl = useThree((st) => st.gl);
+  const scene = useThree((st) => st.scene);
+  const invalidate = useThree((st) => st.invalidate);
+  const env = useMemo(() => {
+    const pmrem = new PMREMGenerator(gl);
+    const room = new RoomEnvironment();
+    const target = pmrem.fromScene(room, 0.04);
+    room.dispose();
+    pmrem.dispose();
+    return target;
+  }, [gl]);
+  useEffect(() => {
+    scene.environment = env.texture;
+    invalidate();
+    return () => {
+      if (scene.environment === env.texture) scene.environment = null;
+      env.dispose();
+    };
+  }, [env, scene, invalidate]);
+  useEffect(() => {
+    scene.environmentIntensity = intensity;
+    invalidate();
+  }, [scene, intensity, invalidate]);
+  return null;
 }

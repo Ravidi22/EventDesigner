@@ -15,18 +15,21 @@ export const LIGHT_BY_MOOD: Record<Mood, number> = { day: 0, evening: 0.5, night
 /** A strength at or above this is a bulb or a lamp — lit before any candle. */
 export const LAMP_CLASS = 0.7;
 
-/** A point light's intensity in candela from the builder's 0–1 strength: a candle (0.4) 0.6, a
- *  chandelier bulb (0.7) 2, a lamp (1) 3 — piecewise linear between them, clamped past 1. */
+/** A point light's intensity in candela from the builder's 0–1 strength: a candle (0.4) 1.5, a
+ *  chandelier bulb (0.7) 5, a lamp (1) 7.5 — piecewise linear between them, clamped past 1. Seen in
+ *  a browser on 2026-10-23: at a third of this a candle lit nothing a metre away, and a hall at
+ *  night was black between its bulbs. */
 export function intensityOf(strength: number): number {
   const s = Math.max(0, Math.min(1, strength));
-  if (s <= 0.4) return (s / 0.4) * 0.6;
-  if (s <= LAMP_CLASS) return 0.6 + ((s - 0.4) / (LAMP_CLASS - 0.4)) * 1.4;
-  return 2 + ((s - LAMP_CLASS) / (1 - LAMP_CLASS)) * 1;
+  if (s <= 0.4) return (s / 0.4) * 1.5;
+  if (s <= LAMP_CLASS) return 1.5 + ((s - 0.4) / (LAMP_CLASS - 0.4)) * 3.5;
+  return 5 + ((s - LAMP_CLASS) / (1 - LAMP_CLASS)) * 2.5;
 }
 
-/** How far a light reaches, in metres: six times the emitter's radius, plus two. */
+/** How far a light reaches, in metres: four times the emitter's radius, plus a metre and a half —
+ *  a pool round its table, not a wash across the floor. */
 export function lightDistanceM(radiusM: number): number {
-  return 6 * radiusM + 2;
+  return 4 * radiusM + 1.5;
 }
 
 export interface LitCandidate {

@@ -61,7 +61,8 @@ export function surfaceMaterial(texture: Texture, tint?: string): MaterialRef {
 
 export const clothMaterial = (colour: string): MaterialRef => ({ colour, kind: "fabric" });
 export const fabricMaterial = clothMaterial;
-export const glassMaterial = (colour = "#e8f0f5"): MaterialRef => ({ colour, kind: "glass", opacity: 0.35 });
+/** Clear glass: barely there, its edges and reflections doing the work (0.35 read as frosted). */
+export const glassMaterial = (colour = "#e8f0f5"): MaterialRef => ({ colour, kind: "glass", opacity: 0.22 });
 export const metalMaterial = (colour: string): MaterialRef => ({ colour, kind: "metal" });
 export const glossMaterial = (colour: string): MaterialRef => ({ colour, kind: "gloss" });
 export const foliageMaterial = (colour: string): MaterialRef => ({ colour, kind: "foliage" });

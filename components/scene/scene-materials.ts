@@ -11,6 +11,7 @@ import {
   CanvasTexture,
   Color,
   DoubleSide,
+  MeshPhysicalMaterial,
   MeshStandardMaterial,
   RepeatWrapping,
   SRGBColorSpace,
@@ -235,44 +236,77 @@ function haloTexture(): CanvasTexture | null {
 
 // --- the materials --------------------------------------------------------------------------------
 
+/** How rough each floor and furniture material is: the plan's materials, given a finish. A hall's
+ *  tiles are polished (they mirror the chandeliers), marble is honed, timber oiled, a lawn not at all. */
+const FINISH: Partial<Record<NonNullable<MaterialRef["texture"]>, { roughness: number; metalness?: number; env?: number }>> = {
+  // Polished, but reflecting the studio environment only faintly: its bright ceiling panel mirrored
+  // in the tile as a white pool at grazing angles (headless, 2026-10-23); the room's own lights and
+  // the sheen of the grid are what a polished hall floor shows.
+  tile: { roughness: 0.27, env: 0.3 },
+  marble: { roughness: 0.22, env: 0.6 },
+  wood: { roughness: 0.55 },
+  deck: { roughness: 0.7 },
+  paving: { roughness: 0.85 },
+  grass: { roughness: 1 },
+  gravel: { roughness: 1 },
+  sand: { roughness: 1 },
+  soil: { roughness: 1 },
+};
+
 function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
   const colour = new Color(ref.colour);
-  const mat = new MeshStandardMaterial({ color: colour, roughness: 0.85, metalness: 0 });
+  // Fabric is physical: a sheen at grazing angles is what makes a cloth read as cloth and not as
+  // painted plastic — the one place the extra shader cost is worth it on every device.
+  const mat: MeshStandardMaterial =
+    ref.kind === "fabric"
+      ? // A sheen in the cloth's own colour, half strength: a full white sheen takes its energy out of
+        // the base colour, and a white napkin read grey (seen headless, 2026-10-23).
+        new MeshPhysicalMaterial({ color: colour, roughness: 0.82, metalness: 0, sheen: 0.5, sheenRoughness: 0.7, sheenColor: colour.clone() })
+      : new MeshStandardMaterial({ color: colour, roughness: 0.75, metalness: 0 });
   switch (ref.kind) {
     case "matte":
-      break;
     case "fabric":
-      mat.roughness = 0.95;
       break;
     case "gloss":
-      mat.roughness = 0.3;
-      mat.metalness = 0.05;
+      mat.roughness = 0.22;
+      mat.metalness = 0.04;
+      mat.envMapIntensity = 1.2;
       break;
     case "metal":
-      mat.metalness = 0.85;
-      mat.roughness = 0.35;
+      mat.metalness = 0.92;
+      mat.roughness = 0.24;
+      mat.envMapIntensity = 1.4;
       break;
     case "glass":
       mat.transparent = true;
       mat.opacity = ref.opacity ?? 0.35;
       mat.depthWrite = false;
-      mat.roughness = 0.1;
+      mat.roughness = 0.04;
+      mat.envMapIntensity = 1.8;
       break;
     case "water":
-      mat.roughness = 0.15;
+      mat.roughness = 0.08;
       mat.metalness = 0.1;
+      mat.envMapIntensity = 1.4;
       mat.emissive = new Color(tint(ref.colour, "#000000", 0.5));
       mat.emissiveIntensity = 0.12;
       break;
     case "foliage":
-      mat.roughness = 0.9;
+      mat.roughness = 0.85;
       mat.side = DoubleSide;
       break;
     case "emissive":
       mat.emissive = colour.clone();
-      mat.emissiveIntensity = 1.2;
+      mat.emissiveIntensity = 2.2;
       mat.roughness = 0.6;
+      mat.toneMapped = false;
       break;
+  }
+  const finish = ref.texture ? FINISH[ref.texture] : undefined;
+  if (finish && ref.kind !== "water") {
+    mat.roughness = finish.roughness;
+    if (finish.metalness !== undefined) mat.metalness = finish.metalness;
+    if (finish.env !== undefined) mat.envMapIntensity = finish.env;
   }
   if (ref.kind !== "glass" && ref.opacity !== undefined && ref.opacity < 1) {
     mat.transparent = true;

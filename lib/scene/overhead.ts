@@ -168,6 +168,7 @@ function partSpan(p: Part): [number, number] {
     case "cylinder":
     case "extrude":
     case "ribbon":
+    case "drape":
       return [p.at.z, p.at.z + p.h];
     case "sphere":
       return [p.at.z - p.r, p.at.z + p.r];
@@ -205,6 +206,7 @@ function flipPart(p: Part, H: number): Part {
     }
     case "extrude":
     case "ribbon":
+    case "drape":
       return { ...p, at: vec3(p.at.x, p.at.y, H - (p.at.z + p.h)) };
     case "sphere":
     case "torus":
@@ -262,12 +264,14 @@ function hangFall(build: ItemBuild, spec: FlowerDrawSpec, H: number): void {
   const L = H - start;
   for (const r of build.instanced) {
     const p = r.parts[0];
-    if (!r.key.startsWith("flower:") || p?.shape !== "sphere") continue;
+    // A head is a ball or a bloom (flowers.ts headPart); either way its centre is one radius up.
+    const radius = p?.shape === "sphere" ? p.r : p?.shape === "lathe" ? p.profile.reduce((m, q) => Math.max(m, q.r), 0) : 0;
+    if (!r.key.startsWith("flower:") || radius <= 0) continue;
     const x = r.at.at.x;
     if (x < fallFrom - R * 0.06) continue;
     const t = Math.max(0, Math.min(1, (x - fallFrom) / (R * 0.72)));
     const centre = Math.max(0, L * (1 - t));
-    r.at = { ...r.at, at: vec3(x, r.at.at.y, centre - p.r) };
+    r.at = { ...r.at, at: vec3(x, r.at.at.y, centre - radius) };
   }
 }
 
@@ -417,9 +421,12 @@ if (isMain(import.meta.url)) {
   };
   const spec = flowerDrawSpecOf(product, { kind: "circle", diameterMm: 600 }, "#e8bcce");
   assert(spec.form === "dome", `a 40 cm arrangement is a dome (${spec.form})`);
+  // A head's centre: its base plus a ball's radius, or a bloom's widest ring (flowers.ts headPart).
   const centreOf = (r: InstanceRequest) => {
     const p = r.parts[0];
-    return p.shape === "sphere" ? r.at.at.z + p.r : r.at.at.z;
+    if (p.shape === "sphere") return r.at.at.z + p.r;
+    if (p.shape === "lathe") return r.at.at.z + p.profile.reduce((m, q) => Math.max(m, q.r), 0);
+    return r.at.at.z;
   };
   const upright = flowerBuild(spec, 400, { type: "flowers" });
   const hung = hungFlowersBody(ctxOf(600, 400, { flowers: spec }));

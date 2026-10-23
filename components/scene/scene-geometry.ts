@@ -315,6 +315,95 @@ function ribbonGeometry(path: Point[], h: number, pleatMm: number | undefined, a
   return g;
 }
 
+/** A cloth falling from a closed rim to the floor (Part "drape"). The rim is resampled every
+ *  DRAPE_STEP_MM; each sample is pushed out along its outward normal by the hem's flare (growing as
+ *  t² toward the floor) and by a fold — a sine along the rim whose depth grows with t, so the cloth
+ *  lies flat where it leaves the table and folds as it falls. A grid of DRAPE_ROWS rows, smooth
+ *  normals: fabric, not facets. Built outward-facing whatever way the outline winds. */
+const DRAPE_STEP_MM = 25;
+const DRAPE_ROWS = 14;
+function drapeGeometry(outline: Point[], h: number, pitchMm: number, depthMm: number, flareMm: number): BufferGeometry {
+  // Resample the closed rim.
+  const rim: Point[] = [];
+  const along: number[] = [];
+  let s = 0;
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i];
+    const b = outline[(i + 1) % outline.length];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const n = Math.max(1, Math.ceil(len / DRAPE_STEP_MM));
+    for (let k = 0; k < n; k++) {
+      const t = k / n;
+      rim.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      along.push(s + len * t);
+    }
+    s += len;
+  }
+  const N = rim.length;
+  if (N < 3) return new BufferGeometry();
+  // Outward normals: the rim's winding decides which side of each edge is out.
+  let area = 0;
+  for (let i = 0; i < N; i++) {
+    const a = rim[i];
+    const b = rim[(i + 1) % N];
+    area += a.x * b.y - b.x * a.y;
+  }
+  const out = area > 0 ? 1 : -1;
+  const normal = (i: number): Point => {
+    const p0 = rim[(i - 1 + N) % N];
+    const p1 = rim[(i + 1) % N];
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    const L = Math.hypot(dx, dy) || 1;
+    // For a CCW rim (positive area, y up) the outside of an edge is its right: (dy, −dx).
+    return { x: (dy / L) * out, y: (-dx / L) * out };
+  };
+  // A whole number of folds round the rim, so the seam does not jump.
+  const folds = Math.max(3, Math.round(s / Math.max(80, pitchMm)));
+  const pos: number[] = [];
+  const uv: number[] = [];
+  for (let j = 0; j <= DRAPE_ROWS; j++) {
+    const t = j / DRAPE_ROWS;
+    const z = h * (1 - t);
+    for (let i = 0; i <= N; i++) {
+      const k = i % N;
+      const nrm = normal(k);
+      const phase = ((i === N ? s : along[k]) / s) * folds * Math.PI * 2;
+      const push = flareMm * t * t + depthMm * Math.pow(t, 1.3) * Math.sin(phase);
+      pos.push(m(rim[k].x + nrm.x * push), m(z), m(rim[k].y + nrm.y * push));
+      uv.push(m(i === N ? s : along[k]), m(z));
+    }
+  }
+  const idx: number[] = [];
+  const W = N + 1;
+  for (let j = 0; j < DRAPE_ROWS; j++) {
+    for (let i = 0; i < N; i++) {
+      const a = j * W + i;
+      const b = a + 1;
+      const c = a + W;
+      const d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // Faces outward? Compare the first column's normal half way down with its outward direction
+  // (plan (x, y) is three (x, z)); flip the winding if it points in.
+  const nAttr = g.getAttribute("normal");
+  const probe = Math.floor(DRAPE_ROWS / 2) * W;
+  const n0 = normal(0);
+  if (nAttr.getX(probe) * n0.x + nAttr.getZ(probe) * n0.y < 0) {
+    const flipped: number[] = [];
+    for (let q = 0; q < idx.length; q += 3) flipped.push(idx[q], idx[q + 2], idx[q + 1]);
+    g.setIndex(flipped);
+    g.computeVertexNormals();
+  }
+  return g;
+}
+
 /** The tilt (see the rule at the top): a turn about the part's own x axis through its base
  *  centre, which is the origin the part was built about. three's rotateX is the right-handed
  *  turn, so +tilt carries the top (0, h, 0) to (0, h·cos, h·sin): toward +z, plan +y. */
@@ -336,6 +425,8 @@ export function partGeometry(part: Part): BufferGeometry {
       return extrudeGeometry(part.outline, part.h, part.holes);
     case "lathe":
       return latheGeometry(part.profile, part.segments ?? DEFAULT_RADIAL);
+    case "drape":
+      return drapeGeometry(part.outline, part.h, part.foldPitchMm ?? 230, part.foldDepthMm ?? 20, part.flareMm ?? 40);
     case "torus":
       return torusGeometry(part.r, part.tube, part.segments ?? DEFAULT_TORUS_TUBULAR);
     case "plane":
@@ -517,6 +608,14 @@ export function geometrySignature(body: BodyNode): string {
         num(p.pleatMm ?? 0);
         num(p.amplitudeMm ?? 0);
         for (const q of p.path) pt(q);
+        break;
+      case "drape":
+        num(p.h);
+        num(p.foldPitchMm ?? 0);
+        num(p.foldDepthMm ?? 0);
+        num(p.flareMm ?? 0);
+        num(p.outline.length);
+        for (const q of p.outline) pt(q);
         break;
     }
   }

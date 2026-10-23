@@ -61,6 +61,7 @@ import type { MeetingStepId } from "@/lib/meeting/steps";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { QuoteLayout } from "@/lib/quotes/layout";
 import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
+import type { SceneSettings } from "@/lib/scene/types";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -1407,4 +1408,41 @@ export const notifications = pgTable(
     createdAt: created(),
   },
   (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)],
+);
+
+// ── The 3D scene (docs/superpowers/specs/2026-10-23-3d-scene-design.md §7) ─────────────────────
+
+/** Everything about an event's 3D view that is NOT the drawing: the designer's viewpoints, the
+ *  guided tour and the mood (SceneSettings, lib/scene/types.ts). One row per event, written only
+ *  when the designer saves camera work — the scene itself is derived from the design document on
+ *  every read and is never stored. */
+export const eventScenes = pgTable("event_scenes", {
+  eventId: uuid("event_id")
+    .primaryKey()
+    .references(() => events.id, { onDelete: "cascade" }),
+  organizationId: orgId(),
+  settings: jsonb("settings").$type<SceneSettings>().notNull(),
+  updatedAt: updated(),
+});
+
+/** The no-login link a client forwards to family (F-9.2): the token is shown once and only its
+ *  hash is kept, compared with `gt(expiresAt, now)` like an invitation (lib/auth/invite-token.ts).
+ *  One live link per event — minting a new one revokes the old (DECIDE 4). */
+export const sceneLinks = pgTable(
+  "scene_links",
+  {
+    id: id(),
+    organizationId: orgId(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    openedCount: integer("opened_count").notNull().default(0),
+    lastOpenedAt: timestamp("last_opened_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("scene_links_token_key").on(t.tokenHash), index("scene_links_event_idx").on(t.eventId)],
 );

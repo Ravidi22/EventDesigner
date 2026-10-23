@@ -6,6 +6,7 @@ import {
   DEFAULT_FLOW,
   MEETING_STEPS,
   moveStep,
+  stepRank,
   toggleStep,
   type MeetingStepId,
 } from "@/lib/meeting/steps";
@@ -78,11 +79,15 @@ export function MeetingSection() {
 
   const isDefault = flow.length === DEFAULT_FLOW.length && flow.every((id, i) => id === DEFAULT_FLOW[i]);
 
-  // Order the whole catalogue by the flow, with the switched-off stages parked where the default
-  // flow has them — a stage you turn back on reappears exactly where it sat in this list.
+  // Order the whole catalogue by the flow, with each switched-off stage parked where turning it on
+  // would put it (toggleStep's rule, by stepRank) — so it reappears exactly where it sat in this
+  // list. The default flow's own indices would park the 3D stage, which is not in it, above
+  // פרטי האירוע.
   const rank = (id: MeetingStepId) => {
     const on = flow.indexOf(id);
-    return on === -1 ? DEFAULT_FLOW.indexOf(id) - 0.5 : on;
+    if (on !== -1) return on;
+    const at = flow.findIndex((s) => stepRank(s) > stepRank(id));
+    return (at === -1 ? flow.length : at) - 0.5;
   };
   const rows = [...MEETING_STEPS].sort((a, b) => rank(a.id) - rank(b.id));
 

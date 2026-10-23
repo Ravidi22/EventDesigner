@@ -52,6 +52,46 @@ type Trail = Extract<FlowerItem, { t: "trail" }>;
 /** The instance key a head shares with every head of its kind, colour and size in the room. */
 export const headKey = (kind: string, col: string, r: number): string => `flower:${kind}:${col}:${Math.round(r)}`;
 
+/** Kinds that read as a ball from every side: a hydrangea's mophead, and the small fillers. */
+const ROUND_KINDS = new Set(["hydrangea", "gyps", "phlox", "filler", "delphinium", "lavender"]);
+
+/** One head, its BASE at the origin and its centre `r` up (the instance is placed at z − r); a
+ *  bloom's widest ring is exactly `r`, as a ball's is. A real
+ *  bloom — a rose, a peony, a lisianthus — is a cup, open on top, its few lathe facets standing for
+ *  petals (seen close up on plan A: spheres read as grapes); a mophead or a filler stays a ball. */
+export function headPart(it: { t: string; kind: string; r: number }): Part {
+  const r = it.r;
+  if (it.t !== "head" || ROUND_KINDS.has(it.kind)) return { shape: "sphere", r, at: vec3(0, 0, r), segments: HEAD_SEGMENTS };
+  // A flat face (daisy, sunflower, anemone) opens wider and lower than a cup (rose, peony, ranunculus).
+  const flat = it.kind === "daisy" || it.kind === "sunflower" || it.kind === "anemone";
+  const profile = flat
+    ? [
+        { r: 0, z: 0 },
+        { r: 0.35 * r, z: 0.35 * r },
+        { r: 0.9 * r, z: 0.85 * r },
+        { r: 1.0 * r, z: 1.0 * r },
+        { r: 0.55 * r, z: 1.12 * r },
+        { r: 0, z: 1.18 * r },
+      ]
+    : [
+        { r: 0, z: 0 },
+        { r: 0.5 * r, z: 0.3 * r },
+        { r: 0.92 * r, z: 0.85 * r },
+        { r: 1.0 * r, z: 1.25 * r },
+        { r: 0.86 * r, z: 1.6 * r },
+        { r: 0.48 * r, z: 1.76 * r },
+        { r: 0.18 * r, z: 1.62 * r },
+        { r: 0, z: 1.66 * r },
+      ];
+  // Seated so the bloom's height is centred on the head's centre (a cup spans 0.12 r…1.88 r, a face
+  // 0.41 r…1.59 r): a hung arrangement mirrors each head about the middle of its own height, and a
+  // ball and a bloom must land in the same place.
+  return { shape: "lathe", profile, at: vec3(0, 0, flat ? 0.41 * r : 0.12 * r), segments: BLOOM_PETALS };
+}
+
+/** A bloom's facets round its rim: few enough to read as petals, not as a smooth bowl. */
+const BLOOM_PETALS = 9;
+
 /** The arrangement described by `spec` (composeFlowers' layout, in the footprint frame) as a
  *  build whose heads are instanced per (kind, colour) across the room. `heightMm` is the row's:
  *  the top of the highest head's centre. */
@@ -89,7 +129,7 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
   const head = (it: Head, z: number) => {
     const req: InstanceRequest = {
       key: headKey(it.kind, it.col, it.r),
-      parts: [{ shape: "sphere", r: it.r, at: vec3(0, 0, it.r), segments: HEAD_SEGMENTS }],
+      parts: [headPart(it)],
       material: { colour: it.col, kind: "matte" },
       tag,
       at: transform(vec3(it.x, it.y, z - it.r), deg(it.rot)),
@@ -189,10 +229,14 @@ if (isMain(import.meta.url)) {
     ],
   };
   const tag: NodeTag = { type: "flowers" };
+  // A head's centre is one head-radius above its base — a ball's radius, a bloom's widest ring.
   const centreOf = (r: InstanceRequest) => {
     const p = r.parts[0];
-    return p.shape === "sphere" ? r.at.at.z + p.r : r.at.at.z;
+    if (p.shape === "sphere") return r.at.at.z + p.r;
+    if (p.shape === "lathe") return r.at.at.z + p.profile.reduce((m, q) => Math.max(m, q.r), 0);
+    return r.at.at.z;
   };
+
 
   const spec = flowerDrawSpecOf(product, { kind: "circle", diameterMm: 400 }, "#e8bcce");
   assert(spec.form === "dome", `a 35cm arrangement is a dome (${spec.form})`);

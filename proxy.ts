@@ -39,7 +39,8 @@ const AUTH_PAGES = ["/login", "/signup", "/forgot"];
  * `/api/auth` is Better Auth's own routes: email verification links, the reset handshake, sign-in
  * itself. Each checks its own token; this layer has nothing to add.
  */
-const PUBLIC = [...AUTH_PAGES, "/join", "/reset", "/api/auth", "/api/google/callback", "/"];
+// "/v" is the 3D scene's no-login link (lib/scene/share-read.ts): the page itself checks the token.
+const PUBLIC = [...AUTH_PAGES, "/join", "/reset", "/api/auth", "/api/google/callback", "/v", "/"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
