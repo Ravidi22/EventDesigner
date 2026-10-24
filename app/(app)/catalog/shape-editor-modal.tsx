@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { Trash2 } from "lucide-react";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
-import { outlineBounds } from "@/lib/studio/footprint";
+import { customShapeBounds } from "@/lib/studio/footprint";
 import { useOutlineEditor } from "@/lib/studio/use-outline-editor";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
@@ -53,7 +53,7 @@ export function ShapeEditorModal({
     if (!open && d.open) d.close();
   }, [open]);
 
-  const bounds = outline.length >= 3 ? outlineBounds(outline) : null;
+  const bounds = outline.length >= 3 ? customShapeBounds(outline) : null;
   const mmToCm = (mm: number) => Math.round(mm / 10);
 
   // Rescale the shape to a new bounding width/height (cm). Curves are endpoint-relative offsets, so

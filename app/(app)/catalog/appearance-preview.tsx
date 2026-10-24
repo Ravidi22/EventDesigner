@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { Product } from "@/lib/catalog/types";
-import { resolveFootprint, resolveContent, outlineBounds } from "@/lib/studio/footprint";
+import { resolveFootprint, resolveContent, customShapeBounds } from "@/lib/studio/footprint";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { resolveStyle } from "@/lib/element-style";
@@ -26,7 +26,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
   if (f.kind === "circle") { w = f.diameterMm; h = f.diameterMm; shape = <circle cx={0} cy={0} r={w / 2} {...shapeProps} />; }
   else if (f.kind === "ellipse") { w = f.widthMm; h = f.depthMm; shape = <ellipse cx={0} cy={0} rx={w / 2} ry={h / 2} {...shapeProps} />; }
   else if (f.kind === "custom") {
-    const b = outlineBounds(f.outline); w = b.w; h = b.h;
+    const b = customShapeBounds(f.outline); w = b.w; h = b.h;
     // Center on (0,0); edge curves are endpoint-relative offsets so they carry over unchanged.
     const centered = f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
     shape = <path d={outlinePathD(centered, f.edgeCurves)} {...shapeProps} />;

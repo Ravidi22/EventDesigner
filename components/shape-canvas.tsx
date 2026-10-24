@@ -63,6 +63,60 @@ export interface ContextMenuItem {
   onSelect: () => void;
 }
 
+// A connected wall graph the canvas can draw and reshape alongside (or instead of) the single
+// `outline`. The outline models ONE closed shape, which cannot express a property where two rooms
+// share a wall: the shared wall would have to exist twice, once in each outline, and the two copies
+// drift apart the moment either is edited. A graph stores it once — dragging a node moves every
+// wall attached to it.
+//
+// Deliberately structural rather than importing the venue types, so this component keeps knowing
+// nothing about venues: anything with ids and coordinates satisfies it.
+export interface CanvasGraphNode {
+  id: string;
+  x: number;
+  y: number;
+}
+export interface CanvasGraphWall {
+  id: string;
+  a: string; // node id
+  b: string; // node id
+  kind?: "wall" | "edge"; // built wall vs. a boundary line you can see but not walk into
+}
+export interface CanvasGraph {
+  nodes: CanvasGraphNode[];
+  walls: CanvasGraphWall[];
+}
+/** What the canvas can hand back as "the thing you clicked" in a graph. Kept apart from
+ *  SelectedRef: that one's ids are positions in the `outline` array, these are stable graph ids. */
+export interface CanvasGraphRef {
+  kind: "node" | "wall";
+  id: string;
+}
+
+/** A world-space box to frame, plus a nonce the host bumps to ask for it again. Without the nonce,
+ *  selecting the same zone twice after panning away would be a no-op — the box hasn't changed, but
+ *  the request is real. */
+export interface CanvasFocus {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  nonce: number;
+}
+
+const FOCUS_MS = 300; // long enough to read as travel between two places, short enough not to wait on
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+
+// What a host-supplied layer needs from the canvas to be interactive rather than decorative: the
+// same pointer→world conversion every handle inside the canvas uses, and the current zoom. A layer
+// that only draws can stay plain JSX and ignore all of this.
+export interface CanvasLayerContext {
+  clientToMm: (clientX: number, clientY: number) => Point;
+  /** Screen px → world mm at the current zoom, for hit areas that must stay a constant finger-width. */
+  mm: (px: number) => number;
+}
+export type CanvasLayer = ReactNode | ((ctx: CanvasLayerContext) => ReactNode);
+
 const PAD_MM = 1500;
 const DEFAULT_EXTENT = { w: 22000, h: 15000 };
 const SNAP_PX = 16; // how close a click has to land on the first vertex to close the shape
@@ -90,8 +144,8 @@ const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
 
 // Frames the closed shape (doors are plain gaps in the wall now, so there's no swing arc to keep
 // in view). Only used in edit mode — while drawing we hold a fixed frame instead (see below).
-function computeViewBox(outline: Point[], stage: Fixture | undefined, bars: Fixture[], padMm: number, minExtent: { w: number; h: number }) {
-  const points = [...outline, ...(stage ? [stage] : []), ...bars];
+function computeViewBox(outline: Point[], stage: Fixture | undefined, bars: Fixture[], padMm: number, minExtent: { w: number; h: number }, extra: Point[] = []) {
+  const points = [...outline, ...(stage ? [stage] : []), ...bars, ...extra];
   if (points.length === 0) return { minX: -padMm, minY: -padMm, w: minExtent.w, h: minExtent.h };
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
@@ -226,6 +280,15 @@ export function ShapeCanvas({
   onUndo,
   onRedo,
   contextMenuItems,
+  backdrop,
+  overlay,
+  graph,
+  onMoveGraphNode,
+  graphSelection = [],
+  onSelectGraph,
+  onMarquee,
+  drawFrom,
+  focus,
   padMm = PAD_MM,
   minExtentMm = DEFAULT_EXTENT,
   gridMm = 1000,
@@ -269,6 +332,36 @@ export function ShapeCanvas({
   onRedo?: () => void;
   // Right-click builds its menu from these (e.g. the hall's add entrance/stage/bar). No items → no menu.
   contextMenuItems?: (point: Point) => ContextMenuItem[];
+  // World-space content painted under everything the canvas owns (below the walls, above the grid).
+  // The venue plan puts its zone tints and fixed features here, so a wall shared by two zones is
+  // still drawn once, by the canvas, on top of both — rather than each zone painting its own copy.
+  // Either plain JSX, or a function given the canvas's own pointer→world transform — which is what
+  // lets a host layer drag something without reimplementing (or mis-implementing) the conversion.
+  backdrop?: CanvasLayer;
+  // World-space content painted directly ABOVE the walls but below every handle — door openings,
+  // which only read as gaps if they overpaint the wall they cut through.
+  overlay?: CanvasLayer;
+  // A connected wall graph, drawn and reshaped alongside `outline`. Its nodes join the snap
+  // references, so tracing a new wing aligns to the walls already on the plan.
+  graph?: CanvasGraph;
+  onMoveGraphNode?: (nodeId: string, p: Point) => void;
+  // Graph selection. Supplying onSelectGraph is what makes walls clickable at all — a host that is
+  // mid-draw leaves it off, so a click meant to place a corner can't be swallowed by the wall it
+  // lands on. Node handles are drawn whenever either this or onMoveGraphNode is present.
+  // `additive` is the shift modifier: the host toggles rather than replaces.
+  graphSelection?: CanvasGraphRef[];
+  onSelectGraph?: (ref: CanvasGraphRef | null, additive: boolean) => void;
+  // A marquee drag finished. The canvas reports the box rather than the hits, because everything
+  // selectable here belongs to the host — the graph is its data, and so is whatever it drew into
+  // backdrop/overlay. Hit-testing it here would mean teaching the canvas what a zone is.
+  onMarquee?: (box: { minX: number; minY: number; maxX: number; maxY: number }, additive: boolean) => void;
+  // Where the rubber-band starts when there is no `outline` to hang it off — a graph host passes
+  // the corner its current run reached. Ignored while an outline is being drawn.
+  drawFrom?: Point | null;
+  // Frame this world-space box. Re-fits every time `nonce` changes, so "show me this zone" works
+  // twice in a row. The move is animated: on a property with five zones an instant jump to a
+  // different corner of the plan reads as a redraw, not as travel.
+  focus?: CanvasFocus | null;
   padMm?: number; // frame padding + minimum extent + grid spacing — hall-scale by default, smaller for
   minExtentMm?: { w: number; h: number }; // product footprints (cm-scale) so a small shape isn't tiny
   gridMm?: number;
@@ -322,10 +415,13 @@ export function ShapeCanvas({
 
   // Where the view should sit when fitted: hug the shape, or hold a fixed frame while first drawing
   // (recomputing to hug a single point would fling it into the corner).
+  // A graph host has no outline to hug, so an empty outline is not the same as an empty canvas —
+  // fall back to the fixed frame only when there is genuinely nothing drawn yet.
+  const graphFramePoints: Point[] = graph ? graph.nodes.map((n) => ({ x: n.x, y: n.y })) : [];
   const contentBox =
-    mode === "draw" && outline.length < 3
+    mode === "draw" && outline.length < 3 && graphFramePoints.length === 0
       ? { minX: -padMm, minY: -padMm, w: minExtentMm.w, h: minExtentMm.h }
-      : computeViewBox(outline, stage, bars, padMm, minExtentMm);
+      : computeViewBox(outline, stage, bars, padMm, minExtentMm, graphFramePoints);
 
   // The viewBox is derived from center+zoom with the container's own aspect ratio, so there's no
   // letterbox and 1 screen px == mmPerPx world units everywhere. Pan moves center; zoom changes
@@ -340,6 +436,41 @@ export function ShapeCanvas({
     setMmPerPx(Math.max(box.w / rw, box.h / rh) * 1.06);
     setCenter({ x: box.minX + box.w / 2, y: box.minY + box.h / 2 });
   };
+
+  // The live view, mirrored into a ref so the focus tween can read where it is starting from
+  // without re-subscribing every time the user pans a pixel. Synced from an effect rather than
+  // during render — and it stays correct for the tween because the effect that starts one is
+  // declared below this and so runs after it in the same commit.
+  const viewRef = useRef({ center, mmPerPx });
+  useEffect(() => {
+    viewRef.current = { center, mmPerPx };
+  }, [center, mmPerPx]);
+  const focusAnim = useRef<number | null>(null);
+  const cancelFocus = () => {
+    if (focusAnim.current !== null) cancelAnimationFrame(focusAnim.current);
+    focusAnim.current = null;
+  };
+  // Eased travel to a box, rather than a cut. Any pan or zoom the user starts mid-flight cancels it
+  // — the view is theirs the moment they touch it.
+  const animateTo = (box: { minX: number; minY: number; w: number; h: number }, rw: number, rh: number) => {
+    cancelFocus();
+    if (rw === 0 || rh === 0 || box.w <= 0 || box.h <= 0) return;
+    const from = { ...viewRef.current.center, mmPerPx: viewRef.current.mmPerPx };
+    const to = {
+      x: box.minX + box.w / 2,
+      y: box.minY + box.h / 2,
+      mmPerPx: Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, Math.max(box.w / rw, box.h / rh) * 1.18)),
+    };
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = easeOutCubic(Math.min(1, (now - t0) / FOCUS_MS));
+      setCenter({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
+      setMmPerPx(from.mmPerPx + (to.mmPerPx - from.mmPerPx) * k);
+      focusAnim.current = k < 1 ? requestAnimationFrame(step) : null;
+    };
+    focusAnim.current = requestAnimationFrame(step);
+  };
+  useEffect(() => cancelFocus, []);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -389,8 +520,12 @@ export function ShapeCanvas({
   };
 
   const clampZoom = (m: number) => Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, m));
-  const zoomByCenter = (factor: number) => setMmPerPx((m) => clampZoom(m * factor));
+  const zoomByCenter = (factor: number) => {
+    cancelFocus();
+    setMmPerPx((m) => clampZoom(m * factor));
+  };
   const zoomAround = (clientX: number, clientY: number, factor: number) => {
+    cancelFocus();
     const svg = svgRef.current;
     if (!svg) return;
     const r = svg.getBoundingClientRect();
@@ -514,10 +649,18 @@ export function ShapeCanvas({
 
   // Dragging: alignment pull only (see lib/studio/snap.ts), and remember the matched x/y so the
   // accent guide lines can be drawn.
-  const snapDrag = (p: Point, opts?: { fixtureId?: string; vertexIdx?: number }): Point => {
+  const graphPoints: Point[] = graph ? graph.nodes.map((n) => ({ x: n.x, y: n.y })) : [];
+  const graphNodeAt = (id: string) => graph?.nodes.find((n) => n.id === id) ?? null;
+
+  const snapDrag = (p: Point, opts?: { fixtureId?: string; vertexIdx?: number; graphNodeId?: string }): Point => {
     const r = snapPoint(p, {
       toleranceMm: SNAP_TOL_PX * mmPerPx,
-      outline,
+      // The dragged corner is dropped from its own reference list — otherwise it aligns to where it
+      // already is and can never be pulled off that line.
+      outline: [
+        ...outline,
+        ...(graph ? graph.nodes.filter((n) => n.id !== opts?.graphNodeId).map((n) => ({ x: n.x, y: n.y })) : []),
+      ],
       fixtures: fixtureRefs(opts?.fixtureId),
       gridMm,
       excludeVertexIdx: opts?.vertexIdx,
@@ -528,11 +671,16 @@ export function ShapeCanvas({
 
   // Drawing: the same references plus the 5°/ortho lock off the previous vertex. Kept pure and
   // re-derived every render (rather than stored) so pressing Alt updates the preview immediately.
-  const drawAnchor = mode === "draw" && outline.length > 0 ? outline[outline.length - 1] : null;
+
+  const drawAnchor =
+    mode === "draw" ? (outline.length > 0 ? outline[outline.length - 1] : (drawFrom ?? null)) : null;
   const snapDraw = (p: Point, releaseAngle: boolean): SnapResult =>
     snapPoint(p, {
       toleranceMm: SNAP_TOL_PX * mmPerPx,
-      outline,
+      // Existing graph corners are snap references too — that is what lets a new wing land flush on
+      // the wing already drawn, and what makes two runs actually meet at one node instead of at two
+      // that merely look coincident (and so enclose nothing).
+      outline: [...outline, ...graphPoints],
       fixtures: fixtureRefs(),
       gridMm,
       anchor: drawAnchor ?? undefined,
@@ -568,6 +716,7 @@ export function ShapeCanvas({
     if (marqueeMoved.current) { marqueeMoved.current = false; return; } // …nor on the click that ends a marquee drag
     if (mode !== "draw") {
       onSelect(null);
+      onSelectGraph?.(null, false); // empty canvas clears the graph selection too, not just the outline's
       return;
     }
     svgRef.current?.focus(); // typed lengths and Enter-to-close belong to the canvas from here on
@@ -632,10 +781,24 @@ export function ShapeCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, outline.length, onCloseOutline, onCancelDraw]);
 
+  const layerCtx: CanvasLayerContext = { clientToMm, mm };
+
   const entryOpen = entry !== null;
   useEffect(() => {
     if (entryOpen) entryRef.current?.focus();
   }, [entryOpen]);
+
+  // "Show me this" — the host bumps focus.nonce, the view travels there. Keyed on the nonce alone
+  // so a re-render that happens to carry the same box doesn't yank the view back mid-pan.
+  const focusNonce = focus?.nonce ?? 0;
+  useEffect(() => {
+    if (!focus || focusNonce === 0 || !hasRect) return;
+    const w = focus.maxX - focus.minX;
+    const h = focus.maxY - focus.minY;
+    if (w <= 0 || h <= 0) return;
+    animateTo({ minX: focus.minX, minY: focus.minY, w, h }, rect.w, rect.h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce, rect.w, rect.h]);
 
   // The view follows the drawing: nudge the centre when a fresh point lands near the frame's edge,
   // and only re-fit (which changes zoom) once the whole outline no longer fits at all. Draw mode
@@ -676,7 +839,10 @@ export function ShapeCanvas({
       preserveAspectRatio="xMidYMid meet"
       tabIndex={-1}
       className={
-        "h-full w-full touch-none focus:outline-none " +
+        // select-none on the root, not on each <text>: it inherits, so it also covers whatever a
+        // host draws into backdrop/overlay. A drawing surface has nothing worth text-selecting, and
+        // a drag across a label that highlights it instead of moving the plan reads as broken.
+        "h-full w-full touch-none select-none focus:outline-none " +
         (spaceHeld ? "cursor-grab" : hoverClose && closable ? "cursor-pointer" : mode === "draw" ? "cursor-crosshair" : "cursor-default")
       }
       role="img"
@@ -686,12 +852,19 @@ export function ShapeCanvas({
         panMoved.current = false;
         if (spaceHeld || e.button === 1) {
           e.preventDefault();
+          cancelFocus(); // the view is the user's again the instant they grab it
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           pan.current = { x: e.clientX, y: e.clientY, moved: false };
         } else if (mode === "edit") {
-          // Reaching the svg's own onPointerDown at all means the press missed every handle (they
-          // all stopPropagation), so this is empty canvas — the start of a marquee, not a click yet.
-          (e.currentTarget as Element).setPointerCapture(e.pointerId);
+          // A press that reached the svg missed every *draggable* handle (those stopPropagation),
+          // but it may still be a plain click on something selectable in a host layer — a zone
+          // tint, a wall, a door — since those have to let the press through or a marquee could
+          // never be started over them.
+          //
+          // Which is why capture is NOT taken here, only once the drag threshold is crossed (see
+          // onPointerMove). A captured pointer retargets the click that follows to the capture
+          // element, so capturing every press would silently eat the click on everything underneath
+          // — the exact reason walls and zones read as unclickable.
           const p = clientToMm(e.clientX, e.clientY);
           marquee.current = { anchorClientX: e.clientX, anchorClientY: e.clientY, x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false };
         }
@@ -705,8 +878,21 @@ export function ShapeCanvas({
           return;
         }
         if (marquee.current) {
+          // Nothing captures the pointer below the drag threshold, so a press that wandered off the
+          // canvas and was released there never reaches our onPointerUp. Seeing the button already
+          // up is how that stranded gesture gets cleaned up, instead of a ghost box appearing the
+          // next time the pointer crosses back in.
+          if (e.buttons !== 1) {
+            marquee.current = null;
+            setMarqueeBox(null);
+            return;
+          }
           const p = clientToMm(e.clientX, e.clientY);
           const moved = marquee.current.moved || Math.hypot(e.clientX - marquee.current.anchorClientX, e.clientY - marquee.current.anchorClientY) >= DRAG_THRESHOLD_PX;
+          // Capture at the threshold, not at the press: now that this really is a drag, the box
+          // should keep tracking past the canvas edge, and swallowing the trailing click is correct
+          // rather than destructive.
+          if (moved && !marquee.current.moved) (e.currentTarget as Element).setPointerCapture(e.pointerId);
           marquee.current = { ...marquee.current, x1: p.x, y1: p.y, moved };
           setMarqueeBox(moved ? { x0: marquee.current.x0, y0: marquee.current.y0, x1: p.x, y1: p.y } : null);
           return;
@@ -719,12 +905,14 @@ export function ShapeCanvas({
           (e.currentTarget as Element).releasePointerCapture(e.pointerId);
           panMoved.current = pan.current.moved;
         } else if (marquee.current) {
-          (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+          const el = e.currentTarget as Element;
+          if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId); // only taken if it became a drag
           if (marquee.current.moved) {
             marqueeMoved.current = true;
             const { x0, y0, x1, y1 } = marquee.current;
-            const hits = collectMarqueeHits({ minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) });
-            onSelectMany?.(hits, e.shiftKey);
+            const box = { minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) };
+            onSelectMany?.(collectMarqueeHits(box), e.shiftKey);
+            onMarquee?.(box, e.shiftKey);
           }
           marquee.current = null;
           setMarqueeBox(null);
@@ -747,6 +935,124 @@ export function ShapeCanvas({
         </pattern>
       </defs>
       <rect x={vb.minX} y={vb.minY} width={vb.w} height={vb.h} fill="url(#shape-grid)" />
+
+      {/* Host-supplied world-space layers (the venue plan's zone tints and fixed features), under
+          everything the canvas draws itself. */}
+      {typeof backdrop === "function" ? backdrop(layerCtx) : backdrop}
+
+      {/* The wall graph. Drawn after the backdrop and before the outline, so a wall shared by two
+          tinted zones is one stroke lying over both — the visual form of it being stored once. */}
+      {graph?.walls.map((w) => {
+        const a = graphNodeAt(w.a);
+        const b = graphNodeAt(w.b);
+        if (!a || !b) return null; // wall left dangling by a deleted node
+        const isEdge = w.kind === "edge";
+        const isSelected = graphSelection.some((r) => r.kind === "wall" && r.id === w.id);
+        return (
+          <g key={w.id}>
+            <line
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              className={isSelected ? "text-accent" : isEdge ? "text-muted" : "text-ink"}
+              stroke="currentColor"
+              strokeWidth={isSelected ? 4 : isEdge ? 1.5 : 2.5}
+              strokeDasharray={isEdge ? "5 4" : undefined}
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+            {/* A wall is a hairline; the thing you aim at has to be finger-width. Transparent, in
+                world units so it stays the same size on screen at any zoom, and only mounted when
+                the host is actually taking selections (see onSelectGraph's note). */}
+            {onSelectGraph && (
+              <line
+                x1={a.x}
+                y1={a.y}
+                x2={b.x}
+                y2={b.y}
+                stroke="transparent"
+                strokeWidth={mm(11)}
+                strokeLinecap="round"
+                tabIndex={0}
+                role="button"
+                aria-label={`${isEdge ? "גבול שטח" : "קיר"} — בחירה לעריכה`}
+                className={`cursor-pointer touch-none ${HANDLE_CLS}`}
+                // No stopPropagation on the press: a wall is selectable but not draggable, so the
+                // press has to reach the <svg> for a marquee to be able to start on top of one.
+                // The click below survives that only because the svg defers its pointer capture
+                // until a drag really begins — see its onPointerDown.
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectGraph(isSelected && !e.shiftKey ? null : { kind: "wall", id: w.id }, e.shiftKey);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectGraph({ kind: "wall", id: w.id }, e.shiftKey);
+                  }
+                }}
+              />
+            )}
+          </g>
+        );
+      })}
+
+      {/* Above the walls, below the handles — door gaps overpainting the wall they cut. */}
+      {typeof overlay === "function" ? overlay(layerCtx) : overlay}
+
+      {/* Graph corners. One handle can be shared by several walls, so dragging it reshapes every
+          room that meets there at once — the whole reason the structure is a graph. */}
+      {graph &&
+        (onMoveGraphNode || onSelectGraph) &&
+        graph.nodes.map((n) => {
+          const isSelected = graphSelection.some((r) => r.kind === "node" && r.id === n.id);
+          // A plain press on a corner that is already part of a multi-selection leaves the group
+          // alone, so a group drag has something left to drag — the same rule the outline's own
+          // handles follow (see selectOrPreserveGroup).
+          const select = onSelectGraph
+            ? (mods: { shift: boolean; phase: "press" | "click" }) => {
+                if (mods.phase === "press" && graphSelection.length > 1 && isSelected) return;
+                onSelectGraph({ kind: "node", id: n.id }, mods.shift);
+              }
+            : undefined;
+          // Without onMoveGraphNode the corner is still clickable (to inspect its coordinates), it
+          // just doesn't move — dragHandlers with a no-op mover would swallow the press.
+          const drag = onMoveGraphNode
+            ? dragHandlers(
+                clientToMm,
+                (p) => onMoveGraphNode(n.id, snapDrag(p, { graphNodeId: n.id })),
+                select,
+                undefined,
+                onCommit,
+              )
+            : {
+                onClick: (e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  select?.({ shift: e.shiftKey, phase: "click" });
+                },
+              };
+          return (
+            <g
+              key={n.id}
+              {...drag}
+              tabIndex={0}
+              role="button"
+              aria-label={onMoveGraphNode ? "פינה — גרירה לשינוי המבנה" : "פינה"}
+              onKeyDown={(e) => onMoveGraphNode && nudge(e, n.x, n.y, (p) => onMoveGraphNode(n.id, p))}
+              className={`${onMoveGraphNode ? "cursor-move" : "cursor-pointer"} touch-none ${HANDLE_CLS}`}
+            >
+              <circle {...HALO} cx={n.x} cy={n.y} r={mm(10)} />
+              <circle
+                cx={n.x}
+                cy={n.y}
+                r={mm(isSelected ? 6.5 : 5)}
+                className={isSelected ? "text-accent" : "text-ink-soft hover:text-accent"}
+                fill="currentColor"
+              />
+            </g>
+          );
+        })}
 
       {/* Walls — solid stubs on either side of each door gap. The wall keeps its curve: the gap is
           cut along the bezier (via wallSegmentD), so a door on a bowed wall no longer flattens it.
@@ -1229,7 +1535,7 @@ export function ShapeCanvas({
       <IconButton label="התקרבות" onClick={() => zoomByCenter(1 / 1.2)}>
         <Plus className="h-4 w-4" strokeWidth={2} />
       </IconButton>
-      <IconButton label="התאמת התצוגה לאולם" onClick={() => fitTo(contentBox, rect.w, rect.h)}>
+      <IconButton label="התאמת התצוגה לתרשים" onClick={() => { cancelFocus(); fitTo(contentBox, rect.w, rect.h); }}>
         <Maximize className="h-4 w-4" strokeWidth={2} />
       </IconButton>
       <div className="mx-0.5 h-5 w-px bg-border" />
@@ -1627,23 +1933,60 @@ function ResizeHandle({
 
 const SHAPE_LABEL: Record<FixtureShape, string> = { rect: "מלבן", circle: "עיגול", ellipse: "אליפסה" };
 
+// The floating inspector's shell. Exported so a second inspector over the same canvas (the venue
+// plan's walls/doors/features) is the same object, not a lookalike that drifts.
+export const INSPECTOR_WRAP =
+  "flex max-w-4xl flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-2 shadow-floating";
+
 // A cluster of related fields (dimensions, transform, style...) — kept as one flex item so the
 // wrap's flex-wrap breaks between groups, never in the middle of one.
-function InspectorGroup({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function InspectorGroup({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div className={`flex shrink-0 items-center gap-2 ${className}`}>{children}</div>;
 }
 
-function InspectorDivider() {
+export function InspectorDivider() {
   return <div aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />;
 }
 
 // The identity chip every inspector opens with — an icon so the selected kind reads at a glance,
 // matching the object-inspector convention of other plan/design tools.
-function InspectorHeader({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+export function InspectorHeader({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
   return (
     <div className="flex shrink-0 items-center gap-1.5 ps-0.5">
       <Icon className="h-4 w-4 text-accent" strokeWidth={1.75} />
       <span className="text-sm font-semibold text-ink nums">{label}</span>
+    </div>
+  );
+}
+
+// One segmented control, sized to the fields' own h-10 so a toggle beside a NumberField lands on
+// the same baseline instead of reading a size smaller.
+export function SegmentedToggle<T extends string | number | boolean>({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  ariaLabel?: string;
+}) {
+  return (
+    <div role="group" aria-label={ariaLabel} className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
+      {options.map((o) => (
+        <button
+          key={String(o.value)}
+          type="button"
+          aria-pressed={o.value === value}
+          onClick={() => onChange(o.value)}
+          className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${
+            o.value === value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -1695,39 +2038,31 @@ export function SelectionInspector({
   onToggleWallLock?: (edgeIdx: number) => void;
   onClose: () => void;
 }) {
-  const wrap = "flex max-w-3xl flex-wrap items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-2 shadow-floating";
+  const wrap = INSPECTOR_WRAP;
   const mmToCm = (mm: number) => mm / 10;
   const closeBtn = (
     <IconButton label="סגירת בחירה" className="ms-auto" onClick={onClose}>
       <X className="h-4 w-4" strokeWidth={2} />
     </IconButton>
   );
-  // Segmented controls share the fields' own h-10, so a toggle sitting next to a NumberField
-  // lands on the same baseline instead of reading a size smaller.
   const shapeToggle = (shape: FixtureShape, onPick: (s: FixtureShape) => void) => (
-    <div className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
-      {(Object.keys(SHAPE_LABEL) as FixtureShape[]).map((s) => (
-        <button
-          key={s}
-          type="button"
-          onClick={() => onPick(s)}
-          className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${s === shape ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}
-        >
-          {SHAPE_LABEL[s]}
-        </button>
-      ))}
-    </div>
+    <SegmentedToggle
+      value={shape}
+      options={(Object.keys(SHAPE_LABEL) as FixtureShape[]).map((s) => ({ value: s, label: SHAPE_LABEL[s] }))}
+      onChange={onPick}
+      ariaLabel="צורה"
+    />
   );
   // A plain two-way segmented control — door direction/leaf-count, either boolean.
   const boolToggle = (value: boolean, onLabel: string, offLabel: string, onPick: (v: boolean) => void) => (
-    <div className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
-      <button type="button" onClick={() => onPick(true)} className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}>
-        {onLabel}
-      </button>
-      <button type="button" onClick={() => onPick(false)} className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${!value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"}`}>
-        {offLabel}
-      </button>
-    </div>
+    <SegmentedToggle
+      value={value}
+      options={[
+        { value: true, label: onLabel },
+        { value: false, label: offLabel },
+      ]}
+      onChange={onPick}
+    />
   );
   const rotationField = (rotationDeg: number, onChange: (deg: number) => void) => (
     <NumberField layout="inline" label="זווית (°)" decimals={0} min={0} max={360} value={rotationDeg} onChange={onChange} className="w-20" />

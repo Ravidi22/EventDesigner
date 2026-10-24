@@ -15,7 +15,9 @@
     "check:footprint": "node --experimental-strip-types lib/studio/footprint.ts",
     "check:geometry": "node --experimental-strip-types lib/studio/geometry.ts",
     "check:snap": "node --experimental-strip-types lib/studio/snap.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:structure": "node --experimental-strip-types lib/venues/structure.ts",
+    "check:selection": "node --experimental-strip-types lib/venues/selection.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

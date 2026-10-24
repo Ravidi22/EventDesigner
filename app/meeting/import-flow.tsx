@@ -2,12 +2,12 @@
 
 import { useRef, useState } from "react";
 import { UploadCloud, FileText, ArrowLeft, Info, Ruler } from "lucide-react";
-import type { Hall } from "@/lib/studio/hall";
+import { shellBounds, type ZoneShell } from "@/lib/venues/zone";
 import type { SketchRef } from "@/lib/design-document/types";
 import { NumberField } from "@/components/number-field";
 import { fieldLabelClassName } from "@/components/control";
 import { Button } from "@/components/button";
-import { PlanPreview } from "@/components/plan-preview";
+import { PlanPreview, PLAN_PAD_MM } from "@/components/plan-preview";
 
 // F-3.2 per-event sketch import: upload the iPlan PDF, align it manually (drag/scale) over the
 // hall shell, calibrate once for a new hall (F-3.4). No auto-detection (phase 2/3 — F-9.4).
@@ -27,7 +27,7 @@ export function ImportFlow({
   onDone,
   onCancel,
 }: {
-  hall: Hall;
+  hall: ZoneShell;
   hasCalibration: boolean; // known hall → skip calibration (it lives on the template)
   onDone: (r: ImportResult) => void;
   onCancel: () => void;
@@ -39,9 +39,10 @@ export function ImportFlow({
   const [scale, setScale] = useState(1);
   const [refCm, setRefCm] = useState(180);
 
+  const box = shellBounds(hall);
   const sketch = (): SketchRef | null =>
     fileName
-      ? { fileName, x: pos.x, y: pos.y, widthMm: hall.widthMm * scale, heightMm: hall.heightMm * scale }
+      ? { fileName, x: pos.x, y: pos.y, widthMm: box.widthMm * scale, heightMm: box.heightMm * scale }
       : null;
 
   const finishAlign = () => {
@@ -118,7 +119,7 @@ function AlignStage({
   scale,
   onMove,
 }: {
-  hall: Hall;
+  hall: ZoneShell;
   fileName: string;
   pos: { x: number; y: number };
   scale: number;
@@ -127,7 +128,13 @@ function AlignStage({
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
 
-  const pxPerMm = () => (ref.current ? ref.current.clientWidth / (hall.widthMm * 1.09) : 0.01); // 1.09 ≈ PlanPreview padding
+  // Mirrors PlanPreview's own viewBox exactly — width + a PLAN_PAD_MM margin each side, origin at
+  // the shape's minX/minY — so the draggable sketch frame lands on the same millimetre the plan
+  // beneath it draws. This used to approximate the padding as a flat 1.09/0.045 of the width,
+  // which only held for a roughly 20m-wide hall anchored at the origin.
+  const box = shellBounds(hall);
+  const vbWidthMm = box.widthMm + PLAN_PAD_MM * 2;
+  const pxPerMm = () => (ref.current && vbWidthMm ? ref.current.clientWidth / vbWidthMm : 0.01);
 
   return (
     <div ref={ref} className="relative overflow-hidden rounded-lg border border-border bg-canvas p-2">
@@ -161,10 +168,10 @@ function AlignStage({
         }}
         className="absolute cursor-move touch-none rounded-md border-2 border-dashed border-accent bg-accent-tint/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
         style={{
-          left: `${((pos.x + hall.widthMm * 0.045) * pxPerMm())}px`,
-          top: `${((pos.y + hall.heightMm * 0.045) * pxPerMm())}px`,
-          width: `${hall.widthMm * scale * pxPerMm()}px`,
-          height: `${hall.heightMm * scale * pxPerMm()}px`,
+          left: `${(pos.x - (box.minX - PLAN_PAD_MM)) * pxPerMm()}px`,
+          top: `${(pos.y - (box.minY - PLAN_PAD_MM)) * pxPerMm()}px`,
+          width: `${box.widthMm * scale * pxPerMm()}px`,
+          height: `${box.heightMm * scale * pxPerMm()}px`,
         }}
       >
         <span className="absolute inset-x-0 bottom-1.5 truncate px-2 text-center text-xs text-ink-soft">{fileName}</span>

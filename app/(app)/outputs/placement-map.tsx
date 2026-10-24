@@ -1,9 +1,9 @@
 import Link from "next/link";
 import type { DesignDocumentContent, DesignTable } from "@/lib/design-document/types";
-import type { Hall } from "@/lib/studio/hall";
 import { placementLegend } from "@/lib/outputs/aggregate";
 import { productName } from "@/lib/outputs/lookup";
-import { pointAtDistance, resolveWallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
+import { outlinePathD, pointAtDistance, wallEndpoints, wallLengthMm } from "@/lib/studio/geometry";
+import { shellBounds, shellOutline, type ZoneShell } from "@/lib/venues/zone";
 import { resolveStyle } from "@/lib/element-style";
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
@@ -20,19 +20,26 @@ function formatTables(nums: number[]): string {
   return parts.join(", ");
 }
 
-export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: Hall }) {
+export function PlacementMap({ doc, hall }: { doc: DesignDocumentContent; hall: ZoneShell }) {
   const legend = placementLegend(doc, productName);
   const pad = 800;
-  const vb = `${-pad} ${-pad} ${hall.widthMm + pad * 2} ${hall.heightMm + pad + 1400}`;
+  // Was a bare width×height rectangle, which quietly printed an L-shaped room as a box. The plan
+  // is the client-facing deliverable, so it draws the real outline; the extra bottom padding still
+  // leaves room for the legend beneath.
+  const outline = shellOutline(hall);
+  const box = shellBounds(hall);
+  const vb = `${box.minX - pad} ${box.minY - pad} ${box.widthMm + pad * 2} ${box.heightMm + pad + 1400}`;
 
   return (
     <div className="space-y-8">
       <svg viewBox={vb} className="w-full rounded-lg border border-border bg-canvas" role="img" aria-label="מפת הצבה">
         {/* Walls */}
-        <rect x={0} y={0} width={hall.widthMm} height={hall.heightMm} fill="#ffffff" stroke="#1b1725" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        {outline.length >= 3 && (
+          <path d={outlinePathD(outline, hall.edgeCurves)} fill="#ffffff" stroke="#1b1725" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        )}
         {/* Entrances — position resolved from the wall it's cut into */}
-        {hall.entrances.map((e) => {
-          const { a, b } = resolveWallEndpoints(hall.outline, hall.widthMm, hall.heightMm, e.wallIndex);
+        {outline.length >= 3 && hall.entrances.map((e) => {
+          const { a, b } = wallEndpoints(outline, e.wallIndex);
           const len = wallLengthMm(a, b) || 1;
           const ux = (b.x - a.x) / len;
           const uy = (b.y - a.y) / len;
