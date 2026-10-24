@@ -102,6 +102,8 @@ import { ZONE_MARGIN_MM, featuresBoundary, presentFeatureIds } from "@/lib/venue
 import { newSeatingFeature } from "@/lib/venues/seating";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { SeatingGlyph } from "@/components/chair-block";
+import { ColumnGlyph } from "@/components/column-glyph";
+import { defineColumns } from "@/lib/venues/column";
 import {
   ZoneRegions,
   StructureFeatures,
@@ -1149,6 +1151,16 @@ export function HallsScreen() {
     setDraftZone({ source: { type: "features", featureIds: ids, marginMm: ZONE_MARGIN_MM }, name: "", kind: "canopy" });
   };
 
+  /** "הגדרה כעמודים": the picked stacks of footprints become columns, one undo step, and the
+   *  columns are the selection (each keeps its plinth's id — lib/venues/column.ts). */
+  const defineAsColumns = (ids: string[]) => {
+    const made = defineColumns(structure, ids).ids;
+    if (made.length === 0) return;
+    editStructure((s) => defineColumns(s, ids).structure);
+    setSelection(made.map((id) => ({ kind: "feature" as const, id })));
+    setHint(made.length === 1 ? "הוגדר עמוד" : `הוגדרו ${made.length} עמודים`);
+  };
+
   /** A features zone re-made of the selection — how a feature is added to one, or taken out. */
   const setZoneFeatures = (zoneId: string, ids: string[]) => {
     const zone = zones.find((z) => z.id === zoneId);
@@ -2017,6 +2029,7 @@ export function HallsScreen() {
                   onCancelDraftZone={() => setDraftZone(null)}
                   outlineEditId={outlineSurface?.id ?? null}
                   onToggleOutline={(id) => setOutlineEditId((cur) => (cur === id ? null : id))}
+                  onDefineColumns={defineAsColumns}
                 />
               </div>
             </div>
@@ -2535,8 +2548,21 @@ const SEATING_PREVIEW_BOX = (() => {
   return { w: l.widthMm, d: l.depthMm, pad: Math.max(l.widthMm, l.depthMm) * 0.1 };
 })();
 
+// The column on its card: a new one (a 60cm plinth, a ⌀50 base, a ⌀40 shaft) drawn as it will be.
+const COLUMN_PREVIEW = newFeature("column", { x: 0, y: 0 });
+
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+  if (tool.kind === "column") {
+    const s = COLUMN_PREVIEW.widthMm * 1.3;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-8 w-8" aria-hidden>
+          <ColumnGlyph f={COLUMN_PREVIEW} fill="var(--color-surface)" stroke="var(--color-muted)" strokeWidth={1.25} />
+        </svg>
+      </span>
+    );
+  }
   if (tool.kind === "seating") {
     const { w, d, pad } = SEATING_PREVIEW_BOX;
     return (

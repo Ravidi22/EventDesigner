@@ -16,6 +16,15 @@
 //   hedge  clipped: a run of overlapping blobs along its length, its height, its depth
 //   bed    a soil slab and heads on a grid inside its outline (./envelope.ts keeps the bed)
 //
+// Seen again on אמרה's courtyard (2026-10-24, Ravid: "fix and improve the trees and vegetation"):
+// a crown of lumpy blobs still read as broccoli — a closed, solid surface with no leaves in it and
+// no sky through it. A tree's, a shrub's and a pot's crown is now a CORE of the same clumps, a
+// little smaller and darker (the shade inside a crown), under LEAF CARDS (`leafCards`): sprites of
+// a leaf cluster cut out of their own alpha, spread over the clumps' exposed surface and standing
+// proud of it, so the outline breaks into leaves and the light catches the rim. The clumps still
+// give the mass from far off and cast the shadow; the cards cast none. A clipped hedge keeps its
+// clipped blobs.
+//
 // One body per species × size × colour, shared by every plant like it (./collect.ts); the
 // instances turn by a hash of the feature's id, so a row of identical trees is not a row of
 // clones. Deterministic. `npx tsx lib/scene/plants.ts` holds the shapes.
@@ -24,13 +33,16 @@ import { isMain } from "../self-check";
 import { turn } from "./frame";
 import { ENVELOPE, foliageMaterial } from "./materials";
 import { seedOf, seeded } from "./organic";
-import { type MaterialRef, type Part, vec3 } from "./types";
+import { type LeafCard, type MaterialRef, type Part, vec3 } from "./types";
 
 const TRUNK: MaterialRef = { colour: ENVELOPE.trunk, kind: "matte" };
 const PALM_TRUNK: MaterialRef = { colour: "#9a8466", kind: "matte" };
 const PALM_BOOT: MaterialRef = { colour: "#76603f", kind: "matte" };
 const DATES: MaterialRef = { colour: "#8f5228", kind: "matte" };
 export const POT_MATERIAL: MaterialRef = { colour: "#b06a4a", kind: "matte" };
+
+/** A crown's own green when the plant says none — the venue tree's (./envelope.ts PLANT_FILL). */
+const TREE_GREEN = "#8fae84";
 
 /** A canopy clump's lumps: a few big ones round a clump; rougher on a shrub. */
 const CLUMP = { lumps: 3, rough: 0.17, detail: 2 } as const;
@@ -73,52 +85,118 @@ function mass(R: number, share: number, z: number, z0: number, h: number, squash
   return { shape: "blob", r, at: vec3(0, 0, zc), seed, squash, ...look };
 }
 
-/** Small clumps standing out of a crown's surface: what breaks a canopy's outline from a cloud's
- *  into a tree's. `count` of them, each `share` of its host lobe wide, on the host's upper half and
- *  sides at seeded bearings — cheap (detail 1), the leaf texture does the rest. */
-function sprigs(hosts: readonly Part[], count: number, share: number, seed: number): Part[] {
-  const rnd = seeded(seed);
-  const out: Part[] = [];
-  const blobs = hosts.filter((p): p is Extract<Part, { shape: "blob" }> => p.shape === "blob");
-  if (!blobs.length) return out;
-  for (let i = 0; i < count; i++) {
-    const host = blobs[Math.floor(rnd() * blobs.length)];
-    const az = rnd() * 2 * Math.PI;
-    const el = (rnd() * 0.75 - 0.15) * (Math.PI / 2);
-    const sq = host.squash ?? 1;
-    const reach = host.r * 0.92;
-    const r = host.r * share * (0.75 + 0.5 * rnd());
-    out.push({
-      shape: "blob",
-      r,
-      at: vec3(host.at.x + reach * Math.cos(el) * Math.cos(az), host.at.y + reach * Math.cos(el) * Math.sin(az), host.at.z + reach * sq * Math.sin(el)),
-      seed: seed * 31 + i,
-      squash: sq,
-      lumps: 3,
-      rough: 0.22,
-      detail: 1,
-    });
-  }
-  return out;
+// --- leaf cards -----------------------------------------------------------------------------------
+
+type Blob = Extract<Part, { shape: "blob" }>;
+
+/** A crown's leaf cards: one card `share` of the crown's radius across, held to a leaf cluster's
+ *  real size (minMm–maxMm); `cover` cards' worth over every card-sized patch of clump surface (the
+ *  core shows only as the shade between them); at most `max` a crown; standing up to `proud` of its
+ *  clump's surface (of the clump's radius) — some sunk into it, so the leaves are layered, not a
+ *  shell. Tuned headless on אמרה's east tree line (2026-10-24): at 1.6 cards the core showed as dark
+ *  felt with pale patches on it. */
+export const CARDS = { share: 0.34, minMm: 260, maxMm: 900, cover: 3.2, max: 520, proud: 0.2 } as const;
+
+/** How big a crown's cards are. */
+export const cardSizeOf = (R: number) => Math.max(CARDS.minMm, Math.min(CARDS.maxMm, CARDS.share * R));
+
+/** An ellipsoid's surface (Knud Thomsen's p = 1.6 approximation), for how many cards a clump takes. */
+function surfaceOf(b: Blob): number {
+  const a = b.r;
+  const c = b.r * (b.squash ?? 1);
+  const p = 1.6;
+  return 4 * Math.PI * Math.pow((Math.pow(a * a, p) + 2 * Math.pow(a * c, p)) / 3, 1 / p);
 }
 
-export const TREE = { trunkTop: 0.62, crownFrom: 0.5, squash: 0.82, sprigs: 16 } as const;
+/** Inside a clump: < 1 within its (squashed) ball. */
+const insideOf = (q: { x: number; y: number; z: number }, b: Blob) =>
+  Math.hypot((q.x - b.at.x) / b.r, (q.y - b.at.y) / b.r, (q.z - b.at.z) / (b.r * (b.squash ?? 1)));
 
-/** A tree: a trunk to 0.62 h with three limbs leaning out into the crown, the nine lobes stacked
- *  from half its height to its top, the middle mass at 0.72 h and a crown over it. */
-export function treeParts(rx: number, ry: number, h: number): Part[] {
+/**
+ * Leaf cards over the EXPOSED surface of a crown's clumps: points spread evenly over each clump (a
+ * Fibonacci lattice, turned by the seed), every one that lies buried inside another clump left out,
+ * and most of the underside thinned; each card stands CARDS.proud of its clump's surface, faces out
+ * of the crown (±35°), tips back more the higher on its clump it is (a crown's top is leaves lying
+ * toward the sky, its sides leaves hanging), and is shaded lighter up the crown. Deterministic.
+ */
+export function leafCards(clumps: readonly Blob[], cardMm: number, seed: number): LeafCard[] {
+  const rnd = seeded(seed);
+  const want = clumps.map((b) => (surfaceOf(b) * CARDS.cover) / (cardMm * cardMm));
+  const total = want.reduce((t, n) => t + n, 0);
+  const scale = total > CARDS.max ? CARDS.max / total : 1;
+  let zLo = Infinity;
+  let zHi = -Infinity;
+  for (const b of clumps) {
+    zLo = Math.min(zLo, b.at.z - b.r * (b.squash ?? 1));
+    zHi = Math.max(zHi, b.at.z + b.r * (b.squash ?? 1));
+  }
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const cards: LeafCard[] = [];
+  clumps.forEach((b, bi) => {
+    const n = Math.max(1, Math.round(want[bi] * scale));
+    const sq = b.squash ?? 1;
+    const turn0 = rnd() * 2 * Math.PI;
+    for (let i = 0; i < n; i++) {
+      const z = 1 - (2 * (i + 0.5)) / n;
+      const ring = Math.sqrt(Math.max(0, 1 - z * z));
+      const phi = turn0 + i * golden;
+      const d = { x: ring * Math.cos(phi), y: ring * Math.sin(phi), z };
+      const k = 1 + CARDS.proud * (rnd() * 1.1 - 0.1);
+      const q = { x: b.at.x + b.r * d.x * k, y: b.at.y + b.r * d.y * k, z: b.at.z + b.r * sq * d.z * k };
+      if (clumps.some((o, oi) => oi !== bi && insideOf(q, o) < 0.92)) continue;
+      // Thin the underside: from below, a crown is mostly its shade.
+      if (d.z < -0.35 && rnd() < 0.6) continue;
+      const out = Math.atan2(d.y, d.x);
+      // A card's face is its local −y turned by yaw (scene-geometry.ts leavesGeometry): facing
+      // outward is a yaw of the outward bearing plus a quarter.
+      const yaw = (out * 180) / Math.PI + 90 + (rnd() - 0.5) * 70;
+      const pitch = 12 + 58 * Math.max(0, d.z) + (rnd() - 0.5) * 30;
+      const up = zHi > zLo ? (q.z - zLo) / (zHi - zLo) : 0.5;
+      const shade = Math.max(0.48, Math.min(0.96, 0.56 + 0.3 * up + 0.06 * ring * Math.max(0, d.z) + (rnd() - 0.5) * 0.14));
+      cards.push({
+        x: Math.round(q.x),
+        y: Math.round(q.y),
+        z: Math.round(q.z),
+        size: Math.round(cardMm * (0.8 + 0.4 * rnd())),
+        yawDeg: Math.round(yaw),
+        pitchDeg: Math.round(pitch),
+        tile: Math.floor(rnd() * 4),
+        shade: Math.round(shade * 100) / 100,
+      });
+    }
+  });
+  return cards;
+}
+
+/** The core of a crown — its clumps, darker (the shade inside it) — and the leaf cards over them,
+ *  in the crown's own green. */
+function crownOf(core: Blob[], R: number, colour: string, seed: number, centreZ: number): Part[] {
+  const shaded = foliageMaterial(mix(colour, "#1c2a16", 0.1));
+  return [
+    ...core.map((b) => ({ ...b, material: shaded })),
+    { shape: "leaves", at: vec3(0, 0, 0), centre: vec3(0, 0, centreZ), cards: leafCards(core, cardSizeOf(R), seed), material: { colour, kind: "leaves" } },
+  ];
+}
+
+export const TREE = { trunkTop: 0.62, crownFrom: 0.5, squash: 0.82, core: 0.86 } as const;
+
+/** A tree: a trunk to 0.62 h with three limbs leaning out into the crown; the crown's core the nine
+ *  lobes stacked from half its height to its top, the middle mass at 0.72 h and a crown over it —
+ *  TREE.core of the crown's size, so the leaf cards over them reach its rim. */
+export function treeParts(rx: number, ry: number, h: number, colour: string = TREE_GREEN): Part[] {
   const R = Math.min(rx, ry);
   const parts: Part[] = [{ shape: "cylinder", rTop: 0.05 * R, rBottom: 0.085 * R, h: TREE.trunkTop * h, at: vec3(0, 0, 0), segments: 10, material: TRUNK }];
   for (let k = 0; k < 3; k++) {
     const rot = 25 + k * 120;
     parts.push({ shape: "cylinder", rTop: 0.022 * R, rBottom: 0.045 * R, h: 0.3 * h, at: vec3(0, 0, 0.42 * h), segments: 7, rotDeg: rot, tiltDeg: 38, material: TRUNK });
   }
-  const crown: Part[] = [
-    ...lobes(rx, ry, TREE.crownFrom * h, h, TREE_CLUMPS.length, TREE.squash, CLUMP),
-    mass(R, 0.62, 0.72 * h, TREE.crownFrom * h, h, TREE.squash, 3, CLUMP),
-    mass(R, 0.42, h, TREE.crownFrom * h, h, TREE.squash, 4, CLUMP),
-  ];
-  parts.push(...crown, ...sprigs(crown, TREE.sprigs, 0.38, 71));
+  const c = TREE.core;
+  const core = [
+    ...lobes(c * rx, c * ry, TREE.crownFrom * h, h, TREE_CLUMPS.length, TREE.squash, CLUMP),
+    mass(c * R, 0.62, 0.72 * h, TREE.crownFrom * h, h, TREE.squash, 3, CLUMP),
+    mass(c * R, 0.42, h, TREE.crownFrom * h, h, TREE.squash, 4, CLUMP),
+  ] as Blob[];
+  parts.push(...crownOf(core, R, colour, 71, 0.75 * h));
   return parts;
 }
 
@@ -186,16 +264,18 @@ export function palmParts(rx: number, ry: number, h: number, colour: string): Pa
   return parts;
 }
 
-/** A shrub: the first five lobes and a middle mass through z0..h, no trunk. */
-export function shrubParts(rx: number, ry: number, z0: number, h: number): Part[] {
+/** A shrub: the first five lobes and a middle mass through z0..h, no trunk — a core a little inside
+ *  its size, under its leaf cards. */
+export function shrubParts(rx: number, ry: number, z0: number, h: number, colour: string = TREE_GREEN): Part[] {
   const R = Math.min(rx, ry);
-  const body = [...lobes(rx, ry, z0, h, 5, 0.88, BUSH, 31), mass(R, 0.62, (z0 + h) / 2 + 0.1 * (h - z0), z0, h, 0.88, 37, BUSH)];
-  return [...body, ...sprigs(body, 6, 0.4, 41)];
+  const c = TREE.core;
+  const core = [...lobes(c * rx, c * ry, z0, h, 5, 0.88, BUSH, 31), mass(c * R, 0.62, (z0 + h) / 2 + 0.1 * (h - z0), z0, h, 0.88, 37, BUSH)] as Blob[];
+  return crownOf(core, R, colour, 41, (z0 + h) / 2);
 }
 
 /** A potted plant: a terracotta pot (a lathe — a narrow foot flaring to its rim at 0.45 h, a rolled
  *  lip) with a shrub three quarters its width standing in it to the top. */
-export function potParts(rx: number, ry: number, h: number): Part[] {
+export function potParts(rx: number, ry: number, h: number, colour: string = TREE_GREEN): Part[] {
   const R = Math.min(rx, ry);
   const pot: Part = {
     shape: "lathe",
@@ -213,7 +293,7 @@ export function potParts(rx: number, ry: number, h: number): Part[] {
     segments: 24,
     material: POT_MATERIAL,
   };
-  return [pot, ...shrubParts(0.74 * rx, 0.74 * ry, 0.4 * h, h)];
+  return [pot, ...shrubParts(0.74 * rx, 0.74 * ry, 0.4 * h, h, colour)];
 }
 
 /** A clipped hedge: blobs a little rounder than its depth, overlapping along its length (at most
@@ -255,20 +335,35 @@ if (isMain(import.meta.url)) {
   type Blob = Extract<Part, { shape: "blob" }>;
   const blobs = (ps: Part[]) => ps.filter((p): p is Blob => p.shape === "blob");
 
-  // A tree: a trunk, three limbs, the nine lobes, the middle mass and the crown.
-  const tree = treeParts(1750, 1750, 4000);
+  type Leaves = Extract<Part, { shape: "leaves" }>;
+  const cardsOf = (ps: Part[]) => ps.filter((p): p is Leaves => p.shape === "leaves");
+
+  // A tree: a trunk, three limbs, a core of the nine lobes, the middle mass and the crown, and the
+  // leaf cards over them.
+  const tree = treeParts(1750, 1750, 4000, "#8fae84");
   const trunk = tree[0];
   assert(trunk.shape === "cylinder" && near(trunk.h, 0.62 * 4000) && trunk.rTop < trunk.rBottom && trunk.material === TRUNK, "a tree's trunk tapers to 0.62 h, in bark");
   const limbs = tree.filter((p) => p.shape === "cylinder" && p.tiltDeg);
   assert(limbs.length === 3, "…three limbs lean out into the crown");
-  const crown = blobs(tree);
-  const main = crown.filter((p) => p.detail !== 1);
-  assert(main.length === TREE_CLUMPS.length + 2 && crown.length === main.length + TREE.sprigs, `…the nine lobes, the middle mass and the crown, and the sprigs out of them (${main.length} + ${crown.length - main.length})`);
+  const main = blobs(tree);
+  assert(main.length === TREE_CLUMPS.length + 2, `…a core of the nine lobes, the middle mass and the crown (${main.length})`);
   assert(main.every((p) => p.at.z - p.r * TREE.squash >= TREE.crownFrom * 4000 - 1e-6 && p.at.z + p.r * TREE.squash <= 4000 + 1e-6), "every clump stands in the crown band, half way up to the top");
-  assert(crown.every((p) => p.at.z > 0.4 * 4000), "…and no sprig hangs down the trunk");
   const nine = main.slice(0, TREE_CLUMPS.length);
-  assert(nine.some((p) => near(Math.hypot(p.at.x, p.at.y) + p.r, 1750, 1e-3)), "…the lobes touching the rim, as on the plan");
+  assert(nine.some((p) => near(Math.hypot(p.at.x, p.at.y) + p.r, TREE.core * 1750, 1e-3)), "…the lobes touching the core's rim, a little inside the plan's");
   assert(new Set(main.map((p) => p.seed)).size === main.length, "…each clump its own lumps");
+  assert(main.every((p) => p.material && p.material.colour !== "#8fae84"), "…the core in a deeper green than the crown — the shade inside it");
+  const [leaves] = cardsOf(tree);
+  assert(!!leaves && leaves.material?.kind === "leaves" && leaves.material.colour === "#8fae84", "the crown wears leaf cards in its own green");
+  assert(leaves.cards.length >= 60 && leaves.cards.length <= CARDS.max, `…enough of them to break the outline, never more than CARDS.max (${leaves.cards.length})`);
+  const reach = Math.max(...leaves.cards.map((c) => Math.hypot(c.x, c.y) + c.size / 2));
+  assert(reach > 0.95 * 1750 && reach < 1.25 * 1750, `…reaching the crown's rim from the core (${Math.round(reach)})`);
+  assert(leaves.cards.every((c) => c.z > 0.4 * 4000 && main.every((b) => insideOf(c, b) >= 0.92)), "…every card out on the surface, none buried in a clump or hanging down the trunk");
+  assert(leaves.cards.every((c) => c.size >= 0.8 * cardSizeOf(1750) - 1 && c.size <= 1.2 * cardSizeOf(1750) + 1 && c.tile >= 0 && c.tile < 4), "…each a leaf cluster's size, on one of the atlas's four cells");
+  const upper = leaves.cards.filter((c) => c.z > 0.85 * 4000);
+  const lower = leaves.cards.filter((c) => c.z < 0.6 * 4000);
+  const avg = (cs: LeafCard[], f: (c: LeafCard) => number) => cs.reduce((t, c) => t + f(c), 0) / Math.max(1, cs.length);
+  assert(avg(upper, (c) => c.shade) > avg(lower, (c) => c.shade) && avg(upper, (c) => c.pitchDeg) > avg(lower, (c) => c.pitchDeg), "…lighter and lying back toward the sky at the top, darker and hanging at the bottom");
+  assert(JSON.stringify(treeParts(1750, 1750, 4000, "#8fae84")) === JSON.stringify(tree), "the same tree twice is the same tree");
 
   // A palm: a ringed trunk, the boot, nineteen arching fronds, three bunches of dates.
   const palm = palmParts(2250, 2250, 6000, "#6f9a5a");
@@ -283,10 +378,11 @@ if (isMain(import.meta.url)) {
 
   // Shrubs, pots, hedges.
   const shrub = shrubParts(600, 600, 0, 1000);
-  const bushy = shrub.filter((p) => p.shape === "blob" && p.detail !== 1);
-  assert(shrub.length === 12 && bushy.length === 6 && bushy.every((p) => p.shape === "blob" && p.at.z - p.r * 0.88 >= -1e-6 && p.at.z + p.r * 0.88 <= 1000 + 1e-6), "a shrub: five lobes and a middle mass on the ground, to its height, and six sprigs");
+  const bushy = blobs(shrub);
+  assert(bushy.length === 6 && bushy.every((p) => p.at.z - p.r * 0.88 >= -1e-6 && p.at.z + p.r * 0.88 <= 1000 + 1e-6), "a shrub: five lobes and a middle mass on the ground, to its height");
+  assert(cardsOf(shrub).length === 1 && cardsOf(shrub)[0].cards.length >= 12 && cardsOf(shrub)[0].cards.every((c) => c.size >= CARDS.minMm * 0.8 - 1), "…under leaf cards no smaller than a cluster");
   const pot = potParts(350, 350, 900);
-  assert(pot[0].shape === "lathe" && pot[0].material === POT_MATERIAL && blobs(pot).length === 12, "a pot: a terracotta lathe with a shrub in it");
+  assert(pot[0].shape === "lathe" && pot[0].material === POT_MATERIAL && blobs(pot).length === 6 && cardsOf(pot).length === 1, "a pot: a terracotta lathe with a shrub in it");
   const hedge = hedgeParts(4000, 800, 1200);
   const hb = blobs(hedge);
   assert(hb.length >= 5 && hb.every((b) => near(b.at.z, 600) && near(b.r * (b.squash ?? 1), 600)), "a hedge: blobs as tall as it, along its length");

@@ -97,7 +97,23 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 // Stairs and a ramp are where the FLOOR changes height — the steps down from a lobby, a ramp at a
 // side door — and stand on the plan by themselves (./climb.ts), unlike the flight hung off a raised
 // feature (`stairs`, below), which needs a deck to climb onto.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating";
+//
+// A column is a kind of its own (the user, 2026-10-24: "add to the hall option to add עמוד"): one
+// element that IS a pillar — its plinth, a base ring and its shaft (./column.ts) — where a venue
+// used to draw each one as three `structure` footprints stacked on one centre, which only the 3D
+// scene knew how to read back as one thing.
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating";
+
+/** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
+ *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
+ *  across between the two. The height is the feature's own `heightMm`. */
+export interface FeatureColumn {
+  shaftMm: number;
+  /** The base ring round the shaft's foot. Absent (or no wider than the shaft) = none. */
+  baseMm?: number;
+  /** A square pillar rather than a round column. */
+  square?: boolean;
+}
 
 /** A `seating` feature's rows — the venue's own chairs set out for a ceremony, in rows facing a
  *  חופה or a stage (the user, 2026-10-17: "שורות כיסאות is more for the /halls"). The rows are the
@@ -196,6 +212,8 @@ export interface StructureFeature {
   plant?: PlantSpecies;
   /** iff `kind === "seating"`: the rows and the chair (./seating.ts). Absent reads as five rows of five. */
   seating?: FeatureSeating;
+  /** iff `kind === "column"`: the shaft and its base (./column.ts). Absent reads as a new column's. */
+  column?: FeatureColumn;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
   /** A surface laid wall to wall in a CLOSED SHAPE of the walls, without that shape being a zone
@@ -252,6 +270,7 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   stage: "במה",
   bar: "בר",
   structure: "מבנה",
+  column: "עמוד",
   other: "אחר",
   plant: "צמחייה",
   surface: "משטח",
@@ -683,6 +702,9 @@ const NEW_SEATING_BOX = (() => {
   return { widthMm: l.widthMm, depthMm: l.depthMm };
 })();
 
+/** A new column's shaft and base, on FEATURE_DEFAULTS.column's 60cm plinth. */
+export const NEW_COLUMN: FeatureColumn = { shaftMm: 400, baseMm: 500 };
+
 // Plausible starting dimensions per kind, so dropping one onto the plan gives something the right
 // rough size to nudge rather than a nondescript square to type over.
 const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "depthMm" | "heightMm" | "shape">> = {
@@ -690,6 +712,8 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   stage: { widthMm: 6000, depthMm: 3000, heightMm: 600, shape: "rect" },
   bar: { widthMm: 4000, depthMm: 1200, heightMm: 1100, shape: "rect" },
   structure: { widthMm: 4000, depthMm: 4000, heightMm: 3000, shape: "rect" },
+  // A 60cm square plinth under a ⌀40 shaft, 3m tall (NEW_COLUMN below).
+  column: { widthMm: 600, depthMm: 600, heightMm: 3000, shape: "rect" },
   other: { widthMm: 2000, depthMm: 2000, heightMm: 1000, shape: "rect" },
   plant: { widthMm: 1200, depthMm: 1200, heightMm: 1000, shape: "circle" },
   surface: { widthMm: 4000, depthMm: 3000, heightMm: 0, shape: "rect" },
@@ -724,6 +748,7 @@ export function newFeature(kind: FeatureKind, at: Point, variant?: PlantSpecies 
     return { ...base, label: SURFACE_MATERIAL_LABEL[material], ...FEATURE_DEFAULTS.surface, surface: material };
   }
   if (kind === "seating") return { ...base, label: FEATURE_KIND_LABEL.seating, ...FEATURE_DEFAULTS.seating, seating: { ...NEW_BLOCK } };
+  if (kind === "column") return { ...base, label: FEATURE_KIND_LABEL.column, ...FEATURE_DEFAULTS.column, column: { ...NEW_COLUMN } };
   return { ...base, label: FEATURE_KIND_LABEL[kind], ...FEATURE_DEFAULTS[kind] };
 }
 

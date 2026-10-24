@@ -194,6 +194,15 @@ function partSpan(p: Part): [number, number] {
     }
     case "plane":
       return [p.at.z, p.at.z];
+    case "leaves": {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const c of p.cards) {
+        lo = Math.min(lo, c.z - c.size / 2);
+        hi = Math.max(hi, c.z + c.size / 2);
+      }
+      return Number.isFinite(lo) ? [p.at.z + lo, p.at.z + hi] : [p.at.z, p.at.z];
+    }
   }
 }
 
@@ -231,6 +240,8 @@ function flipPart(p: Part, H: number): Part {
     }
     case "plane":
       return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z), side: p.side === "down" ? "up" : p.side === "both" ? "both" : "down" };
+    case "leaves":
+      return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z), centre: vec3(p.centre.x, p.centre.y, -p.centre.z), cards: p.cards.map((c) => ({ ...c, z: -c.z, pitchDeg: -c.pitchDeg })) };
   }
 }
 

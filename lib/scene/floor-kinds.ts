@@ -32,7 +32,7 @@ import type { SymbolKind } from "@/lib/catalog/symbols";
 import { type FlowerDrawSpec, type FlowerForm, defaultMix, seedOf } from "@/lib/catalog/flower-draw";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { BOTTLE_PITCH_MM, type Strip, barDrawing, bottleRadiusMm, counterShelfMm, counterTopMm } from "@/lib/catalog/bar-draw";
-import { DEFAULT_TONE, TREE_CLUMPS } from "@/components/item-symbol";
+import { DEFAULT_TONE } from "@/components/item-symbol";
 import { type BenchLayout, SOFA_BACK_MM, benchLayout } from "@/lib/design-document/bench";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { type ClimbHost, climbRisers, climbTreads, riserHeightMm, treadDepthMm } from "@/lib/venues/climb";
@@ -41,6 +41,7 @@ import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { chairParts, chairRequest, darkened, pale } from "./items";
 import { flowerBuild } from "./flowers";
+import { treeParts } from "./plants";
 import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, foliageMaterial, glossMaterial, metalMaterial, swatchMaterial, waterMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
@@ -116,7 +117,6 @@ const cyl = (r: number, h: number, at: Vec3, material?: MaterialRef, rTop = r, s
   if (segments) p.segments = segments;
   return p;
 };
-const sphere = (r: number, at: Vec3, material?: MaterialRef): Part => (material ? { shape: "sphere", r, at, material } : { shape: "sphere", r, at });
 const lathe = (profile: { r: number; z: number }[], at: Vec3, material?: MaterialRef): Part => (material ? { shape: "lathe", profile, at, material } : { shape: "lathe", profile, at });
 const torus = (r: number, tube: number, at: Vec3, material?: MaterialRef): Part => (material ? { shape: "torus", r, tube, at, material } : { shape: "torus", r, tube, at });
 const extrude = (outline: BuiltOutline, h: number, at: Vec3, material?: MaterialRef, holes?: BuiltOutline[]): Part => {
@@ -429,32 +429,16 @@ function archBody(ctx: ItemContext): ItemBuild {
 
 // ── tree (item-symbol.tsx:689) ──────────────────────────────────────────────────────────────────
 
-/** A tree: the trunk min(rx, ry)·0.07 (item-symbol.tsx:708) up to 0.55 h; the canopy the plan's
- *  nine clumps (TREE_CLUMPS: [radius, bearing] as fractions of the radius, each centred at 1 − r
- *  so it touches the edge, :693) as spheres stacked from 0.45 h to h — the bigger the lobe the
- *  higher (spec §3.4) — round the fuller middle mass 0.62 R (:700) in its foliage. */
+/** A catalog tree (a rented olive, a blossom tree): the venue's own tree (./plants.ts treeParts —
+ *  a trunk with limbs, the plan's nine clumps as the crown's core, leaf cards over it) at the row's
+ *  size, in its shade. Never less than 1.4 of its radius tall, or the crown would sit on the floor. */
 function treeBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const rx = w / 2;
   const ry = d / 2;
-  const R = (rx + ry) / 2;
-  const H = Math.max(h, R * 1.4);
-  const leaves = foliageMaterial(tone);
-  const b = make(leaves);
-  b.parts.push(cyl(Math.min(rx, ry) * 0.07, H * 0.55, vec3(0, 0, 0), matte(ENVELOPE.trunk)));
-  const bottom = H * 0.45;
-  const rs = TREE_CLUMPS.map(([r]) => r);
-  const rMin = Math.min(...rs);
-  const rMax = Math.max(...rs);
-  for (const [r, deg] of TREE_CLUMPS) {
-    const c = polar(1 - r, deg);
-    const rad = r * R;
-    const t = rMax > rMin ? (r - rMin) / (rMax - rMin) : 0.5;
-    const z = bottom + rad + Math.max(0, H - bottom - 2 * rad) * t;
-    b.parts.push(sphere(rad, vec3(c.x * rx, c.y * ry, z), leaves));
-  }
-  const mass = R * 0.62;
-  b.parts.push(sphere(mass, vec3(0, 0, Math.max((bottom + H) / 2, H - mass)), leaves));
+  const H = Math.max(h, ((rx + ry) / 2) * 1.4);
+  const b = make(foliageMaterial(tone));
+  b.parts.push(...treeParts(rx, ry, H, tone));
   return b;
 }
 
@@ -900,13 +884,10 @@ if (isMain(import.meta.url)) {
   const tallArch = floorKindBody("arch", ctxOf({ kind: "rect", widthMm: 600, depthMm: 3000 }, 2500, DEFAULT_TONE.arch));
   assert(boxes(tallArch).filter((p) => near(top(p), 2250)).every((p) => near(Math.abs(p.at.y), 1200) && near(p.at.x, 0)), "an arch stored deep runs along y");
 
-  // A tree ⌀3500 × 4000: nine lobes and the middle mass, on a trunk.
+  // A tree ⌀3500 × 4000: the venue's own tree (./plants.ts) in the row's shade.
   const tree = floorKindBody("tree", ctxOf({ kind: "circle", diameterMm: 3500 }, 4000, DEFAULT_TONE.tree));
-  const lobes = tree.parts.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere");
-  assert(lobes.length === 10, `tree: nine clumps and the middle mass (${lobes.length})`);
-  assert(lobes.every((p) => p.at.z - p.r >= 1800 - 1e-6 && p.at.z + p.r <= 4000 + 1e-6), "tree: the canopy from 0.45 h to h");
-  assert(cyls(tree).some((p) => near(p.rBottom, 122.5) && p.material?.colour === ENVELOPE.trunk && near(top(p), 2200)), "tree: the trunk min(rx, ry)·0.07 to 0.55 h");
-  assert(lobes.some((p) => near(p.r, 1750 * 0.62)) && lobes.some((p) => near(p.r, 1750 * 0.4) && near(p.at.x, 1750 * 0.6)), "tree: the mass 0.62 R, the first clump 0.4 R touching the edge");
+  assert(JSON.stringify(tree.parts) === JSON.stringify(treeParts(1750, 1750, 4000, DEFAULT_TONE.tree.toLowerCase())), "tree: the venue's tree, at its size and in its shade");
+  assert(tree.parts.some((p) => p.shape === "leaves") && cyls(tree).some((p) => p.material?.colour === ENVELOPE.trunk), "tree: leaf cards over a crown, on a trunk");
 
   // A straight bar 3000×600×1100: the body to 1100, the counter top on it, bottles on the shelf.
   const bar = floorKindBody("bar", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 600 }, 1100, DEFAULT_TONE.bar));

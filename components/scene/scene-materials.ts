@@ -9,6 +9,7 @@
 // every body made of it; a stretched image repeats once and its body's UVs are normalised.
 import {
   CanvasTexture,
+  ClampToEdgeWrapping,
   Color,
   DoubleSide,
   MeshPhysicalMaterial,
@@ -263,6 +264,90 @@ function leafTexture(base: string): CanvasTexture | null {
   return t;
 }
 
+/** A crown's leaf cards (Part "leaves"): a 2×2 atlas of LEAF CLUSTERS on a transparent ground —
+ *  twigs from a cell's foot fanning out, a few dozen pointed leaves along them in lighter and
+ *  darker tints of the leaf colour, the gaps between them clear so the sky shows through a crown.
+ *  Each cell keeps clear of its edges so a mip level never bleeds one cluster into the next. Drawn
+ *  once per colour; cut out by the material's alphaTest. */
+const LEAF_ATLAS = 512;
+function leafCardTexture(base: string): CanvasTexture | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = LEAF_ATLAS;
+  canvas.height = LEAF_ATLAS;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const cell = LEAF_ATLAS / 2;
+  const rnd = seeded(`leaves:${base}`);
+  const leaf = (x: number, y: number, len: number, angle: number, fill: string) => {
+    const w = len * 0.42;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(w, len * 0.45, 0, len);
+    ctx.quadraticCurveTo(-w, len * 0.45, 0, 0);
+    ctx.fill();
+    // The midrib, faint.
+    ctx.strokeStyle = tint(fill, "#000000", 0.25);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, len * 0.08);
+    ctx.lineTo(0, len * 0.9);
+    ctx.stroke();
+    ctx.restore();
+  };
+  for (let c = 0; c < 4; c++) {
+    const ox = (c % 2) * cell;
+    const oy = Math.floor(c / 2) * cell;
+    const pad = cell * 0.1;
+    const foot = { x: ox + cell / 2, y: oy + cell - pad };
+    const twigs = 4 + Math.floor(rnd() * 3);
+    for (let t = 0; t < twigs; t++) {
+      // A twig fanning up and out from the foot, its leaves along it, the biggest near its tip.
+      const a = -Math.PI / 2 + (t / (twigs - 1) - 0.5) * 2.3 + (rnd() - 0.5) * 0.25;
+      const reach = (cell / 2 - pad) * (0.75 + rnd() * 0.35);
+      const tip = { x: foot.x + Math.cos(a) * reach, y: foot.y + Math.sin(a) * reach * 1.45 };
+      ctx.strokeStyle = tint(base, "#3b2a1a", 0.55);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(foot.x, foot.y);
+      ctx.lineTo(tip.x, tip.y);
+      ctx.stroke();
+      const n = 7 + Math.floor(rnd() * 4);
+      for (let i = 0; i < n; i++) {
+        const k = 0.2 + (0.8 * (i + 1)) / n;
+        const x = foot.x + (tip.x - foot.x) * k;
+        const y = foot.y + (tip.y - foot.y) * k;
+        const side = i % 2 ? 1 : -1;
+        const along = Math.atan2(tip.y - foot.y, tip.x - foot.x) - Math.PI / 2;
+        // Mostly the leaf's own green and darker; a few catch the light.
+        const shadeT = (rnd() - 0.62) * 0.48;
+        const fill = tint(base, shadeT < 0 ? "#000000" : "#ffffff", Math.abs(shadeT));
+        const len = cell * (0.1 + 0.07 * k + rnd() * 0.05);
+        leaf(x, y, len, along + side * (0.55 + rnd() * 0.5), fill);
+      }
+    }
+    // A fuller head of leaves at the cluster's crown, so a card is mostly leaf.
+    for (let i = 0; i < 18; i++) {
+      const r = (cell / 2 - pad * 1.6) * Math.sqrt(rnd());
+      const a = rnd() * Math.PI * 2;
+      const x = ox + cell / 2 + Math.cos(a) * r;
+      const y = oy + cell * 0.42 + Math.sin(a) * r * 0.8;
+      const shadeT = (rnd() - 0.62) * 0.48;
+      leaf(x, y, cell * (0.11 + rnd() * 0.06), rnd() * Math.PI * 2, tint(base, shadeT < 0 ? "#000000" : "#ffffff", Math.abs(shadeT)));
+    }
+  }
+  const t = new CanvasTexture(canvas);
+  t.colorSpace = SRGBColorSpace;
+  t.wrapS = ClampToEdgeWrapping;
+  t.wrapT = ClampToEdgeWrapping;
+  t.anisotropy = 4;
+  return t;
+}
+
 /** The additive glow behind an emitter: a soft radial falloff, white (the sprite tints it). */
 function haloTexture(): CanvasTexture | null {
   if (typeof document === "undefined") return null;
@@ -345,6 +430,14 @@ function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
       // Every foliage geometry carries its shading (scene-geometry.ts withColour).
       mat.vertexColors = true;
       break;
+    case "leaves":
+      // Cut out of the leaf atlas: no sorting, no blending; coverage smooths the cut edges.
+      mat.roughness = 0.8;
+      mat.side = DoubleSide;
+      mat.vertexColors = true;
+      mat.alphaTest = 0.5;
+      mat.alphaToCoverage = true;
+      break;
     case "emissive":
       mat.emissive = colour.clone();
       mat.emissiveIntensity = 2.2;
@@ -401,6 +494,14 @@ export class MaterialCache {
   private textureFor(ref: MaterialRef): ThreeTexture | null {
     const fromImage = this.imageTexture(ref);
     if (fromImage) return fromImage;
+    if (ref.kind === "leaves") {
+      const key = `leaves:${ref.colour}`;
+      const hit = this.textures.get(key);
+      if (hit) return hit;
+      const t = leafCardTexture(leafColour(ref.colour));
+      if (t) this.textures.set(key, t);
+      return t;
+    }
     if (ref.kind === "foliage" && !ref.texture) {
       const key = `leaf:${ref.colour}`;
       const hit = this.textures.get(key);

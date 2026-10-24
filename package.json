@@ -34,6 +34,7 @@
     "check:clipboard": "tsx lib/studio/clipboard.ts",
     "check:sketches": "tsx lib/studio/sketches.ts",
     "check:seating": "tsx lib/venues/seating.ts",
+    "check:column": "tsx lib/venues/column.ts",
     "check:groups": "tsx lib/design-document/groups.ts",
     "check:block": "tsx lib/design-document/block.ts",
     "check:features": "tsx lib/design-document/features.ts",

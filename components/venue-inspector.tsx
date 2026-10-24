@@ -4,6 +4,7 @@ import {
   Accessibility,
   ArrowDownUp,
   Box,
+  Cylinder,
   Grid2x2,
   Grid3x3,
   Leaf,
@@ -69,7 +70,7 @@ import {
   SegmentedToggle,
 } from "@/components/plan-canvas";
 
-export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "other", "plant", "surface", "stairs", "ramp", "seating"];
+export const FEATURE_KINDS: FeatureKind[] = ["pool", "stage", "bar", "structure", "column", "other", "plant", "surface", "stairs", "ramp", "seating"];
 // Which features are offered flights and ramps is takesEdgeItems (lib/venues/stage-edges.ts) — a
 // stage, or a platform somebody climbs onto; never a bar, a fence or a column.
 
@@ -78,6 +79,7 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   stage: Presentation,
   bar: GlassWater,
   structure: Box,
+  column: Cylinder,
   other: Shapes,
   plant: Sprout,
   surface: Grid2x2,

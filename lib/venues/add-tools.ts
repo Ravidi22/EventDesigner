@@ -70,6 +70,8 @@ const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   { id: "ramp", label: FEATURE_KIND_LABEL.ramp, kind: "ramp" },
   { id: "pool", label: FEATURE_KIND_LABEL.pool, kind: "pool" },
   { id: "structure", label: FEATURE_KIND_LABEL.structure, kind: "structure" },
+  // A pillar — its plinth, base and shaft are the column's own (./column.ts).
+  { id: "column", label: FEATURE_KIND_LABEL.column, kind: "column" },
   { id: "other", label: FEATURE_KIND_LABEL.other, kind: "other" },
 ];
 
@@ -146,7 +148,7 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 9 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the nine plain things — door, stairs, ramp, pool, structure, other, bar, stage, chairs in rows — and the planting");
+  assert(empty.length === 10 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the ten plain things — door, stairs, ramp, pool, structure, column, other, bar, stage, chairs in rows — and the planting");
   assert(empty.find((t) => t.kind === "seating")?.chair === undefined, "…the rows of a dining chair when there is no chair to take");
   assert(empty.filter((t) => t.product).length === 0, "…none of them backed by a row that isn't there");
   for (const kind of ["bar", "stage"] as const) {

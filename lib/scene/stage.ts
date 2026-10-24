@@ -50,7 +50,7 @@ import { rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage"
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
 import { applyTransform, headingDeg, roomTransform, turn } from "./frame";
-import { ENVELOPE, metalMaterial, surfaceMaterial, swatchMaterial } from "./materials";
+import { ENVELOPE, hexOf, metalMaterial, surfaceMaterial, swatchMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
 import { chairRequest } from "./items";
 
@@ -100,6 +100,9 @@ export interface StageOpts {
   railingAboveMm?: number | null;
   /** The height of the floor the stage stands on. */
   floorZ?: number;
+  /** A BUILT platform's colour (#rrggbb): the venue's own stage, painted at /halls — stone in that
+   *  colour, top, sides and steps, and no cloth skirt round it. Absent = a timber stage. */
+  built?: string;
 }
 
 /** A sketch stage: decks, levels, every edge item, corners, skirt, railings — and the rim pieces
@@ -109,9 +112,18 @@ export function stageNodes(p: StagePlacement, out: SceneCollector, opts: StageOp
 }
 
 /** A venue's raised feature as the same stage (lib/venues/structure.ts featureStage): built of no
- *  decks, so it stands as one slab of its outline; its flights and ramps are the sketch's. */
+ *  decks, so it stands as one slab of its outline; its flights and ramps are the sketch's. Painted
+ *  a colour of its own at /halls, it is the venue's BUILT platform in that colour — the קוליסאום's
+ *  white stone (2026-10-24), which stood as a timber deck in a black skirt. */
 export function venueStageNodes(f: StructureFeature, out: SceneCollector, opts: StageOpts): void {
-  buildStage(featurePlacement(f), `feature:${f.id}`, out, opts);
+  const built = hexOf(f.style?.fill);
+  buildStage(featurePlacement(f), `feature:${f.id}`, out, built ? { ...opts, built } : opts);
+}
+
+/** A built platform's sides: its colour a shade darker than its top, so the edge reads. */
+function sideTone(hex: string, k = 0.9): string {
+  const ch = (i: number) => Math.round(parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16) * k);
+  return `#${[0, 1, 2].map((i) => ch(i).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // --- the build --------------------------------------------------------------------------------
@@ -138,8 +150,13 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
   /** The floor an edge item on `level` climbs from, and stands on outside the stage. */
   const levelFloor = (level: string | undefined): number => (level ? baseH : 0);
   const layout = layStage(stage, deckOf);
-  const deckTop = stage.surfaceVariant ? rowMaterial(stage.surfaceVariant, DECK_TONE, "matte", true) : surfaceMaterial("deck", DECK_TONE);
-  const deckUnder = matte(ENVELOPE.deckUnderside);
+  const deckTop = opts.built
+    ? // Stone slabs, matte: marble's veins on a near-white platform read as cracks up close.
+      surfaceMaterial("paving", opts.built)
+    : stage.surfaceVariant
+      ? rowMaterial(stage.surfaceVariant, DECK_TONE, "matte", true)
+      : surfaceMaterial("deck", DECK_TONE);
+  const deckUnder = matte(opts.built ? sideTone(opts.built) : ENVELOPE.deckUnderside);
 
   // 1. Decks — or, built of none (a venue stage, a stage whose decks left the catalog), one slab.
   const tops: Part[] = [];
@@ -223,7 +240,8 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
 
   // 5. The skirt: a pleated strip hanging down every open edge nothing stands against.
   const wallDistance = wallDistanceOf(opts.structure);
-  const runs = openEdges(p, deckOf, wallDistance);
+  // A built platform's sides are its stone, not a cloth.
+  const runs = opts.built ? [] : openEdges(p, deckOf, wallDistance);
   if (runs.length) {
     const parts: Part[] = runs.map((r) => ({ shape: "ribbon", path: r.path, h: r.dropMm, at: vec3(0, 0, levelTop(r.level) - r.dropMm), pleatMm: SKIRT_PLEAT_MM, amplitudeMm: SKIRT_AMPLITUDE_MM }));
     out.body(`${id}:skirt`, { type: "skirt", id, label: "חצאית" }, rowMaterial(stage.skirtVariant, SKIRT_TONE, "fabric"), parts, [at]);
@@ -612,6 +630,16 @@ if (isMain(import.meta.url)) {
     assert(near(vSlab.instances[0].at.x, 20000) && near(vSlab.instances[0].at.y, 5000), "…where the feature stands");
     const vFlight = vBodies.find((b) => b.tag.type === "edge" && b.tag.id === "vf")!;
     assert(!!vFlight && vFlight.parts.length === 3 && near(topOf(vFlight.parts[0]), 450), "its flight is the sketch's: three treads, the first one riser under the deck");
+    assert(vSlab.material.texture === "deck" && vBodies.some((b) => b.tag.type === "skirt"), "an unpainted venue stage is timber in a skirt");
+
+    // Painted at /halls, it is a BUILT platform: stone in its colour, top and steps, no skirt.
+    const bOut = new SceneCollector();
+    venueStageNodes({ ...feature, style: { fill: "#FBF9F4" } }, bOut, opts);
+    const bBodies = bOut.nodes().filter((n) => n.kind === "body");
+    const bSlab = bBodies.find((b) => b.id === "feature:vs:decks")!;
+    assert(bSlab.material.texture === "paving" && bSlab.material.colour === "#fbf9f4", "a painted venue stage's top is stone slabs in its colour");
+    assert(bBodies.find((b) => b.tag.type === "edge" && b.tag.id === "vf")!.material === bSlab.material, "…its steps the same stone");
+    assert(!bBodies.some((b) => b.tag.type === "skirt"), "…and no cloth hangs round a built platform");
 
     const stats = out.stats();
     console.log(`scene stage ok: ${stats.bodies} bodies, ${stats.instances} instances for the 6×4`);

@@ -470,6 +470,62 @@ function frondGeometry(part: Extract<Part, { shape: "frond" }>): BufferGeometry 
   return g;
 }
 
+/** A crown's leaf cards (Part "leaves"): one quad per card in metres, about the part's own `at` —
+ *  upright, tipped back `pitchDeg` about its own x, turned `yawDeg` on the plan — its UVs one cell of
+ *  the 2×2 leaf atlas (scene-materials.ts leafCardTexture), its NORMAL pointing away from the
+ *  crown's `centre` and a little up whichever way the card faces, so a crown of flat cards is lit
+ *  as one round mass, and its colour the card's `shade`, a touch darker at its foot. */
+function leavesGeometry(part: Extract<Part, { shape: "leaves" }>): BufferGeometry {
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const uv: number[] = [];
+  const colour: number[] = [];
+  const corners: [number, number][] = [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, -1],
+    [1, 1],
+    [-1, 1],
+  ];
+  for (const c of part.cards) {
+    const half = c.size / 2;
+    const p = rad(c.pitchDeg);
+    const y0 = rad(c.yawDeg);
+    const u0 = (c.tile % 2) * 0.5;
+    const v0 = (Math.floor(c.tile / 2) % 2) * 0.5;
+    let nx = c.x - part.centre.x;
+    let ny = c.y - part.centre.y;
+    let nz = c.z - part.centre.z;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len;
+    ny /= len;
+    nz = nz / len + 0.25;
+    const nl2 = Math.hypot(nx, ny, nz) || 1;
+    for (const [u, v] of corners) {
+      // Plan frame: a card's width along x, its height along z, then tipped and turned.
+      const lx = u * half;
+      const lz = v * half;
+      const ly = lz * Math.sin(p);
+      const lzz = lz * Math.cos(p);
+      const x = c.x + lx * Math.cos(y0) - ly * Math.sin(y0);
+      const y = c.y + lx * Math.sin(y0) + ly * Math.cos(y0);
+      const z = c.z + lzz;
+      pos.push(m(x), m(z), m(y));
+      nrm.push(nx / nl2, nz / nl2, ny / nl2);
+      uv.push(u0 + 0.25 * (u + 1), v0 + 0.25 * (v + 1));
+      const k = c.shade * (v < 0 ? 0.86 : 1);
+      colour.push(k, k, k);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new Float32BufferAttribute(nrm, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new Float32BufferAttribute(colour, 3));
+  return g;
+}
+
 /** The tilt (see the rule at the top): a turn about the part's own x axis through its base
  *  centre, which is the origin the part was built about. three's rotateX is the right-handed
  *  turn, so +tilt carries the top (0, h, 0) to (0, h·cos, h·sin): toward +z, plan +y. */
@@ -491,6 +547,8 @@ export function partGeometry(part: Part): BufferGeometry {
       return blobGeometry(part.r, part.seed, part.lumps ?? 4, part.rough ?? 0.2, part.squash ?? 1, part.detail ?? 3);
     case "frond":
       return frondGeometry(part);
+    case "leaves":
+      return leavesGeometry(part);
     case "extrude":
       return extrudeGeometry(part.outline, part.h, part.holes);
     case "lathe": {
@@ -683,6 +741,20 @@ export function geometrySignature(body: BodyNode): string {
         num(p.r);
         num(p.tube);
         num(p.segments ?? 0);
+        break;
+      case "leaves":
+        v3(p.centre);
+        num(p.cards.length);
+        for (const c of p.cards) {
+          num(c.x);
+          num(c.y);
+          num(c.z);
+          num(c.size);
+          num(c.yawDeg);
+          num(c.pitchDeg);
+          num(c.tile);
+          num(c.shade * 1000);
+        }
         break;
       case "extrude":
         num(p.h);

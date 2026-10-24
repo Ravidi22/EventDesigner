@@ -34,6 +34,7 @@ import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock, SeatingGlyph } from "@/components/chair-block";
+import { ColumnGlyph } from "@/components/column-glyph";
 import { seatingOf } from "@/lib/venues/seating";
 import {
   benchInRoom,
@@ -1331,6 +1332,9 @@ function ColourFeature({ f, den, mono = false }: { f: StructureFeature; den: num
                 <SeatingGlyph spec={seatingOf(f)} tone={MONO.chair} ink={INK} print />
                 <FootprintShape footprint={fp} fill="none" stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
               </>
+            ) : f.kind === "column" ? (
+              // A column: its plinth white, the shaft in the elements' grey so it reads solid.
+              <ColumnGlyph f={f} fill="#ffffff" stroke={MUTED} strokeWidth={style.strokeWidth} shaftFill={MONO.feature} />
             ) : f.kind === "plant" ? (
               // The plan symbol for a tree: its canopy's edge and the trunk at its middle.
               <>
@@ -1349,7 +1353,7 @@ function ColourFeature({ f, den, mono = false }: { f: StructureFeature; den: num
             )}
           </g>
         </g>
-        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && !isClimb(f.kind) && f.label && (
+        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && !isClimb(f.kind) && f.label && (
           <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT} stroke="#ffffff" strokeWidth={0.5 * den} strokeLinejoin="round" paintOrder="stroke">
             {f.label}
           </text>
@@ -1391,6 +1395,8 @@ function ColourFeature({ f, den, mono = false }: { f: StructureFeature; den: num
             <PlantGlyph species={plantSpecies(f)} w={f.widthMm} d={f.depthMm} id={`q-${f.id}`} color={f.style?.fill} opacity={f.style?.fillOpacity} />
           ) : f.kind === "seating" ? (
             <SeatingGlyph spec={seatingOf(f)} tone={f.style?.fill} ink={MUTED} />
+          ) : f.kind === "column" ? (
+            <ColumnGlyph f={f} fill={style.fill} fillOpacity={style.fillOpacity} stroke={style.stroke} strokeWidth={style.strokeWidth} />
           ) : (
             <FootprintShape
               footprint={featureFootprint(f)}
@@ -1405,7 +1411,7 @@ function ColourFeature({ f, den, mono = false }: { f: StructureFeature; den: num
         </g>
       </g>
       {/* Upright, outside the turn — a name drawn at the feature's angle reads as a mark. */}
-      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && !isClimb(f.kind) && f.label && (
+      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && !isClimb(f.kind) && f.label && (
         <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
           {f.label}
         </text>

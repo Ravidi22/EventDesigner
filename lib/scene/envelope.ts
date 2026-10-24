@@ -26,7 +26,14 @@
 // floor under it, a coping kerb round its rim — and its footprint CUT OUT of every floor it lies in
 // (the zone's floor plane, any surface feature's plane, the ground under them all), by the one
 // rule "the well's centre is inside that floor". Nothing is cut out of a floor the pool merely
-// touches: a hole crossing the outer edge is not a hole.
+// touches: a hole crossing the outer edge is not a hole. A pool standing ON a platform (most of it on
+// a stage's deck — the קוליסאום's basins, 2026-10-24: "the pool should be on top of the stage") is
+// a RAISED BASIN on that top instead: a stone wall BASIN_RIM_MM high round the water, nothing cut.
+//
+// Everything built — a column, the beam it carries, a kiosk, a bar — stands on the floor under it
+// (./elevation.ts floorUnder), its height above that floor; a beam on the floor its columns stand on.
+// A tree or a palm stands where its TRUNK is, not where its crown reaches: a palm beside a stage,
+// its crown half over the deck, was lifted onto it and hung its trunk in the air.
 //
 // Every plant is INSTANCED per (species, size, colour): a landscaped courtyard is a hundred-odd
 // plants of a handful of kinds, so the same tree twenty times is one body with twenty transforms.
@@ -64,7 +71,8 @@ import { chairRequest } from "./items";
 import { ENVELOPE, foliageMaterial, hexOf, surfaceMaterial, waterMaterial } from "./materials";
 import { offsetOutline } from "./tables";
 import { hedgeParts, palmParts, plantTurn, potParts, shrubParts, treeParts } from "./plants";
-import { readStructures, shaftTopOf, type ColumnReading, type StructureReading } from "./structures";
+import { readStructures, shaftTopOf, type BeamReading, type ColumnReading } from "./structures";
+import { elevationOf } from "./elevation";
 import {
   DEFAULT_SETTINGS,
   DOOR_HEIGHT_MM,
@@ -92,6 +100,13 @@ const WELL_BELOW_MM = 600;
 /** The coping round a pool's rim: a kerb this wide standing on the floor outside the water. */
 const COPING_MM = 150;
 const COPING_HIGH_MM = 100;
+/** A raised basin (a pool on a platform): its stone wall, how high over the platform and how thick,
+ *  and how far under the wall's top the water stands. */
+export const BASIN_RIM_MM = 450;
+export const BASIN_WALL_MM = 220;
+export const BASIN_WATER_MM = 90;
+/** A tree's trunk, for what it stands on: a square this wide round its middle. */
+const TRUNK_PROBE_MM = 400;
 /** A door's frame: a trim this wide on each jamb, standing this far proud of both wall faces. */
 const FRAME_TRIM_MM = 40;
 const FRAME_PROUD_MM = 10;
@@ -110,6 +125,8 @@ const VENUE_CHAIR_TONE = "#f7f6fc";
 const WELL_MATERIAL: MaterialRef = { colour: "#3b4d5a", kind: "matte" };
 /** Paving's own tone (SURFACE_BASE.paving): the stone a pool is edged in. */
 const COPING_MATERIAL: MaterialRef = { colour: "#d9d3c7", kind: "matte" };
+/** A raised basin's wall: a pale stone, lighter than the paving's coping. */
+const BASIN_MATERIAL: MaterialRef = { colour: "#efebe4", kind: "matte" };
 const WALL_MATERIAL: MaterialRef = { colour: ENVELOPE.wall, kind: "matte" };
 const KERB_MATERIAL: MaterialRef = { colour: ENVELOPE.kerb, kind: "matte" };
 const CEILING_MATERIAL: MaterialRef = { colour: ENVELOPE.ceiling, kind: "matte" };
@@ -392,10 +409,11 @@ interface Well {
 
 const isWell = (f: StructureFeature): boolean => f.kind === "pool" || (f.kind === "surface" && featureSurface(f) === "water");
 
-function waterWells(structure: VenueStructure): Well[] {
+function waterWells(structure: VenueStructure, floorOf: FloorOf): Well[] {
   const wells: Well[] = [];
   for (const f of structure.features) {
-    if (!isWell(f)) continue;
+    // A basin raised on a platform cuts nothing: the floor under the platform is out of sight.
+    if (!isWell(f) || floorOfFeature(f, floorOf) > 0) continue;
     const frame = featureFrame(f);
     wells.push({ id: f.id, centre: { x: f.x, y: f.y }, room: footprintOutlines(featureFootprint(f)).map((o) => carryOutline(o, frame)) });
   }
@@ -418,11 +436,22 @@ function holesIn(polygon: readonly Point[], wells: readonly Well[], into: Transf
  *  outline) and floor, the water plane at the top of the recess, and a coping kerb — COPING_MM
  *  wide, COPING_HIGH_MM high — standing on the floor round the rim (the rim itself is its hole, so
  *  it covers the seam between the floor's cut edge and the well's wall). */
-function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector): void {
+function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, floorZ = 0): void {
   const bottom = -(WATER_DEPTH_MM + WELL_BELOW_MM);
   const tint = hexOf(f.style?.fill);
   const water: MaterialRef = tint ? { ...surfaceMaterial("water", tint), opacity: 0.8 } : waterMaterial();
   const parts: Part[] = [];
+  if (floorZ > 0) {
+    // On a platform: a basin standing on its top — a dark floor a hair over the deck, a stone wall
+    // round the water BASIN_WALL_MM thick and BASIN_RIM_MM high, the water BASIN_WATER_MM under it.
+    for (const o of outlines) {
+      parts.push({ shape: "plane", outline: o, at: vec3(0, 0, 2) });
+      parts.push({ shape: "plane", outline: o, at: vec3(0, 0, BASIN_RIM_MM - BASIN_WATER_MM), material: water });
+      parts.push({ shape: "extrude", outline: { outline: offsetOutline(o, BASIN_WALL_MM) }, holes: [o], h: BASIN_RIM_MM, at: vec3(0, 0, 0), material: BASIN_MATERIAL });
+    }
+    out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, WELL_MATERIAL, parts, [{ ...featureFrame(f), at: vec3(f.x, f.y, floorZ) }], { castShadow: false });
+    return;
+  }
   for (const o of outlines) {
     parts.push({ shape: "ribbon", path: closedPolyline(o), h: WATER_DEPTH_MM + WELL_BELOW_MM, at: vec3(0, 0, bottom) });
     parts.push({ shape: "plane", outline: o, at: vec3(0, 0, bottom) });
@@ -452,24 +481,24 @@ function surfacePlane(f: StructureFeature, outlines: readonly BuiltOutline[], or
 
 /** A built thing (a wall, a kiosk, a permanent bar): its footprint extruded to its height — or,
  *  when it is part of a beam the venue's columns carry (./structures.ts), only the beam's band. */
-function extrudedFeature(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, span?: { fromMm: number; toMm: number }): void {
+function extrudedFeature(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, span?: { fromMm: number; toMm: number }, floorZ = 0): void {
   const material: MaterialRef = { colour: hexOf(f.style?.fill) ?? FEATURE_FILL, kind: "matte" };
   const from = span?.fromMm ?? 0;
   const h = Math.max(10, (span?.toMm ?? f.heightMm ?? 0) - from);
   const parts: Part[] = outlines.map((outline) => ({ shape: "extrude", outline, h, at: vec3(0, 0, from) }));
-  out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [featureFrame(f)]);
+  out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [{ ...featureFrame(f), at: vec3(f.x, f.y, floorZ) }]);
 }
 
-/** A column read off nested footprints (./structures.ts): the PLINTH (its biggest footprint) a
- *  short block, the BASE mouldings (those between) a drum with a roll round its foot, the SHAFT
- *  (the smallest) rising with a slight entasis to the beam it carries or its own top, and the
- *  capital mirroring the base under an abacus of the plinth's shape. A lone column gets a base and
- *  a capital of its own, a fifth wider. One body, built at the column's centre. */
-function columnBody(column: ColumnReading, reading: StructureReading, features: readonly StructureFeature[], out: SceneCollector): void {
-  const members = column.ids.map((id) => features.find((f) => f.id === id)!).filter(Boolean);
+/** A column (./structures.ts — the venue's own, or read off nested footprints): the PLINTH (its
+ *  biggest footprint) a short block, the BASE mouldings (those between) a drum with a roll round
+ *  its foot, the SHAFT (the smallest) rising with a slight entasis to the beam it carries or its
+ *  own top, and the capital mirroring the base under an abacus of the plinth's shape. A lone column
+ *  gets a base and a capital of its own, a fifth wider. One body, built at the column's centre on
+ *  the floor it stands on (`floorZ`), `top` above that floor. */
+function columnBody(column: ColumnReading, top: number, floorZ: number, out: SceneCollector): void {
+  const members = column.members;
   if (!members.length) return;
   const H = column.heightMm;
-  const top = shaftTopOf(column, reading, features);
   const c = column.centre;
   const tone = (f: StructureFeature) => ({ colour: hexOf(f.style?.fill) ?? FEATURE_FILL, kind: "matte" as const });
   const plinthH = Math.max(250, Math.min(600, 0.06 * H));
@@ -523,7 +552,7 @@ function columnBody(column: ColumnReading, reading: StructureReading, features: 
     z += ringH;
   }
   if (plinth) parts.push(...slab(plinth, z, top - z, tone(plinth)));
-  out.body(`feature:${column.ids[0]}`, { type: "feature", id: column.ids[0], label: shaft.label }, tone(shaft), parts, [transform(vec3(c.x, c.y, 0), 0)]);
+  out.body(`feature:${column.ids[0]}`, { type: "feature", id: column.ids[0], label: shaft.label }, tone(shaft), parts, [transform(vec3(c.x, c.y, floorZ), 0)]);
 }
 
 // --- plants ---------------------------------------------------------------------------------------
@@ -562,17 +591,17 @@ function plantParts(species: PlantSpecies, f: StructureFeature, w: number, d: nu
   const ry = d / 2;
   switch (species) {
     case "tree":
-      return treeParts(rx, ry, h);
+      return treeParts(rx, ry, h, colour);
     case "palm":
       return palmParts(rx, ry, h, colour);
     case "pot":
-      return potParts(rx, ry, h);
+      return potParts(rx, ry, h, colour);
     case "hedge":
       return hedgeParts(w, d, h);
     case "flowers":
       return bedParts(footprintOutlines(featureFootprint(f)), w, d, h);
     default:
-      return shrubParts(rx, ry, 0, h);
+      return shrubParts(rx, ry, 0, h, colour);
   }
 }
 
@@ -587,6 +616,15 @@ const ON_FLOOR: FloorOf = () => 0;
 const floorOfFeature = (f: StructureFeature, floorOf: FloorOf): number =>
   floorOf(footprintPolygons(featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0), `feature:${f.id}`);
 
+/** What a plant stands on: a tree or a palm where its trunk is (a small square round its middle —
+ *  its footprint is its CROWN, which may reach over a stage it does not stand on); anything else on
+ *  its footprint, which is where it meets the ground. */
+function plantFloor(f: StructureFeature, species: PlantSpecies, floorOf: FloorOf): number {
+  if (species !== "tree" && species !== "palm") return floorOfFeature(f, floorOf);
+  const r = Math.min(TRUNK_PROBE_MM, f.widthMm, f.depthMm) / 2;
+  return floorOf([[{ x: f.x - r, y: f.y - r }, { x: f.x + r, y: f.y - r }, { x: f.x + r, y: f.y + r }, { x: f.x - r, y: f.y + r }]], `feature:${f.id}`);
+}
+
 function plantInstance(f: StructureFeature, out: SceneCollector, floorOf: FloorOf = ON_FLOOR): void {
   const species = plantSpecies(f);
   const w = Math.max(1, Math.round(f.widthMm));
@@ -600,7 +638,7 @@ function plantInstance(f: StructureFeature, out: SceneCollector, floorOf: FloorO
     material: foliageMaterial(colour),
     tag: { type: "feature", id: f.id, label: f.label },
     // A round crown turns by its id (./plants.ts plantTurn), so a row of trees is not of clones.
-    at: roomTransform({ position: { x: f.x, y: f.y }, rotation: species === "flowers" ? (f.rotationDeg ?? 0) : plantTurn(f.id, w, d, f.rotationDeg ?? 0) }, floorOfFeature(f, floorOf)),
+    at: roomTransform({ position: { x: f.x, y: f.y }, rotation: species === "flowers" ? (f.rotationDeg ?? 0) : plantTurn(f.id, w, d, f.rotationDeg ?? 0) }, plantFloor(f, species, floorOf)),
   });
 }
 
@@ -624,6 +662,14 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
   let surfaces = 0;
   // Columns and what they carry, read off the drawing once (./structures.ts).
   const reading = readStructures(structure.features);
+  // The floor each column stands on (its plinth's footprint), and a beam on its columns' highest.
+  const columnFloor = new Map<ColumnReading, number>();
+  const floorOfColumn = (c: ColumnReading): number => {
+    let z = columnFloor.get(c);
+    if (z === undefined) columnFloor.set(c, (z = floorOfFeature(c.members[0], floorOf)));
+    return z;
+  };
+  const beamFloor = (b: BeamReading): number => Math.max(0, ...b.columns.map(floorOfColumn));
   for (const f of structure.features) {
     switch (f.kind) {
       case "surface": {
@@ -634,22 +680,31 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
         break;
       }
       case "pool":
-        waterWell(f, footprintOutlines(featureFootprint(f)), out);
+        waterWell(f, footprintOutlines(featureFootprint(f)), out, floorOfFeature(f, floorOf));
         break;
+      case "column":
       case "structure":
       case "other": {
         const role = reading.role.get(f.id);
         if (role?.kind === "column") {
-          // A column is one body, built where its first (biggest) footprint is met.
-          if (role.index === 0) columnBody(role.column, reading, structure.features, out);
+          // A column is one body, built where its first (biggest) footprint is met — up to the
+          // beam it carries (on the floor that beam is on), else its own height above its floor.
+          if (role.index === 0) {
+            const c = role.column;
+            const z = floorOfColumn(c);
+            const top = c.beam ? beamFloor(c.beam) + shaftTopOf(c) - z : shaftTopOf(c);
+            columnBody(c, top, z, out);
+          }
+        } else if (role?.kind === "beam") {
+          const drop = role.beam.dropOf[f.id] ?? 0;
+          extrudedFeature(f, footprintOutlines(featureFootprint(f)), out, { fromMm: role.beam.fromMm - drop, toMm: role.beam.toMm - drop }, beamFloor(role.beam));
         } else {
-          const drop = role?.kind === "beam" ? (role.beam.dropOf[f.id] ?? 0) : 0;
-          extrudedFeature(f, footprintOutlines(featureFootprint(f)), out, role?.kind === "beam" ? { fromMm: role.beam.fromMm - drop, toMm: role.beam.toMm - drop } : undefined);
+          extrudedFeature(f, footprintOutlines(featureFootprint(f)), out, undefined, floorOfFeature(f, floorOf));
         }
         break;
       }
       case "bar":
-        extrudedFeature(f, footprintOutlines(featureFootprint(f)), out);
+        extrudedFeature(f, footprintOutlines(featureFootprint(f)), out, undefined, floorOfFeature(f, floorOf));
         break;
       case "plant":
         plantInstance(f, out, floorOf);
@@ -680,7 +735,7 @@ function grown(b: Bounds, byMm: number): BuiltOutline {
 export function envelopeNodes(input: SceneInput, out: SceneCollector, floorOf: FloorOf = ON_FLOOR): { roofedMm: number | null } {
   const { plan, structure } = input;
   const zones = plan.all;
-  const wells = waterWells(structure);
+  const wells = waterWells(structure, floorOf);
 
   // Floors: every zone on the property, so the hall next door is still there through its door —
   // each with the wells that lie in it cut out.
@@ -889,7 +944,7 @@ if (isMain(import.meta.url)) {
     // Plants: shared per species and size; the shapes are ./plants.ts's (check:plants).
     const trees = bodies.filter((b) => b.id.startsWith("i:plant:tree:"));
     assert(trees.length === 1 && trees[0].instances.length === 2, "two trees of one size are one shared body with two instances");
-    assert(JSON.stringify(trees[0].parts) === JSON.stringify(treeParts(1750, 1750, 4000)), "…built by treeParts");
+    assert(JSON.stringify(trees[0].parts) === JSON.stringify(treeParts(1750, 1750, 4000, PLANT_FILL.tree)), "…built by treeParts");
     assert(trees[0].instances[0].rotationDeg !== trees[0].instances[1].rotationDeg, "…each turned its own way (a round crown turns by its id)");
     const palm = bodies.find((b) => b.id.startsWith("i:plant:palm:"))!;
     assert(!!palm && palm.instances.length === 1 && palm.parts.some((q) => q.shape === "frond"), "the palm is its own shared body, crowned with fronds");
@@ -915,8 +970,8 @@ if (isMain(import.meta.url)) {
     plantInstance({ id: "pot-1", kind: "plant", label: "עציץ", x: 0, y: 0, widthMm: 700, depthMm: 700, heightMm: 900, shape: "circle", rotationDeg: 0, plant: "pot" }, shrubbery);
     plantInstance({ id: "shrub-1", kind: "plant", label: "שיח", x: 0, y: 0, widthMm: 1200, depthMm: 1200, heightMm: 1000, shape: "circle", rotationDeg: 0 }, shrubbery);
     const [potBody, shrubBody] = shrubbery.nodes() as Extract<(typeof nodes)[number], { kind: "body" }>[];
-    assert(potBody.id.startsWith("i:plant:pot:") && JSON.stringify(potBody.parts) === JSON.stringify(potParts(350, 350, 900)), "a pot is potParts");
-    assert(shrubBody.id.startsWith("i:plant:shrub:") && JSON.stringify(shrubBody.parts) === JSON.stringify(shrubParts(600, 600, 0, 1000)), "a plant with no species is a shrub");
+    assert(potBody.id.startsWith("i:plant:pot:") && JSON.stringify(potBody.parts) === JSON.stringify(potParts(350, 350, 900, PLANT_FILL.pot)), "a pot is potParts");
+    assert(shrubBody.id.startsWith("i:plant:shrub:") && JSON.stringify(shrubBody.parts) === JSON.stringify(shrubParts(600, 600, 0, 1000, PLANT_FILL.shrub)), "a plant with no species is a shrub");
 
     // The venue's chairs in rows: twelve chairs, one instanced body, facing the block's +y.
     const seats = bodies.filter((b) => b.tag.type === "chair");
@@ -928,6 +983,34 @@ if (isMain(import.meta.url)) {
     assert(new Set(seatXs).size === 3, "…in three rows across the turned block");
 
     assert(!byId("feature:stage-1"), "a venue stage is left to phase B");
+
+    // On a platform (a 1m built terrace, 8×8m): a pool is a raised basin on its top, a column
+    // stands on it to its own height, and a palm beside it — its crown more than half over the
+    // terrace, its trunk off it — stands on the ground.
+    {
+      const terrace: StructureFeature = { id: "terrace", kind: "structure", label: "", x: 0, y: 0, widthMm: 8000, depthMm: 8000, heightMm: 1000, shape: "rect", rotationDeg: 0 };
+      const basin: StructureFeature = { id: "basin", kind: "pool", label: "", x: 0, y: -2000, widthMm: 3000, depthMm: 1500, heightMm: 0, shape: "rect", rotationDeg: 0 };
+      const column: StructureFeature = { id: "pillar", kind: "column", label: "עמוד", x: 2000, y: 2000, widthMm: 600, depthMm: 600, heightMm: 3000, shape: "rect", rotationDeg: 0, column: { shaftMm: 400, baseMm: 500 } };
+      const palm: StructureFeature = { id: "palm-2", kind: "plant", label: "דקל", x: 4300, y: 0, widthMm: 7000, depthMm: 7000, heightMm: 6000, shape: "circle", rotationDeg: 0, plant: "palm" };
+      const raised: VenueStructure = { nodes: [], walls: [], entrances: [], features: [terrace, basin, column, palm] };
+      const floorOf = elevationOf(emptyDocument(), raised).floorUnder;
+      const at = new SceneCollector();
+      const rPlan = eventPlan({ venueId: "v", zoneIds: [] }, { structure: raised, zones: [], mmPerUnit: 1, access: "granted" });
+      envelopeNodes({ doc: emptyDocument(), plan: rPlan, structure: raised, settings: DEFAULT_SETTINGS, author: true }, at, floorOf);
+      const rb = at.nodes().filter((n): n is Extract<typeof n, { kind: "body" }> => n.kind === "body");
+      const b = rb.find((n) => n.id === "feature:basin")!;
+      assert(!!b && b.instances[0].at.z === 1000, "a pool on a platform stands on its top");
+      assert(!b.parts.some((q) => q.shape === "ribbon") && b.parts.some((q) => q.shape === "extrude" && q.h === BASIN_RIM_MM && q.material === BASIN_MATERIAL), "…a raised basin: a stone wall BASIN_RIM_MM high, no sunken well");
+      assert(b.parts.some((q) => q.shape === "plane" && q.material?.kind === "water" && q.at.z === BASIN_RIM_MM - BASIN_WATER_MM), "…the water just under the wall's top");
+      const g2 = rb.find((n) => n.id === "ground")!.parts[0];
+      assert(g2.shape === "plane" && !g2.holes, "…and nothing is cut out of the ground under the platform");
+      const c = rb.find((n) => n.id === "feature:pillar")!;
+      const cTop = Math.max(...c.parts.map((q) => (q.shape === "extrude" || q.shape === "cylinder" || q.shape === "lathe" ? q.at.z + (q.shape === "lathe" ? Math.max(...q.profile.map((r) => r.z)) : q.h) : q.at.z)));
+      assert(!!c && c.instances[0].at.z === 1000 && near(cTop, 3000), `a column stands on the platform, its own height above it (top ${cTop})`);
+      assert(c.parts.some((q) => q.shape === "lathe") && c.parts.some((q) => q.shape === "torus"), "…a round shaft over a base ring");
+      const palms = rb.find((n) => n.id.startsWith("i:plant:palm:"))!;
+      assert(palms.instances[0].at.z === 0, "a palm whose trunk is off the platform stands on the ground, whatever its crown overhangs");
+    }
 
     const total = out.stats();
     console.log(`scene envelope ok: ${total.bodies} bodies, ${total.instances} instances; roofed ${roofedMm}`);

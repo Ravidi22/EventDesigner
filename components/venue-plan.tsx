@@ -12,6 +12,7 @@ import { PlantGlyph } from "@/components/plant-glyph";
 import { SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { ClimbGlyph } from "@/components/climb-glyph";
 import { SeatingGlyph } from "@/components/chair-block";
+import { ColumnGlyph } from "@/components/column-glyph";
 import { seatingOf } from "@/lib/venues/seating";
 import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
 import { NO_DECKS, edgesMatter, takesEdgeItems } from "@/lib/venues/stage-edges";
@@ -817,6 +818,18 @@ const FeatureNode = memo(function FeatureNode({
                       vectorEffect="non-scaling-stroke"
                     />
                   </>
+                ) : f.kind === "column" ? (
+                  // A column: its plinth, base ring and shaft (lib/venues/column.ts) — drawn solid,
+                  // not in the dashed line a feature's outline rests in, and with no name: the
+                  // drawing says what it is, and a colonnade of 24 named "עמוד" is a grey smudge.
+                  <ColumnGlyph
+                    f={f}
+                    fill={common.fill}
+                    fillOpacity={common.fillOpacity}
+                    stroke={common.stroke}
+                    strokeWidth={common.strokeWidth}
+                    dash={f.style?.dash ? common.strokeDasharray : undefined}
+                  />
                 ) : isClimb(f.kind) ? (
                   // Stairs or a ramp: the step edges and the walking line say what it is, so it
                   // carries no name — only a ramp's slope. The same tread-coloured well and muted
@@ -857,7 +870,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"

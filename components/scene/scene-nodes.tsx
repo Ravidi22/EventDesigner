@@ -203,7 +203,7 @@ const BodyView = memo(function BodyView({ body, caches, registry }: { body: Body
               key={i}
               geometry={b.geometry}
               material={caches.material.get(b.material, !!t.mirrored, offsetRank)}
-              castShadow={castShadow}
+              castShadow={castShadow && b.material.kind !== "leaves"}
               receiveShadow={receiveShadow}
               renderOrder={renderOrder}
             />
@@ -226,7 +226,8 @@ const BodyView = memo(function BodyView({ body, caches, registry }: { body: Body
             geometry={b.geometry}
             material={caches.material.get(b.material, anyMirrored, offsetRank)}
             instances={body.instances}
-            castShadow={castShadow}
+            // A leaf card's shadow is its square: the crown's clumps under the cards cast the tree's.
+            castShadow={castShadow && b.material.kind !== "leaves"}
             receiveShadow={receiveShadow}
             renderOrder={renderOrder}
             vary={body.tag.type === "flowers" || body.id.includes(":flower:") || (body.tag.type === "feature" && body.material.kind === "foliage")}

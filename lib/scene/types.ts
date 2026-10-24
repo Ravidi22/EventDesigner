@@ -38,7 +38,9 @@ export interface Transform {
   scale?: number;
 }
 
-export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "emissive";
+/** `leaves` is a crown's leaf cards: a sprite of a leaf cluster cut out by its own alpha, two-sided,
+ *  casting no shadow of its own (the clumps under it do). */
+export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "emissive";
 
 /** What a surface is made of. `colour` is the designer's (a shade's swatch, a style's fill) or the
  *  kind's default tone; a `texture` is one of the plan's materials drawn procedurally by the viewer
@@ -90,7 +92,26 @@ export type Part =
    *  `liftDeg` above level and drooping `droopDeg` by its tip. A blade `w` wide at its widest, its
    *  halves folded `foldDeg` up; or, with `leaflets`, pinnate — that many pairs of leaflets up to `w`
    *  long off a thin rachis, hanging `foldDeg` below it (./organic.ts frondTriangles). */
-  | { shape: "frond"; len: number; w: number; at: Vec3; rotDeg?: number; liftDeg?: number; droopDeg?: number; leaflets?: number; foldDeg?: number; material?: MaterialRef };
+  | { shape: "frond"; len: number; w: number; at: Vec3; rotDeg?: number; liftDeg?: number; droopDeg?: number; leaflets?: number; foldDeg?: number; material?: MaterialRef }
+  /** A crown's LEAF CARDS (./plants.ts): square sprites of a leaf cluster, cut out by the `leaves`
+   *  material's alpha — what breaks a canopy's outline into leaves and lets the sky through, where
+   *  the clumps under them keep its mass. Each card stands about `at`; every card is lit as if the
+   *  crown were round, its normal pointing away from `centre` (about `at` too). */
+  | { shape: "leaves"; at: Vec3; centre: Vec3; cards: LeafCard[]; material?: MaterialRef };
+
+/** One leaf card: `size` across, centred at (x, y, z), turned `yawDeg` on the plan and tipped
+ *  `pitchDeg` back from upright (0 = a vertical card, 90 = lying flat), showing atlas `tile` (0–3)
+ *  at `shade` of the material's colour. */
+export interface LeafCard {
+  x: number;
+  y: number;
+  z: number;
+  size: number;
+  yawDeg: number;
+  pitchDeg: number;
+  tile: number;
+  shade: number;
+}
 
 export type NodeType =
   | "ground" | "floor" | "wall" | "door" | "ceiling" | "feature"

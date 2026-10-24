@@ -9,6 +9,7 @@ import {
   ArrowUp,
   BringToFront,
   CircleDot,
+  Cylinder,
   DoorOpen,
   Footprints,
   Grid2x2,
@@ -53,6 +54,7 @@ import type { ElementStyle } from "@/lib/element-style";
 import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
 import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
+import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, type ChairStyle } from "@/lib/catalog/symbols";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import {
@@ -157,6 +159,7 @@ export function SelectionBar({
   onCancelDraftZone,
   outlineEditId,
   onToggleOutline,
+  onDefineColumns,
 }: {
   selection: PlanSelection[];
   structure: VenueStructure;
@@ -204,6 +207,8 @@ export function SelectionBar({
   /** The free surface whose outline is out for point editing, and the switch for it. */
   outlineEditId?: string | null;
   onToggleOutline?: (featureId: string) => void;
+  /** "הגדרה כעמודים": the picked stacks of drawn footprints become columns (lib/venues/column.ts). */
+  onDefineColumns?: (featureIds: string[]) => void;
 }) {
   // ── a zone being named ───────────────────────────────────────────────────────────────────────
   if (draftZone) {
@@ -380,6 +385,16 @@ export function SelectionBar({
     );
   })();
 
+  // A venue's pillars drawn the old way — footprints stacked on one centre, a plinth, a base, a
+  // shaft — made into columns: one element each, with the column's own fields.
+  const defineChip = onDefineColumns && features.length > 0 && canDefineColumns(features) && (
+    <BarButton
+      icon={Cylinder}
+      label={features.length === 1 ? "הגדרה כעמוד — אלמנט אחד עם בסיס, טבעת ועמוד" : "הגדרה כעמודים — כל ערימה של צורות על מרכז אחד הופכת לעמוד אחד"}
+      onClick={() => onDefineColumns(features.map((f) => f.id))}
+    />
+  );
+
   // ── several things ───────────────────────────────────────────────────────────────────────────
   if (selection.length > 1) {
     const kind = soleKind(selection);
@@ -425,6 +440,7 @@ export function SelectionBar({
         {features.length > 0 &&
           styleOf(features[0].style, (style) => apply((s) => features.reduce((acc, f) => updateFeature(acc, f.id, { style }), s)))}
         {zoneChip}
+        {defineChip}
         {lockButton}
         {stackMenu}
         {onDuplicate && features.length > 0 ? (
@@ -673,6 +689,8 @@ export function SelectionBar({
   const surface = feature.kind === "surface";
   // The venue's own chairs in rows (lib/venues/seating.ts): sized by their rows and their chair.
   const seating = feature.kind === "seating";
+  // A column: its plinth is the size; its shaft and base are its own panel (lib/venues/column.ts).
+  const column = feature.kind === "column" ? columnOf(feature) : null;
   // A surface laid wall to wall in a closed shape: the walls are its size and shape.
   const bound = followsWalls(feature);
   const icon =
@@ -696,6 +714,7 @@ export function SelectionBar({
     surface && feature.label && feature.label !== SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)] ? SURFACE_MATERIAL_LABEL[surfaceMaterial(feature)] : FEATURE_KIND_LABEL[feature.kind],
     bound ? `ממלא שטח סגור · ${Math.round(polygonAreaMm2(featureWorldOutline(feature)) / 1_000_000)} מ״ר` : size,
     band !== null && feature.kind === "bar" ? `דלפק ${Math.round(band / 10)} ס״מ` : null,
+    column ? `עמוד ⌀ ${cmOf(column.shaftMm)} ס״מ` : null,
     !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null,
     feature.locked ? "נעול" : null,
   ]
@@ -865,7 +884,7 @@ export function SelectionBar({
         })()
       ) : bound ? null : (
         <Popover label="מידות" icon={Ruler} value={size}>
-          <PanelRow label={feature.shape === "circle" ? "קוטר (מ׳)" : "רוחב (מ׳)"} htmlFor="feature-w">
+          <PanelRow label={`${feature.shape === "circle" ? "קוטר" : "רוחב"}${column ? " הבסיס" : ""} (מ׳)`} htmlFor="feature-w">
             <NumberField
               id="feature-w"
               decimals={2}
@@ -877,7 +896,7 @@ export function SelectionBar({
             />
           </PanelRow>
           {feature.shape !== "circle" && (
-            <PanelRow label="עומק (מ׳)" htmlFor="feature-d">
+            <PanelRow label={column ? "עומק הבסיס (מ׳)" : "עומק (מ׳)"} htmlFor="feature-d">
               <NumberField
                 id="feature-d"
                 decimals={2}
@@ -922,6 +941,27 @@ export function SelectionBar({
               <Note>{feature.kind === "bar" ? "עומק הדלפק נשאר קבוע כשמשנים את הרוחב והעומק של הבר." : "העובי נשאר קבוע כשמשנים את הגודל."}</Note>
             </>
           )}
+        </Popover>
+      )}
+
+      {column && (
+        <Popover label="עמוד" icon={Cylinder} value={`⌀ ${cmOf(column.shaftMm)} ס״מ`} panelClassName="w-80">
+          <Segmented
+            label="חתך העמוד"
+            value={column.square ? "square" : "round"}
+            options={[
+              ["round", "עגול"],
+              ["square", "מרובע"],
+            ] as const}
+            onChange={(v) => patch(columnPatch(feature, { square: v === "square" }))}
+          />
+          <PanelRow label={column.square ? "רוחב העמוד (ס״מ)" : "קוטר העמוד (ס״מ)"} htmlFor="column-shaft">
+            <NumberField id="column-shaft" decimals={0} min={10} step={5} commitOnBlur value={cmOf(column.shaftMm)} onChange={(cm) => patch(columnPatch(feature, { shaftMm: cm * 10 }))} className="w-20" />
+          </PanelRow>
+          <PanelRow label="טבעת בסיס (ס״מ)" htmlFor="column-base">
+            <NumberField id="column-base" decimals={0} min={0} step={5} commitOnBlur value={column.baseMm ? cmOf(column.baseMm) : 0} onChange={(cm) => patch(columnPatch(feature, { baseMm: cm * 10 }))} className="w-20" />
+          </PanelRow>
+          <Note>הבסיס המרובע או העגול שהעמוד עומד עליו הוא האלמנט עצמו — הגודל שלו ב״מידות״. עמוד ברוחב הבסיס הוא עמוד בלי בסיס; טבעת 0 היא בלי טבעת.</Note>
         </Popover>
       )}
 
@@ -1033,6 +1073,7 @@ export function SelectionBar({
       )}
 
       {zoneChip}
+      {defineChip}
       {lockButton}
       {stackMenu}
       {onDuplicate ? (

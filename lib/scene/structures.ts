@@ -2,23 +2,29 @@
 // colonnade and not as a drum (Ravid, 2026-10-24: "improve the visual of the objects: the
 // קוליסאום"). Spec §3.1.
 //
-// A venue draws its architecture as `structure` features: footprints with a height. At אמרה the
-// קוליסאום is 24 columns, each drawn as THREE nested footprints on one centre (a 2m square, a
-// ⌀1.5 round, a ⌀0.8 round), under a ring of 48 band pieces — every one of them 9m tall, so
-// extruding each to its height built a solid 9m drum with the columns buried inside it. The
-// drawing says more than that, and this module reads it:
+// A venue draws its architecture as `structure` features: footprints with a height — and, since
+// 2026-10-24, its pillars as `column` features (lib/venues/column.ts). At אמרה the קוליסאום was 24
+// columns, each drawn as THREE nested footprints on one centre (a 2m square, a ⌀1.5 round, a ⌀0.8
+// round), under a ring of 48 band pieces — every one of them 9m tall, so extruding each to its
+// height built a solid 9m drum with the columns buried inside it. The drawing says more than that,
+// and this module reads it:
 //
-//   COLUMN  footprints nested on one centre are one column: the biggest is its PLINTH, the
-//           smallest its SHAFT, those between its BASE mouldings — and its capital mirrors them at
-//           the top. A lone slender footprint (4× taller than wide, ≤1.2m) is a column too.
+//   COLUMN  a `column` feature is one: its plinth, base ring and shaft are its own (columnOf).
+//           Footprints nested on one centre are one too (columnStacks): the biggest is its PLINTH,
+//           the smallest its SHAFT, those between its BASE mouldings — and its capital mirrors them
+//           at the top. A lone slender footprint (4× taller than wide, ≤1.2m) is a column too.
 //   BEAM    built pieces of one height that touch one another, with a column standing INSIDE the
 //           run, are what the columns carry: drawn as the top BEAM_SHARE of their height (a ring
 //           beam, a pergola, a lintel), open beneath.
 //   SOLID   everything else is its footprint extruded to its height, as before.
 //
+// Heights here are above the floor the thing stands on; ./envelope.ts adds that floor (a colonnade
+// on a stage stands on its deck).
+//
 // Pure, deterministic; `npx tsx lib/scene/structures.ts` holds a ring colonnade.
 import type { Point } from "@/lib/studio/hall";
 import { featureFootprint, type StructureFeature } from "@/lib/venues/structure";
+import { columnOf, columnStacks } from "@/lib/venues/column";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { isMain } from "../self-check";
@@ -28,13 +34,9 @@ export const BEAM_SHARE = 0.11;
 export const BEAM_MM = { min: 350, max: 1100 } as const;
 /** Two pieces touch within this. */
 const TOUCH_MM = 60;
-/** Two footprints share a centre within this share of the smaller's size (and at least 30mm). */
-const CENTRE_SHARE = 0.08;
 /** A lone footprint is a column when it is this many times taller than wide, and no wider than this. */
 const SLENDER = 3.5;
 const SLENDER_MAX_MM = 1200;
-/** A column's pieces are COMPACT: no longer than this over their width, filling this much of their
- *  box (a circle 0.79, a square 1) — a band piece of a ring beam is neither. */
 const COMPACT_ASPECT = 1.4;
 const COMPACT_FILL = 0.7;
 /** A beam is something people walk under: a run lower than this is a wall, whatever stands in it
@@ -43,10 +45,15 @@ const BEAM_MIN_MM = 2200;
 export const BAND_STEP_MM = 150;
 
 export interface ColumnReading {
-  /** Every member's id, biggest footprint first: [plinth, …bases, shaft] — one id for a lone column. */
+  /** The features it is drawn as — the column feature itself, or every member of a stack. */
   ids: string[];
+  /** Its pieces biggest first: [plinth, …bases, shaft] — one for a lone column. A `column`
+   *  feature's are made from its spec, the plinth keeping the feature's own id. */
+  members: StructureFeature[];
   centre: Point;
   heightMm: number;
+  /** The beam it holds up, when it stands under one. */
+  beam?: BeamReading;
 }
 
 export interface BeamReading {
@@ -58,6 +65,8 @@ export interface BeamReading {
    *  a white band outside a grey one) is the main band and an ARCHITRAVE stepped BAND_STEP_MM down
    *  per band — never two faces at one height where the bands overlap, which flickered. */
   dropOf: Record<string, number>;
+  /** The columns standing under it. */
+  columns: ColumnReading[];
 }
 
 export interface StructureReading {
@@ -117,46 +126,53 @@ function area(poly: readonly Point[]): number {
   return Math.abs(a) / 2;
 }
 
+/** A `column` feature as the pieces a stack would have drawn: the plinth (the feature itself, when
+ *  it has one), the base ring, the shaft — each turned with it. */
+export function columnMembers(f: StructureFeature): StructureFeature[] {
+  const parts = columnOf(f);
+  const piece = (suffix: string, across: number): StructureFeature => ({ ...f, id: `${f.id}:${suffix}`, shape: parts.square ? "rect" : "circle", widthMm: across, depthMm: across, outline: undefined, edgeCurves: undefined });
+  return [...(parts.plinth ? [f] : []), ...(parts.baseMm ? [piece("base", parts.baseMm)] : []), { ...piece("shaft", parts.shaftMm), ...(parts.plinth ? {} : { id: f.id }) }];
+}
+
 export function readStructures(features: readonly StructureFeature[]): StructureReading {
-  const items = features.filter((f) => built(f) && f.heightMm > 0).map((f) => {
-    const polys = polysOf(f);
-    const box = boxOf(polys);
-    // In the feature's OWN frame (its width × depth): a square plinth turned 40° is still a square.
-    const fill = polys.reduce((s, p) => s + area(p), 0) / Math.max(1, f.widthMm * f.depthMm);
-    const compact = Math.max(f.widthMm, f.depthMm) <= COMPACT_ASPECT * Math.min(f.widthMm, f.depthMm) && fill >= COMPACT_FILL;
-    return { f, polys, box, compact };
-  });
   const role: StructureReading["role"] = new Map();
   const columns: ColumnReading[] = [];
-
-  // 1. Columns: footprints nested on one centre.
-  const used = new Set<string>();
-  const byArea = [...items].sort((a, b) => b.box.w * b.box.d - a.box.w * a.box.d);
-  for (const outer of byArea) {
-    if (used.has(outer.f.id) || !outer.compact) continue;
-    const stack = [outer];
-    for (const inner of byArea) {
-      if (inner === outer || !inner.compact || used.has(inner.f.id) || stack.includes(inner)) continue;
-      const last = stack[stack.length - 1];
-      const tol = Math.max(30, CENTRE_SHARE * Math.min(inner.box.w, inner.box.d));
-      const centred = Math.hypot(inner.box.cx - outer.box.cx, inner.box.cy - outer.box.cy) <= tol;
-      // Truly inside the one before: every corner of its outline in that outline.
-      const nested = inner.box.w * inner.box.d < last.box.w * last.box.d && inner.polys.every((poly) => poly.every((p) => last.polys.some((q) => pointInPolygon(p, q) || q.some((v, i) => segDist(p, v, q[(i + 1) % q.length]) <= 2))));
-      if (centred && nested) stack.push(inner);
-    }
-    const shaft = stack[stack.length - 1];
-    const lone = stack.length === 1 && Math.max(shaft.box.w, shaft.box.d) <= SLENDER_MAX_MM && shaft.f.heightMm >= SLENDER * Math.max(shaft.box.w, shaft.box.d);
-    if (stack.length < 2 && !lone) continue;
-    const column: ColumnReading = { ids: stack.map((s) => s.f.id), centre: { x: shaft.box.cx, y: shaft.box.cy }, heightMm: Math.max(...stack.map((s) => s.f.heightMm)) };
+  const add = (column: ColumnReading, roleIds: string[]) => {
     columns.push(column);
-    stack.forEach((s, index) => {
-      used.add(s.f.id);
-      role.set(s.f.id, { kind: "column", column, index });
+    roleIds.forEach((id, index) => role.set(id, { kind: "column", column, index }));
+  };
+
+  // 1. Columns: the venue's own, then footprints nested on one centre, then lone slender pillars.
+  for (const f of features) {
+    if (f.kind !== "column") continue;
+    add({ ids: [f.id], members: columnMembers(f), centre: { x: f.x, y: f.y }, heightMm: f.heightMm }, [f.id]);
+  }
+  const stacked = new Set<string>();
+  for (const st of columnStacks(features)) {
+    const ids = st.members.map((m) => m.id);
+    ids.forEach((id) => stacked.add(id));
+    add({ ids, members: st.members, centre: st.centre, heightMm: st.heightMm }, ids);
+  }
+  const items = features
+    .filter((f) => built(f) && f.heightMm > 0 && !stacked.has(f.id))
+    .map((f) => {
+      const polys = polysOf(f);
+      // Compact in the feature's OWN frame — a square turned 40° is still a square; a band piece
+      // of a ring beam is no pillar however slender (lib/venues/column.ts reads stacks the same way).
+      const fill = polys.reduce((s, p) => s + area(p), 0) / Math.max(1, f.widthMm * f.depthMm);
+      const compact = Math.max(f.widthMm, f.depthMm) <= COMPACT_ASPECT * Math.min(f.widthMm, f.depthMm) && fill >= COMPACT_FILL;
+      return { f, polys, box: boxOf(polys), compact };
     });
+  const lone = new Set<string>();
+  for (const it of items) {
+    const across = Math.max(it.box.w, it.box.d);
+    if (!it.compact || across > SLENDER_MAX_MM || it.f.heightMm < SLENDER * across) continue;
+    lone.add(it.f.id);
+    add({ ids: [it.f.id], members: [it.f], centre: { x: it.box.cx, y: it.box.cy }, heightMm: it.f.heightMm }, [it.f.id]);
   }
 
   // 2. Beams: runs of touching pieces of one height with a column standing inside.
-  const rest = items.filter((it) => !used.has(it.f.id));
+  const rest = items.filter((it) => !lone.has(it.f.id));
   const parent = rest.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   for (let i = 0; i < rest.length; i++) {
@@ -174,8 +190,8 @@ export function readStructures(features: readonly StructureFeature[]): Structure
   for (const run of runs.values()) {
     const h = Math.max(...run.map((it) => it.f.heightMm));
     if (h < BEAM_MIN_MM) continue;
-    const holds = columns.some((c) => c.heightMm >= 0.8 * h && c.heightMm <= 1.2 * h && run.some((it) => it.polys.some((poly) => pointInPolygon(c.centre, poly))));
-    if (!holds) continue;
+    const under = columns.filter((c) => c.heightMm >= 0.8 * h && c.heightMm <= 1.2 * h && run.some((it) => it.polys.some((poly) => pointInPolygon(c.centre, poly))));
+    if (!under.length) continue;
     const depth = Math.max(BEAM_MM.min, Math.min(BEAM_MM.max, BEAM_SHARE * h));
     // Its bands by colour, the one with the most area first: that one is the beam, each next one
     // a step lower.
@@ -187,24 +203,18 @@ export function readStructures(features: readonly StructureFeature[]): Structure
     const rank = [...areaBy].sort((a, b) => b[1] - a[1]).map(([k]) => k);
     const dropOf: Record<string, number> = {};
     for (const it of run) dropOf[it.f.id] = rank.indexOf(it.f.style?.fill ?? "") * BAND_STEP_MM;
-    const beam: BeamReading = { ids: run.map((it) => it.f.id), fromMm: Math.max(0, h - depth), toMm: h, dropOf };
+    const beam: BeamReading = { ids: run.map((it) => it.f.id), fromMm: Math.max(0, h - depth), toMm: h, dropOf, columns: under };
     beams.push(beam);
+    for (const c of under) c.beam ??= beam;
     for (const it of run) role.set(it.f.id, { kind: "beam", beam });
   }
   return { columns, beams, role };
 }
 
-/** How high a column's shaft rises: to the underside of the beam it stands under, else its top. */
-export function shaftTopOf(column: ColumnReading, reading: StructureReading, features: readonly StructureFeature[]): number {
-  let top = column.heightMm;
-  for (const beam of reading.beams) {
-    const under = beam.ids.some((id) => {
-      const f = features.find((x) => x.id === id);
-      return !!f && polysOf(f).some((poly) => pointInPolygon(column.centre, poly));
-    });
-    if (under) top = Math.min(top, beam.fromMm);
-  }
-  return top;
+/** How high a column's shaft rises above the floor: to the underside of the beam it stands under,
+ *  else its top. */
+export function shaftTopOf(column: ColumnReading): number {
+  return column.beam ? Math.min(column.heightMm, column.beam.fromMm) : column.heightMm;
 }
 
 // ponytail: self-check. Run: npx tsx lib/scene/structures.ts
@@ -247,17 +257,25 @@ if (isMain(import.meta.url)) {
   // And a plain wall that holds nothing, and a lone slender pillar.
   fs.push({ ...base, id: "wall", x: 30000, y: 0, widthMm: 6000, depthMm: 200, shape: "rect" });
   fs.push({ ...base, id: "pillar", x: 30000, y: 5000, widthMm: 500, depthMm: 500, shape: "circle", heightMm: 4000 });
+  // A venue column of its own (FeatureKind "column"): a 60cm plinth, a ⌀50 base, a ⌀40 shaft.
+  fs.push({ ...base, id: "col", kind: "column", x: 30000, y: 9000, widthMm: 600, depthMm: 600, shape: "rect", heightMm: 3000, column: { shaftMm: 400, baseMm: 500 } });
   const r = readStructures(fs);
-  assert(r.columns.length === 10, `eight stacked columns, the gate post and the lone pillar (${r.columns.length})`);
+  assert(r.columns.length === 11, `eight stacked columns, the gate post, the lone pillar and the venue's column (${r.columns.length})`);
   const c0 = r.columns.find((c) => c.ids.includes("s0"))!;
   assert(c0.ids.join() === "p0,b0,s0", `a stack reads plinth, base, shaft — biggest first (${c0.ids.join()})`);
   assert(r.beams.length === 1 && r.beams[0].ids.length === 8, `the eight band pieces are ONE beam (${r.beams.map((b) => b.ids.length).join()} / roles ${[...r.role].map(([id, x]) => id + ":" + x.kind).join(" ")})`);
   assert(r.beams[0].toMm === 6000 && r.beams[0].fromMm === 6000 - 660, "…the top 11% of their height");
+  assert(r.beams[0].columns.length === 8 && c0.beam === r.beams[0], "…carried by the eight columns under it");
   assert(!r.role.has("wall"), "a wall that holds no column stays a solid");
   assert(!r.role.has("lowwall") && r.role.get("gatepost")?.kind === "column", "a low garden wall stays a wall though a pillar rises from it");
   assert(r.columns.every((c) => !c.ids.some((id) => id.startsWith("r"))), "no band piece of the ring is read as part of a column");
-  assert(shaftTopOf(c0, r, fs) === 6000 - 660, "a column's shaft rises to the beam's underside");
+  assert(shaftTopOf(c0) === 6000 - 660, "a column's shaft rises to the beam's underside");
   const pillar = r.columns.find((c) => c.ids[0] === "pillar")!;
-  assert(!!pillar && shaftTopOf(pillar, r, fs) === 4000, "a lone pillar stands to its own height");
+  assert(!!pillar && shaftTopOf(pillar) === 4000, "a lone pillar stands to its own height");
+  const col = r.columns.find((c) => c.ids[0] === "col")!;
+  assert(!!col && col.members.map((m) => `${m.id}:${m.shape}:${m.widthMm}`).join() === "col:rect:600,col:base:circle:500,col:shaft:circle:400", `a venue column is its plinth, base and shaft (${col?.members.map((m) => m.id).join()})`);
+  assert(r.role.get("col")?.kind === "column" && shaftTopOf(col) === 3000, "…one column, to its own height");
+  const plain = readStructures([{ ...base, id: "plain", kind: "column", x: 0, y: 0, widthMm: 400, depthMm: 400, shape: "circle", heightMm: 3000, column: { shaftMm: 400 } }]).columns[0];
+  assert(plain.members.length === 1 && plain.members[0].id === "plain", "a column whose shaft fills it has no plinth");
   console.log("scene structures ok");
 }
