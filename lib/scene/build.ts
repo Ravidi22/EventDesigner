@@ -21,6 +21,7 @@ import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { hangHeightOf } from "@/lib/studio/hang";
 import { resolveSpan } from "@/lib/studio/anchor";
 import { pointInPolygon } from "@/lib/venues/faces";
+import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
 import type { Placement } from "@/lib/design-document/types";
 import type { Point } from "@/lib/studio/hall";
@@ -33,7 +34,7 @@ import { type ItemContext } from "./item-context";
 import { floorKindBody, rugBody } from "./floor-kinds";
 import { hexOf } from "./materials";
 import { ceilingUndersideMm, curtainBody, hungFlowersBody } from "./overhead";
-import { chairSpecOf, itemContextOf, tableNodes } from "./tables";
+import { chairSpecOf, itemContextOf, tableNodes, topsOf } from "./tables";
 import { stageNodes, venueStageNodes, type StageOpts } from "./stage";
 import { type Scene, type SceneInput, WALL_THICK_MM, transform, vec3 } from "./types";
 import type { StagePlacement } from "@/lib/design-document/stage";
@@ -45,8 +46,9 @@ const VENUE_CLIMB_TONE = "#faf9fd";
 
 export function buildScene(input: SceneInput): Scene {
   const out = new SceneCollector();
-  const { roofedMm } = envelopeNodes(input, out);
+  // What stands on what first: a venue's planter under a sketch stage stands on its deck too.
   const elevation = elevationOf(input.doc, input.structure);
+  const { roofedMm } = envelopeNodes(input, out, elevation.floorUnder);
   for (const f of input.structure.features) {
     if (f.kind === "stage") venueStageNodes(f, out, stageOpts(input));
     else venueClimb(input, out, f);
@@ -54,7 +56,7 @@ export function buildScene(input: SceneInput): Scene {
   const tables = new Map(input.doc.tables.map((t) => [t.id, t]));
   tableNodes(input, out, (tableId) => {
     const t = tables.get(tableId);
-    return t ? elevation.floorZ(t.position) : 0;
+    return t ? elevation.floorUnder(topsOf(t)) : 0;
   });
   for (const p of input.doc.placements) {
     if (p.tableId || p.layer === "table") continue; // on a table: tables.ts drew it
@@ -94,9 +96,11 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
     stageNodes(p as StagePlacement, out, stageOpts(input));
     return;
   }
+  /** The floor under this placement drawn at `fp`: what most of it stands on. */
+  const floorOf = (fp: Footprint) => elevation.floorUnder(footprintPolygons(fp, p.position, p.rotation ?? 0, !!p.mirrored, p.scale || 1), p.id);
   const block = p.rows ? chairBlockOf(p) : null;
   if (block) {
-    const z = elevation.floorZ(p.position);
+    const z = floorOf(placementFootprint(p));
     const layout = chairRowsLayout(block.spec, block.chair);
     const r = resolve(p.variantId);
     const tone = hexOf(r?.swatch) ?? hexOf(block.product.appearance?.style?.fill) ?? DEFAULT_TONE.chair;
@@ -109,14 +113,14 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
     }
     return;
   }
-  const { product, kind, ctx } = contextOf(input, p);
+  const { product, kind, ctx, footprint } = contextOf(input, p);
   if (product?.category === "rugs") {
     // The rug's own top is what floorZ reads under it; its base is a rug lower.
     const z = elevation.floorZ(p.position) - RUG_MM;
     out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody(ctx), roomTransform(p, Math.max(0, z)));
     return;
   }
-  out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, elevation.floorZ(p.position)));
+  out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, floorOf(footprint)));
 }
 
 /** A design item standing on a banquette: where the plan spreads it along the strip, on its top. */

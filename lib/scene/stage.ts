@@ -45,6 +45,7 @@ import { wallDistanceOf } from "@/lib/venues/stage-edges";
 import { emptyStructure, featurePlacement, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import { primeCatalog } from "@/lib/catalog/storage";
+import { pointInPolygon } from "@/lib/venues/faces";
 import { rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage";
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
@@ -78,8 +79,6 @@ export const RAIL_HEIGHT_MM = 1000;
 export const RAIL_POST_R_MM = 20;
 export const RAIL_POST_EVERY_MM = 1200;
 export const RAIL_MM = 40;
-export const MISSING_TONE = "#e0a24a";
-export const MISSING_MM = 20;
 
 export interface StageChair {
   style: ChairStyle;
@@ -93,7 +92,7 @@ export interface StageChair {
 export interface StageOpts {
   /** The venue's structure WITH this event's moves applied — its walls say which edges hug one. */
   structure: VenueStructure;
-  /** The designer's view: missing pieces are drawn; a client never sees "חסר". */
+  /** The designer's view (labels; nothing about the stage differs). */
   author: boolean;
   /** The chair a banquette seats — the studio's default (lib/scene/tables.ts chairSpecOf). */
   chair: StageChair;
@@ -103,8 +102,8 @@ export interface StageOpts {
   floorZ?: number;
 }
 
-/** A sketch stage: decks, levels, every edge item, corners, skirt, railings — and, for the author,
- *  the rim pieces the studio does not have. */
+/** A sketch stage: decks, levels, every edge item, corners, skirt, railings — and the rim pieces
+ *  the studio does not have yet, built as deck like the rest. */
 export function stageNodes(p: StagePlacement, out: SceneCollector, opts: StageOpts): void {
   buildStage(p, p.id, out, opts);
 }
@@ -151,6 +150,17 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
       tops.push(top);
       bodies.push(body);
     }
+    // 2. The rim pieces the studio does not own yet ("חסר" on the plan, layStage's `missing`) are
+    // still the stage: the room is what will stand there, and a round apron left as a hole put
+    // plan A's podium 40cm in the air over the dance floor (2026-10-24). Buying them is the
+    // studio's business, shown in the stage tool — never in the room.
+    for (const m of layout.missing) {
+      const c = m.outline.reduce((a, q) => ({ x: a.x + q.x / m.outline.length, y: a.y + q.y / m.outline.length }), { x: 0, y: 0 });
+      const level = (stage.levels ?? []).filter((l) => pointInPolygon(c, l.outline)).reduce((h, l) => Math.max(h, l.heightMm), 0);
+      const { top, body } = deckParts({ outline: m.outline, heightMm: level || baseH } as StageDeck);
+      tops.push(top);
+      bodies.push(body);
+    }
   } else {
     tops.push({ shape: "extrude", outline: { outline: stage.outline }, h: DECK_TOP_MM, at: vec3(0, 0, baseH - DECK_TOP_MM) });
     bodies.push({ shape: "extrude", outline: { outline: stage.outline }, h: baseH - DECK_TOP_MM, at: vec3(0, 0, 0) });
@@ -162,12 +172,6 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
   const deckTag: NodeTag = { type: "deck", id, label: "במה" };
   out.body(`${id}:decks`, deckTag, deckTop, tops, [at]);
   out.body(`${id}:deck-under`, deckTag, deckUnder, bodies.filter((b) => b.shape !== "extrude" || b.h > 0), [at]);
-
-  // 2. Missing rim pieces — the designer's warning tile, flush with the deck. Never for a client.
-  if (opts.author && layout.missing.length) {
-    const parts: Part[] = layout.missing.map((m) => ({ shape: "extrude", outline: { outline: m.outline }, h: MISSING_MM, at: vec3(0, 0, baseH - MISSING_MM) }));
-    out.body(`${id}:missing`, { type: "missing", id, label: "חסר" }, { colour: MISSING_TONE, kind: "matte", opacity: 0.5 }, parts, [at]);
-  }
 
   // 3. Edge items.
   const shapes: { item: StageStair; shape: EdgeItemShape }[] = [];
@@ -559,18 +563,19 @@ if (isMain(import.meta.url)) {
     const rail = railed.nodes().filter((n) => n.kind === "body").filter((b) => b.tag.type === "railing");
     assert(rail.length === 1 && rail[0].parts.some((q) => q.shape === "cylinder" && q.at.z === 600) && rail[0].parts.some((q) => q.shape === "box" && near(topOf(q), 600 + RAIL_HEIGHT_MM)), "a 60cm drop above a 50cm rule gets posts on the deck and a rail a metre up");
 
-    // Nothing is missing on a rectangle; a round stage built of sheets misses its rim — author only.
-    assert(ofType("missing").length === 0, "a rectangle of sheets misses no piece");
+    // A round stage built of sheets misses its rim pieces — and stands whole all the same.
     const disc = roundOutline(3000, 3000);
     const round: StagePlacement = { ...p, id: "s2", stage: { outline: disc.outline, smooth: disc.smooth, front: 0, decks: ["deck-244x122"] } };
     const authorOut = new SceneCollector();
     stageNodes(round, authorOut, opts);
     const clientOut = new SceneCollector();
     stageNodes(round, clientOut, { ...opts, author: false });
-    const missingAuthor = authorOut.nodes().filter((n) => n.kind === "body").filter((b) => b.tag.type === "missing");
-    const missingClient = clientOut.nodes().filter((n) => n.kind === "body").filter((b) => b.tag.type === "missing");
-    assert(layStage(round.stage, deckOf).missing.length > 0 && missingAuthor.length === 1, "a disc of sheets misses its rim pieces, and the author sees them");
-    assert(missingClient.length === 0, "…and a client never does");
+    const missing = layStage(round.stage, deckOf).missing;
+    const deckTops = (c: SceneCollector) => c.nodes().filter((n) => n.kind === "body").filter((b) => b.id === "s2:decks").flatMap((b) => b.parts);
+    const sheets = layStage(round.stage, deckOf).decks.length;
+    // Laid of no sheet at all, it is one slab of its outline; else its sheets and the pieces.
+    assert(missing.length > 0 && deckTops(clientOut).length === (sheets ? sheets + missing.length : 1), "a disc of sheets misses its rim pieces, and the room still has its whole deck — no holes");
+    assert(deckTops(authorOut).length === deckTops(clientOut).length, "…the same for the designer and the client");
 
     // A ramp: one tilted slab over a stepped infill, from the floor to the deck.
     const ramped = edgeItemShape(stage, { id: "rp", kind: "ramp", edge: 3, t: 0.5, widthMm: 1200 }, deckOf)!;

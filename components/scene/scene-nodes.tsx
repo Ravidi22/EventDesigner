@@ -137,8 +137,9 @@ function Instanced({
   castShadow: boolean;
   receiveShadow: boolean;
   renderOrder?: number;
-  /** Shade each instance a little differently (flower heads): no two blooms of one variety are the
-   *  same colour, and an arrangement of identical heads reads as plastic. Deterministic by index. */
+  /** Shade each instance a little differently (flower heads, the venue's plants): no two blooms of
+   *  one variety are the same colour, no two trees of one size the same green, and identical heads
+   *  read as plastic. Deterministic by index. */
   vary?: boolean;
 }) {
   const ref = useRef<InstancedMesh>(null);
@@ -228,7 +229,7 @@ const BodyView = memo(function BodyView({ body, caches, registry }: { body: Body
             castShadow={castShadow}
             receiveShadow={receiveShadow}
             renderOrder={renderOrder}
-            vary={body.tag.type === "flowers" || body.id.includes(":flower:")}
+            vary={body.tag.type === "flowers" || body.id.includes(":flower:") || (body.tag.type === "feature" && body.material.kind === "foliage")}
           />
         ))}
       </group>
@@ -299,7 +300,9 @@ const EmitterCloudView = memo(function EmitterCloudView({ cloud, mood, caches }:
 export function mergeBodies(nodes: readonly BodyNode[]): BodyNode[] {
   const out = new Map<string, BodyNode>();
   for (const b of nodes) {
-    const key = `${geometrySignature(b)}|${b.tag.type}|${b.castShadow ?? true}|${b.lod ? `${b.lod.tier}:${b.lod.beyondMm}` : ""}`;
+    // A body that hides past a distance was cut by REGION on purpose (lib/scene/tableware.ts: the
+    // settings of each part of the room): merged, its nearest instance would always be close.
+    const key = `${geometrySignature(b)}|${b.tag.type}|${b.castShadow ?? true}|${b.lod ? `${b.lod.tier}:${b.lod.beyondMm}${b.lod.tier === "near" ? `|${b.id}` : ""}` : ""}`;
     const have = out.get(key);
     if (have) {
       have.instances.push(...b.instances);

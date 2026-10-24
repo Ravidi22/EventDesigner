@@ -18,13 +18,15 @@ import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { isMain } from "../self-check";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { foliageMaterial } from "./materials";
+import { seedOf } from "./organic";
 import { type NodeTag, type Part, transform, vec3 } from "./types";
 
 /** The foliage's colour when the spec has no green of its own (item-symbol.tsx LEAF). */
 const LEAF = "#8fae84";
 /** A leaf geometry is one unit long; each sprig scales it to its length. */
 const LEAF_UNIT_MM = 100;
-const LEAF_THICK_MM = 4;
+/** A leaf's width over its length. */
+const LEAF_WIDTH = 0.38;
 const STEM_R_MM = 3;
 const HEAD_SEGMENTS = 10;
 /** Fills vanish past this distance (spec §3.3, §8): the heads carry the shape, the fills the detail. */
@@ -42,6 +44,20 @@ const RUNNER_FILL = 0.42;
 const BUD_HEAD = 0.9;
 const BUD_BOTTLE = 0.65;
 const LEAF_Z = 0.45;
+/** The filler mass: this share of the heads' rim across, sinking this share of the height into the
+ *  vase, this pale a tint of the shade. */
+const MASS_SHARE = 0.9;
+const MASS_SINK = 0.08;
+const MASS_PALE = 0.55;
+/** The shoulder ring stands this share of the mass's half height above its middle. */
+const SHOULDER = 0.35;
+
+/** `hex` a share `t` of the way to white. */
+function towardWhite(hex: string, t: number): string {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const ch = (i: number) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
+  return `#${[0, 1, 2].map((i) => Math.round(ch(i) + (255 - ch(i)) * t).toString(16).padStart(2, "0")).join("")}`;
+}
 
 const deg = (rad: number) => (rad * 180) / Math.PI;
 
@@ -61,7 +77,12 @@ const ROUND_KINDS = new Set(["hydrangea", "gyps", "phlox", "filler", "delphinium
  *  petals (seen close up on plan A: spheres read as grapes); a mophead or a filler stays a ball. */
 export function headPart(it: { t: string; kind: string; r: number }): Part {
   const r = it.r;
-  if (it.t !== "head" || ROUND_KINDS.has(it.kind)) return { shape: "sphere", r, at: vec3(0, 0, r), segments: HEAD_SEGMENTS };
+  // A mophead is a ball of florets, a filler a froth of tiny ones: a blob (./organic.ts) whose many
+  // small lumps are the florets — a smooth sphere read as a ping-pong ball (2026-10-24).
+  if (it.t !== "head" || ROUND_KINDS.has(it.kind)) {
+    const mop = it.kind === "hydrangea";
+    return { shape: "blob", r, at: vec3(0, 0, r), seed: seedOf(it.kind), lumps: mop ? 10 : 8, rough: mop ? 0.1 : 0.16, squash: mop ? 0.88 : 1, detail: it.t === "fill" ? 1 : r >= 40 ? 3 : 2 };
+  }
   // A flat face (daisy, sunflower, anemone) opens wider and lower than a cup (rose, peony, ranunculus).
   const flat = it.kind === "daisy" || it.kind === "sunflower" || it.kind === "anemone";
   const profile = flat
@@ -142,7 +163,9 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
     if (it.len <= 0) return;
     build.instanced.push({
       key: `leaf:${it.col}`,
-      parts: [{ shape: "box", w: LEAF_UNIT_MM, d: LEAF_UNIT_MM * 0.35, h: LEAF_THICK_MM, at: vec3(LEAF_UNIT_MM / 2, 0, 0) }],
+      // A blade that rises off the mass and arches down, its halves folded up off the midrib —
+      // grown along +x (a frond grows along its own +y, so it is turned a quarter back).
+      parts: [{ shape: "frond", len: LEAF_UNIT_MM, w: LEAF_UNIT_MM * LEAF_WIDTH, at: vec3(0, 0, 0), rotDeg: -90, liftDeg: 18, droopDeg: 55, foldDeg: 22 }],
       material: foliageMaterial(it.col),
       tag,
       at: transform(vec3(it.x, it.y, leafZ), deg(it.ang), false, it.len / LEAF_UNIT_MM),
@@ -168,6 +191,37 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
     if (to - from < 5) return;
     build.parts.push({ shape: "cylinder", rTop: STEM_R_MM, rBottom: STEM_R_MM, h: to - from, at: vec3(x, y, from), segments: 6 });
   };
+
+  // The mass the heads sit in: the small flowers and the filler packed between the blooms — a ball
+  // of tiny florets (a blob with many small lumps) in a pale tint of the shade, sitting on the
+  // vase's mouth, its top a little under the heads'. The plan lays only the heads it can show from
+  // above; in a room, heads alone floated over the vase like a bunch of balloons, and a GREEN mass
+  // read as a camouflage egg (2026-10-24).
+  if (F) {
+    const massTop = H * (form === "cushion" ? 0.78 : 0.8);
+    const a = (massTop + MASS_SINK * H) / 2;
+    const r = rim * MASS_SHARE;
+    const tintOf = spec.shade ?? items.find((it): it is Head => it.t === "head")?.col ?? "#f2e6ea";
+    build.parts.push({ shape: "blob", r, at: vec3(cx, 0, massTop - a), seed: spec.seed, squash: a / r, lumps: 13, rough: 0.07, detail: 3, material: { colour: towardWhite(tintOf, MASS_PALE), kind: "matte" } });
+    // …and its shoulders dressed: a ring of the arrangement's main bloom round the mass a little
+    // above its widest, where the plan (seen from above) lays none. Instanced with the rest.
+    const blooms = items.filter((it): it is Head => it.t === "head" && !ROUND_KINDS.has(it.kind));
+    if (blooms.length && form !== "cascade") {
+      const tally = new Map<string, { it: Head; n: number }>();
+      for (const it of blooms) {
+        const k = headKey(it.kind, it.col, it.r);
+        tally.set(k, { it, n: (tally.get(k)?.n ?? 0) + 1 });
+      }
+      const main = [...tally.values()].sort((x, y) => y.n - x.n)[0].it;
+      const zc = massTop - a + a * SHOULDER;
+      const ring = r * Math.sqrt(1 - SHOULDER * SHOULDER) * 0.97;
+      const n = Math.max(5, Math.min(16, Math.floor((2 * Math.PI * ring) / (2.3 * main.r))));
+      for (let k = 0; k < n; k++) {
+        const ang = (2 * Math.PI * (k + 0.5 * (spec.seed % 2))) / n;
+        head({ ...main, x: cx + ring * Math.cos(ang), y: ring * Math.sin(ang), rot: ang }, zc);
+      }
+    }
+  }
 
   let afterStem = false;
   for (const it of items) {
@@ -229,10 +283,11 @@ if (isMain(import.meta.url)) {
     ],
   };
   const tag: NodeTag = { type: "flowers" };
+  const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
   // A head's centre is one head-radius above its base — a ball's radius, a bloom's widest ring.
   const centreOf = (r: InstanceRequest) => {
     const p = r.parts[0];
-    if (p.shape === "sphere") return r.at.at.z + p.r;
+    if (p.shape === "sphere" || p.shape === "blob") return r.at.at.z + p.r;
     if (p.shape === "lathe") return r.at.at.z + p.profile.reduce((m, q) => Math.max(m, q.r), 0);
     return r.at.at.z;
   };
@@ -253,6 +308,8 @@ if (isMain(import.meta.url)) {
   const leaves = dome.instanced.filter((r) => r.key.startsWith("leaf:"));
   assert(leaves.every((r) => (r.at.scale ?? 1) > 0 && r.at.at.z === 350 * LEAF_Z), "a leaf is the unit leaf scaled to its sprig, drooping at 0.45 h");
   assert(JSON.stringify(flowerBuild(spec, 350, tag)) === JSON.stringify(dome), "the same spec builds the same twice");
+  const mass = dome.parts.find((p): p is Extract<Part, { shape: "blob" }> => p.shape === "blob");
+  assert(!!mass && near(mass.at.z + mass.r * (mass.squash ?? 1), 350 * 0.8) && near(mass.at.z - mass.r * (mass.squash ?? 1), -350 * MASS_SINK) && mass.material?.kind === "matte", "the heads sit in a mass of filler, its top under theirs (0.8 h), sinking a little into the vase");
 
   const lines = spec.lines;
   const cushion = flowerBuild({ form: "cushion", w: 400, h: 400, lines, shade: "#e8bcce", seed: 7 }, 250, tag);

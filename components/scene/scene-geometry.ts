@@ -39,8 +39,10 @@ import {
   Vector2,
   Vector3,
   TorusGeometry,
+  IcosahedronGeometry,
 } from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { frondTriangles, lumpField } from "@/lib/scene/organic";
 import type { Point } from "@/lib/studio/hall";
 import type { BuiltOutline } from "@/lib/studio/footprint";
 import { absoluteControlPoints } from "@/lib/studio/geometry";
@@ -404,6 +406,70 @@ function drapeGeometry(outline: Point[], h: number, pitchMm: number, depthMm: nu
   return g;
 }
 
+/** A blob (Part "blob"): an icosphere in metres, every vertex pushed out along its direction by
+ *  the seeded lump field (lib/scene/organic.ts), its height scaled by `squash`, welded and smooth-
+ *  shaded so the lumps read as one living surface; a spherical UV so it merges with the rest. */
+function blobGeometry(r: number, seed: number, lumps: number, rough: number, squash: number, detail: number): BufferGeometry {
+  const ico = new IcosahedronGeometry(1, Math.max(1, Math.min(4, detail)));
+  ico.deleteAttribute("uv");
+  ico.deleteAttribute("normal");
+  const g = mergeVertices(ico);
+  ico.dispose();
+  const field = lumpField(seed, lumps, rough);
+  const pos = g.getAttribute("position");
+  const uv: number[] = [];
+  const colour: number[] = [];
+  const R = m(r);
+  const deep = Math.max(0.05, rough);
+  for (let i = 0; i < pos.count; i++) {
+    // three's y is up: the lump field reads plan (x, y, z-up) = three (x, z, y).
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const f = field({ x, y: z, z: y });
+    const k = R * f;
+    const X = x * k;
+    const Y = y * k * squash;
+    const Z = z * k;
+    pos.setXYZ(i, X, Y, Z);
+    // An oblique projection in metres: no seam (a wrapped longitude crushed the leaf pattern into
+    // a stripe down every clump — seen 2026-10-24), stretched only where a face lies along it.
+    uv.push(X * 0.8 + Z * 0.6, Y * 0.9 + X * 0.25 - Z * 0.3);
+    // Light where the clump bulges and on top, dark in its hollows and underneath — the shade
+    // between leaves that makes a mass of them read as a tree, not as felt.
+    const shade = (0.84 + 0.14 * Math.max(-1.4, Math.min(1.4, (f - 1) / deep))) * (0.72 + 0.28 * (y * 0.5 + 0.5));
+    colour.push(shade, shade, shade);
+  }
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new Float32BufferAttribute(colour, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A frond (Part "frond"): its triangles from lib/scene/organic.ts, plan mm (x across, y along,
+ *  z up) into three metres (x, z-up → y, along → +z, then turned onto the plan by the part's
+ *  rotation like every other part). Flat-shaded leaflets; the foliage material is two-sided. */
+function frondGeometry(part: Extract<Part, { shape: "frond" }>): BufferGeometry {
+  const tris = frondTriangles(part);
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const colour: number[] = [];
+  for (const p of tris) {
+    // Plan frame: +y is DOWN the plan, which is three's +z (see the note at the top).
+    pos.push(m(p.x), m(p.z), m(p.y));
+    uv.push(m(p.x), m(p.y));
+    // Darker at the stem, lighter toward the tips.
+    const c = 0.72 + 0.36 * Math.min(1, Math.hypot(p.x, p.y, p.z) / Math.max(1, part.len));
+    colour.push(c, c, c);
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new Float32BufferAttribute(colour, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
 /** The tilt (see the rule at the top): a turn about the part's own x axis through its base
  *  centre, which is the origin the part was built about. three's rotateX is the right-handed
  *  turn, so +tilt carries the top (0, h, 0) to (0, h·cos, h·sin): toward +z, plan +y. */
@@ -421,10 +487,18 @@ export function partGeometry(part: Part): BufferGeometry {
       return tilted(cylinderGeometry(part.rTop, part.rBottom, part.h, part.segments ?? DEFAULT_RADIAL), part.tiltDeg);
     case "sphere":
       return sphereGeometry(part.r, part.segments ?? DEFAULT_SPHERE);
+    case "blob":
+      return blobGeometry(part.r, part.seed, part.lumps ?? 4, part.rough ?? 0.2, part.squash ?? 1, part.detail ?? 3);
+    case "frond":
+      return frondGeometry(part);
     case "extrude":
       return extrudeGeometry(part.outline, part.h, part.holes);
-    case "lathe":
-      return latheGeometry(part.profile, part.segments ?? DEFAULT_RADIAL);
+    case "lathe": {
+      const g = latheGeometry(part.profile, part.segments ?? DEFAULT_RADIAL);
+      // The plan's y is three's z.
+      if (part.scaleY && part.scaleY !== 1) g.scale(1, 1, part.scaleY);
+      return g;
+    }
     case "drape":
       return drapeGeometry(part.outline, part.h, part.foldPitchMm ?? 230, part.foldDepthMm ?? 20, part.flareMm ?? 40);
     case "torus":
@@ -470,6 +544,13 @@ function mergeNonIndexed(pieces: BufferGeometry[]): BufferGeometry {
   return out;
 }
 
+/** A white vertex colour on a geometry that has none. */
+function withColour(g: BufferGeometry): void {
+  if (g.getAttribute("color")) return;
+  const n = g.getAttribute("position")?.count ?? 0;
+  g.setAttribute("color", new Float32BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+}
+
 /** The group's UVs as fractions of its own footprint, so a stretched image is one copy over it. */
 function normaliseUv(g: BufferGeometry): void {
   g.computeBoundingBox();
@@ -504,6 +585,10 @@ export function bodyGeometry(body: BodyNode): Built[] {
   }
   const out: Built[] = [];
   for (const { material, pieces } of groups.values()) {
+    // Foliage is vertex-shaded (a blob's hollows, a frond's stem): every piece of it carries a
+    // colour, white where its shape has none (a hedge's core box, a bed's heads) — a merge of
+    // pieces with and without one would drop them all.
+    if (material.kind === "foliage") for (const p of pieces) withColour(p);
     const geometry = mergeNonIndexed(pieces);
     for (const p of pieces) p.dispose();
     if (isStretched(material)) normaliseUv(geometry);
@@ -577,6 +662,23 @@ export function geometrySignature(body: BodyNode): string {
         num(p.r);
         num(p.segments ?? 0);
         break;
+      case "blob":
+        num(p.r);
+        num(p.seed);
+        num(p.lumps ?? 0);
+        num((p.rough ?? 0) * 1000);
+        num((p.squash ?? 1) * 1000);
+        num(p.detail ?? 0);
+        break;
+      case "frond":
+        num(p.len);
+        num(p.w);
+        num(p.rotDeg ?? 0);
+        num(p.liftDeg ?? 0);
+        num(p.droopDeg ?? 0);
+        num(p.leaflets ?? 0);
+        num(p.foldDeg ?? 0);
+        break;
       case "torus":
         num(p.r);
         num(p.tube);
@@ -591,6 +693,7 @@ export function geometrySignature(body: BodyNode): string {
         break;
       case "lathe":
         num(p.segments ?? 0);
+        num((p.scaleY ?? 1) * 1000);
         for (const q of p.profile) {
           num(q.r);
           num(q.z);

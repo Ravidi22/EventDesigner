@@ -71,11 +71,14 @@ if (isMain(import.meta.url)) {
   assert(!!dining && dining.instances.length === 12 && dining.instances.every((t) => near(t.at.z, 0)), "the venue's own rows: twelve dining chairs on the floor");
 
   // ── place settings: one per TABLE seat — never at the ceremony rows or the banquette ─────────────
-  const settingsBody = bodies.find((b) => b.tag.type === "tableware");
-  assert(!!settingsBody && settingsBody.instances.length === 10 + 16, `a place setting at every table seat (got ${settingsBody?.instances.length})`);
-  assert(settingsBody!.instances.every((t) => near(t.at.z, 750)), "…on the table tops");
-  const round1 = settingsBody!.instances.filter((t) => Math.hypot(t.at.x - 5000, t.at.y - 5000) < 900);
+  const settings = bodies.filter((b) => b.tag.type === "tableware").flatMap((b) => b.instances);
+  assert(settings.length === 10 + 16, `a place setting at every table seat (got ${settings.length})`);
+  assert(settings.every((t) => near(t.at.z, 750)), "…on the table tops");
+  const round1 = settings.filter((t) => Math.hypot(t.at.x - 5000, t.at.y - 5000) < 900);
   assert(round1.length === 10 && round1.every((t) => Math.hypot(t.at.x - 5000, t.at.y - 5000) > 500), "…inside the rim, round the round table");
+  // The fit (./tableware.ts laySettings): no two settings' chargers-and-cutlery meet, at any seat.
+  const clash = settings.some((a, i) => settings.some((b, j) => j > i && Math.hypot(a.at.x - b.at.x, a.at.y - b.at.y) < 205 * ((a.scale ?? 1) + (b.scale ?? 1)) - 1));
+  assert(!clash, "…and no two of them meet");
   const off = buildScene({ ...fixtureInput(false), settings: { ...fixtureInput(false).settings, tableware: false } });
   assert(!off.nodes.some((n) => n.kind === "body" && n.tag.type === "tableware"), "…and none when the designer switches them off");
 
@@ -122,7 +125,6 @@ if (isMain(import.meta.url)) {
   }
   const client = buildScene(fixtureInput(false));
   assert(!client.nodes.some((n) => n.kind === "label"), "a client sees no labels");
-  assert(!client.nodes.some((n) => n.kind === "body" && n.tag.type === "missing"), "…and no missing stage pieces");
 
   console.log(`scene ok: ${scene.stats.bodies} bodies, ${scene.stats.instances} instances, ${scene.stats.emitters} emitters`);
 }

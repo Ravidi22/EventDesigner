@@ -30,6 +30,7 @@ import { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { ENVELOPE, clothMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
+import { frondSpan } from "./organic";
 
 // ── the constants ───────────────────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,14 @@ function partSpan(p: Part): [number, number] {
       return [p.at.z, p.at.z + p.h];
     case "sphere":
       return [p.at.z - p.r, p.at.z + p.r];
+    case "blob": {
+      const h = p.r * (p.squash ?? 1) * (1 + (p.rough ?? 0.2));
+      return [p.at.z - h, p.at.z + h];
+    }
+    case "frond": {
+      const [lo, hi] = frondSpan(p);
+      return [p.at.z + lo, p.at.z + hi];
+    }
     case "torus":
       return [p.at.z - p.tube, p.at.z + p.tube];
     case "lathe": {
@@ -210,7 +219,11 @@ function flipPart(p: Part, H: number): Part {
       return { ...p, at: vec3(p.at.x, p.at.y, H - (p.at.z + p.h)) };
     case "sphere":
     case "torus":
+    case "blob":
       return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z) };
+    case "frond":
+      // Hung upside down, a leaf that rose now falls: the lift and the droop change sign.
+      return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z), liftDeg: -(p.liftDeg ?? 20), droopDeg: -(p.droopDeg ?? 40) };
     case "lathe": {
       const zmax = p.profile.reduce((m, q) => Math.max(m, q.z), 0);
       const profile = [...p.profile].reverse().map((q) => ({ r: q.r, z: zmax - q.z }));
@@ -264,8 +277,9 @@ function hangFall(build: ItemBuild, spec: FlowerDrawSpec, H: number): void {
   const L = H - start;
   for (const r of build.instanced) {
     const p = r.parts[0];
-    // A head is a ball or a bloom (flowers.ts headPart); either way its centre is one radius up.
-    const radius = p?.shape === "sphere" ? p.r : p?.shape === "lathe" ? p.profile.reduce((m, q) => Math.max(m, q.r), 0) : 0;
+    // A head is a ball of florets or a bloom (flowers.ts headPart); either way its centre is one
+    // radius up.
+    const radius = p?.shape === "sphere" || p?.shape === "blob" ? p.r : p?.shape === "lathe" ? p.profile.reduce((m, q) => Math.max(m, q.r), 0) : 0;
     if (!r.key.startsWith("flower:") || radius <= 0) continue;
     const x = r.at.at.x;
     if (x < fallFrom - R * 0.06) continue;
@@ -424,7 +438,7 @@ if (isMain(import.meta.url)) {
   // A head's centre: its base plus a ball's radius, or a bloom's widest ring (flowers.ts headPart).
   const centreOf = (r: InstanceRequest) => {
     const p = r.parts[0];
-    if (p.shape === "sphere") return r.at.at.z + p.r;
+    if (p.shape === "sphere" || p.shape === "blob") return r.at.at.z + p.r;
     if (p.shape === "lathe") return r.at.at.z + p.profile.reduce((m, q) => Math.max(m, q.r), 0);
     return r.at.at.z;
   };
@@ -440,9 +454,18 @@ if (isMain(import.meta.url)) {
   assert(upHeads.length === heads.length && upHeads.every((r, i) => r.key === heads[i].key && near(centreOf(r) + centreOf(heads[i]), 400)), "every head is the table's head mirrored about H/2, keyed the same (one geometry for both)");
   const disc = hung.parts.find((p) => p.shape === "cylinder" && near(p.rBottom, 300));
   assert(!!disc && near(disc.at.z, 370) && near(top(disc), 400) && disc.material?.kind === "foliage", "a foliage disc the footprint's width at the top");
-  assert(hung.parts.every((p) => partSpan(p)[0] >= 400 * 0.3 - 1e-9), "every part (the disc, any stem) is in the upper mass, not among the hanging heads");
+  assert(hung.parts.every((p) => p.shape === "blob" || partSpan(p)[0] >= 400 * 0.3 - 1e-9), "every part (the disc, any stem) is in the upper mass, not among the hanging heads");
+  const leafy = hung.parts.find((p): p is Extract<Part, { shape: "blob" }> => p.shape === "blob");
+  assert(!!leafy && near(partSpan(leafy)[0], 400 - 400 * 0.8, 400 * 0.05), "…and the filler the heads sit in hangs from the top, flipped with them, its underside above the lowest heads");
   const leaves = hung.instanced.filter((r) => r.key.startsWith("leaf:"));
-  assert(leaves.length > 0 && leaves.every((r) => near(r.at.at.z, 400 - 400 * 0.45 - 4)), "the leaves droop at 0.55 h from the top, their slab flipped by its thickness");
+  assert(
+    leaves.length > 0 &&
+      leaves.every((r) => {
+        const [lo, hi] = partSpan(r.parts[0]);
+        return near(r.at.at.z, 400 - 400 * 0.45 - hi - lo);
+      }),
+    "the leaves droop at 0.55 h from the top, moved by their own span",
+  );
   const hungChained = hungFlowersBody(ctxOf(600, 400, { flowers: spec, chainMm: 2000 }));
   const cable = hungChained.parts.filter((p) => p.shape === "cylinder" && p.at.z === 400);
   assert(cable.length === 1 && near(top(cable[0]), 2400), "a hung arrangement's cable reaches the ceiling");

@@ -124,6 +124,10 @@ const MIN_EYE_M = 0.3;
 const MIN_FRAME_MM = 4000;
 
 /** three metres → plan mm: the frame module's inverse of `toWorld` (lib/scene/frame.ts). */
+
+/** The camera's frame callback runs first (negative: fiber sorts ascending, and only a positive
+ *  priority takes the render over). */
+const CAMERA_FIRST = -1;
 export function fromWorld(p: Vector3): Vec3 {
   return planFromWorld(p.x, p.y, p.z);
 }
@@ -355,6 +359,11 @@ export function SceneCamera(props: SceneCameraProps) {
 
   // --- the frame: only while something moves ----------------------------------------------------
 
+  // CAMERA_FIRST: this runs before every other frame callback, so the pose a frame is drawn with is
+  // the pose they all see. At priority 0 it ran after "the camera settled"'s watcher
+  // (scene-settle.ts): on a fly's last frame the camera landed after the watcher had looked, no
+  // frame followed, and the level of detail and the real lights stayed as the fly's first frames
+  // left them — the overview's chair boxes standing round the stage's tables (2026-10-24).
   useFrame(() => {
     const now = performance.now();
     let moving = false;
@@ -429,7 +438,7 @@ export function SceneCamera(props: SceneCameraProps) {
 
     if (changed) apply();
     if (moving) invalidate();
-  });
+  }, CAMERA_FIRST);
 
   // --- placement: the first frame, another plan, a mode switch ----------------------------------
 

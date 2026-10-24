@@ -60,7 +60,7 @@
     "check:region": "tsx lib/venues/region-edit.ts",
     "check:underlay": "tsx lib/venues/underlay.ts",
     "check:csv": "tsx lib/catalog/csv.ts",
-    "check:flowers": "tsx lib/scene/flowers.ts",
+    "check:flowers": "tsx lib/catalog/flowers.ts",
     "check:vessel": "tsx lib/catalog/vessel.ts",
     "check:composition": "tsx lib/catalog/composition.ts",
     "check:flower-kinds": "tsx lib/catalog/flower-kinds.ts",
@@ -117,7 +117,13 @@
     "check:floor-kinds": "tsx lib/scene/floor-kinds.ts",
     "check:overhead": "tsx lib/scene/overhead.ts",
     "check:scene-stage": "tsx lib/scene/stage.ts",
-    "check:scene-settings": "tsx lib/scene/clean.ts"
+    "check:scene-settings": "tsx lib/scene/clean.ts",
+    "check:scene-flowers": "tsx lib/scene/flowers.ts",
+    "check:plants": "tsx lib/scene/plants.ts",
+    "check:organic": "tsx lib/scene/organic.ts",
+    "check:structures": "tsx lib/scene/structures.ts",
+    "check:elevation": "tsx lib/scene/elevation.ts",
+    "check:tableware": "tsx lib/scene/tableware.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

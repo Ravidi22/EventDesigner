@@ -169,6 +169,14 @@ function along(w: number, d: number, draw: (L: number, D: number) => ItemBuild):
 
 const isRound = (f: Footprint): boolean => f.kind === "circle" || f.kind === "ellipse";
 
+/** Clear crystal: brighter than a drinking glass, the facets catching the light. */
+const CRYSTAL: MaterialRef = { colour: "#e6eef2", kind: "glass", opacity: 0.7 };
+
+/** What a candelabrum's foot, stem and bar are made of: crystal when its shade is clear (a
+ *  near-white tone — "שקוף"), else metal in its tone. A clear piece in metal read as a grey lab
+ *  rack (plan A's "פמוט צינורות קריסטל", 2026-10-24). */
+const frameOf = (tone: string): MaterialRef => (pale(tone) ? CRYSTAL : metalMaterial(tone));
+
 /** A candle standing at (x, y) from `from` up to `top`: its holder cup in the metal, the wax, the
  *  flame emitter at its tip — and in a sleeve the glass round it 1.75× its radius (item-symbol.tsx:362
  *  candleAt: wax r, flame 0.5r, sleeve 1.75r). */
@@ -452,7 +460,7 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
  *  0.95 h and the centre one crowns it at h. */
 function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean, tone: string): ItemBuild {
   const R = Math.min(w, d) / 2;
-  const metal = metalMaterial(tone);
+  const metal = frameOf(tone);
   const b = make(metal);
   if (n <= 1) {
     // item-symbol.tsx:395: a foot 0.92 R wide and one candle 0.5 R (0.32 R in its sleeve).
@@ -484,7 +492,7 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
 function candleTiers(w: number, d: number, h: number, n: number, tone: string): ItemBuild {
   if (n < 7) return candleRing(w, d, h, n, false, tone);
   const R = Math.min(w, d) / 2;
-  const metal = metalMaterial(tone);
+  const metal = frameOf(tone);
   const arms = armMaterial(tone);
   const b = make(metal);
   const rest = n - 1;
@@ -519,7 +527,7 @@ function candleTiers(w: number, d: number, h: number, n: number, tone: string): 
  *  min(0.12 D, 0.05 L) on a round foot min(0.36 D, 0.16 L). The bar stands at 0.5 h. */
 function candleRow(w: number, d: number, h: number, n: number, long: boolean, sleeves: boolean, tone: string): ItemBuild {
   return along(w, d, (L, D) => {
-    const metal = metalMaterial(tone);
+    const metal = frameOf(tone);
     const b = make(metal);
     const r = Math.min(D * (sleeves ? 0.2 : 0.34), L / (n * (sleeves ? 3.8 : 2.3)));
     const span = L * (sleeves ? 0.78 : 0.84);
@@ -696,17 +704,71 @@ function lampBody(ctx: ItemContext): ItemBuild {
   return b;
 }
 
-/** A vessel (item-symbol.tsx:670 vase): rim 1.0, opening 0.8, foot 0.32 of its radius — a lathe up
- *  from the foot through the belly to the rim at h, and a second surface inside from the opening
- *  down, so it reads hollow. Glass when its tone is near-white, glazed otherwise. An oval bowl is
- *  lathed on its width. */
+/** What shape a vessel is. A vase row carries no style, so its NAME is read where it says (the
+ *  way lib/catalog/flower-kinds.ts reads a flower and isRunner a runner): "מרטיני" is a martini on a
+ *  stem, "צילינדר" a straight cylinder, "קערה" a bowl — on a foot when it says "רגל". Otherwise
+ *  the proportions: very slender is a cylinder, squat is a bowl, anything else the plan's urn. */
+export type VesselForm = "trumpet" | "cylinder" | "bowl" | "pedestal" | "urn";
+const VESSEL_WORDS: [VesselForm, RegExp][] = [
+  ["trumpet", /מרטיני|חצוצר|martini|trumpet/i],
+  ["cylinder", /צילינד|גליל|cylinder/i],
+  ["pedestal", /(קער|bowl).*(רגל|foot|pedestal)|(רגל|foot|pedestal).*(קער|bowl)/i],
+  ["bowl", /קער|bowl/i],
+];
+export function vesselForm(name: string | undefined, w: number, d: number, h: number): VesselForm {
+  for (const [form, words] of VESSEL_WORDS) if (name && words.test(name)) return form;
+  const wide = Math.max(w, d);
+  if (h >= 5 * wide) return "cylinder";
+  if (h <= 0.6 * wide) return "bowl";
+  return "urn";
+}
+
+/** A metal shade by its name — gold, silver, nickel, copper, brass (the catalog's variants say so). */
+const METAL_SHADE = /זהב|כסף|ניקל|נחושת|פליז|רוז גולד|gold|silver|nickel|copper|brass|chrome/i;
+
+/** Each form's outer profile, then the inside from the opening down (so it reads hollow), as
+ *  shares of the radius R and the height h. */
+const VESSEL_PROFILES: Record<VesselForm, { outer: [number, number][]; inner: [number, number][] }> = {
+  // A martini: a round foot, a slim stem with a knot, a cone flaring to the rim.
+  trumpet: {
+    outer: [[0, 0], [0.62, 0], [0.62, 0.015], [0.2, 0.04], [0.09, 0.07], [0.07, 0.4], [0.12, 0.43], [0.08, 0.47], [0.3, 0.6], [0.62, 0.8], [1, 1]],
+    inner: [[0.94, 1], [0.58, 0.8], [0.25, 0.6], [0.08, 0.5], [0, 0.5]],
+  },
+  cylinder: {
+    outer: [[0, 0], [1, 0], [1, 1]],
+    inner: [[0.9, 1], [0.9, 0.03], [0, 0.03]],
+  },
+  // A bowl on a pedestal: a foot, a short stem, a shallow bowl.
+  pedestal: {
+    outer: [[0, 0], [0.5, 0], [0.5, 0.05], [0.16, 0.16], [0.11, 0.34], [0.22, 0.42], [0.72, 0.62], [0.96, 0.88], [1, 1]],
+    inner: [[0.93, 1], [0.66, 0.66], [0.2, 0.5], [0, 0.5]],
+  },
+  bowl: {
+    outer: [[0, 0], [0.45, 0], [0.78, 0.35], [0.96, 0.8], [1, 1]],
+    inner: [[0.92, 1], [0.7, 0.4], [0, 0.15]],
+  },
+  // The plan's urn (item-symbol.tsx:670 vase): rim 1.0, opening 0.8, foot 0.32.
+  urn: {
+    outer: [[0.32, 0], [0.32, 0.04], [0.6, 0.3], [0.86, 0.7], [1, 1]],
+    inner: [[0.8, 1], [0.68, 0.6], [0.28, 0.2], [0, 0.2]],
+  },
+};
+
+/** A vessel: its form's profile (vesselForm) lathed on its width — an oval one stretched to its
+ *  depth — outside and in. Glass when its tone is near-white, metal when its shade is a metal,
+ *  glazed otherwise. */
 function vaseBody(ctx: ItemContext): ItemBuild {
-  const { widthMm: w, heightMm: h, tone } = ctx;
+  const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const R = w / 2;
-  const material = pale(tone) ? glassMaterial(tone) : glossMaterial(tone);
+  const form = vesselForm(ctx.product?.name, w, d, h);
+  const shade = ctx.resolved?.variant?.name ?? "";
+  const material = pale(tone) && !METAL_SHADE.test(shade) ? glassMaterial(tone) : METAL_SHADE.test(shade) ? metalMaterial(tone) : glossMaterial(tone);
   const b = make(material);
-  b.parts.push(lathe([{ r: R * 0.32, z: 0 }, { r: R * 0.32, z: h * 0.04 }, { r: R * 0.6, z: h * 0.3 }, { r: R * 0.86, z: h * 0.7 }, { r: R, z: h }], vec3(0, 0, 0)));
-  b.parts.push(lathe([{ r: R * 0.8, z: h }, { r: R * 0.8, z: h - 10 }, { r: R * 0.68, z: h * 0.6 }, { r: R * 0.28, z: h * 0.2 }, { r: 0, z: h * 0.2 }], vec3(0, 0, 0)));
+  const { outer, inner } = VESSEL_PROFILES[form];
+  const scaleY = w > 0 && Math.abs(d - w) > 1 ? d / w : undefined;
+  const at = vec3(0, 0, 0);
+  const shaped = (pts: [number, number][]): Part => ({ shape: "lathe", profile: pts.map(([r, z]) => ({ r: R * r, z: h * z })), at, segments: 32, ...(scaleY ? { scaleY } : {}) });
+  b.parts.push(shaped(outer), shaped(inner));
   return b;
 }
 
@@ -851,5 +913,10 @@ if (isMain(import.meta.url)) {
   const sofa = itemBody("sofa", ctxOf({ kind: "rect", widthMm: 1800, depthMm: 900 }, 800, { tone: DEFAULT_TONE.sofa }));
   assert(sofa.parts.length > 1 && !sofa.parts.some((q) => q.shape === "extrude" && q.h === 800), "a sofa is built by the floor kinds (back, arms, cushions), not the fallback box");
   assert(itemBody(null, ctxOf({ kind: "rect", widthMm: 300, depthMm: 300 }, 0)).parts[0].shape === "extrude", "no picture: the fallback");
+  // Vessels by what their name says, else by their proportions.
+  assert(vesselForm("אגרטל מרטיני זהב 80", 200, 200, 800) === "trumpet", "a martini vase stands on a stem");
+  assert(vesselForm("צילינדר זכוכית מפוספס 50", 60, 60, 500) === "cylinder", "a cylinder is straight");
+  assert(vesselForm("קערה אובלית על רגל 60", 600, 300, 200) === "pedestal" && vesselForm("קערה שטוחה", 400, 400, 120) === "bowl", "a bowl on a foot has a pedestal; a bowl does not");
+  assert(vesselForm(undefined, 200, 200, 300) === "urn" && vesselForm(undefined, 60, 60, 500) === "cylinder" && vesselForm(undefined, 400, 400, 150) === "bowl", "…and nameless ones go by their proportions");
   console.log("scene items ok");
 }

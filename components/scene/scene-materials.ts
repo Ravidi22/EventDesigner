@@ -215,6 +215,54 @@ function patternTexture(texture: Texture, base: string): CanvasTexture | null {
   return t;
 }
 
+/** A plan colour as a living leaf: the plan's planting fills are pastel on purpose (a drawing on
+ *  white paper); under evening light in 3D they read as sage felt. More saturated, darker. */
+export function leafColour(hex: string): string {
+  const c = new Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
+  c.setHSL(hsl.h, Math.min(0.85, hsl.s * 1.35 + 0.05), hsl.l * 0.78);
+  return `#${c.getHexString()}`;
+}
+
+/** Foliage seen close: LEAF_TILE_MM of small leaf-shaped dabs in lighter and darker tints of the
+ *  leaf colour, over a darker ground — the gaps between leaves. Drawn once per colour; used as the
+ *  colour map and, for depth, as the bump map. */
+const LEAF_TILE_MM = 450;
+function leafTexture(base: string): CanvasTexture | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const rnd = seeded(`leaf:${base}`);
+  ctx.fillStyle = tint(base, "#000000", 0.35);
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  for (let i = 0; i < 1500; i++) {
+    const t = (rnd() - 0.45) * 0.55;
+    ctx.fillStyle = tint(base, t < 0 ? "#000000" : "#ffffff", Math.abs(t));
+    const x = rnd() * SIZE;
+    const y = rnd() * SIZE;
+    const L = 5 + rnd() * 7;
+    const a = rnd() * Math.PI;
+    // Drawn a canvas-width either side too, so the tile repeats without a seam.
+    for (const dx of [-SIZE, 0, SIZE])
+      for (const dy of [-SIZE, 0, SIZE]) {
+        ctx.beginPath();
+        ctx.ellipse(x + dx, y + dy, L, L * 0.42, a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+  }
+  const t = new CanvasTexture(canvas);
+  t.colorSpace = SRGBColorSpace;
+  t.wrapS = RepeatWrapping;
+  t.wrapT = RepeatWrapping;
+  t.repeat.set(MM_PER_M / LEAF_TILE_MM, MM_PER_M / LEAF_TILE_MM);
+  t.anisotropy = 4;
+  return t;
+}
+
 /** The additive glow behind an emitter: a soft radial falloff, white (the sprite tints it). */
 function haloTexture(): CanvasTexture | null {
   if (typeof document === "undefined") return null;
@@ -294,6 +342,8 @@ function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
     case "foliage":
       mat.roughness = 0.85;
       mat.side = DoubleSide;
+      // Every foliage geometry carries its shading (scene-geometry.ts withColour).
+      mat.vertexColors = true;
       break;
     case "emissive":
       mat.emissive = colour.clone();
@@ -351,6 +401,14 @@ export class MaterialCache {
   private textureFor(ref: MaterialRef): ThreeTexture | null {
     const fromImage = this.imageTexture(ref);
     if (fromImage) return fromImage;
+    if (ref.kind === "foliage" && !ref.texture) {
+      const key = `leaf:${ref.colour}`;
+      const hit = this.textures.get(key);
+      if (hit) return hit;
+      const t = leafTexture(leafColour(ref.colour));
+      if (t) this.textures.set(key, t);
+      return t;
+    }
     if (!ref.texture) return null;
     const key = `tex:${ref.texture}:${ref.colour}`;
     const hit = this.textures.get(key);
@@ -375,6 +433,11 @@ export class MaterialCache {
       mat.map = map;
       // The pattern is already tinted; a picture is the designer's as it is.
       mat.color.set("#ffffff");
+      // Leaves have depth: the same dabs, as bumps.
+      if (ref.kind === "foliage" && !ref.texture) {
+        mat.bumpMap = map;
+        mat.bumpScale = 1.6;
+      }
     }
     if (mirrored) mat.side = DoubleSide;
     if (floorRank) {

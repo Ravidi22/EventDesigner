@@ -68,8 +68,9 @@ export type Part =
   | { shape: "torus"; r: number; tube: number; at: Vec3; segments?: number; material?: MaterialRef }
   /** A closed outline (bezier edges honoured) extruded `h` up from `at.z`; `holes` are cut out. */
   | { shape: "extrude"; outline: BuiltOutline; holes?: BuiltOutline[]; h: number; at: Vec3; rotDeg?: number; material?: MaterialRef }
-  /** A profile of (radius, height) pairs, bottom to top, revolved about the vertical axis at `at`. */
-  | { shape: "lathe"; profile: { r: number; z: number }[]; at: Vec3; segments?: number; material?: MaterialRef }
+  /** A profile of (radius, height) pairs, bottom to top, revolved about the vertical axis at `at`;
+   *  `scaleY` stretches it along the plan's y (an oval bowl: its depth over its width). */
+  | { shape: "lathe"; profile: { r: number; z: number }[]; at: Vec3; segments?: number; scaleY?: number; material?: MaterialRef }
   /** A flat closed outline at `at.z`, facing up unless told otherwise (a ceiling faces down);
    *  `holes` are cut out (a floor round a recessed pool). */
   | { shape: "plane"; outline: BuiltOutline; holes?: BuiltOutline[]; at: Vec3; side?: "up" | "down" | "both"; rotDeg?: number; material?: MaterialRef }
@@ -79,12 +80,22 @@ export type Part =
   /** A cloth hanging from a closed RIM (`outline`, the cloth's edge where it leaves the table, a
    *  flattened polygon about `at`) down `h` to the floor: folds every `foldPitchMm` that deepen to
    *  `foldDepthMm` at the hem, the hem flaring `flareMm` out. Smooth-shaded — fabric, not facets. */
-  | { shape: "drape"; outline: Point[]; h: number; at: Vec3; foldPitchMm?: number; foldDepthMm?: number; flareMm?: number; material?: MaterialRef };
+  | { shape: "drape"; outline: Point[]; h: number; at: Vec3; foldPitchMm?: number; foldDepthMm?: number; flareMm?: number; material?: MaterialRef }
+  /** An organic mass — a canopy's clump, a shrub, a hydrangea's mophead: a ball `r` across its
+   *  middle whose surface seeded lumps push in and out (`lumps` round its girth, `rough` of r deep,
+   *  ./organic.ts lumpField), `squash` its height over its width. `at` is its CENTRE, as a sphere's;
+   *  `detail` its subdivision (2 a far shrub, 3 a near canopy or a floret head). */
+  | { shape: "blob"; r: number; at: Vec3; seed: number; lumps?: number; rough?: number; squash?: number; detail?: number; material?: MaterialRef }
+  /** A leaf or a palm frond grown from `at` along its own +y (turned `rotDeg`): `len` long, rising
+   *  `liftDeg` above level and drooping `droopDeg` by its tip. A blade `w` wide at its widest, its
+   *  halves folded `foldDeg` up; or, with `leaflets`, pinnate — that many pairs of leaflets up to `w`
+   *  long off a thin rachis, hanging `foldDeg` below it (./organic.ts frondTriangles). */
+  | { shape: "frond"; len: number; w: number; at: Vec3; rotDeg?: number; liftDeg?: number; droopDeg?: number; leaflets?: number; foldDeg?: number; material?: MaterialRef };
 
 export type NodeType =
   | "ground" | "floor" | "wall" | "door" | "ceiling" | "feature"
   | "table" | "cloth" | "chair" | "item" | "flowers" | "tableware"
-  | "stage" | "deck" | "edge" | "skirt" | "corner" | "railing" | "missing";
+  | "stage" | "deck" | "edge" | "skirt" | "corner" | "railing";
 
 /** What a body is, for the author's hover name and for the self-check's counts. `id` is the
  *  document/venue id of the thing it belongs to, when it has one. */

@@ -30,11 +30,11 @@ import { chairOf } from "@/lib/catalog/chairs";
 import { CLOTH_DROP_MM, chairStyleOf, drawStyleOf, symbolCount, symbolOf, type ChairStyle } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { vesselOf } from "@/lib/catalog/vessel";
-import { dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { type DressingSpot, dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { primeCatalog } from "@/lib/catalog/storage";
 import { isMain } from "../self-check";
-import { placeSettings } from "./tableware";
+import { placeSettings, type Keepout, type SettingSeat } from "./tableware";
 import { SceneCollector } from "./collect";
 import { applyTransform, roomTransform, seatTransform } from "./frame";
 import { chairRequest, itemBody, type ItemContext } from "./items";
@@ -293,37 +293,89 @@ export function chairSpecOf(table: Pick<DesignTable, "chairVariantId">): ChairSp
   };
 }
 
-/** One chair per seat, each turned to face the table by `seatTransform`, all sharing one geometry
- *  with every other chair of this spec in the room (the collector merges by key). */
-/** The chairs of a ring — and, when `settingTopMm` is given (SceneSettings.tableware), a place
- *  setting at each seat on the table top that far above the frame's floor (./tableware.ts). */
-function placeChairs(seats: readonly Seat[], frame: Transform, spec: ChairSpec, tag: NodeTag, out: SceneCollector, settingTopMm?: number): void {
+/** Where a ring's place settings go (SceneSettings.tableware): the top they stand on — its height
+ *  above the venue floor and its outlines in the room — and what already stands on it. */
+export interface SettingsAt {
+  topZ: number;
+  tops: Point[][];
+  keepouts: Keepout[];
+}
+
+/** The chairs of a ring, each turned to face the table by `seatTransform`, all sharing one geometry
+ *  with every other chair of this spec in the room (the collector merges by key) — and, given
+ *  `settings`, a place setting for each diner, laid off the edge they face (./tableware.ts). */
+function placeChairs(seats: readonly Seat[], frame: Transform, spec: ChairSpec, tag: NodeTag, out: SceneCollector, settings?: SettingsAt): void {
   if (!seats.length) return;
-  if (settingTopMm !== undefined) placeSettings(seats, frame, settingTopMm, out);
+  const at = seats.map((seat) => seatTransform(frame, seat));
+  if (settings) {
+    const diners: SettingSeat[] = at.map((t) => {
+      const o = applyTransform(t, vec3(0, 0, 0));
+      const f = applyTransform(t, vec3(0, 1, 0));
+      return { at: { x: o.x, y: o.y }, facing: { x: f.x - o.x, y: f.y - o.y } };
+    });
+    placeSettings(diners, settings.tops, settings.keepouts, settings.topZ, out);
+  }
   // The parts are built once; every instance is the same request at its own transform.
   const base = chairRequest(spec.style, spec.widthMm, spec.depthMm, spec.heightMm, spec.tone, transform(vec3(0, 0, 0)), tag);
-  for (const seat of seats) out.instance({ ...base, at: seatTransform(frame, seat) });
+  for (const t of at) out.instance({ ...base, at: t });
 }
 
 /** The ring round one table that is in no block: `seatsAround` its footprint, through the table's
  *  turn and mirror. Returns how many chairs it placed. */
-export function chairRing(table: DesignTable, z: number, out: SceneCollector, spec: ChairSpec = chairSpecOf(table), settingTopMm?: number): number {
+export function chairRing(table: DesignTable, z: number, out: SceneCollector, spec: ChairSpec = chairSpecOf(table), settings?: SettingsAt): number {
   const seats = seatsAround(tableFootprint(table), table.seats ?? 0, undefined, tableBlockedSides(table));
-  placeChairs(seats, roomTransform(table, z), spec, { type: "chair", id: table.id }, out, settingTopMm);
+  placeChairs(seats, roomTransform(table, z), spec, { type: "chair", id: table.id }, out, settings);
   return seats.length;
+}
+
+/** A table's top as flat outlines in the room — through its turn and mirror. */
+export function topsOf(table: DesignTable): Point[][] {
+  const frame = roomTransform(table);
+  return footprintOutlines(tableFootprint(table)).map((piece) => flatOutline(piece).map((p) => {
+    const q = applyTransform(frame, vec3(p.x, p.y, 0));
+    return { x: q.x, y: q.y };
+  }));
+}
+
+/** How much of an item's box its FOOT takes on the top — what a setting must keep off. A
+ *  candelabrum spreads its arms high over the places (its foot is small, at most CANDLE_FOOT_MM
+ *  across each way); an arrangement's mass sits on a narrower base; a vase, a bowl, a lamp stand on
+ *  their whole box. */
+const FOOT_SHARE_BY_KIND: Partial<Record<string, number>> = { candlestick: 0.45, flowers: 0.6, centerpiece: 0.7 };
+const CANDLE_FOOT_MM = 160;
+
+/** What stands on a table, as keep-outs for its place settings: every item but the runner. */
+export function keepoutsOf(spots: readonly DressingSpot[]): Keepout[] {
+  const out: Keepout[] = [];
+  for (const spot of spots) {
+    if (spot.runner) continue;
+    const product = resolve(spot.p.variantId)?.product;
+    const footprint = spot.footprint ?? placementFootprint(spot.p);
+    const kind = symbolOf(product, footprint);
+    const b = footprintBounds(footprint);
+    const s = (spot.p.scale || 1) * (FOOT_SHARE_BY_KIND[kind ?? ""] ?? 1);
+    let hw = (b.w / 2) * s;
+    let hd = (b.h / 2) * s;
+    if (kind === "candlestick") {
+      hw = Math.min(hw, CANDLE_FOOT_MM);
+      hd = Math.min(hd, CANDLE_FOOT_MM);
+    }
+    out.push({ c: spot.at, hw, hd, rotationDeg: spot.rotation, round: footprint.kind === "circle" });
+  }
+  return out;
 }
 
 /** The ring round a BLOCK: `blockSeats` in the block's frame — its centre and rotation only, never
  *  a mirror (canvas-stage.tsx:1186) — seating what its members seat between them (`groupSeats`).
  *  The chair is the first member's, as the frame is. Returns the block, for its label. */
-export function blockChairRing(members: readonly DesignTable[], doc: DesignDocumentContent, z: number, out: SceneCollector, settingTopMm?: number): BlockFrame | null {
+export function blockChairRing(members: readonly DesignTable[], doc: DesignDocumentContent, z: number, out: SceneCollector, settings?: SettingsAt): BlockFrame | null {
   const first = members[0];
   const groupId = first?.groupId;
   if (!first || !groupId) return null;
   const block = tableBlock(members);
   if (!block) return null;
   const seats = blockSeats(block, groupSeats(doc, groupId));
-  placeChairs(seats, transform(vec3(block.centre.x, block.centre.y, z), block.rotation), chairSpecOf(first), { type: "chair", id: groupId }, out, settingTopMm);
+  placeChairs(seats, transform(vec3(block.centre.x, block.centre.y, z), block.rotation), chairSpecOf(first), { type: "chair", id: groupId }, out, settings);
   return block;
 }
 
@@ -368,11 +420,44 @@ export function itemContextOf(placement: Placement, product: Product | undefined
   return contextFor(product, resolved, footprint, author, placement);
 }
 
+/** The vase an arrangement at `spot` stands IN although the plan does not say so: the plan lets a
+ *  designer set an arrangement and a vase down as two items on one spot (plan A does it on every
+ *  table — "אגרטל מרטיני" and "סידור" at the same offset), and in the room the flowers are in the
+ *  vase's mouth, not round its foot. The vase whose box holds the arrangement's middle, nearest
+ *  first; null when none does. */
+export function vaseUnder(spot: DressingSpot, spots: readonly DressingSpot[]): DressingSpot | null {
+  let best: DressingSpot | null = null;
+  let bestD = Infinity;
+  for (const v of spots) {
+    if (v === spot || v.runner) continue;
+    const product = resolve(v.p.variantId)?.product;
+    if (product?.category !== "vases") continue;
+    const b = footprintBounds(v.footprint ?? placementFootprint(v.p));
+    const s = v.p.scale || 1;
+    const local = turnBack({ x: spot.at.x - v.at.x, y: spot.at.y - v.at.y }, v.rotation);
+    if (Math.abs(local.x) > (b.w / 2) * s || Math.abs(local.y) > (b.h / 2) * s) continue;
+    const d = Math.hypot(local.x, local.y);
+    if (d < bestD) {
+      best = v;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+const turnBack = (p: Point, deg: number): Point => {
+  const c = Math.cos((-deg * Math.PI) / 180);
+  const s = Math.sin((-deg * Math.PI) / 180);
+  return { x: p.x * c - p.y * s, y: p.x * s + p.y * c };
+};
+
 /** What stands on `table`: every item at its `dressingSpots` place on the top face (z = `topZ`),
  *  turned as the plan turns it, at its own drawing scale, drawn by its kind. An arrangement in a
  *  vessel (`vesselOf`) stands IN it: the vase at the spot first, the flowers raised to VASE_RIM_SHARE
- *  of the vase's height (DECIDE 7). `chipsOf` is the room's bucketing of table items with the cover
- *  left out — the same lookup `dressBlockOf` lays a block's items with. Returns the item count. */
+ *  of the vase's height (DECIDE 7) — and so does one set down on a vase's spot (`vaseUnder`).
+ *  `chipsOf` is the room's bucketing of table items with the cover left out — the same lookup
+ *  `dressBlockOf` lays a block's items with; `spots` may be handed in when the caller has them.
+ *  Returns the item count. */
 export function dressingOf(
   doc: DesignDocumentContent,
   table: DesignTable,
@@ -380,10 +465,11 @@ export function dressingOf(
   topZ: number,
   author: boolean,
   out: SceneCollector,
+  given?: readonly DressingSpot[],
 ): number {
   const chips = chipsOf(table.id);
   if (!chips.length) return 0;
-  const spots = dressingSpots(table, chips, dressBlockOf(doc.tables, table, chipsOf));
+  const spots = given ?? dressingSpots(table, chips, dressBlockOf(doc.tables, table, chipsOf));
   for (const spot of spots) {
     const p = spot.p;
     const resolved = resolve(p.variantId);
@@ -399,6 +485,9 @@ export function dressingOf(
       const vaseCtx = contextFor(vase.product, vase, resolveFootprint(vase.product), author);
       out.item(`${p.id}:vase`, { type: "item", id: p.id, label: vase.product.name }, itemBody("vase", vaseCtx), standAt(z));
       z += VASE_RIM_SHARE * (vase.product.dimensions.heightMm || 0);
+    } else if (kind === "flowers" || kind === "centerpiece") {
+      const under = vaseUnder(spot, spots);
+      if (under) z += VASE_RIM_SHARE * (resolve(under.p.variantId)?.product.dimensions.heightMm || 0);
     }
     out.item(p.id, { type: kind === "flowers" ? "flowers" : "item", id: p.id, label: product?.name }, itemBody(kind, ctx), standAt(z));
   }
@@ -435,6 +524,19 @@ export function tableNodes(input: Pick<SceneInput, "doc" | "author"> & { setting
   }
   const chipsOf = (tableId: string): readonly Placement[] => chipsByTable.get(tableId) ?? NONE;
   const ringed = new Set<string>();
+  // Each table's dressing, laid once: drawn by `dressingOf`, kept clear by the settings.
+  const spotCache = new Map<string, readonly DressingSpot[]>();
+  const spotsOf = (t: DesignTable): readonly DressingSpot[] => {
+    let hit = spotCache.get(t.id);
+    if (!hit) {
+      const chips = chipsOf(t.id);
+      hit = chips.length ? dressingSpots(t, chips, dressBlockOf(doc.tables, t, chipsOf)) : [];
+      spotCache.set(t.id, hit);
+    }
+    return hit;
+  };
+  const settingsFor = (members: readonly DesignTable[], z: number, heightMm: number): SettingsAt | undefined =>
+    tableware ? { topZ: z + heightMm, tops: members.flatMap(topsOf), keepouts: members.flatMap((m) => keepoutsOf(spotsOf(m))) } : undefined;
 
   for (const t of doc.tables) {
     const resolved = t.variantId ? resolve(t.variantId) : undefined;
@@ -459,14 +561,14 @@ export function tableNodes(input: Pick<SceneInput, "doc" | "author"> & { setting
     // No table numbers float in the room (Ravid, 2026-10-23: "remove the numbering of the tables in
     // the 3D") — a number is a crew mark on a plan, and the room is what the client is shown.
     if (!t.groupId) {
-      chairRing(t, z, out, undefined, tableware ? heightMm : undefined);
+      chairRing(t, z, out, undefined, settingsFor([t], z, heightMm));
     } else if (!ringed.has(t.groupId)) {
       ringed.add(t.groupId);
       const members = doc.tables.filter((x) => x.groupId === t.groupId);
-      blockChairRing(members, doc, z, out, tableware ? Math.max(...members.map(tableHeightOf)) : undefined);
+      blockChairRing(members, doc, z, out, settingsFor(members, z, Math.max(...members.map(tableHeightOf))));
     }
 
-    dressingOf(doc, t, chipsOf, z + heightMm, author, out);
+    dressingOf(doc, t, chipsOf, z + heightMm, author, out, spotsOf(t));
   }
 }
 
