@@ -38,7 +38,8 @@ export type SymbolKind =
   | "stairs"
   | "ramp"
   | "bench"
-  | "lamp";
+  | "lamp"
+  | "gate";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -60,6 +61,8 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   columns: "column",
   fountains: "fountain",
   arches: "arch",
+  // Two columns joined overhead — a straight lintel or an arch — that guests walk through.
+  gates: "gate",
   chuppahs: "chuppah",
   bars: "bar",
   // A flight or a ramp standing on its own (lib/studio/climb-item.ts): its step edges and the line
@@ -170,14 +173,242 @@ export const CHUPPAH_STYLE_LABEL: Record<ChuppahStyle, string> = {
   rotunda: "עמודים במעגל (רוטונדה)",
 };
 
-/** The drawing style of a candlestick or a chuppah (the two pictures with more than one version
- *  besides a chair, which has chairStyleOf). Undefined = the category's default picture. */
-export function drawStyleOf(product: Product | undefined): CandleStyle | ChuppahStyle | undefined {
+// The other pictures with more than one version. Each list starts with its DEFAULT — what the
+// category drew before there was a choice, stored as no style at all — so no existing row changes
+// by itself. Like a chair's style, it is what the thing looks like from above; never a count.
+
+/** A chandelier: arms and bulbs round a hub (the default), crystal tiers, a hoop of lights, a
+ *  sputnik, a cluster of pendant globes, a linear piece, a ring dressed in flowers. */
+export type ChandelierStyle = "arms" | "crystal" | "hoop" | "sputnik" | "pendants" | "linear" | "floral";
+/** A sofa: back, arms and cushions (the default), a buttoned Chesterfield, an L corner, a curved
+ *  one, armless modules, a backless upholstered bench. */
+export type SofaStyle = "classic" | "chesterfield" | "corner" | "curved" | "armless" | "ottoman";
+/** A vessel — the 3D builder's own forms (lib/scene/items.ts VesselForm) plus the plain vase. */
+export type VaseStyle = "vase" | "cylinder" | "trumpet" | "urn" | "pedestal" | "bowl";
+export type TreeStyle = "canopy" | "olive" | "blossom" | "palm" | "cypress" | "topiary" | "potted";
+export type ColumnStyle = "classic" | "smooth" | "square" | "pedestal";
+export type FountainStyle = "classic" | "tiered" | "jets" | "bowl";
+export type ArchStyle = "floral" | "corner" | "draped" | "bare";
+export type LampStyle = "empire" | "drum" | "mushroom" | "globe";
+/** A gate's ENTRANCE: square under a straight lintel, or round under an arch. */
+export type GateStyle = "square" | "arched";
+
+export type DrawStyle =
+  | CandleStyle
+  | ChuppahStyle
+  | ChandelierStyle
+  | SofaStyle
+  | VaseStyle
+  | TreeStyle
+  | ColumnStyle
+  | FountainStyle
+  | ArchStyle
+  | LampStyle
+  | GateStyle;
+
+export interface SymbolStyleSet {
+  /** The editor's heading over the tiles. */
+  title: string;
+  /** Every version, the default first. */
+  styles: readonly DrawStyle[];
+  label: Partial<Record<DrawStyle, string>>;
+  hint?: Partial<Record<DrawStyle, string>>;
+  /** What a tile draws the version at — a typical piece of it, not the row's own size, so a linear
+   *  chandelier is long and a corner sofa is an L whatever the row being edited measures. */
+  sample: (style: DrawStyle) => Footprint;
+}
+
+const circle = (diameterMm: number): Footprint => ({ kind: "circle", diameterMm });
+const rect = (widthMm: number, depthMm: number): Footprint => ({ kind: "rect", widthMm, depthMm });
+
+/** The pictures whose version the appearance editor offers as tiles (a chair's and a candlestick's
+ *  have tiles of their own, an arrangement's form is lib/catalog/flower-draw.ts). */
+export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
+  chuppah: {
+    title: "סוג החופה",
+    styles: CHUPPAH_STYLES,
+    label: CHUPPAH_STYLE_LABEL,
+    sample: () => circle(4200),
+  },
+  chandelier: {
+    title: "סוג השנדליר",
+    styles: ["arms", "crystal", "hoop", "sputnik", "pendants", "linear", "floral"],
+    label: {
+      arms: "קנים ונורות",
+      crystal: "קריסטל בקומות",
+      hoop: "טבעת אור",
+      sputnik: "ספוטניק",
+      pendants: "מקבץ גלובוסים",
+      linear: "שנדליר אורך",
+      floral: "טבעת פרחים",
+    },
+    hint: {
+      arms: "זרועות מרכזיות ונורה או נר בקצה כל אחת — השנדליר הקלאסי",
+      crystal: "טבעות של נטיפי קריסטל סביב הנורות",
+      hoop: "חישוק אחד עם נורות לאורכו, תלוי בשלושה כבלים",
+      sputnik: "כדור מרכזי ומוטות לכל הכיוונים עם נורה בקצה",
+      pendants: "גלובוסים בגדלים שונים התלויים מאותה פלטה",
+      linear: "מוט ארוך עם מנורות בשורה — מעל שולחן אבירים",
+      floral: "חישוק עטוף פרחים וירק",
+    },
+    sample: (s) => (s === "linear" ? rect(1400, 320) : circle(900)),
+  },
+  sofa: {
+    title: "סוג הספה",
+    styles: ["classic", "chesterfield", "corner", "curved", "armless", "ottoman"],
+    label: {
+      classic: "ספה קלאסית",
+      chesterfield: "צ׳סטרפילד",
+      corner: "ספה פינתית",
+      curved: "ספה מעוגלת",
+      armless: "מודולרית",
+      ottoman: "ספסל מרופד",
+    },
+    hint: {
+      classic: "גב, ידית בכל צד וכריות ישיבה",
+      chesterfield: "ידיות בגובה הגב וריפוד מכופתר",
+      corner: "צורת ר — גב לאורך שני צדדים",
+      curved: "ספה בקשת, הגב בצד החיצוני",
+      armless: "מודולים בלי ידיות, צמודים זה לזה",
+      ottoman: "בלי גב — פוף ארוך או ספסל מרופד",
+    },
+    sample: (s) => (s === "corner" ? rect(2400, 1700) : s === "curved" ? rect(2600, 1100) : s === "ottoman" ? rect(1400, 600) : rect(2100, 900)),
+  },
+  vase: {
+    title: "צורת הכלי",
+    styles: ["vase", "cylinder", "trumpet", "urn", "pedestal", "bowl"],
+    label: {
+      vase: "אגרטל",
+      cylinder: "צילינדר",
+      trumpet: "מרטיני",
+      urn: "כד עם ידיות",
+      pedestal: "קערה על רגל",
+      bowl: "קערה",
+    },
+    hint: {
+      cylinder: "צילינדר זכוכית ישר — רואים את התחתית דרכו",
+      trumpet: "גביע רחב על רגל דקה — אגרטל מרטיני / חצוצרה",
+      urn: "כד בטני עם שתי ידיות",
+      pedestal: "קערה רדודה על רגל — קומפוט",
+      bowl: "קערה נמוכה ורחבה",
+    },
+    sample: (s) => (s === "bowl" || s === "pedestal" ? circle(420) : s === "cylinder" ? circle(220) : circle(320)),
+  },
+  tree: {
+    title: "סוג העץ",
+    styles: ["canopy", "olive", "blossom", "palm", "cypress", "topiary", "potted"],
+    label: {
+      canopy: "עץ נוי",
+      olive: "זית",
+      blossom: "עץ פורח",
+      palm: "דקל",
+      cypress: "ברוש",
+      topiary: "כדור גזום",
+      potted: "צמח בעציץ",
+    },
+    hint: {
+      canopy: "צמרת מלאה של אשכולות עלים",
+      olive: "צמרת פתוחה וכסופה, גזע מפוצל",
+      blossom: "צמרת מכוסה פריחה — דובדבן, שקד",
+      palm: "כפות ארוכות מכתר אחד",
+      cypress: "עץ צר וזקוף",
+      topiary: "שיח גזום לכדור מושלם",
+      potted: "עלים גדולים מעל עציץ",
+    },
+    sample: (s) => (s === "cypress" ? circle(900) : s === "topiary" || s === "potted" ? circle(1000) : circle(2400)),
+  },
+  column: {
+    title: "סוג העמוד",
+    styles: ["classic", "smooth", "square", "pedestal"],
+    label: {
+      classic: "עמוד רומי",
+      smooth: "עמוד חלק",
+      square: "עמוד מרובע",
+      pedestal: "פודיום תצוגה",
+    },
+    hint: {
+      classic: "פיר מחורץ על בסיס ריבועי",
+      smooth: "פיר עגול חלק על בסיס עגול",
+      square: "פיר מרובע עם כותרת",
+      pedestal: "תיבה עם משטח עליון — לפסל, לעוגה או לסידור",
+    },
+    sample: (s) => (s === "square" || s === "pedestal" ? rect(450, 450) : circle(450)),
+  },
+  fountain: {
+    title: "סוג המזרקה",
+    styles: ["classic", "tiered", "jets", "bowl"],
+    label: {
+      classic: "אגן וקערה",
+      tiered: "קומות",
+      jets: "סילונים",
+      bowl: "קערה גבוהה",
+    },
+    hint: {
+      classic: "אגן מים וקערה במרכזו",
+      tiered: "שלוש קערות זו מעל זו, המים יורדים ביניהן",
+      jets: "בריכה עם סילונים בשורה",
+      bowl: "קערה אחת על רגל, המים גולשים משפתה",
+    },
+    sample: (s) => (s === "jets" ? rect(2400, 1000) : s === "bowl" ? circle(1000) : circle(2000)),
+  },
+  arch: {
+    title: "עיצוב הקשת",
+    styles: ["floral", "corner", "draped", "bare"],
+    label: {
+      floral: "פרחים לכל האורך",
+      corner: "פרחים בפינות",
+      draped: "בד נשפך",
+      bare: "שלד בלבד",
+    },
+    hint: {
+      floral: "זר פרחים לאורך כל הקשת",
+      corner: "מקבץ גדול בפינה אחת ומקבץ קטן בפינה שמנגד",
+      draped: "בד שנשפך על הקשת בגלים",
+      bare: "המסגרת עצמה — מתכת, עץ או ניאון",
+    },
+    sample: () => rect(2400, 600),
+  },
+  lamp: {
+    title: "סוג האהיל",
+    styles: ["empire", "drum", "mushroom", "globe"],
+    label: {
+      empire: "אהיל מתרחב",
+      drum: "אהיל תוף",
+      mushroom: "פטריה",
+      globe: "גלובוס זכוכית",
+    },
+    hint: {
+      empire: "אהיל צר למעלה ורחב למטה",
+      drum: "אהיל ישר, אותו רוחב למעלה ולמטה",
+      mushroom: "כיפה אטומה — מנורת פטריה",
+      globe: "כדור זכוכית, הבסיס נראה דרכו",
+    },
+    sample: () => circle(400),
+  },
+  gate: {
+    title: "צורת הכניסה",
+    styles: ["square", "arched"],
+    label: {
+      square: "כניסה מרובעת",
+      arched: "כניסה עגולה (קשת)",
+    },
+    hint: {
+      square: "שני עמודים ומשקוף ישר ביניהם",
+      arched: "שני עמודים וקשת עגולה ביניהם",
+    },
+    sample: () => rect(3000, 650),
+  },
+};
+
+/** The drawing style of any picture that has versions besides a chair's (chairStyleOf): a
+ *  candlestick's, or one of SYMBOL_STYLES. Undefined = the category's default picture. */
+export function drawStyleOf(product: Product | undefined): DrawStyle | undefined {
   const s = product?.appearance?.symbolStyle;
   if (!product || !s) return undefined;
   if (product.category === "candlesticks") return isCandleStyle(s) ? s : undefined;
-  if (product.category === "chuppahs") return (CHUPPAH_STYLES as string[]).includes(s) ? (s as ChuppahStyle) : undefined;
-  return undefined;
+  const kind = SYMBOL_BY_CATEGORY[product.category];
+  const set = kind ? SYMBOL_STYLES[kind] : undefined;
+  return set && (set.styles as readonly string[]).includes(s) ? (s as DrawStyle) : undefined;
 }
 
 /** How far a cloth shows past the tabletop seen from above — the fall of the fabric, not its full

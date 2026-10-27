@@ -67,13 +67,14 @@ import {
   CANDLE_STYLE_LABEL,
   CHAIR_STYLES,
   CHAIR_STYLE_LABEL,
-  CHUPPAH_STYLES,
-  CHUPPAH_STYLE_LABEL,
+  SYMBOL_STYLES,
   categoryHasSymbol,
   chairStyleOf,
   drawStyleOf,
   symbolCount,
   symbolOf,
+  type DrawStyle,
+  type SymbolKind,
 } from "@/lib/catalog/symbols";
 import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
@@ -549,6 +550,52 @@ function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShap
           <span className="line-clamp-2 w-full">{SHAPE_LABEL[s]}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+/** The versions of a category's picture (SYMBOL_STYLES) as tiles, each drawn at a typical size of
+ *  that version in THIS row's shade and count, so the designer picks by looking. The first tile is
+ *  what the category always drew, and picking it stores no style at all. A sofa drawn round is a
+ *  pouf whatever its style, so a round one is offered none. */
+function StyleTiles({ kind, product, onPick }: { kind: SymbolKind; product: Product; onPick: (style: DrawStyle | undefined) => void }) {
+  const set = SYMBOL_STYLES[kind];
+  if (!set) return null;
+  if (kind === "sofa" && resolveFootprint(product).kind !== "rect") return null;
+  const chosen = drawStyleOf(product) ?? set.styles[0];
+  const tone = product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill;
+  const count = symbolCount(product, kind);
+  const cols = set.styles.length <= 2 ? "grid-cols-2" : set.styles.length === 3 ? "grid-cols-3" : "grid-cols-4";
+  return (
+    <div>
+      <span className={fieldLabelClassName}>{set.title}</span>
+      <div className={`grid ${cols} gap-1`} role="radiogroup" aria-label={set.title}>
+        {set.styles.map((st, i) => {
+          const f = set.sample(st);
+          const b = footprintBounds(f);
+          const pad = Math.max(b.w, b.h) * 0.06;
+          const on = chosen === st;
+          return (
+            <button
+              key={st}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              title={set.hint?.[st] ?? set.label[st]}
+              onClick={() => onPick(i === 0 ? undefined : st)}
+              className={
+                "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
+                (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
+              }
+            >
+              <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-10 w-full" aria-hidden>
+                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} />
+              </svg>
+              <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{set.label[st]}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -2017,35 +2064,10 @@ export function AppearanceModal({
               </div>
             )}
 
-            {/* A chuppah: four poles under a canopy, or a round colonnade (ChuppahStyle). */}
-            {draft.category === "chuppahs" && previewSymbol && (
-              <div>
-                <span className={fieldLabelClassName}>סוג החופה</span>
-                <div className="grid grid-cols-2 gap-1" role="radiogroup" aria-label="סוג החופה">
-                  {CHUPPAH_STYLES.map((st) => {
-                    const on = (drawStyleOf(preview) ?? "canopy") === st;
-                    return (
-                      <button
-                        key={st}
-                        type="button"
-                        role="radio"
-                        aria-checked={on}
-                        title={CHUPPAH_STYLE_LABEL[st]}
-                        onClick={() => setAppearance({ symbolStyle: st === "canopy" ? undefined : st })}
-                        className={
-                          "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
-                          (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
-                        }
-                      >
-                        <svg viewBox="-2300 -2300 4600 4600" className="h-10 w-10" aria-hidden>
-                          <ItemSymbol kind="chuppah" footprint={{ kind: "circle", diameterMm: 4200 }} count={1} drawStyle={st} />
-                        </svg>
-                        <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{CHUPPAH_STYLE_LABEL[st]}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+            {/* Which version of the picture — a chuppah's colonnade, a chandelier's crystal tiers,
+                a corner sofa, a palm, a gate's round entrance… (SYMBOL_STYLES). */}
+            {previewSymbol && SYMBOL_STYLES[previewSymbol] && (
+              <StyleTiles kind={previewSymbol} product={preview} onPick={(symbolStyle) => setAppearance({ symbolStyle })} />
             )}
 
             {/* Which form an arrangement takes — a dome, a low cushion, a wild garden, a cascade, a

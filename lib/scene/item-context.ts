@@ -5,7 +5,7 @@ import type { Footprint } from "@/lib/studio/footprint";
 import { footprintOutlines } from "@/lib/studio/footprint";
 import type { Product } from "@/lib/catalog/types";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
-import type { CandleStyle, ChairStyle, ChuppahStyle } from "@/lib/catalog/symbols";
+import type { ChairStyle, DrawStyle } from "@/lib/catalog/symbols";
 import type { FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import type { ChairRows, PlacementClimb } from "@/lib/design-document/types";
 import type { BenchLayout } from "@/lib/design-document/bench";
@@ -28,7 +28,7 @@ export interface ItemContext {
   /** symbolCount: arms, bulbs, candles. */
   count: number;
   chairStyle?: ChairStyle;
-  drawStyle?: CandleStyle | ChuppahStyle;
+  drawStyle?: DrawStyle;
   flowers?: FlowerDrawSpec;
   climb?: PlacementClimb & { heightMm: number };
   bench?: BenchLayout;

@@ -61,6 +61,8 @@ function item(
 
 /** A chair drawn in one style (ChairStyle, lib/catalog/symbols.ts) — a rectangle; its picture does the rest. */
 const chair = (style: string): Product["appearance"] => ({ shape: "rect", content: "none", symbolStyle: style });
+/** Any other picture in one of its versions (SYMBOL_STYLES, lib/catalog/symbols.ts). */
+const drawn = (shape: "rect" | "circle", style?: string): Product["appearance"] => ({ shape, content: "none", ...(style ? { symbolStyle: style } : {}) });
 
 // A cloth and a rug have no height of their own — they take the height of whatever they cover,
 // which is what `needsHeight: false` says in the drawer. The column is NOT NULL, so that is a 0.
@@ -122,7 +124,17 @@ export const DESIGN_ITEMS: DesignItem[] = [
     { name: "קריסטל שקוף", swatch: GLASS },
     { name: "זהב", swatch: GOLD },
     { name: "שחור", swatch: BLACK },
-  ], { categoryFields: { arms: 12 }, styleTags: ["קלאסי", "זוהר"] }),
+  ], { categoryFields: { arms: 12 }, styleTags: ["קלאסי", "זוהר"], appearance: drawn("circle", "crystal") }),
+
+  item("chandelier-sputnik-90", "שנדליר ספוטניק 90", "chandeliers", { diameterMm: 900, heightMm: 900 }, [
+    { name: "זהב", swatch: GOLD },
+    { name: "שחור", swatch: BLACK },
+  ], { categoryFields: { arms: 16 }, styleTags: ["מודרני"], appearance: drawn("circle", "sputnik") }),
+
+  item("chandelier-hoop-120", "טבעת אור 120", "chandeliers", { diameterMm: 1200, heightMm: 300 }, [
+    { name: "זהב", swatch: GOLD },
+    { name: "לבן", swatch: WHITE },
+  ], { categoryFields: { arms: 10 }, styleTags: ["מודרני", "זוהר"], appearance: drawn("circle", "hoop") }),
 
   // A drape is cut to the wall it hangs on, so it carries no width — only its DROP, which is the
   // one number that still tells two rolls of the same curtain apart (see CategoryDef.sizing).
@@ -152,11 +164,38 @@ export const DESIGN_ITEMS: DesignItem[] = [
     { name: "טרופי", swatch: "#3F7A54" },
   ], { styleTags: ["טרופי", "רומנטי"], stockKind: "consumable" }),
 
+  // A gate is two columns joined overhead; its picture shows the shape of the entrance between them.
+  item("gate-square-300", "שער עמודים — כניסה מרובעת 300", "gates", { widthMm: 3000, depthMm: 500, heightMm: 2800 }, [
+    { name: "לבן אבן", swatch: "#F1ECE3" },
+    { name: "שחור", swatch: BLACK },
+    { name: "זהב", swatch: GOLD },
+  ], { spec: "שני עמודים ומשקוף ישר", styleTags: ["מודרני"], appearance: drawn("rect") }),
+
+  item("gate-arched-300", "שער קשת — כניסה עגולה 300", "gates", { widthMm: 3000, depthMm: 500, heightMm: 3000 }, [
+    { name: "לבן אבן", swatch: "#F1ECE3" },
+    { name: "שמנת", swatch: CREAM },
+    { name: "זהב", swatch: GOLD },
+  ], { spec: "שני עמודים וקשת עגולה ביניהם", styleTags: ["קלאסי", "רומנטי"], appearance: drawn("rect", "arched") }),
+
+  item("arch-corner-220", "קשת עגולה — פרחים בפינות", "arches", { widthMm: 2200, depthMm: 500, heightMm: 2200 }, [
+    { name: "לבן־ירוק", swatch: GREENERY },
+    { name: "פסטל", swatch: "#F0DCE6" },
+  ], { styleTags: ["רומנטי"], stockKind: "consumable", appearance: drawn("rect", "corner") }),
+
   item("column-display-100", "עמוד תצוגה 100", "columns", { diameterMm: 300, heightMm: 1000 }, [
     { name: "לבן", swatch: WHITE },
     { name: "שחור", swatch: BLACK },
     { name: "זהב", swatch: GOLD },
-  ], { styleTags: ["מודרני"] }),
+  ], { styleTags: ["מודרני"], appearance: drawn("circle", "pedestal") }),
+
+  item("tree-olive-250", "עץ זית 250", "trees", { diameterMm: 2500, heightMm: 3000 }, [
+    { name: "טבעי" },
+  ], { styleTags: ["כפרי"], stockKind: "rented", appearance: drawn("circle", "olive") }),
+
+  item("vase-martini-70", "אגרטל מרטיני 70", "vases", { diameterMm: 300, heightMm: 700 }, [
+    { name: "שקוף", swatch: GLASS },
+    { name: "זהב", swatch: GOLD },
+  ], { styleTags: ["זוהר"], appearance: drawn("circle", "trumpet") }),
 
   // ── הושבה ורצפה ──────────────────────────────────────────────────────────────────────────────
   item("chair-napoleon", "כיסא נפוליאון", "chairs", { widthMm: 400, depthMm: 400, heightMm: 900 }, [
@@ -213,6 +252,16 @@ export const DESIGN_ITEMS: DesignItem[] = [
     { name: "אפור", swatch: "#8E9299" },
     { name: "ירוק בקבוק", swatch: "#2F4F3E" },
   ], { styleTags: ["מודרני"], stockKind: "rented", appearance: { shape: "rect", content: "none" } }),
+
+  item("sofa-corner", "ספה פינתית", "sofas", { widthMm: 2600, depthMm: 1800, heightMm: 800 }, [
+    { name: "שמנת", swatch: CREAM },
+    { name: "אפור", swatch: "#8E9299" },
+  ], { styleTags: ["מודרני"], stockKind: "rented", appearance: drawn("rect", "corner") }),
+
+  item("sofa-chesterfield", "ספת צ׳סטרפילד", "sofas", { widthMm: 2000, depthMm: 900, heightMm: 750 }, [
+    { name: "חום עור", swatch: "#6B4430" },
+    { name: "ירוק בקבוק", swatch: "#2F4F3E" },
+  ], { styleTags: ["קלאסי"], stockKind: "rented", appearance: drawn("rect", "chesterfield") }),
 
   item("rug-runner", "שטיח מעבר", "rugs", { widthMm: 1200, depthMm: 6000, heightMm: DRAPED }, [
     { name: "שנהב", swatch: CREAM },
