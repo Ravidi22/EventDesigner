@@ -28,6 +28,7 @@ import { isMain } from "../self-check";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
+import { applyTransform } from "./frame";
 import { ENVELOPE, clothMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
 import { frondSpan } from "./organic";
@@ -172,6 +173,8 @@ function partSpan(p: Part): [number, number] {
     case "drape":
       return [p.at.z, p.at.z + p.h];
     case "sphere":
+    case "bloom":
+      // A bloom is centred on its height and never taller than it is wide: r bounds it either way.
       return [p.at.z - p.r, p.at.z + p.r];
     case "blob": {
       const h = p.r * (p.squash ?? 1) * (1 + (p.rough ?? 0.2));
@@ -229,6 +232,7 @@ function flipPart(p: Part, H: number): Part {
     case "sphere":
     case "torus":
     case "blob":
+    case "bloom":
       return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z) };
     case "frond":
       // Hung upside down, a leaf that rose now falls: the lift and the droop change sign.
@@ -246,10 +250,11 @@ function flipPart(p: Part, H: number): Part {
 }
 
 /** An instance keeps its PARTS — its geometry stays the one shared with every upright arrangement
- *  in the room (a head's sphere, a leaf's slab: symmetric about their own middle) — and only its
- *  `at.z` moves, by the parts' local extent [lo, hi]: the instance spanned [at.z + lo, at.z + hi]
- *  and now spans [H − at.z − hi, H − at.z − lo], so at.z' = H − at.z − hi − lo. A head sphere at
- *  local z = r (centre at at.z + r) lands with its centre at H − (at.z + r). */
+ *  in the room (a head, a leaf's slab) — and only its `at.z` moves, by the parts' local extent
+ *  [lo, hi]: the instance spanned [at.z + lo, at.z + hi] and now spans [H − at.z − hi, H − at.z −
+ *  lo], so at.z' = H − at.z − hi − lo. A head is built about its centre, so its centre lands at
+ *  H − centre. A BLOOM also turns over — it leans 180° − its lean, so a head that looked up and out
+ *  of the dome looks down and out of the hung one — about its own middle, where it stands. */
 function flipInstance(r: InstanceRequest, H: number): InstanceRequest {
   let lo = Infinity;
   let hi = -Infinity;
@@ -259,7 +264,9 @@ function flipInstance(r: InstanceRequest, H: number): InstanceRequest {
     hi = Math.max(hi, b);
   }
   if (!r.parts.length) lo = hi = 0;
-  return { ...r, at: { ...r.at, at: vec3(r.at.at.x, r.at.at.y, H - r.at.at.z - hi - lo) } };
+  const at = { ...r.at, at: vec3(r.at.at.x, r.at.at.y, H - r.at.at.z - hi - lo) };
+  if (r.parts[0]?.shape === "bloom") at.tiltDeg = 180 - (r.at.tiltDeg ?? 0);
+  return { ...r, at };
 }
 
 /** `build` turned upside down about z = H/2: every part, instance and emitter that stood at z now
@@ -288,15 +295,13 @@ function hangFall(build: ItemBuild, spec: FlowerDrawSpec, H: number): void {
   const L = H - start;
   for (const r of build.instanced) {
     const p = r.parts[0];
-    // A head is a ball of florets or a bloom (flowers.ts headPart); either way its centre is one
-    // radius up.
-    const radius = p?.shape === "sphere" || p?.shape === "blob" ? p.r : p?.shape === "lathe" ? p.profile.reduce((m, q) => Math.max(m, q.r), 0) : 0;
-    if (!r.key.startsWith("flower:") || radius <= 0) continue;
+    // A head is a ball of florets or a bloom (flowers.ts headPart), built about its own centre.
+    if (!r.key.startsWith("flower:") || !(p?.shape === "sphere" || p?.shape === "blob" || p?.shape === "bloom")) continue;
     const x = r.at.at.x;
     if (x < fallFrom - R * 0.06) continue;
     const t = Math.max(0, Math.min(1, (x - fallFrom) / (R * 0.72)));
     const centre = Math.max(0, L * (1 - t));
-    r.at = { ...r.at, at: vec3(x, r.at.at.y, centre - radius) };
+    r.at = { ...r.at, at: vec3(x, r.at.at.y, centre - p.at.z) };
   }
 }
 
@@ -446,13 +451,8 @@ if (isMain(import.meta.url)) {
   };
   const spec = flowerDrawSpecOf(product, { kind: "circle", diameterMm: 600 }, "#e8bcce");
   assert(spec.form === "dome", `a 40 cm arrangement is a dome (${spec.form})`);
-  // A head's centre: its base plus a ball's radius, or a bloom's widest ring (flowers.ts headPart).
-  const centreOf = (r: InstanceRequest) => {
-    const p = r.parts[0];
-    if (p.shape === "sphere" || p.shape === "blob") return r.at.at.z + p.r;
-    if (p.shape === "lathe") return r.at.at.z + p.profile.reduce((m, q) => Math.max(m, q.r), 0);
-    return r.at.at.z;
-  };
+  // A head's centre: a ball and a bloom are both built about their own middle (flowers.ts headPart).
+  const centreOf = (r: InstanceRequest) => r.at.at.z + r.parts[0].at.z;
   const upright = flowerBuild(spec, 400, { type: "flowers" });
   const hung = hungFlowersBody(ctxOf(600, 400, { flowers: spec }));
   const heads = hung.instanced.filter((r) => r.key.startsWith("flower:"));
@@ -463,9 +463,12 @@ if (isMain(import.meta.url)) {
   assert(lowest === nearest, "the head nearest the middle hangs lowest — the dome law, inverted");
   const upHeads = upright.instanced.filter((r) => r.key.startsWith("flower:"));
   assert(upHeads.length === heads.length && upHeads.every((r, i) => r.key === heads[i].key && near(centreOf(r) + centreOf(heads[i]), 400)), "every head is the table's head mirrored about H/2, keyed the same (one geometry for both)");
+  const looks = (r: InstanceRequest) => applyTransform({ ...r.at, at: vec3(0, 0, 0) }, vec3(0, 0, 1)).z;
+  const hungBlooms = heads.filter((r) => r.parts[0].shape === "bloom");
+  assert(hungBlooms.length > 5 && hungBlooms.every((r, i) => near(looks(r), -looks(upHeads.filter((u) => u.parts[0].shape === "bloom")[i]), 1e-9)), "a hung bloom turns over with its arrangement: it looks down as far as the upright one looks up");
   const disc = hung.parts.find((p) => p.shape === "cylinder" && near(p.rBottom, 300));
   assert(!!disc && near(disc.at.z, 370) && near(top(disc), 400) && disc.material?.kind === "foliage", "a foliage disc the footprint's width at the top");
-  assert(hung.parts.every((p) => p.shape === "blob" || partSpan(p)[0] >= 400 * 0.3 - 1e-9), "every part (the disc, any stem) is in the upper mass, not among the hanging heads");
+  assert(hung.parts.every((p) => p.shape === "blob" || p.shape === "leaves" || partSpan(p)[0] >= 400 * 0.3 - 1e-9), "every part (the disc, any stem) is in the upper mass, not among the hanging heads — the filler and the leaves round it flip with it");
   const leafy = hung.parts.find((p): p is Extract<Part, { shape: "blob" }> => p.shape === "blob");
   assert(!!leafy && near(partSpan(leafy)[0], 400 - 400 * 0.8, 400 * 0.05), "…and the filler the heads sit in hangs from the top, flipped with them, its underside above the lowest heads");
   const leaves = hung.instanced.filter((r) => r.key.startsWith("leaf:"));

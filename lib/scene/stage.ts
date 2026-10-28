@@ -1,11 +1,12 @@
 // The stage, lifted into height — a sketch's `Placement.stage` and a venue's `stage` feature alike.
 // Spec: docs/superpowers/specs/2026-10-23-3d-scene-design.md §3.6, §3.7.
 //
-// Nothing here derives a deck, a tread or a run of skirt: every piece of geometry is read off
-// lib/design-document/stage.ts — `layStage` for the decks, `edgeItemShape` for each flight,
-// banquette, barrier, backdrop and ramp, `stageCorners` for the corner pieces, `openEdges` for the
-// skirt and `railingRuns` for the rail — in the STAGE'S OWN FRAME, exactly as the canvas, the quote
-// and the printed stage plan read them. This file only gives each of those a height and a material,
+// Nothing here derives a tread or a run of skirt: every piece of geometry is read off
+// lib/design-document/stage.ts — `edgeItemShape` for each flight, banquette, barrier, backdrop and
+// ramp, `stageCorners` for the corner pieces, `openEdges` for the skirt and `railingRuns` for the
+// rail — in the STAGE'S OWN FRAME, exactly as the canvas, the quote and the printed stage plan read
+// them. The platform is the stage's OUTLINE and its levels', never the decks `layStage` builds it
+// from (see buildStage). This file only gives each of those a height and a material,
 // and emits the whole stage as a few bodies placed at ONE transform (`roomTransform`), so a turned or
 // mirrored stage is carried into the room by the same arithmetic that carries a chip onto a table.
 // The banquette's chairs are instanced through the same transform and share their geometry with
@@ -36,16 +37,13 @@ import {
   type CornerPiece,
   type EdgeItemShape,
   type EdgeRun,
-  type StageDeck,
   type StagePlacement,
 } from "@/lib/design-document/stage";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
-import { footprintOutlines } from "@/lib/studio/footprint";
 import { wallDistanceOf } from "@/lib/venues/stage-edges";
 import { emptyStructure, featurePlacement, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import { primeCatalog } from "@/lib/catalog/storage";
-import { pointInPolygon } from "@/lib/venues/faces";
 import { rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage";
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
@@ -54,10 +52,8 @@ import { ENVELOPE, hexOf, metalMaterial, surfaceMaterial, swatchMaterial } from 
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
 import { chairRequest } from "./items";
 
-/** The top slab of a deck — what the surface material is laid on; the dark body is under it. */
+/** The top slab of a stage — what the surface material is laid on; the dark body is under it. */
 export const DECK_TOP_MM = 40;
-/** The dark body stands this far in from the slab's edge on a rectangular deck — the legs' line. */
-export const DECK_INSET_MM = 40;
 /** A bare deck: timber boards, muted — the plan draws stages empty, 3D wants a floor to stand on. */
 export const DECK_TONE = "#cfc7bb";
 /** A banquette's strip is a solid block; a sofa cushion is this thick; its backrest this high. */
@@ -105,8 +101,7 @@ export interface StageOpts {
   built?: string;
 }
 
-/** A sketch stage: decks, levels, every edge item, corners, skirt, railings — and the rim pieces
- *  the studio does not have yet, built as deck like the rest. */
+/** A sketch stage: its platform and levels whole, every edge item, corners, skirt, railings. */
 export function stageNodes(p: StagePlacement, out: SceneCollector, opts: StageOpts): void {
   buildStage(p, p.id, out, opts);
 }
@@ -149,7 +144,6 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
   const levelTop = (level: string | undefined): number => (level ? (stage.levels?.find((l) => l.id === level)?.heightMm ?? baseH) : baseH);
   /** The floor an edge item on `level` climbs from, and stands on outside the stage. */
   const levelFloor = (level: string | undefined): number => (level ? baseH : 0);
-  const layout = layStage(stage, deckOf);
   const deckTop = opts.built
     ? // Stone slabs, matte: marble's veins on a near-white platform read as cracks up close.
       surfaceMaterial("paving", opts.built)
@@ -158,44 +152,34 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
       : surfaceMaterial("deck", DECK_TONE);
   const deckUnder = matte(opts.built ? sideTone(opts.built) : ENVELOPE.deckUnderside);
 
-  // 1. Decks — or, built of none (a venue stage, a stage whose decks left the catalog), one slab.
-  const tops: Part[] = [];
-  const bodies: Part[] = [];
-  if (layout.decks.length) {
-    for (const d of layout.decks) {
-      const { top, body } = deckParts(d);
-      tops.push(top);
-      bodies.push(body);
-    }
-    // 2. The rim pieces the studio does not own yet ("חסר" on the plan, layStage's `missing`) are
-    // still the stage: the room is what will stand there, and a round apron left as a hole put
-    // plan A's podium 40cm in the air over the dance floor (2026-10-24). Buying them is the
-    // studio's business, shown in the stage tool — never in the room.
-    for (const m of layout.missing) {
-      const c = m.outline.reduce((a, q) => ({ x: a.x + q.x / m.outline.length, y: a.y + q.y / m.outline.length }), { x: 0, y: 0 });
-      const level = (stage.levels ?? []).filter((l) => pointInPolygon(c, l.outline)).reduce((h, l) => Math.max(h, l.heightMm), 0);
-      const { top, body } = deckParts({ outline: m.outline, heightMm: level || baseH } as StageDeck);
-      tops.push(top);
-      bodies.push(body);
-    }
-  } else {
-    tops.push({ shape: "extrude", outline: { outline: stage.outline }, h: DECK_TOP_MM, at: vec3(0, 0, baseH - DECK_TOP_MM) });
-    bodies.push({ shape: "extrude", outline: { outline: stage.outline }, h: baseH - DECK_TOP_MM, at: vec3(0, 0, 0) });
-    for (const l of stage.levels ?? []) {
-      tops.push({ shape: "extrude", outline: { outline: l.outline }, h: DECK_TOP_MM, at: vec3(0, 0, l.heightMm - DECK_TOP_MM) });
-      bodies.push({ shape: "extrude", outline: { outline: l.outline }, h: l.heightMm - DECK_TOP_MM, at: vec3(0, 0, 0) });
-    }
-  }
-  const deckTag: NodeTag = { type: "deck", id, label: "במה" };
-  out.body(`${id}:decks`, deckTag, deckTop, tops, [at]);
-  out.body(`${id}:deck-under`, deckTag, deckUnder, bodies.filter((b) => b.shape !== "extrude" || b.h > 0), [at]);
-
-  // 3. Edge items.
   const shapes: { item: StageStair; shape: EdgeItemShape }[] = [];
   for (const item of stage.stairs ?? []) {
     const shape = edgeItemShape(stage, item, deckOf);
     if (shape) shapes.push({ item, shape });
   }
+
+  // 1. The platform: ONE slab per surface — the base outline at the stage's height, each level's
+  // outline at its own — over a solid body down to the floor, with only the recesses inner flights
+  // are sunk into left open. Never the decks one by one: which decks build it is the plan's business
+  // (the stage tool, the quote, the printed stage plan); in the room a stage is a floor to stand on.
+  // Laid deck by deck it left every stretch the fill could not deck — a leftover narrower than the
+  // narrowest deck, a gap where a curve's run fell between rows — as a hole down to the floor
+  // (2026-10-27, the user: "the stage needs to look full"); a missing rim piece before that put plan
+  // A's podium in the air (2026-10-24).
+  const surfaces = [{ level: undefined as string | undefined, outline: stage.outline, top: baseH }, ...(stage.levels ?? []).map((l) => ({ level: l.id as string | undefined, outline: l.outline, top: l.heightMm }))];
+  const tops: Part[] = [];
+  const bodies: Part[] = [];
+  for (const s of surfaces) {
+    const holes = shapes.filter(({ item, shape }) => shape.inner && shape.kind === "stairs" && item.level === s.level).map(({ shape }) => ({ outline: recessHole(shape.polygon) }));
+    const hollow = holes.length ? { holes } : {};
+    tops.push({ shape: "extrude", outline: { outline: s.outline }, h: DECK_TOP_MM, at: vec3(0, 0, s.top - DECK_TOP_MM), ...hollow });
+    if (s.top - DECK_TOP_MM > 0) bodies.push({ shape: "extrude", outline: { outline: s.outline }, h: s.top - DECK_TOP_MM, at: vec3(0, 0, 0), ...hollow });
+  }
+  const deckTag: NodeTag = { type: "deck", id, label: "במה" };
+  out.body(`${id}:decks`, deckTag, deckTop, tops, [at]);
+  out.body(`${id}:deck-under`, deckTag, deckUnder, bodies, [at]);
+
+  // 2. Edge items.
   const benchMaterial = rowMaterial(stage.benchVariant, BENCH_TONE, "fabric");
   const barrierMaterial = rowMaterial(stage.barrierVariant, BARRIER_TONE, "metal");
   const backdropMaterial = rowMaterial(stage.backdropVariant, BACKDROP_TONE, "fabric");
@@ -233,12 +217,12 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
     }
   }
 
-  // 4. Corner pieces where two runs of stairs or two banquettes meet.
+  // 3. Corner pieces where two runs of stairs or two banquettes meet.
   const cornerParts: Part[] = [];
   for (const c of stageCorners(stage, deckOf)) cornerParts.push(...cornerPieceParts(c, shapes, levelFloor(c.level), levelTop(c.level)));
   if (cornerParts.length) out.body(`${id}:corners`, { type: "corner", id, label: "פינה" }, deckTop, cornerParts, [at]);
 
-  // 5. The skirt: a pleated strip hanging down every open edge nothing stands against.
+  // 4. The skirt: a pleated strip hanging down every open edge nothing stands against.
   const wallDistance = wallDistanceOf(opts.structure);
   // A built platform's sides are its stone, not a cloth.
   const runs = opts.built ? [] : openEdges(p, deckOf, wallDistance);
@@ -247,7 +231,7 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
     out.body(`${id}:skirt`, { type: "skirt", id, label: "חצאית" }, rowMaterial(stage.skirtVariant, SKIRT_TONE, "fabric"), parts, [at]);
   }
 
-  // 6. Railings, when the studio's rule asks for them.
+  // 5. Railings, when the studio's rule asks for them.
   const rails = railingRuns(p, deckOf, opts.railingAboveMm, wallDistance);
   if (rails.length) {
     const parts = rails.flatMap((r) => railParts(r, levelTop(r.level)));
@@ -257,40 +241,38 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
 
 // --- decks -----------------------------------------------------------------------------------
 
-/** A deck as laid (lib/design-document/stage.ts StageDeck, in the stage's frame): its top slab and
- *  the dark body under it. A rectangle is two boxes, the body stepped in for the legs' line; a
- *  round piece a cylinder (an oval the ellipse extruded); a shaped piece its placed outline. */
-export function deckParts(d: StageDeck): { top: Part; body: Part } {
-  const topZ = d.heightMm - DECK_TOP_MM;
-  const bodyH = Math.max(0, topZ);
-  if (d.outline) {
-    // Already where it stands — turned and flipped by the fill (placedPiece / the rim) — so no
-    // rotation and no mirror of our own: the outline IS the footprint.
-    return {
-      top: { shape: "extrude", outline: { outline: d.outline }, h: DECK_TOP_MM, at: vec3(0, 0, topZ) },
-      body: { shape: "extrude", outline: { outline: d.outline }, h: bodyH, at: vec3(0, 0, 0) },
-    };
+/** How far a recess hole is drawn in from its own outline. */
+const RECESS_INSET_MM = 3;
+
+/** A sunk flight's polygon as a hole in the slab it is cut from: every side moved RECESS_INSET_MM
+ *  in (mitred, the mitre capped at three times that on a sharp corner). The flight's own edge lies ON
+ *  the stage's rim, and a hole that touches its outline is beyond the triangulation; 3 mm of slab
+ *  over the top riser is invisible. */
+export function recessHole(polygon: readonly Point[]): Point[] {
+  const n = polygon.length;
+  if (n < 3) return [...polygon];
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % n];
+    area += a.x * b.y - b.x * a.y;
   }
-  const at = (z: number): Vec3 => vec3(d.centre.x, d.centre.y, z);
-  if (d.round) {
-    if (Math.abs(d.widthMm - d.depthMm) < 1) {
-      const r = d.widthMm / 2;
-      return {
-        top: { shape: "cylinder", rTop: r, rBottom: r, h: DECK_TOP_MM, at: at(topZ), segments: 48 },
-        body: { shape: "cylinder", rTop: r - DECK_INSET_MM, rBottom: r - DECK_INSET_MM, h: bodyH, at: at(0), segments: 48 },
-      };
-    }
-    const oval = footprintOutlines({ kind: "ellipse", widthMm: d.widthMm, depthMm: d.depthMm })[0];
-    return {
-      top: { shape: "extrude", outline: oval, h: DECK_TOP_MM, at: at(topZ), rotDeg: d.rotation },
-      body: { shape: "extrude", outline: oval, h: bodyH, at: at(0), rotDeg: d.rotation },
-    };
-  }
-  return {
-    top: { shape: "box", w: d.widthMm, d: d.depthMm, h: DECK_TOP_MM, at: at(topZ), rotDeg: d.rotation },
-    body: { shape: "box", w: Math.max(1, d.widthMm - 2 * DECK_INSET_MM), d: Math.max(1, d.depthMm - 2 * DECK_INSET_MM), h: bodyH, at: at(0), rotDeg: d.rotation },
+  // The inward normal of edge a→b: left of the walk for a positive (counter-clockwise in x/y) area.
+  const s = area > 0 ? 1 : -1;
+  const inward = (a: Point, b: Point): Point => {
+    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (-(b.y - a.y) / L) * s, y: ((b.x - a.x) / L) * s };
   };
+  return polygon.map((q, i) => {
+    const n1 = inward(polygon[(i - 1 + n) % n], q);
+    const n2 = inward(q, polygon[(i + 1) % n]);
+    const k = Math.min(3, 1 / Math.max(1e-3, (1 + n1.x * n2.x + n1.y * n2.y) / 2));
+    const mx = (n1.x + n2.x) / 2;
+    const my = (n1.y + n2.y) / 2;
+    return { x: q.x + mx * k * RECESS_INSET_MM, y: q.y + my * k * RECESS_INSET_MM };
+  });
 }
+
 
 // --- stairs ----------------------------------------------------------------------------------
 
@@ -519,11 +501,26 @@ if (isMain(import.meta.url)) {
 
     const decks = ofType("deck");
     const slabs = decks.find((b) => b.id === "s1:decks")!;
-    assert(slabs.parts.length > 0, "a 6×4 of 244×122 sheets lays decks");
-    assert(slabs.parts.every((q) => near(topOf(q), 600)), "every deck's top is at the stage height, 600");
+    // 6×4 of 244×122 sheets leaves strips no sheet fits; the platform is the outline all the same.
+    assert(layStage(stage, deckOf).coverage < 1, "a 6×4 is not whole sheets — the fill leaves strips");
+    assert(slabs.parts.length === 1 && slabs.parts[0].shape === "extrude" && JSON.stringify(slabs.parts[0].outline.outline) === JSON.stringify(stage.outline) && !slabs.parts[0].holes, "…and the room's platform is ONE slab of the stage's outline — no holes where no deck fits");
+    assert(near(topOf(slabs.parts[0]), 600), "its top is at the stage height, 600");
     assert(slabs.instances.length === 1 && near(slabs.instances[0].at.x, 10000) && near(slabs.instances[0].at.y, 8000), "…placed at the stage's own transform in the room");
     const under = decks.find((b) => b.id === "s1:deck-under")!;
-    assert(under.parts.every((q) => q.at.z === 0 && near(topOf(q), 600 - DECK_TOP_MM)), "the dark body stands from the floor to just under the slab");
+    assert(under.parts.length === 1 && under.parts.every((q) => q.at.z === 0 && near(topOf(q), 600 - DECK_TOP_MM)), "the dark body stands from the floor to just under the slab");
+
+    // A flight set INTO the stage keeps its recess: the slab and the body have it as a hole, drawn
+    // just inside the flight so it never touches the stage's own edge.
+    const sunkItem: StageStair = { id: "sk", edge: 0, t: 0.5, widthMm: 1000, inner: true };
+    const sunkStage: StageBuild = { ...stage, stairs: [sunkItem] };
+    const sunkOut = new SceneCollector();
+    stageNodes({ ...p, id: "s3", stage: sunkStage }, sunkOut, opts);
+    const sunkSlab = sunkOut.nodes().filter((n) => n.kind === "body").find((b) => b.id === "s3:decks")!;
+    const hole = sunkSlab.parts[0].shape === "extrude" ? sunkSlab.parts[0].holes?.[0]?.outline : undefined;
+    const sunkPoly = edgeItemShape(sunkStage, sunkItem, deckOf)!.polygon;
+    const inside = (q: Point) => q.y > -2000 && Math.abs(q.x) < 3000;
+    assert(!!hole && hole.length === sunkPoly.length && hole.every(inside), "a sunk flight is a hole in the slab, inside the stage's edge");
+    assert(hole!.every((q, i) => Math.hypot(q.x - sunkPoly[i].x, q.y - sunkPoly[i].y) <= RECESS_INSET_MM * 1.5), "…a hair inside the flight's own outline");
 
     // Stairs: one block per tread, descending from the edge to the foot.
     const flight = bodies.find((b) => b.tag.type === "edge" && b.tag.id === "fl")!;
@@ -590,10 +587,9 @@ if (isMain(import.meta.url)) {
     stageNodes(round, clientOut, { ...opts, author: false });
     const missing = layStage(round.stage, deckOf).missing;
     const deckTops = (c: SceneCollector) => c.nodes().filter((n) => n.kind === "body").filter((b) => b.id === "s2:decks").flatMap((b) => b.parts);
-    const sheets = layStage(round.stage, deckOf).decks.length;
-    // Laid of no sheet at all, it is one slab of its outline; else its sheets and the pieces.
-    assert(missing.length > 0 && deckTops(clientOut).length === (sheets ? sheets + missing.length : 1), "a disc of sheets misses its rim pieces, and the room still has its whole deck — no holes");
-    assert(deckTops(authorOut).length === deckTops(clientOut).length, "…the same for the designer and the client");
+    const whole = deckTops(clientOut);
+    assert(missing.length > 0 && whole.length === 1 && whole[0].shape === "extrude" && whole[0].outline.outline.length === disc.outline.length, "a disc of sheets misses its rim pieces, and the room still has its whole deck — one slab, no holes");
+    assert(deckTops(authorOut).length === whole.length, "…the same for the designer and the client");
 
     // A ramp: one tilted slab over a stepped infill, from the floor to the deck.
     const ramped = edgeItemShape(stage, { id: "rp", kind: "ramp", edge: 3, t: 0.5, widthMm: 1200 }, deckOf)!;

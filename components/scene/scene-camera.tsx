@@ -9,6 +9,12 @@
 // lets go at once: the controls take the very press that interrupted it. When the designer moves
 // the camera off a viewpoint by hand, `onLeave` says so, so the same row can be chosen again.
 //
+// The designer is never tied to the middle of the venue (2026-10-27, the user: "not stuck to the
+// center — I want to move and focus"): the wheel zooms toward the point under the cursor, a DOUBLE-
+// CLICK flies to whatever was clicked (a table, a corner of the lawn) and orbits it from there, and
+// WASD / the arrows walk the camera and its orbit point together along the floor (Q/E down/up,
+// Shift faster) — physical keys, so a Hebrew layout walks too, and never while a field has focus.
+//
 // CURATED (the meeting, the client): no controls. The camera stands at the active viewpoint; a drag
 // turns the head about the eye (yaw ±35°, pitch ±20°, ./camera-rules.ts), a wheel or a two-finger
 // pinch zooms the field of view between 40° and 70°, and nothing moves the eye but a viewpoint.
@@ -29,7 +35,7 @@
 // the next leg is due, so a resting tour draws nothing. The one callback per leg is `onTourStep`.
 // Every pose is in plan mm (lib/scene/types.ts) and enters three through `toWorld` alone.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from "react";
-import { type Camera, type PerspectiveCamera, Vector3 } from "three";
+import { type Camera, type Object3D, type PerspectiveCamera, Plane, Raycaster, type Scene as ThreeScene, Vector2, Vector3 } from "three";
 import { OrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { Bounds } from "@/lib/studio/geometry";
@@ -119,6 +125,54 @@ interface TourRun {
 }
 
 const MIN_EYE_M = 0.3;
+/** A double-click's fly: how far from the clicked point the eye lands (a share of where it was,
+ *  within these metres), the slope it looks down at, and how long it takes. */
+const FOCUS_SHARE = 0.4;
+const FOCUS_MIN_M = 2.5;
+const FOCUS_MAX_M = 10;
+const FOCUS_PITCH_MIN_DEG = 18;
+const FOCUS_PITCH_MAX_DEG = 60;
+const FOCUS_MS = 800;
+/** Walking: metres a second for each metre the eye stands from its orbit point (so a step from far
+ *  away crosses the venue and a step at a table is a step), within these, and Shift's multiple. */
+const WALK_PER_M = 0.9;
+const WALK_MIN_M_S = 1.5;
+const WALK_MAX_M_S = 30;
+const WALK_FAST = 2.5;
+/** A walking key → (forward, right, up). */
+const WALK_KEYS: Record<string, readonly [number, number, number]> = {
+  KeyW: [1, 0, 0],
+  ArrowUp: [1, 0, 0],
+  KeyS: [-1, 0, 0],
+  ArrowDown: [-1, 0, 0],
+  KeyA: [0, -1, 0],
+  ArrowLeft: [0, -1, 0],
+  KeyD: [0, 1, 0],
+  ArrowRight: [0, 1, 0],
+  KeyQ: [0, 0, -1],
+  KeyE: [0, 0, 1],
+};
+
+/** Whether a key went to something that types or picks — a field, a select, a menu row. */
+function typingInto(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || el === document.body) return false;
+  return !!el.closest?.("input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='listbox'], [role='menu'], [role='radiogroup'], dialog");
+}
+
+/** Where a ray from the eye first meets something real: a drawn mesh (not a hidden far box, not a
+ *  halo, not the sky), else the floor plane. World metres; null when the ray points at the sky. */
+function pickPoint(raycaster: Raycaster, scene: ThreeScene): Vector3 | null {
+  const shown = (o: Object3D | null): boolean => {
+    for (let p = o; p; p = p.parent) if (!p.visible || p.userData.noPick) return false;
+    return true;
+  };
+  for (const hit of raycaster.intersectObject(scene, true)) {
+    if ((hit.object as { isMesh?: boolean }).isMesh && shown(hit.object)) return hit.point.clone();
+  }
+  const floor = new Vector3();
+  return raycaster.ray.intersectPlane(new Plane(new Vector3(0, 1, 0), 0), floor) && raycaster.ray.direction.y < 0 ? floor : null;
+}
 /** The smallest plan the opening view frames, so an empty or one-table plan is not seen from
  *  a hand's breadth away. */
 const MIN_FRAME_MM = 4000;
@@ -183,6 +237,11 @@ export function SceneCamera(props: SceneCameraProps) {
   const dwellTimer = useRef(0);
   const reportFrame = useRef(0);
   const tmp = useRef(new Vector3());
+  /** The walking keys held down (KeyboardEvent.code), whether Shift is, and the last walked frame. */
+  const held = useRef(new Set<string>());
+  const fast = useRef(false);
+  const walkedAt = useRef(0);
+  const walkTmp = useRef({ forward: new Vector3(), right: new Vector3(), step: new Vector3() });
 
   // --- the small verbs, all on refs -------------------------------------------------------------
 
@@ -357,6 +416,48 @@ export function SceneCamera(props: SceneCameraProps) {
 
   const viewpointById = (id: string) => latest.current.viewpoints.find((v) => v.id === id) ?? null;
 
+  /** Author: the camera is leaving whatever viewpoint it stood at (the controls' own onStart). */
+  const leave = () => {
+    if (place.current.viewpointId === null) return;
+    place.current = { stop: null, viewpointId: null, arrived: true };
+    latest.current.onLeave?.();
+  };
+
+  /** Author: one frame of walking — the eye and its orbit point carried together along the floor
+   *  by the held keys, at a speed that grows with how far the eye stands from what it orbits. */
+  const walk = (now: number): boolean => {
+    const c = controls.current;
+    if (!c || !c.enabled) return false;
+    const dt = walkedAt.current ? Math.min(0.05, (now - walkedAt.current) / 1000) : 1 / 60;
+    walkedAt.current = now;
+    let f = 0;
+    let r = 0;
+    let u = 0;
+    for (const code of held.current) {
+      const k = WALK_KEYS[code];
+      if (!k) continue;
+      f += k[0];
+      r += k[1];
+      u += k[2];
+    }
+    const camera = get().camera;
+    const { forward, right, step } = walkTmp.current;
+    forward.set(c.target.x - camera.position.x, 0, c.target.z - camera.position.z);
+    if (forward.lengthSq() < 1e-8) camera.getWorldDirection(forward).setY(0);
+    forward.normalize();
+    // three is y-up: the right of a heading (x, z) is (−z, x).
+    right.set(-forward.z, 0, forward.x);
+    const speed = Math.min(WALK_MAX_M_S, Math.max(WALK_MIN_M_S, camera.position.distanceTo(c.target) * WALK_PER_M)) * (fast.current ? WALK_FAST : 1);
+    step.set(0, 0, 0).addScaledVector(forward, f).addScaledVector(right, r);
+    if (step.lengthSq() > 1) step.normalize();
+    step.multiplyScalar(speed * dt);
+    step.y = Math.max(u * speed * dt, -c.target.y);
+    camera.position.add(step);
+    c.target.add(step);
+    c.update();
+    return true;
+  };
+
   // --- the frame: only while something moves ----------------------------------------------------
 
   // CAMERA_FIRST: this runs before every other frame callback, so the pose a frame is drawn with is
@@ -369,6 +470,8 @@ export function SceneCamera(props: SceneCameraProps) {
     let moving = false;
     let changed = dirty.current;
     dirty.current = false;
+
+    if (held.current.size && latest.current.mode === "author" && walk(now)) moving = true;
 
     const run = tour.current;
     if (run) {
@@ -620,6 +723,76 @@ export function SceneCamera(props: SceneCameraProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, get, invalidate]);
 
+  // --- the designer's freedom (author): a double-click focuses, the keys walk ---------------------
+
+  useEffect(() => {
+    if (mode !== "author") return;
+    const el = get().gl.domElement;
+    const raycaster = new Raycaster();
+    const ndc = new Vector2();
+
+    // Fly to what was double-clicked and orbit it from there: the eye keeps the side it looks from,
+    // comes in to a share of its distance, and looks down at a comfortable slope.
+    const focus = (e: MouseEvent) => {
+      e.preventDefault();
+      const { camera, scene } = get();
+      const rect = el.getBoundingClientRect();
+      ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(ndc, camera);
+      const at = pickPoint(raycaster, scene);
+      if (!at) return;
+      const c = controls.current;
+      const off = new Vector3().subVectors(camera.position, c ? c.target : at);
+      const flat = Math.hypot(off.x, off.z);
+      const az = flat > 1e-6 ? Math.atan2(off.z, off.x) : Math.atan2(camera.position.z - at.z, camera.position.x - at.x);
+      const clampDeg = Math.min(FOCUS_PITCH_MAX_DEG, Math.max(FOCUS_PITCH_MIN_DEG, (Math.atan2(off.y, flat) * 180) / Math.PI));
+      const pitch = (clampDeg * Math.PI) / 180;
+      const dist = Math.min(FOCUS_MAX_M, Math.max(FOCUS_MIN_M, off.length() * FOCUS_SHARE));
+      const eye = new Vector3(at.x + Math.cos(az) * Math.cos(pitch) * dist, Math.max(MIN_EYE_M, at.y + Math.sin(pitch) * dist), at.z + Math.sin(az) * Math.cos(pitch) * dist);
+      if (tour.current) endTour(true);
+      leave();
+      beginFly({ id: "", name: "", eye: fromWorld(eye), look: fromWorld(at), fovDeg: asPerspective(camera)?.fov ?? DEFAULT_FOV_DEG }, FOCUS_MS);
+      // Standing on no viewpoint: the chip the designer chose last can be chosen again.
+      place.current.viewpointId = null;
+    };
+
+    const down = (e: KeyboardEvent) => {
+      fast.current = e.shiftKey;
+      if (!WALK_KEYS[e.code] || e.ctrlKey || e.metaKey || e.altKey || typingInto(e.target)) return;
+      e.preventDefault();
+      if (tour.current) endTour(true);
+      else if (fly.current) {
+        fly.current = null;
+        apply();
+        handBack();
+      }
+      if (!held.current.size) leave();
+      held.current.add(e.code);
+      invalidate();
+    };
+    const up = (e: KeyboardEvent) => {
+      fast.current = e.shiftKey;
+      held.current.delete(e.code);
+      if (!held.current.size) walkedAt.current = 0;
+    };
+    const letGo = () => {
+      held.current.clear();
+      walkedAt.current = 0;
+    };
+    el.addEventListener("dblclick", focus);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", letGo);
+    return () => {
+      el.removeEventListener("dblclick", focus);
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", letGo);
+      letGo();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, get, invalidate]);
+
   // A hidden tab: the tour's clock stops, and is moved on by the time away when it comes back.
   useEffect(() => {
     const sync = () => {
@@ -664,11 +837,7 @@ export function SceneCamera(props: SceneCameraProps) {
     report();
   };
   // A press or a wheel the controls take: the camera is leaving whatever viewpoint it stood at.
-  const onStart = () => {
-    if (place.current.viewpointId === null) return;
-    place.current = { stop: null, viewpointId: null, arrived: true };
-    latest.current.onLeave?.();
-  };
+  const onStart = leave;
 
   return (
     <OrbitControls
@@ -677,6 +846,9 @@ export function SceneCamera(props: SceneCameraProps) {
       enableDamping
       dampingFactor={0.12}
       enablePan
+      // The wheel zooms toward what is under the cursor, carrying the orbit point with it — so the
+      // designer can close in on any table, not only on the middle of the venue.
+      zoomToCursor
       screenSpacePanning={false}
       maxPolarAngle={Math.PI / 2 - 0.03}
       minDistance={0.4}

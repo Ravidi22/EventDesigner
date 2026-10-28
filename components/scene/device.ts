@@ -1,8 +1,12 @@
 // What this device can afford (spec §8, plan D4): a phone or a tablet — a touch screen, or fewer
 // than six cores — gets no shadow map, a pixel ratio capped at 1.25, no real point lights (the
 // emitters' halos alone), LOD thresholds halved and the fog brought nearer; anything else gets
-// shadows, 1.5, sixteen lights and the full distances. A heuristic, read once by the screen that
+// shadows, 1.5, eight lights and the full distances. A heuristic, read once by the screen that
 // mounts the viewer; the designer's panel may override it later. No three here — plain DOM.
+//
+// EIGHT, not sixteen (2026-10-27): three unrolls every point light into every lit shader, and on
+// Windows (ANGLE → D3D11) a cold compile of plan A's 45 programs with sixteen froze the page for
+// 7.6 s; each light is also paid per pixel. Eight nearest, lamps first, light a table's candles.
 
 export interface DeviceProfile {
   shadows: boolean;
@@ -17,7 +21,7 @@ export interface DeviceProfile {
   touch: boolean;
 }
 
-export const CAPABLE: DeviceProfile = { shadows: true, maxDpr: 1.5, pointLights: 16, lodScale: 1, fogScale: 1, touch: false };
+export const CAPABLE: DeviceProfile = { shadows: true, maxDpr: 1.5, pointLights: 8, lodScale: 1, fogScale: 1, touch: false };
 export const MODEST: DeviceProfile = { shadows: false, maxDpr: 1.25, pointLights: 0, lodScale: 0.5, fogScale: 0.6, touch: true };
 
 export function detectDevice(): DeviceProfile {

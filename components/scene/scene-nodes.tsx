@@ -39,19 +39,32 @@ import { useCameraSettle } from "./scene-settle";
 const RECEIVES = new Set<NodeType>(["ground", "floor", "ceiling", "wall", "deck", "stage", "table", "cloth", "feature"]);
 
 const UP = new Vector3(0, 1, 0);
+const ACROSS = new Vector3(1, 0, 0);
 const scratchM = new Matrix4();
 const scratchP = new Vector3();
 const scratchQ = new Quaternion();
+const scratchLean = new Quaternion();
+const scratchSpin = new Quaternion();
 const scratchS = new Vector3();
 const scratchC = new Color();
 
 /** A camera distance read in metres, back to plan mm — through the one mapping. */
 const lengthMm = (metres: number) => fromWorld(metres, 0, 0).x;
 
+/** A transform's turn as three's quaternion: the plan's rotation about +y, then its lean about the
+ *  thing's own x (plan +z toward +y is three's +y toward +z, a positive turn about x — the box
+ *  part's tilt rule), then its spin about its own up axis (lib/scene/frame.ts applyTransform). */
+function instanceQuaternion(t: Transform, out: Quaternion): Quaternion {
+  out.setFromAxisAngle(UP, worldRotationY(t.rotationDeg));
+  if (t.tiltDeg) out.multiply(scratchLean.setFromAxisAngle(ACROSS, (t.tiltDeg * Math.PI) / 180));
+  if (t.spinDeg) out.multiply(scratchSpin.setFromAxisAngle(UP, worldRotationY(t.spinDeg)));
+  return out;
+}
+
 function instanceMatrix(t: Transform, out: Matrix4): Matrix4 {
   const [x, y, z] = toWorld(t.at);
   scratchP.set(x, y, z);
-  scratchQ.setFromAxisAngle(UP, worldRotationY(t.rotationDeg));
+  instanceQuaternion(t, scratchQ);
   const s = t.scale ?? 1;
   scratchS.set(t.mirrored ? -s : s, 1, s);
   return out.compose(scratchP, scratchQ, scratchS);
@@ -195,8 +208,9 @@ const BodyView = memo(function BodyView({ body, caches, registry }: { body: Body
   if (n === 1) {
     const t = body.instances[0];
     const s = t.scale ?? 1;
+    const q = instanceQuaternion(t, new Quaternion());
     return (
-      <group position={toWorld(t.at)} rotation={[0, worldRotationY(t.rotationDeg), 0]} scale={[t.mirrored ? -s : s, 1, s]}>
+      <group position={toWorld(t.at)} quaternion={[q.x, q.y, q.z, q.w]} scale={[t.mirrored ? -s : s, 1, s]}>
         <group ref={mainRef}>
           {built.map((b, i) => (
             <mesh

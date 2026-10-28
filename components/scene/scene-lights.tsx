@@ -1,9 +1,16 @@
-"use client";
+﻿"use client";
 // The three moods as one rig (spec §4): a hemisphere light for the sky's ambient, a sun with one
-// shadow map fitted to the plan's bounds, a gradient dome, and fog the colour of the horizon
-// starting past the bounds. DAY: a high warm sun, a blue-white dome. EVENING: the sun low on the
-// horizon (14°, long shadows) in gold, an orange-to-violet dome, the ambient down to a third.
-// NIGHT: no sun, a deep-blue dome with a faint horizon, a dim bluish ambient, the fog darker.
+// shadow map fitted to the plan's bounds, a sky dome, and fog the colour of the horizon starting
+// past the bounds. DAY: a high warm sun in a blue sky with fair-weather cloud. EVENING: the sun low
+// on the horizon (14°, long shadows) in gold, a sunset sky — orange at the horizon, rose above it,
+// violet overhead — its clouds lit from below. NIGHT: the MOON — the same light, cool and dim, so
+// the room gets soft moon shadows at no cost — a starfield over a deep-blue sky, a dim ambient.
+//
+// The dome is ONE shader (SKY_FRAGMENT): a three-stop gradient with a haze band, the sun's glow and
+// disc (or the moon's, with its seas) where the light really comes from, clouds as a noise sheet seen
+// from below, stars hashed off the view direction. It costs one draw, only where sky shows, and the
+// moods are uniforms — a mood switch never recompiles (2026-10-27, the user: "realistic, sun/moon &
+// sky — think about performance"; it was a 1×128 gradient texture).
 //
 // The emitters glow in two layers. Every one wears the additive halo sprite (scene-nodes.tsx,
 // dimmed by HALO_BY_MOOD). In the evening and at night the nearest few to the camera also get a
@@ -12,7 +19,7 @@
 // bulbs before candles, intensity by strength, reach by radius, no shadows. The pool is JSX once;
 // the re-pick writes the lights' fields and invalidates — never a render per frame.
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { BackSide, type Camera, CanvasTexture, type DirectionalLight, PMREMGenerator, type PointLight, SRGBColorSpace, Vector3 } from "three";
+import { BackSide, type Camera, Color, type DirectionalLight, PMREMGenerator, type PointLight, ShaderMaterial, Vector3 } from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { useThree } from "@react-three/fiber";
 import type { Bounds } from "@/lib/studio/geometry";
@@ -33,10 +40,33 @@ interface Rig {
   interior: { colour: string; intensity: number };
   /** The renderer's exposure under neutral tone mapping. */
   exposure: number;
-  sun: { colour: string; intensity: number; elevationDeg: number } | null;
-  zenith: string;
-  horizon: string;
+  /** The directional light: the sun by day and in the evening, the MOON at night. */
+  sun: { colour: string; intensity: number; elevationDeg: number };
+  dome: Dome;
+  /** The fog's colour: the dome's horizon, so the far ground melts into the sky. */
   fog: string;
+}
+
+/** The sky dome of one mood (SKY_FRAGMENT's uniforms). Colours are the plan's hex, read linear. */
+interface Dome {
+  zenith: string;
+  /** The band a quarter of the way up — a sunset's rose, a day's mid-blue. */
+  mid: string;
+  horizon: string;
+  /** How much brighter the band hugging the horizon is, 0..1. */
+  haze: number;
+  /** The disc's angular radius in radians — drawn larger than life, as the eye remembers it. */
+  discRad: number;
+  /** The glow round the disc, 0..~1.5. */
+  glow: number;
+  /** A moon (seas, no hot core) instead of a sun. */
+  moon: boolean;
+  /** Cloud cover 0..1, the side facing the light and the side away. */
+  clouds: number;
+  cloudLit: string;
+  cloudShade: string;
+  /** Starlight 0..1. */
+  stars: number;
 }
 
 const RIGS: Record<Mood, Rig> = {
@@ -48,9 +78,8 @@ const RIGS: Record<Mood, Rig> = {
     interior: { colour: "#fff4e6", intensity: 0.55 },
     exposure: 1.0,
     sun: { colour: "#fff2dd", intensity: 2.2, elevationDeg: 52 },
-    zenith: "#8fb4e0",
-    horizon: "#e8eef5",
-    fog: "#e8eef5",
+    dome: { zenith: "#3f78c9", mid: "#8cb6e6", horizon: "#dfeaf4", haze: 0.55, discRad: 0.011, glow: 0.7, moon: false, clouds: 0.5, cloudLit: "#ffffff", cloudShade: "#c4cfdc", stars: 0 },
+    fog: "#dfeaf4",
   },
   evening: {
     sky: "#e6c4a8",
@@ -60,9 +89,8 @@ const RIGS: Record<Mood, Rig> = {
     interior: { colour: "#ffcf98", intensity: 0.6 },
     exposure: 1.1,
     sun: { colour: "#ffb070", intensity: 1.2, elevationDeg: 14 },
-    zenith: "#7a6aa8",
-    horizon: "#f0a070",
-    fog: "#e9a27c",
+    dome: { zenith: "#33366e", mid: "#d98a8c", horizon: "#f7a45c", haze: 0.7, discRad: 0.014, glow: 1.25, moon: false, clouds: 0.35, cloudLit: "#ffc38a", cloudShade: "#7a5878", stars: 0 },
+    fog: "#ec9f72",
   },
   night: {
     sky: "#334466",
@@ -71,9 +99,9 @@ const RIGS: Record<Mood, Rig> = {
     environment: 0.16,
     interior: { colour: "#ffb066", intensity: 0.36 },
     exposure: 1.2,
-    sun: null,
-    zenith: "#0b1230",
-    horizon: "#27305a",
+    // Moonlight: cool, dim, high enough that its shadows stay short.
+    sun: { colour: "#b4c6ea", intensity: 0.32, elevationDeg: 38 },
+    dome: { zenith: "#040819", mid: "#0c1636", horizon: "#232c55", haze: 0.45, discRad: 0.02, glow: 0.35, moon: true, clouds: 0.18, cloudLit: "#3a4670", cloudShade: "#10162e", stars: 1 },
     fog: "#151b3d",
   },
 };
@@ -81,24 +109,160 @@ const RIGS: Record<Mood, Rig> = {
 const SKY_RADIUS_M = 400;
 const SHADOW_MAP = 2048;
 
-/** A 1×128 vertical gradient: the zenith at the top, the horizon at the middle, a little darker
- *  below it (the dome continues under the ground plane, where fog and the ground hide it). */
-function skyTexture(zenith: string, horizon: string): CanvasTexture | null {
-  if (typeof document === "undefined") return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = 1;
-  canvas.height = 128;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  const g = ctx.createLinearGradient(0, 0, 0, 128);
-  g.addColorStop(0, zenith);
-  g.addColorStop(0.5, horizon);
-  g.addColorStop(1, horizon);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 1, 128);
-  const t = new CanvasTexture(canvas);
-  t.colorSpace = SRGBColorSpace;
-  return t;
+const SKY_VERTEX = /* glsl */ `
+varying vec3 vDir;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vDir = wp.xyz - cameraPosition;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+  // On the far plane, behind everything, whatever the dome's radius.
+  gl_Position.z = gl_Position.w;
+}`;
+
+const SKY_FRAGMENT = /* glsl */ `
+uniform vec3 uZenith;
+uniform vec3 uMid;
+uniform vec3 uHorizon;
+uniform vec3 uGround;
+uniform vec3 uLightDir;
+uniform vec3 uLightColour;
+uniform float uDisc;
+uniform float uGlow;
+uniform float uMoon;
+uniform float uHaze;
+uniform float uClouds;
+uniform vec3 uCloudLit;
+uniform vec3 uCloudShade;
+uniform float uStars;
+varying vec3 vDir;
+
+float hash12(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * 0.1031);
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x), mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += a * noise(p);
+    p = p * 2.03 + 17.1;
+    a *= 0.5;
+  }
+  return v;
+}
+
+void main() {
+  vec3 d = normalize(vDir);
+  float h = d.y;
+  float up = clamp(h, 0.0, 1.0);
+  // The gradient: horizon → the band above it → the zenith, a brighter haze hugging the horizon.
+  vec3 col = mix(mix(uHorizon, uMid, smoothstep(0.0, 0.3, up)), uZenith, smoothstep(0.18, 0.95, up));
+  col = mix(col, uHorizon, exp(-up * 14.0) * uHaze);
+  col = mix(col, uGround, smoothstep(0.0, -0.06, h));
+
+  // The light's glow: wide and faint, then tight and bright round the disc.
+  float c = dot(d, uLightDir);
+  float toward = max(c, 0.0);
+  col += uLightColour * (pow(toward, 6.0) * 0.16 + pow(toward, 48.0) * 0.4 + pow(toward, 700.0) * 0.7) * uGlow;
+
+  // Clouds: a sheet of noise seen from below, thinning to the horizon, lit on the side facing the light.
+  if (uClouds > 0.0 && h > 0.0) {
+    vec2 uv = d.xz / (h + 0.12) * 1.6;
+    float n = fbm(uv + vec2(3.7, 1.3));
+    float dense = smoothstep(0.62 - 0.22 * uClouds, 0.9, n) * smoothstep(0.0, 0.2, h);
+    vec3 cloud = mix(uCloudShade, uCloudLit, clamp(0.5 + 0.4 * c + 0.6 * (n - 0.6), 0.0, 1.0));
+    col = mix(col, cloud, dense * min(1.0, uClouds * 1.6));
+  }
+
+  // The disc, in front of the clouds: the sun white-hot, the moon pale with its seas.
+  float ang = acos(clamp(c, -1.0, 1.0));
+  float disc = 1.0 - smoothstep(uDisc * 0.86, uDisc, ang);
+  if (uMoon > 0.5) {
+    vec3 t1 = normalize(cross(uLightDir, vec3(0.0, 1.0, 0.0)));
+    vec3 t2 = cross(t1, uLightDir);
+    vec2 q = vec2(dot(d, t1), dot(d, t2)) / uDisc;
+    float seas = smoothstep(0.42, 0.72, noise(q * 2.3 + 5.0));
+    col = mix(col, vec3(0.86, 0.88, 0.92) * (1.0 - 0.3 * seas) * (1.0 - 0.2 * dot(q, q)), disc);
+  } else {
+    col = mix(col, uLightColour * 1.8 + 0.2, disc);
+  }
+
+  // Stars: one in a few hundred cells of a fine grid on the sphere, fading toward the horizon.
+  if (uStars > 0.0 && h > 0.0) {
+    vec3 g = d * 260.0;
+    vec3 cell = floor(g);
+    if (hash13(cell) > 0.991) {
+      vec3 o = vec3(hash13(cell + 1.7), hash13(cell + 3.1), hash13(cell + 5.3)) - 0.5;
+      float s = 1.0 - smoothstep(0.0, 0.22, length(fract(g) - 0.5 - o * 0.5));
+      col += vec3(0.9, 0.93, 1.0) * s * uStars * (0.3 + 0.7 * hash13(cell + 9.1)) * smoothstep(0.03, 0.3, h) * (1.0 - disc);
+    }
+  }
+
+  gl_FragColor = vec4(col, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`;
+
+/** The sky dome's material: built once, its uniforms written per mood. */
+function skyMaterial(): ShaderMaterial {
+  const v3 = () => ({ value: new Color() });
+  return new ShaderMaterial({
+    vertexShader: SKY_VERTEX,
+    fragmentShader: SKY_FRAGMENT,
+    uniforms: {
+      uZenith: v3(),
+      uMid: v3(),
+      uHorizon: v3(),
+      uGround: v3(),
+      uLightDir: { value: new Vector3(0, 1, 0) },
+      uLightColour: v3(),
+      uDisc: { value: 0.01 },
+      uGlow: { value: 1 },
+      uMoon: { value: 0 },
+      uHaze: { value: 0.5 },
+      uClouds: { value: 0 },
+      uCloudLit: v3(),
+      uCloudShade: v3(),
+      uStars: { value: 0 },
+    },
+    side: BackSide,
+    depthWrite: false,
+    fog: false,
+    toneMapped: false,
+  });
+}
+
+/** One mood's dome into the material, the disc where the light stands (`toLight`, world, unit). */
+function paintSky(m: ShaderMaterial, rig: Rig, toLight: Vector3): void {
+  const { dome, sun: light } = rig;
+  const u = m.uniforms;
+  (u.uZenith.value as Color).set(dome.zenith);
+  (u.uMid.value as Color).set(dome.mid);
+  (u.uHorizon.value as Color).set(dome.horizon);
+  // Under the horizon the dome is the fog's colour, so the far ground fades into the sky unbroken.
+  (u.uGround.value as Color).set(rig.fog);
+  (u.uLightColour.value as Color).set(dome.moon ? "#dfe6f2" : light.colour);
+  (u.uLightDir.value as Vector3).copy(toLight);
+  u.uDisc.value = dome.discRad;
+  u.uGlow.value = dome.glow;
+  u.uMoon.value = dome.moon ? 1 : 0;
+  u.uHaze.value = dome.haze;
+  u.uClouds.value = dome.clouds;
+  (u.uCloudLit.value as Color).set(dome.cloudLit);
+  (u.uCloudShade.value as Color).set(dome.cloudShade);
+  u.uStars.value = dome.stars;
 }
 
 /** The plan's frame in metres: its centre on the floor and its diagonal. */
@@ -131,15 +295,16 @@ export function SceneLights({
   const boundsKey = `${bounds.minX},${bounds.minY},${bounds.maxX},${bounds.maxY}`;
 
   // The sun stands off the south-west corner (plan: −x, +y → three: −x, +z), `distance` out and
-  // `elevation` up, looking at the plan's centre. Low in the evening, so the shadows run long.
-  // The sun is always mounted (a night without one keeps it at intensity 0) for the light-count
-  // reason EmitterLights gives; at night it stands where the evening's did.
-  const sunSpec = rig.sun ?? { colour: "#000000", intensity: 0, elevationDeg: RIGS.evening.sun!.elevationDeg };
+  // `elevation` up, looking at the plan's centre. Low in the evening, so the shadows run long. At
+  // night the same light is the moon, so the light count never changes (the reason EmitterLights
+  // gives) and the dome's disc is always where the shadows come from.
+  const sunSpec = rig.sun;
   const sun = useMemo(() => {
     const el = (sunSpec.elevationDeg * Math.PI) / 180;
     const distance = diag + 10;
     const flat = (distance * Math.cos(el)) / Math.SQRT2;
-    return { position: [cx - flat, distance * Math.sin(el), cz + flat] as [number, number, number], distance };
+    const toLight = new Vector3(-Math.cos(el) / Math.SQRT2, Math.sin(el), Math.cos(el) / Math.SQRT2).normalize();
+    return { position: [cx - flat, distance * Math.sin(el), cz + flat] as [number, number, number], distance, toLight };
   }, [sunSpec.elevationDeg, cx, cz, diag]);
 
   useLayoutEffect(() => {
@@ -164,8 +329,13 @@ export function SceneLights({
     // boundsKey stands in for the four numbers; roofedMm is accepted for the phase-C indoor rig.
   }, [sun, diag, cx, cz, boundsKey, shadows, invalidate, roofedMm]);
 
-  const sky = useMemo(() => skyTexture(rig.zenith, rig.horizon), [rig.zenith, rig.horizon]);
-  useEffect(() => () => sky?.dispose(), [sky]);
+  const sky = useMemo(skyMaterial, []);
+  useEffect(() => () => sky.dispose(), [sky]);
+  // Before the frame (layout): a mood switch repaints the dome in the same frame as the lights.
+  useLayoutEffect(() => {
+    paintSky(sky, rig, sun.toLight);
+    invalidate();
+  }, [sky, rig, sun, invalidate]);
   useEffect(() => {
     invalidate();
   }, [mood, fogScale, invalidate]);
@@ -187,13 +357,10 @@ export function SceneLights({
       <hemisphereLight color={rig.sky} groundColor={rig.ground} intensity={rig.hemisphere} />
       {roofedMm !== null && <hemisphereLight color={rig.interior.colour} groundColor="#2a2018" intensity={rig.interior.intensity} />}
       <directionalLight ref={sunRef} position={sun.position} color={sunSpec.colour} intensity={sunSpec.intensity} castShadow={shadows} />
-      <mesh position={[cx, 0, cz]} frustumCulled={false}>
+      {/* Last of the opaque pass, on the far plane: only the pixels nothing else covered run the sky
+          shader. noPick: a double-click focus (scene-camera.tsx) looks through it to the floor. */}
+      <mesh position={[cx, 0, cz]} frustumCulled={false} material={sky} userData={{ noPick: true }} renderOrder={1000}>
         <sphereGeometry args={[SKY_RADIUS_M, 24, 12]} />
-        {sky ? (
-          <meshBasicMaterial map={sky} side={BackSide} depthWrite={false} fog={false} toneMapped={false} />
-        ) : (
-          <meshBasicMaterial color={rig.horizon} side={BackSide} depthWrite={false} fog={false} toneMapped={false} />
-        )}
       </mesh>
       <fog attach="fog" args={[rig.fog, fogNear, fogFar]} />
     </>
@@ -220,7 +387,11 @@ export function EmitterLights({ emitters, mood, count }: { emitters: EmitterNode
   // The pool is mounted whatever the mood and lights go DARK rather than invisible: three counts the
   // visible lights into every material's shader, so a mood switch that changed the count recompiled
   // the whole room (seen headless on 2026-10-23: a 30 s frame) and hitches on a real GPU.
-  const n = Math.max(0, Math.min(count, emitters.length));
+  // For the same reason the pool is the profile's FULL size whenever there is anything to light —
+  // never one light per candle: sized `min(count, candles)`, every event with its own candle count
+  // compiled the whole room afresh (plan A at 9 lights: 5.3 s frozen; at 11: 6.0 s; 2026-10-27). So
+  // a machine compiles two sets at most — with the pool and without — and keeps them in its cache.
+  const n = emitters.length > 0 ? Math.max(0, count) : 0;
 
   const placed = useMemo<Placed[]>(
     () =>
@@ -299,7 +470,10 @@ function StudioEnvironment({ intensity }: { intensity: number }) {
     pmrem.dispose();
     return target;
   }, [gl]);
-  useEffect(() => {
+  // A layout effect: the environment is part of every lit program, so it must be on the scene before
+  // the viewer's FrameGate compiles them (its layout effect runs after this one), or the first frame
+  // recompiles the room.
+  useLayoutEffect(() => {
     scene.environment = env.texture;
     invalidate();
     return () => {

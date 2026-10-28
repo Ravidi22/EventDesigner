@@ -36,11 +36,22 @@ export interface Transform {
   rotationDeg: number;
   mirrored?: boolean;
   scale?: number;
+  /** A lean about the thing's own x axis after `rotationDeg` turns it, positive tipping its top
+   *  toward its own +y — a box part's `tiltDeg`, for a whole instance: a flower head facing out of
+   *  the side of its arrangement. Only ever on an INNER transform (./frame.ts compose). */
+  tiltDeg?: number;
+  /** A turn about the thing's own up axis BEFORE the lean, so a head's petals are not stamped. */
+  spinDeg?: number;
 }
 
 /** `leaves` is a crown's leaf cards: a sprite of a leaf cluster cut out by its own alpha, two-sided,
- *  casting no shadow of its own (the clumps under it do). */
-export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "emissive";
+ *  casting no shadow of its own (the clumps under it do). `petal` is a flower's: two-sided (a petal
+ *  is a thin sheet seen from both faces) and shaded by its geometry's vertex colours. */
+export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive";
+
+/** A flower head's family of petals (./flowers.ts bloomMesh): a rose's spiral, a peony's ruffled
+ *  layers, a tulip's cup, a lily's star, a gerbera's ring round its disc, an orchid's five. */
+export type BloomForm = "rose" | "peony" | "cup" | "star" | "face" | "orchid";
 
 /** What a surface is made of. `colour` is the designer's (a shade's swatch, a style's fill) or the
  *  kind's default tone; a `texture` is one of the plan's materials drawn procedurally by the viewer
@@ -97,7 +108,11 @@ export type Part =
    *  material's alpha — what breaks a canopy's outline into leaves and lets the sky through, where
    *  the clumps under them keep its mass. Each card stands about `at`; every card is lit as if the
    *  crown were round, its normal pointing away from `centre` (about `at` too). */
-  | { shape: "leaves"; at: Vec3; centre: Vec3; cards: LeafCard[]; material?: MaterialRef };
+  | { shape: "leaves"; at: Vec3; centre: Vec3; cards: LeafCard[]; material?: MaterialRef }
+  /** A flower head of real petals (./flowers.ts bloomMesh), opening up +z, `r` across its widest
+   *  ring as the plan draws it. `at` is its CENTRE, as a sphere's; `seed` varies its petals; a face
+   *  has `petals` round a `disc` (#rrggbb) of its own colour — a sunflower's brown. */
+  | { shape: "bloom"; form: BloomForm; r: number; at: Vec3; seed: number; disc?: string; petals?: number; material?: MaterialRef };
 
 /** One leaf card: `size` across, centred at (x, y, z), turned `yawDeg` on the plan and tipped
  *  `pitchDeg` back from upright (0 = a vertical card, 90 = lying flat), showing atlas `tile` (0–3)
