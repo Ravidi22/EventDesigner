@@ -254,7 +254,10 @@ export interface MapAppearance {
    *  `texture`. Like `texture`, it surfaces the BASE shape; each part carries its own. */
   textureImage?: TextureImage;
   style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
-  arc?: ArcSpec; // iff shape === "arc"; absent = a half ring (ARC_SWEEP.default) with a default band
+  /** On an "arc": its sweep and band; absent = a half ring (ARC_SWEEP.default) with a default band.
+   *  On a "circle": only `sweepDeg` is read — how much of the circle (כמה מהעיגול), a solid slice;
+   *  absent = the whole circle. Hollowed with its radii open, a slice is the arc. */
+  arc?: ArcSpec;
   ring?: RingSpec; // iff shape is a hollow curved one (RingShape, lib/studio/footprint.ts); absent = defaults (ringSpecOf)
   /** The shape drawn as a band round an open middle (see HollowSpec) — a hand-drawn outline too, whose
    *  drawing is then the OUTSIDE of the band. Absent = solid. Read only for a shape that canHollow;

@@ -781,7 +781,8 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
       : drawn;
   // An arc is sized by its circle and a feature by its box, so it comes across as the outline it
   // resolves to: a drawn shape, which the feature then scales to its two numbers like any other.
-  const baked = (stated === "arc" || hollow) && base.kind === "custom";
+  // (A circle resolves to a custom outline only when it is PART of a circle — a slice.)
+  const baked = (stated === "arc" || stated === "circle" || hollow) && base.kind === "custom";
   const shape = baked ? "custom" : stated;
   const b = footprintBounds(base);
   const outline = baked ? base.outline : shape === "custom" ? product.appearance?.outline : undefined;

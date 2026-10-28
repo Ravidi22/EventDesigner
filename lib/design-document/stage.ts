@@ -128,7 +128,8 @@ export function pieceProduct(info: PieceInfo, heightMm: number): Pick<Product, "
  *  with a curved rim (stageFromPiece `round`) built of itself. */
 export function isRoundPiece(product: Product): boolean {
   const shape = shapeOf(product);
-  return (shape === "circle" || shape === "ellipse") && !product.appearance?.parts?.length;
+  // A circle with a sweep is a slice of one — shaped, not round.
+  return (shape === "circle" || shape === "ellipse") && !product.appearance?.parts?.length && !(shape === "circle" && product.appearance?.arc);
 }
 
 /** A stage piece of any shape but a plain rectangle — a disc, a half-round, a quarter, a triangle,

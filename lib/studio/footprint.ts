@@ -212,10 +212,10 @@ export function buildArcOutline(outerDiameterMm: number, arc?: Partial<ArcSpec>)
       outline.push(at(r, cuts[i]));
       edgeCurves.push(i > 0 ? bow(r, cuts[i], cuts[i - 1]) : null);
     }
-  } else {
+  } else if (Math.abs(sweepDeg - 180) > 1e-9) {
     outline.push({ x: 0, y: 0 }); // no hole left: a slice, its point at the centre
     edgeCurves.push(null);
-  }
+  } // a half slice's two radii are one straight chord — one side, not two
   const b = customShapeBounds(outline);
   return { outline: outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves };
 }
@@ -1136,7 +1136,17 @@ function solidFootprint(shape: MapShape, d: ShapeDims): Footprint {
     if (outline && outline.length >= 3) return { kind: "custom", outline, ...(edgeCurves ? { edgeCurves } : {}) };
     // malformed custom → fall through to a safe rectangle
   }
-  if (shape === "circle") return { kind: "circle", diameterMm: d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM };
+  if (shape === "circle") {
+    const D = d.diameterMm || d.widthMm || d.depthMm || MIN_FOOTPRINT_MM;
+    // Part of the circle (`arc.sweepDeg` under 360): the solid slice — the arc's own outline with a
+    // band the full radius. Hollowed with its radii open, it is the old קשת חלולה.
+    const sweep = d.arc?.sweepDeg;
+    if (sweep && sweep < 360) {
+      const built = buildArcOutline(D, { sweepDeg: sweep, bandMm: D / 2 });
+      return { kind: "custom", outline: built.outline, edgeCurves: built.edgeCurves };
+    }
+    return { kind: "circle", diameterMm: D };
+  }
   if (shape === "arc") {
     const built = buildArcOutline(d.diameterMm || d.widthMm || MIN_FOOTPRINT_MM, d.arc);
     return { kind: "custom", outline: built.outline, edgeCurves: built.edgeCurves };
@@ -1591,6 +1601,13 @@ if (isMain(import.meta.url)) {
   assert(slice.outline.length === 4, "a band the full radius is a slice: the arc, and the centre it closes on");
   const arcItem: Product = { ...base, dimensions: { diameterMm: 4000, heightMm: 750 }, appearance: { shape: "arc", content: "none", arc: { sweepDeg: 180, bandMm: 750 } } };
   assert(eq(footprintBounds(resolveFootprint(arcItem)), { w: 4000, h: 2000 }), "the resolver draws an arc from its diameter");
+  const near = (a: { w: number; h: number }, b: { w: number; h: number }) => Math.abs(a.w - b.w) < 1 && Math.abs(a.h - b.h) < 1;
+  const halfSlice = shapeFootprint("circle", { diameterMm: 2000, arc: { sweepDeg: 180, bandMm: 0 } });
+  assert(halfSlice.kind === "custom" && halfSlice.outline.length === 3 && near(footprintBounds(halfSlice), { w: 2000, h: 1000 }), "half of a circle is a half circle: the arc and ONE chord");
+  assert(shapeFootprint("circle", { diameterMm: 2000, arc: { sweepDeg: 360, bandMm: 0 } }).kind === "circle", "all of a circle is the circle");
+  const thirdRing = shapeFootprint("circle", { diameterMm: 4000, arc: { sweepDeg: 120, bandMm: 0 }, hollow: { bandMm: 750, openSides: [2, 3] } });
+  const thirdArc = shapeFootprint("arc", { diameterMm: 4000, arc: { sweepDeg: 120, bandMm: 750 } });
+  assert(thirdRing.kind === "custom" && near(footprintBounds(thirdRing), footprintBounds(thirdArc)), "a third of a circle, hollow with its radii open, is the third of a ring the arc drew");
 
   // ── The capsule, and the hollow oval ───────────────────────────────────────────────────────
   const flat = (o: BuiltOutline): Point[] =>

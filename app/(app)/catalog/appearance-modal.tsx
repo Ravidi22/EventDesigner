@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BringToFront, Check, Donut, Move, Paintbrush, PenLine, Rainbow, Ruler, SendToBack, Shapes, Trash2, X } from "lucide-react";
+import { BringToFront, ChartPie, Check, Donut, Move, Paintbrush, PenLine, Rainbow, Ruler, SendToBack, Shapes, Trash2, X } from "lucide-react";
 import type { ArcSpec, HollowSpec, MapAppearance, MapShape, Product, RingSpec, ShapePart } from "@/lib/catalog/types";
 import { ARC_SWEEP, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
@@ -176,6 +176,45 @@ function ArcFields({
       </div>
     </div>
   );
+}
+
+const CIRCLE_SWEEPS = [["360", "מלא"], ...SWEEP_PRESETS] as const;
+
+/** How much of a circle it is (MapAppearance.arc.sweepDeg on a "circle") — all of it, a half, a
+ *  third, a quarter, or any angle. Under 360 it is a solid slice; the "מילוי" chip hollows it, and
+ *  its two radii opened make the old קשת חלולה. */
+function CircleSweepFields({ idPrefix, sweepDeg, onChange }: { idPrefix: string; sweepDeg: number; onChange: (sweepDeg: number) => void }) {
+  return (
+    <div className="space-y-2">
+      <Segmented label="כמה מהעיגול" value={String(sweepDeg)} options={CIRCLE_SWEEPS} onChange={(v) => onChange(Number(v))} />
+      <PanelRow label="זווית (°)" htmlFor={`${idPrefix}-sweep`}>
+        <NumberField id={`${idPrefix}-sweep`} decimals={0} min={ARC_SWEEP.min} max={360} commitOnBlur value={sweepDeg} onChange={onChange} className="w-20" />
+      </PanelRow>
+    </div>
+  );
+}
+
+/** A circle's sweep as stored: absent for the whole circle. */
+const sweepPatch = (deg: number): ArcSpec | undefined => (deg >= 360 ? undefined : { sweepDeg: Math.max(ARC_SWEEP.min, Math.round(deg)), bandMm: 0 });
+const sweepValue = (arc: ArcSpec | undefined) => (arc && arc.sweepDeg < 360 ? ltr(`${arc.sweepDeg}°`) : "מלא");
+
+/** A slice's straight sides — its two radii, or the one chord of a half — as edge numbers; null for
+ *  the whole circle. A slice made hollow, or re-cut while hollow, is opened along them: that is the
+ *  banana table, the curved partition, what the קשת חלולה was. Closed again by hand if wanted. */
+function sliceRadii(diameterMm: number | undefined, arc: ArcSpec | undefined): number[] | null {
+  if (!arc || arc.sweepDeg >= 360) return null;
+  const o = hollowOuter("circle", { diameterMm, arc });
+  return o.outline.map((_, i) => i).filter((i) => !o.edgeCurves?.[i]);
+}
+
+/** The row with its hollow slice opened along its radii (sliceRadii) — and, on a table, its two caps
+ *  across the band left unseated, as the arc's were (arcCaps). Any other row comes back as it was. */
+function withSliceOpened(p: Product, seated: boolean): Product {
+  const a = p.appearance;
+  const radii = a?.shape === "circle" && a.hollow ? sliceRadii(roundSizeMm("circle", p.dimensions), a.arc) : null;
+  if (!a?.hollow || !radii) return p;
+  const opened: Product = { ...p, appearance: { ...a, hollow: { ...a.hollow, openSides: radii } } };
+  return seated ? { ...opened, appearance: { ...opened.appearance!, blockedSides: arcCaps(opened) } } : opened;
 }
 
 const GAP_AT = [
@@ -642,6 +681,20 @@ function PartBar({
           <ArcFields idPrefix={id} diameterMm={D ?? 0} arc={part.arc} onChange={(arc) => onChange({ arc })} />
         </Popover>
       )}
+      {part.shape === "circle" && (
+        <Popover label="חלק מהעיגול" icon={ChartPie} value={sweepValue(part.arc)} panelClassName="w-72">
+          <CircleSweepFields
+            idPrefix={id}
+            sweepDeg={part.arc?.sweepDeg ?? 360}
+            onChange={(deg) => {
+              const arc = sweepPatch(deg);
+              const hollow = hollowAcross(part.hollow, "circle");
+              const radii = hollow && sliceRadii(D, arc);
+              onChange({ arc, hollow: radii ? { ...hollow, openSides: radii } : hollow });
+            }}
+          />
+        </Popover>
+      )}
       {ringShape && ringSpec && (
         <Popover label={RING_LABEL[ringShape]} icon={Donut} value={`רצועה ${cm(ringSpec.bandMm)}`} panelClassName="w-72">
           <RingFields idPrefix={id} shape={ringShape} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
@@ -663,7 +716,10 @@ function PartBar({
               const b = sampledBounds([hollowOuter(part.shape, part)]);
               return defaultHollowBand(b.w, b.h);
             })()}
-            onChange={(hollow) => onChange({ hollow })}
+            onChange={(hollow) => {
+              const radii = hollow && !part.hollow && part.shape === "circle" && sliceRadii(D, part.arc);
+              onChange({ hollow: radii ? { ...hollow, openSides: radii } : hollow });
+            }}
           />
         </Popover>
       )}
@@ -954,7 +1010,11 @@ export function AppearanceModal({
     canvasOutline.length >= 3 && (derived || mode === "edit") ? { outline: canvasOutline, edgeCurves: canvasCurves } : null;
   const band = hollowSpec && outerShown ? buildHollow(outerShown, hollowSpec) : null;
   // Its sides are numbered, and a hollow edit can add, drop or join them: the blocked ones go.
-  const setHollow = (h: HollowSpec | undefined) => setAppearance({ hollow: h, blockedSides: undefined });
+  const setHollow = (h: HollowSpec | undefined) =>
+    setDraft((d) => {
+      const next: Product = { ...d, appearance: { shape: shapeOf(d), content: contentOf(d), ...d.appearance, hollow: h, blockedSides: undefined } };
+      return d.appearance?.hollow ? next : withSliceOpened(next, seated);
+    });
   /** The base as the plan draws it — band or whole outline — and where its box's centre sits on the
    *  canvas: what its surface fills and its name is written in. */
   const baseDrawn: { footprint: Footprint; at: { x: number; y: number } } | null = !canvasBounds
@@ -1380,6 +1440,8 @@ export function AppearanceModal({
                         outline: canvasOutline,
                         edgeCurves: canvasCurves,
                         lockedEdges: canvasLocked,
+                        // A hollow shape's open sides are guides: a slice's radii, a ח's open bottom.
+                        openEdges: hollowSpec?.openSides,
                         selected,
                         onSelect: (r: SelectedRef | null) => {
                           setSelected(r ? [r] : []);
@@ -1773,6 +1835,25 @@ export function AppearanceModal({
                           diameterMm={roundSizeMm(shape, draft.dimensions) ?? 0}
                           arc={draft.appearance?.arc}
                           onChange={(arc) => setAppearance({ arc })}
+                        />
+                      </Popover>
+                    )}
+                    {shape === "circle" && !stretch && (
+                      <Popover label="חלק מהעיגול" icon={ChartPie} value={sweepValue(draft.appearance?.arc)} panelClassName="w-72">
+                        <CircleSweepFields
+                          idPrefix="a-sweep"
+                          sweepDeg={draft.appearance?.arc?.sweepDeg ?? 360}
+                          onChange={(deg) =>
+                            setDraft((d) =>
+                              withSliceOpened(
+                                {
+                                  ...d,
+                                  appearance: { shape: shapeOf(d), content: contentOf(d), ...d.appearance, arc: sweepPatch(deg), hollow: hollowAcross(d.appearance?.hollow, "circle"), blockedSides: undefined },
+                                },
+                                seated,
+                              ),
+                            )
+                          }
                         />
                       </Popover>
                     )}

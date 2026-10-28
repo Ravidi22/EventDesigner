@@ -372,6 +372,7 @@ export function PlanCanvas({
   outline,
   edgeCurves,
   lockedEdges = [],
+  openEdges,
   columns = [],
   entrances = [],
   stage,
@@ -433,6 +434,9 @@ export function PlanCanvas({
   outline: Point[];
   edgeCurves: (EdgeCurve | null)[];
   lockedEdges?: boolean[]; // per-wall length lock, aligned to outline — see lib/studio/geometry's constrainVertexToLocks
+  /** Sides that are a guide, not a wall — a hollow shape's open sides (HollowSpec.openSides): drawn
+   *  dashed and quiet, still selectable and draggable like any side. */
+  openEdges?: readonly number[];
   columns?: Column[];
   entrances?: Entrance[];
   stage?: Fixture | undefined;
@@ -2056,6 +2060,7 @@ export function PlanCanvas({
         const curve = edgeCurves[i] ?? null;
         const isSelected = isSel("wall", String(i));
         const isHovered = hoverWall === i;
+        const open = !!openEdges?.includes(i) && !isSelected && !isHovered;
         const len = wallLengthMm(a, b) || 1;
         const doorsOnWall = entrances.filter((e) => e.wallIndex === i).sort((x, y) => x.distanceMm - y.distanceMm);
         const solids: [number, number][] = []; // solid-wall t-intervals between the door gaps
@@ -2074,9 +2079,10 @@ export function PlanCanvas({
                 key={si}
                 d={wallSegmentD(a, b, curve, t0, t1)}
                 fill="none"
-                className={isSelected || isHovered ? "text-accent" : "text-ink"}
+                className={isSelected || isHovered ? "text-accent" : open ? "text-muted" : "text-ink"}
                 stroke="currentColor"
-                strokeWidth={isSelected ? 3 : 2}
+                strokeWidth={isSelected ? 3 : open ? 1.25 : 2}
+                strokeDasharray={open ? "6 5" : undefined}
                 vectorEffect="non-scaling-stroke"
               />
             ))}
