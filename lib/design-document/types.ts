@@ -121,6 +121,11 @@ export interface Placement {
    *  shaped item it is the BOUNDING BOX the shape is redrawn into; absent means "the size the
    *  catalog gives it". */
   sizeMm?: { widthMm: number; depthMm: number };
+  /** A RUG with curved sides (lib/studio/rug-shape.ts): top, right, bottom, left — how far each side
+   *  is pulled out (+) or pushed in (−), as a fraction of that side's length, so stretching the rug
+   *  scales its curves with it. Absent = the plain rectangle. A drawing fact like `scale`: the quote,
+   *  the packing list and orders still count the rug by its box. */
+  bows?: [number, number, number, number];
   /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
    *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
    *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */

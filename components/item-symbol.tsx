@@ -14,6 +14,7 @@ import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
 import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
 import { outlinePathD } from "@/lib/studio/geometry";
+import { rugFringe, rugInset, type RugBows } from "@/lib/studio/rug-shape";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -1288,13 +1289,27 @@ function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity 
 }
 
 /** A rug, centred, `w`×`h`: the woven border inside its edge and the fringe off its two short ends. */
-function RugPatternView({ w, h, ink = "var(--color-ink)", opacity = 1 }: { w: number; h: number; ink?: string; opacity?: number }) {
+function RugPatternView({ w, h, ink = "var(--color-ink)", opacity = 1, bows }: { w: number; h: number; ink?: string; opacity?: number; bows?: RugBows }) {
   const m = Math.min(w, h);
   const b1 = Math.min(m * 0.07, 160);
   const b2 = Math.min(m * 0.12, 260);
   const fringe = Math.min(70, m * 0.05);
   const gap = 45;
   const line = { fill: "none", stroke: ink, vectorEffect: "non-scaling-stroke" as const, strokeWidth: 1 };
+  if (bows) {
+    // Curved sides: the border follows the outline (the same bows on the smaller rectangle) and the
+    // fringe leaves the short ends along the curve's normal.
+    const inner = rugInset(w, h, bows, b1);
+    const outer = m > b2 * 3 ? rugInset(w, h, bows, b2) : null;
+    const strands = rugFringe(w, h, bows, gap).map((t) => `M ${t.x} ${t.y} l ${t.nx * fringe} ${t.ny * fringe}`).join(" ");
+    return (
+      <g className="pointer-events-none" opacity={opacity}>
+        {inner && <path d={outlinePathD(inner.outline, inner.edgeCurves)} {...line} strokeOpacity={0.3} />}
+        {outer && <path d={outlinePathD(outer.outline, outer.edgeCurves)} {...line} strokeOpacity={0.18} strokeDasharray="3 3" />}
+        <path d={strands} {...line} strokeOpacity={0.35} />
+      </g>
+    );
+  }
   // The fringe hangs off the SHORT ends — the ends a rug is woven from.
   let f = "";
   if (w >= h) {

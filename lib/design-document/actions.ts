@@ -6,6 +6,7 @@ import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
 import { carryHung } from "../studio/hang-over";
+import { cleanBows } from "../studio/rug-shape";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
 const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
@@ -102,6 +103,8 @@ export type Action =
   // null = back to the catalog's size — the field goes, rather than a copy of the catalog's number
   // staying behind to go stale the day the catalog row is edited.
   | { type: "resizePlacement"; id: string; sizeMm: { widthMm: number; depthMm: number } | null }
+  // A rug's sides curved (Placement.bows). null, or every side straight, takes the field away.
+  | { type: "setPlacementBows"; id: string; bows: [number, number, number, number] | null }
   | { type: "removePlacement"; id: string }
   // A stage re-drawn, re-fronted, or stretched by its handles — its build, and where it now stands.
   // `mirrored: false` when the outline was re-drawn in the room: a new outline is already the way
@@ -573,6 +576,16 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
           if (action.sizeMm) return { ...p, sizeMm: action.sizeMm };
           const { sizeMm: _catalog, ...rest } = p;
           return rest;
+        }),
+      };
+    case "setPlacementBows":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const bows = action.bows ? cleanBows(action.bows) : undefined;
+          const { bows: _old, ...rest } = p;
+          return bows ? { ...rest, bows } : rest;
         }),
       };
     case "removePlacement": {
@@ -1554,6 +1567,11 @@ if (isMain(import.meta.url)) {
     assert(!("sizeMm" in apply(wide, { type: "resizeTable", id: "t", sizeMm: null }).tables[0]), "…and null hands it back to the catalog's size");
     const sized = apply(base, { type: "resizePlacement", id: "p", sizeMm: { widthMm: 2400, depthMm: 900 } });
     assert(!("sizeMm" in apply(sized, { type: "resizePlacement", id: "p", sizeMm: null }).placements[0]), "a placement's size resets the same way");
+    const curved = apply(sized, { type: "setPlacementBows", id: "p", bows: [0.2, 0, 0, -0.1] });
+    assert(curved.placements[0].bows?.[0] === 0.2 && curved.placements[0].sizeMm?.widthMm === 2400, "a rug's sides bow and keep their size");
+    assert(apply(curved, { type: "resizePlacement", id: "p", sizeMm: { widthMm: 3000, depthMm: 900 } }).placements[0].bows?.[3] === -0.1, "stretching keeps the curves (they are fractions)");
+    assert(!("bows" in apply(curved, { type: "setPlacementBows", id: "p", bows: [0, 0, 0, 0] }).placements[0]), "all sides straight takes the field away");
+    assert(!("bows" in apply(curved, { type: "setPlacementBows", id: "p", bows: null }).placements[0]), "null straightens it too");
 
     // A swap keeps the table and replaces only what described its old catalog row.
     const dressed: DesignDocumentContent = {

@@ -12,7 +12,8 @@ import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
-import { toLocalFrame, fromLocalFrame, rotatedExtent } from "@/lib/studio/geometry";
+import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
+import { bowFromPoint, bowHandle, bowedRug, bowsOf, withBow, type RugBows } from "@/lib/studio/rug-shape";
 import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
 import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
@@ -214,6 +215,7 @@ export function CanvasStage({
   onEndDrag,
   alignKeyBox,
   onResizePlacement,
+  onBowPlacement,
   onSpanPlacement,
   onDropProduct,
   onScale,
@@ -295,6 +297,9 @@ export function CanvasStage({
   /** A carpet stretched by its corner: the new size, and the centre it moved to (the opposite
    *  corner stays put, which is what dragging one corner means). */
   onResizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
+  /** A rug's side pulled out or pushed in by its middle (null = all straight again). Absent on a host
+   *  that only looks, which draws the curves but offers no handles. */
+  onBowPlacement?: (id: string, bows: RugBows | null) => void;
   /** A drape's run along its wall, after dragging one of its ends. */
   onSpanPlacement: (id: string, span: WallSpan) => void;
   onDropProduct: (productId: string, x: number, y: number) => void;
@@ -1672,6 +1677,7 @@ export function CanvasStage({
     endGesture: (moved?: SelectionRef[]) => onEndDrag(moved),
     focusTable: (id: string) => onFocusTable?.(id),
     resizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => onResizePlacement(id, sizeMm, position),
+    bowPlacement: (id: string, bows: RugBows | null) => onBowPlacement?.(id, bows),
     selectPlacement: (id: string, additive: boolean) => onSelect({ kind: "placement", id }, additive),
     spanPlacement: (id: string, span: WallSpan) => onSpanPlacement(id, span),
   };
@@ -1685,6 +1691,7 @@ export function CanvasStage({
       endGesture: (moved?: SelectionRef[]) => hostRef.current.endGesture(moved),
       focusTable: (id: string) => hostRef.current.focusTable(id),
       resizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => hostRef.current.resizePlacement(id, sizeMm, position),
+      bowPlacement: (id: string, bows: RugBows | null) => hostRef.current.bowPlacement(id, bows),
       selectPlacement: (id: string, additive: boolean) => hostRef.current.selectPlacement(id, additive),
       spanPlacement: (id: string, span: WallSpan) => hostRef.current.spanPlacement(id, span),
     }),
@@ -2059,6 +2066,7 @@ export function CanvasStage({
                   ctx={ctx}
                   drag={nodeProps({ kind: "placement", id: p.id })}
                   onResize={stable.resizePlacement}
+                  onBow={onBowPlacement ? stable.bowPlacement : undefined}
                   onEndResize={stable.endGesture}
                 />
               </g>
@@ -2909,6 +2917,7 @@ const CarpetNode = memo(function CarpetNode({
   ctx,
   drag,
   onResize,
+  onBow,
   onEndResize,
 }: {
   placement: Placement;
@@ -2916,6 +2925,8 @@ const CarpetNode = memo(function CarpetNode({
   ctx: CanvasLayerContext;
   drag: DragProps;
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
+  /** A side pulled out or pushed in; null = every side straight again. Absent on a host that only looks. */
+  onBow?: (id: string, bows: RugBows | null) => void;
   onEndResize: () => void;
 }) {
   const r = resolve(placement.variantId);
@@ -2924,6 +2935,11 @@ const CarpetNode = memo(function CarpetNode({
   const halfW = size.widthMm / 2;
   const halfD = size.depthMm / 2;
   const rot = placement.rotation || 0;
+  // Curved sides (lib/studio/rug-shape.ts): the same rug, about the same centre, with the outline's
+  // sides bowed. The surface and picture are drawn through a footprint the seams recentre on its
+  // bounds, so they are carried back by `centre`.
+  const bows = bowsOf(placement);
+  const bowed = bows ? bowedRug(size.widthMm, size.depthMm, bows) : null;
   // Its shade, else the fill its catalog row was given in the appearance editor, else the neutral
   // inset — translucent by default, so whatever stands on the rug still reads through it.
   const style = resolveStyle(productStyle(r?.product), "screen", {
@@ -2933,41 +2949,95 @@ const CarpetNode = memo(function CarpetNode({
     strokeWidth: 1.5,
   });
 
+  const shape = {
+    ...draggable(placement.position, ctx, drag),
+    fill: swatchOf(r, style.fill),
+    fillOpacity: style.fillOpacity,
+    stroke: selected ? "var(--color-accent)" : style.stroke,
+    strokeOpacity: selected ? 1 : style.strokeOpacity,
+    strokeWidth: selected ? 3 : style.strokeWidth,
+    strokeDasharray: style.dashArray.length ? style.dashArray.join(" ") : undefined,
+    vectorEffect: "non-scaling-stroke" as const,
+    tabIndex: 0,
+    role: "button",
+    "aria-label": `${r?.label ?? "שטיח"} — ${(size.widthMm / 1000).toFixed(1)}×${(size.depthMm / 1000).toFixed(1)} מטר`,
+    className: "cursor-move touch-none focus:outline-none",
+  };
+
   return (
     <g transform={rot ? `rotate(${rot} ${x} ${y})` : undefined}>
-      <rect
-        {...draggable(placement.position, ctx, drag)}
-        x={x - halfW}
-        y={y - halfD}
-        width={size.widthMm}
-        height={size.depthMm}
-        rx={Math.min(size.widthMm, size.depthMm) * 0.03}
-        fill={swatchOf(r, style.fill)}
-        fillOpacity={style.fillOpacity}
-        stroke={selected ? "var(--color-accent)" : style.stroke}
-        strokeOpacity={selected ? 1 : style.strokeOpacity}
-        strokeWidth={selected ? 3 : style.strokeWidth}
-        strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
-        vectorEffect="non-scaling-stroke"
-        tabIndex={0}
-        role="button"
-        aria-label={`${r?.label ?? "שטיח"} — ${(size.widthMm / 1000).toFixed(1)}×${(size.depthMm / 1000).toFixed(1)} מטר`}
-        className="cursor-move touch-none focus:outline-none"
-      />
+      {bowed ? (
+        <path {...shape} transform={`translate(${x} ${y})`} d={outlinePathD(bowed.outline, bowed.edgeCurves)} />
+      ) : (
+        <rect {...shape} x={x - halfW} y={y - halfD} width={size.widthMm} height={size.depthMm} rx={Math.min(size.widthMm, size.depthMm) * 0.03} />
+      )}
       {/* A lawn runner, a sisal mat, a printed rug: what it is woven of (or the designer's own
           picture of it), tinted by its shade. Over the rect (which keeps the pointer), under the
           border and the handles. */}
       {anySurface(r?.product.appearance) && (
-        <g transform={`translate(${x} ${y})`} className="pointer-events-none">
-          <ItemSurface appearance={r?.product.appearance} footprint={{ kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
+        <g transform={`translate(${x + (bowed?.centre.x ?? 0)} ${y + (bowed?.centre.y ?? 0)})`} className="pointer-events-none">
+          <ItemSurface appearance={r?.product.appearance} footprint={bowed?.footprint ?? { kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
         </g>
       )}
-      {/* A rug's border and fringe — the two things that make a rectangle on the floor a rug. */}
+      {/* A rug's border and fringe — the two things that make a rectangle on the floor a rug. On a
+          rug with curved sides they follow the curves. */}
       {r?.product.category === "rugs" && (
         <g transform={`translate(${x} ${y})`}>
-          <RugPattern w={size.widthMm} h={size.depthMm} />
+          <RugPattern w={size.widthMm} h={size.depthMm} bows={bows} />
         </g>
       )}
+      {/* The middle of each side: pull it and the side curves, like the shape canvas's diamond. A
+          double-click straightens that side again. */}
+      {selected &&
+        onBow &&
+        [0, 1, 2, 3].map((side) => {
+          const h = bowHandle(size.widthMm, size.depthMm, bows, side);
+          const at = { x: x + h.x, y: y + h.y };
+          return (
+            <g
+              key={side}
+              transform={`rotate(45 ${at.x} ${at.y})`}
+              className="cursor-move touch-none focus:outline-none"
+              tabIndex={0}
+              role="button"
+              aria-label="צד השטיח — גרירה לעיקום, לחיצה כפולה ליישור"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                drag.onPress(false);
+                const centre = { x, y };
+                startPointerGesture(e, {
+                  onMove: (ev) => {
+                    const local = toLocalFrame(ctx.clientToMm(ev.clientX, ev.clientY), centre, rot);
+                    onBow(placement.id, withBow(bows, side, bowFromPoint(size.widthMm, size.depthMm, side, local)) ?? null);
+                  },
+                  onEnd: (_ev, moved) => {
+                    if (moved) onEndResize();
+                  },
+                });
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (bows?.[side]) {
+                  onBow(placement.id, withBow(bows, side, 0) ?? null);
+                  onEndResize();
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <rect
+                x={at.x - ctx.mm(5)}
+                y={at.y - ctx.mm(5)}
+                width={ctx.mm(10)}
+                height={ctx.mm(10)}
+                rx={ctx.mm(2)}
+                fill={bows?.[side] ? "var(--color-accent)" : "var(--color-canvas)"}
+                stroke="var(--color-accent)"
+                strokeWidth={2.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          );
+        })}
       {selected &&
         CORNERS.map(([sx, sy]) => {
           const corner = { x: x + sx * halfW, y: y + sy * halfD };

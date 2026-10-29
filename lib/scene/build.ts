@@ -20,6 +20,7 @@ import { DEFAULT_TONE } from "@/components/item-symbol";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { hangHeightOf } from "@/lib/studio/hang";
 import { resolveSpan } from "@/lib/studio/anchor";
+import { bowsOf } from "@/lib/studio/rug-shape";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
@@ -117,7 +118,7 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
   if (product?.category === "rugs") {
     // The rug's own top is what floorZ reads under it; its base is a rug lower.
     const z = elevation.floorZ(p.position) - RUG_MM;
-    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody(ctx), roomTransform(p, Math.max(0, z)));
+    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody({ ...ctx, bows: bowsOf(p) }), roomTransform(p, Math.max(0, z)));
     return;
   }
   out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, floorOf(footprint)));
