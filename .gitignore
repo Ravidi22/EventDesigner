@@ -41,6 +41,8 @@ yarn-error.log*
 # Recreate them with `npx skills experimental_install`.
 /.claude/skills/supabase
 /.claude/skills/supabase-postgres-best-practices
+# worktrees Claude Code makes for isolated agents; each is a full checkout on its own branch.
+/.claude/worktrees/
 
 # vercel
 .vercel
