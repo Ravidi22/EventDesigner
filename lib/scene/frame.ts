@@ -23,23 +23,39 @@ export function roomTransform(p: { position: Point; rotation?: number; mirrored?
 }
 
 /** A point in `t`'s own frame, carried into the frame `t` stands in: scale, mirror (x → −x),
- *  rotate, translate. Heights add; nothing scales z. */
+ *  spin, lean, rotate, translate. Heights add; nothing scales z. */
 export function applyTransform(t: Transform, p: Vec3): Vec3 {
   const s = t.scale ?? 1;
-  const x0 = (t.mirrored ? -p.x : p.x) * s;
-  const y0 = p.y * s;
+  let x0 = (t.mirrored ? -p.x : p.x) * s;
+  let y0 = p.y * s;
+  let z0 = p.z;
+  if (t.spinDeg) ({ x: x0, y: y0 } = turn({ x: x0, y: y0 }, t.spinDeg));
+  if (t.tiltDeg) {
+    // About x, the top toward +y: (0, 0, 1) → (0, sin, cos).
+    const ct = Math.cos(rad(t.tiltDeg));
+    const st = Math.sin(rad(t.tiltDeg));
+    [y0, z0] = [y0 * ct + z0 * st, -y0 * st + z0 * ct];
+  }
   const c = Math.cos(rad(t.rotationDeg));
   const sn = Math.sin(rad(t.rotationDeg));
-  return { x: t.at.x + x0 * c - y0 * sn, y: t.at.y + x0 * sn + y0 * c, z: t.at.z + p.z };
+  return { x: t.at.x + x0 * c - y0 * sn, y: t.at.y + x0 * sn + y0 * c, z: t.at.z + z0 };
 }
 
 /** `inner` expressed in `outer`'s frame → one transform in the frame `outer` stands in. A mirrored
  *  outer turns the inner's rotation the other way (a mirror conjugates a rotation) and two mirrors
- *  cancel — exactly what nesting an SVG <g> inside a mirrored <g> does. */
+ *  cancel — exactly what nesting an SVG <g> inside a mirrored <g> does. An inner lean is carried as
+ *  it is (a mirror across x and a turn about z both commute with a lean about x) and its spin turns
+ *  the other way under a mirror, like its rotation; the outer is never leaning itself (a head leans
+ *  inside an arrangement, an arrangement stands upright on its table). An outer drawing scale is
+ *  applied in the leaning head's own frame — exact at 1, the drawing size of a scaled placement
+ *  otherwise. */
 export function compose(outer: Transform, inner: Transform): Transform {
   const mirrored = !!outer.mirrored !== !!inner.mirrored;
   const rotationDeg = outer.rotationDeg + (outer.mirrored ? -inner.rotationDeg : inner.rotationDeg);
-  return transform(applyTransform(outer, inner.at), rotationDeg, mirrored, (outer.scale ?? 1) * (inner.scale ?? 1));
+  const out = transform(applyTransform(outer, inner.at), rotationDeg, mirrored, (outer.scale ?? 1) * (inner.scale ?? 1));
+  if (inner.tiltDeg) out.tiltDeg = inner.tiltDeg;
+  if (inner.spinDeg) out.spinDeg = outer.mirrored ? -inner.spinDeg : inner.spinDeg;
+  return out;
 }
 
 /** A chair at a seat of the table whose transform is `table`. A `Seat` faces the table along
@@ -121,6 +137,23 @@ if (isMain(import.meta.url)) {
   const m = seatTransform(mirroredTable, { x: 900, y: 0, facingDeg: 180 });
   const mFront = applyTransform(transform(vec3(0, 0, 0), m.rotationDeg, m.mirrored), vec3(0, 1, 0));
   assert(near(m.at.x, -900) && near(mFront.x, 1), "on a mirrored table the same seat stands at −x and its chair faces +x — still at the table");
+
+  // A leaning head: its top (+z) tips toward its own +y, which its rotation turns on the plan.
+  const leaning: Transform = { ...transform(vec3(0, 0, 0), -90), tiltDeg: 90 };
+  const tip = applyTransform(leaning, vec3(0, 0, 1));
+  assert(near(tip.x, 1) && near(tip.y, 0) && near(tip.z, 0), "a head turned −90 (its +y onto +x) and leant 90° faces +x, lying on its side");
+  const spun = applyTransform({ ...transform(vec3(0, 0, 0), 0), spinDeg: 90, tiltDeg: 30 }, vec3(1, 0, 0));
+  assert(near(spun.x, 0) && near(spun.y, Math.cos(rad(30))) && near(spun.z, -Math.sin(rad(30))), "the spin turns the head about its own axis BEFORE the lean");
+  // Composed into a turned, mirrored table, a leaning, spun head lands where the two frames put it.
+  for (const outer of [roomTransform(table, 750), roomTransform({ ...table, mirrored: false }, 750)]) {
+    const inner: Transform = { ...transform(vec3(120, -40, 300), 35), tiltDeg: 50, spinDeg: 70 };
+    const both = compose(outer, inner);
+    for (const p of [vec3(10, 0, 0), vec3(0, 10, 0), vec3(0, 0, 10), vec3(7, -3, 5)]) {
+      const once = applyTransform(both, p);
+      const twice = applyTransform(outer, applyTransform(inner, p));
+      assert(near(once.x, twice.x) && near(once.y, twice.y) && near(once.z, twice.z), `compose carries a lean and a spin through ${outer.mirrored ? "a mirrored" : "an unmirrored"} outer`);
+    }
+  }
 
   assert(near(headingDeg({ x: 0, y: 0 }, { x: 0, y: 5 }), 90), "heading toward +y is 90° (down the plan)");
   const back = fromWorld(...toWorld(vec3(1234, -567, 890)));

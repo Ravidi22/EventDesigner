@@ -430,6 +430,14 @@ function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
       // Every foliage geometry carries its shading (scene-geometry.ts withColour).
       mat.vertexColors = true;
       break;
+    case "petal":
+      // A petal is a thin sheet seen from both faces, its heart darker than its rim by the
+      // geometry's own vertex colours (lib/scene/flowers.ts bloomMesh). Standard, not physical: a
+      // sheen would cost a shader of its own on every cold cache for something seen at arm's length.
+      mat.roughness = 0.62;
+      mat.side = DoubleSide;
+      mat.vertexColors = true;
+      break;
     case "leaves":
       // Cut out of the leaf atlas: no sorting, no blending; coverage smooths the cut edges.
       mat.roughness = 0.8;

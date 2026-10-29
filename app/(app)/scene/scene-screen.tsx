@@ -47,25 +47,28 @@ export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "st
   const { workspace, ready } = useEventWorkspace();
   const [warm] = useState(() => (typeof window !== "undefined" && loadProducts().length > 0 ? loadProducts() : undefined));
   const catalog = useCatalog(initialProducts ?? warm);
-  const loading = !ready || !catalog.ready;
+  // The studio's railing rule (settings → במות), as /outputs reads it: off if the read fails — a
+  // stage then simply wears no railing, which is what an unset rule means. The scene waits for the
+  // answer (`undefined` = not read yet): built before it, a studio WITH a rule had every open built
+  // twice — railings off, then on — and the build is the page's longest task (plan A: ~340 ms).
+  // (In dev the build still shows twice: Strict Mode runs every useMemo calculation twice.)
+  const [railingAboveMm, setRailingAboveMm] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    fetchStageRules()
+      .then((r) => live && setRailingAboveMm(r.railingAboveMm))
+      .catch(() => live && setRailingAboveMm(null));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const loading = !ready || !catalog.ready || railingAboveMm === undefined;
   const event = workspace?.event ?? null;
   const meeting = frame === "meeting";
 
   const store = useSceneSettings(event?.id ?? null);
   const { settings, setSettings } = store;
   const [panelCollapsed, setPanelCollapsed] = useState(meeting);
-  // The studio's railing rule (settings → במות), as /outputs reads it: off until read, and off if
-  // the read fails — a stage then simply wears no railing, which is what an unset rule means.
-  const [railingAboveMm, setRailingAboveMm] = useState<number | null>(null);
-  useEffect(() => {
-    let live = true;
-    fetchStageRules()
-      .then((r) => live && setRailingAboveMm(r.railingAboveMm))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
   const [device] = useState(() => (typeof window !== "undefined" ? detectDevice() : { shadows: true, maxDpr: 1.5, touch: false }));
 
   const doc: DesignDocumentContent = useMemo(() => {

@@ -43,6 +43,7 @@ import {
 } from "three";
 import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { frondTriangles, lumpField } from "@/lib/scene/organic";
+import { bloomMesh } from "@/lib/scene/flowers";
 import type { Point } from "@/lib/studio/hall";
 import type { BuiltOutline } from "@/lib/studio/footprint";
 import { absoluteControlPoints } from "@/lib/studio/geometry";
@@ -526,6 +527,29 @@ function leavesGeometry(part: Extract<Part, { shape: "leaves" }>): BufferGeometr
   return g;
 }
 
+/** A flower head (Part "bloom"): its petals from lib/scene/flowers.ts bloomMesh, plan mm (x, y, z
+ *  up) into three metres (x, z-up → y, y → z), indexed so each petal is smooth-shaded, shaded by its
+ *  vertex colours (the petal material is two-sided — a petal is seen from both faces). */
+function bloomGeometry(part: Extract<Part, { shape: "bloom" }>): BufferGeometry {
+  const mesh = bloomMesh(part.form, part.r, part.seed, { petals: part.petals, disc: part.disc });
+  const pos = new Float32Array(mesh.positions.length);
+  const uv = new Float32Array((mesh.positions.length / 3) * 2);
+  for (let i = 0; i < mesh.positions.length; i += 3) {
+    pos[i] = m(mesh.positions[i]);
+    pos[i + 1] = m(mesh.positions[i + 2]);
+    pos[i + 2] = m(mesh.positions[i + 1]);
+    uv[(i / 3) * 2] = pos[i];
+    uv[(i / 3) * 2 + 1] = pos[i + 2];
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new Float32BufferAttribute(mesh.colours, 3));
+  g.setIndex(mesh.indices);
+  g.computeVertexNormals();
+  return g;
+}
+
 /** The tilt (see the rule at the top): a turn about the part's own x axis through its base
  *  centre, which is the origin the part was built about. three's rotateX is the right-handed
  *  turn, so +tilt carries the top (0, h, 0) to (0, h·cos, h·sin): toward +z, plan +y. */
@@ -549,6 +573,8 @@ export function partGeometry(part: Part): BufferGeometry {
       return frondGeometry(part);
     case "leaves":
       return leavesGeometry(part);
+    case "bloom":
+      return bloomGeometry(part);
     case "extrude":
       return extrudeGeometry(part.outline, part.h, part.holes);
     case "lathe": {
@@ -643,10 +669,10 @@ export function bodyGeometry(body: BodyNode): Built[] {
   }
   const out: Built[] = [];
   for (const { material, pieces } of groups.values()) {
-    // Foliage is vertex-shaded (a blob's hollows, a frond's stem): every piece of it carries a
-    // colour, white where its shape has none (a hedge's core box, a bed's heads) — a merge of
-    // pieces with and without one would drop them all.
-    if (material.kind === "foliage") for (const p of pieces) withColour(p);
+    // Foliage and petals are vertex-shaded (a blob's hollows, a frond's stem, a petal's heart): every
+    // piece of either carries a colour, white where its shape has none (a hedge's core box, a bed's
+    // heads) — a merge of pieces with and without one would drop them all.
+    if (material.kind === "foliage" || material.kind === "petal") for (const p of pieces) withColour(p);
     const geometry = mergeNonIndexed(pieces);
     for (const p of pieces) p.dispose();
     if (isStretched(material)) normaliseUv(geometry);
@@ -741,6 +767,13 @@ export function geometrySignature(body: BodyNode): string {
         num(p.r);
         num(p.tube);
         num(p.segments ?? 0);
+        break;
+      case "bloom":
+        str(p.form);
+        num(p.r);
+        num(p.seed);
+        num(p.petals ?? 0);
+        str(p.disc ?? "");
         break;
       case "leaves":
         v3(p.centre);

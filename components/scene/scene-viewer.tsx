@@ -11,7 +11,13 @@
 // triangles, the frame's CPU time, the first frame since mount, the body and instance counts —
 // for the phone session; nothing in it is React state. While the tab is hidden the frame loop is
 // set to "never", and back to "demand" with one invalidate when it shows again.
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+//
+// SHADERS ARE COMPILED BEFORE THE FIRST FRAME, off the main thread (`FrameGate`). The first render
+// of a scene compiles every program it uses, and the browser waits for the driver: on Windows a cold
+// compile of plan A froze the page for 7.6 s (2026-10-27 — a freshly installed machine has an empty
+// shader cache). `compileAsync` hands the programs to the driver's parallel compiler and polls; the
+// loop is held at "never" until they are ready, so the page stays live and shows "מכין את החלל…".
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, addAfterEffect, useFrame, useThree } from "@react-three/fiber";
 import { NeutralToneMapping, SRGBColorSpace } from "three";
 import { Box } from "lucide-react";
@@ -94,26 +100,61 @@ function NoWebGL({ className }: { className: string }) {
   );
 }
 
-/** Inside the Canvas: stop the loop while the document is hidden, resume with a frame when it
- *  shows. (A playing tour freezes its clock on the same signal — ./scene-camera.tsx.) */
-function VisibilityPause() {
+/** Inside the Canvas, LAST (its layout effect must run after the lights, the environment and the
+ *  nodes have mounted): the frame loop runs only while the document is visible and the scene's
+ *  programs are compiled. A new scene holds it at "never" — with the frame already asked for
+ *  cleared, or fiber would still draw it — until `compileAsync` resolves; then one frame. A scene
+ *  whose programs are all cached resolves on the next poll. (A playing tour freezes its clock on the
+ *  visibility signal too — ./scene-camera.tsx.) */
+function FrameGate({ scene, onWarm }: { scene: Scene; onWarm: (warm: boolean) => void }) {
+  const get = useThree((s) => s.get);
   const setFrameloop = useThree((s) => s.setFrameloop);
   const invalidate = useThree((s) => s.invalidate);
+  const shown = useRef(true);
+  const compiling = useRef(false);
+  const sync = useCallback(() => {
+    if (shown.current && !compiling.current) {
+      setFrameloop("demand");
+      invalidate();
+    } else {
+      setFrameloop("never");
+      get().internal.frames = 0;
+    }
+  }, [get, setFrameloop, invalidate]);
+
   useEffect(() => {
-    const sync = () => {
-      if (document.visibilityState === "hidden") setFrameloop("never");
-      else {
-        setFrameloop("demand");
-        invalidate();
-      }
+    const onVisibility = () => {
+      shown.current = document.visibilityState !== "hidden";
+      sync();
     };
-    document.addEventListener("visibilitychange", sync);
-    sync();
+    document.addEventListener("visibilitychange", onVisibility);
+    onVisibility();
     return () => {
-      document.removeEventListener("visibilitychange", sync);
+      document.removeEventListener("visibilitychange", onVisibility);
       setFrameloop("demand");
     };
-  }, [setFrameloop, invalidate]);
+  }, [sync, setFrameloop]);
+
+  useLayoutEffect(() => {
+    let live = true;
+    compiling.current = true;
+    sync();
+    const slow = window.setTimeout(() => live && onWarm(false), 150);
+    const { gl, scene: graph, camera } = get();
+    gl.compileAsync(graph, camera)
+      .catch(() => undefined)
+      .then(() => {
+        window.clearTimeout(slow);
+        if (!live) return;
+        compiling.current = false;
+        onWarm(true);
+        sync();
+      });
+    return () => {
+      live = false;
+      window.clearTimeout(slow);
+    };
+  }, [scene, get, sync, onWarm]);
   return null;
 }
 
@@ -169,6 +210,8 @@ export default function SceneViewer({
   const webgl = useMemo(() => hasWebGL(), []);
   const profile = useMemo(() => resolveDevice(device), [device]);
   const [perf] = useState(perfAsked);
+  // False only while a compile has been running a moment (FrameGate) — the pill, not a blank box.
+  const [warm, setWarm] = useState(true);
   const readout = useRef<HTMLSpanElement>(null);
   const emitters = useMemo(() => scene.nodes.filter((n): n is EmitterNode => n.kind === "emitter"), [scene]);
   if (!webgl) return <NoWebGL className={className} />;
@@ -178,13 +221,18 @@ export default function SceneViewer({
         frameloop="demand"
         dpr={[1, profile.maxDpr]}
         shadows={profile.shadows}
-        gl={{ antialias: true, powerPreference: "high-performance" }}
+        // Tone mapping is part of every lit program: set with the renderer, before anything compiles.
+        gl={{ antialias: true, powerPreference: "high-performance", toneMapping: NeutralToneMapping, outputColorSpace: SRGBColorSpace }}
         camera={{ fov: DEFAULT_FOV_DEG, near: 0.05, far: 800 }}
         onCreated={({ gl }) => {
           // Neutral (Khronos PBR Neutral) keeps the designer's colours true — ACES shifts a blush cloth
           // toward salmon and crushes a dark one; this is a product shown to a client.
           gl.toneMapping = NeutralToneMapping;
           gl.outputColorSpace = SRGBColorSpace;
+          // Each program's first use otherwise reads back its info logs — synchronous round trips
+          // to the GPU process, ~320 ms over plan A's programs (profiled 2026-10-27). A broken shader
+          // then draws nothing instead of logging; flip this back on to debug one.
+          gl.debug.checkShaderErrors = false;
         }}
       >
         <SceneLights mood={settings.mood} bounds={scene.bounds} roofedMm={scene.roofedMm} shadows={profile.shadows} fogScale={profile.fogScale} />
@@ -205,9 +253,21 @@ export default function SceneViewer({
           onLeave={onLeave}
           onCamera={onCamera}
         />
-        <VisibilityPause />
         {perf && <PerfProbe target={readout} stats={scene.stats} />}
+        <FrameGate scene={scene} onWarm={setWarm} />
       </Canvas>
+      {mode === "author" && (
+        <div dir="rtl" className="pointer-events-none absolute bottom-3 end-3 rounded-pill bg-surface/85 px-3 py-1 text-[11px] text-muted shadow-lifted">
+          גרירה: סיבוב · לחצן ימני: הזזה · גלגלת: זום לנקודה · לחיצה כפולה: מיקוד · <span dir="ltr">W A S D</span>: תנועה
+        </div>
+      )}
+      {!warm && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <span dir="rtl" className="rounded-pill bg-surface/90 px-3 py-1 text-xs text-muted shadow-lifted">
+            מכין את החלל…
+          </span>
+        </div>
+      )}
       {perf && (
         <div dir="ltr" className="pointer-events-none absolute bottom-3 start-3 rounded-md bg-surface/90 px-2.5 py-1 text-xs text-muted shadow-floating">
           <span ref={readout} className="whitespace-nowrap tabular-nums">

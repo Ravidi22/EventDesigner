@@ -329,9 +329,9 @@ assert(floorRank(lawn) === 1, "floors: a surface feature ranks by its lowest pla
 assert(floorRank({ ...lawn, parts: [{ shape: "plane", outline: square(2000), at: vec3(0, 0, 40) }] }) === 8, "floors: …capped at 8");
 assert(floorRank({ ...lawn, parts: [...lawn.parts, { shape: "box", w: 100, d: 100, h: 100, at: vec3(0, 0, 0) }] }) === null, "floors: a feature with anything but planes is not a floor");
 assert(polygonOffsetOf(-2) === 2 && polygonOffsetOf(3) === -3 && renderOrderOf(-2) < renderOrderOf(0) && renderOrderOf(0) < renderOrderOf(1) && renderOrderOf(8) < 0, "floors: offset is minus the rank; draw order follows the rank and every floor goes before the furniture");
-assert(CAPABLE.pointLights === 16 && CAPABLE.lodScale === 1 && CAPABLE.shadows && MODEST.pointLights === 0 && MODEST.lodScale === 0.5 && !MODEST.shadows && MODEST.maxDpr <= 1.25 && MODEST.fogScale < 1, "device: the two profiles as spec §8 states them");
+assert(CAPABLE.pointLights === 8 && CAPABLE.lodScale === 1 && CAPABLE.shadows && MODEST.pointLights === 0 && MODEST.lodScale === 0.5 && !MODEST.shadows && MODEST.maxDpr <= 1.25 && MODEST.fogScale < 1, "device: the two profiles as spec §8 states them");
 const partial = resolveDevice({ shadows: false, maxDpr: 1.25 });
-assert(!partial.shadows && partial.maxDpr === 1.25 && partial.pointLights === 16 && partial.lodScale === 1, "device: a partial profile is filled from CAPABLE");
+assert(!partial.shadows && partial.maxDpr === 1.25 && partial.pointLights === 8 && partial.lodScale === 1, "device: a partial profile is filled from CAPABLE");
 
 // --- frame round trip (the camera's inverse) ---
 const w = toWorld(vec3(1000, 2000, 750));
