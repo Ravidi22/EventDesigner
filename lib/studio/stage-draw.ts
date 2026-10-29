@@ -870,6 +870,24 @@ export function pushSide(poly: readonly Point[], i: number, d: number, snapLengt
   return poly.map((v, k) => (k === i || k === j ? { x: Math.round(v.x + nrm.x * d), y: Math.round(v.y + nrm.y * d) } : { ...v }));
 }
 
+/** Side `i` made exactly `lengthMm` long — a TYPED length, beside dragging. One end of it moves along
+ *  the side, and the side beyond that end moves with it unchanged, so a square corner stays square
+ *  (a rectangle given a new width is still a rectangle). `keep` is the end that stays: the side's
+ *  first corner ("start") or its second ("end"). */
+export function setSideLength(poly: readonly Point[], i: number, lengthMm: number, keep: "start" | "end" = "start"): Point[] {
+  const n = poly.length;
+  const a = poly[i];
+  const b = poly[(i + 1) % n];
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 1 || !(lengthMm >= 1)) return [...poly];
+  const d = keep === "start" ? lengthMm - len : len - lengthMm;
+  const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+  const end = keep === "start" ? (i + 1) % n : i;
+  // A triangle has no side beyond to carry: its far corner alone moves.
+  const moved = n > 3 ? [end, keep === "start" ? (i + 2) % n : (i - 1 + n) % n] : [end];
+  return poly.map((v, k) => (moved.includes(k) ? { x: Math.round(v.x + u.x * d), y: Math.round(v.y + u.y * d) } : { ...v }));
+}
+
 /** Side `i` split in its middle: two corners on one point, so either half can be pushed on its own.
  *  The front stays the side it was (its first half, when it is the one split). */
 export function splitSide(poly: readonly Point[], front: number, i: number): { outline: Point[]; front: number } {
@@ -1147,6 +1165,18 @@ if (isMain(import.meta.url)) {
     assert(shapeRect(6000, 4000, {}).outline.length === 4 && shapeRect(6000, 4000, { roundedMm: 0, bowMm: 0 }).outline.length === 4, "nothing asked, the plain rectangle");
     const backOnly = shapeRect(6000, 4000, { roundedMm: 600, roundedAt: "back", bowMm: 300 });
     assert(backOnly.outline[0].x === -3000 && backOnly.outline.filter((q, i) => !backOnly.smooth.includes(i)).length === 6, "a bow with the back corners rounded: the bow's two ends, and two tangent points per back corner");
+  }
+  // A typed side length: the far end moves along the side, the side beyond carried square with it.
+  {
+    const r4 = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 3000 }, { x: 0, y: 3000 }];
+    const wide = setSideLength(r4, 0, 7320);
+    assert(wide[1].x === 7320 && wide[2].x === 7320 && wide[2].y === 3000 && wide[0].x === 0 && wide[3].x === 0, "a 6m front typed as 7.32 is a 7.32×3 rectangle, its first corner where it was");
+    const back = setSideLength(r4, 0, 4880, "end");
+    assert(back[1].x === 6000 && back[0].x === 1120 && back[3].x === 1120 && back[2].x === 6000, "…and kept at its far end, it is the first corner and the side behind it that move");
+    const deep = setSideLength(r4, 1, 3660);
+    assert(deep[2].y === 3660 && deep[3].y === 3660 && deep[1].y === 0, "a depth typed moves the back");
+    const tri = setSideLength([{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 0, y: 3000 }], 0, 5000);
+    assert(tri[1].x === 5000 && tri[2].y === 3000, "a triangle's side moves its far corner alone");
   }
   console.log("stage-draw self-check passed");
 }

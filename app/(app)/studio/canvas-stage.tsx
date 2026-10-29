@@ -41,7 +41,7 @@ import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type Canva
 import { IconButton } from "@/components/icon-button";
 import { Grid2x2Plus, ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LaidDeck, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
-import { constrainNext, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
+import { constrainNext, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, setSideLength, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
 import {
   benchInRoom,
   edgeGaps,
@@ -59,6 +59,7 @@ import {
   toRoom,
   toStageFrame,
   stageSides,
+  WALL_HUG_MM,
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
@@ -2232,6 +2233,7 @@ export function CanvasStage({
               fromRoom={(q) => toStageFrame(shapingStage, q)}
               ctx={ctx}
               snap={shapingSnap ?? undefined}
+              wallDistance={(q) => nearestWall(plan.structure, q)?.distanceMm ?? Infinity}
               onBegin={() => {
                 shapingFrom.current = shapingStage;
               }}
@@ -2633,7 +2635,8 @@ export function CanvasStage({
               {areaPreview.polygon.map((a, i) => {
                 const b = areaPreview.polygon[(i + 1) % areaPreview.polygon.length];
                 const L = Math.hypot(b.x - a.x, b.y - a.y);
-                if (L < 1 || areaPreview.curved) return null;
+                // With grips on, each side's length is OutlineHandles' own pill — typed into, not just read.
+                if (L < 1 || areaPreview.curved || onAreaReshape) return null;
                 const font = ctx.mm(11);
                 const sgn = signedArea(areaPreview.polygon) >= 0 ? 1 : -1;
                 const at = { x: (a.x + b.x) / 2 + ((sgn * (b.y - a.y)) / L) * font * 1.5, y: (a.y + b.y) / 2 + ((-sgn * (b.x - a.x)) / L) * font * 1.5 };
@@ -2708,6 +2711,7 @@ export function CanvasStage({
                       fromRoom={same}
                       ctx={ctx}
                       snap={areaLengthSnap ? (mm, magnetMm) => areaLengthSnap(mm, { magnetMm }) : undefined}
+                      wallDistance={(q) => nearestWall(plan.structure, q)?.distanceMm ?? Infinity}
                       onChange={(next) => onAreaReshape(next, areaPreview.front)}
                       onSplit={(i) => {
                         const r = splitSide(poly, areaPreview.front, i);
@@ -4528,7 +4532,12 @@ function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | nul
  *
  *  `outline` is in its own frame (a stage's, or the room's): `toRoom` draws it, and `fromRoom` — read
  *  when a drag BEGINS, so a stage re-centred under the pointer does not slide its own frame — takes
- *  the pointer back into it. `refDeg` is the direction of the front in that frame. */
+ *  the pointer back into it. `refDeg` is the direction of the front in that frame.
+ *
+ *  Every side also wears its LENGTH, outside it, and the length is a button: click it (or Enter on
+ *  it), type centimetres, Enter — the side is that long (setSideLength). Tab takes the typed length
+ *  and opens the next side, so a whole outline can be typed round. The end that stays is the one
+ *  whose side beyond stands against a wall (`wallDistance`), else the side's first corner. */
 function OutlineHandles({
   outline,
   refDeg,
@@ -4536,6 +4545,7 @@ function OutlineHandles({
   fromRoom,
   ctx,
   snap,
+  wallDistance,
   onChange,
   onSplit,
   onRemove,
@@ -4548,6 +4558,8 @@ function OutlineHandles({
   fromRoom: (q: Point) => Point;
   ctx: CanvasLayerContext;
   snap?: (mm: number, magnetMm: number) => number;
+  /** How far a point in the ROOM is from the nearest wall — which end a typed length keeps. */
+  wallDistance?: (q: Point) => number;
   onChange: (outline: Point[]) => void;
   onSplit?: (side: number) => void;
   onRemove?: (corner: number) => void;
@@ -4557,7 +4569,9 @@ function OutlineHandles({
   onEnd?: () => void;
 }) {
   const start = useRef<{ outline: Point[]; fromRoom: (q: Point) => Point } | null>(null);
+  const [typing, setTyping] = useState<{ side: number; text: string; refused?: boolean } | null>(null);
   const s = ctx.mm(5);
+  const px = ctx.mm(1);
   const pull = (e: { altKey: boolean }) => (snap && !e.altKey ? (mm: number) => snap(mm, ctx.mm(8)) : (mm: number) => Math.max(10, Math.round(mm / 10) * 10));
   const take = (next: Point[]) => {
     const short = next.some((v, k) => {
@@ -4565,8 +4579,36 @@ function OutlineHandles({
       const L = Math.hypot(w.x - v.x, w.y - v.y);
       return L >= 1 && L < 100;
     });
-    if (!short && !selfIntersects(next)) onChange(next);
+    if (short || selfIntersects(next)) return false;
+    onChange(next);
+    return true;
   };
+  const n = outline.length;
+  const sideLength = (i: number) => {
+    const a = outline[i];
+    const b = outline[(i + 1) % n];
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  };
+  /** The typed length, taken: true when the outline took it (a length that folds it over itself, or
+   *  leaves a side under 10cm, is refused and the box stays open, marked). */
+  const typed = (i: number, text: string) => {
+    const cm = Number(text.replace(",", "."));
+    if (!(cm > 0)) return false;
+    if (Math.abs(cm * 10 - sideLength(i)) < 1) return true;
+    const hugs = (k: number) => {
+      if (!wallDistance) return false;
+      const a = outline[k];
+      const b = outline[(k + 1) % n];
+      return wallDistance(toRoomOf({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })) <= WALL_HUG_MM;
+    };
+    const keep = hugs((i + 1) % n) && !hugs((i - 1 + n) % n) ? "end" : "start";
+    onBegin?.();
+    const ok = take(setSideLength(outline, i, Math.round(cm * 10), keep));
+    onEnd?.();
+    return ok;
+  };
+  const roomOutline = outline.map(toRoomOf);
+  const outward = signedArea(roomOutline) >= 0 ? 1 : -1;
   /** A grip taking hold: the outline as it stands is the frame every move of this gesture is read
    *  in, and `onMove` is what each move does with the pointer. */
   const grab = (e: React.PointerEvent, onMove: (ev: PointerEvent, was: NonNullable<typeof start.current>) => void) => {
@@ -4628,6 +4670,86 @@ function OutlineHandles({
             }}
             onClick={(e) => e.stopPropagation()}
           />
+        );
+      })}
+      {outline.map((a, i) => {
+        const L = sideLength(i);
+        if (L < 1) return null;
+        const ra = roomOutline[i];
+        const rb = roomOutline[(i + 1) % n];
+        const rl = Math.hypot(rb.x - ra.x, rb.y - ra.y) || 1;
+        // Outside the side, clear of its grip: the pill is drawn in screen pixels (scale px).
+        const at = { x: (ra.x + rb.x) / 2 + ((outward * (rb.y - ra.y)) / rl) * px * 22, y: (ra.y + rb.y) / 2 + ((-outward * (rb.x - ra.x)) / rl) * px * 22 };
+        const label = (L / 1000).toFixed(2);
+        const open = () => setTyping({ side: i, text: String(Math.round(L / 10)) });
+        if (typing?.side === i)
+          return (
+            <g key={`len-${i}`} transform={`translate(${at.x} ${at.y}) scale(${px})`}>
+              <foreignObject x={-58} y={-15} width={116} height={30}>
+                <div
+                  dir="ltr"
+                  className={`control-group flex h-[30px] items-center gap-1 rounded-full border bg-surface px-2.5 shadow-floating ${typing.refused ? "border-alert" : "border-accent"}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <input
+                    autoFocus
+                    inputMode="decimal"
+                    aria-label="אורך הצד בסנטימטרים"
+                    aria-invalid={typing.refused || undefined}
+                    value={typing.text}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (/^\d*[.,]?\d*$/.test(v)) setTyping({ side: i, text: v });
+                    }}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setTyping(null);
+                      } else if (e.key === "Enter" || e.key === "Tab") {
+                        e.preventDefault();
+                        if (!typed(i, typing.text)) return setTyping({ ...typing, refused: true });
+                        // Tab goes round the outline (Shift+Tab back), the next side's length ready.
+                        const next = e.key === "Tab" ? (i + (e.shiftKey ? n - 1 : 1)) % n : -1;
+                        setTyping(next >= 0 ? { side: next, text: String(Math.round(sideLength(next) / 10)) } : null);
+                      }
+                    }}
+                    onBlur={() => setTyping((t) => (t?.side === i ? null : t))}
+                    className={`nums w-14 bg-transparent text-center text-[13px] font-semibold ${typing.refused ? "text-alert-ink" : "text-ink"}`}
+                  />
+                  <span className="text-[11px] text-muted">ס״מ</span>
+                </div>
+              </foreignObject>
+            </g>
+          );
+        return (
+          <g
+            key={`len-${i}`}
+            transform={`translate(${at.x} ${at.y}) scale(${px})`}
+            role="button"
+            tabIndex={0}
+            aria-label={`אורך הצד ${label} מ׳ — לחיצה להקלדת אורך`}
+            className="cursor-text focus:outline-none [&:focus-visible>rect]:stroke-[2.5]"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              open();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                open();
+              }
+            }}
+          >
+            <title>לחיצה להקלדת אורך הצד</title>
+            <rect x={-label.length * 3.6 - 9} y={-10.5} width={label.length * 7.2 + 18} height={21} rx={10.5} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <text textAnchor="middle" dominantBaseline="central" direction="ltr" fill="var(--color-accent)" className="nums" style={{ fontSize: 12, fontWeight: 600 }}>
+              {label}
+            </text>
+          </g>
         );
       })}
       {outline.map((v, i) => {

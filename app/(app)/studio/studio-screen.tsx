@@ -2359,6 +2359,15 @@ export function StudioScreen({
   /** An area just closed: the decks already chosen (every deck, the first time), and the front is
    *  the side that faces the room — the edge away from the wall the stage is standing against. A
    *  click on another edge changes it. A redraw of a stage being edited stays that stage's edit. */
+  /** The decks a new stage starts from: the ones the last stage on this plan was built of — one
+   *  system, one height — while the studio still has them; else every deck it has. Choosing every
+   *  deck mixed the 40cm sheets with the 60cm ones and the 40×122 step pieces, and the fill picked
+   *  between them by geometry alone (a U came out as hundreds of step pieces). */
+  const lastStageDecks = useCallback(() => {
+    const last = [...doc.placements].reverse().find((p) => p.stage)?.stage?.decks.filter((id) => deckTypes.some((t) => t.id === id));
+    return last?.length ? last : deckTypes.map((t) => t.id);
+  }, [doc.placements, deckTypes]);
+
   const openStageFill = useCallback(
     (polygon: Point[], smooth?: number[]) =>
       setStageFill((cur) => {
@@ -2378,11 +2387,11 @@ export function StudioScreen({
           front,
           ...(smooth?.length ? { smooth } : {}),
           shape: cur?.shape,
-          chosen: cur?.chosen ?? deckTypes.map((t) => t.id),
+          chosen: cur?.chosen ?? lastStageDecks(),
           editing: cur?.editing,
         };
       }),
-    [plan.structure, deckTypes],
+    [plan.structure, lastStageDecks],
   );
 
   /** Take one of the layout's exact sizes: the area is redrawn at that size, front first. */

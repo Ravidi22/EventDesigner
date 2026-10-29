@@ -96,6 +96,9 @@ export function StageFillPanel({
     .map((t) => ({ t, n: decks.filter((d) => d.typeId === t.id).length }))
     .filter((x) => x.n > 0);
   const areaM2 = (layout?.areaMm2 ?? 0) / 1e6;
+  // The height the build came out at — one stage is one height, and with decks of two heights chosen
+  // the designer has to see which system the fill went for.
+  const heights = [...new Set(byType.map(({ t }) => t.heightMm).filter((h): h is number => !!h))].map(cm);
   // ROUNDED CORNERS AND A BOWED FRONT — a rectangle's, and only while the area still is one (a corner
   // dragged out of square takes the chip away, and the shape with it).
   const rectangle = !state.smooth?.length && asRect(state.polygon, state.front) !== null;
@@ -125,21 +128,21 @@ export function StageFillPanel({
     <Bar
       icon={Grid2x2Plus}
       title={state.editing ? "עריכת במה" : "מילוי במות"}
-      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, missing.length > 0 ? `${missing.length} חסרות` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
+      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, heights.length ? `גובה ${heights.join("/")} ס״מ` : null, missing.length > 0 ? `${missing.length} חסרות` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
       onClose={onClose}
     >
       <Popover label="אילו במות" icon={Grid2x2Plus} value={`${state.chosen.length} מתוך ${types.length}`} panelClassName="w-80">
         <div className="flex flex-wrap gap-1.5">
           {types.map((t) => (
             <TagToggle key={t.id} active={state.chosen.includes(t.id)} onClick={() => toggle(t.id)}>
-              {t.name} <span className="nums text-muted">{ltr(`${cm(t.widthMm)}×${cm(t.depthMm)}`)}</span>
+              {t.name} <span className="nums text-muted">{ltr(`${cm(t.widthMm)}×${cm(t.depthMm)}`)}{t.heightMm ? ` · ${cm(t.heightMm)} ס״מ` : ""}</span>
             </TagToggle>
           ))}
         </div>
         <Note>
-          הגדולות מונחות קודם, לאורך החזית, והקטנות משלימות. פלטות בגובה שונה או במידות שלא מתחברות
-          (למשל 200×100 ו־122×244) לא מתערבבות באותה במה. שוליים שאף פלטה לא נכנסת אליהם נשארים
-          בצד האחורי.
+          הגדולות מונחות קודם, לאורך החזית, והקטנות משלימות את השורה האחרונה. פלטות בגובה שונה או במידות
+          שלא מתחברות (למשל 200×100 ו־122×244) לא מתערבבות באותה במה — כדאי לבחור גובה אחד. צד באלכסון
+          מקבל שורת פלטות מסובבות לאורכו, והשוליים שאף פלטה לא נכנסת אליהם נשארים בצד האחורי.
         </Note>
       </Popover>
 

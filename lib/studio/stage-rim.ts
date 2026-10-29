@@ -351,14 +351,17 @@ function corners(pts: Point[], poly: readonly Point[], sigma: number, depth = 0)
 export const runRegion = (run: RimRun, outer = false): Point[] => tidy([...run.pts, outer ? run.outer : run.inner]);
 
 /** The outline with every run replaced by the legs through its chosen corner — rectilinear, laid
- *  with decks like any other. Runs are numbered in the order rimSegments gives them. */
-export function coreOutline(segments: readonly RimSegment[], outer: (run: number) => boolean): Point[] {
+ *  with decks like any other — or, for a run whose choice is "line", kept as it runs (the decks go up
+ *  to it as far as whole ones reach). Runs are numbered in the order rimSegments gives them. */
+export function coreOutline(segments: readonly RimSegment[], outer: (run: number) => boolean | "line"): Point[] {
   const pts: Point[] = [];
   let r = 0;
   for (const s of segments) {
     if (s.kind === "edge") pts.push(s.a);
     else {
-      pts.push(s.run.pts[0], outer(r) ? s.run.outer : s.run.inner);
+      const how = outer(r);
+      if (how === "line") pts.push(...s.run.pts.slice(0, -1));
+      else pts.push(s.run.pts[0], how ? s.run.outer : s.run.inner);
       r++;
     }
   }

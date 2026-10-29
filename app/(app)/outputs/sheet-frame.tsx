@@ -71,13 +71,15 @@ const OVERHEAD_SWATCH_DASH = OVERHEAD_DASH.split(" ")
   .map((n) => (n / 120) * 1.6)
   .join(" ");
 
-export type LegendSwatch = "hatch-diagonal" | "hatch-cross" | "dot-ghost" | "solid" | "outline" | "overhead" | "mark";
+export type LegendSwatch = "hatch-diagonal" | "hatch-cross" | "dot-ghost" | "solid" | "outline" | "overhead" | "mark" | "fill";
 
 export interface LegendRow {
   label: string;
   swatch: LegendSwatch;
   /** The character in a "mark" swatch — the same mark the drawing prints (a chair type's number). */
   mark?: string;
+  /** A "fill" swatch's colour (the stage sheet's deck heights). */
+  color?: string;
 }
 
 /** One row of the notes column: a mark (the callout number on the drawing), a line, and an optional
@@ -302,7 +304,7 @@ export function SheetFrame({
           {laidLegend.map((r, i) =>
             r.fits ? (
               <g key={i}>
-                <LegendSwatchGlyph swatch={r.swatch} mark={r.mark} x={r.swatchX} y={barTop + 1.6} size={SWATCH_MM} />
+                <LegendSwatchGlyph swatch={r.swatch} mark={r.mark} color={r.color} x={r.swatchX} y={barTop + 1.6} size={SWATCH_MM} />
                 <text
                   x={r.textX}
                   y={barTop + 1.6 + SWATCH_MM / 2}
@@ -513,7 +515,7 @@ function hatchDefs(suffix: string, k: number) {
   );
 }
 
-function LegendSwatchGlyph({ swatch, mark, x, y, size = 5 }: { swatch: LegendSwatch; mark?: string; x: number; y: number; size?: number }) {
+function LegendSwatchGlyph({ swatch, mark, color, x, y, size = 5 }: { swatch: LegendSwatch; mark?: string; color?: string; x: number; y: number; size?: number }) {
   if (swatch === "mark") {
     return (
       <g>
@@ -528,7 +530,7 @@ function LegendSwatchGlyph({ swatch, mark, x, y, size = 5 }: { swatch: LegendSwa
     return <line x1={x} y1={y + size / 2} x2={x + size} y2={y + size / 2} stroke={INK} strokeWidth={LINE_WEIGHTS.overhead} strokeDasharray={OVERHEAD_SWATCH_DASH} vectorEffect="non-scaling-stroke" />;
   }
   const fill =
-    swatch === "solid" ? INK : swatch === "outline" ? "#ffffff" : `url(#${swatch}-sw)`;
+    swatch === "solid" ? INK : swatch === "outline" ? "#ffffff" : swatch === "fill" ? (color ?? "#ffffff") : `url(#${swatch}-sw)`;
   return (
     <rect
       x={x}

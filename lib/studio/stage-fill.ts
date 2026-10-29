@@ -156,6 +156,9 @@ export interface FillOptions {
 }
 
 export const STAGE_TOLERANCE_MM = 50;
+/** Two builds whose cover differs by less than a strip this deep along the whole front cover the same
+ *  stage — fewer decks decides (see bestParts). */
+const COVER_SLACK_MM = 100;
 
 /** Above this many cells the grid is coarsened — a 30×20m area at a 10mm grid would be 6M cells,
  *  which is a frozen tab. */
@@ -339,6 +342,8 @@ function lay(
   /** Where the grid starts, back from the outline's own corner — see FillOptions.phases. */
   offset: Point = { x: 0, y: 0 },
   cache?: CellCache,
+  /** Every deck long side along the front — none turned (a curved apron's rows). */
+  oneWay = false,
 ): Laid {
   const minX = Math.min(...local.map((p) => p.x)) - offset.x;
   const maxX = Math.max(...local.map((p) => p.x));
@@ -355,7 +360,18 @@ function lay(
 
   const dims = types.flatMap((t) => [r10(t.widthMm), r10(t.depthMm)]);
   let step = Math.max(10, dims.reduce((g, d) => gcd(g, d)));
-  while (((maxX - minX + tol + reach) / step) * ((maxY - minY + tol + reach) / step) > MAX_CELLS) step *= 2;
+  const tooMany = (s: number) => ((maxX - minX + tol + reach) / s) * ((maxY - minY + tol + reach) / s) > MAX_CELLS;
+  if (tooMany(step)) {
+    // Coarsened, the grid goes to a step the MAIN deck divides into exactly — a 244×122 sheet's 61mm
+    // (1220 = 20 × 61), not 40mm: at 40 every sheet took 1240mm, eleven rows lost 22cm, and the
+    // strip that should have finished the back no longer fitted (a 28×14m area went to 400 strips
+    // of 244×40). Only the strips round up, by a few mm, inside the tolerance.
+    const main = types.reduce((a, b) => (b.widthMm * b.depthMm > a.widthMm * a.depthMm ? b : a));
+    const g = gcd(r10(main.widthMm), r10(main.depthMm));
+    const exact = Array.from({ length: g }, (_, k) => k + 1).filter((d) => g % d === 0 && d >= step && !tooMany(d))[0];
+    if (exact) step = exact;
+    else while (tooMany(step)) step *= 2;
+  }
   const nx = Math.max(1, Math.floor((maxX - minX + tol + reach) / step + 1e-6));
   const ny = Math.max(1, Math.floor((maxY - minY + tol + reach) / step + 1e-6));
   // 1 = a cell of the drawn area; 2 = a cell past its edge a deck may still reach into (exceeding
@@ -393,7 +409,7 @@ function lay(
         const d = turned ? t.widthMm : t.depthMm;
         return { type: t, turned, across: d > w, w, d, cw: cells(w), ch: cells(d) };
       };
-      return t.widthMm === t.depthMm ? [orient(false)] : [orient(false), orient(true)];
+      return t.widthMm === t.depthMm || oneWay ? [orient(t.depthMm > t.widthMm)] : [orient(false), orient(true)];
     })
     .sort((a, b) => b.type.widthMm * b.type.depthMm - a.type.widthMm * a.type.depthMm || Number(a.across) - Number(b.across));
 
@@ -421,12 +437,49 @@ function lay(
     return footprintOk(minX + i * step, minY + j * step, sh.w, sh.d);
   };
 
+  // WHICH deck at a free cell: the largest that fits, as a crew lays — except in the last stretch of
+  // a column, under two of the main deck's depth from the back, where the strip chosen is the one
+  // whose best finish covers most of what is left. Largest-first alone put an 80cm strip behind four
+  // rows of sheets in a 6m depth and left 32cm no strip fits, where 60 + 40 leave 12. A smaller deck
+  // is taken there only when it covers COVER_SLACK_MM more; `fin[r]` is the most r cells of depth the
+  // rows along the front can cover.
+  const rows = shapes.filter((sh) => !sh.across);
+  const mainCh = rows.length ? Math.max(...rows.map((sh) => sh.ch)) : 0;
+  const depthsInCells = [...new Set(rows.map((sh) => sh.ch))];
+  const fin: number[] = [0];
+  const finish = (r: number) => {
+    while (fin.length <= r) {
+      const k = fin.length;
+      fin.push(Math.max(0, ...depthsInCells.filter((d) => d <= k).map((d) => d + fin[k - d])));
+    }
+    return fin[r];
+  };
+  const room = (i: number, j: number) => {
+    let k = j;
+    while (k < ny && free[k * nx + i] && !taken[k * nx + i]) k++;
+    return k - j;
+  };
   const boxes: { x: number; y: number; w: number; d: number; type: DeckType; turned: boolean; across: boolean; frac: number }[] = [];
   for (let j = 0; j < ny; j++)
     for (let i = 0; i < nx; i++) {
       if (!free[j * nx + i] || taken[j * nx + i]) continue;
-      const s = shapes.find((sh) => fits(i, j, sh));
+      let s = shapes.find((sh) => fits(i, j, sh));
       if (!s) continue;
+      if (!s.across) {
+        const r = room(i, j);
+        if (r < 2 * mainCh) {
+          const value = (sh: (typeof shapes)[number]) => Math.min(r, sh.ch) + finish(Math.max(0, r - sh.ch));
+          let sv = value(s);
+          for (const sh of rows)
+            if (sh !== s && sh.ch < s.ch && fits(i, j, sh)) {
+              const v = value(sh);
+              if ((v - sv) * step > COVER_SLACK_MM) {
+                s = sh;
+                sv = v;
+              }
+            }
+        }
+      }
       // How much of the deck is on the drawn floor — what it COVERS, as against what it hangs over.
       const on = boxSum(drawn, nx, i, j, s.cw, s.ch);
       placed.push({ i, j, w: s.cw, h: s.ch });
@@ -444,6 +497,48 @@ function lay(
       const ok = boxes.every((b) => footprintOk(b.x + shift, b.y, b.w, b.d));
       if (ok) for (const b of boxes) b.x += shift;
     }
+  }
+
+  // A ROW whose two ends both meet a curve or a slant — a half-round's rows, a trapezoid's — is
+  // centred in its own span, so the pieces at its ends come out the same on both sides. A row with
+  // a square end stays flush against it.
+  const rowsAt = new Map<number, typeof boxes>();
+  for (const b of boxes) rowsAt.set(b.y, [...(rowsAt.get(b.y) ?? []), b]);
+  for (const row of rowsAt.values()) {
+    const d = Math.min(...row.map((b) => b.d));
+    const lo = Math.min(...row.map((b) => b.x));
+    const hi = Math.max(...row.map((b) => b.x + b.w));
+    // How far along the row, from x, the line is at height y — the nearest crossing that way.
+    const reach = (x: number, y: number, dir: 1 | -1) => {
+      let best = Infinity;
+      for (let i = 0; i < local.length; i++) {
+        const a = local[i];
+        const b = local[(i + 1) % local.length];
+        if (a.y > y === b.y > y) continue;
+        const along = (a.x + ((y - a.y) * (b.x - a.x)) / (b.y - a.y) - x) * dir;
+        if (along >= -tol && along < best) best = along;
+      }
+      return best;
+    };
+    // An end on a curve or a slant: the line meets it at one corner and falls away along it — not
+    // all along like a square end, and not a deck or open floor away.
+    const onSlant = (x: number, dir: 1 | -1) => {
+      const r = [0.02, 0.5, 0.98].map((f) => reach(x, row[0].y + f * d, dir));
+      return Math.min(...r) <= tol + 10 && Math.max(...r) - Math.min(...r) > tol;
+    };
+    if (!onSlant(lo, -1) || !onSlant(hi, 1)) continue;
+    const others = boxes.filter((b) => !row.includes(b));
+    const clear = (b: (typeof boxes)[number], dx: number) =>
+      footprintOk(b.x + dx, b.y, b.w, b.d) &&
+      !blocks.some((bl) => [0.02, 0.5, 0.98].some((fx) => [0.02, 0.5, 0.98].some((fy) => inside({ x: b.x + dx + fx * b.w, y: b.y + fy * b.d }, bl)))) &&
+      others.every((o) => b.x + dx >= o.x + o.w - 1 || o.x >= b.x + dx + b.w - 1 || b.y >= o.y + o.d - 1 || o.y >= b.y + b.d - 1);
+    const ok = (dx: number) => row.every((b) => clear(b, dx));
+    let right = 0;
+    while (right < 4000 && ok(right + 10)) right += 10;
+    let left = 0;
+    while (left < 4000 && ok(-(left + 10))) left += 10;
+    const dx = Math.round((right - left) / 20) * 10;
+    if (Math.abs(dx) >= 10) for (const b of row) b.x += dx;
   }
 
   const baseDeg = (frame.theta * 180) / Math.PI;
@@ -468,9 +563,13 @@ function lay(
 }
 
 /** The best layout over every family and every deck alone: most covered, then fewest decks, then
- *  fewest turned. Coverage is compared to the half-percent — 0.1% more cover is not worth a
- *  second family of legs. Several PARTS (behind the front line and in front of it) are laid with
- *  one family between them — one stage, one system of decks — each from its own first row. */
+ *  fewest turned. Coverage is compared with a SLACK of a COVER_SLACK_MM strip the length of the
+ *  front: two builds that differ by less than a 10cm strip cover the same stage, and the one with
+ *  fewer decks wins. Compared to the half-percent instead, an 8.01m deep band went to 114 strips of
+ *  244×80 (ten rows, 8.00m) over six rows of sheets and one strip (7.92m) — a 9cm gap at the back no
+ *  crew would trade forty more decks for. Several PARTS (behind the front line and in front of it)
+ *  are laid with one family between them — one stage, one system of decks — each from its own
+ *  first row. */
 function bestParts(
   parts: readonly (readonly Point[])[],
   blocks: readonly (readonly Point[])[],
@@ -481,13 +580,33 @@ function bestParts(
   bound: readonly Point[] | null = null,
   exceed = false,
   phases = false,
+  /** The stage's own outline, when `parts` are a core cut from it — whether a part's tip is square is
+   *  read off the line, not off the core's corners (fromLine). */
+  outline?: readonly Point[],
 ): Laid {
   const fams = families(types);
-  const candidates = [...fams, ...types.filter(() => types.length > 1).map((t) => [t])].filter(
+  // Each deck alone too — but not a STRIP of a bigger deck in its own family (244×40 beside the
+  // 244×122): the family already lays it where it finishes a row, and a stage of strips alone is
+  // never what the crew builds (nor, with the slack, the build that wins). Half the work on a big area.
+  const strip = (t: DeckType) =>
+    fams.some((f) => f.includes(t) && f.some((o) => o !== t && Math.max(o.widthMm, o.depthMm) === Math.max(t.widthMm, t.depthMm) && Math.min(o.widthMm, o.depthMm) > Math.min(t.widthMm, t.depthMm)));
+  // …and not a SMALL piece (under a third of the largest deck — a 40×122 step, an 80×122 riser)
+  // either: on an irregular area it hugs the line closer than any sheet and wins on cover, and a
+  // stage of three hundred step pieces is not a stage. It still finishes the rows of its family.
+  const largest = Math.max(...types.map((t) => t.widthMm * t.depthMm));
+  const small = (t: DeckType) => t.widthMm * t.depthMm * 3 < largest;
+  const candidates = [...fams, ...types.filter((t) => types.length > 1 && !strip(t) && !small(t)).map((t) => [t])].filter(
     (c, i, all) => all.findIndex((o) => o.length === c.length && o.every((t, k) => t.id === c[k].id)) === i,
   );
-  let winner: Laid = { decks: [], covered: 0, turned: 0, boxes: [] };
-  let winnerKey = [-1, 0, 0];
+  let winner: (Laid & { judged: number }) | null = null;
+  const xs = parts.flatMap((p) => p.map((q) => q.x));
+  const slack = COVER_SLACK_MM * (xs.length ? Math.max(...xs) - Math.min(...xs) : 0);
+  // ponytail: a tolerance, so not transitive — fine for keeping a running best over a dozen builds.
+  // `judged` is the cover that counts: a curved tip's part (fromLine) is left out of it when the rim
+  // is being built, because what its decks do not reach is a piece there, not bare floor.
+  type Judged = Laid & { judged: number };
+  const beats = (l: Judged, w: Judged) =>
+    Math.abs(l.judged - w.judged) > slack ? l.judged > w.judged : l.decks.length !== w.decks.length ? l.decks.length < w.decks.length : l.turned !== w.turned ? l.turned < w.turned : l.judged > w.judged + 1;
   const caches = parts.map((): CellCache => new Map());
   for (const c of candidates) {
     // A curve tries its rows at a few offsets within one grid step, when the step is coarse (a family
@@ -496,22 +615,42 @@ function bestParts(
     const k = phases && step >= 200 ? Math.min(6, Math.floor(step / 100)) : 1;
     for (let oy = 0; oy < k; oy++)
       for (let ox = 0; ox < k; ox++) {
-        const each = parts.map((part, p) => lay(part, blocks, c, tol, frame, bound, exceed, { x: (ox * step) / k, y: (oy * step) / k }, caches[p]));
-        const l: Laid = {
+        const each = parts.map((part, p) => {
+          const at = { x: (ox * step) / k, y: (oy * step) / k };
+          if (!fromLine(outline ? clipToBox(outline, boxOf(part)) : part)) {
+            const l = lay(part, blocks, c, tol, frame, bound, exceed, at, caches[p]);
+            return { ...l, judged: l.covered };
+          }
+          // Laid as its own mirror image, so its rows start at the line and end at the tip — and of the
+          // family's LARGEST deck only: the curve beyond its rows is pieces, and strips stair-stepped
+          // up a curve are exactly what a crew does not lay.
+          const flip = (q: Point) => ({ x: q.x, y: -q.y });
+          const mirror = { ...frame, toWorld: (q: Point) => frame.toWorld(flip(q)) };
+          const largest = [...c].sort((a, b) => b.widthMm * b.depthMm - a.widthMm * a.depthMm).slice(0, 1);
+          // One deck size steps a whole deck at a time: the rows are tried at a few offsets across
+          // (never back from the line), or a row of three where three fit comes out two.
+          const grid = Math.max(10, gcd(r10(largest[0].widthMm), r10(largest[0].depthMm)));
+          const tries = Math.max(1, Math.min(6, Math.floor(grid / 100)));
+          let l: Laid | null = null;
+          for (let t = 0; t < tries; t++) {
+            const o = lay(part.map(flip), blocks.map((b) => b.map(flip)), largest, tol, mirror, bound?.map(flip) ?? null, exceed, { x: at.x + (t * grid) / tries, y: at.y }, caches[p], true);
+            if (!l || o.covered > l.covered + 1 || (Math.abs(o.covered - l.covered) <= 1 && o.decks.length < l.decks.length)) l = o;
+          }
+          return { ...l!, boxes: l!.boxes.map((b) => ({ ...b, y: -(b.y + b.d) })), judged: outline ? 0 : l!.covered };
+        });
+        const l = {
           decks: each.flatMap((e) => e.decks),
           covered: each.reduce((s, e) => s + e.covered, 0),
+          judged: each.reduce((s, e) => s + e.judged, 0),
           turned: each.reduce((s, e) => s + e.turned, 0),
           boxes: each.flatMap((e) => e.boxes),
         };
-        const key = [Math.round((Math.min(1, l.covered / areaMm2) * 200)), -l.decks.length, -l.turned];
-        const better = key[0] !== winnerKey[0] ? key[0] > winnerKey[0] : key[1] !== winnerKey[1] ? key[1] > winnerKey[1] : key[2] > winnerKey[2];
-        if (better) {
-          winner = l;
-          winnerKey = key;
-        }
+        if (!winner || beats(l, winner)) winner = l;
       }
   }
-  return winner;
+  if (!winner) return { decks: [], covered: 0, turned: 0, boxes: [] };
+  const { judged: _, ...laid } = winner;
+  return laid;
 }
 
 function best(
@@ -531,6 +670,21 @@ function best(
 function frontParts(local: readonly Point[]): Point[][] {
   if (!local.some((p) => p.y < -1)) return [[...local]];
   return [clipY(local, 0, true), clipY(local, 0, false)].filter((p) => polyArea(p) > 1);
+}
+
+/** A part in front of the line whose far end is not a square edge (a half-round, a point) is laid FROM
+ *  the line: its tip is curved or angled anyway, and taking the leftover there leaves no strip of
+ *  bare floor between it and the body. A catwalk's square tip keeps its decks (see frontParts). */
+function fromLine(part: readonly Point[]): boolean {
+  if (part.some((p) => p.y > 1)) return false;
+  const tip = Math.min(...part.map((p) => p.y));
+  let flat = 0;
+  for (let i = 0; i < part.length; i++) {
+    const a = part[i];
+    const b = part[(i + 1) % part.length];
+    if (Math.abs(a.y - tip) <= 2 && Math.abs(b.y - tip) <= 2) flat += Math.abs(b.x - a.x);
+  }
+  return flat < 400;
 }
 
 /** Lay decks of the given types across `polygon`. */
@@ -618,6 +772,15 @@ function rimBuild(
   const maxSide = usable.length ? Math.max(...usable.map((t) => Math.max(t.widthMm, t.depthMm))) : 2440;
   const maxArea = RIM_AREA_FACTOR * (usable.length ? Math.max(...usable.map((t) => t.widthMm * t.depthMm)) : 2440 * 1220);
   const narrowest = usable.length ? Math.min(...usable.map((t) => Math.min(t.widthMm, t.depthMm))) : 0;
+  // A LONG STRAIGHT ANGLED SIDE is built the crew's way (the אמארה plan of 26.10): a row of whole
+  // decks turned to run along it, their outer edge on the line, and the square rows behind. The
+  // zig-zag between the two is filled on site, not bought — never a grid of cut pieces. Not a choice
+  // the search below makes: every such side gets its row, and the rest is decked round it.
+  const main = usable.length ? [...usable].sort((a, b) => b.widthMm * b.depthMm - a.widthMm * a.depthMm)[0] : null;
+  const rows: (BevelRow | null)[] = [];
+  for (const r of runs) rows.push(main ? bevelRow(r, local, main, [...blocks, ...rows.flatMap((x) => x?.polys ?? [])], tol) : null);
+  const rowPolys = rows.flatMap((x) => x?.polys ?? []);
+  const rowArea = rowPolys.reduce((s, p) => s + polyArea(p), 0);
   // Which edges of a piece lie along the stage's own curves — what makes a side of it curved.
   const onCurve = curveTest(runs.map((r) => r.pts));
   const ownedShapes = owned.map((t) => ({ t, n: normal(t.outline?.length ? t.outline : ellipse(t.widthMm, t.depthMm)) }));
@@ -629,6 +792,17 @@ function rimBuild(
     }
     return undefined;
   };
+  // A curve too big to be ONE piece (a half-round of 8m) is decked as far as whole decks reach, and
+  // only what is left along the line is cut into pieces — never the region chopped into a grid of
+  // "pieces", rectangles among them that a deck would have covered.
+  const big = runs.map((r, i) => {
+    if (rows[i]) return false;
+    const reg = runRegion(r);
+    const b = boxOf(reg);
+    // …and deep enough across to take a whole deck: a long thin bow is still pieces along its line.
+    const room = main ? Math.min(main.widthMm, main.depthMm) : Infinity;
+    return !ownedFor(reg) && Math.min(b.x1 - b.x0, b.y1 - b.y0) >= room && !(b.x1 - b.x0 <= maxSide + 1 && b.y1 - b.y0 <= maxSide + 1 && polyArea(reg) <= maxArea);
+  });
   // Runs of one shape are decided together — the four corners of a rounded stage, the two halves of
   // an apron — so a stage comes out the same on both sides.
   const groupOf: number[] = [];
@@ -654,15 +828,19 @@ function rimBuild(
     return all ? hit / all : 0;
   };
 
+  // A run with a turned row along it, or too big to be a piece, keeps its own LINE in the core: the
+  // decks go up to it as far as whole ones reach.
+  const onLine = runs.map((_, i) => !!rows[i] || big[i]);
+  const allBlocks = [...blocks, ...rowPolys];
   const evaluate = (outer: boolean[]): RimEval => {
-    const core = coreOutline(segments, (r) => outer[r]);
+    const core = coreOutline(segments, (r) => (onLine[r] && !outer[r] ? "line" : outer[r]));
     const coreArea = polyArea(core);
-    const innerRuns = runs.map((r, i) => ({ r, i })).filter(({ i }) => !outer[i]);
+    const innerRuns = runs.map((r, i) => ({ r, i })).filter(({ i }) => !outer[i] && !onLine[i]);
     const outerRegions = runs.filter((_, i) => outer[i]).map((r) => runRegion(r, true));
     const innerRegions = innerRuns.map(({ r }) => runRegion(r));
     const laid =
       coreArea > 1 && usable.length
-        ? bestParts(frontParts(core), exceed ? [...blocks, ...innerRegions] : blocks, usable, tol, frame, coreArea, null, exceed)
+        ? bestParts(frontParts(core), exceed ? [...allBlocks, ...innerRegions] : allBlocks, usable, tol, frame, coreArea, null, exceed, false, local)
         : { decks: [], covered: 0, turned: 0, boxes: [] };
     // A deck over an OUTER corner that overhangs the line is not laid: what of it is on the stage is
     // a piece of the rim (a deck with a curved side), cut along the deck's own seams. Overhanging is
@@ -682,24 +860,31 @@ function rimBuild(
     const dropped = laid.boxes.filter((_, i) => !keep[i]);
     const toBox = (b: { x: number; y: number; w: number; d: number }): Box => ({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.d });
 
-    const fixed: { poly: Point[]; from: "deck" | "rim" | "gap" }[] = [];
+    const fixed: { poly: Point[]; from: "deck" | "rim" | "gap" | "fill" }[] = [];
     for (const b of dropped) fixed.push({ poly: clipToBox(local, toBox(b)), from: "deck" });
     // What the core's decks leave uncovered — a gap where a run's corner falls between rows, or
     // the part of an OUTER corner no deck reached: cut along every deck seam and core corner, and
     // gathered into the largest rectangles a piece can be.
-    const xs = [...new Set([...core.map((p) => p.x), ...laid.boxes.flatMap((b) => [b.x, b.x + b.w])].map((v) => Math.round(v)))].sort((a, b) => a - b);
-    const ys = [...new Set([...core.map((p) => p.y), ...laid.boxes.flatMap((b) => [b.y, b.y + b.d])].map((v) => Math.round(v)))].sort((a, b) => a - b);
+    // A cell the line of an on-line run crosses is open even with its centre off the stage — the
+    // sliver of it on the stage is part of the zig-zag along that line. That line's own corners cut
+    // nothing: a curve of 24 chords cut at each would be 24 slivers no deck is as narrow as.
+    const lines = runs.filter((_, k) => onLine[k] && !outer[k]).map((r) => r.pts);
+    const byLine = (c: Point, reach: number) => lines.some((pts) => distToPolyline(c, pts) <= reach);
+    const cuts = core.filter((p) => !lines.some((pts) => pts.slice(1, -1).some((q) => Math.abs(q.x - p.x) < 0.5 && Math.abs(q.y - p.y) < 0.5)));
+    const xs = [...new Set([...cuts.map((p) => p.x), ...laid.boxes.flatMap((b) => [b.x, b.x + b.w])].map((v) => Math.round(v)))].sort((a, b) => a - b);
+    const ys = [...new Set([...cuts.map((p) => p.y), ...laid.boxes.flatMap((b) => [b.y, b.y + b.d])].map((v) => Math.round(v)))].sort((a, b) => a - b);
     const cx = xs.length - 1;
     const cy = ys.length - 1;
     const open = new Uint8Array(Math.max(0, cx * cy));
     for (let j = 0; j < cy; j++)
       for (let i = 0; i < cx; i++) {
         const c = { x: (xs[i] + xs[i + 1]) / 2, y: (ys[j] + ys[j + 1]) / 2 };
-        if (xs[i + 1] - xs[i] < 1 || ys[j + 1] - ys[j] < 1 || coreArea <= 1 || !inside(c, core)) continue;
+        if (xs[i + 1] - xs[i] < 1 || ys[j + 1] - ys[j] < 1 || coreArea <= 1) continue;
+        if (!inside(c, core) && !byLine(c, Math.hypot(xs[i + 1] - xs[i], ys[j + 1] - ys[j]) / 2)) continue;
         if (laid.boxes.some((b) => c.x > b.x && c.x < b.x + b.w && c.y > b.y && c.y < b.y + b.d)) continue;
         // The rim's own regions are pieces already, never gaps of the core.
         if (innerRegions.some((r) => inside(c, r))) continue;
-        if (blocks.some((o) => inside(c, o))) continue;
+        if (allBlocks.some((o) => inside(c, o))) continue;
         if (polyArea(clipToBox(local, { x0: xs[i], x1: xs[i + 1], y0: ys[j], y1: ys[j + 1] })) <= 1) continue;
         open[j * cx + i] = 1;
       }
@@ -715,7 +900,10 @@ function rimBuild(
         };
         while (j1 < cy && rowOpen(j1) && ys[j1 + 1] - ys[j] <= maxSide + 1 && (xs[i1] - xs[i]) * (ys[j1 + 1] - ys[j]) <= maxArea) j1++;
         for (let jj = j; jj < j1; jj++) for (let ii = i; ii < i1; ii++) open[jj * cx + ii] = 0;
-        fixed.push({ poly: clipToBox(local, { x0: xs[i], x1: xs[i1], y0: ys[j], y1: ys[j1] }), from: "gap" });
+        // Between a turned row and the square rows behind it: filled on site (see `rows`).
+        const mid = { x: (xs[i] + xs[i1]) / 2, y: (ys[j] + ys[j1]) / 2 };
+        const fill = rows.some((row) => row && distToPolyline(mid, row.line) <= row.depthMm * 2);
+        fixed.push({ poly: clipToBox(local, { x0: xs[i], x1: xs[i1], y0: ys[j], y1: ys[j1] }), from: fill ? "fill" : "gap" });
       }
     const decks = laid.decks.filter((_, i) => keep[i]);
     const keptArea = kept.reduce((s, b) => s + polyArea(clipToBox(local, toBox(b))), 0);
@@ -747,7 +935,7 @@ function rimBuild(
     }
     return bestOf!;
 
-    function finish(raw: { poly: Point[]; from: "deck" | "rim" | "gap" }[], regions: Point[][]): RimEval {
+    function finish(raw: { poly: Point[]; from: "deck" | "rim" | "gap" | "fill" }[], regions: Point[][]): RimEval {
       for (const region of regions) {
         if (covering(region) > 0.5) continue;
         const b = boxOf(region);
@@ -772,6 +960,10 @@ function rimBuild(
         if (a < RIM_SLIVER_MM2) continue;
         const b = boxOf(poly);
         if (a / Math.max(b.x1 - b.x0, b.y1 - b.y0) < RIM_THIN_MM) continue;
+        if (from === "fill") {
+          bare += a;
+          continue;
+        }
         const own = ownedFor(poly);
         if (own) pieces.push({ poly, owned: own });
         // A bare rectangle left among the decks is a size question (the drawn size is not what the
@@ -805,7 +997,7 @@ function rimBuild(
   // where the plain rectangle the outer corners leave is built of sheets.
   const first = evaluate(runs.map(() => false));
   let winner = first;
-  const flips = reps.map((_, g) => runs.map((r, i) => groupOf[i] === g && r.outerOk));
+  const flips = reps.map((_, g) => runs.map((r, i) => groupOf[i] === g && r.outerOk && !onLine[i]));
   const helped: boolean[][] = [];
   for (const f of flips) {
     if (!f.some(Boolean)) continue;
@@ -814,7 +1006,7 @@ function rimBuild(
     if (better(e.score, winner.score)) winner = e;
   }
   if (runs.every((r) => r.outerOk) && reps.length > 1) {
-    const e = evaluate(runs.map(() => true));
+    const e = evaluate(runs.map((_, i) => !onLine[i]));
     if (better(e.score, winner.score)) winner = e;
   }
   if (helped.length > 1) {
@@ -851,7 +1043,71 @@ function rimBuild(
     const shape = `${g.info.kind}:${g.info.widthMm}x${g.info.depthMm}:${k}`;
     return g.members.map((m) => ({ outline: m.map(world), shape, info: g.info }));
   });
-  return { decks: [...winner.decks, ...pieceDecks], missing, covered: winner.covered };
+  const rowDecks: LaidDeck[] = rows.flatMap((row) =>
+    (row?.decks ?? []).map((d) => ({ typeId: d.type.id, centre: world(d.centre), rotation: norm(baseDeg + frame.s * d.deg), widthMm: d.type.widthMm, depthMm: d.type.depthMm })),
+  );
+  return { decks: [...winner.decks, ...pieceDecks, ...rowDecks], missing, covered: winner.covered + rowArea };
+}
+
+/** The distance from a point to an open polyline. */
+function distToPolyline(p: Point, pts: readonly Point[]): number {
+  let best = Infinity;
+  for (let k = 0; k + 1 < pts.length; k++) best = Math.min(best, distToBoundary(p, [pts[k], pts[k + 1]]));
+  return best;
+}
+
+/** Under this many degrees off the rows, an angled side is a sliver along them — a piece, not a row. */
+const BEVEL_MIN_DEG = 10;
+
+interface BevelRow {
+  decks: { type: DeckType; centre: Point; deg: number }[];
+  polys: Point[][];
+  /** The side it runs along, and how deep it is. */
+  line: Point[];
+  depthMm: number;
+}
+
+/** A row of whole decks turned to run along a run that is a long STRAIGHT angled side — the main deck,
+ *  long side along the line, its outer edge on it, centred in the stretch where they fit. In the
+ *  fill's frame; null when the run is curved, shorter than a deck, within BEVEL_MIN_DEG of the rows,
+ *  or no deck fits along it. */
+function bevelRow(run: RimRun, poly: readonly Point[], main: DeckType, blocks: readonly (readonly Point[])[], tol: number): BevelRow | null {
+  const A = run.pts[0];
+  const B = run.pts[run.pts.length - 1];
+  const L = Math.hypot(B.x - A.x, B.y - A.y);
+  const along = Math.max(main.widthMm, main.depthMm);
+  const d = Math.min(main.widthMm, main.depthMm);
+  if (L < along - tol) return null;
+  const u = { x: (B.x - A.x) / L, y: (B.y - A.y) / L };
+  if (run.pts.some((p) => Math.abs((p.x - A.x) * u.y - (p.y - A.y) * u.x) > 2)) return null;
+  const deg = (Math.atan2(u.y, u.x) * 180) / Math.PI;
+  const off = ((deg % 90) + 90) % 90;
+  if (Math.min(off, 90 - off) < BEVEL_MIN_DEG) return null;
+  // Into the stage: the side the run's inner corner is on.
+  let n = { x: -u.y, y: u.x };
+  if ((run.inner.x - A.x) * n.x + (run.inner.y - A.y) * n.y < 0) n = { x: -n.x, y: -n.y };
+  const at = (s: number, o: number) => ({ x: A.x + u.x * s + n.x * o, y: A.y + u.y * s + n.y * o });
+  const onStage = (p: Point) => (inside(p, poly) || distToBoundary(p, poly) <= tol) && !blocks.some((b) => inside(p, b));
+  const fits = (s: number) => [0, 0.5, 1].every((f) => [1, d / 2, d - 1].every((o) => onStage(at(s + 1 + f * (along - 2), o))));
+  let lo = -1;
+  let hi = -1;
+  for (let s = -tol; s + along <= L + tol; s += 10)
+    if (fits(s)) {
+      if (lo < 0) lo = s;
+      hi = s;
+    }
+  if (lo < 0) return null;
+  const k = Math.floor((hi - lo) / along + 1e-6) + 1;
+  const start = lo + (hi - lo - (k - 1) * along) / 2;
+  const decks: BevelRow["decks"] = [];
+  const polys: Point[][] = [];
+  for (let j = 0; j < k; j++) {
+    const s = start + j * along;
+    if (!fits(s)) continue;
+    decks.push({ type: main, centre: at(s + along / 2, d / 2), deg: main.widthMm >= main.depthMm ? deg : deg + 90 });
+    polys.push([at(s, 0), at(s + along, 0), at(s + along, d), at(s, d)]);
+  }
+  return decks.length ? { decks, polys, line: [A, B], depthMm: d } : null;
 }
 
 /** An oval piece's outline about its centre, for comparing with the rim. */
@@ -1251,6 +1507,26 @@ if (isMain(import.meta.url)) {
     const t2 = Date.now();
     fillWithDecks(apron, base244, { front: 0, smooth });
     assert(Date.now() - t2 < 1000, "a stage with a rim answers inside a second");
+
+    // ורדה, 2026-10-28: an 8.01m deep band. Ten rows of 80cm strips cover it to the millimetre;
+    // six rows of sheets and a 60cm strip leave 9cm at the back — and are what a crew lays.
+    const band = fillWithDecks(rect(0, 0, 14640, 8012), base244, { front: 0 });
+    assert(count(band, "122") === 36 && count(band, "60") === 6 && band.decks.length === 42, "an 8.01m deep band is six rows of sheets and a strip, not ten rows of strips");
+
+    // A long side at 45° gets a row of sheets turned to run along it (the אמארה plan's crew) —
+    // the square rows behind, and nothing listed to buy.
+    const splay = fillWithDecks([{ x: 0, y: 0 }, { x: 12000, y: 0 }, { x: 12000, y: 1000 }, { x: 7000, y: 6000 }, { x: 0, y: 6000 }], base244, { front: 0 });
+    const along45 = splay.decks.filter((d) => Math.abs((((d.rotation % 180) + 180) % 180) - 135) < 0.5);
+    assert(along45.length === 2 && along45.every((d) => d.typeId === "122"), "a 7m side at 45° carries two sheets turned along it");
+    assert(splay.missing.length === 0 && splay.decks.every((d) => along45.includes(d) || d.rotation % 90 === 0), "…the rest square to the front, and no cut pieces");
+
+    // A half-round apron too big to be one piece is decked as far as sheets reach — from the front
+    // line out — and only its rim is pieces.
+    const bigApron: Point[] = [{ x: 0, y: 0 }, ...arc(6000, 0, 4000, 180, 360, 24), { x: 12000, y: 0 }, { x: 12000, y: 4880 }, { x: 0, y: 4880 }];
+    const ba = fillWithDecks(bigApron, base244, { front: 0, smooth: Array.from({ length: 23 }, (_, k) => k + 2) });
+    const inApron = ba.decks.filter((d) => d.centre.y < 0 && !d.outline);
+    assert(inApron.length >= 6 && inApron.some((d) => Math.abs(d.centre.y + 610) < 2), "a 4m half-round apron is sheets inside, the first row on the front line");
+    assert(ba.missing.every((m) => m.info.kind !== "rect"), "…and none of its pieces is a rectangle a sheet would cover");
   }
 
   const t0 = Date.now();

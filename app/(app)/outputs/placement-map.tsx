@@ -58,6 +58,7 @@ import {
 import { pieceName } from "@/lib/studio/stage-rim";
 import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
 import { uprightTransform } from "@/lib/design-document/mirror";
+import { darkFill, deckLabel, heightColour } from "@/lib/outputs/deck-colours";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
@@ -274,7 +275,13 @@ export function PlacementMap({
       ? [{ label: `כיסאות: ${chairName(chairKinds[0][0])} · ${chairKinds[0][1]}`, swatch: "outline" }]
       : chairKinds.map(([id, n]) => ({ label: `${chairName(id)} · ${n}`, swatch: "mark" as const, mark: chairMark.get(id) }));
 
+  // The stage sheet's key is the crew's: one row per height the decks on it stand at, in its colour.
+  const deckHeights =
+    sheet.id === "stage" && !mono
+      ? [...new Set(doc.placements.flatMap((p) => (p.stage ? layStage(p.stage, deckOf).decks.map((d) => Math.round(d.heightMm / 10)) : [])))].sort((a, b) => a - b)
+      : [];
   const symbolKey: LegendRow[] = [
+    ...deckHeights.map((h) => ({ label: `${h} ס״מ`, swatch: "fill" as const, color: heightColour(h * 10) })),
     ...(chairSheet ? chairKey : []),
     ...(mono && framedFeatures.some((f) => f.kind === "stage") ? [{ label: "במה", swatch: "hatch-diagonal" as const }] : []),
     ...(mono && framedFeatures.some((f) => f.kind === "pool") ? [{ label: "בריכה", swatch: "hatch-cross" as const }] : []),
@@ -942,45 +949,67 @@ function StageGlyph({ p, build, railing, label, carries, den, skip, mono = false
         strokeWidth={LINE_WEIGHTS.furniture}
         vectorEffect="non-scaling-stroke"
       />
+      {/* A level is told by its decks' colour on the build sheet; elsewhere it is hatched. */}
       {(stage.levels ?? []).map((l) => (
         <polygon
           key={l.id}
           points={l.outline.map((q) => `${q.x},${q.y}`).join(" ")}
-          fill="url(#hatch-diagonal)"
+          fill={build ? "none" : "url(#hatch-diagonal)"}
           fillOpacity={0.35}
           stroke={INK}
           strokeWidth={LINE_WEIGHTS.furniture}
           vectorEffect="non-scaling-stroke"
         />
       ))}
-      {laid?.decks.map((d, i) => (
-        <g key={i}>
-          {/* A piece standing whole (a disc, a half-round) is drawn as the shape it is; on a stage
-              that IS the piece, that line is the stage's own outline. */}
-          {d.outline ? (
-            <polygon
-              points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
-              fill="none"
-              stroke={INK_SOFT}
-              strokeWidth={LINE_WEIGHTS.annotation}
-              vectorEffect="non-scaling-stroke"
-            />
-          ) : !d.round && (
-            <rect
-              x={-d.widthMm / 2}
-              y={-d.depthMm / 2}
-              width={d.widthMm}
-              height={d.depthMm}
-              transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-              fill="none"
-              stroke={INK_SOFT}
-              strokeWidth={LINE_WEIGHTS.annotation}
-              vectorEffect="non-scaling-stroke"
-            />
-          )}
-          {text(d.centre.x, d.centre.y, String(i + 1), Math.min(320, Math.min(d.widthMm, d.depthMm) * 0.4), 600)}
-        </g>
-      ))}
+      {/* The crew's drawing (the אמארה plan of 26.10): every deck in the colour of its height
+          (lib/outputs/deck-colours.ts) and named by its size along its long side — "122-244". In
+          black and white the colour is gone, so the height is written under the size instead. */}
+      {laid?.decks.map((d, i) => {
+        const fill = mono ? "#ffffff" : heightColour(d.heightMm);
+        const ink = darkFill(fill) ? "#ffffff" : INK;
+        const short = Math.min(d.widthMm, d.depthMm);
+        const long = Math.max(d.widthMm, d.depthMm);
+        // The size, as large as the deck's short side allows and a long one holds, never over 2.4
+        // printed mm — a strip's too, small (the crew zooms the PDF) — and left off under 0.6mm.
+        const size = Math.min(short * 0.42, long / 4.6, 2.2 * den);
+        const along = d.rotation + (d.widthMm >= d.depthMm ? 0 : 90);
+        const onPage = (((p.mirrored ? (p.rotation || 0) + 180 - along : (p.rotation || 0) + along) % 180) + 270) % 180 - 90;
+        return (
+          <g key={i}>
+            {/* A piece standing whole (a disc, a half-round) is drawn as the shape it is; on a stage
+                that IS the piece, that line is the stage's own outline. */}
+            {d.outline ? (
+              <polygon points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")} fill={fill} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+            ) : d.round ? (
+              <ellipse cx={d.centre.x} cy={d.centre.y} rx={d.widthMm / 2} ry={d.depthMm / 2} transform={`rotate(${d.rotation} ${d.centre.x} ${d.centre.y})`} fill={fill} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+            ) : (
+              <rect
+                x={-d.widthMm / 2}
+                y={-d.depthMm / 2}
+                width={d.widthMm}
+                height={d.depthMm}
+                transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+                fill={fill}
+                stroke={INK}
+                strokeWidth={LINE_WEIGHTS.annotation}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            {size >= 0.6 * den && (
+              <g transform={`translate(${d.centre.x} ${d.centre.y})${upright ? ` ${upright}` : ""} rotate(${onPage})`}>
+                <text textAnchor="middle" dominantBaseline="central" y={mono ? -size * 0.45 : 0} fontFamily="Assistant, sans-serif" fontSize={size} fontWeight={500} fill={ink} direction="ltr" className="nums">
+                  {deckLabel(d.widthMm, d.depthMm)}
+                </text>
+                {mono && (
+                  <text textAnchor="middle" dominantBaseline="central" y={size * 0.65} fontFamily="Assistant, sans-serif" fontSize={size * 0.8} fill={INK_SOFT} direction="ltr" className="nums">
+                    {`h${Math.round(d.heightMm / 10)}`}
+                  </text>
+                )}
+              </g>
+            )}
+          </g>
+        );
+      })}
       {/* A rim piece the studio does not have yet (a quarter-round, a curved deck): where it goes,
           dashed, and said — the crew is not handed a stage with an unexplained hole in it. */}
       {laid?.missing.map((m, i) => {
@@ -1142,10 +1171,15 @@ export function StageSchedule({
         ];
         const rows = parts.map((part) => {
           const decks = laid.decks.filter((d) => d.level === part.id);
-          const byType = new Map<string, number>();
-          for (const d of decks) byType.set(d.typeId, (byType.get(d.typeId) ?? 0) + 1);
-          const first = laid.decks.indexOf(decks[0]) + 1;
-          return { ...part, byType, from: first, to: first + decks.length - 1, count: decks.length };
+          // By the size the drawing writes on each deck ("122-244"), largest first.
+          const bySize = new Map<string, { n: number; area: number; name?: string }>();
+          for (const d of decks) {
+            const k = d.outline ? (productName(d.typeId) ?? "פלטה בצורה") : deckLabel(d.widthMm, d.depthMm);
+            const was = bySize.get(k);
+            bySize.set(k, { n: (was?.n ?? 0) + 1, area: d.widthMm * d.depthMm, name: productName(d.typeId) ?? undefined });
+          }
+          const sizes = [...bySize.entries()].sort((a, b) => b[1].area - a[1].area);
+          return { ...part, sizes, count: decks.length };
         });
         const shapes = (stage.stairs ?? []).map((st) => edgeItemShape(stage, st, deckOf)).filter((x) => !!x);
         const flights = shapes.filter((x) => x.kind === "stairs");
@@ -1175,7 +1209,6 @@ export function StageSchedule({
                   <th className="py-1 text-start font-medium">חלק</th>
                   <th className="py-1 text-start font-medium">גובה</th>
                   <th className="py-1 text-start font-medium">פלטות</th>
-                  <th className="py-1 text-start font-medium">מספרים בשרטוט</th>
                   <th className="py-1 text-start font-medium">רגליים</th>
                 </tr>
               </thead>
@@ -1183,11 +1216,22 @@ export function StageSchedule({
                 {rows.map((r) => (
                   <tr key={r.label}>
                     <td className="py-1.5 text-ink">{r.label}</td>
-                    <td className="nums py-1.5 text-ink">{cm(r.heightMm)} ס״מ</td>
-                    <td className="py-1.5 text-ink">
-                      {[...r.byType.entries()].map(([id, n]) => `${productName(id) ?? "פלטה"} ×${n}`).join(" · ") || "—"}
+                    <td className="nums py-1.5 text-ink">
+                      {/* The drawing's colour for this height — the key the crew reads the plan by. */}
+                      <span className="inline-flex items-center gap-1.5">
+                        <span aria-hidden className="inline-block h-3 w-3 rounded-[2px] border border-ink" style={{ background: heightColour(r.heightMm) }} />
+                        {cm(r.heightMm)} ס״מ
+                      </span>
                     </td>
-                    <td className="nums py-1.5 text-ink-soft">{r.count > 0 ? (r.count === 1 ? r.from : `${r.from}–${r.to}`) : "—"}</td>
+                    <td className="py-1.5 text-ink">
+                      {r.sizes.map(([label, x], k) => (
+                        <span key={label} title={x.name}>
+                          {k > 0 && " · "}
+                          <span className="nums" dir="ltr">{label}</span> ×{x.n}
+                        </span>
+                      ))}
+                      {r.sizes.length === 0 && "—"}
+                    </td>
                     {/* Four adjustable legs to a deck, set to the part's height — what the crew
                         counts out and dials in before a deck goes down. */}
                     <td className="nums py-1.5 text-ink-soft">{r.count > 0 ? `${r.count * LEGS_PER_DECK} × ${cm(r.heightMm)} ס״מ` : "—"}</td>
@@ -1218,7 +1262,7 @@ export function StageSchedule({
           </div>
         );
       })}
-      <p className="mt-2 text-xs text-muted">הפלטות ממוספרות מהחזית לאחור, בשורות. חזית הבמה היא הצד שמסומן ״קהל״.</p>
+      <p className="mt-2 text-xs text-muted">על כל פלטה בשרטוט כתובה מידתה בס״מ (122-244), וצבעה הוא צבע הגובה שלה. חזית הבמה היא הצד שמסומן ״קהל״.</p>
     </section>
   );
 }
