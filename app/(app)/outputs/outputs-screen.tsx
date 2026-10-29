@@ -34,8 +34,10 @@ import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
 import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
 
-type View = "packing" | "map" | "quote";
+export type View = "packing" | "map" | "quote";
 const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר" };
+/** Whether a `?view=` is one of the documents — the page reads it, the runway's buttons write it. */
+export const isView = (v: string | undefined): v is View => v !== undefined && v in TITLES;
 /** Rail order, and it is not TITLES' key order by accident: the quote is first because it is what
  *  this screen opens on — this is the stage that CLOSES a meeting, and the two crew sheets are
  *  prepared afterwards, with nobody else in the room. */
@@ -67,12 +69,20 @@ const MARGIN_MM = 16;
 /** `frame`: which screen this is a page of. The same component closes the meeting (app/meeting) and
  *  is /outputs on its own; the one thing that differs is where "nothing to print yet" sends the
  *  designer — back into the stepper, or out to the studio (./back-to-studio.tsx).
- *  `initialProducts`: the catalog, read on the server by /outputs (the meeting has none to hand). */
-export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "studio" | "meeting"; initialProducts?: Product[] }) {
+ *  `initialProducts`: the catalog, read on the server by /outputs (the meeting has none to hand).
+ *  `initialView`: the document to open on (`?view=`, from the runway's alert buttons); the quote
+ *  otherwise — this is the stage that closes a meeting. */
+export function OutputsScreen({
+  frame = "studio",
+  initialProducts,
+  initialView,
+}: {
+  frame?: "studio" | "meeting";
+  initialProducts?: Product[];
+  initialView?: View;
+}) {
   const meeting = frame === "meeting";
-  // Empty until the event's real document loads. A packing list is the one screen that must never
-  // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
-  const [view, setView] = useState<View>("quote");
+  const [view, setView] = useState<View>(initialView ?? "quote");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("auto");
   // The booklet in colour (the venue's lawn, pool, trees) or in black and white for a crew that gets

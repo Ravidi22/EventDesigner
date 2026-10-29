@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { requireDesigner } from "@/lib/auth/guard";
 import { fetchRunway } from "@/lib/production/actions";
+import { fetchEvents } from "@/lib/events/actions";
+import { fetchAppointments } from "@/lib/appointments/actions";
 import { ProductionScreen } from "./production-screen";
 
 export const metadata: Metadata = { title: "הפקה · Eve" };
@@ -10,13 +12,14 @@ export const metadata: Metadata = { title: "הפקה · Eve" };
 // action dispatched from the client is a POST, so it cannot start until React has mounted and it
 // can never be prefetched by <Link>.
 //
-// ONE read, deliberately, where the dashboard makes four. `fetchRunway` already assembles every
-// fact this screen shows — the events, their zones, their gallery passes, their drawings, their
-// quotes and their exports — in a single batch of set-based queries, and it returns the finished
-// `Runway` rather than raw rows. That is the whole reason the derivation lives in
-// lib/production/runway.ts as a pure function: the server does the reducing once, and the screen
-// renders what it is handed instead of recomputing six checkpoints per row on every keystroke of
-// the search box.
+// THREE reads, together. `fetchRunway` assembles every fact the LIST shows — the events, their
+// zones, their gallery passes, their drawings, their quotes and their exports — in one batch of
+// set-based queries and returns the finished `Runway`, so the screen renders what it is handed
+// instead of recomputing the checkpoints per row on every keystroke of the search box. The events
+// and the diary are for the event DRAWER the rows open (the dashboard's own, app/(app)/dashboard/
+// event-detail-drawer.tsx): the brief, the contacts, the meetings, the client's side and, for a
+// confirmed event, the production section. A row used to jump straight into /studio, which is a
+// design surface; from a screen about deadlines the first click should be a look, not a leap.
 //
 // There is no venue parameter, and that is the fix for one of the old screen's real bugs. The
 // Kanban filtered to whichever venue the sidebar had active, which meant "how many open deals do I
@@ -37,5 +40,14 @@ export default async function ProductionPage({
   await requireDesigner();
   const params = await searchParams;
   const venueId = (Array.isArray(params.venue) ? params.venue[0] : params.venue) || undefined;
-  return <ProductionScreen key={venueId ?? "all"} runway={await fetchRunway()} venueId={venueId} />;
+  const [runway, events, appointments] = await Promise.all([fetchRunway(), fetchEvents(), fetchAppointments()]);
+  return (
+    <ProductionScreen
+      key={venueId ?? "all"}
+      runway={runway}
+      venueId={venueId}
+      initialEvents={events}
+      initialAppointments={appointments}
+    />
+  );
 }

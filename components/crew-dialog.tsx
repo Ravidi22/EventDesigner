@@ -2,17 +2,32 @@
 
 import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
-import type { RunwayRow } from "@/lib/production/runway";
 import { setEventCrew } from "@/lib/production/actions";
 import { fetchMembers } from "@/lib/team/actions";
 import { STUDIO_ROLE_LABEL, type StudioMember } from "@/lib/team/types";
 import { Button } from "@/components/button";
 import { Drawer } from "@/components/drawer";
 
-/** Who is on this event's truck. A checklist of the studio's people, saved as a unit. */
-export function CrewDialog({ row, onSaved, onClose }: { row: RunwayRow; onSaved: () => void; onClose: () => void }) {
+/** Who is on this event's truck. A checklist of the studio's people, saved as a unit.
+ *
+ *  Shared by the runway row's menu and the event drawer's production section — the one typed fact
+ *  of production after the client's yes (lib/production/runway.ts), edited in one place. */
+export function CrewDialog({
+  eventId,
+  clientName,
+  crewIds,
+  onSaved,
+  onClose,
+}: {
+  eventId: string;
+  clientName: string;
+  /** Who is on it now. */
+  crewIds: readonly string[];
+  onSaved: () => void;
+  onClose: () => void;
+}) {
   const [members, setMembers] = useState<StudioMember[] | null>(null);
-  const [picked, setPicked] = useState<Set<string>>(() => new Set((row.event.crew ?? []).map((c) => c.id)));
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(crewIds));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +53,7 @@ export function CrewDialog({ row, onSaved, onClose }: { row: RunwayRow; onSaved:
     setBusy(true);
     setError(null);
     try {
-      await setEventCrew(row.event.id, [...picked]);
+      await setEventCrew(eventId, [...picked]);
       onSaved();
       onClose();
     } catch {
@@ -48,7 +63,7 @@ export function CrewDialog({ row, onSaved, onClose }: { row: RunwayRow; onSaved:
   };
 
   return (
-    <Drawer title={`צוות הקמה — ${row.event.clientName}`} onClose={onClose}>
+    <Drawer title={`צוות הקמה — ${clientName}`} onClose={onClose}>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-5">
           <p className="text-xs leading-relaxed text-muted">

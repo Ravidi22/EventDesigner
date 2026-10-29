@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -10,6 +10,7 @@ import {
   CalendarHeart,
   CircleCheck,
   CircleSlash,
+  FileText,
   Trash2,
   MessagesSquare,
   PenTool,
@@ -18,32 +19,29 @@ import {
   RotateCcw,
   Users,
 } from "lucide-react";
-import type { Runway, RunwayRow } from "@/lib/production/runway";
+import type { ActionTarget, Runway, RunwayRow } from "@/lib/production/runway";
 import { LANE_HINT, LANE_LABEL, type LaneId } from "@/lib/production/runway";
-import { confirmEvent, deleteEvent, markEventLost, patchEvent, reopenEvent } from "@/lib/events/actions";
+import { confirmEvent, markEventLost, patchEvent, reopenEvent } from "@/lib/events/actions";
+import type { EventSummary } from "@/lib/events/types";
+import { useEvents } from "@/lib/events/use-events";
+import { clearActiveEventId, loadActiveEventId, setActiveEventId } from "@/lib/events/storage";
+import type { Appointment } from "@/lib/appointments/types";
+import { useAppointments } from "@/lib/appointments/use-appointments";
 import { useVenues } from "@/lib/venues/use-venues";
-import { setActiveEventId } from "@/lib/events/storage";
 import type { MenuItem } from "@/components/menu";
 import { SearchInput } from "@/components/search-input";
 import { Button } from "@/components/button";
 import { EmptyState, NoResults } from "@/components/empty-state";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EventDialog } from "@/components/event-dialog";
+import { CrewDialog } from "@/components/crew-dialog";
 import { PAGE_GUTTER } from "@/components/page-gutter";
-import { LoadRibbon } from "./load-ribbon";
+import { EventDetailDrawer } from "../dashboard/event-detail-drawer";
+import { AppointmentDialog } from "../dashboard/appointment-dialog";
+import { toISODate } from "../dashboard/dashboard-view-utils";
 import { LaneFilter, type FilterId } from "./lane-filter";
 import { CollisionBand, RunwayRowCard } from "./runway-row";
-import { CrewDialog } from "./crew-dialog";
-import {
-  groupByMonth,
-  planCollisions,
-  ribbonStart,
-  rowsOutsideRibbon,
-  scrollBehavior,
-  sundayOf,
-  todayOf,
-  weekCells,
-} from "./view-utils";
+import { groupByMonth, planCollisions } from "./view-utils";
 
 // THE PRODUCTION RUNWAY — what is coming, and what about it is late.
 //
@@ -58,18 +56,43 @@ import {
 //   I have" — and the answer to that is a chronological list, because the event date is a deadline
 //   that has never moved.
 //
-// So: three parts, top to bottom, and NOTHING ON THIS SCREEN SCROLLS SIDEWAYS.
+// So: two parts, top to bottom, and NOTHING ON THIS SCREEN SCROLLS SIDEWAYS.
 //
-//   1. A load ribbon — thirteen weeks across the content width. Navigation, not a chart.
-//   2. A filter bar — the lanes are a FILTER, so exactly one of them renders, at full width.
-//   3. The list — chronological always, grouped by month, one card shape at one density.
+//   1. A filter bar — the lanes are a FILTER, so exactly one of them renders, at full width.
+//   2. The list — chronological always, grouped by month under sticky headers, one card shape at
+//      one density. (A thirteen-week "load ribbon" used to sit above it as a second axis for the
+//      same rows; the month headers already do that job, and the ribbon cost the top of every
+//      visit. It is gone.)
 //
 // And the aesthetic instruction that outranks all of them: THE SCREEN IS SILENT WHEN NOTHING IS
 // WRONG. Alert ink appears for a late checkpoint and for a collision, and for nothing else. A
 // designer whose book is on schedule opens this and sees dates and names.
-export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?: string }) {
+//
+// ── A ROW OPENS THE EVENT, THE ALERT OPENS THE FIX ─────────────────────────────────────────────
+//
+// A click on the name opens the event's DRAWER — the dashboard's own (the brief, the contacts, the
+// meetings, the client's side, and for a confirmed event the production section: crew, equipment,
+// orders, printed sheets). The row used to jump straight into /studio, a design surface; from a
+// screen about deadlines the first click should be a look. The alert's button goes where the slip
+// is fixed (`row.action`, decided in runway.ts; `act` below decides how each target is reached).
+export function ProductionScreen({
+  runway,
+  venueId,
+  initialEvents,
+  initialAppointments,
+}: {
+  runway: Runway;
+  venueId?: string;
+  /** For the drawer. Both read on the server with the runway (page.tsx). */
+  initialEvents: EventSummary[];
+  initialAppointments: Appointment[];
+}) {
   const router = useRouter();
   const { venues, remove: removeVenue } = useVenues();
+  // The drawer's rows. Re-seeded by every router.refresh() (lib/events/use-events.ts), so a
+  // confirmation made in the drawer and the runway's re-derivation land together.
+  const { events, remove: removeEvent } = useEvents(initialEvents);
+  const { appointments, save: saveAppointment, remove: removeAppointment } = useAppointments(initialAppointments);
 
   // `?venue=` (see page.tsx): "what is still on this property", asked when deleting it was refused.
   // Every count on the screen is taken from the scoped rows, so the lane badges and the list agree.
@@ -89,16 +112,12 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
   // `production` by default: the lane the designer is being PAID for. An event the client has said
   // yes to is work with a delivery date; everything else is still a conversation.
   //
-  // ⚠ BUT NOT ONTO AN EMPTY LANE. `confirmedAt` is new, so on the first visit after it shipped
-  // NOTHING is confirmed — every live event sits under מוקדם or בהצעה — and opening on a lane
-  // reading "0" made a screen that was working perfectly look broken. It is not only a migration
-  // artefact either: a studio between seasons, or one that files everything the week after, lands
-  // in the same place honestly.
-  //
-  // So the opening lane is the first one that has anything in it, in the order the filter bar
-  // already puts them. This is a DEFAULT, not a redirect — `setFilter` still goes wherever it is
-  // told, an empty lane reached by clicking still renders its own empty state (that is an answer to
-  // a question the designer asked), and the fallback is computed once at mount rather than tracking
+  // ⚠ BUT NOT ONTO AN EMPTY LANE. A studio between seasons, or one that files everything the week
+  // after, lands on a lane reading "0" — and a screen that opens on nothing looks broken. So the
+  // opening lane is the first one that has anything in it, in the order the filter bar already
+  // puts them. This is a DEFAULT, not a redirect — `setFilter` still goes wherever it is told, an
+  // empty lane reached by clicking still renders its own empty state (that is an answer to a
+  // question the designer asked), and the fallback is computed once at mount rather than tracking
   // `counts`, so confirming the last event in a lane cannot yank the view out from under the click
   // that confirmed it.
   const [filter, setFilter] = useState<FilterId>(() => {
@@ -111,23 +130,38 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
   // time is enough — these are single clicks on single rows, not a batch surface.
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The row whose "סומן כלא נסגר" is waiting on the confirmation. ONE dialog for the whole screen,
-  // owned here rather than one per card — the same arrangement the catalog uses, and the reason
-  // every delete in a surface asks the same question in the same words.
-  const [losing, setLosing] = useState<RunwayRow | null>(null);
+  // The event whose "סומן כלא נסגר" is waiting on the confirmation. ONE dialog for the whole
+  // screen, owned here rather than one per card — the same arrangement the catalog uses, and the
+  // reason every delete in a surface asks the same question in the same words.
+  const [losing, setLosing] = useState<{ id: string; clientName: string } | null>(null);
   // Same arrangement for the one delete that cannot be undone. Archive and "not closed" both keep
   // the event; this is for the one that should not exist at all — a test event, a duplicate, or
-  // the last thing standing between the designer and deleting a venue.
-  const [deleting, setDeleting] = useState<RunwayRow | null>(null);
+  // the last thing standing between the designer and deleting a venue. Asked from a row's menu or
+  // from inside the drawer; either way it is this one question.
+  const [deleting, setDeleting] = useState<{ id: string; clientName: string; date: string } | null>(null);
   const [deletingVenue, setDeletingVenue] = useState(false);
-  // The row whose crew is being picked. One dialog, owned here, like the two confirmations.
-  const [crewFor, setCrewFor] = useState<RunwayRow | null>(null);
+  // The event whose crew is being picked. One dialog, owned here, like the two confirmations.
+  const [crewFor, setCrewFor] = useState<{ id: string; clientName: string; crewIds: string[] } | null>(null);
 
-  const listRef = useRef<HTMLDivElement>(null);
-
-  // The server's today, recovered from the runway rather than read off this browser's clock — see
-  // todayOf. Everything the ribbon marks as "now" is measured against the same day the rows were.
-  const today = useMemo(() => todayOf(runway), [runway]);
+  // ── The drawer ───────────────────────────────────────────────────────────────────────────────
+  //
+  // By id, read off the live list, so an edit, a confirmation or a delete made from inside it shows
+  // (or leaves with) the row as it now is — the dashboard's own arrangement.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedEvent = useMemo(() => events.find((e) => e.id === selectedId) ?? null, [events, selectedId]);
+  const selectedVenueName = useMemo(
+    () => (selectedEvent?.venueId ? venues.find((v) => v.id === selectedEvent.venueId)?.name : undefined),
+    [venues, selectedEvent],
+  );
+  const selectedAppointments = useMemo(
+    () => (selectedEvent ? appointments.filter((a) => a.eventId === selectedEvent.id) : []),
+    [appointments, selectedEvent],
+  );
+  const [editingEvent, setEditingEvent] = useState<EventSummary | null>(null);
+  // The meeting dialog, as the dashboard keeps it: one object, so booking a new one can never leave
+  // a stale `editing` behind.
+  const [booking, setBooking] = useState<{ editing: Appointment | null; date: string; eventId?: string } | null>(null);
+  const liveEvents = useMemo(() => events.filter((e) => !e.archived), [events]);
 
   // ⚠ FILTER ONLY. Never `.sort()` — `runway.rows` arrives chronological and stays that way, because
   // urgency is a filter here and never a sort: a row must not move out from under the eye between
@@ -159,41 +193,13 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
   // The Tabular Count Rule exists to prevent.
   const showMoney = useMemo(() => visible.some((r) => r.event.quoteTotal != null), [visible]);
 
-  // The first visible row of each week is the ribbon's scroll target. `visible` is chronological, so
-  // a week's rows are always contiguous and the first one it sees is the first one there is.
-  const weekAnchors = useMemo(() => {
-    const anchors = new Map<string, string>();
-    let last = "";
-    for (const row of visible) {
-      if (!row.event.date) continue;
-      const week = sundayOf(row.event.date);
-      if (week !== last) {
-        anchors.set(row.event.id, week);
-        last = week;
-      }
-    }
-    return anchors;
-  }, [visible]);
-
-  const ribbon = useMemo(() => {
-    const start = ribbonStart(visible, today);
-    return { cells: weekCells(visible, start, today), outside: rowsOutsideRibbon(visible, start) };
-  }, [visible, today]);
-
-  const scrollToWeek = (weekStart: string) => {
-    // Queried out of the list rather than held in a ref map: the anchor moves every time the filter
-    // changes, and a map of refs would have to be torn down and rebuilt to stay honest about it.
-    const target = listRef.current?.querySelector<HTMLElement>(`[data-week="${weekStart}"]`);
-    target?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
-  };
-
   // ── Mutations ────────────────────────────────────────────────────────────────────────────────
   //
   // Every one of these ends in `router.refresh()` rather than in local state. The runway is DERIVED
   // — lanes, checkpoints, alerts and collisions are all recomputed from the facts by the server —
   // so patching a row here would mean re-deriving the whole screen in the client from a shape the
-  // client does not own. Refreshing re-runs page.tsx's `fetchRunway()` and the answer comes back
-  // whole and consistent, which is the only way it can be right.
+  // client does not own. Refreshing re-runs page.tsx's reads and the answer comes back whole and
+  // consistent, which is the only way it can be right.
   const run = async (id: string, mutate: () => Promise<unknown>) => {
     setPending(id);
     setError(null);
@@ -209,17 +215,49 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
   };
 
   // The one route into a screen that is about a specific event: point this device at it, then
-  // navigate. Same idiom the board used — the active event is a per-device UI position that lives
-  // in localStorage (lib/events/storage.ts), not a route parameter.
+  // navigate. The active event is a per-device UI position that lives in localStorage
+  // (lib/events/storage.ts), not a route parameter.
   const go = (id: string, path: string) => {
     setActiveEventId(id);
     router.push(path);
+  };
+
+  /** How each `ActionTarget` is reached — the one table that turns runway.ts's verbs into screens. */
+  const act = (row: RunwayRow, target: ActionTarget) => {
+    const e = row.event;
+    switch (target) {
+      case "details": {
+        const ev = events.find((x) => x.id === e.id);
+        if (ev) setEditingEvent(ev);
+        else setSelectedId(e.id);
+        return;
+      }
+      case "meeting":
+        return go(e.id, "/meeting");
+      case "studio":
+      case "proposal":
+        // The studio shows the client's proposal as a banner over the canvas and reviews it there.
+        return go(e.id, "/studio");
+      case "quote":
+        return go(e.id, "/outputs?view=quote");
+      case "packing":
+        return go(e.id, "/outputs?view=packing");
+      case "map":
+        return go(e.id, "/outputs?view=map");
+      case "confirm":
+        return void run(e.id, () => confirmEvent(e.id));
+      case "crew":
+        return setCrewFor({ id: e.id, clientName: e.clientName, crewIds: (e.crew ?? []).map((c) => c.id) });
+      case "orders":
+        return router.push("/suppliers?tab=orders");
+    }
   };
 
   const actionsFor = (row: RunwayRow): MenuItem[] => {
     const e = row.event;
     const items: MenuItem[] = [];
 
+    items.push({ label: "פרטי האירוע", icon: FileText, onSelect: () => setSelectedId(e.id) });
     // "The client said yes" is the ONE fact on this screen that nobody can derive — see the note on
     // `confirmedAt` — so it is the one thing here that is a button rather than a consequence. It is
     // offered only where it means something: an event already confirmed, lost or filed is not
@@ -227,28 +265,40 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
     if (!e.confirmedAt && !e.lostAt && !e.archived) {
       items.push({ label: "אישור הזמנה", icon: BadgeCheck, onSelect: () => void run(e.id, () => confirmEvent(e.id)) });
     }
-    items.push({ label: "פתיחה בסטודיו", icon: PenTool, onSelect: () => go(e.id, "/studio") });
+    items.push({ label: "פתיחה בסטודיו", icon: PenTool, separated: true, onSelect: () => go(e.id, "/studio") });
     items.push({ label: "פלטים תפעוליים", icon: Printer, onSelect: () => go(e.id, "/outputs") });
+    items.push({ label: "המשך פגישה", icon: MessagesSquare, onSelect: () => go(e.id, "/meeting") });
     // Who is on the truck — the one other typed fact on this screen (see event_crew in the schema).
     if (!e.lostAt && !e.archived) {
-      items.push({ label: "צוות הקמה", icon: Users, onSelect: () => setCrewFor(row) });
+      items.push({ label: "צוות הקמה", icon: Users, separated: true, onSelect: () => act(row, "crew") });
     }
-    items.push({ label: "המשך פגישה", icon: MessagesSquare, onSelect: () => go(e.id, "/meeting") });
     if (e.lostAt) {
-      items.push({ label: "החזרה לפעילות", icon: RotateCcw, onSelect: () => void run(e.id, () => reopenEvent(e.id)) });
+      items.push({ label: "החזרה לפעילות", icon: RotateCcw, separated: true, onSelect: () => void run(e.id, () => reopenEvent(e.id)) });
     }
     items.push({
       label: e.archived ? "שחזור מהארכיון" : "העברה לארכיון",
       icon: e.archived ? ArchiveRestore : Archive,
+      separated: !e.lostAt,
       onSelect: () => void run(e.id, () => patchEvent(e.id, { archived: !e.archived })),
     });
     // Last, and `danger`, so Menu draws its own hairline above it: the destructive row is never
     // flush against an ordinary one under a moving cursor.
     if (!e.lostAt) {
-      items.push({ label: "סומן כלא נסגר", icon: CircleSlash, onSelect: () => setLosing(row), danger: true });
+      items.push({ label: "סומן כלא נסגר", icon: CircleSlash, onSelect: () => setLosing({ id: e.id, clientName: e.clientName }), danger: true });
     }
-    items.push({ label: "מחיקת אירוע", icon: Trash2, onSelect: () => setDeleting(row), danger: true });
+    items.push({ label: "מחיקת אירוע", icon: Trash2, onSelect: () => setDeleting({ id: e.id, clientName: e.clientName, date: e.date }), danger: true });
     return items;
+  };
+
+  const confirmDelete = () => {
+    const target = deleting;
+    setDeleting(null);
+    if (!target) return;
+    // The pointer to "which event is open on this device" can outlive the event itself, and every
+    // screen that resolves it would keep asking the server about a row that is gone.
+    if (loadActiveEventId() === target.id) clearActiveEventId();
+    if (selectedId === target.id) setSelectedId(null);
+    void run(target.id, () => removeEvent(target.id));
   };
 
   // ── Empty states ─────────────────────────────────────────────────────────────────────────────
@@ -283,7 +333,7 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
       <EmptyState
         icon={CalendarHeart}
         title="אין עדיין אירועים"
-        body="ההפקה נספרת אחורה מתאריך האירוע — אזורים, גלריה, סקיצה, הצעה, אישור ורשימת ציוד, כל אחד עם יעד משלו. ברגע שיהיה כאן אירוע ראשון עם תאריך, המסך הזה יתחיל לספור."
+        body="ההפקה נספרת אחורה מתאריך האירוע — עד האישור: אזורים, גלריה, סקיצה והצעה; אחריו: צוות, הזמנות, רשימת ציוד ומפות — כל אחד עם יעד משלו. ברגע שיהיה כאן אירוע ראשון עם תאריך, המסך הזה יתחיל לספור."
         action={
           <Button onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" strokeWidth={2.5} />
@@ -335,10 +385,10 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
                   <RunwayRowCard
                     row={row}
                     actions={actionsFor(row)}
-                    onOpen={() => go(row.event.id, "/studio")}
+                    onOpen={() => setSelectedId(row.event.id)}
+                    onAction={(target) => act(row, target)}
                     notes={collisionPlan.notes.get(row.event.id) ?? []}
                     showMoney={showMoney}
-                    weekAnchor={weekAnchors.get(row.event.id)}
                     busy={pending === row.event.id}
                   />
                 </ListItems>
@@ -372,12 +422,6 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
         </div>
       )}
 
-      {/* The ribbon is navigation for the list underneath it, so it is drawn only when there is a
-          list to navigate — thirteen disabled cells over an empty state say nothing. */}
-      {visible.some((r) => r.event.date) && (
-        <LoadRibbon cells={ribbon.cells} outside={ribbon.outside} onPick={scrollToWeek} />
-      )}
-
       <div className="mb-4 flex shrink-0 flex-wrap items-center gap-3">
         <LaneFilter
           value={filter}
@@ -398,33 +442,40 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
         <span className="nums shrink-0 text-sm text-muted">{visible.length} אירועים</span>
       </div>
 
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
-        {list}
-      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">{list}</div>
+
+      <EventDetailDrawer
+        event={selectedEvent}
+        venueName={selectedVenueName}
+        appointments={selectedAppointments}
+        onClose={() => setSelectedId(null)}
+        onContinue={(e, to = "/meeting") => go(e.id, to)}
+        onEdit={setEditingEvent}
+        onOpenAppointment={(a) => setBooking({ editing: a, date: a.date })}
+        onCreateAppointment={(e) => setBooking({ editing: null, date: toISODate(new Date()), eventId: e.id })}
+        onDelete={(e) => setDeleting({ id: e.id, clientName: e.clientName, date: e.date })}
+        onEventChanged={() => router.refresh()}
+      />
 
       <ConfirmDialog
         open={losing !== null}
-        title={losing ? `לסמן את ${losing.event.clientName} כלא נסגר?` : ""}
+        title={losing ? `לסמן את ${losing.clientName} כלא נסגר?` : ""}
         body="האירוע יעבור ל״הסתיים״ ויירד מההפקה ומההצעות. העיצוב, ההצעה והפרטים נשמרים כמו שהם, ואפשר להחזיר אותו לפעילות מאותו תפריט."
         confirmLabel="סמן כלא נסגר"
         onConfirm={() => {
-          const row = losing;
+          const target = losing;
           setLosing(null);
-          if (row) void run(row.event.id, () => markEventLost(row.event.id));
+          if (target) void run(target.id, () => markEventLost(target.id));
         }}
         onClose={() => setLosing(null)}
       />
 
       <ConfirmDialog
         open={deleting !== null}
-        title={deleting ? `למחוק את ${deleting.event.clientName}?` : ""}
+        title={deleting ? `למחוק את ${deleting.clientName}?` : ""}
         body="האירוע יימחק לצמיתות, ואיתו האזורים, העיצוב, ההצעות, הפגישות והגלריה שלו. הוצאות שנרשמו עליו נשארות בספרים, ללא שיוך. אם רק רוצים להסתיר אותו — העברה לארכיון שומרת הכול."
         confirmLabel="מחיקת האירוע"
-        onConfirm={() => {
-          const row = deleting;
-          setDeleting(null);
-          if (row) void run(row.event.id, () => deleteEvent(row.event.id));
-        }}
+        onConfirm={confirmDelete}
         onClose={() => setDeleting(null)}
       />
 
@@ -447,9 +498,35 @@ export function ProductionScreen({ runway, venueId }: { runway: Runway; venueId?
         onClose={() => setDeletingVenue(false)}
       />
 
-      {crewFor && <CrewDialog row={crewFor} onSaved={() => router.refresh()} onClose={() => setCrewFor(null)} />}
+      {crewFor && (
+        <CrewDialog
+          eventId={crewFor.id}
+          clientName={crewFor.clientName}
+          crewIds={crewFor.crewIds}
+          onSaved={() => router.refresh()}
+          onClose={() => setCrewFor(null)}
+        />
+      )}
 
       <EventDialog open={creating} onClose={() => setCreating(false)} />
+      <EventDialog
+        open={editingEvent !== null}
+        event={editingEvent}
+        onClose={() => setEditingEvent(null)}
+        onSaved={() => router.refresh()}
+      />
+
+      <AppointmentDialog
+        open={booking !== null}
+        appointment={booking?.editing ?? null}
+        defaultDate={booking?.date ?? ""}
+        defaultEventId={booking?.eventId}
+        defaultVenueId={selectedEvent?.venueId}
+        events={liveEvents}
+        onSave={saveAppointment}
+        onDelete={removeAppointment}
+        onClose={() => setBooking(null)}
+      />
     </div>
   );
 }

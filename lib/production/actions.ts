@@ -38,7 +38,7 @@
 // `npm run check:costs` does not name it — but "no prices in a room with a client in it" is the
 // same rule, and the crew role, whose entire line is "מפות הצבה ורשימות הובלה בלבד — בלי מחירים",
 // is refused the total below rather than trusted to look away.
-import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/db/org";
 import { revalidateProduction } from "@/lib/db/revalidate";
@@ -50,14 +50,19 @@ import {
   events,
   exports,
   issuedQuotes,
+  orderLines,
   orders,
   sketchProposals,
+  suppliers,
   users,
 } from "@/lib/db/schema";
 import { assertEventOwned } from "@/lib/events/ownership";
 import { fetchCheckpointOffsets } from "@/lib/settings/actions";
 import { ROLE_CAPABILITIES } from "@/lib/team/types";
 import { grantedVenueIds } from "@/lib/venues/granted";
+import { assembleDemands } from "@/lib/suppliers/demand";
+import type { OrderStatus } from "@/lib/orders/types";
+import { readiness, type OrderedLine, type Readiness } from "./readiness";
 import { buildRunway, type EventFacts, type Runway } from "./runway";
 
 /** Today, as the SERVER's calendar day. `toISOString().slice(0,10)` would be the UTC day, which is
@@ -358,4 +363,164 @@ export async function setEventCrew(eventId: string, userIds: string[]): Promise<
     }
   });
   revalidateProduction();
+}
+
+// ── One event's production ─────────────────────────────────────────────────────────────────────
+
+export interface ExportStamp {
+  number: number;
+  documentVersion: number;
+  /** Epoch ms. */
+  at: number;
+}
+
+/** What the event drawer's production section shows — every line derived, none typed, no price. */
+export interface EventProduction {
+  crew: { id: string; name: string }[];
+  /** The orders whose window covers the event's day, by supplier. Counts and answers only: the
+   *  lines' cost stays in lib/orders. */
+  orders: { id: string; supplierName: string; status: OrderStatus; lines: number; reply: string; sentAt: number }[];
+  /** Null when there is no date or no drawing to count from. */
+  readiness: Readiness | null;
+  /** A drape fell back to its catalog width because the venue's walls could not be read. */
+  measured: boolean;
+  outputs: {
+    currentVersion?: number;
+    packing?: ExportStamp;
+    map?: ExportStamp;
+    quote?: ExportStamp;
+  };
+  /** Epoch ms since the client's unanswered changes were sent. */
+  proposalSince?: number;
+}
+
+/**
+ * The production facts of one event, read when its drawer opens.
+ *
+ * Heavier than a runway row on purpose — it reduces the event's drawing (and the drawings of the
+ * other events standing on the same day, for the stock peak) through the same demand assembly the
+ * procurement forecast uses (lib/suppliers/demand.ts) — and read for one event at a time, which is
+ * what makes that affordable.
+ */
+export async function fetchEventProduction(eventId: string): Promise<EventProduction> {
+  const actor = await currentActor();
+  const organizationId = actor.organizationId;
+  await assertEventOwned(organizationId, eventId);
+  const database = db();
+
+  const [event] = await database
+    .select({ id: events.id, clientName: events.clientName, eventDate: events.eventDate, venueId: events.venueId, confirmedAt: events.confirmedAt })
+    .from(events)
+    .where(and(eq(events.id, eventId), eq(events.organizationId, organizationId)));
+  if (!event) throw new Error("event not found");
+  const date = event.eventDate;
+
+  const [crewRows, orderRows, exportRows, docRows, proposalRows, dayRows] = await Promise.all([
+    database
+      .select({ userId: eventCrew.userId, name: users.name, email: users.email })
+      .from(eventCrew)
+      .innerJoin(users, eq(users.id, eventCrew.userId))
+      .where(and(eq(eventCrew.organizationId, organizationId), eq(eventCrew.eventId, eventId))),
+
+    date
+      ? database
+          .select({ id: orders.id, supplierName: suppliers.name, status: orders.status, reply: orders.reply, sentAt: orders.sentAt })
+          .from(orders)
+          .innerJoin(suppliers, eq(suppliers.id, orders.supplierId))
+          .where(and(eq(orders.organizationId, organizationId), lte(orders.windowFrom, date), gte(orders.windowTo, date)))
+          .orderBy(desc(orders.sentAt))
+      : Promise.resolve([]),
+
+    // The LATEST sheet of each kind — "is the paper in the crew's hand current" is this question,
+    // the opposite of the runway's "was it ever produced" (which reads the first).
+    database
+      .selectDistinctOn([exports.type], { type: exports.type, number: exports.number, documentVersion: exports.documentVersion, createdAt: exports.createdAt })
+      .from(exports)
+      .where(and(eq(exports.organizationId, organizationId), eq(exports.eventId, eventId)))
+      .orderBy(exports.type, desc(exports.number)),
+
+    database
+      .select({ version: designDocuments.version })
+      .from(designDocuments)
+      .where(and(eq(designDocuments.organizationId, organizationId), eq(designDocuments.eventId, eventId)))
+      .orderBy(desc(designDocuments.version))
+      .limit(1),
+
+    database
+      .select({ submittedAt: sketchProposals.submittedAt })
+      .from(sketchProposals)
+      .where(and(eq(sketchProposals.organizationId, organizationId), eq(sketchProposals.eventId, eventId), eq(sketchProposals.status, "submitted")))
+      .orderBy(asc(sketchProposals.submittedAt))
+      .limit(1),
+
+    // Everything standing on the same day: this event, and the others the client has booked —
+    // the stock has to cover all of them at once.
+    date
+      ? database
+          .select({ id: events.id, clientName: events.clientName, eventDate: events.eventDate, venueId: events.venueId, confirmedAt: events.confirmedAt })
+          .from(events)
+          .where(and(eq(events.organizationId, organizationId), eq(events.eventDate, date), eq(events.archived, false), isNull(events.lostAt)))
+      : Promise.resolve([]),
+  ]);
+
+  const lineRows = orderRows.length
+    ? await database
+        .select({ orderId: orderLines.orderId, variantId: orderLines.variantId, quantity: orderLines.quantity })
+        .from(orderLines)
+        .where(inArray(orderLines.orderId, orderRows.map((o) => o.id)))
+    : [];
+  const linesPerOrder = new Map<string, number>();
+  const statusOf = new Map(orderRows.map((o) => [o.id, o.status]));
+  const ordered = new Map<string, OrderedLine[]>();
+  for (const l of lineRows) {
+    linesPerOrder.set(l.orderId, (linesPerOrder.get(l.orderId) ?? 0) + 1);
+    const list = ordered.get(l.variantId) ?? [];
+    list.push({ variantId: l.variantId, quantity: Number(l.quantity), status: statusOf.get(l.orderId) ?? "sent" });
+    ordered.set(l.variantId, list);
+  }
+
+  // The day's demand. This event is reduced whatever its state (the drawer is asking about IT);
+  // the others count against the stock only once the client has booked them, as procurement does.
+  let readinessOf: Readiness | null = null;
+  let measured = true;
+  if (date) {
+    const rows = dayRows.some((r) => r.id === eventId) ? dayRows : [event, ...dayRows];
+    const { demands, lookup } = await assembleDemands(actor, rows);
+    const mine = demands.find((d) => d.eventId === eventId);
+    if (mine?.drawn) {
+      measured = mine.measured;
+      const elsewhere = new Map<string, number>();
+      for (const d of demands) {
+        if (d.eventId === eventId || !d.committed) continue;
+        for (const r of d.rows) elsewhere.set(r.variantId, (elsewhere.get(r.variantId) ?? 0) + r.quantity);
+      }
+      readinessOf = readiness(mine.rows, elsewhere, lookup, ordered);
+    }
+  }
+
+  const stamp = (type: "packing_list" | "placement_map" | "quote"): ExportStamp | undefined => {
+    const r = exportRows.find((x) => x.type === type);
+    return r ? { number: r.number, documentVersion: r.documentVersion, at: r.createdAt.getTime() } : undefined;
+  };
+
+  return {
+    crew: crewRows.map((r) => ({ id: r.userId, name: r.name?.trim() || r.email.split("@")[0] })),
+    orders: orderRows.map((o) => ({
+      id: o.id,
+      supplierName: o.supplierName,
+      status: o.status,
+      lines: linesPerOrder.get(o.id) ?? 0,
+      reply: o.reply,
+      sentAt: o.sentAt.getTime(),
+    })),
+    readiness: readinessOf,
+    measured,
+    outputs: {
+      currentVersion: docRows[0]?.version,
+      packing: stamp("packing_list"),
+      map: stamp("placement_map"),
+      quote: stamp("quote"),
+    },
+    proposalSince: proposalRows[0]?.submittedAt?.getTime(),
+  };
 }

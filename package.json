@@ -92,6 +92,7 @@
     "check:labels": "tsx lib/outputs/labels.ts",
     "check:procurement": "tsx lib/suppliers/procurement.ts",
     "check:runway": "tsx lib/production/runway.ts",
+    "check:readiness": "tsx lib/production/readiness.ts",
     "check:costs": "tsx lib/suppliers/cost-boundary.ts",
     "check:password": "tsx lib/auth/password.ts",
     "check:email": "tsx lib/email/config.ts && tsx lib/email/send.ts && tsx lib/email/templates/index.ts",

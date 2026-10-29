@@ -16,6 +16,7 @@ import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
 import { DrawerSection, SectionAction } from "./drawer-section";
 import { EventBookingCard } from "./event-booking-card";
 import { ClientAccessCard } from "./client-access-card";
+import { ProductionSection } from "./production-section";
 
 // The shell — the floating left-anchored <dialog>, its header and its one scrollbar — is
 // components/drawer.tsx, shared with the catalog's product form. What stays here is what this
@@ -143,6 +144,12 @@ export function EventDetailDrawer({
               </Button>
             </div>
           </div>
+
+          {/* Once the client has said yes the event is being PRODUCED, and that is the first thing
+              to read about it: the crew, the equipment, the suppliers' answers, the printed sheets
+              (./production-section.tsx). Before the yes the drawer is about selling, and the
+              booking card at the foot is where the yes is recorded. */}
+          {status === "confirmed" && <ProductionSection key={`production-${event.id}`} event={event} onChanged={onEventChanged} />}
 
           {/* Everything the details form asks, read back with its own words — the form's סוג, יום
               ההקמה and גוונים were never shown here, and the event's created-at was (it moved to the

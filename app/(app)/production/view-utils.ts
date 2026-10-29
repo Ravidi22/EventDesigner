@@ -1,5 +1,5 @@
-// The presentation half of the runway: how a date is written, which week and which month a row
-// falls in, and where a collision band goes once a filter has been applied.
+// The presentation half of the runway: how a date is written, which month a row falls in, and
+// where a collision band goes once a filter has been applied.
 //
 // Kept out of lib/production/runway.ts on purpose. That file is pure logic with a self-check that
 // runs under plain node — it decides WHAT is late. Nothing in here decides anything; it only turns
@@ -16,8 +16,6 @@
 // with `timeZone: "UTC"`, so both ends of the round trip agree and the offset cancels.
 import type { Collision, Runway, RunwayRow } from "@/lib/production/runway";
 import { shiftDays } from "@/lib/production/runway";
-
-const DAY_MS = 86_400_000;
 
 /** Midnight-UTC epoch for a `yyyy-mm-dd`. Not exported — nothing outside should hold one. */
 function utcDay(iso: string): number {
@@ -39,9 +37,9 @@ function localToday(): string {
  *
  * The runway was built on the server against one `today`, and every `daysUntil` in it counts from
  * that day. If the client recomputed its own — from a browser sitting on the far side of midnight,
- * or in another timezone — the ribbon would highlight a different week than the one the rows were
- * measured against, and nothing on screen would say so. So instead of asking the clock, we invert
- * an answer the server already gave us: for any dated row, `date − daysUntil` IS the server's today.
+ * or in another timezone — anything it marked as "now" would disagree with the rows, and nothing on
+ * screen would say so. So instead of asking the clock, we invert an answer the server already gave
+ * us: for any dated row, `date − daysUntil` IS the server's today.
  *
  * The local clock is the fallback for a runway with no dated rows at all, where there is nothing to
  * invert and nothing on screen that could disagree with it anyway.
@@ -49,14 +47,6 @@ function localToday(): string {
 export function todayOf(runway: Runway): string {
   const anchored = runway.rows.find((r) => r.event.date && r.daysUntil !== null);
   return anchored ? shiftDays(anchored.event.date, -anchored.daysUntil!) : localToday();
-}
-
-/** The Sunday of the week `iso` falls in. Sunday because that is where an Israeli week starts and
- *  where every other calendar surface in this app already snaps (weekGrid, dashboard-view-utils). */
-export function sundayOf(iso: string): string {
-  const t = utcDay(iso);
-  const dow = new Date(t).getUTCDay(); // 0 = Sunday, in UTC because `t` is UTC
-  return new Date(t - dow * DAY_MS).toISOString().slice(0, 10);
 }
 
 // ── Labels ─────────────────────────────────────────────────────────────────────────────────────
@@ -71,13 +61,6 @@ function fmt(iso: string, options: Intl.DateTimeFormatOptions): string {
  *  absent — the month header above the row is already carrying it. */
 export function rowDateLabel(iso: string): string {
   return iso ? fmt(iso, { weekday: "short", day: "numeric", month: "short" }) : "טרם נקבע";
-}
-
-/** The ribbon cell's date — deliberately numeric and tiny ("12.8"), because thirteen of them sit
- *  side by side and a month name in each would be the loudest thing on the screen. */
-export function weekCellLabel(sunday: string): string {
-  const d = new Date(utcDay(sunday));
-  return `${d.getUTCDate()}.${d.getUTCMonth() + 1}`;
 }
 
 /** "בעוד 12 ימים" / "היום" / "לפני 3 ימים". The single most important number on the row — the whole
@@ -110,6 +93,10 @@ const UNDATED_LABEL = "ללא תאריך";
  * ⚠ This never sorts. `runway.rows` is chronological already and a timeline you can re-sort is not
  * a timeline (see the note on `Runway.rows`) — so this walks the list once and starts a new group
  * whenever the month changes, which is also why a month can only ever appear once.
+ *
+ * The sticky month headers these make are the list's whole navigation. A thirteen-week "load
+ * ribbon" used to sit above the list as a second axis for the same rows; its own comment admitted a
+ * designer with eight events a month can recite the counts, and it cost the top of every visit.
  */
 export function groupByMonth(rows: readonly RunwayRow[]): MonthGroup[] {
   const groups: MonthGroup[] = [];
@@ -127,61 +114,6 @@ export function groupByMonth(rows: readonly RunwayRow[]): MonthGroup[] {
     });
   }
   return groups;
-}
-
-// ── The load ribbon ────────────────────────────────────────────────────────────────────────────
-
-export interface WeekCell {
-  /** ISO date of the week's Sunday — also the anchor a click scrolls the list to. */
-  start: string;
-  count: number;
-  /** True for the week containing the server's today. */
-  current: boolean;
-}
-
-/** A quarter. Thirteen weeks is how far a designer can actually see: far enough that a booking made
- *  today lands inside it, short enough that thirteen slim cells still fit the content width without
- *  a horizontal scrollbar — which this screen does not have anywhere, by construction. */
-export const RIBBON_WEEKS = 13;
-
-/**
- * Where the ribbon's window starts.
- *
- * Normally this week: the runway is about what is ahead, and "now" belongs at the leading edge.
- * The exception is a lane whose rows are all behind us — the closed lane is exactly that — where a
- * window pinned to today would be thirteen empty cells. So when the earliest visible row is in the
- * past, the window starts there instead.
- *
- * A closed lane holding years of history therefore only gets a ribbon over its first quarter. That
- * is a real limitation and it is the right trade: the ribbon is a scrollbar with information in it,
- * not a chart of the archive, and everything outside the window is still in the list below.
- */
-export function ribbonStart(visible: readonly RunwayRow[], today: string): string {
-  const firstDated = visible.find((r) => r.event.date)?.event.date;
-  return sundayOf(firstDated && firstDated < today ? firstDated : today);
-}
-
-/** One cell per week from `start`, each counting the VISIBLE rows that fall in it — the ribbon
- *  navigates the list you are looking at, so it has to count the list you are looking at. */
-export function weekCells(visible: readonly RunwayRow[], start: string, today: string): WeekCell[] {
-  const counts = new Map<string, number>();
-  for (const row of visible) {
-    if (!row.event.date) continue;
-    const week = sundayOf(row.event.date);
-    counts.set(week, (counts.get(week) ?? 0) + 1);
-  }
-  const thisWeek = sundayOf(today);
-  return Array.from({ length: RIBBON_WEEKS }, (_, i) => {
-    const weekStart = shiftDays(start, i * 7);
-    return { start: weekStart, count: counts.get(weekStart) ?? 0, current: weekStart === thisWeek };
-  });
-}
-
-/** How many visible dated rows the ribbon's window does NOT cover. Stated on screen rather than
- *  hidden: a ribbon that silently omits half the list is worse than no ribbon. */
-export function rowsOutsideRibbon(visible: readonly RunwayRow[], start: string): number {
-  const end = shiftDays(start, RIBBON_WEEKS * 7); // exclusive
-  return visible.filter((r) => r.event.date && (r.event.date < start || r.event.date >= end)).length;
 }
 
 // ── Collisions, after filtering ────────────────────────────────────────────────────────────────
@@ -249,14 +181,4 @@ export function planCollisions(
   }
 
   return { bandBefore, notes };
-}
-
-// ── Misc ───────────────────────────────────────────────────────────────────────────────────────
-
-/** Whether this browser has asked for less motion. Checked in JS because `scroll-behavior: auto`
- *  in the reduced-motion block of globals.css does NOT reach `scrollIntoView({ behavior: "smooth" })`
- *  — the option beats the stylesheet, so honouring the preference has to be done by hand. */
-export function scrollBehavior(): ScrollBehavior {
-  if (typeof window === "undefined" || !window.matchMedia) return "auto";
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 }
