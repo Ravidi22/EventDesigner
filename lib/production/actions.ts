@@ -61,7 +61,7 @@ import { fetchCheckpointOffsets } from "@/lib/settings/actions";
 import { ROLE_CAPABILITIES } from "@/lib/team/types";
 import { grantedVenueIds } from "@/lib/venues/granted";
 import { assembleDemands } from "@/lib/suppliers/demand";
-import type { OrderStatus } from "@/lib/orders/types";
+import { ORDER_STATUS_LABEL, type OrderStatus } from "@/lib/orders/types";
 import { readiness, type OrderedLine, type Readiness } from "./readiness";
 import { buildRunway, type EventFacts, type Runway } from "./runway";
 
@@ -522,5 +522,79 @@ export async function fetchEventProduction(eventId: string): Promise<EventProduc
       quote: stamp("quote"),
     },
     proposalSince: proposalRows[0]?.submittedAt?.getTime(),
+  };
+}
+
+// ── The load-in sheet ──────────────────────────────────────────────────────────────────────────
+
+/** What the printed load-in sheet (/outputs → דף הקמה) needs beyond the event and its drawing:
+ *  who is on the truck, and which suppliers deliver what. NO COST — this is paper the crew carries
+ *  round the hall, so the order lines come across as description × quantity and nothing else
+ *  (the outputs surface may not import lib/orders at all; `npm run check:costs`). */
+export interface LoadInFacts {
+  crew: { name: string }[];
+  deliveries: {
+    supplierName: string;
+    contactName?: string;
+    phone?: string;
+    /** The supplier's answer, already in words — the sheet imports nothing from lib/orders. */
+    statusLabel: string;
+    lines: { description: string; quantity: number; unitLabel: string }[];
+  }[];
+}
+
+export async function fetchLoadIn(eventId: string): Promise<LoadInFacts> {
+  const actor = await currentActor();
+  const organizationId = actor.organizationId;
+  await assertEventOwned(organizationId, eventId);
+  const database = db();
+
+  const [event] = await database
+    .select({ eventDate: events.eventDate })
+    .from(events)
+    .where(and(eq(events.id, eventId), eq(events.organizationId, organizationId)));
+  if (!event) throw new Error("event not found");
+  const date = event.eventDate;
+
+  const [crewRows, orderRows] = await Promise.all([
+    database
+      .select({ name: users.name, email: users.email })
+      .from(eventCrew)
+      .innerJoin(users, eq(users.id, eventCrew.userId))
+      .where(and(eq(eventCrew.organizationId, organizationId), eq(eventCrew.eventId, eventId))),
+    date
+      ? database
+          .select({
+            id: orders.id,
+            supplierName: suppliers.name,
+            contactName: suppliers.contactName,
+            phone: suppliers.phone,
+            status: orders.status,
+          })
+          .from(orders)
+          .innerJoin(suppliers, eq(suppliers.id, orders.supplierId))
+          .where(and(eq(orders.organizationId, organizationId), lte(orders.windowFrom, date), gte(orders.windowTo, date)))
+          .orderBy(asc(suppliers.name))
+      : Promise.resolve([]),
+  ]);
+  const lineRows = orderRows.length
+    ? await database
+        .select({ orderId: orderLines.orderId, description: orderLines.description, quantity: orderLines.quantity, unitLabel: orderLines.unitLabel, position: orderLines.position })
+        .from(orderLines)
+        .where(inArray(orderLines.orderId, orderRows.map((o) => o.id)))
+        .orderBy(asc(orderLines.position))
+    : [];
+
+  return {
+    crew: crewRows.map((r) => ({ name: r.name?.trim() || r.email.split("@")[0] })),
+    deliveries: orderRows.map((o) => ({
+      supplierName: o.supplierName,
+      contactName: o.contactName ?? undefined,
+      phone: o.phone ?? undefined,
+      statusLabel: ORDER_STATUS_LABEL[o.status],
+      lines: lineRows
+        .filter((l) => l.orderId === o.id)
+        .map((l) => ({ description: l.description, quantity: Number(l.quantity), unitLabel: l.unitLabel })),
+    })),
   };
 }
