@@ -247,6 +247,8 @@ export function floorKindBody(kind: SymbolKind, ctx: ItemContext): ItemBuild {
       return fountainBody(ctx);
     case "arch":
       return archBody(ctx);
+    case "gate":
+      return gateBody(ctx);
     case "tree":
       return treeBody(ctx);
     case "bar":
@@ -424,6 +426,51 @@ function archBody(ctx: ItemContext): ItemBuild {
     b.parts.push(box(L - foot, span, ARCH_SPAN_MM, vec3(0, 0, feetTop), frame));
     const spec = flowersFor(ctx.product, L - foot * 1.2, D * 0.9, "runner", tone, "arch");
     return merge(b, shifted(flowerBuild(spec, Math.max(40, D * 0.5), tagOf(ctx, "flowers")), 0, 0, feetTop + ARCH_SPAN_MM));
+  });
+}
+
+// ── gate (item-symbol.tsx gate) ─────────────────────────────────────────────────────────────────
+
+/** Voussoirs in a gate's arch — enough that the curve reads as a curve from across the room. */
+const GATE_VOUSSOIRS = 18;
+
+/** A gate (`L` along it): a column at each end — plinth, shaft, capital — and what joins them at the
+ *  top (GateStyle): a straight lintel over a square entrance, or a round arch springing from the
+ *  capitals with its crown at h. The columns min(D, 0.2 L) square and the beam as deep as the plan's
+ *  dashed one. Never under 2.1 m: a gate is walked through. */
+function gateBody(ctx: ItemContext): ItemBuild {
+  const { widthMm: w, depthMm: d, tone } = ctx;
+  const H = Math.max(ctx.heightMm, 2100);
+  return along(w, d, (L, D) => {
+    const P = Math.min(D, L * 0.2);
+    const cx = L / 2 - P / 2;
+    const beam = Math.min(D * 0.62, P * 0.8);
+    const stone = glossMaterial(tone);
+    const b = make(stone);
+    const plinth = H * 0.06;
+    const cap = Math.max(80, H * 0.04);
+    const arched = ctx.drawStyle === "arched";
+    const ring = P * 0.6;
+    // Where the columns stop: under the lintel, or where the arch springs so its crown is at h.
+    const spring = arched ? Math.max(H * 0.45, H - cx - ring / 2) : H - Math.max(150, H * 0.08);
+    for (const sx of [-1, 1]) {
+      b.parts.push(box(P, P, plinth, vec3(sx * cx, 0, 0), stone));
+      b.parts.push(cyl(P * 0.36, spring - cap - plinth, vec3(sx * cx, 0, plinth), stone));
+      b.parts.push(box(P * 0.86, P * 0.86, cap, vec3(sx * cx, 0, spring - cap), stone));
+    }
+    if (!arched) {
+      b.parts.push(box(L, beam, H - spring, vec3(0, 0, spring), stone));
+      return b;
+    }
+    // The arch on the circle through both column centres: each voussoir a box turned a quarter (its
+    // width across the gate) and leaned along the curve. A part turned 90° leans toward plan −x
+    // (scene-geometry's tilt rule), so the arch is laid from the +x column over to the −x one.
+    const chord = 2 * cx * Math.sin(rad(90 / GATE_VOUSSOIRS));
+    for (let i = 0; i < GATE_VOUSSOIRS; i++) {
+      const p = polar(cx, (180 * i) / GATE_VOUSSOIRS);
+      b.parts.push(box(beam, ring, chord * 1.02, vec3(p.x, 0, spring + p.y), stone, 90, (180 * (i + 0.5)) / GATE_VOUSSOIRS));
+    }
+    return b;
   });
 }
 
@@ -883,6 +930,21 @@ if (isMain(import.meta.url)) {
   assert(arch.instanced.some((r) => r.key.startsWith("flower:")) && arch.instanced.every((r) => r.at.at.z >= 2250 + 120 - 1e-9), "arch: a garland of flowers on the span");
   const tallArch = floorKindBody("arch", ctxOf({ kind: "rect", widthMm: 600, depthMm: 3000 }, 2500, DEFAULT_TONE.arch));
   assert(boxes(tallArch).filter((p) => near(top(p), 2250)).every((p) => near(Math.abs(p.at.y), 1200) && near(p.at.x, 0)), "an arch stored deep runs along y");
+
+  // A gate 3000×500×2800: two columns 500 square at ±1250, joined by a lintel to h — or, arched, by
+  // voussoirs laid from the +x column over to the −x one, each ending where the next begins, the
+  // crown's centre line half the ring (0.6 P) under h.
+  const gateSq = floorKindBody("gate", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 500 }, 2800, DEFAULT_TONE.gate));
+  assert(boxes(gateSq).filter((p) => p.w === 500 && p.d === 500).every((p) => near(Math.abs(p.at.x), 1250)) && cyls(gateSq).length === 2, "gate: two columns min(D, 0.2 L) square at ±(L − P)/2");
+  assert(boxes(gateSq).some((p) => p.w === 3000 && near(top(p), 2800)), "gate: a square entrance is a lintel across both columns to h");
+  const gateArch = floorKindBody("gate", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 500 }, 2800, DEFAULT_TONE.gate, { drawStyle: "arched" }));
+  const vous = boxes(gateArch).filter((p) => p.rotDeg === 90 && p.tiltDeg !== undefined);
+  const endOf = (p: Extract<Part, { shape: "box" }>) => ({ x: p.at.x - p.h * Math.sin(rad(p.tiltDeg!)), z: p.at.z + p.h * Math.cos(rad(p.tiltDeg!)) });
+  assert(vous.length === GATE_VOUSSOIRS && !boxes(gateArch).some((p) => p.w === 3000), `gate: an arched entrance is ${GATE_VOUSSOIRS} voussoirs and no lintel (${vous.length})`);
+  assert(near(vous[0].at.x, 1250) && vous.every((p, i) => i === vous.length - 1 || Math.hypot(endOf(p).x - vous[i + 1].at.x, endOf(p).z - vous[i + 1].at.z) < 0.03 * p.h), "gate: the voussoirs join, from the +x column over");
+  assert(near(endOf(vous[vous.length - 1]).x, -1250, 0.03 * vous[0].h) && near(endOf(vous[vous.length - 1]).z, vous[0].at.z, 0.03 * vous[0].h), "gate: …landing on the −x column at the springing");
+  assert(near(Math.max(...vous.map((p) => p.at.z)), 2800 - 150), "gate: the crown's centre line half the ring under h");
+  assert(near(top(boxes(floorKindBody("gate", ctxOf({ kind: "rect", widthMm: 500, depthMm: 3000 }, 2800, DEFAULT_TONE.gate))).find((p) => p.d === 3000 || p.w === 3000)!), 2800), "a gate stored deep runs along y");
 
   // A tree ⌀3500 × 4000: the venue's own tree (./plants.ts) in the row's shade.
   const tree = floorKindBody("tree", ctxOf({ kind: "circle", diameterMm: 3500 }, 4000, DEFAULT_TONE.tree));

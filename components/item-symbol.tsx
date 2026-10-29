@@ -1,6 +1,21 @@
 import { memo, type ReactNode } from "react";
 import type { Footprint } from "@/lib/studio/footprint";
-import { CLOTH_DROP_MM, type CandleStyle, type ChairStyle, type ChuppahStyle, type SymbolKind } from "@/lib/catalog/symbols";
+import {
+  CLOTH_DROP_MM,
+  type ArchStyle,
+  type CandleStyle,
+  type ChairStyle,
+  type ChandelierStyle,
+  type ColumnStyle,
+  type DrawStyle,
+  type FountainStyle,
+  type GateStyle,
+  type LampStyle,
+  type SofaStyle,
+  type SymbolKind,
+  type TreeStyle,
+  type VaseStyle,
+} from "@/lib/catalog/symbols";
 
 export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
@@ -60,6 +75,8 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   bench: "#ECE7F5",
   // A linen shade.
   lamp: "#FBF6EC",
+  // Cast stone, which most gates hired for an event imitate.
+  gate: "#F1ECE3",
 };
 
 export interface ItemSymbolProps {
@@ -86,8 +103,9 @@ export interface ItemSymbolProps {
   overhead?: boolean;
   /** Which chair, for a chair (symbolStyleOf). Absent = a dining chair, or a stool when round. */
   chairStyle?: ChairStyle;
-  /** Which version of a candlestick or a chuppah (drawStyleOf). Absent = the category's default. */
-  drawStyle?: CandleStyle | ChuppahStyle;
+  /** Which version of the picture (drawStyleOf) — a candlestick's, a chuppah's, a chandelier's, a
+   *  gate's entrance… Absent = the category's default. */
+  drawStyle?: DrawStyle;
   /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
   rise?: PlacementClimb & { heightMm: number };
   /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
@@ -128,7 +146,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = candlestick(w, h, round, count, c, line, drawStyle as CandleStyle | undefined);
       break;
     case "lamp":
-      body = lamp(w, h, round, c, line);
+      body = lamp(w, h, round, c, line, drawStyle as LampStyle | undefined);
       break;
     case "flowers":
       body = <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />;
@@ -148,28 +166,31 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       );
       break;
     case "vase":
-      body = vase(w, h, round, c, line);
+      body = vase(w, h, round, c, line, drawStyle as VaseStyle | undefined);
       break;
     case "tree":
-      body = tree(w, h, c, line);
+      body = tree(w, h, round, c, line, drawStyle as TreeStyle | undefined);
       break;
     case "chair":
       body = round ? pouf(w, h, c, line) : chair(w, h, chairStyle ?? "dining", c, line);
       break;
     case "sofa":
-      body = round ? pouf(w, h, c, line) : sofa(w, h, c, line);
+      body = round ? pouf(w, h, c, line) : sofa(w, h, c, line, drawStyle as SofaStyle | undefined);
       break;
     case "chandelier":
-      body = chandelier(w, h, count, c, line);
+      body = chandelier(w, h, count, c, line, drawStyle as ChandelierStyle | undefined, ink, detail);
       break;
     case "column":
-      body = column(w, h, round, c, line);
+      body = column(w, h, round, c, line, drawStyle as ColumnStyle | undefined);
       break;
     case "fountain":
-      body = fountain(w, h, round, c, line);
+      body = fountain(w, h, round, c, line, drawStyle as FountainStyle | undefined);
       break;
     case "arch":
-      body = along(w, h, (L, D) => arch(L, D, c, line, ink, detail));
+      body = along(w, h, (L, D) => arch(L, D, c, line, ink, detail, drawStyle as ArchStyle | undefined));
+      break;
+    case "gate":
+      body = along(w, h, (L, D) => gate(L, D, c, line, drawStyle as GateStyle | undefined));
       break;
     case "chuppah":
       body = drawStyle === "rotunda" ? rotunda(w, h, c, line) : chuppah(w, h, round, c, line, ink, detail);
@@ -642,41 +663,135 @@ function fireBurner(w: number, h: number, round: boolean, c: Colours, line: Line
   });
 }
 
-/** A table lamp from above: the bottom rim of its shade, the smaller top rim, the light inside, the
- *  spider that holds the shade and the finial at its middle. A square shade is a square. */
-function lamp(w: number, h: number, round: boolean, c: Colours, line: Line) {
+/** A table lamp from above, in its style (LampStyle): by default an empire shade — the bottom rim,
+ *  the smaller top rim, the light inside, the spider that holds the shade and the finial at its
+ *  middle. A drum is one rim all the way down; a mushroom an opaque dome; a globe clear glass with
+ *  its base showing through. A square shade is a square. */
+function lamp(w: number, h: number, round: boolean, c: Colours, line: Line, style?: LampStyle) {
   const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
   const R = Math.min(w, h) / 2;
   const ring = (k: number, props: object) =>
     round ? <ellipse rx={(w / 2) * k} ry={(h / 2) * k} {...props} /> : <rect x={(-w / 2) * k} y={(-h / 2) * k} width={w * k} height={h * k} rx={R * 0.08 * k} {...props} />;
-  return (
-    <>
-      {ring(1, { fill: c.tone, ...line })}
-      {!c.print && ring(0.8, { fill: "#F6D98E", fillOpacity: 0.3 })}
-      {ring(0.64, { fill: "none", ...faint })}
-      {[45, 135, 225, 315].map((deg) => {
-        const p = polar(R * 0.6, deg);
-        return <line key={deg} x1={0} y1={0} x2={p.x * (round ? w / 2 / R : 1)} y2={p.y * (round ? h / 2 / R : 1)} {...faint} />;
-      })}
-      {!c.print && <circle r={R * 0.18} fill="#FFF4C9" fillOpacity={0.9} />}
-      <circle r={R * 0.07} fill={c.tone} {...line} />
-    </>
-  );
+  const spider = (k: number) =>
+    [45, 135, 225, 315].map((deg) => {
+      const p = polar(R * k, deg);
+      return <line key={deg} x1={0} y1={0} x2={p.x * (round ? w / 2 / R : 1)} y2={p.y * (round ? h / 2 / R : 1)} {...faint} />;
+    });
+  switch (style) {
+    case "drum":
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {ring(0.93, { fill: c.print ? "none" : "#F6D98E", fillOpacity: 0.3, ...faint })}
+          {spider(0.9)}
+          {!c.print && <circle r={R * 0.22} fill="#FFF4C9" fillOpacity={0.9} />}
+          <circle r={R * 0.07} fill={c.tone} {...line} />
+        </>
+      );
+    case "mushroom":
+      // Opaque: nothing of the light shows from above, only the dome lit from the top left.
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {ring(0.72, { fill: "none", ...faint, strokeOpacity: line.strokeOpacity * 0.3 })}
+          {!c.print && <ellipse cx={-R * 0.22} cy={-R * 0.24} rx={R * 0.34} ry={R * 0.26} fill="#ffffff" fillOpacity={0.4} />}
+        </>
+      );
+    case "globe":
+      return (
+        <>
+          {ring(1, { fill: c.print ? "#ffffff" : "#ffffff", fillOpacity: c.print ? 1 : 0.45, ...line })}
+          {ring(0.46, { fill: c.tone, fillOpacity: c.print ? 0 : 0.5, ...faint, strokeDasharray: "3 3" })}
+          {!c.print && <circle r={R * 0.24} fill="#FFF4C9" fillOpacity={0.95} />}
+          <circle r={R * 0.08} fill="none" {...faint} />
+          <path d={`M ${-R * 0.72} ${-R * 0.1} A ${R * 0.72} ${R * 0.72} 0 0 1 ${-R * 0.1} ${-R * 0.72}`} fill="none" {...line} stroke={c.print ? c.ink : "#ffffff"} strokeOpacity={c.print ? 0.4 : 0.95} strokeWidth={2} strokeLinecap="round" />
+        </>
+      );
+    default:
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {!c.print && ring(0.8, { fill: "#F6D98E", fillOpacity: 0.3 })}
+          {ring(0.64, { fill: "none", ...faint })}
+          {spider(0.6)}
+          {!c.print && <circle r={R * 0.18} fill="#FFF4C9" fillOpacity={0.9} />}
+          <circle r={R * 0.07} fill={c.tone} {...line} />
+        </>
+      );
+  }
 }
 
 /** A vessel — a vase, an urn, a footed bowl: its rim, the opening inside it in the shade's darker
  *  tone, and the foot showing faintly through. Empty, because what is arranged in it is its own item
  *  (a centrepiece, an arrangement) and is drawn by that one. An oval bowl is an oval rim. */
-function vase(w: number, h: number, round: boolean, c: Colours, line: Line) {
+function vase(w: number, h: number, round: boolean, c: Colours, line: Line, style?: VaseStyle) {
   const ring = (k: number, props: object) =>
     round ? <ellipse rx={(w / 2) * k} ry={(h / 2) * k} {...props} /> : <rect x={(-w / 2) * k} y={(-h / 2) * k} width={w * k} height={h * k} rx={Math.min(w, h) * 0.12 * k} {...props} />;
-  return (
-    <>
-      {ring(1, { fill: c.tone, ...line })}
-      {ring(0.8, { fill: c.shade, fillOpacity: c.print ? 0 : c.shadeOpacity * 1.3, ...line, strokeOpacity: line.strokeOpacity * 0.6 })}
-      {ring(0.32, { fill: "none", ...line, strokeOpacity: line.strokeOpacity * 0.35 })}
-    </>
-  );
+  const soft = (k: number) => ({ ...line, strokeOpacity: line.strokeOpacity * k });
+  const hollow = { fill: c.shade, fillOpacity: c.print ? 0 : c.shadeOpacity * 1.3 };
+  switch (style) {
+    case "cylinder":
+      // Clear glass: the wall a thin double line, the floor of it seen through the water.
+      return (
+        <>
+          {ring(1, { fill: c.tone, fillOpacity: c.print ? 1 : 0.45, ...line })}
+          {ring(0.88, { fill: "none", ...soft(0.6) })}
+          {ring(0.8, { fill: "none", ...soft(0.3), strokeDasharray: "3 3" })}
+        </>
+      );
+    case "trumpet":
+      // A wide cone narrowing to its stem: rings closing in on the middle, the foot hidden under it.
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {ring(0.92, { fill: "none", ...soft(0.6) })}
+          {ring(0.66, { ...hollow, ...soft(0.4) })}
+          {ring(0.4, { ...hollow, ...soft(0.4) })}
+          {ring(0.56, { fill: "none", ...soft(0.3), strokeDasharray: "3 3" })}
+          {ring(0.12, { fill: c.print ? "none" : c.ink, fillOpacity: 0.25, ...soft(0.6) })}
+        </>
+      );
+    case "urn": {
+      // The belly, the narrower neck and rim above it, the opening — and a handle either side.
+      const hx = (w / 2) * 0.88;
+      return (
+        <>
+          {[-1, 1].map((s) => (
+            <ellipse key={s} cx={s * hx} cy={0} rx={w * 0.07} ry={h * 0.13} fill="none" {...line} strokeWidth={1.5} />
+          ))}
+          {ring(0.86, { fill: c.tone, ...soft(0.5) })}
+          {ring(0.62, { fill: c.tone, ...line })}
+          {ring(0.5, { ...hollow, ...soft(0.6) })}
+        </>
+      );
+    }
+    case "pedestal":
+      // A shallow bowl: the rim, the bowl falling to its middle, the foot hidden under it.
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {ring(0.88, { fill: "none", ...soft(0.6) })}
+          {ring(0.6, { ...hollow, ...soft(0.35) })}
+          {ring(0.34, { fill: "none", ...soft(0.35), strokeDasharray: "3 3" })}
+        </>
+      );
+    case "bowl":
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {ring(0.88, { ...hollow, ...soft(0.6) })}
+          {ring(0.5, { fill: "none", ...soft(0.3) })}
+        </>
+      );
+    default:
+      return (
+        <>
+          {ring(1, { fill: c.tone, ...line })}
+          {ring(0.8, { ...hollow, ...line, strokeOpacity: line.strokeOpacity * 0.6 })}
+          {ring(0.32, { fill: "none", ...line, strokeOpacity: line.strokeOpacity * 0.35 })}
+        </>
+      );
+  }
 }
 
 /** [radius, bearing] of each clump of a canopy, as fractions of its radius. */
@@ -684,9 +799,132 @@ export const TREE_CLUMPS: [number, number][] = [
   [0.4, 0], [0.33, 44], [0.38, 80], [0.42, 122], [0.34, 166], [0.39, 204], [0.35, 246], [0.41, 284], [0.36, 326],
 ];
 
-/** A tree from above: its canopy — a ring of overlapping clumps round a fuller middle, in the tree's
+const TRUNK = "#8A6A4F";
+
+/** A tree from above, in its style (TreeStyle). The canopy is the default; the others are drawn in
+ *  a unit disc scaled onto the canopy, so an oval canopy stays an oval of the same tree. Each
+ *  species keeps its own green until the row or its shade gives it a colour. */
+function tree(w: number, h: number, round: boolean, c: Colours, line: Line, style?: TreeStyle) {
+  if (!style || style === "canopy") return canopy(w, h, c, line);
+  const own = c.tone === DEFAULT_TONE.tree;
+  const soft = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  const trunk = c.print ? "#ffffff" : TRUNK;
+  const unit = (body: ReactNode) => <g transform={`scale(${w / 2} ${h / 2})`}>{body}</g>;
+  switch (style) {
+    case "olive": {
+      // An open, silvery crown — small clumps with the sky between them — over a split trunk.
+      const leaf = own && !c.print ? "#A9B48F" : c.tone;
+      return unit(
+        <>
+          {OLIVE_CLUMPS.map(([r, deg, d], i) => {
+            const p = polar(d, deg);
+            return <circle key={i} cx={p.x} cy={p.y} r={r} fill={leaf} {...soft} />;
+          })}
+          {[[-0.06, 0.03], [0.07, -0.02], [0.01, 0.08]].map(([x, y], i) => (
+            <circle key={`t${i}`} cx={x} cy={y} r={0.055} fill={trunk} {...line} />
+          ))}
+        </>,
+      );
+    }
+    case "blossom": {
+      // The canopy in blossom, and the flowers over it.
+      const crown = own && !c.print ? "#F6DCE5" : c.tone;
+      const bloom = c.print ? "#ffffff" : own ? "#E58FB0" : "#ffffff";
+      return (
+        <>
+          {canopy(w, h, { ...c, tone: crown }, line)}
+          {unit(
+            BLOSSOMS.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={0.035} fill={bloom} fillOpacity={c.print ? 1 : 0.95} {...(c.print ? soft : {})} />),
+          )}
+        </>
+      );
+    }
+    case "palm": {
+      // Fronds from one crown: each a long leaf, its midrib, and leaflets down both sides.
+      const leaf = own && !c.print ? "#6E9B57" : c.tone;
+      const N = 9;
+      return unit(
+        <>
+          {Array.from({ length: N }, (_, i) => {
+            const deg = i * (360 / N) + (i % 2 ? 9 : -4);
+            const L = i % 3 === 1 ? 0.86 : 0.98;
+            return (
+              <g key={i} transform={`rotate(${deg})`}>
+                <path d={`M 0.08 0 Q ${L * 0.5} -0.17 ${L} 0 Q ${L * 0.5} 0.17 0.08 0 Z`} fill={leaf} {...soft} />
+                <line x1={0.08} y1={0} x2={L} y2={0} {...soft} />
+                {[0.28, 0.42, 0.56, 0.7, 0.84].filter((t) => t < L - 0.06).map((t) => {
+                  const half = 0.15 * Math.sin((Math.PI * (t - 0.08)) / (L - 0.08));
+                  return <path key={t} d={`M ${t} ${-half} L ${t - 0.06} 0 L ${t} ${half}`} fill="none" {...soft} strokeOpacity={line.strokeOpacity * 0.35} />;
+                })}
+              </g>
+            );
+          })}
+          <circle r={0.1} fill={trunk} {...line} />
+        </>,
+      );
+    }
+    case "cypress": {
+      // Narrow and upright: from above a tight, spiky star of foliage round the leader.
+      const leaf = own && !c.print ? "#4F7A4A" : c.tone;
+      const star = (out: number, inn: number, turn: number) =>
+        Array.from({ length: 28 }, (_, i) => {
+          const p = polar(i % 2 ? inn : out, turn + i * (360 / 28));
+          return `${i ? "L" : "M"} ${p.x} ${p.y}`;
+        }).join(" ") + " Z";
+      return unit(
+        <>
+          <path d={star(1, 0.78, 0)} fill={leaf} {...soft} strokeLinejoin="round" />
+          <path d={star(0.62, 0.44, 6)} fill={c.shade} fillOpacity={c.print ? 0 : c.shadeOpacity} {...soft} strokeOpacity={line.strokeOpacity * 0.3} />
+          <circle r={0.08} fill={trunk} {...line} />
+        </>,
+      );
+    }
+    case "topiary":
+      // A clipped ball: one clean round, lit from the top left, its clipped surface a fine stipple.
+      return unit(
+        <>
+          <circle r={1} fill={c.tone} {...line} />
+          {BLOSSOMS.slice(0, 22).map((p, i) => (
+            <circle key={i} cx={p.x * 0.92} cy={p.y * 0.92} r={0.03} fill={c.print ? "none" : c.shade} fillOpacity={c.shadeOpacity * 1.6} {...(c.print ? soft : {})} />
+          ))}
+          <circle r={0.8} fill="none" {...soft} strokeOpacity={line.strokeOpacity * 0.25} />
+          {!c.print && <ellipse cx={-0.3} cy={-0.32} rx={0.34} ry={0.26} fill="#ffffff" fillOpacity={0.3} />}
+        </>,
+      );
+    case "potted": {
+      // Broad leaves over the rim of their pot, the soil showing between them.
+      const pot = c.print ? "#ffffff" : "#C98F6B";
+      const N = 7;
+      return unit(
+        <>
+          {round ? <circle r={0.62} fill={pot} {...line} /> : <rect x={-0.62} y={-0.62} width={1.24} height={1.24} rx={0.06} fill={pot} {...line} />}
+          {round ? <circle r={0.53} fill={c.print ? "none" : "#6B5444"} fillOpacity={0.55} {...soft} /> : <rect x={-0.53} y={-0.53} width={1.06} height={1.06} fill={c.print ? "none" : "#6B5444"} fillOpacity={0.55} {...soft} />}
+          {Array.from({ length: N }, (_, i) => (
+            <g key={i} transform={`rotate(${i * (360 / N) + 12})`}>
+              <ellipse cx={0.5} cy={0} rx={0.46} ry={0.18} fill={c.tone} {...soft} />
+              <line x1={0.08} y1={0} x2={0.92} y2={0} {...soft} strokeOpacity={line.strokeOpacity * 0.35} />
+            </g>
+          ))}
+        </>,
+      );
+    }
+  }
+  return canopy(w, h, c, line);
+}
+
+/** [radius, bearing, distance] of each clump of an olive's crown, in the unit disc. */
+const OLIVE_CLUMPS: [number, number, number][] = [
+  [0.2, 8, 0.76], [0.17, 38, 0.72], [0.22, 70, 0.74], [0.18, 104, 0.78], [0.21, 140, 0.7], [0.17, 172, 0.76],
+  [0.2, 206, 0.73], [0.18, 238, 0.78], [0.22, 270, 0.72], [0.17, 302, 0.77], [0.2, 334, 0.71],
+  [0.2, 20, 0.36], [0.18, 110, 0.4], [0.21, 196, 0.34], [0.18, 286, 0.4], [0.16, 0, 0],
+];
+
+/** Points scattered evenly over the unit disc (a sunflower spiral) — blossoms, a clipped stipple. */
+const BLOSSOMS = Array.from({ length: 46 }, (_, i) => polar(0.9 * Math.sqrt((i + 0.5) / 46), i * 137.508));
+
+/** The default tree: its canopy — a ring of overlapping clumps round a fuller middle, in the tree's
  *  colour (white for a blossom tree, through its shade) — and the trunk at the centre. */
-function tree(w: number, h: number, c: Colours, line: Line) {
+function canopy(w: number, h: number, c: Colours, line: Line) {
   const rx = w / 2;
   const ry = h / 2;
   // Uneven on purpose — nine equal lobes read as a flower, not a tree. Each clump touches the edge.
@@ -871,8 +1109,165 @@ function SeatChairView({
   return <g transform="rotate(-90)">{chair(widthMm, depthMm, style, c, line)}</g>;
 }
 
-/** A sofa: the back along its back edge, an arm at each end, and its seat cushions between them. */
-function sofa(w: number, h: number, c: Colours, line: Line) {
+/** A sofa in its style (SofaStyle) — back at −y, the seat toward +y, like a chair. */
+function sofa(w: number, h: number, c: Colours, line: Line, style?: SofaStyle) {
+  switch (style) {
+    case "chesterfield":
+      return chesterfield(w, h, c, line);
+    case "corner":
+      return cornerSofa(w, h, c, line);
+    case "curved":
+      return curvedSofa(w, h, c, line);
+    case "armless":
+      return armlessSofa(w, h, c, line);
+    case "ottoman":
+      return ottoman(w, h, c, line);
+    default:
+      return classicSofa(w, h, c, line);
+  }
+}
+
+/** Seat cushions laid along a run from (x0, y0) to (x1, y1), one about every 65cm, a gap between. */
+function cushionRun(key: string, x0: number, y0: number, x1: number, y1: number, alongX: boolean, c: Colours, line: Line) {
+  const gap = 25;
+  const len = alongX ? x1 - x0 : y1 - y0;
+  const n = Math.max(1, Math.round(len / 650));
+  const each = (len - gap * (n - 1)) / n;
+  if (each <= 40 || (alongX ? y1 - y0 : x1 - x0) <= 40) return null;
+  return Array.from({ length: n }, (_, i) => {
+    const a = (alongX ? x0 : y0) + i * (each + gap);
+    const x = alongX ? a : x0;
+    const y = alongX ? y0 : a;
+    const cw = alongX ? each : x1 - x0;
+    const ch = alongX ? y1 - y0 : each;
+    return <rect key={`${key}${i}`} x={x} y={y} width={cw} height={ch} rx={Math.min(cw, ch) * 0.18} fill={c.tone} {...line} strokeOpacity={line.strokeOpacity * 0.6} />;
+  });
+}
+
+/** Tufting: a staggered grid of buttons over a box, about every `pitch` mm. */
+function buttons(key: string, x0: number, y0: number, x1: number, y1: number, pitch: number, c: Colours, line: Line) {
+  const cols = Math.max(1, Math.round((x1 - x0) / pitch));
+  const rows = Math.max(1, Math.round((y1 - y0) / pitch));
+  const r = Math.min(16, pitch * 0.09);
+  const out: ReactNode[] = [];
+  for (let j = 0; j < rows; j++) {
+    // Every other row sits half a step over, between the buttons of the row before it.
+    const stagger = j % 2 === 1 && cols > 1;
+    for (let i = 0; i < (stagger ? cols - 1 : cols); i++) {
+      const x = x0 + ((i + (stagger ? 1 : 0.5)) * (x1 - x0)) / cols;
+      out.push(<circle key={`${key}${j}-${i}`} cx={x} cy={y0 + ((j + 0.5) * (y1 - y0)) / rows} r={r} fill={c.print ? "none" : c.shade} fillOpacity={isDark(c.tone) ? 0.5 : 0.35} {...(c.print ? line : {})} />);
+    }
+  }
+  return out;
+}
+
+/** A Chesterfield: arms rolled as high as its back, both buttoned, one long seat cushion. */
+function chesterfield(w: number, h: number, c: Colours, line: Line) {
+  const back = Math.min(h * 0.24, 230);
+  const arm = Math.min(w * 0.12, 220, h * 0.3);
+  const gap = 25;
+  const shade = { fill: c.shade, fillOpacity: c.print ? 1 : c.shadeOpacity };
+  const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  return (
+    <>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={arm * 0.5} fill={c.tone} {...line} />
+      <rect x={-w / 2} y={-h / 2} width={w} height={back} rx={back * 0.45} {...shade} />
+      <rect x={-w / 2} y={-h / 2} width={arm} height={h} rx={arm * 0.5} {...shade} {...faint} />
+      <rect x={w / 2 - arm} y={-h / 2} width={arm} height={h} rx={arm * 0.5} {...shade} {...faint} />
+      {buttons("b", -w / 2 + arm, -h / 2, w / 2 - arm, -h / 2 + back, 140, c, line)}
+      <rect x={-w / 2 + arm + gap} y={-h / 2 + back + gap} width={w - 2 * (arm + gap)} height={h - back - 2 * gap} rx={Math.min(arm, back) * 0.4} fill={c.tone} {...faint} />
+    </>
+  );
+}
+
+/** An L — a corner sofa: a back along the back edge and down the left side, a seat in the corner,
+ *  an arm at the end of each run. */
+function cornerSofa(w: number, h: number, c: Colours, line: Line) {
+  const sd = Math.min(950, h * 0.55, w * 0.4);
+  const back = Math.min(sd * 0.28, 260);
+  const arm = Math.min(200, sd * 0.25);
+  const gap = 25;
+  const top = -h / 2;
+  const left = -w / 2;
+  const shade = { fill: c.shade, fillOpacity: c.print ? 1 : c.shadeOpacity };
+  const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  const L = (k: number) =>
+    `M ${left} ${top} L ${w / 2} ${top} L ${w / 2} ${top + k} L ${left + k} ${top + k} L ${left + k} ${h / 2} L ${left} ${h / 2} Z`;
+  return (
+    <>
+      <path d={L(sd)} fill={c.tone} {...line} strokeLinejoin="round" />
+      <path d={L(back)} {...shade} />
+      <rect x={w / 2 - arm} y={top} width={arm} height={sd} rx={arm * 0.45} {...shade} {...faint} />
+      <rect x={left} y={h / 2 - arm} width={sd} height={arm} rx={arm * 0.45} {...shade} {...faint} />
+      {cushionRun("r", left + sd + gap, top + back + gap, w / 2 - arm - gap, top + sd - gap, true, c, line)}
+      {cushionRun("k", left + back + gap, top + back + gap, left + sd - gap, top + sd - gap, true, c, line)}
+      {cushionRun("l", left + back + gap, top + sd + gap, left + sd - gap, h / 2 - arm - gap, false, c, line)}
+    </>
+  );
+}
+
+/** A curved sofa: a band on an arc, its back along the outside, the cushions cut across it. */
+function curvedSofa(w: number, h: number, c: Colours, line: Line) {
+  const sd = Math.min(h * 0.62, 900, w * 0.35);
+  const back = Math.min(sd * 0.3, 240);
+  const y = h / 2;
+  const band = (rxOut: number, ryOut: number, rxIn: number, ryIn: number) =>
+    `M ${-rxOut} ${y} A ${rxOut} ${ryOut} 0 0 1 ${rxOut} ${y} L ${rxIn} ${y} A ${rxIn} ${ryIn} 0 0 0 ${-rxIn} ${y} Z`;
+  const [rx0, ry0] = [w / 2, h];
+  const [rx1, ry1] = [w / 2 - back, h - back];
+  const [rx2, ry2] = [w / 2 - sd, h - sd];
+  const n = Math.max(2, Math.round((Math.PI * ((rx1 + rx2) / 2 + (ry1 + ry2) / 2)) / 2 / 700));
+  const at = (rx: number, ry: number, t: number) => ({ x: rx * Math.cos(t), y: y - ry * Math.sin(t) });
+  return (
+    <>
+      <path d={band(rx0, ry0, rx2, ry2)} fill={c.tone} {...line} strokeLinejoin="round" />
+      <path d={band(rx0, ry0, rx1, ry1)} fill={c.shade} fillOpacity={c.print ? 1 : c.shadeOpacity} />
+      {Array.from({ length: n - 1 }, (_, i) => {
+        const t = Math.PI - ((i + 1) * Math.PI) / n;
+        const a = at(rx1, ry1, t);
+        const b = at(rx2, ry2, t);
+        return <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} {...line} strokeOpacity={line.strokeOpacity * 0.6} />;
+      })}
+    </>
+  );
+}
+
+/** Armless modules pushed together: one back along them, a seam where each module meets the next. */
+function armlessSofa(w: number, h: number, c: Colours, line: Line) {
+  const back = Math.min(h * 0.28, 260);
+  const n = Math.max(1, Math.round(w / 800));
+  const gap = 25;
+  return (
+    <>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={back * 0.3} fill={c.tone} {...line} />
+      <rect x={-w / 2} y={-h / 2} width={w} height={back} rx={back * 0.3} fill={c.shade} fillOpacity={c.print ? 1 : c.shadeOpacity} />
+      {Array.from({ length: n }, (_, i) => {
+        const x0 = -w / 2 + (i * w) / n;
+        return (
+          <g key={i}>
+            {i > 0 && <line x1={x0} y1={-h / 2} x2={x0} y2={h / 2} {...line} strokeOpacity={line.strokeOpacity * 0.7} />}
+            <rect x={x0 + gap} y={-h / 2 + back + gap} width={w / n - 2 * gap} height={h - back - 2 * gap} rx={Math.min(w / n, h) * 0.08} fill={c.tone} {...line} strokeOpacity={line.strokeOpacity * 0.5} />
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+/** A backless upholstered bench — a long ottoman: its piping and its buttons. */
+function ottoman(w: number, h: number, c: Colours, line: Line) {
+  const m = Math.min(w, h);
+  return (
+    <>
+      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={m * 0.18} fill={c.tone} {...line} />
+      <rect x={-w / 2 + m * 0.08} y={-h / 2 + m * 0.08} width={w - m * 0.16} height={h - m * 0.16} rx={m * 0.12} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.4} />
+      {buttons("o", -w / 2 + m * 0.08, -h / 2 + m * 0.08, w / 2 - m * 0.08, h / 2 - m * 0.08, 200, c, line)}
+    </>
+  );
+}
+
+/** The default sofa: the back along its back edge, an arm at each end, and its seat cushions between them. */
+function classicSofa(w: number, h: number, c: Colours, line: Line) {
   const back = Math.min(h * 0.28, 260);
   const arm = Math.min(w * 0.13, 230, h * 0.3);
   const innerW = w - arm * 2;
@@ -919,34 +1314,198 @@ function pouf(w: number, h: number, c: Colours, line: Line) {
 }
 
 /** A chandelier: hub, arms and bulbs, and its crystal ring — lines only, dashed where it is a ring,
- *  because the thing is overhead and a filled shape reads as something you walk round. */
-function chandelier(w: number, h: number, n: number, c: Colours, line: Line) {
+ *  because the thing is overhead and a filled shape reads as something you walk round. The other
+ *  styles (ChandelierStyle) keep to the same rule: metal as heavy lines, glass and light as tints. */
+function chandelier(w: number, h: number, n: number, c: Colours, line: Line, style?: ChandelierStyle, ink?: string, detail?: boolean) {
   const R = Math.min(w, h) / 2;
   const count = Math.max(3, n);
-  const arms = Array.from({ length: count }, (_, i) => polar(R * 0.74, -90 + (i * 360) / count));
-  const bulb = Math.min(R * 0.1, ((Math.PI * R * 0.74) / arms.length) * 0.35);
-  const stroke = c.print ? c.ink : c.tone;
+  // Clear crystal or white has no colour to draw its metal in — drawn in its own tone it vanished
+  // into the cloth under it — so a pale piece is drawn in a soft ink, its bulbs as warm light.
+  const pale = !c.print && paleTone(c.tone);
+  const stroke = c.print || pale ? c.ink : c.tone;
   // On screen the arms and bulbs are drawn a touch heavier than the rest of the plan's hairlines:
   // the thing floats over a table drawn in the same greys, and at hall zoom a 1px gold line on a
   // grey cloth was the one item on the plan a designer could not find.
   const sw = c.print ? 1.5 : 2;
+  const metal = { ...line, stroke, strokeOpacity: pale ? 0.6 : 0.95, strokeWidth: sw };
+  const glow = (key: string, x: number, y: number, r: number) => (
+    <circle
+      key={key}
+      cx={x}
+      cy={y}
+      r={r}
+      fill={c.print ? "none" : pale ? "#FFE9A8" : stroke}
+      fillOpacity={c.print ? undefined : pale ? 0.95 : 0.35}
+      {...line}
+      stroke={stroke}
+      strokeOpacity={pale ? 0.6 : 1}
+      strokeWidth={sw}
+    />
+  );
+  const ringAt = (k: number, m: number, turn = -90) => Array.from({ length: m }, (_, i) => polar(R * k, turn + (i * 360) / m));
+  switch (style) {
+    case "crystal": {
+      // Rings of drops round the lights — the outer one the widest, the second turned half a drop.
+      const bulbs = ringAt(0.48, count);
+      const bulb = Math.min(R * 0.08, ((Math.PI * R * 0.48) / count) * 0.35);
+      const drop = (key: string, p: { x: number; y: number }, r: number) => (
+        <circle key={key} cx={p.x} cy={p.y} r={r} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.75} {...line} stroke={stroke} strokeOpacity={0.8} />
+      );
+      return (
+        <>
+          <circle r={R * 0.9} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.5} strokeDasharray="4 3" />
+          {ringAt(0.9, 32).map((p, i) => drop(`o${i}`, p, R * 0.042))}
+          {ringAt(0.72, 24, -90 + 7.5).map((p, i) => drop(`m${i}`, p, R * 0.036))}
+          {bulbs.map((p, i) => (
+            <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...metal} />
+          ))}
+          {bulbs.map((p, i) => glow(`b${i}`, p.x, p.y, bulb))}
+          {ringAt(0.26, 12, -75).map((p, i) => drop(`i${i}`, p, R * 0.03))}
+          <circle r={R * 0.12} fill="none" {...metal} />
+        </>
+      );
+    }
+    case "hoop": {
+      // One ring of light, its lamps along it, hung from a plate in the middle by three cables.
+      const bulbs = ringAt(0.9, count);
+      return (
+        <>
+          {ringAt(0.9, 3, -60).map((p, i) => (
+            <line key={`k${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.7} strokeDasharray="3 3" />
+          ))}
+          <circle r={R * 0.9} fill="none" {...metal} strokeWidth={sw * 1.5} />
+          {bulbs.map((p, i) => glow(`b${i}`, p.x, p.y, Math.min(R * 0.06, ((Math.PI * R * 0.9) / count) * 0.3)))}
+          <circle r={R * 0.08} fill="none" {...metal} />
+        </>
+      );
+    }
+    case "sputnik": {
+      // A sphere with rods out to every side, a bulb on each — some reaching further than others,
+      // because half of them point up or down.
+      const m = Math.max(12, count);
+      const rods = Array.from({ length: m }, (_, i) => polar(R * (0.6 + 0.36 * (((i * 7) % 5) / 4)), i * 137.508));
+      return (
+        <>
+          {rods.map((p, i) => (
+            <line key={`r${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...metal} strokeWidth={sw * 0.75} />
+          ))}
+          {rods.map((p, i) => glow(`b${i}`, p.x, p.y, R * 0.05))}
+          <circle r={R * 0.17} fill={c.print ? "none" : pale ? "#ffffff" : stroke} fillOpacity={c.print ? undefined : pale ? 0.8 : 0.3} {...metal} />
+        </>
+      );
+    }
+    case "pendants": {
+      // Globes of different sizes hung from one canopy plate, each with its bulb.
+      return (
+        <>
+          <circle r={R * 0.98} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.45} strokeDasharray="4 3" />
+          {packCircles(count).map((g, i) => {
+            const x = (g.x * w) / 2;
+            const y = (g.y * h) / 2;
+            const r = g.r * R * 0.94;
+            return (
+              <g key={i}>
+                <circle cx={x} cy={y} r={r} fill={c.print ? "none" : pale ? "#ffffff" : stroke} fillOpacity={c.print ? undefined : pale ? 0.7 : 0.16} {...metal} strokeWidth={sw * 0.75} />
+                {glow(`b${i}`, x, y, r * 0.24)}
+              </g>
+            );
+          })}
+        </>
+      );
+    }
+    case "linear":
+      // A long bar with its lamps in a row under it, hung by a cable near each end.
+      return along(w, h, (L, D) => {
+        const m = Math.max(2, count);
+        const r = Math.min(D * 0.34, (L * 0.9) / (m * 3.2));
+        const span = L * 0.9 - r * 2;
+        return (
+          <>
+            <rect x={-L * 0.47} y={-D * 0.07} width={L * 0.94} height={D * 0.14} rx={D * 0.07} fill="none" {...metal} />
+            {[-1, 1].map((s) => (
+              <circle key={s} cx={s * L * 0.32} cy={0} r={D * 0.12} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.7} strokeDasharray="3 3" />
+            ))}
+            {Array.from({ length: m }, (_, i) => glow(`b${i}`, -span / 2 + (i * span) / (m - 1), 0, r))}
+          </>
+        );
+      });
+    case "floral": {
+      // A hoop wound with greenery, clusters of flowers on it and its lights between them.
+      const k = 5;
+      const leaf = c.print ? "#ffffff" : LEAF;
+      return (
+        <>
+          <circle r={R * 0.8} fill="none" {...metal} strokeWidth={sw * 1.4} />
+          {Array.from({ length: 18 }, (_, i) => {
+            const deg = i * 20;
+            const p = polar(R * (i % 2 ? 0.86 : 0.74), deg);
+            return <ellipse key={`l${i}`} cx={p.x} cy={p.y} rx={R * 0.11} ry={R * 0.045} transform={`rotate(${deg + 90 + (i % 2 ? 25 : -25)} ${p.x} ${p.y})`} fill={leaf} fillOpacity={c.print ? 1 : 0.85} {...line} strokeOpacity={line.strokeOpacity * 0.5} />;
+          })}
+          {ringAt(0.8, k, -72).map((p, i) => (
+            <g key={`f${i}`} transform={`translate(${p.x} ${p.y})`}>
+              <FlowerDrawing spec={plainFlowers(R * 0.42, R * 0.42, undefined, "dome")} ink={ink} print={c.print} detail={detail} />
+            </g>
+          ))}
+          {ringAt(0.8, k, -36).map((p, i) => glow(`b${i}`, p.x, p.y, R * 0.05))}
+        </>
+      );
+    }
+  }
+  const arms = ringAt(0.74, count);
+  const bulb = Math.min(R * 0.1, ((Math.PI * R * 0.74) / arms.length) * 0.35);
   return (
     <>
       <circle r={R * 0.48} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.8} strokeDasharray="4 3" />
       {arms.map((p, i) => (
-        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} stroke={stroke} strokeOpacity={0.95} strokeWidth={sw} />
+        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...metal} />
       ))}
-      {arms.map((p, i) => (
-        <circle key={`b${i}`} cx={p.x} cy={p.y} r={bulb} fill={c.print ? "none" : stroke} fillOpacity={c.print ? undefined : 0.35} {...line} stroke={stroke} strokeOpacity={1} strokeWidth={sw} />
-      ))}
-      <circle r={R * 0.13} fill="none" {...line} stroke={stroke} strokeOpacity={1} strokeWidth={sw} />
+      {arms.map((p, i) => glow(`b${i}`, p.x, p.y, bulb))}
+      <circle r={R * 0.13} fill="none" {...metal} strokeOpacity={pale ? metal.strokeOpacity : 1} />
     </>
   );
 }
 
-/** A column: its plinth, the fluted shaft standing on it, and the capital at the top. */
-function column(w: number, h: number, round: boolean, c: Colours, line: Line) {
+/** A column, in its style (ColumnStyle): by default its plinth, the fluted shaft standing on it, and
+ *  the capital at the top. A smooth one stands on a round base; a square pillar is square all the
+ *  way up; a display pedestal is a block under its top plate. */
+function column(w: number, h: number, round: boolean, c: Colours, line: Line, style?: ColumnStyle) {
   const R = Math.min(w, h) / 2;
+  const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
+  const box = (k: number, props: object) => <rect x={(-w / 2) * k} y={(-h / 2) * k} width={w * k} height={h * k} {...props} />;
+  // A display pedestal is round or square as its footprint is; a square pillar is square regardless.
+  const block = (k: number, props: object) => (round ? <ellipse rx={(w / 2) * k} ry={(h / 2) * k} {...props} /> : box(k, { rx: R * 0.04 * k, ...props }));
+  switch (style) {
+    case "smooth":
+      return (
+        <>
+          <ellipse rx={w / 2} ry={h / 2} fill={c.tone} {...line} />
+          <ellipse rx={w * 0.43} ry={h * 0.43} fill="none" {...faint} />
+          <circle r={R * 0.74} fill={c.tone} {...line} />
+          <circle r={R * 0.6} fill="none" {...faint} />
+          {!c.print && <ellipse cx={-R * 0.22} cy={-R * 0.22} rx={R * 0.24} ry={R * 0.16} fill="#ffffff" fillOpacity={0.5} />}
+        </>
+      );
+    case "square":
+      // Plinth, capital and — hidden under the capital — the shaft; the capital's corners chamfered
+      // down to the plinth's.
+      return (
+        <>
+          {box(1, { fill: c.tone, ...line })}
+          {[-1, 1].flatMap((sx) => [-1, 1].map((sy) => <line key={`${sx}${sy}`} x1={(sx * w) / 2} y1={(sy * h) / 2} x2={(sx * w * 0.8) / 2} y2={(sy * h * 0.8) / 2} {...faint} />))}
+          {box(0.8, { fill: c.tone, ...line })}
+          {box(0.58, { fill: "none", ...faint, strokeDasharray: "3 3" })}
+        </>
+      );
+    case "pedestal":
+      // A display block: its top plate, the body under it hidden by the plate.
+      return (
+        <>
+          {block(1, { fill: c.tone, ...line })}
+          {block(0.86, { fill: "none", ...faint, strokeDasharray: "3 3" })}
+          {block(0.94, { fill: "none", ...faint, strokeOpacity: line.strokeOpacity * 0.3 })}
+        </>
+      );
+  }
   const flutes = Array.from({ length: 16 }, (_, i) => i * 22.5);
   return (
     <>
@@ -962,26 +1521,91 @@ function column(w: number, h: number, round: boolean, c: Colours, line: Line) {
   );
 }
 
-/** A fountain: the basin, its rim, the bowl in the middle and the spout — and the rings on the water. */
-function fountain(w: number, h: number, round: boolean, c: Colours, line: Line) {
+/** A fountain, in its style (FountainStyle): by default the basin, its rim, the bowl in the middle
+ *  and the spout — and the rings on the water. Tiered is three bowls one over the other; jets a pool
+ *  with its jets in a row; a bowl one raised stone bowl brimming over. */
+function fountain(w: number, h: number, round: boolean, c: Colours, line: Line, style?: FountainStyle) {
   const water = c.print ? "#ffffff" : c.tone === DEFAULT_TONE.fountain ? WATER : c.tone;
   const ripple = { fill: "none", stroke: c.print ? c.ink : "#ffffff", strokeOpacity: c.print ? 0.5 : 0.9, strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const };
   const R = Math.min(w, h) / 2;
   // The basin holds the same water the venue's pool is drawn in (components/surface-fill.tsx) — a
   // flat blue disc beside a textured pool read as a lid. The item's own tone tints it; the printed
   // sheet keeps the flat white basin. One seed for every fountain: its ripples are not a signature.
-  const basin: Footprint = round ? { kind: "ellipse", widthMm: w, depthMm: h } : { kind: "rect", widthMm: w, depthMm: h };
+  const pool = (bw: number, bh: number, rx: number) => {
+    const basin: Footprint = round ? { kind: "ellipse", widthMm: bw, depthMm: bh } : { kind: "rect", widthMm: bw, depthMm: bh };
+    const edge = (fill: string) => (round ? <ellipse rx={bw / 2} ry={bh / 2} fill={fill} {...line} /> : <rect x={-bw / 2} y={-bh / 2} width={bw} height={bh} rx={rx} fill={fill} {...line} />);
+    return c.print ? (
+      edge(water)
+    ) : (
+      <>
+        <SurfaceFill material="water" footprint={basin} w={bw} d={bh} id="fountain" color={c.tone === DEFAULT_TONE.fountain ? undefined : c.tone} />
+        {edge("none")}
+      </>
+    );
+  };
+  const basin = (
+    <>
+      {pool(w, h, R * 0.15)}
+      {round ? <ellipse rx={w / 2 - R * 0.08} ry={h / 2 - R * 0.08} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} /> : <rect x={-w / 2 + R * 0.08} y={-h / 2 + R * 0.08} width={w - R * 0.16} height={h - R * 0.16} rx={R * 0.1} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} />}
+    </>
+  );
+  switch (style) {
+    case "tiered":
+      return (
+        <>
+          {basin}
+          <circle r={R * 0.74} {...ripple} strokeDasharray="5 4" />
+          <circle r={R * 0.6} fill={c.print ? "#ffffff" : WATER} {...line} />
+          <circle r={R * 0.5} {...ripple} strokeDasharray="4 3" />
+          <circle r={R * 0.38} fill={c.print ? "#ffffff" : WATER_DEEP} {...line} />
+          <circle r={R * 0.28} {...ripple} strokeDasharray="3 3" />
+          <circle r={R * 0.18} fill={c.print ? "#ffffff" : WATER} {...line} />
+          <circle r={R * 0.06} fill="#ffffff" {...line} />
+        </>
+      );
+    case "jets":
+      return (
+        <>
+          {basin}
+          {along(w, h, (L, D) => {
+            const rows = D >= 1600 ? 2 : 1;
+            const k = Math.max(3, Math.round((L * 0.8) / 450));
+            const r = Math.min(D * 0.06, 70);
+            return Array.from({ length: rows * k }, (_, i) => {
+              const row = Math.floor(i / k);
+              const x = -L * 0.4 + ((i % k) + 0.5) * ((L * 0.8) / k);
+              const y = rows === 1 ? 0 : (row ? 1 : -1) * D * 0.18;
+              return (
+                <g key={i}>
+                  <circle cx={x} cy={y} r={r * 2.6} {...ripple} strokeDasharray="3 3" />
+                  <circle cx={x} cy={y} r={r} fill="#ffffff" {...line} />
+                </g>
+              );
+            });
+          })}
+        </>
+      );
+    case "bowl": {
+      // A raised stone bowl, no basin under it: its rim, the water in it, the water brimming over.
+      const stone = c.print ? "#ffffff" : c.tone === DEFAULT_TONE.fountain ? "#ECE7DE" : c.tone;
+      return (
+        <>
+          {round ? <ellipse rx={w / 2} ry={h / 2} fill={stone} {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.2} fill={stone} {...line} />}
+          <g transform={`scale(0.84)`}>{pool(w, h, R * 0.15)}</g>
+          {Array.from({ length: 16 }, (_, i) => {
+            const a = polar(R * 0.86, i * 22.5);
+            const b = polar(R * 0.97, i * 22.5);
+            return <line key={i} x1={a.x * (w / 2 / R)} y1={a.y * (h / 2 / R)} x2={b.x * (w / 2 / R)} y2={b.y * (h / 2 / R)} {...ripple} stroke={c.print ? c.ink : WATER_DEEP} strokeOpacity={c.print ? 0.5 : 1} />;
+          })}
+          <circle r={R * 0.5} {...ripple} strokeDasharray="5 4" />
+          <circle r={R * 0.12} fill="#ffffff" {...line} />
+        </>
+      );
+    }
+  }
   return (
     <>
-      {c.print ? (
-        round ? <ellipse rx={w / 2} ry={h / 2} fill={water} {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill={water} {...line} />
-      ) : (
-        <>
-          <SurfaceFill material="water" footprint={basin} w={w} d={h} id="fountain" color={c.tone === DEFAULT_TONE.fountain ? undefined : c.tone} />
-          {round ? <ellipse rx={w / 2} ry={h / 2} fill="none" {...line} /> : <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={R * 0.15} fill="none" {...line} />}
-        </>
-      )}
-      {round ? <ellipse rx={w / 2 - R * 0.08} ry={h / 2 - R * 0.08} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} /> : <rect x={-w / 2 + R * 0.08} y={-h / 2 + R * 0.08} width={w - R * 0.16} height={h - R * 0.16} rx={R * 0.1} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} />}
+      {basin}
       <circle r={R * 0.68} {...ripple} strokeDasharray="5 4" />
       <circle r={R * 0.42} fill={c.print ? "#ffffff" : WATER_DEEP} {...line} />
       <circle r={R * 0.26} {...ripple} />
@@ -990,18 +1614,108 @@ function fountain(w: number, h: number, round: boolean, c: Colours, line: Line) 
   );
 }
 
-/** An arch, seen from above: a foot at each end and the span between them, dressed with a garland
- *  of flowers — the runner form of the same drawing an arrangement is (components/flower-symbol.tsx),
- *  in the arch's own tone. */
-function arch(L: number, D: number, c: Colours, line: Line, ink: string, detail: boolean) {
+/** An arch, seen from above: a foot at each end and the span between them, dressed in its style
+ *  (ArchStyle) — by default a garland of flowers the whole way along, the runner form of the same
+ *  drawing an arrangement is (components/flower-symbol.tsx), in the arch's own tone. */
+function arch(L: number, D: number, c: Colours, line: Line, ink: string, detail: boolean, style?: ArchStyle) {
   const foot = Math.min(D, L * 0.2);
   const span = D * 0.38;
-  return (
+  const tone = c.print ? undefined : c.tone;
+  const frame = (
     <>
       <rect x={-L / 2 + foot / 2} y={-span / 2} width={L - foot} height={span} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.14} {...line} />
       <rect x={-L / 2} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />
       <rect x={L / 2 - foot} y={-foot / 2} width={foot} height={foot} rx={foot * 0.12} fill={c.print ? "#ffffff" : c.ink} fillOpacity={c.print ? 1 : 0.32} {...line} />
-      <FlowerDrawing spec={plainFlowers(L - foot * 1.2, D * 0.9, c.print ? undefined : c.tone, "runner")} ink={ink} print={c.print} detail={detail} />
+    </>
+  );
+  switch (style) {
+    case "corner": {
+      // The asymmetric dressing: a big spray over one corner, a smaller one over the other.
+      const big = L * 0.44;
+      const small = L * 0.24;
+      return (
+        <>
+          {frame}
+          <g transform={`translate(${-L / 2 + foot * 0.4 + big / 2} 0)`}>
+            <FlowerDrawing spec={plainFlowers(big, D * 0.95, tone, "runner")} ink={ink} print={c.print} detail={detail} />
+          </g>
+          <g transform={`translate(${L / 2 - foot * 0.4 - small / 2} 0)`}>
+            <FlowerDrawing spec={plainFlowers(small, D * 0.7, tone, "runner")} ink={ink} print={c.print} detail={detail} />
+          </g>
+        </>
+      );
+    }
+    case "draped": {
+      // Fabric thrown over the span, falling in swags: a band that waves along the arch, wider where
+      // it gathers, with a fold down its length.
+      const x0 = -L / 2 + foot * 0.3;
+      const run = L - foot * 0.6;
+      const steps = 48;
+      const pts = Array.from({ length: steps + 1 }, (_, i) => {
+        const t = i / steps;
+        const wave = Math.sin(t * Math.PI * 3);
+        return { x: x0 + t * run, y: D * 0.16 * wave, hw: D * (0.2 + 0.18 * Math.abs(Math.cos(t * Math.PI * 3))) };
+      });
+      const edge = (s: number) => pts.map((p) => `${p.x} ${p.y + s * p.hw}`);
+      const band = `M ${edge(-1).join(" L ")} L ${edge(1).reverse().join(" L ")} Z`;
+      const fold = `M ${pts.map((p) => `${p.x} ${p.y + p.hw * 0.25}`).join(" L ")}`;
+      return (
+        <>
+          {frame}
+          <path d={band} fill={c.print ? "#ffffff" : c.tone} fillOpacity={c.print ? 1 : 0.85} {...line} strokeLinejoin="round" />
+          <path d={fold} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.4} />
+        </>
+      );
+    }
+    case "bare":
+      // The frame alone — metal, timber or neon — its tube drawn down the middle of the span.
+      return (
+        <>
+          {frame}
+          <line x1={-L / 2 + foot / 2} y1={0} x2={L / 2 - foot / 2} y2={0} {...line} stroke={c.print || paleTone(c.tone) ? c.ink : c.tone} strokeOpacity={1} strokeWidth={c.print ? 1.5 : 2.5} strokeLinecap="round" />
+        </>
+      );
+  }
+  return (
+    <>
+      {frame}
+      <FlowerDrawing spec={plainFlowers(L - foot * 1.2, D * 0.9, tone, "runner")} ink={ink} print={c.print} detail={detail} />
+    </>
+  );
+}
+
+/** A gate, seen from above (`L` along it, `D` through it): a column at each end standing on its
+ *  plinth, and the beam joining them overhead — dashed, as anything above the cut is. Between the
+ *  columns, the ENTRANCE'S SHAPE folded down onto the plan (GateStyle): square corners under a
+ *  straight lintel, one curve under an arch — the one thing a plan cannot otherwise show of a gate,
+ *  and the thing that tells two gates apart. */
+function gate(L: number, D: number, c: Colours, line: Line, style?: GateStyle) {
+  const P = Math.min(D, L * 0.2);
+  const cx = L / 2 - P / 2;
+  const beam = Math.min(D * 0.62, P * 0.8);
+  // The opening, as wide as the passage and as deep as the gate, so its shape reads even at hall
+  // zoom: an arch is one curve from column to column, with no straight run anywhere along it.
+  const a = (L / 2 - P) * 0.92;
+  const foot = D * 0.4;
+  const rise = D * 0.8;
+  const overhead = { ...line, strokeOpacity: c.print ? line.strokeOpacity : line.strokeOpacity * 0.9, strokeDasharray: "5 3" };
+  const profile =
+    style === "arched"
+      ? `M ${-a} ${foot} A ${a} ${rise} 0 0 1 ${a} ${foot}`
+      : `M ${-a} ${foot} L ${-a} ${foot - rise} L ${a} ${foot - rise} L ${a} ${foot}`;
+  const post = (x: number) => (
+    <g key={x} transform={`translate(${x} 0)`}>
+      <rect x={-P / 2} y={-P / 2} width={P} height={P} rx={P * 0.06} fill={c.tone} {...line} />
+      <circle r={P * 0.36} fill={c.print ? "#ffffff" : "#FFFFFF"} {...line} />
+      <circle r={P * 0.24} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.4} />
+    </g>
+  );
+  return (
+    <>
+      <rect x={-L / 2} y={-beam / 2} width={L} height={beam} fill={c.print ? "#ffffff" : c.tone} fillOpacity={c.print ? 1 : 0.5} {...overhead} />
+      <path d={profile} fill="none" {...line} stroke={c.ink} strokeOpacity={c.print ? 1 : 0.8} strokeWidth={c.print ? 1.2 : 1.6} strokeLinejoin="round" />
+      {post(-cx)}
+      {post(cx)}
     </>
   );
 }

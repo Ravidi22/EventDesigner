@@ -34,6 +34,7 @@ import {
   Wheat,
   Combine,
   Lamp,
+  DoorOpen,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
@@ -237,6 +238,10 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [], placeOnce: true },
   { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch" },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
+  // A gate — two columns joined overhead by a lintel (a square entrance) or an arch (a round one),
+  // set where the guests come in or at the head of the aisle. Not an arch: an arch is a dressed
+  // frame, a gate is built — and the plan has to show the passage between its columns.
+  { id: "gates", label: "שערים", group: "grp-accessories", defaultLayer: "floor", icon: DoorOpen, dims: "box", fields: [] },
   // Columns and pillars — a Roman column, a display plinth, a pedestal a bust stands on.
   { id: "columns", label: "עמודים", group: "grp-accessories", defaultLayer: "floor", icon: Milestone, dims: "round", fields: [] },
   // Water features: a fountain is round far more often than not.

@@ -239,6 +239,7 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     case "column":
     case "fountain":
     case "arch":
+    case "gate":
     case "tree":
     case "bar":
     case "chuppah":
