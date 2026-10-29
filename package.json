@@ -106,6 +106,7 @@
     "gen:calendar": "tsx lib/calendar/generate.mts",
     "check:delta": "tsx lib/design-document/delta.ts",
     "db:verify:client": "tsx lib/client-portal/verify.ts",
+    "db:verify:production": "tsx lib/production/verify.ts",
     "check:client-product": "tsx lib/client-portal/safe-product.ts",
     "check:scene": "tsx lib/scene/check.ts",
     "check:scene-frame": "tsx lib/scene/frame.ts",
