@@ -51,6 +51,7 @@ import {
   exports,
   issuedQuotes,
   orders,
+  sketchProposals,
   users,
 } from "@/lib/db/schema";
 import { assertEventOwned } from "@/lib/events/ownership";
@@ -111,7 +112,7 @@ export async function fetchRunway(): Promise<Runway> {
   // passing the same object to four of them is a subtlety nobody should have to hold in their head.
   const scopedEventIds = () => database.select({ id: events.id }).from(events).where(scope);
 
-  const [eventRows, zoneRows, likedRows, docRows, packingRows, quoteRows, offsets, crewRows, orderRows] = await Promise.all([
+  const [eventRows, zoneRows, likedRows, docRows, packingRows, mapRows, proposalRows, quoteRows, offsets, crewRows, orderRows] = await Promise.all([
     database
       .select({
         id: events.id,
@@ -186,6 +187,39 @@ export async function fetchRunway(): Promise<Runway> {
       )
       .orderBy(exports.eventId, asc(exports.createdAt)),
 
+    // The first placement-map set, by the same reasoning.
+    database
+      .selectDistinctOn([exports.eventId], {
+        eventId: exports.eventId,
+        createdAt: exports.createdAt,
+      })
+      .from(exports)
+      .where(
+        and(
+          eq(exports.organizationId, organizationId),
+          eq(exports.type, "placement_map"),
+          inArray(exports.eventId, scopedEventIds()),
+        ),
+      )
+      .orderBy(exports.eventId, asc(exports.createdAt)),
+
+    // The client's changes nobody has answered yet (lib/proposals): the EARLIEST submitted one per
+    // event, since "how long have they been waiting" is what the designer wants to know.
+    database
+      .selectDistinctOn([sketchProposals.eventId], {
+        eventId: sketchProposals.eventId,
+        submittedAt: sketchProposals.submittedAt,
+      })
+      .from(sketchProposals)
+      .where(
+        and(
+          eq(sketchProposals.organizationId, organizationId),
+          eq(sketchProposals.status, "submitted"),
+          inArray(sketchProposals.eventId, scopedEventIds()),
+        ),
+      )
+      .orderBy(sketchProposals.eventId, asc(sketchProposals.submittedAt)),
+
     // One row per event — issued_quotes is keyed on eventId, because re-issuing overwrites.
     database
       .select({
@@ -240,6 +274,8 @@ export async function fetchRunway(): Promise<Runway> {
   const liked = new Set(likedRows.map((r) => r.eventId));
   const versionByEvent = new Map(docRows.map((r) => [r.eventId, r.version]));
   const packedByEvent = new Map(packingRows.map((r) => [r.eventId, r.createdAt]));
+  const mappedByEvent = new Map(mapRows.map((r) => [r.eventId, r.createdAt]));
+  const askedByEvent = new Map(proposalRows.map((r) => [r.eventId, r.submittedAt]));
   const quoteByEvent = new Map(quoteRows.map((r) => [r.eventId, r]));
 
   // The crew role sees the work and never the money (ROLE_CAPABILITIES). Decided once, here, rather
@@ -278,6 +314,8 @@ export async function fetchRunway(): Promise<Runway> {
       lostAt: e.lostAt?.getTime(),
       archived: e.archived,
       packingExportedAt: packedByEvent.get(e.id)?.getTime(),
+      mapExportedAt: mappedByEvent.get(e.id)?.getTime(),
+      proposalPendingSince: askedByEvent.get(e.id)?.getTime(),
       // F-7.4, as two integers rather than a JSON comparison: issuing a quote SEALS the version it
       // names, so a current version above it means the drawing genuinely moved on afterwards and
       // never merely that a float rendered differently. An event with no quote has nothing to have

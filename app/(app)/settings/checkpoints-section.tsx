@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import {
   CHECKPOINTS,
+  CHECKPOINT_BY_ID,
   DEFAULT_OFFSETS,
+  PRODUCTION_CHECKPOINTS,
+  SALES_CHECKPOINTS,
   type CheckpointId,
   type CheckpointOffsets,
 } from "@/lib/production/runway";
@@ -37,8 +40,23 @@ const DONE_WHEN: Record<CheckpointId, string> = {
   design: "מסומן כשיש סקיצה לאירוע בסטודיו.",
   quote: "מסומן כשיצאה ללקוח הצעת מחיר.",
   confirm: "מסומן כשהלקוח אישר. זו הנקודה שבה האירוע עובר מ״בהצעה״ ל״בהפקה״.",
+  crew: "מסומן כשנבחר צוות הקמה לאירוע (מסך ההפקה).",
+  orders: "מסומן כשכל ההזמנות לספקים לאירוע נענו בחיוב — או כשאין הזמנות כלל.",
   packing: "מסומן אחרי ייצוא ראשון של רשימת הציוד.",
+  map: "מסומן אחרי הדפסה ראשונה של סט מפות ההצבה.",
 };
+
+/** The two plans, each under its own heading — the settings read as the work happens: selling
+ *  first, then producing. Which plan an event is measured against is decided by its confirmation
+ *  (checkpointSetFor in runway.ts); the drawing is on both and is listed once, under the first. */
+const PLANS: { title: string; hint: string; ids: readonly CheckpointId[] }[] = [
+  { title: "עד שהלקוח מאשר", hint: "נמדד על אירועים בעיצוב ובהצעה.", ids: SALES_CHECKPOINTS },
+  {
+    title: "אחרי האישור",
+    hint: "נמדד על אירועים בהפקה. הסקיצה נספרת גם כאן — ממנה נגזר כל השאר.",
+    ids: PRODUCTION_CHECKPOINTS.filter((id) => id !== "design"),
+  },
+];
 
 export function CheckpointsSection({ initialOffsets }: { initialOffsets: CheckpointOffsets }) {
   // Seeded by the server read in page.tsx, exactly like the business form — a section that opens on
@@ -88,41 +106,54 @@ export function CheckpointsSection({ initialOffsets }: { initialOffsets: Checkpo
       hint="כל נקודת בקרה נמדדת אחורה מתאריך האירוע. עבר התאריך והנקודה עדיין לא סומנה — היא נדלקת כהתראה במסך ההפקה, והמוקדמת שבהן היא זו שהאירוע מוצג לפיה. הכול נשמר אוטומטית."
       action={<SavedFlag shown={saved} />}
     >
-      {/* In runway order, not alphabetically and not by size: the list is a plan, and reading it
+      {/* In runway order, not alphabetically and not by size: each list is a plan, and reading it
           top to bottom is meant to read as the way the work actually happens. */}
-      <ol className="max-w-3xl">
-        {CHECKPOINTS.map(({ id, label }, i) => (
-          <li key={id} className="flex items-center gap-3 border-b border-border-soft py-3.5 last:border-0">
-            <span
-              aria-hidden
-              className="nums flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-tint text-[13px] font-bold text-accent"
-            >
-              {i + 1}
-            </span>
+      <div className="max-w-3xl space-y-5">
+        {PLANS.map((plan) => (
+          <section key={plan.title}>
+            <h4 className="flex items-baseline gap-2 text-sm font-bold text-ink">
+              {plan.title}
+              <span className="text-xs font-normal text-muted">{plan.hint}</span>
+            </h4>
+            <ol>
+              {plan.ids.map((id, i) => {
+                const { label } = CHECKPOINT_BY_ID[id];
+                return (
+                  <li key={id} className="flex items-center gap-3 border-b border-border-soft py-3.5 last:border-0">
+                    <span
+                      aria-hidden
+                      className="nums flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-tint text-[13px] font-bold text-accent"
+                    >
+                      {i + 1}
+                    </span>
 
-            <div className="min-w-0 flex-1">
-              <span className="text-sm font-semibold text-ink">{label}</span>
-              <p className="mt-0.5 text-[13px] leading-relaxed text-ink-soft">{DONE_WHEN[id]}</p>
-            </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-sm font-semibold text-ink">{label}</span>
+                      <p className="mt-0.5 text-[13px] leading-relaxed text-ink-soft">{DONE_WHEN[id]}</p>
+                    </div>
 
-            {/* The unit is spelled out beside every field rather than once in a column header:
-                these rows are read one at a time, when a designer is deciding about ONE checkpoint,
-                and "45" with the header scrolled away is a number without a meaning. */}
-            <div className="flex shrink-0 items-center gap-2">
-              <NumberField
-                value={offsets[id]}
-                onChange={(days) => set(id, days)}
-                min={0}
-                max={365}
-                decimals={0}
-                aria-label={`${label} — ימים לפני האירוע`}
-                wrapperClassName="w-[76px]"
-              />
-              <span className="text-[13px] text-muted">ימים לפני האירוע</span>
-            </div>
-          </li>
+                    {/* The unit is spelled out beside every field rather than once in a column header:
+                        these rows are read one at a time, when a designer is deciding about ONE
+                        checkpoint, and "45" with the header scrolled away is a number without a meaning. */}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <NumberField
+                        value={offsets[id]}
+                        onChange={(days) => set(id, days)}
+                        min={0}
+                        max={365}
+                        decimals={0}
+                        aria-label={`${label} — ימים לפני האירוע`}
+                        wrapperClassName="w-[76px]"
+                      />
+                      <span className="text-[13px] text-muted">ימים לפני האירוע</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
         ))}
-      </ol>
+      </div>
 
       <div className="mt-5 flex items-start justify-between gap-4">
         <p className="max-w-xl text-xs leading-relaxed text-muted">
