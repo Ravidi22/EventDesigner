@@ -2,7 +2,7 @@ import { requireOrgKind } from "@/lib/auth/guard";
 import { fetchProducts } from "@/lib/catalog/actions";
 import { fetchMarketFlowers } from "@/lib/marketplace/actions";
 import { CatalogScreen } from "./catalog-screen";
-import { SOURCING_FILTERS, type SourcingFilter } from "./filters";
+import { SOURCING_FILTERS, type SourcingFilter } from "./sourcing";
 
 // The catalog is read here, on the server, and handed to the screen — which also primes the
 // studio's synchronous resolver cache with it (lib/catalog/use-catalog.ts) before anything draws.
