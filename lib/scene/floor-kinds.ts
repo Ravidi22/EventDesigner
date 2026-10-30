@@ -26,6 +26,7 @@
 import type { BuiltOutline, Footprint } from "@/lib/studio/footprint";
 import { catalogBox, footprintOutlines, pieceOf, resolveFootprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
+import { bowedRug, rugFringe, rugInset } from "@/lib/studio/rug-shape";
 import { flatRing, signedDistance } from "@/lib/studio/label-anchor";
 import type { Product } from "@/lib/catalog/types";
 import type { SymbolKind } from "@/lib/catalog/symbols";
@@ -831,11 +832,12 @@ export function rugBody(ctx: ItemContext): ItemBuild {
   const fabric = swatchMaterial(ctx.resolved, ctx.product, tone, "fabric", true);
   const weave: MaterialRef = { colour: darkened(tone, 0.2), kind: "fabric" };
   const b = make(fabric);
-  b.parts.push(box(w, d, RUG_MM, vec3(0, 0, 0), fabric));
   const m = Math.min(w, d);
   const b1 = Math.min(m * 0.07, 160);
   const b2 = Math.min(m * 0.12, 260);
   const band = b2 - b1;
+  if (ctx.bows) return curvedRugBody(ctx, b, weave, { m, b1, b2 });
+  b.parts.push(box(w, d, RUG_MM, vec3(0, 0, 0), fabric));
   if (band > 2 && m > b2 * 3) {
     for (const sy of [-1, 1]) b.parts.push(box(w - b1 * 2, band, RUG_BAND_MM, vec3(0, sy * (d / 2 - b1 - band / 2), RUG_MM), weave));
     for (const sx of [-1, 1]) b.parts.push(box(band, d - b2 * 2, RUG_BAND_MM, vec3(sx * (w / 2 - b1 - band / 2), 0, RUG_MM), weave));
@@ -849,6 +851,36 @@ export function rugBody(ctx: ItemContext): ItemBuild {
       if (w >= d) b.parts.push(box(fringe, RUG_FRINGE_W_MM, RUG_FRINGE_W_MM, vec3(s * (w / 2 + fringe / 2), along, 0), weave));
       else b.parts.push(box(RUG_FRINGE_W_MM, fringe, RUG_FRINGE_W_MM, vec3(along, s * (d / 2 + fringe / 2), 0), weave));
     }
+  }
+  return b;
+}
+
+/** A rug with curved sides (lib/studio/rug-shape.ts): the slab is the bowed outline extruded, the
+ *  border a ring between two insets of it (the same bows on a smaller rectangle — the plan's two
+ *  border lines), and each strand of fringe a small box leaving the short end along the curve's
+ *  normal. Everything about the rectangle's centre, as the plan draws it. */
+function curvedRugBody(ctx: ItemContext, b: ItemBuild, weave: MaterialRef, k: { m: number; b1: number; b2: number }): ItemBuild {
+  const { widthMm: w, depthMm: d, bows } = ctx;
+  if (!bows) return b;
+  const slab = bowedRug(w, d, bows);
+  b.parts.push({ shape: "extrude", outline: { outline: slab.outline, edgeCurves: slab.edgeCurves }, h: RUG_MM, at: vec3(0, 0, 0) });
+  const inner = rugInset(w, d, bows, k.b1);
+  const outer = k.m > k.b2 * 3 ? rugInset(w, d, bows, k.b2) : null;
+  if (inner && outer && k.b2 - k.b1 > 2) {
+    b.parts.push({
+      shape: "extrude",
+      outline: { outline: inner.outline, edgeCurves: inner.edgeCurves },
+      holes: [{ outline: outer.outline, edgeCurves: outer.edgeCurves }],
+      h: RUG_BAND_MM,
+      at: vec3(0, 0, RUG_MM),
+      material: weave,
+    });
+  }
+  const fringe = Math.min(70, k.m * 0.05);
+  for (const t of rugFringe(w, d, bows, RUG_FRINGE_PITCH_MM, RUG_FRINGE_MAX)) {
+    const deg = (Math.atan2(t.ny, t.nx) * 180) / Math.PI;
+    // A box turned about its own centre: put the centre half a strand out along the normal.
+    b.parts.push(box(fringe, RUG_FRINGE_W_MM, RUG_FRINGE_W_MM, vec3(t.x + (t.nx * fringe) / 2, t.y + (t.ny * fringe) / 2, 0), weave, deg));
   }
   return b;
 }
@@ -1027,6 +1059,17 @@ if (isMain(import.meta.url)) {
   assert(boxes(rug).filter((p) => p.h === 2).length === 4, "rug: four border strips");
   const fringes = boxes(rug).filter((p) => p.h === 3);
   assert(fringes.length === 40 && fringes.every((p) => Math.abs(p.at.x) > 1500), "rug: twenty fringes off each short end");
+
+  // The same rug with its right end bowed out 20%: an extruded slab, a ring border with a hole, and
+  // fringe that follows the curve — the bulge reaches past the straight end, and every strand points out.
+  const curved = rugBody(ctxOf({ kind: "rect", widthMm: 3000, depthMm: 2000 }, 12, "#c9b8a8", { bows: [0, 0.2, 0, 0] }));
+  const curvedSlab = curved.parts[0];
+  assert(curvedSlab.shape === "extrude" && curvedSlab.h === 12 && curvedSlab.outline.edgeCurves?.[1] != null, "curved rug: the slab is the bowed outline, extruded");
+  const ring = curved.parts.find((p) => p.shape === "extrude" && p.h === 2);
+  assert(ring?.shape === "extrude" && ring.holes?.length === 1, "curved rug: the border is a ring");
+  const strands = boxes(curved).filter((p) => p.h === 3);
+  assert(strands.length === 40, `curved rug: twenty strands an end (${strands.length})`);
+  assert(strands.some((p) => p.at.x > 1500 + 350), "curved rug: the fringe rides the bulge");
 
   // Chairs in rows 3×4: twelve instances, all facing +y.
   const rows = chairRowsBody(ctxOf({ kind: "rect", widthMm: 1950, depthMm: 2400 }, 900, DEFAULT_TONE.chair, { rows: { rows: 3, perRow: 4 } }));

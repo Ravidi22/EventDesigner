@@ -398,6 +398,8 @@ export function sameDrawProps<P extends object>(a: P, b: P): boolean {
     const y = b[k];
     if (Object.is(x, y)) continue;
     if (k === "footprint" && x && y && sameFootprint(x as unknown as Footprint, y as unknown as Footprint)) continue;
+    // A rug's curves (Placement.bows) are a fresh four-number array on every read.
+    if (k === "bows" && Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])) continue;
     return false;
   }
   return true;

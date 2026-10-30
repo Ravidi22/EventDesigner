@@ -30,6 +30,7 @@ import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushion
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
+import { bowedRug, bowsOf, rugPolygon } from "@/lib/studio/rug-shape";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
@@ -441,7 +442,10 @@ export function PlacementMap({
     const b = footprintBounds(fp);
     const rug = r?.product.category === "rugs";
     if (!rug && Math.max(b.w, b.h) * (p.scale || 1) < 1500) continue;
-    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(outlineOf(fp), p.position, p.rotation, p.mirrored, p.scale || 1) });
+    // A rug with curved sides is measured along them (lib/studio/rug-shape.ts), not by its box.
+    const bows = rug && r?.sizing === "stretch" ? bowsOf(p) : undefined;
+    const curved = bows && fp.kind === "rect" ? rugPolygon(fp.widthMm, fp.depthMm, bows) : null;
+    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(curved ?? outlineOf(fp), p.position, p.rotation, p.mirrored, p.scale || 1) });
   }
   // The venue's own stairs and ramps (lib/venues/climb.ts). Nobody on the crew places them, so they
   // are never sized or tied — but a table has to keep their foot and head clear, so the gap to the
@@ -1520,10 +1524,19 @@ export function PlacementGlyph({
   chairs?: boolean;
 }) {
   const r = resolve(placement.variantId);
+  // A rug with curved sides (lib/studio/rug-shape.ts) is drawn through its bowed outline. The seams
+  // that draw a custom footprint recentre it on its bounds, so `lift` carries it back onto the
+  // rectangle's centre — which is where the rug is.
+  const stretched = r?.sizing === "stretch" ? (placement.sizeMm ?? fallbackSize(r)) : undefined;
+  const bows = stretched && !shape ? bowsOf(placement) : undefined;
+  const bowed = bows && stretched ? bowedRug(stretched.widthMm, stretched.depthMm, bows) : null;
+  const lift = bowed ? `translate(${bowed.centre.x} ${bowed.centre.y})` : undefined;
   const footprint: Footprint = shape ?? (
-    r?.sizing === "stretch"
-      ? { kind: "rect", ...(placement.sizeMm ?? fallbackSize(r)) }
+    stretched
+      ? (bowed?.footprint ?? { kind: "rect", ...stretched })
       : placementFootprint(placement)); // at the size it was stretched to, when its row allows that
+  // The rectangle a rug's border and fringe are laid in: its footprint, or — curved — the box it bows from.
+  const patternBox = footprint.kind === "rect" ? { w: footprint.widthMm, h: footprint.depthMm } : bowed && stretched ? { w: stretched.widthMm, h: stretched.depthMm } : null;
   const scale = placement.scale || 1;
   // The row's own weight and dash, collapsed to ink-on-paper (TableGlyph's reason). A stage keeps the
   // sheet's furniture weight whatever deck it was built from, as it does on screen.
@@ -1563,19 +1576,25 @@ export function PlacementGlyph({
         {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
         {!symbol && !block && (
-          <FootprintShape
-            footprint={footprint}
-            overhead={overhead}
-            fill={own ?? screen.fill}
-            fillOpacity={own ? 1 : screen.fillOpacity}
-            stroke={placement.stage ? INK : screen.stroke}
-            strokeWidth={screen.strokeWidth}
-            strokeDasharray={screen.dashArray.length ? screen.dashArray.join(" ") : undefined}
-            vectorEffect="non-scaling-stroke"
-          />
+          <g transform={lift}>
+            <FootprintShape
+              footprint={footprint}
+              overhead={overhead}
+              fill={own ?? screen.fill}
+              fillOpacity={own ? 1 : screen.fillOpacity}
+              stroke={placement.stage ? INK : screen.stroke}
+              strokeWidth={screen.strokeWidth}
+              strokeDasharray={screen.dashArray.length ? screen.dashArray.join(" ") : undefined}
+              vectorEffect="non-scaling-stroke"
+            />
+          </g>
         )}
-        {surfaced && <ItemSurface appearance={r?.product.appearance} footprint={footprint} color={own} seed={placement.id} />}
-        {r?.product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={dark ? "#ffffff" : INK} opacity={0.5} />}
+        {surfaced && (
+          <g transform={lift}>
+            <ItemSurface appearance={r?.product.appearance} footprint={footprint} color={own} seed={placement.id} />
+          </g>
+        )}
+        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} bows={bows} ink={dark ? "#ffffff" : INK} opacity={0.5} />}
       </g>
     );
   }
@@ -1589,17 +1608,19 @@ export function PlacementGlyph({
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
-      <FootprintShape
-        footprint={footprint}
-        overhead={overhead}
-        fill={symbol || block ? "none" : (flat ?? style.fill)}
-        stroke={style.stroke}
-        strokeWidth={block ? LINE_WEIGHTS.annotation : style.strokeWidth}
-        strokeDasharray={block ? "4 3" : style.dashArray.length ? style.dashArray.join(" ") : undefined}
-        vectorEffect="non-scaling-stroke"
-      />
+      <g transform={lift}>
+        <FootprintShape
+          footprint={footprint}
+          overhead={overhead}
+          fill={symbol || block ? "none" : (flat ?? style.fill)}
+          stroke={style.stroke}
+          strokeWidth={block ? LINE_WEIGHTS.annotation : style.strokeWidth}
+          strokeDasharray={block ? "4 3" : style.dashArray.length ? style.dashArray.join(" ") : undefined}
+          vectorEffect="non-scaling-stroke"
+        />
+      </g>
       {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. */}
-      {rug && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} ink={INK} opacity={0.8} />}
+      {rug && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} bows={bows} ink={INK} opacity={0.8} />}
     </g>
   );
 }

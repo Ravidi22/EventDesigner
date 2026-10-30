@@ -16,6 +16,7 @@
     "check:label-anchor": "tsx lib/studio/label-anchor.ts",
     "check:hang": "tsx lib/studio/hang.ts",
     "check:spine": "tsx lib/studio/spine.ts",
+    "check:rug-shape": "tsx lib/studio/rug-shape.ts",
     "check:hang-over": "tsx lib/studio/hang-over.ts",
     "check:geometry": "tsx lib/studio/geometry.ts",
     "check:collide": "tsx lib/studio/collide.ts",

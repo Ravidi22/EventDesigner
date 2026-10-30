@@ -355,6 +355,7 @@ export function Inspector({
   onVariant,
   onSpan,
   onResize,
+  onBows,
   onRenumber,
   onStyleTable,
   onDuplicate,
@@ -503,6 +504,8 @@ export function Inspector({
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }) => void;
+  /** A rug's curved sides (Placement.bows); null straightens them all. */
+  onBows?: (id: string, bows: [number, number, number, number] | null) => void;
   onRenumber: (id: string, number: number) => void;
   onStyleTable: (id: string, style: ElementStyle | undefined) => void;
   /** Copy + paste in one press — offered by every bar, because "another one of these" is the same
@@ -1855,6 +1858,16 @@ export function Inspector({
                 className="w-20"
               />
             </PanelRow>
+            {onBows && (
+              <>
+                <Note>גרירת הריבוע באמצע כל צד מעקמת אותו; לחיצה כפולה עליו מיישרת אותו.</Note>
+                {p.bows && (
+                  <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onBows(p.id, null)}>
+                    יישור כל הצדדים
+                  </Button>
+                )}
+              </>
+            )}
           </Popover>
         )}
 

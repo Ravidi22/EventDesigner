@@ -14,6 +14,7 @@ import { catalogVersion } from "@/lib/catalog/storage";
 import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
 import { resolveSpan } from "@/lib/studio/anchor";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
+import { bowsOf, rugPolygon } from "@/lib/studio/rug-shape";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
@@ -176,9 +177,16 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
         const shape = p.stage ? edgeItemShape(p.stage, st, deckOf) : null;
         return shape && shape.kind !== "barrier" && shape.kind !== "backdrop" ? [shape.polygon.map((q) => toRoom({ position: c, rotation: p.rotation, mirrored: p.mirrored }, q))] : [];
       });
+    // A rug with curved sides is measured along its curves; the rectangle it was is only its box.
+    const bows = bowsOf(p);
     const polysAt =
       r?.sizing === "stretch"
-        ? (c: Point) => footprintPolygons({ kind: "rect", ...stretchSize(p) }, c, p.rotation || 0)
+        ? bows
+          ? (c: Point): Poly[] => {
+              const s = stretchSize(p);
+              return [rugPolygon(s.widthMm, s.depthMm, bows).map((q) => toRoom({ position: c, rotation: p.rotation }, q))];
+            }
+          : (c: Point) => footprintPolygons({ kind: "rect", ...stretchSize(p) }, c, p.rotation || 0)
         : (c: Point) => [...footprintPolygons(placementFootprint(p), c, p.rotation || 0, !!p.mirrored, p.scale || 1), ...stairPolys(c)];
     return {
       ref,

@@ -4736,6 +4736,7 @@ export function StudioScreen({
               drag({ type: "resizePlacement", id, sizeMm });
               drag({ type: "movePlacement", id, position });
             }}
+            onBowPlacement={(id, bows) => drag({ type: "setPlacementBows", id, bows })}
             onSpanPlacement={(id, span) => drag({ type: "setPlacementSpan", id, span })}
             onDropProduct={dropProduct}
             onScale={(v) => {
@@ -5050,6 +5051,7 @@ export function StudioScreen({
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
+                onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicate={duplicate}
