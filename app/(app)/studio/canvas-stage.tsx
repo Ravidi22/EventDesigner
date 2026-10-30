@@ -11,7 +11,7 @@ import { ChairBlock } from "@/components/chair-block";
 import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
-import { pointToT, resolveSpan, wallSegment, nearestWall } from "@/lib/studio/anchor";
+import { resolveSpan, wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, bowedRug, bowsOf, withBow, type RugBows } from "@/lib/studio/rug-shape";
 import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
@@ -29,7 +29,8 @@ import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "@/components/vessel-mark";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
-import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { DrapePleatsAlong } from "@/components/curtain-cloth";
 import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
@@ -2824,9 +2825,10 @@ const DrapeNode = memo(function DrapeNode({
       onSelect(placement.id, false);
       startPointerGesture(e, {
         onMove: (ev) => {
-          const wall = wallSegment(structure, span.wallId);
-          if (!wall) return;
-          const t = pointToT(wall, ctx.clientToMm(ev.clientX, ev.clientY));
+          // Slid along the wall itself — round the bow on a curved one (lib/studio/anchor.ts).
+          const track = wallTrack(structure, span.wallId);
+          if (!track) return;
+          const t = track.nearestT(ctx.clientToMm(ev.clientX, ev.clientY));
           onSpan(placement.id, which === "from" ? { ...span, from: t } : { ...span, to: t });
         },
         onEnd: (_ev, moved) => {
@@ -2837,16 +2839,17 @@ const DrapeNode = memo(function DrapeNode({
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
   });
 
+  // The run along the wall itself: two points on a straight wall, the bow followed on a curved one.
+  const run = resolved.path.map((q) => `${q.x},${q.y}`).join(" ");
   return (
     <g>
-      <line
-        x1={from.x}
-        y1={from.y}
-        x2={to.x}
-        y2={to.y}
+      <polyline
+        points={run}
+        fill="none"
         stroke={colour}
         strokeWidth={DRAPE_MM}
         strokeLinecap="butt"
+        strokeLinejoin="round"
         opacity={0.9}
         tabIndex={0}
         role="button"
@@ -2859,16 +2862,12 @@ const DrapeNode = memo(function DrapeNode({
         }}
       />
       {/* Its pleats — the fabric gathered on the rail — so a drape reads as cloth, not as paint. */}
-      <g transform={`translate(${(from.x + to.x) / 2} ${(from.y + to.y) / 2}) rotate(${(Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI})`}>
-        <DrapePleats lengthMm={resolved.lengthMm} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} />
-      </g>
+      <DrapePleatsAlong line={resolved.path} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} />
       {/* The selection outline is a second stroke rather than a colour change: a drape's whole
           point is the colour it is, and highlighting must not repaint it. */}
-      <line
-        x1={from.x}
-        y1={from.y}
-        x2={to.x}
-        y2={to.y}
+      <polyline
+        points={run}
+        fill="none"
         stroke={selected ? "var(--color-accent)" : "var(--color-ink-soft)"}
         strokeWidth={selected ? 3 : 1}
         strokeOpacity={selected ? 1 : 0.5}
@@ -5151,7 +5150,7 @@ function ArmedPane({
   const footprint: Footprint = size ? { kind: "rect", ...size } : resolveFootprint(product);
   const table = onTable && at ? tableUnder(doc.tables, at) : undefined;
   const near = onWall && at ? nearestWall(structure, at) : null;
-  const wall = near ? wallSegment(structure, near.wallId) : null;
+  const wall = near ? wallTrack(structure, near.wallId) : null;
   const ghost = (p: Point, faint = false) => (
     <g className="pointer-events-none" transform={`translate(${p.x} ${p.y})`} opacity={faint ? 0.45 : 1}>
       {/* A composite lands as its parts, about this point: they are what follows the pointer. */}
@@ -5224,12 +5223,10 @@ function ArmedPane({
       )}
       {at && onTable && !table && ghost(at, true)}
       {at && onWall && wall && (
-        <line
+        <polyline
           className="pointer-events-none"
-          x1={wall.a.x}
-          y1={wall.a.y}
-          x2={wall.b.x}
-          y2={wall.b.y}
+          points={wall.path(0, 1).map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
           stroke="var(--color-accent)"
           strokeOpacity={0.55}
           strokeWidth={10}

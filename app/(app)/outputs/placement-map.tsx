@@ -9,14 +9,14 @@ import {
   doorGeometry,
   fromLocalFrame,
   outlinePathD,
-  wallAngleDeg,
   wallLengthMm,
   wallSegmentD,
 } from "@/lib/studio/geometry";
 import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, isDoor, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature } from "@/lib/venues/structure";
 import { WindowGlazing } from "@/components/window-glazing";
-import { CURTAIN_FILL, curtainPieces, type CurtainPiece } from "@/lib/venues/curtain";
+import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainPieces, type CurtainPiece } from "@/lib/venues/curtain";
+import { CurtainCloth, DrapePleatsAlong, polygonD } from "@/components/curtain-cloth";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { featureEdgeShapes } from "@/lib/venues/stage-edges";
 import { isClimb } from "@/lib/venues/climb";
@@ -28,7 +28,7 @@ import { PlantGlyph } from "@/components/plant-glyph";
 import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
-import { ClothDrape, DrapePleats, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
@@ -64,7 +64,7 @@ import { uprightTransform } from "@/lib/design-document/mirror";
 import { darkFill, deckLabel, heightColour } from "@/lib/outputs/deck-colours";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
-import { nearestWall, resolveSpan } from "@/lib/studio/anchor";
+import { nearestWall, resolveSpan, spanBand } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
@@ -836,22 +836,18 @@ export function PlacementMap({
             // wall, so a drape always measures itself against the real one.
             const resolved = resolveSpan(plan.structure, p.span);
             if (!resolved) return null;
-            const angle = wallAngleDeg(resolved.from, resolved.to);
-            const mid = { x: (resolved.from.x + resolved.to.x) / 2, y: (resolved.from.y + resolved.to.y) / 2 };
+            // Centred on the wall's own line — round the bow on a curved wall (lib/studio/anchor.ts).
             return (
-              <g key={p.id} transform={`translate(${mid.x} ${mid.y}) rotate(${angle})`}>
-                <rect
-                  x={-resolved.lengthMm / 2}
-                  y={-DRAPE_MM / 2}
-                  width={resolved.lengthMm}
-                  height={DRAPE_MM}
+              <g key={p.id}>
+                <path
+                  d={polygonD(spanBand(resolved.track, resolved.t0, resolved.t1, -DRAPE_MM / 2, DRAPE_MM / 2))}
                   fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : mono ? MONO.drape : "none"}
                   stroke={INK}
                   strokeWidth={LINE_WEIGHTS.overhead}
                   strokeDasharray={OVERHEAD_DASH}
                   vectorEffect="non-scaling-stroke"
                 />
-                <DrapePleats lengthMm={resolved.lengthMm} depthMm={DRAPE_MM} ink={INK} opacity={0.6} />
+                <DrapePleatsAlong line={resolved.path} depthMm={DRAPE_MM} ink={INK} opacity={0.6} />
               </g>
             );
           })}
@@ -1387,15 +1383,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
               </>
             ) : f.kind === "curtain" ? (
               // The venue's curtain as a hired drape prints: the band in the elements' grey, pleated,
-              // in the pieces its doors leave it.
-              <>
-                {(pieces ?? [{ dx: 0, widthMm: f.widthMm, t0: 0, t1: 1 }]).map((pc, i) => (
-                  <g key={i} transform={`translate(${pc.dx} 0)`}>
-                    <rect x={-pc.widthMm / 2} y={-f.depthMm / 2} width={pc.widthMm} height={f.depthMm} fill={MONO.feature} />
-                    <DrapePleats lengthMm={pc.widthMm} depthMm={f.depthMm} ink={INK} opacity={0.6} />
-                  </g>
-                ))}
-              </>
+              // in the pieces its doors leave it, round the bow on a curved wall.
+              <CurtainCloth pieces={pieces ?? []} depthMm={CURTAIN_DEPTH_MM} fill={MONO.feature} ink={INK} opacity={0.6} />
             ) : f.kind === "fountain" ? (
               // A fountain as the catalog's prints: white basin, ink lines.
               <ItemSymbol kind="fountain" footprint={fp} count={1} print ink={INK} tone="#ffffff" />
@@ -1467,14 +1456,14 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
           ) : f.kind === "fountain" ? (
             <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={INK_SOFT} />
           ) : f.kind === "curtain" ? (
-            <>
-              {(pieces ?? [{ dx: 0, widthMm: f.widthMm, t0: 0, t1: 1 }]).map((pc, i) => (
-                <g key={i} transform={`translate(${pc.dx} 0)`}>
-                  <rect x={-pc.widthMm / 2} y={-f.depthMm / 2} width={pc.widthMm} height={f.depthMm} fill={f.style?.fill ?? CURTAIN_FILL} fillOpacity={f.style?.fillOpacity} />
-                  <DrapePleats lengthMm={pc.widthMm} depthMm={f.depthMm} ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : INK} opacity={0.5} />
-                </g>
-              ))}
-            </>
+            <CurtainCloth
+              pieces={pieces ?? []}
+              depthMm={CURTAIN_DEPTH_MM}
+              fill={f.style?.fill ?? CURTAIN_FILL}
+              fillOpacity={f.style?.fillOpacity}
+              ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : INK}
+              opacity={0.5}
+            />
           ) : (
             <FootprintShape
               footprint={featureFootprint(f)}

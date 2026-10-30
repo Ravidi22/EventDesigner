@@ -95,7 +95,8 @@ export function zoneSheets(doc: DesignDocumentContent, plan: EventPlan): ZoneShe
     if (onTable) return tableAt(onTable);
     if (p.span) {
       const s = resolveSpan(plan.structure, p.span);
-      return s ? { x: (s.from.x + s.to.x) / 2, y: (s.from.y + s.to.y) / 2 } : null;
+      // The middle of the run on the wall itself — out on the bow of a curved one, not its chord.
+      return s ? s.track.at((s.t0 + s.t1) / 2).p : null;
     }
     if (p.perch) {
       const stage = placementById.get(p.perch.stageId);

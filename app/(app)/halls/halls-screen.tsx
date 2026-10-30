@@ -1491,8 +1491,8 @@ export function HallsScreen() {
   };
 
   /** The venue's curtain (lib/venues/curtain.ts) hung along the whole of the nearest wall, on the
-   *  side of it the click fell — the bar shortens the stretch. A boundary line and a bowed wall take
-   *  none. */
+   *  side of it the click fell — the bar shortens the stretch. A boundary line takes none; a bowed
+   *  wall takes one round its bow. */
   const addCurtainNear = (p: Point) => {
     const hit = nearestWall(structure, p);
     const wall = hit ? structure.walls.find((w) => w.id === hit.wallId) : null;
@@ -1501,10 +1501,7 @@ export function HallsScreen() {
       return;
     }
     const made = newCurtain(structure, wall.id, p);
-    if (!made) {
-      setHint("וילון נתלה על קיר ישר — על קיר מעוגל אין וילון עדיין");
-      return;
-    }
+    if (!made) return;
     const { structure: next, featureId } = addFeature(structure, made);
     editStructure(() => next);
     setSelection([{ kind: "feature", id: featureId }]);

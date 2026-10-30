@@ -58,8 +58,8 @@ import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
 import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
 import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
-import { curtainOf, curtainPatch } from "@/lib/venues/curtain";
-import { wallSegment } from "@/lib/studio/anchor";
+import { curtainLengthMm, curtainOf, curtainPatch } from "@/lib/venues/curtain";
+import { wallTrack } from "@/lib/studio/anchor";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, type ChairStyle } from "@/lib/catalog/symbols";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import {
@@ -826,7 +826,8 @@ export function SelectionBar({
   const seating = feature.kind === "seating";
   // A curtain: a stretch of its wall (lib/venues/curtain.ts) — no shape, size or turn of its own.
   const curtain = feature.kind === "curtain" ? curtainOf(feature) : null;
-  const curtainWall = curtain ? wallSegment(structure, curtain.wallId) : null;
+  // Measured ALONG the wall — round the bow of a curved one (lib/studio/anchor.ts WallTrack).
+  const curtainWall = curtain ? wallTrack(structure, curtain.wallId) : null;
   // A column: its plinth is the size; its shaft and base are its own panel (lib/venues/column.ts).
   const column = feature.kind === "column" ? columnOf(feature) : null;
   // A surface laid wall to wall in a closed shape: the walls are its size and shape.
@@ -836,7 +837,7 @@ export function SelectionBar({
   const size = climb
     ? `${(feature.widthMm / 1000).toFixed(2)} × ${(climbRunMm(feature) / 1000).toFixed(2)} מ׳ · עולה ${Math.round(feature.heightMm / 10)} ס״מ`
     : curtain
-      ? `${(feature.widthMm / 1000).toFixed(2)} מ׳ לאורך הקיר${curtainWall ? ` (${(curtainWall.lengthMm / 1000).toFixed(2)} מ׳)` : ""}`
+      ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ לאורך ה${curtainWall?.curved ? "קיר המעוגל" : "קיר"}${curtainWall ? ` (${(curtainWall.lengthMm / 1000).toFixed(2)} מ׳)` : ""}`
     : seating
       ? `${seatingCount(feature)} כיסאות · ${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`
       : feature.shape === "circle"
@@ -1034,8 +1035,8 @@ export function SelectionBar({
                   max={curtainWall.lengthMm / 1000}
                   step={0.1}
                   commitOnBlur
-                  value={(curtain.from * curtainWall.lengthMm) / 1000}
-                  onChange={(m) => apply((s) => updateFeature(s, feature.id, curtainPatch(s, feature, { from: (m * 1000) / curtainWall.lengthMm })))}
+                  value={curtainWall.mmAt(curtain.from) / 1000}
+                  onChange={(m) => apply((s) => updateFeature(s, feature.id, curtainPatch(s, feature, { from: curtainWall.tAt(m * 1000) })))}
                   className="w-24"
                 />
               </PanelRow>
@@ -1047,8 +1048,8 @@ export function SelectionBar({
                   max={curtainWall.lengthMm / 1000}
                   step={0.1}
                   commitOnBlur
-                  value={(curtain.to * curtainWall.lengthMm) / 1000}
-                  onChange={(m) => apply((s) => updateFeature(s, feature.id, curtainPatch(s, feature, { to: (m * 1000) / curtainWall.lengthMm })))}
+                  value={curtainWall.mmAt(curtain.to) / 1000}
+                  onChange={(m) => apply((s) => updateFeature(s, feature.id, curtainPatch(s, feature, { to: curtainWall.tAt(m * 1000) })))}
                   className="w-24"
                 />
               </PanelRow>
