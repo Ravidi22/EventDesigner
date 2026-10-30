@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronLeft, ChevronRight, Lock, Plus } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Lock, Plus, Sparkles } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -110,8 +110,8 @@ type Mode = "week" | "month";
 // a day's contents read as one list of what is happening, not as two competing widget styles.
 //
 // (This is a deliberate reversal. The diary entry used to be a thin outlined chip, drawn unlike an
-// event on purpose so the two could be told apart at arm's length. They still can be — by the kind
-// icon and the 3px hue rail that only a diary card wears — but the difference is now carried by the
+// event on purpose so the two could be told apart at arm's length. Both now wear a 3px hue rail and
+// a leading glyph — the event's ✦, a diary entry its kind's — and the difference is carried by the
 // card's CONTENT rather than by giving one species a second-class shape.)
 //
 // Clicking an event opens its drawer; clicking a diary card opens it for editing; and the day's own
@@ -464,12 +464,12 @@ export function CalendarCard({
 // A diary entry in a day cell. THE SAME CARD AN EVENT GETS — same radius, same padding, same type
 // sizes, the same lift on hover — because a designer scanning a day wants to read what is happening
 // on it, not to decode two widget vocabularies. What differs is what each card can honestly say: an
-// event spends its last two lines on a progress bar and a status word, and a diary entry has neither
-// (an hour in a diary has no stages to be at), so it spends its lines on the note and the kind.
+// event's second line ends in a status word over a progress bar, and a diary entry has neither (an
+// hour in a diary has no stages to be at), so it spends its lines on the note and the kind.
 //
 // COLOUR IS THE KIND HERE, not the status — see KIND_CARD_THEME. The fill is the kind's tint, the
-// leading 3px rail is the kind's full hue, and the icon is its glyph. The rail and the icon are also
-// the tell between the species: no event card carries either, so a wedding and a walkthrough sitting
+// leading 3px rail is the kind's full hue, and the icon is its glyph. The glyph is the tell between
+// the species: an event always wears ✦, which no kind uses, so a wedding and a walkthrough sitting
 // in one cell in two greens are still not the same object.
 //
 // A held meeting (`done`) goes grey with a tick rather than disappearing: the record of having met
@@ -577,62 +577,51 @@ function BusyChip({ block, compact }: { block: BusyBlock; compact: boolean }) {
   );
 }
 
+// THE DIARY CARD'S SHAPE (2026-10-30, the user: "improve it to look a bit more compact and more like
+// the meeting bubble"). Same rail, same leading glyph, same first line — name, then the hour — and
+// the same second line, here the zones with the status word at its end. The progress (a designer's
+// event only) is a slim bar under them: in a month cell without its number, which the tooltip still
+// carries; in a week cell, where the day is worked, with it. Four lines became two and a hairline.
 function EventCard({ event: e, look, compact, onClick }: { event: EventSummary; look: EventLook; compact: boolean; onClick: () => void }) {
   const theme = STATUS_CARD_THEME[look.tone];
+  const size = compact ? CHIP_SIZE.compact : CHIP_SIZE.full;
   const where = zonesLabelOf(e);
   const title = [e.clientName, where, e.time, look.progress !== undefined ? `${look.progress}%` : "", look.label].filter(Boolean).join(" · ");
-
-  // Four lines in a month cell — name and hour, the zones, the progress (a designer's event only),
-  // the status word — as the calendar drew them before the one-line pass.
-  if (compact) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        title={title}
-        className={"flex flex-col gap-1.5 rounded-md p-2 text-start transition-transform hover:-translate-y-px hover:shadow-floating " + theme.bg}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className={"min-w-0 flex-1 truncate text-xs font-semibold " + (look.struck ? "text-muted line-through" : "text-ink")}>{e.clientName}</span>
-          {e.time && <span className={"nums shrink-0 text-[11px] font-semibold " + theme.text}>{e.time}</span>}
-        </div>
-        <span className="truncate text-[10px] text-ink-soft">{where}</span>
-        {look.progress !== undefined && (
-          <div className="flex items-center gap-1.5">
-            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
-              <div className={"h-full rounded-full " + theme.bar} style={{ width: `${look.progress}%` }} />
-            </div>
-            <span className={"nums shrink-0 text-[10px] font-bold " + theme.text}>{look.progress}%</span>
-          </div>
-        )}
-        <span className={"truncate text-[10px] font-semibold " + theme.text}>{look.label}</span>
-      </button>
-    );
-  }
 
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={"flex flex-col gap-2 rounded-md p-2.5 text-start transition-all hover:shadow-floating " + theme.bg}
+      className={
+        "flex flex-col border-s-[3px] text-start transition-transform hover:-translate-y-px hover:shadow-floating " +
+        size.card + " " + theme.bg + " " + theme.rail
+      }
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className={"min-w-0 flex-1 truncate text-sm font-semibold " + (look.struck ? "text-muted line-through" : "text-ink")}>
+      <div className={"flex items-center " + (compact ? "gap-1.5" : "gap-2")}>
+        <Sparkles className={size.icon + " shrink-0 " + theme.text} strokeWidth={2} />
+        <span
+          className={
+            "min-w-0 flex-1 truncate font-semibold " + size.name + " " +
+            (look.struck ? "text-muted line-through" : "text-ink")
+          }
+        >
           {e.clientName}
         </span>
-        {e.time && <span className={"nums shrink-0 text-xs font-semibold " + theme.text}>{e.time}</span>}
+        {e.time && <span className={"nums shrink-0 font-semibold " + size.time + " " + theme.text}>{e.time}</span>}
       </div>
-      <span className="truncate text-xs text-ink-soft">{where}</span>
+      <div className={"flex items-center " + (compact ? "gap-1.5" : "gap-2")}>
+        <span className={"min-w-0 flex-1 truncate text-ink-soft " + size.meta}>{where}</span>
+        <span className={"shrink-0 font-semibold " + size.meta + " " + theme.text}>{look.label}</span>
+      </div>
       {look.progress !== undefined && (
         <div className="flex items-center gap-2">
-          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
+          <div className={"min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/70 " + (compact ? "h-[3px]" : "h-1")}>
             <div className={"h-full rounded-full " + theme.bar} style={{ width: `${look.progress}%` }} />
           </div>
-          <span className={"nums shrink-0 text-xs font-bold " + theme.text}>{look.progress}%</span>
+          {!compact && <span className={"nums shrink-0 font-bold " + size.meta + " " + theme.text}>{look.progress}%</span>}
         </div>
       )}
-      <span className={"truncate text-xs font-semibold " + theme.text}>{look.label}</span>
     </button>
   );
 }
