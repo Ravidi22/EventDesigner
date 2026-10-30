@@ -1,4 +1,4 @@
-import { requireStudio } from "@/lib/auth/guard";
+import { requireOrgKind } from "@/lib/auth/guard";
 import { fetchProducts } from "@/lib/catalog/actions";
 import { fetchMarketFlowers } from "@/lib/marketplace/actions";
 import { CatalogScreen } from "./catalog-screen";
@@ -18,7 +18,7 @@ export default async function CatalogPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
-  await requireStudio();
+  await requireOrgKind(["studio", "supplier"]);
   const params = await searchParams;
   const raw = Array.isArray(params.sourcing) ? params.sourcing[0] : params.sourcing;
   const sourcing = (SOURCING_FILTERS as readonly string[]).includes(raw ?? "") ? (raw as SourcingFilter) : null;

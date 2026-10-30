@@ -1,4 +1,4 @@
-import { requireDesigner } from "@/lib/auth/guard";
+import { requireHost } from "@/lib/auth/guard";
 import { fetchImages, fetchPresentations } from "@/lib/gallery/actions";
 import { GalleryScreen } from "./gallery-screen";
 
@@ -7,7 +7,7 @@ import { GalleryScreen } from "./gallery-screen";
 // serialized POSTs after the empty gallery had already been painted.
 export default async function GalleryPage() {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
-  await requireDesigner();
+  await requireHost();
   const [images, presentations] = await Promise.all([fetchImages(), fetchPresentations()]);
   return <GalleryScreen initialImages={images} initialPresentations={presentations} />;
 }

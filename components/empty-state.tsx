@@ -28,6 +28,15 @@ const SHAPE = {
     body: "mt-2 text-sm leading-relaxed text-ink-soft",
     action: "mt-6",
   },
+  /** `card`'s scale on a WHITE dashboard tile (today's meetings, beside the violet events tile). */
+  tile: {
+    root: "flex-1 px-4 py-8",
+    frame: "mb-4 h-11 w-11 rounded-md border border-border bg-canvas",
+    glyph: "h-5 w-5 text-accent",
+    title: "text-base font-semibold text-ink",
+    body: "mt-1.5 text-[13px] leading-relaxed text-ink-soft",
+    action: "mt-5",
+  },
   card: {
     // flex-1 so it centres in a card that stretches to its grid row rather than to this content.
     root: "flex-1 px-4 py-8",

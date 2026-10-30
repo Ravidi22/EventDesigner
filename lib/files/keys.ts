@@ -45,9 +45,9 @@ export function sameOriginUrl(url: string): string {
 
 /** What a file is FOR. It decides the folder and, later, which sizes get generated — not who may
  *  read it, which is the key prefix's job. */
-export type FileKind = "gallery" | "product" | "underlay" | "logo" | "signature";
+export type FileKind = "gallery" | "product" | "underlay" | "logo" | "signature" | "dish";
 
-export const FILE_KINDS: FileKind[] = ["gallery", "product", "underlay", "logo", "signature"];
+export const FILE_KINDS: FileKind[] = ["gallery", "product", "underlay", "logo", "signature", "dish"];
 
 export function isFileKind(value: unknown): value is FileKind {
   return typeof value === "string" && (FILE_KINDS as string[]).includes(value);

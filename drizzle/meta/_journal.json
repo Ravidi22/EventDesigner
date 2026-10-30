@@ -176,6 +176,13 @@
       "when": 1793356701197,
       "tag": "0024_spare_rate",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793373278023,
+      "tag": "0025_venue_owners",
+      "breakpoints": true
     }
   ]
 }

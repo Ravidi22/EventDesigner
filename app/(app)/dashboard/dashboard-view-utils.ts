@@ -10,6 +10,7 @@ import {
   TreePalm,
   User,
   Users,
+  UtensilsCrossed,
   type LucideIcon,
 } from "lucide-react";
 import type { AppointmentKind } from "@/lib/appointments/types";
@@ -58,11 +59,15 @@ export const monthLabel = (d: Date) => d.toLocaleDateString("he-IL", { month: "l
 // Compact echo of StatusChip's own tone→fill mapping (components/status-chip.tsx) — a chip
 // this small can't carry StatusChip's padding/text size, but the meaning must stay identical
 // to every other status surface in the app.
-export const TONE_CLASS: Record<StatusTone, string> = {
+// `alert` is a hall's: an option that lapsed (lib/hosting BOOKING_STATUS_TONE) — the date is free
+// again and sales should hear about it. A designer's event never wears it.
+export type CardTone = StatusTone | "alert";
+export const TONE_CLASS: Record<CardTone, string> = {
   neutral: "bg-bg text-muted",
   accent: "bg-accent-wash text-accent-hover",
   success: "bg-success-tint text-success",
   warn: "bg-warn-tint text-warn-ink",
+  alert: "bg-alert-tint text-alert-ink",
 };
 
 // Calendar event cards used to be themed per-hall, but that meant a card's color didn't match
@@ -75,11 +80,12 @@ export interface CardTheme {
   text: string;
   bar: string;
 }
-export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
+export const STATUS_CARD_THEME: Record<CardTone, CardTheme> = {
   neutral: { bg: "bg-bg", text: "text-muted", bar: "bg-faint" },
   warn: { bg: "bg-warn-tint", text: "text-warn-ink", bar: "bg-warn" },
   accent: { bg: "bg-accent-tint", text: "text-accent-hover", bar: "bg-accent" },
   success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success" },
+  alert: { bg: "bg-alert-tint", text: "text-alert-ink", bar: "bg-alert" },
 };
 
 // WHAT KIND OF DAY IS THIS? — one color per סוג הרשומה.
@@ -121,6 +127,7 @@ export const KIND_CARD_THEME: Record<AppointmentKind, KindTheme> = {
   supply: { bg: "bg-magenta-tint", text: "text-magenta-ink", rail: "border-s-magenta" },
   personal: { bg: "bg-blush-tint", text: "text-blush-ink", rail: "border-s-blush-ink" },
   other: { bg: "bg-bg", text: "text-ink-soft", rail: "border-s-faint" },
+  tasting: { bg: "bg-warn-tint", text: "text-warn-ink", rail: "border-s-warn" },
 };
 
 // The glyph half of the same answer. A diary card is the only card in a day cell carrying an icon,
@@ -137,6 +144,7 @@ export const KIND_ICON: Record<AppointmentKind, LucideIcon> = {
   supply: Truck,
   personal: User,
   other: CalendarDays,
+  tasting: UtensilsCrossed,
 };
 
 // A HELD entry drops its hue. `done` is the designer confirming it happened, and what happened is

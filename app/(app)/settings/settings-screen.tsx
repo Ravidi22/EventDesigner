@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useIsVenue } from "@/components/org-kind-context";
 import { useMounted } from "@/lib/use-mounted";
 import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, ReceiptText, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
@@ -53,6 +54,10 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
+/** A designer's own machinery — the meeting flow, the production clock, the stage rules. A venue
+ *  runs none of them, so its settings leave them out. */
+const DESIGNER_ONLY: ReadonlySet<SectionId> = new Set<SectionId>(["meeting", "checkpoints", "stages"]);
+
 // The shared reads arrive from page.tsx and are handed to whichever section is open. Sections mount
 // one at a time (only the selected one renders below), so seeding them here is also what makes
 // SWITCHING sections instant — each used to fetch its own data on mount, every time you clicked it.
@@ -80,9 +85,11 @@ export function SettingsScreen({
   // linkable from the venue plan editor without pulling this client screen into the
   // useSearchParams / Suspense dance for one string. Read in render after mount; a click wins.
   const mounted = useMounted();
+  const venue = useIsVenue();
+  const sections = SECTIONS.filter((s) => !venue || !DESIGNER_ONLY.has(s.id));
   const fromHash = mounted ? window.location.hash.slice(1) : "";
   const [picked, setSection] = useState<SectionId | null>(null);
-  const section: SectionId = picked ?? (SECTIONS.some((s) => s.id === fromHash) ? (fromHash as SectionId) : "business");
+  const section: SectionId = picked ?? (sections.some((s) => s.id === fromHash) ? (fromHash as SectionId) : "business");
 
   const go = (id: SectionId) => {
     setSection(id);
@@ -96,7 +103,7 @@ export function SettingsScreen({
   return (
     <div className={`flex items-start gap-3 ${PAGE_GUTTER}`}>
       <nav aria-label="הגדרות" className="sticky top-0 flex w-[228px] shrink-0 flex-col gap-[3px] rounded-md border border-border bg-surface p-2">
-        {SECTIONS.map(({ id, label, icon: Icon }) => {
+        {sections.map(({ id, label, icon: Icon }) => {
           const active = id === section;
           return (
             <button

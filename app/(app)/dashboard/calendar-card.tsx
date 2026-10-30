@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronRight, Lock, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { CheckCircle2, ChevronLeft, ChevronRight, Lock, Plus } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -9,8 +10,9 @@ import { APPOINTMENT_KIND_LABEL, appointmentLabel, appointmentTimeLabel, byDate 
 import type { BusyBlock } from "@/lib/google/types";
 import type { BusyHandle } from "@/lib/google/use-busy";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
-import type { MeetingStepId } from "@/lib/meeting/steps";
 import { IconButton } from "@/components/icon-button";
+import { Menu, type MenuItem } from "@/components/menu";
+import { GoogleMark } from "@/components/google-mark";
 import { BOOKING_LABEL, calendarDay } from "@/lib/calendar/hebrew";
 import {
   addDays,
@@ -29,7 +31,21 @@ import {
   kindTheme,
   PAST_DAY_FILL,
   PAST_DAY_HATCH,
+  type CardTone,
 } from "./dashboard-view-utils";
+
+/** What an event's card says about where it stands: the word, its tone, and — for a designer's
+ *  event, which moves through a meeting — how far along it is. A hall's booking has no progress;
+ *  its status is the whole story (lib/hosting bookingStatus). */
+export interface EventLook {
+  label: string;
+  tone: CardTone;
+  progress?: number;
+  /** A date that is no longer held — a lapsed option, an evening that did not close. */
+  struck?: boolean;
+}
+
+const WEEKDAYS = ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"];
 
 // A day's calendar note, resolved for rendering.
 //
@@ -107,6 +123,10 @@ export function CalendarCard({
   onOpenEvent,
   onOpenAppointment,
   onCreateAppointment,
+  look,
+  summary,
+  addItems,
+  suggestGoogle = false,
 }: {
   events: EventSummary[];
   appointments: Appointment[];
@@ -117,6 +137,16 @@ export function CalendarCard({
   onOpenAppointment: (a: Appointment) => void;
   /** Book a meeting on this ISO date — the day the designer clicked. */
   onCreateAppointment: (iso: string) => void;
+  /** How an event's card reads. Absent = a designer's: its meeting status and progress. A hall
+   *  passes its booking status (app/(app)/dashboard/venue-dashboard.tsx). */
+  look?: (e: EventSummary) => EventLook;
+  /** The line under the title for the range on screen. Absent = how many events and diary entries. */
+  summary?: (range: { from: string; to: string; events: EventSummary[] }) => ReactNode;
+  /** What a day's "+" offers. Absent = it books a meeting on the day; a hall offers an evening too. */
+  addItems?: (iso: string) => MenuItem[];
+  /** Google can be connected on this deployment and this person has not (or has the pull off):
+   *  the header offers the way to settings → יומן Google. */
+  suggestGoogle?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("month");
   const [anchor, setAnchor] = useState(() => new Date());
@@ -124,6 +154,11 @@ export function CalendarCard({
   // Read once here, not in each card: a month view renders dozens of them, all measuring progress
   // against the same configured meeting flow.
   const flow = useMeetingFlow();
+  const lookOf = (e: EventSummary): EventLook => {
+    if (look) return look(e);
+    const status = eventStatus(e, flow);
+    return { label: STATUS_LABEL[status], tone: STATUS_TONE[status], progress: eventProgress(e, flow) };
+  };
   const rootRef = useRef<HTMLDivElement>(null);
   const today = new Date();
   const todayIso = toISODate(today);
@@ -170,9 +205,18 @@ export function CalendarCard({
   }, [busy, firstDay, lastDay]);
   // One pass for the whole grid, not per cell: a band's label depends on the cell before it.
   const notes = dayNotes(days);
-  const title = mode === "week" ? "השבוע שלי" : "החודש שלי";
   const rangeLabel = mode === "week" ? weekLabel(days) : monthLabel(anchor);
   const maxVisible = mode === "week" ? Infinity : 2;
+  // The range the summary speaks for: the month itself in month mode (not the spill-over days of
+  // the weeks either side), the seven days in week mode.
+  const rangeDays = mode === "week" ? days : days.filter((d) => d.getMonth() === anchor.getMonth());
+  const range = { from: toISODate(rangeDays[0]), to: toISODate(rangeDays[rangeDays.length - 1]) };
+  const rangeEvents = events.filter((e) => e.date && e.date >= range.from && e.date <= range.to);
+  const rangeMeetings = appointments.filter((a) => a.date >= range.from && a.date <= range.to);
+  const summaryLine = summary
+    ? summary({ ...range, events: rangeEvents })
+    : `${rangeEvents.length} אירועים · ${rangeMeetings.length} רשומות ביומן`;
+  const weeks = days.length / 7;
 
   const step = (n: number) => {
     setExpandedDate(null);
@@ -195,10 +239,48 @@ export function CalendarCard({
 
   return (
     <div ref={rootRef} className="rounded-lg border border-border bg-surface px-3 py-5">
+      {/* NO TITLE, THE MONTH IS THE HEADING (2026-10-30, the user: "remove the title 'החודש שלי' and
+          put the month navigator like in billing"). The range itself stands where the title stood,
+          between its two arrows in the /billing screen's own shape (app/(app)/billing/billing-
+          screen.tsx) — → is the previous month in an RTL app, the arrows point where the months
+          go — with the range's figures under it; the view and "היום" at the other end. */}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 px-2">
-        <h3 className="font-display text-h2 text-ink">{title}</h3>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1">
+            <IconButton label={mode === "week" ? "השבוע הקודם" : "החודש הקודם"} onClick={() => step(-1)}>
+              <ChevronRight className="h-4 w-4" strokeWidth={2} />
+            </IconButton>
+            <h3 className="min-w-[9rem] text-center font-display text-h2 text-ink">{rangeLabel}</h3>
+            <IconButton label={mode === "week" ? "השבוע הבא" : "החודש הבא"} onClick={() => step(1)}>
+              <ChevronLeft className="h-4 w-4" strokeWidth={2} />
+            </IconButton>
+          </div>
+          <p className="nums mt-0.5 ps-9 text-sm text-muted">{summaryLine}</p>
+        </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* The calendar is half a picture until the person's own Google entries are on it (the
+              busy blocks below are how a day that looks free is not quietly double-booked). Gone
+              once the pull is on; never shown where the server has no Google set up — settings
+              would only say so. */}
+          {suggestGoogle && (
+            <Link
+              href="/settings#calendar"
+              aria-label="חיבור יומן Google"
+              title="חיבור יומן Google — הפגישות שלך יופיעו ביומן הזה, והיומן יופיע ב-Google"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-pill border border-border bg-canvas transition-colors hover:border-accent-line hover:bg-accent-tint"
+            >
+              <GoogleMark className="h-4 w-4" />
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={goToday}
+            disabled={isCurrentRange}
+            className="rounded-pill border border-border px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:text-accent-hover disabled:cursor-default disabled:opacity-50 disabled:hover:text-ink-soft"
+          >
+            היום
+          </button>
           <div className="flex gap-1 rounded-pill bg-bg p-1">
             {(["week", "month"] as const).map((m) => (
               <button
@@ -217,181 +299,162 @@ export function CalendarCard({
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={goToday}
-            disabled={isCurrentRange}
-            className="rounded-pill border border-border px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:text-accent-hover disabled:cursor-default disabled:opacity-50 disabled:hover:text-ink-soft"
-          >
-            היום
-          </button>
-          <IconButton label={mode === "week" ? "השבוע הקודם" : "החודש הקודם"} onClick={() => step(-1)}>
-            <ChevronRight className="h-4 w-4" strokeWidth={2} />
-          </IconButton>
-          <span className="min-w-32 text-center text-sm font-medium text-ink-soft">{rangeLabel}</span>
-          <IconButton label={mode === "week" ? "השבוע הבא" : "החודש הבא"} onClick={() => step(1)}>
-            <ChevronRight className="h-4 w-4 rotate-180" strokeWidth={2} />
-          </IconButton>
         </div>
       </div>
 
-      {/* Seven columns don't get to shrink to nothing. The sidebar is a fixed 258px and does not
-          collapse on its own, so at a 768px tablet — which docs/01 names as a real device for this
-          app — an unconstrained `grid-cols-7` lands on ~53px cells: narrower than the "+ פגישה"
-          button's own label, let alone a client's name. `min-w` holds the columns at a legible
-          ~118px and this wrapper scrolls sideways instead, the same pattern the team table already
-          uses (settings/team-section.tsx). Above ~1200px there is nothing to scroll and the grid
-          simply fills the card.
-          `pb-1` is for the scrollbar itself: `overflow-x-auto` reserves no room for it, so without
-          the padding it sits on top of the last row's cards on the platforms that draw one. */}
       <div className="overflow-x-auto pb-1">
-        <div className="grid min-w-[860px] grid-cols-7 gap-2">
-          {days.map((d, i) => {
-            const iso = toISODate(d);
-            const dayEvents = eventsByDate.get(iso) ?? [];
-            const dayAppointments = appointmentsByDate.get(iso) ?? [];
-            const dayBusy = busy.byDate.get(iso) ?? [];
-            const isToday = sameDay(d, today);
-            const isPast = !isToday && iso < todayIso;
-            const inMonth = mode === "week" || d.getMonth() === anchor.getMonth();
-            // Each kind gets its own allowance rather than sharing one, so a day with three meetings on
-            // it can't push the wedding out of its own cell.
-            const visible = dayEvents.slice(0, maxVisible);
-            const visibleAppointments = dayAppointments.slice(0, maxVisible);
-            // ONE busy block visible in a month cell, not two. These are the designer's private
-            // errands, not the studio's work: they earn a place in the cell so a day that looks free
-            // is not quietly double-booked, and they must not be the reason a wedding is hidden.
-            const visibleBusy = dayBusy.slice(0, mode === "week" ? maxVisible : 1);
-            // One "+N נוספים" for the whole day, counting both kinds — a cell with two hidden meetings
-            // and one hidden event has three more things in it, and that is what it should say.
-            const overflow =
-              dayEvents.length - visible.length +
-              (dayAppointments.length - visibleAppointments.length) +
-              (dayBusy.length - visibleBusy.length);
-            const isExpanded = expandedDate === iso;
-            const note = notes[i];
+        {/* ONE GRID OF HAIRLINES (2026-10-30, the user: "why are the calendars different? some of the
+            new calendar UI is good and looks clean"). The hall's month grid was the cleaner one —
+            the weekday named once over its column instead of in all 42 cells, the days joined by
+            hairlines rather than floating as 42 separate wells, one line per card — and the
+            designer's had what the hall's lacked: week mode, the Hebrew calendar's periods as bands,
+            Google's busy blocks, "היום". This is the two, one component, for both businesses.
+            `min-w` holds the columns legible on a tablet; the wrapper scrolls sideways instead. */}
+        <div className="min-w-[860px] rounded-md border border-border-soft">
+          <div className="grid grid-cols-7 rounded-t-md border-b border-border-soft bg-inset">
+            {WEEKDAYS.map((w) => (
+              <div key={w} className="py-2 text-center text-xs font-semibold text-muted">
+                {w}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {days.map((d, i) => {
+              const iso = toISODate(d);
+              const dayEvents = eventsByDate.get(iso) ?? [];
+              const dayAppointments = appointmentsByDate.get(iso) ?? [];
+              const dayBusy = busy.byDate.get(iso) ?? [];
+              const isToday = sameDay(d, today);
+              const isPast = !isToday && iso < todayIso;
+              const inMonth = mode === "week" || d.getMonth() === anchor.getMonth();
+              const col = i % 7;
+              const lastRow = Math.floor(i / 7) === weeks - 1;
+              // Each kind gets its own allowance rather than sharing one, so a day with three
+              // meetings on it can't push the wedding out of its own cell.
+              const visible = dayEvents.slice(0, maxVisible);
+              const visibleAppointments = dayAppointments.slice(0, maxVisible);
+              // ONE busy block visible in a month cell. These are the designer's private errands, not
+              // the studio's work: they earn a place so a day that looks free is not quietly
+              // double-booked, and they must not be the reason a wedding is hidden.
+              const visibleBusy = dayBusy.slice(0, mode === "week" ? maxVisible : 1);
+              // One "+N נוספים" for the whole day, counting every kind.
+              const overflow =
+                dayEvents.length - visible.length +
+                (dayAppointments.length - visibleAppointments.length) +
+                (dayBusy.length - visibleBusy.length);
+              const isExpanded = expandedDate === iso;
+              const note = notes[i];
+              const dayLabel = d.toLocaleDateString("he-IL", { day: "numeric", month: "long" });
 
-            return (
-              <div
-                key={iso}
-                // A past day is crossed by a faint diagonal hatch and sits a whisper — not a step —
-                // under a live day: struck through rather than dimmed down. The hatch is the cell's
-                // own background-image, so it lies UNDER the day's numbers and under whatever the
-                // day held (see the note in dashboard-view-utils.ts) — the date and the weekday keep
-                // their ordinary inks, because history is quieter than today, not less readable
-                // than today.
-                style={isPast ? PAST_DAY_HATCH : undefined}
-                className={
-                  "group relative flex flex-col gap-2 rounded-md px-1.5 py-2 " +
-                  (mode === "week" ? "min-h-44" : "min-h-40") + " " +
-                  (isPast ? PAST_DAY_FILL : isToday ? "bg-accent-tint" : inMonth ? "bg-inset" : "bg-inset/50")
-                }
-              >
-                <div className="flex items-center justify-between px-1">
-                  <span className={"text-xs font-medium " + (inMonth ? "text-muted" : "text-faint")}>
-                    {d.toLocaleDateString("he-IL", { weekday: "short" })}
-                  </span>
-                  <span
-                    className={
-                      "nums flex h-6 w-6 items-center justify-center rounded-full text-xs " +
-                      (isToday ? "bg-accent font-semibold text-canvas" : inMonth ? "text-ink-soft" : "text-faint")
-                    }
-                  >
-                    {d.getDate()}
-                  </span>
-                </div>
-
-                {note?.period && (
-                  // Full-bleed against the cell's own px-1.5, so consecutive days join into one bar
-                  // across the row. Height stays fixed whether or not this cell carries the label,
-                  // otherwise the band would step up and down along its own length.
-                  <div
-                    className={"-mx-1.5 flex h-[20px] shrink-0 items-center px-2 " + (note.bandTheme?.band ?? "")}
-                    title={note.title}
-                  >
-                    {note.showPeriodLabel && (
-                      <span className="truncate text-[11px] font-bold leading-none">{note.period.short}</span>
+              return (
+                <div
+                  key={iso}
+                  // A past day is crossed by a faint diagonal hatch — the cell's own background-image,
+                  // so it lies UNDER the day's number and whatever the day held (dashboard-view-utils).
+                  style={isPast ? PAST_DAY_HATCH : undefined}
+                  className={
+                    "group relative flex min-w-0 flex-col gap-1 border-border-soft p-1.5 " +
+                    (mode === "week" ? "min-h-44 " : "min-h-32 ") +
+                    (col !== 6 ? "border-e " : "") +
+                    (!lastRow ? "border-b " : "") +
+                    // The grid's rounded corners without clipping it: a day's "+" menu has to be
+                    // able to open past the cell it stands in.
+                    (lastRow && col === 0 ? "rounded-es-md " : "") +
+                    (lastRow && col === 6 ? "rounded-ee-md " : "") +
+                    (isToday ? "bg-accent-tint/50" : !inMonth ? "bg-bg/60" : isPast ? PAST_DAY_FILL : "")
+                  }
+                >
+                  {/* A fixed height: a day that offers "+" (a 28px button, hidden at rest) and a past
+                      day that does not would otherwise centre their dates 2px apart. */}
+                  <div className="flex h-7 items-center justify-between gap-1">
+                    <span
+                      className={
+                        "nums inline-flex h-6 min-w-6 items-center justify-center rounded-pill px-1 text-xs font-semibold " +
+                        (isToday ? "bg-accent text-canvas" : inMonth ? "text-ink-soft" : "text-faint")
+                      }
+                    >
+                      {d.getDate()}
+                    </span>
+                    {/* The write, beside the day it writes to. Quiet until the day is hovered so 42
+                        plus signs don't compete with the month (shown at rest on every free day of a
+                        hall's, they did) — never `hidden`: focus brings it back, and focus-within
+                        keeps it while its menu is open. NOT ON A DAY THAT HAS BEEN AND GONE; today
+                        still offers it. */}
+                    {!isPast && (
+                      <span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                        {addItems ? (
+                          <Menu
+                            label={`הוספה ב־${dayLabel}`}
+                            icon={Plus}
+                            items={addItems(iso)}
+                            side={lastRow && mode === "month" ? "top" : "bottom"}
+                          />
+                        ) : (
+                          <IconButton label={`הוספה ליומן ב־${dayLabel}`} onClick={() => onCreateAppointment(iso)}>
+                            <Plus className="h-3.5 w-3.5" strokeWidth={2.25} />
+                          </IconButton>
+                        )}
+                      </span>
                     )}
                   </div>
-                )}
 
-                {note?.holiday && (
-                  <span
-                    className={"flex items-center gap-1.5 rounded-sm px-1.5 py-1.5 " + note.chipTheme.chip}
-                    title={note.title}
-                  >
-                    <span className={"h-2 w-2 shrink-0 rounded-full " + note.chipTheme.dot} aria-hidden />
-                    <span className="truncate text-[12px] font-bold leading-none">{note.holiday}</span>
-                  </span>
-                )}
-
-                {/* A past day's cards fade a little, but only a little: the hatch behind them is
-                    saying "this is behind us" now, so the fade is a second voice rather than the
-                    only one, and last week's wedding stays legible at a glance. */}
-                <div className={"flex flex-col gap-1.5" + (isPast ? " opacity-85" : "")}>
-                  {(isExpanded ? dayEvents : visible).map((e) => (
-                    <EventCard key={e.id} event={e} flow={flow} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
-                  ))}
-                  {(isExpanded ? dayAppointments : visibleAppointments).map((a) => (
-                    <AppointmentChip
-                      key={a.id}
-                      appointment={a}
-                      compact={mode === "month"}
-                      onClick={() => onOpenAppointment(a)}
-                    />
-                  ))}
-                  {(isExpanded ? dayBusy : visibleBusy).map((b) => (
-                    <BusyChip key={b.id} block={b} compact={mode === "month"} />
-                  ))}
-                  {overflow > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedDate(isExpanded ? null : iso)}
-                      className="rounded-sm px-1.5 py-0.5 text-start text-[11px] font-medium text-muted hover:text-accent-hover"
+                  {note?.period && (
+                    // Full-bleed against the cell's own p-1.5, so consecutive days join into one bar
+                    // across the row. Height stays fixed whether or not this cell carries the label.
+                    <div
+                      className={"-mx-1.5 flex h-[18px] shrink-0 items-center px-2 " + (note.bandTheme?.band ?? "")}
+                      title={note.title}
                     >
-                      {isExpanded ? "הצג פחות" : `+${overflow} נוספים`}
-                    </button>
+                      {note.showPeriodLabel && (
+                        <span className="truncate text-[11px] font-bold leading-none">{note.period.short}</span>
+                      )}
+                    </div>
                   )}
+
+                  {note?.holiday && (
+                    <span
+                      className={"flex items-center gap-1.5 rounded-sm px-1.5 py-1 " + note.chipTheme.chip}
+                      title={note.title}
+                    >
+                      <span className={"h-1.5 w-1.5 shrink-0 rounded-full " + note.chipTheme.dot} aria-hidden />
+                      <span className="truncate text-[11px] font-bold leading-none">{note.holiday}</span>
+                    </span>
+                  )}
+
+                  {/* A past day's cards fade a little, but only a little: the hatch behind them is
+                      already saying "this is behind us". */}
+                  <div className={"flex flex-col gap-1.5" + (isPast ? " opacity-85" : "")}>
+                    {(isExpanded ? dayEvents : visible).map((e) => (
+                      <EventCard key={e.id} event={e} look={lookOf(e)} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
+                    ))}
+                    {(isExpanded ? dayAppointments : visibleAppointments).map((a) => (
+                      <AppointmentChip
+                        key={a.id}
+                        appointment={a}
+                        compact={mode === "month"}
+                        onClick={() => onOpenAppointment(a)}
+                      />
+                    ))}
+                    {(isExpanded ? dayBusy : visibleBusy).map((b) => (
+                      <BusyChip key={b.id} block={b} compact={mode === "month"} />
+                    ))}
+                    {overflow > 0 && (
+                      // Expands IN PLACE — the row grows and every cell in it stretches to match. A
+                      // floating panel here once hung off the grid's last column and was clipped by
+                      // the very wrapper that keeps the columns legible.
+                      <button
+                        type="button"
+                        onClick={() => setExpandedDate(isExpanded ? null : iso)}
+                        className="rounded-sm px-1.5 py-0.5 text-start text-[11px] font-medium text-muted hover:text-accent-hover"
+                      >
+                        {isExpanded ? "הצג פחות" : `+${overflow} נוספים`}
+                      </button>
+                    )}
+                  </div>
                 </div>
-
-                {/* The write this calendar was missing. Quiet until the day is hovered so 42 plus signs
-                    don't compete with the month itself, but never `hidden` — it is a real button with a
-                    real label, so keyboard focus brings it back into view (focus-visible:opacity-100)
-                    and a screen reader reaches it either way. `mt-auto` pins it to the bottom of the
-                    cell rather than letting it float under whatever the day happens to hold. */}
-                {/* NOT ON A DAY THAT HAS BEEN AND GONE. Hovering last Tuesday used to offer to book
-                    a meeting on it, which is an offer the calendar cannot keep — and it was the only
-                    thing that lit up on the past half of a month view, drawing the eye backwards
-                    across the grid. Today still offers it: a meeting later this afternoon is a
-                    perfectly ordinary thing to add at noon.
-                    Says "הוספה", not "פגישה": what lands here is whatever occupies a day — a sit-down,
-                    an אילוץ, a חופשה, an אספקה — and the kind is chosen in the dialog. */}
-                {!isPast && (
-                  <button
-                    type="button"
-                    onClick={() => onCreateAppointment(iso)}
-                    aria-label={`הוספה ליומן ב-${d.toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`}
-                    className="z-[2] mt-auto flex items-center justify-center gap-1 rounded-sm border border-dashed border-border-soft py-1 text-[11px] font-medium text-muted opacity-0 transition-opacity hover:border-accent-line hover:text-accent-hover focus-visible:opacity-100 group-hover:opacity-100"
-                  >
-                    <Plus className="h-3 w-3" strokeWidth={2.5} />
-                    הוספה
-                  </button>
-                )}
-
-                {/* ⚠ "+N נוספים" USED TO OPEN A FLOATING PANEL here — `absolute start-1 top-full w-56`,
-                    hanging out of the cell. Three things were wrong with it and the third is fatal:
-                    it had no max-height, so a busy day produced a panel taller than the card; anchored
-                    at `start` it grew toward the viewport edge, so on the last column (Saturday, the
-                    LEFTMOST cell in RTL) 90-odd pixels of it hung off the card; and it cannot coexist
-                    with the horizontal scroll the grid now needs, because `overflow-x: auto` computes
-                    `overflow-y` to `auto` rather than `visible` — the panel would be clipped by the
-                    very wrapper that keeps the columns legible.
-                    Expanding IN PLACE has none of those problems: the row simply gets taller, every
-                    cell in it stretches to match, and there is no position, no width and no edge to
-                    get wrong at any viewport. */}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -412,9 +475,11 @@ export function CalendarCard({
 // A held meeting (`done`) goes grey with a tick rather than disappearing: the record of having met
 // is most of what makes a diary worth keeping, and a past date is not the same claim (see the column
 // note in lib/db/schema.ts).
+// The cards are the ones the designer's calendar always had (the user, 2026-10-30, after a pass that
+// cut them to one line: "I liked how the event/meeting tiles were before — revert it").
 const CHIP_SIZE = {
-  compact: { card: "gap-1.5 p-2", icon: "h-3 w-3", name: "text-xs", time: "text-[11px]", meta: "text-[10px]" },
-  full: { card: "gap-2 p-2.5", icon: "h-3.5 w-3.5", name: "text-sm", time: "text-xs", meta: "text-xs" },
+  compact: { card: "gap-1.5 rounded-md p-2", icon: "h-3 w-3", name: "text-xs", time: "text-[11px]", meta: "text-[10px]" },
+  full: { card: "gap-2 rounded-md p-2.5", icon: "h-3.5 w-3.5", name: "text-sm", time: "text-xs", meta: "text-xs" },
 } as const;
 
 function AppointmentChip({
@@ -444,7 +509,7 @@ function AppointmentChip({
       onClick={onClick}
       title={parts.join(" · ")}
       className={
-        "flex flex-col rounded-md border-s-[3px] text-start transition-transform hover:-translate-y-px hover:shadow-floating " +
+        "flex flex-col border-s-[3px] text-start transition-transform hover:-translate-y-px hover:shadow-floating " +
         size.card + " " + theme.bg + " " + theme.rail
       }
     >
@@ -497,7 +562,7 @@ function BusyChip({ block, compact }: { block: BusyBlock; compact: boolean }) {
     <div
       title={[block.title, time, block.calendarName, "מיומן Google"].filter(Boolean).join(" · ")}
       className={
-        "flex items-center rounded-md border border-dashed border-border bg-inset/60 " +
+        "flex items-center border border-dashed border-border bg-inset/60 " +
         size.card + " " + (compact ? "gap-1.5" : "gap-2")
       }
     >
@@ -512,31 +577,35 @@ function BusyChip({ block, compact }: { block: BusyBlock; compact: boolean }) {
   );
 }
 
-function EventCard({ event: e, flow, compact, onClick }: { event: EventSummary; flow: MeetingStepId[]; compact: boolean; onClick: () => void }) {
-  const progress = eventProgress(e, flow);
-  const status = eventStatus(e, flow);
-  const theme = STATUS_CARD_THEME[STATUS_TONE[status]];
+function EventCard({ event: e, look, compact, onClick }: { event: EventSummary; look: EventLook; compact: boolean; onClick: () => void }) {
+  const theme = STATUS_CARD_THEME[look.tone];
+  const where = zonesLabelOf(e);
+  const title = [e.clientName, where, e.time, look.progress !== undefined ? `${look.progress}%` : "", look.label].filter(Boolean).join(" · ");
 
+  // Four lines in a month cell — name and hour, the zones, the progress (a designer's event only),
+  // the status word — as the calendar drew them before the one-line pass.
   if (compact) {
     return (
       <button
         type="button"
         onClick={onClick}
-        title={`${e.clientName} · ${zonesLabelOf(e)}${e.time ? " · " + e.time : ""} · ${progress}% · ${STATUS_LABEL[status]}`}
+        title={title}
         className={"flex flex-col gap-1.5 rounded-md p-2 text-start transition-transform hover:-translate-y-px hover:shadow-floating " + theme.bg}
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{e.clientName}</span>
+          <span className={"min-w-0 flex-1 truncate text-xs font-semibold " + (look.struck ? "text-muted line-through" : "text-ink")}>{e.clientName}</span>
           {e.time && <span className={"nums shrink-0 text-[11px] font-semibold " + theme.text}>{e.time}</span>}
         </div>
-        <span className="truncate text-[10px] text-ink-soft">{zonesLabelOf(e)}</span>
-        <div className="flex items-center gap-1.5">
-          <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
-            <div className={"h-full rounded-full " + theme.bar} style={{ width: `${progress}%` }} />
+        <span className="truncate text-[10px] text-ink-soft">{where}</span>
+        {look.progress !== undefined && (
+          <div className="flex items-center gap-1.5">
+            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
+              <div className={"h-full rounded-full " + theme.bar} style={{ width: `${look.progress}%` }} />
+            </div>
+            <span className={"nums shrink-0 text-[10px] font-bold " + theme.text}>{look.progress}%</span>
           </div>
-          <span className={"nums shrink-0 text-[10px] font-bold " + theme.text}>{progress}%</span>
-        </div>
-        <span className={"truncate text-[10px] font-semibold " + theme.text}>{STATUS_LABEL[status]}</span>
+        )}
+        <span className={"truncate text-[10px] font-semibold " + theme.text}>{look.label}</span>
       </button>
     );
   }
@@ -545,20 +614,25 @@ function EventCard({ event: e, flow, compact, onClick }: { event: EventSummary; 
     <button
       type="button"
       onClick={onClick}
+      title={title}
       className={"flex flex-col gap-2 rounded-md p-2.5 text-start transition-all hover:shadow-floating " + theme.bg}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{e.clientName}</span>
+        <span className={"min-w-0 flex-1 truncate text-sm font-semibold " + (look.struck ? "text-muted line-through" : "text-ink")}>
+          {e.clientName}
+        </span>
         {e.time && <span className={"nums shrink-0 text-xs font-semibold " + theme.text}>{e.time}</span>}
       </div>
-      <span className="truncate text-xs text-ink-soft">{zonesLabelOf(e)}</span>
-      <div className="flex items-center gap-2">
-        <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
-          <div className={"h-full rounded-full " + theme.bar} style={{ width: `${progress}%` }} />
+      <span className="truncate text-xs text-ink-soft">{where}</span>
+      {look.progress !== undefined && (
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/60">
+            <div className={"h-full rounded-full " + theme.bar} style={{ width: `${look.progress}%` }} />
+          </div>
+          <span className={"nums shrink-0 text-xs font-bold " + theme.text}>{look.progress}%</span>
         </div>
-        <span className={"nums shrink-0 text-xs font-bold " + theme.text}>{progress}%</span>
-      </div>
-      <span className={"truncate text-xs font-semibold " + theme.text}>{STATUS_LABEL[status]}</span>
+      )}
+      <span className={"truncate text-xs font-semibold " + theme.text}>{look.label}</span>
     </button>
   );
 }

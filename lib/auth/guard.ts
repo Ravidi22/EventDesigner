@@ -12,6 +12,7 @@
 // themselves rather than relying on where they sit in the tree.
 import { redirect } from "next/navigation";
 import { currentSession, type Session } from "./session";
+import { ORG_HOME, type OrgKind } from "./kinds";
 
 // ⚠ A LAYOUT'S GUARD DOES NOT GATE ITS PAGES. Layouts and pages render in PARALLEL — the router
 // does not wait for (app)/layout.tsx to resolve before it starts (app)/dashboard/page.tsx. So a
@@ -45,13 +46,27 @@ export async function requireStudio(): Promise<Session> {
   return session;
 }
 
-/** A designer's studio — not a supplier's. A supplier account is a studio account whose
- *  organisation publishes a catalog and answers orders; it has no events, venues, gallery or
- *  outputs, so those screens send it to its own inbox rather than rendering an empty studio. */
-export async function requireDesigner(): Promise<Session> {
+/** One of these kinds of organisation, or home. Every screen behind the shell names who it is for:
+ *  a supplier reaching the studio, or a venue reaching the catalog, is sent to its own home rather
+ *  than shown an empty screen of somebody else's work. */
+export async function requireOrgKind(kinds: readonly OrgKind[]): Promise<Session> {
   const session = await requireStudio();
-  if (session.organizationKind === "supplier") redirect("/orders");
+  const kind = session.organizationKind ?? "studio";
+  if (!kinds.includes(kind)) redirect(ORG_HOME[kind]);
   return session;
+}
+
+/** A designer's studio — not a supplier's, not a venue's. A supplier account is a studio account
+ *  whose organisation publishes a catalog and answers orders; a venue's books dates and sells menus.
+ *  Neither has a design studio, outputs or a meeting flow. */
+export async function requireDesigner(): Promise<Session> {
+  return requireOrgKind(["studio"]);
+}
+
+/** A designer or a venue — the screens both run on: the dashboard (a different screen per kind),
+ *  the hall plans, the books, the gallery. */
+export async function requireHost(): Promise<Session> {
+  return requireOrgKind(["studio", "venue"]);
 }
 
 /** A client. The mirror image: a designer who lands here goes back to their dashboard. */

@@ -123,3 +123,18 @@ export function revalidateProduction(): void {
 export function revalidateShell(): void {
   revalidate("/", "layout");
 }
+
+/** A venue's bookings changed: its occupancy calendar (/dashboard) and its list (/bookings). A
+ *  linked designer's event may have followed (lib/event-links/sync.ts), and that is the designer's
+ *  dashboard and runway — the same paths, another tenant's render. */
+export function revalidateBookings(): void {
+  revalidate("/dashboard");
+  revalidate("/bookings");
+  revalidate("/production");
+}
+
+/** A venue's dishes or packages changed. */
+export function revalidateMenus(): void {
+  revalidate("/menus");
+  revalidate("/bookings");
+}

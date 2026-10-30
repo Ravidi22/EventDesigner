@@ -4,7 +4,7 @@
 // and a constant — but also because both halves of the app need it: the sign-up form picks a kind,
 // the actions store it, the guards branch on it, and the screens route by it. One definition.
 
-/** studio = a designer or supplier, who owns an organisation and everything in it.
+/** studio = a designer, a supplier or a venue, who owns an organisation and everything in it.
  *  client  = someone whose event is being designed, who owns nothing and is shown things. */
 export type AccountKind = "studio" | "client";
 
@@ -19,7 +19,7 @@ export const HOME_FOR: Record<AccountKind, string> = {
 /** What each kind is called on screen. Hebrew, and phrased as the person would describe themselves
  *  rather than as the schema names them — nobody thinks of themselves as a "studio account". */
 export const KIND_LABEL: Record<AccountKind, string> = {
-  studio: "מעצב או ספק",
+  studio: "מעצב, ספק או אולם",
   client: "בעל אירוע",
 };
 
@@ -32,7 +32,7 @@ export const KIND_ENTRY: Record<AccountKind, string> = {
 };
 
 export const KIND_HINT: Record<AccountKind, string> = {
-  studio: "אני מעצב אירועים או ספק — הקטלוג, המתחמים והאירועים שלי מנוהלים כאן.",
+  studio: "אני מעצב אירועים, ספק או בעל אולם — העסק שלי מנוהל כאן.",
   client: "יש לי אירוע קרוב — אני רוצה לראות את הסקיצה והתוכנית שהמעצב הכין.",
 };
 
@@ -41,39 +41,46 @@ export function isAccountKind(value: unknown): value is AccountKind {
 }
 
 /** What a STUDIO account's organisation is. A designer runs events; a supplier publishes a catalog
- *  that designers pull from (lib/marketplace/) and answers their orders (lib/orders/). Both are
- *  `studio` accounts — the same sign-in, the same tenant seam — and only the organisation differs. */
-export type OrgKind = "studio" | "supplier";
+ *  that designers pull from (lib/marketplace/) and answers their orders (lib/orders/); a venue owns
+ *  the room — it books dates, sells menus and is paid per guest (lib/hosting/, lib/menus/), and is
+ *  linked to the designer working each evening (lib/event-links/). All three are `studio` accounts —
+ *  the same sign-in, the same tenant seam — and only the organisation differs. */
+export type OrgKind = "studio" | "supplier" | "venue";
 
 export function isOrgKind(value: unknown): value is OrgKind {
-  return value === "studio" || value === "supplier";
+  return value === "studio" || value === "supplier" || value === "venue";
 }
 
 /** The three cards on the sign-up form. `kind` is what the account is, `orgKind` what the
  *  organisation it opens is (a client opens none). */
-export type SignupChoice = "designer" | "supplier" | "client";
+export type SignupChoice = "designer" | "supplier" | "venue" | "client";
 
 export const CHOICE_OF: Record<SignupChoice, { kind: AccountKind; orgKind?: OrgKind }> = {
   designer: { kind: "studio", orgKind: "studio" },
   supplier: { kind: "studio", orgKind: "supplier" },
+  venue: { kind: "studio", orgKind: "venue" },
   client: { kind: "client" },
 };
 
 export const CHOICE_LABEL: Record<SignupChoice, string> = {
   designer: "מעצב אירועים",
   supplier: "ספק",
+  venue: "בעל אולם / מתחם אירועים",
   client: "בעל אירוע",
 };
 
 export const CHOICE_HINT: Record<SignupChoice, string> = {
   designer: "אני מעצב אירועים — הקטלוג, המתחמים והאירועים שלי מנוהלים כאן.",
   supplier: "אני מוכר או משכיר ציוד לאירועים — אני מפרסם קטלוג ומקבל הזמנות ממעצבים.",
+  venue: "יש לי אולם או גן אירועים — היומן, ההזמנות, התפריטים והחשבונות של המקום מנוהלים כאן.",
   client: "יש לי אירוע קרוב — אני רוצה לראות את הסקיצה והתוכנית שהמעצב הכין.",
 };
 
 /** Where a studio account lands by its organisation's kind. A supplier has no dashboard: their
- *  work is the catalog they publish and the orders that arrive for it. */
+ *  work is the catalog they publish and the orders that arrive for it. A venue's dashboard is its
+ *  occupancy calendar — the same route, another screen (app/(app)/dashboard/page.tsx). */
 export const ORG_HOME: Record<OrgKind, string> = {
   studio: "/dashboard",
   supplier: "/orders",
+  venue: "/dashboard",
 };

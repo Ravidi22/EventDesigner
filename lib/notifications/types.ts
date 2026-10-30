@@ -13,7 +13,14 @@ export type NotificationKind =
   /** To the studio: a client accepted the invitation and has an account now. */
   | "client.joined"
   /** To a client who already had an account: another event was shared with them. */
-  | "event.shared";
+  | "event.shared"
+  /** To a designer's studio: a venue named them the designer of one of its evenings (lib/event-links). */
+  | "link.invited"
+  /** To the venue: the designer accepted, or declined. */
+  | "link.accepted"
+  | "link.declined"
+  /** To the designer's studio: the venue moved a fact the linked event follows (date, rooms, guests). */
+  | "link.updated";
 
 /** Facts frozen at the moment of writing, so the line still reads right after a rename. Small on
  *  purpose — everything else is one click away on the page the notification opens. */
@@ -27,6 +34,8 @@ export interface NotificationPayload {
   changes?: number;
   /** Of those, how many were accepted (resolved). */
   accepted?: number;
+  /** link.updated: which shared facts moved, as their Hebrew names. */
+  facts?: string[];
 }
 
 export interface AppNotification {
@@ -63,6 +72,17 @@ export function notificationText(n: Pick<AppNotification, "kind" | "payload">): 
       return { title: `${p.actorName || "הלקוח"} הצטרף לאירוע`, detail: p.eventLabel };
     case "event.shared":
       return { title: `${p.actorName || "הסטודיו"} שיתף אתכם באירוע`, detail: p.eventLabel };
+    case "link.invited":
+      return { title: `${p.actorName || "אולם"} הזמין אתכם לעצב אירוע`, detail: p.eventLabel };
+    case "link.accepted":
+      return { title: `${p.actorName || "המעצב"} אישר את הקישור לאירוע`, detail: p.eventLabel };
+    case "link.declined":
+      return { title: `${p.actorName || "המעצב"} דחה את הקישור לאירוע`, detail: p.eventLabel };
+    case "link.updated":
+      return {
+        title: `${p.actorName || "האולם"} עדכן ${p.facts?.length ? p.facts.join(", ") : "את פרטי האירוע"}`,
+        detail: p.eventLabel,
+      };
   }
 }
 
@@ -77,5 +97,12 @@ export function notificationHref(n: Pick<AppNotification, "kind" | "eventId" | "
     case "proposal.resolved":
     case "event.shared":
       return n.eventId ? `/client/events/${n.eventId}` : "/client";
+    // The designer's dashboard carries the invitations strip; an updated event opens there too.
+    case "link.invited":
+    case "link.updated":
+      return "/dashboard";
+    case "link.accepted":
+    case "link.declined":
+      return n.eventId ? `/bookings?event=${n.eventId}` : "/bookings";
   }
 }

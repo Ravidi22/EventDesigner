@@ -7,19 +7,41 @@ import { Button } from "@/components/button";
 import { AuthShell, Field, FormError } from "@/components/auth-shell";
 import { completeOnboarding } from "@/lib/auth/actions";
 import { CHOICE_HINT, CHOICE_LABEL, CHOICE_OF } from "@/lib/auth/kinds";
+import { setActiveVenueId } from "@/lib/venues/storage";
 
-/** The two businesses a studio account can open (lib/auth/kinds.ts). A client is not one of them —
- *  an event owner comes in by their designer's invitation, never through sign-up. */
-type Business = "designer" | "supplier";
-const BUSINESSES: Business[] = ["designer", "supplier"];
+/** The three businesses a studio account can open (lib/auth/kinds.ts). A client is not one of them —
+ *  an event owner comes in by their designer's invitation, never through sign-up. The hall owner
+ *  leads (the user, 2026-10-30: "the owner option should be on the top"), and is the one selected. */
+type Business = "designer" | "supplier" | "venue";
+const BUSINESSES: Business[] = ["venue", "designer", "supplier"];
+
+const LEDE: Record<Business, string> = {
+  designer: "עוד רגע בסטודיו. איך קוראים לעסק?",
+  supplier: "עוד רגע בחשבון הספק. איך קוראים לעסק?",
+  venue: "עוד רגע באולם. איך קוראים למקום?",
+};
+const PLACEHOLDER: Record<Business, string> = {
+  designer: "סטודיו לעיצוב אירועים",
+  supplier: "שם העסק",
+  venue: "שם האולם או המתחם",
+};
+const NAME_LABEL: Record<Business, string> = {
+  designer: "שם העסק",
+  supplier: "שם העסק",
+  venue: "שם האולם או המתחם",
+};
+const ENTER: Record<Business, [string, string]> = {
+  designer: ["כניסה לסטודיו", "פותחים את הסטודיו…"],
+  supplier: ["כניסה לחשבון", "פותחים את החשבון…"],
+  venue: ["כניסה לאולם", "פותחים את האולם…"],
+};
 
 // What the business is, and two questions, one required. Everything else a quote's letterhead needs
 // (registration number, address, logo) lives in settings → פרטי העסק and is asked for when it is
 // first needed, not here.
 export function WelcomeScreen({ name }: { name: string }) {
   const router = useRouter();
-  const [business, setBusiness] = useState<Business>("designer");
-  const supplier = business === "supplier";
+  const [business, setBusiness] = useState<Business>(BUSINESSES[0]);
   const [studioName, setStudioName] = useState("");
   const [phone, setPhone] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -41,6 +63,8 @@ export function WelcomeScreen({ name }: { name: string }) {
         setBusy(false);
         return;
       }
+      // A hall opened its first venue under the name just typed: make it the switcher's.
+      if (result.venueId) setActiveVenueId(result.venueId);
       router.replace(result.home ?? "/dashboard");
       router.refresh();
     } catch {
@@ -52,7 +76,7 @@ export function WelcomeScreen({ name }: { name: string }) {
   return (
     <AuthShell
       title={name ? `ברוכים הבאים, ${name.split(" ")[0]}` : "ברוכים הבאים"}
-      lede={supplier ? "עוד רגע בחשבון הספק. איך קוראים לעסק?" : "עוד רגע בסטודיו. איך קוראים לעסק?"}
+      lede={LEDE[business]}
       footer={<span className="text-xs text-muted">את שאר פרטי העסק (ח.פ., כתובת, לוגו) אפשר להשלים בהגדרות.</span>}
     >
       <form onSubmit={submit} className="mt-6 flex flex-col gap-4 short:mt-4 short:gap-3" noValidate>
@@ -60,13 +84,13 @@ export function WelcomeScreen({ name }: { name: string }) {
         <BusinessChooser value={business} onChange={setBusiness} />
         <Field
           id="studioName"
-          label="שם העסק"
+          label={NAME_LABEL[business]}
           type="text"
           autoComplete="organization"
           value={studioName}
           onChange={setStudioName}
           error={errors.studioName}
-          placeholder={supplier ? "שם העסק" : "סטודיו לעיצוב אירועים"}
+          placeholder={PLACEHOLDER[business]}
           autoFocus
         />
         <Field
@@ -85,21 +109,23 @@ export function WelcomeScreen({ name }: { name: string }) {
           icon={<ArrowLeft className={`h-[18px] w-[18px] ${busy ? "arrow-run" : "arrow-nudge"}`} strokeWidth={1.8} />}
           className="group mt-1 w-full"
         >
-          {busy ? (supplier ? "פותחים את החשבון…" : "פותחים את הסטודיו…") : supplier ? "כניסה לחשבון" : "כניסה לסטודיו"}
+          {ENTER[business][busy ? 1 : 0]}
         </Button>
       </form>
     </AuthShell>
   );
 }
 
-/** A designer's studio or a supplier — a radiogroup of two cards, because the difference is a
- *  sentence, not a word. With two choices every arrow key moves to the other one, so RTL needs no
- *  mapping; only the selected card is in the Tab order. */
+/** A designer's studio, a supplier or a venue — a radiogroup of cards, because the difference is a
+ *  sentence, not a word. The cards stand in a column: ↓ is the next one, ↑ the previous, and in RTL
+ *  ← is the next and → the previous. Only the selected card is in the Tab order. */
 function BusinessChooser({ value, onChange }: { value: Business; onChange: (b: Business) => void }) {
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    const step = e.key === "ArrowDown" || e.key === "ArrowLeft" ? 1 : e.key === "ArrowUp" || e.key === "ArrowRight" ? -1 : 0;
+    if (!step) return;
     e.preventDefault();
-    const next = value === "designer" ? "supplier" : "designer";
+    const at = BUSINESSES.indexOf(value);
+    const next = BUSINESSES[(at + step + BUSINESSES.length) % BUSINESSES.length];
     onChange(next);
     document.getElementById(`business-${next}`)?.focus();
   };

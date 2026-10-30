@@ -17,6 +17,7 @@ import { DrawerSection, SectionAction } from "./drawer-section";
 import { EventBillingSection } from "./event-billing-section";
 import { ClientAccessCard } from "./client-access-card";
 import { ProductionSection } from "./production-section";
+import { VenueHostingSection } from "./venue-hosting-section";
 
 // The shell — the floating left-anchored <dialog>, its header and its one scrollbar — is
 // components/drawer.tsx, shared with the catalog's product form. What stays here is what this
@@ -183,6 +184,9 @@ export function EventDetailDrawer({
               )}
             </dl>
           </DrawerSection>
+
+          {/* The hall's card, when a venue linked this evening (lib/event-links). */}
+          <VenueHostingSection key={`venue-${event.id}`} event={event} onChanged={onEventChanged} />
 
           <DrawerSection title="אנשי קשר">
             <ul className="space-y-3">

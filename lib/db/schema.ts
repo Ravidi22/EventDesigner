@@ -62,6 +62,9 @@ import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { QuoteLayout } from "@/lib/quotes/layout";
 import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
 import type { SceneSettings } from "@/lib/scene/types";
+import type { Course, DishTag, PackageCourse, PackageExtra } from "@/lib/menus/types";
+import type { DaySlot, EventVendor, RunStep, ServiceStyle, SpecialMeal } from "@/lib/hosting/types";
+import type { LinkState } from "@/lib/event-links/types";
 import type {
   AllocationStatus,
   DocumentCredit,
@@ -103,6 +106,8 @@ export const appointmentKindEnum = pgEnum("appointment_kind", [
   "vacation",
   "supply",
   "personal",
+  // A venue's sitting: the couple tastes the menu before choosing it (lib/hosting).
+  "tasting",
 ]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
@@ -140,7 +145,7 @@ export const inviteStateEnum = pgEnum("invite_state", ["pending", "active"]);
 /** What an organisation IS (Organization.kind). A studio designs events; a supplier publishes a
  *  catalog that studios pull from (lib/marketplace/). Same tables, same tenant seam — the kind only
  *  decides which screens exist and which cross-organisation read is allowed. */
-export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supplier"]);
+export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supplier", "venue"]);
 /** The supplier's answer to an order (Order.status, lib/orders/). Typed by the OTHER party, which
  *  is why it is allowed on a screen that otherwise derives everything: "the supplier said yes" is
  *  derivable from nothing, the same reasoning as events.confirmed_at. */
@@ -1564,5 +1569,111 @@ export const billingDocuments = pgTable(
     index("billing_documents_org_date_idx").on(t.organizationId, t.documentDate),
     // The event drawer: everything about one event's money.
     index("billing_documents_event_idx").on(t.eventId),
+  ],
+);
+
+// ── Venue owners (docs/superpowers/specs/2026-10-30-venue-owners-design.md) ────────────────────
+
+/** Dish (lib/menus/types.ts) — what a venue's kitchen makes, on a course, tagged for the questions a
+ *  tasting asks. Its own rows, not catalog products: a dish has no footprint, no stock kind, no
+ *  place on a plan, and the products table is built around all three. */
+export const menuDishes = pgTable(
+  "menu_dishes",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    course: text("course").$type<Course>().notNull(),
+    description: text("description").notNull().default(""),
+    tags: text("tags").array().$type<DishTag[]>().notNull().default([]),
+    imageUrl: text("image_url"),
+    position: integer("position").notNull().default(0),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("menu_dishes_org_idx").on(t.organizationId)],
+);
+
+/** MenuPackage (lib/menus/types.ts) — what a venue sells: prices per adult / child / vendor meal, a
+ *  minimum, its courses as "choose N of these dishes" and its priced extras. The courses and extras
+ *  are jsonb: small lists written whole with the package and never queried into. */
+export const menuPackages = pgTable(
+  "menu_packages",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    priceAdult: numeric("price_adult", { precision: 12, scale: 2 }).notNull().default("0"),
+    priceChild: numeric("price_child", { precision: 12, scale: 2 }).notNull().default("0"),
+    priceVendor: numeric("price_vendor", { precision: 12, scale: 2 }).notNull().default("0"),
+    minGuests: integer("min_guests").notNull().default(0),
+    courses: jsonb("courses").$type<PackageCourse[]>().notNull().default([]),
+    extras: jsonb("extras").$type<PackageExtra[]>().notNull().default([]),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("menu_packages_org_idx").on(t.organizationId)],
+);
+
+/** EventHosting (lib/hosting/types.ts) — the venue's side of one of its own events, 1:1 on the
+ *  event. A venue's booking IS an `events` row (so billing, the diary and the client portal work
+ *  unchanged); what only a hall asks lives here. */
+export const eventHosting = pgTable("event_hosting", {
+  eventId: uuid("event_id")
+    .primaryKey()
+    .references(() => events.id, { onDelete: "cascade" }),
+  organizationId: orgId(),
+  slot: text("slot").$type<DaySlot>().notNull().default("evening"),
+  holdUntil: date("hold_until"),
+  guaranteedMin: integer("guaranteed_min"),
+  finalGuests: integer("final_guests"),
+  finalClosedAt: timestamp("final_closed_at", { withTimezone: true }),
+  children: integer("children").notNull().default(0),
+  vendorMeals: integer("vendor_meals").notNull().default(0),
+  specialMeals: jsonb("special_meals").$type<Partial<Record<SpecialMeal, number>>>().notNull().default({}),
+  specialNote: text("special_note").notNull().default(""),
+  serviceStyle: text("service_style").$type<ServiceStyle>(),
+  runOfShow: jsonb("run_of_show").$type<RunStep[]>().notNull().default([]),
+  packageId: uuid("package_id").references(() => menuPackages.id, { onDelete: "set null" }),
+  menuChoices: jsonb("menu_choices").$type<Record<string, string[]>>().notNull().default({}),
+  extraIds: jsonb("extra_ids").$type<string[]>().notNull().default([]),
+  kitchenNotes: text("kitchen_notes").notNull().default(""),
+  floorNotes: text("floor_notes").notNull().default(""),
+  vendors: jsonb("vendors").$type<EventVendor[]>().notNull().default([]),
+  onSiteName: text("on_site_name").notNull().default(""),
+  onSitePhone: text("on_site_phone").notNull().default(""),
+  updatedAt: updated(),
+});
+
+/** EventLink (lib/event-links/types.ts) — one evening, two businesses: the venue's booking and the
+ *  designer's event, each an `events` row in its own organisation, joined here and nowhere else.
+ *
+ *  The venue invites (by the designer's address); the designer accepts onto an event of theirs or a
+ *  new one. `studio_event_id` is null until then. One designer per booking: a second invitation
+ *  replaces a declined or ended one rather than stacking beside it. lib/event-links/ is the only
+ *  module that reads across the join, through named columns (`check:event-links`). */
+export const eventLinks = pgTable(
+  "event_links",
+  {
+    id: id(),
+    venueEventId: uuid("venue_event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    venueOrgId: uuid("venue_org_id").notNull(),
+    /** The designer's studio. Null while the address belongs to nobody yet. */
+    studioOrgId: uuid("studio_org_id"),
+    studioEventId: uuid("studio_event_id").references(() => events.id, { onDelete: "set null" }),
+    invitedEmail: text("invited_email").notNull(),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+    state: text("state").$type<LinkState>().notNull().default("pending"),
+    createdAt: created(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("event_links_venue_event_key").on(t.venueEventId),
+    index("event_links_studio_event_idx").on(t.studioEventId),
+    index("event_links_studio_org_idx").on(t.studioOrgId),
+    index("event_links_email_idx").on(t.invitedEmail),
   ],
 );
