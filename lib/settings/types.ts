@@ -2,6 +2,8 @@
 //
 // Studio-level, not venue-level: a designer working three properties still has one VAT rate and one
 // letterhead. What varies per property lives in the מתחמים ושיתוף section.
+import type { VatStatus } from "@/lib/billing/types";
+
 export interface BusinessSettings {
   businessName: string;
   ownerName: string;
@@ -27,6 +29,11 @@ export interface BusinessSettings {
   /** The clauses at the foot of the quote — payment schedule, cancellation, exclusions. One per
    *  line; the sheet renders each line as a bullet. */
   quoteTerms: string;
+  /** The studio's standing with VAT (lib/billing/types.ts): which billing documents it may issue.
+   *  A עוסק פטור never prints "חשבונית מס". */
+  vatStatus: VatStatus;
+  /** Bank, branch, account — printed on a payment request so the client can transfer. */
+  bankDetails: string;
 }
 
 /**
@@ -72,4 +79,6 @@ export const DEFAULT_SETTINGS: BusinessSettings = {
   currency: "₪",
   quoteValidityDays: 14,
   quoteTerms: "",
+  vatStatus: "licensed",
+  bankDetails: "",
 };

@@ -153,7 +153,7 @@ export function DashboardScreen({
     // The pointer to "which event is open on this device" can outlive the event itself, and every
     // screen that resolves it would keep asking the server about a row that is gone.
     if (loadActiveEventId() === target.id) clearActiveEventId();
-    void removeEvent(target.id).catch(() => setDeleteError("מחיקת האירוע נכשלה — נסו שוב"));
+    void removeEvent(target.id).catch((e: unknown) => setDeleteError(e instanceof Error && e.message ? e.message : "מחיקת האירוע נכשלה — נסו שוב"));
   };
 
   return (

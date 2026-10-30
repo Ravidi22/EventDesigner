@@ -677,6 +677,8 @@ async function verifySettings() {
     showBsd: true,
     currency: "€", // ignored on purpose — see below
     quoteValidityDays: 21,
+    vatStatus: "licensed",
+    bankDetails: "",
     quoteTerms: "תשלום: 50% במעמד האישור.\nביטול עד 30 יום.",
   });
 

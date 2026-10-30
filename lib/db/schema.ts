@@ -62,6 +62,18 @@ import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { QuoteLayout } from "@/lib/quotes/layout";
 import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
 import type { SceneSettings } from "@/lib/scene/types";
+import type {
+  AllocationStatus,
+  DocumentCredit,
+  DocumentCustomer,
+  DocumentKind,
+  DocumentLine,
+  DocumentPayment,
+  DocumentStatus,
+  DocumentTotals,
+  ScheduleItem,
+  VatStatus,
+} from "@/lib/billing/types";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -340,6 +352,14 @@ export const studioSettings = pgTable("studio_settings", {
   /** 0.18 = 18%. numeric, never float — this multiplies money. */
   vatRate: numeric("vat_rate", { precision: 5, scale: 4 }).notNull().default("0.18"),
   currency: text("currency").notNull().default("₪"),
+  /** The studio's standing with VAT (VatStatus, lib/billing/types.ts): exempt | licensed | company.
+   *  Read by every billing document — a עוסק פטור may never print "חשבונית מס", so the kinds the
+   *  app offers follow from this. Text, not an enum: three words that may grow a fourth (a
+   *  non-profit) without a migration. */
+  vatStatus: text("vat_status").$type<VatStatus>().notNull().default("licensed"),
+  /** Bank, branch, account — printed on a payment request so the client can transfer. Free text:
+   *  "בנק הפועלים · סניף 612 · חשבון 123456" is how a designer writes it and nothing queries it. */
+  bankDetails: text("bank_details").notNull().default(""),
   /** The stages this studio's meeting has, in order (MeetingStepId[]). Ordered and rewritten
    *  whole by the settings screen, never queried into — an array column says exactly that. */
   meetingFlow: text("meeting_flow").array().$type<MeetingStepId[]>().notNull().default([]),
@@ -639,6 +659,14 @@ export const events = pgTable(
     /** A second contact, if the couple gave one — a parent, a planner. */
     contact2Name: text("contact2_name"),
     contact2Phone: text("contact2_phone"),
+    /** The client as an INVOICE names them (lib/billing): the legal name when it differs from the
+     *  couple's ("משה ורחל כהן" is the event; "כהן אירועים בע״מ" pays), the address a tax invoice
+     *  must carry (ניהול ספרים s.9(א)(4)) and the ת.ז / ח.פ a business client needs. Asked once,
+     *  when the order is issued, and kept so every later invoice needs no asking. Null = not yet
+     *  given; the order dialog falls back to clientName. */
+    billingName: text("billing_name"),
+    billingAddress: text("billing_address"),
+    billingNumber: text("billing_number"),
     eventDate: date("event_date"),
     startTime: time("start_time"),
     // ⚠ `meeting_date` used to live here — one nullable date, i.e. exactly one scheduled meeting per
@@ -1445,4 +1473,92 @@ export const sceneLinks = pgTable(
     createdAt: created(),
   },
   (t) => [uniqueIndex("scene_links_token_key").on(t.tokenHash), index("scene_links_event_idx").on(t.eventId)],
+);
+
+// ── Billing documents (lib/billing/) ───────────────────────────────────────────────────────────
+
+/** The next number of each document series, per studio.
+ *
+ *  A document's number is taken from here with `SELECT … FOR UPDATE` inside the SAME transaction
+ *  that inserts the document (lib/billing/actions.ts) — the only way "no gaps, no duplicates"
+ *  (ניהול ספרים s.18) survives two designers issuing at once. A failed issue rolls the counter
+ *  back with the row; a number is never handed out and then not stored.
+ *
+ *  `series` is the document kind (one sequence per kind, continuing forever — DECIDE 5 in the
+ *  spec). A studio moving from another program types its next number once, on the settings screen,
+ *  while the series is still unused. */
+export const documentCounters = pgTable(
+  "document_counters",
+  {
+    organizationId: orgId(),
+    series: text("series").notNull(),
+    next: integer("next").notNull().default(1),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.series] })],
+);
+
+/** BillingDocument (lib/billing/types.ts) — הזמנה, דרישת תשלום, חשבונית מס, קבלה, חשבונית מס-קבלה,
+ *  חשבונית זיכוי.
+ *
+ *  ⚠ WRITTEN ONCE. A fiscal document may not change after it has a number (ניהול ספרים s.18, s.23א),
+ *  so every figure, line, name and address is COPIED in at issue and a trigger
+ *  (billing_documents_frozen, migration 0023) refuses an UPDATE to any column but the few the law
+ *  lets move after issue: the allocation number, the original/sent/cancelled stamps and their
+ *  details, and the superseding link. A mistake is a NEW document — a credit note, a new order.
+ *
+ *  ⚠ NEVER DELETED. `event_id` is `restrict`, not cascade: an event with documents cannot be
+ *  deleted (the drawer archives it instead), because the documents are the studio's books for seven
+ *  years (s.25(ג)) and an event is not.
+ *
+ *  jsonb for the customer, lines, totals, schedule, payment and credit: each is a small record
+ *  written whole and never queried into — the same argument every other jsonb column here makes —
+ *  and freezing them is simpler as blobs than as twenty columns. `numeric` would be the choice if
+ *  any of them were summed in SQL; the ledger sums `totals.gross` in JS over one month's rows. */
+export const billingDocuments = pgTable(
+  "billing_documents",
+  {
+    id: id(),
+    organizationId: orgId(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "restrict" }),
+    kind: text("kind").$type<DocumentKind>().notNull(),
+    series: text("series").notNull(),
+    number: integer("number").notNull(),
+    status: text("status").$type<DocumentStatus>().notNull().default("issued"),
+    issuedAt: created(),
+    issuedBy: uuid("issued_by").references(() => users.id, { onDelete: "set null" }),
+    /** The date printed. A `date`, like event_date: a document is dated a calendar day. */
+    documentDate: date("document_date").notNull(),
+    /** The document this one is against (a receipt its invoice, a credit its invoice, an invoice
+     *  its order, a superseding order the one it replaces). Self-reference, so no inline
+     *  `references` — Drizzle cannot express a self FK in the column builder without a cycle. */
+    followsId: uuid("follows_id"),
+    /** Orders only: the sealed drawing agreed on. */
+    designDocumentId: uuid("design_document_id").references(() => designDocuments.id, { onDelete: "set null" }),
+    documentVersion: integer("document_version"),
+    customer: jsonb("customer").$type<DocumentCustomer>().notNull(),
+    lines: jsonb("lines").$type<DocumentLine[]>().notNull(),
+    totals: jsonb("totals").$type<DocumentTotals>().notNull(),
+    schedule: jsonb("schedule").$type<ScheduleItem[]>(),
+    payment: jsonb("payment").$type<DocumentPayment>(),
+    credit: jsonb("credit").$type<DocumentCredit>(),
+    allocationNumber: text("allocation_number"),
+    allocationStatus: text("allocation_status").$type<AllocationStatus>().notNull().default("n/a"),
+    note: text("note").notNull().default(""),
+    originalAt: timestamp("original_at", { withTimezone: true }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    sentTo: text("sent_to"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelReason: text("cancel_reason"),
+    supersededById: uuid("superseded_by_id"),
+    contentHash: text("content_hash").notNull(),
+  },
+  (t) => [
+    uniqueIndex("billing_documents_number_key").on(t.organizationId, t.series, t.number),
+    // The ledger: this studio's documents over a month, newest first.
+    index("billing_documents_org_date_idx").on(t.organizationId, t.documentDate),
+    // The event drawer: everything about one event's money.
+    index("billing_documents_event_idx").on(t.eventId),
+  ],
 );

@@ -15,7 +15,7 @@ import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { revalidateEventStage, revalidateEvents } from "@/lib/db/revalidate";
-import { appointments, events, eventZones, venues, zones } from "@/lib/db/schema";
+import { appointments, billingDocuments, events, eventZones, venues, zones } from "@/lib/db/schema";
 import { linksForAppointments, removeFromGoogle } from "@/lib/google/sync";
 import type { EventSummary } from "./types";
 import { toEvent, toEvents, toEventRow, toEventZoneRows } from "./db-mapping";
@@ -311,10 +311,23 @@ export async function patchEvent(id: string, patch: EventPatch): Promise<EventSu
  * studio's, and the venue ladder gates properties, not the diary (see the note in
  * lib/appointments/actions.ts).
  */
-export async function deleteEvent(id: string): Promise<EventSummary[]> {
+export async function deleteEvent(id: string): Promise<EventSummary[] | { error: string }> {
   assertId(id, "id");
   const organizationId = await currentOrg();
   const database = db();
+
+  // An event with billing documents is part of the studio's BOOKS (lib/billing): a tax invoice
+  // must be kept seven years, so `billing_documents.event_id` is RESTRICT and the database would
+  // refuse this delete with a foreign-key error nobody can act on. Said here instead, as the
+  // correction it is — archive, don't delete.
+  const [booksRow] = await database
+    .select({ id: billingDocuments.id })
+    .from(billingDocuments)
+    .where(and(eq(billingDocuments.eventId, id), eq(billingDocuments.organizationId, organizationId)))
+    .limit(1);
+  if (booksRow) {
+    return { error: "לאירוע הופקו מסמכי חיוב (הזמנה, חשבונית או קבלה) והם נשמרים בספרים — העבירו אותו לארכיון במקום למחוק." };
+  }
 
   // Both reads BEFORE the delete — see above. The appointment ids are this studio's own by the
   // same scope the delete uses, so a link cannot be read for a meeting belonging to anyone else.

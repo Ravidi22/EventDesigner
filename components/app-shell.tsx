@@ -10,6 +10,7 @@ import {
   LayoutGrid,
   Images,
   Truck,
+  ReceiptText,
   Store,
   Inbox,
   LogOut,
@@ -48,6 +49,8 @@ const GENERAL: NavItem[] = [
   // A supplier's inbox: the orders studios sent them. A designer's orders live under ספקים ורכש.
   { href: "/orders", label: "הזמנות", icon: Inbox, for: ["supplier"] },
   { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
+  // The income side (lib/billing): orders, invoices, receipts — the studio's own books.
+  { href: "/billing", label: "חשבונות", icon: ReceiptText, for: ["studio", "venue"] },
   { href: "/marketplace", label: "שוק הספקים", icon: Store },
   { href: "/gallery", label: "גלריה ומצגות", icon: Images },
 ];
@@ -58,6 +61,7 @@ const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
+  { test: (p) => p.startsWith("/billing"), title: "חשבונות" },
   { test: (p) => p.startsWith("/marketplace"), title: "שוק הספקים" },
   { test: (p) => p.startsWith("/orders"), title: "הזמנות" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ומצגות" },

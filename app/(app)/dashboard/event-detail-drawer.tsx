@@ -14,7 +14,7 @@ import { Button } from "@/components/button";
 import { Menu } from "@/components/menu";
 import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
 import { DrawerSection, SectionAction } from "./drawer-section";
-import { EventBookingCard } from "./event-booking-card";
+import { EventBillingSection } from "./event-billing-section";
 import { ClientAccessCard } from "./client-access-card";
 import { ProductionSection } from "./production-section";
 
@@ -25,7 +25,8 @@ import { ProductionSection } from "./production-section";
 //   where it stands and the way on   (status, the meeting to continue, its studio and outputs)
 //   the brief                         (פרטי האירוע — everything the details form asks — and who to call)
 //   the sittings                      (פגישות)
-//   the client's side                 (the sketch shared with them, then the quote and their yes)
+//   the client's side                 (the sketch shared with them, then the quote, their yes as an
+//                                      order, and the money — ./event-billing-section.tsx)
 //
 // It used to run status → details → meetings → quote → sharing → contacts: the phone number last,
 // the sketch the client looks at AFTER the quote they agree to, and no way to fix a detail without
@@ -259,7 +260,7 @@ export function EventDetailDrawer({
               they say yes. */}
           <ClientAccessCard key={`clients-${event.id}`} event={event} />
 
-          <EventBookingCard key={event.id} event={event} onConfirmed={onEventChanged} />
+          <EventBillingSection key={`billing-${event.id}`} event={event} onChanged={onEventChanged} />
 
           <p className="nums text-center text-caption text-faint">
             נוצר ב־{new Date(event.createdAt).toLocaleDateString("he-IL", { day: "numeric", month: "short", year: "numeric" })}

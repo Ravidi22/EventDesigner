@@ -49,6 +49,12 @@ export interface EventSummary {
   shades?: string[];
   /** סוג האירוע (EVENT_TYPES). Absent = not said. */
   eventType?: string;
+  /** The client as an INVOICE names them (lib/billing): legal name when it differs from
+   *  clientName, the address a tax invoice must carry, the ת.ז / ח.פ of a business client. Asked
+   *  once when the order is issued and kept. Absent = not given yet. */
+  billingName?: string;
+  billingAddress?: string;
+  billingNumber?: string;
   archived?: boolean;
   createdAt: number;
 }

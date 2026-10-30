@@ -91,6 +91,14 @@ export function revalidateSettings(): void {
   revalidate("/settings");
 }
 
+/** A billing document was issued, sent or cancelled: the ledger, and the event lists that show an
+ *  event's confirmation and its late installments. */
+export function revalidateBilling(): void {
+  revalidate("/billing");
+  revalidate("/dashboard");
+  revalidate("/production");
+}
+
 /**
  * The production runway alone — for a write that changes how it is COMPUTED rather than what is on
  * it.

@@ -169,6 +169,9 @@ export interface EventFacts {
   /** Orders (lib/orders/) whose window covers this event's day, counted by the supplier's answer.
    *  Derived — nothing here is a status the designer sets. */
   orders?: { confirmed: number; open: number; declined: number };
+  /** An installment of the order's payment schedule (lib/billing) due before today and not fully
+   *  paid — derived from the receipts, never a status. */
+  paymentLate?: { label: string; amount: number };
 }
 
 /** The one line a row shows about its orders, or nothing when there are none. */
@@ -319,7 +322,8 @@ export type ActionTarget =
   | "crew"
   | "orders"
   | "packing"
-  | "map";
+  | "map"
+  | "billing";
 
 export interface NextAction {
   label: string;
@@ -363,6 +367,14 @@ function alertFor(
   }
   if (e.designChangedSinceQuote && e.quoteSentAt) {
     return { alert: "העיצוב השתנה מאז ההצעה שנשלחה", action: { label: "לעדכון ההצעה", target: "quote" } };
+  }
+  // Money the order says should be in by now and is not (lib/billing): before a supplier's refusal
+  // because the studio buys with it, after the client's own waiting and a misleading quote.
+  if (e.paymentLate) {
+    return {
+      alert: `${e.paymentLate.label} באיחור — ${Math.round(e.paymentLate.amount).toLocaleString("he-IL")} ₪ טרם התקבלו`,
+      action: { label: "לתשלומים", target: "billing" },
+    };
   }
   if (e.orders?.declined) {
     return {

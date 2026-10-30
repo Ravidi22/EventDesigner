@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import { useMounted } from "@/lib/use-mounted";
-import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, Share2, Store, UserRound, Users } from "lucide-react";
+import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, ReceiptText, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { GoogleStatus } from "@/lib/google/actions";
 import type { StudioMember } from "@/lib/team/types";
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { BusinessSection } from "./business-section";
+import { BillingSection } from "./billing-section";
+import type { SeriesCounter } from "@/lib/billing/actions";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
 import { CheckpointsSection } from "./checkpoints-section";
@@ -34,6 +36,8 @@ import { DataSection } from "./data-section";
 // designer standing in a hall you drew, and sees the property alone.
 const SECTIONS = [
   { id: "business", label: "העסק", icon: Store },
+  // Straight after the business: what the billing documents read off it (lib/billing).
+  { id: "billing", label: "חיוב ומסמכים", icon: ReceiptText },
   { id: "account", label: "החשבון שלי", icon: UserRound },
   { id: "meeting", label: "מצב פגישה", icon: ListChecks },
   // Straight after the meeting, and sharing the nav tab's own icon so the row says which screen it
@@ -59,9 +63,11 @@ export function SettingsScreen({
   initialGoogle,
   initialOffsets,
   initialStageRules,
+  initialCounters,
   emailEnabled,
 }: {
   initialSettings: BusinessSettings;
+  initialCounters: SeriesCounter[];
   initialMe: StudioMember | null;
   initialMembers: StudioMember[];
   initialGoogle: GoogleStatus;
@@ -112,6 +118,7 @@ export function SettingsScreen({
 
       <div className="min-w-0 flex-1">
         {section === "business" && <BusinessSection initialSettings={initialSettings} />}
+        {section === "billing" && <BillingSection initialSettings={initialSettings} initialCounters={initialCounters} />}
         {section === "account" && <AccountSection initialMe={initialMe} />}
         {section === "meeting" && <MeetingSection />}
         {section === "checkpoints" && <CheckpointsSection initialOffsets={initialOffsets} />}

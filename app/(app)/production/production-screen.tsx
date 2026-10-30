@@ -250,6 +250,9 @@ export function ProductionScreen({
         return setCrewFor({ id: e.id, clientName: e.clientName, crewIds: (e.crew ?? []).map((c) => c.id) });
       case "orders":
         return router.push("/suppliers?tab=orders");
+      case "billing":
+        // The event's own drawer carries its order, schedule and receipts.
+        return setSelectedId(e.id);
     }
   };
 
