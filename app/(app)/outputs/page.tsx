@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { requireDesigner } from "@/lib/auth/guard";
 import { fetchProducts } from "@/lib/catalog/actions";
 import { EventSurface } from "@/components/event-surface";
-import { OutputsScreen, isView } from "./outputs-screen";
+import { OutputsScreen } from "./outputs-screen";
+import { isView } from "./views";
 
 export const metadata: Metadata = { title: "פלטים · Eve" };
 

@@ -35,10 +35,8 @@ import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
 import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
 
-export type View = "packing" | "map" | "quote" | "loadin";
-const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר", loadin: "דף הקמה" };
-/** Whether a `?view=` is one of the documents — the page reads it, the runway's buttons write it. */
-export const isView = (v: string | undefined): v is View => v !== undefined && v in TITLES;
+import { TITLES, type View } from "./views";
+export type { View } from "./views";
 /** Rail order, and it is not TITLES' key order by accident: the quote is first because it is what
  *  this screen opens on — this is the stage that CLOSES a meeting, and the crew sheets are prepared
  *  afterwards, with nobody else in the room. The load-in sheet is last: it is the page on top of
