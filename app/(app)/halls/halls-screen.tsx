@@ -123,7 +123,7 @@ import { IconButton } from "@/components/icon-button";
 import { ProductImage } from "../catalog/product-image";
 import { ZoneDialog } from "./zone-dialog";
 import { SelectionBar } from "./selection-bar";
-import { addEdgeItemAt, changeEdgeItem, fillFeatureEdges, removeEdgeItem, setEdgeItems, wallDistanceOf, withDefaultEdges, type EdgeRefusal, type VenueEdgeKind } from "@/lib/venues/stage-edges";
+import { addEdgeItemAt, changeEdgeItem, fillFeatureEdges, removeEdgeItem, setEdgeItems, wallDistanceOf, type EdgeRefusal, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { shareSide } from "@/lib/design-document/stage";
 import type { StageStair } from "@/lib/design-document/types";
 import { ALIGN_LABEL, alignedCentres, needsThree, type AlignOp } from "@/lib/studio/align";
@@ -1429,9 +1429,9 @@ export function HallsScreen() {
           ? newFeatureFromProduct(tool.kind, tool.product, p)
           : newFeature(tool.kind, p, tool.plant ?? tool.surface),
     );
-    // A stage lands with the sketch's default flights — one on every side with floor in front
-    // of it, one at the back of a round one — worked out against the walls as they stand.
-    editStructure(() => (tool.kind === "stage" ? withDefaultEdges(next, featureId, wallDistanceOf(next)) : next));
+    // A stage lands with no flights, as the sketch's does (2026-10-30, the user: "put nothing"):
+    // they are clicked onto its sides from the bar.
+    editStructure(() => next);
     setSelection([{ kind: "feature", id: featureId }]);
   };
 
