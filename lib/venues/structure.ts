@@ -32,6 +32,7 @@ import type { ChairRows, StageBuild, StageStair } from "../design-document/types
 import { FALLBACK_CHAIR, NEW_BLOCK, chairRowsLayout } from "../design-document/chair-rows";
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import type { FeatureClimb } from "./climb";
+import type { FeatureCurtain } from "./curtain";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -56,6 +57,17 @@ export interface Wall {
 // Doors hang off a wall id rather than a positional index. The old Hall stored `wallIndex` into an
 // outline array, which silently pointed at a different wall the moment a vertex was inserted; an id
 // survives any amount of editing elsewhere in the graph.
+//
+// A WINDOW is an entrance too (the user, 2026-10-30: "add option to a wall to have windows /
+// ויטרינה, can have more than one" — אמרה's halls are glazed along their fronts). It is the same
+// thing on the plan — an opening in a wall, so far along it, so wide, measured from a corner, slid
+// along the wall by the same drag and typed in the same fields — that nobody walks through: no leaf,
+// no swing, and in 3D a pane of glass between a sill and a head instead of a door. `kind` tells the
+// two apart; absent = a door, so every plan drawn before windows existed reads exactly as it did.
+// Readers that are about DOORS (the swing, the leaf, "a viewpoint from inside each door") filter
+// with isDoor; everything positional treats both alike.
+export type OpeningKind = "door" | "window";
+
 export interface StructureEntrance {
   id: string;
   wallId: string;
@@ -63,11 +75,52 @@ export interface StructureEntrance {
   widthMm: number;
   swingInward: boolean;
   doubleDoor: boolean;
+  /** Absent = a door. */
+  kind?: OpeningKind;
+  /** iff a window: the sill's height above the floor. Absent = 0 — a ויטרינה, glazed from the floor. */
+  sillMm?: number;
+  /** iff a window: the top of the glass above the floor. Absent = the wall's own top (floor to
+   *  ceiling); never read above the wall. */
+  headMm?: number;
+  /** A curtain hung on this wall PARTS for this door — the main entrance, kept clear (the user,
+   *  2026-10-30: "not all doors, only the main"). Absent = the curtain hangs over the door, as it
+   *  does over a service door or a fire exit. Set from the door's bar (./curtain.ts curtainPieces). */
+  curtainClear?: true;
   /** Which end of its wall the door is MEASURED from — on screen and in the bar's fields — when
    *  the corner a plan or a tape gives the distance from is node b's (the user asked to choose,
    *  2026-10-17). Storage is unchanged: `distanceMm` is always from node a; this only says which
    *  way to read it (doorOffsets). Absent = node a. */
   measureFrom?: "a" | "b";
+}
+
+export function isDoor(e: Pick<StructureEntrance, "kind">): boolean {
+  return (e.kind ?? "door") === "door";
+}
+
+export function isWindow(e: Pick<StructureEntrance, "kind">): boolean {
+  return e.kind === "window";
+}
+
+/** The doors alone — for every reader that is about a swing, a leaf, or walking through. */
+export function doorsOf(s: Pick<VenueStructure, "entrances">): StructureEntrance[] {
+  return s.entrances.filter(isDoor);
+}
+
+/** An ordinary window's sill and head — what the bar offers when a ויטרינה is made a חלון. */
+export const WINDOW_SILL_MM = 900;
+export const WINDOW_HEAD_MM = 2100;
+
+/** A window's glass from the floor: its sill, and its head held under the wall's top. A window
+ *  with neither stored is a ויטרינה — the whole wall height is glass. */
+export function windowHeights(e: Pick<StructureEntrance, "sillMm" | "headMm">, wallHeightMm: number): { sillMm: number; headMm: number } {
+  const sillMm = Math.max(0, Math.min(wallHeightMm, e.sillMm ?? 0));
+  const headMm = Math.max(sillMm, Math.min(wallHeightMm, e.headMm ?? wallHeightMm));
+  return { sillMm, headMm };
+}
+
+/** Whether a window is glazed floor to ceiling — the ויטרינה the bar names it by. */
+export function isVitrine(e: Pick<StructureEntrance, "sillMm" | "headMm">): boolean {
+  return !(e.sillMm && e.sillMm > 0) && e.headMm === undefined;
 }
 
 /** Where a door stands, read from the corner it is measured from (StructureEntrance.measureFrom):
@@ -102,7 +155,16 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 // element that IS a pillar — its plinth, a base ring and its shaft (./column.ts) — where a venue
 // used to draw each one as three `structure` footprints stacked on one centre, which only the 3D
 // scene knew how to read back as one thing.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating";
+//
+// A fountain too (the user, 2026-10-30: "need מזרקה in the center of the pool in the קוליסאום"):
+// drawn with the catalog's own fountain picture (components/item-symbol.tsx) and built in 3D as
+// the catalog's fountain is (lib/scene/floor-kinds.ts) — a basin, a bowl on a stem, a jet — standing
+// on the water when it is set in a pool. Before this a venue's fountain could only be a round pool
+// named "מזרקה", which drew as a disc of water.
+//
+// A curtain (the user, same day: "a default וילון, like אמרה has in both halls — can be removed or
+// changed in the sketch") hangs on a WALL: its span is stored, its box derived (./curtain.ts).
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain";
 
 /** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
  *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
@@ -214,6 +276,9 @@ export interface StructureFeature {
   seating?: FeatureSeating;
   /** iff `kind === "column"`: the shaft and its base (./column.ts). Absent reads as a new column's. */
   column?: FeatureColumn;
+  /** iff `kind === "curtain"`: the wall stretch it hangs on and which side (./curtain.ts). The box
+   *  is derived from it and written with it; a curtain with no span keeps the box it has. */
+  curtain?: FeatureCurtain;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
   /** A surface laid wall to wall in a CLOSED SHAPE of the walls, without that shape being a zone
@@ -241,8 +306,9 @@ export interface StructureFeature {
  *  and the floor itself are not. A feature that is not movable is drawn in the sketch but takes no
  *  clicks — it is the room, like a wall. */
 export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
-  // Chairs in rows too: an event sets the ceremony where its חופה is tonight.
-  return f.movable ?? (f.kind === "bar" || f.kind === "stage" || f.kind === "seating");
+  // Chairs in rows too: an event sets the ceremony where its חופה is tonight. A curtain is "movable"
+  // so a sketch may take it DOWN for its event (the drawing pins it to its wall either way).
+  return f.movable ?? (f.kind === "bar" || f.kind === "stage" || f.kind === "seating" || f.kind === "curtain");
 }
 
 /** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
@@ -277,6 +343,8 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   stairs: "מדרגות",
   ramp: "רמפה",
   seating: "שורות כיסאות",
+  fountain: "מזרקה",
+  curtain: "וילון",
 };
 
 export interface VenueStructure {
@@ -723,6 +791,10 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   ramp: { widthMm: 1500, depthMm: 5400, heightMm: 450, shape: "rect" },
   // Five rows of five dining chairs — the box their layout comes to (./seating.ts), at a chair's height.
   seating: { ...NEW_SEATING_BOX, heightMm: 900, shape: "rect" },
+  // A round basin three metres across; the height is the jet's.
+  fountain: { widthMm: 3000, depthMm: 3000, heightMm: 1500, shape: "circle" },
+  // A band along its wall (./curtain.ts re-lays it); no height of its own — it hangs from the ceiling.
+  curtain: { widthMm: 4000, depthMm: 220, heightMm: 0, shape: "rect" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
@@ -1126,6 +1198,30 @@ if (isMain(import.meta.url)) {
     assert(!canRestack(st, [ids[3]], "forward"), "the topmost feature has nowhere further forward to go");
     assert(!canRestack(st, [ids[3]], "backward"), "…and a feature overlapping nothing has no visible step back either");
     assert(order(restackFeatures(st, [ids[0], ids[1]], "front")) === "2301", "a group keeps its own order when moved");
+  }
+
+  // A window is an entrance with no leaf: positioned, measured and slid like a door, told apart by
+  // its kind; a ויטרינה is glass from the floor to the wall's top, a חלון has a sill and a head.
+  {
+    const wallId = base.walls[0].id;
+    const { structure: s1, entranceId: doorId } = addEntrance(base, { wallId, distanceMm: 1000, widthMm: 900, swingInward: true, doubleDoor: false });
+    const { structure: s2, entranceId: winId } = addEntrance(s1, { wallId, distanceMm: 3000, widthMm: 2000, swingInward: false, doubleDoor: false, kind: "window" });
+    const door = s2.entrances.find((e) => e.id === doorId)!;
+    const win = s2.entrances.find((e) => e.id === winId)!;
+    assert(isDoor(door) && !isWindow(door) && !isDoor(win) && isWindow(win), "a door without a kind is a door; a window says so");
+    assert(doorsOf(s2).length === 1 && doorsOf(s2)[0].id === doorId, "doorsOf leaves the window out");
+    assert(isVitrine(win), "a window with no sill and no head is a ויטרינה");
+    const glass = windowHeights(win, 4000);
+    assert(glass.sillMm === 0 && glass.headMm === 4000, "…glazed from the floor to the wall top");
+    const sashed = windowHeights({ sillMm: WINDOW_SILL_MM, headMm: WINDOW_HEAD_MM }, 4000);
+    assert(sashed.sillMm === 900 && sashed.headMm === 2100 && !isVitrine({ sillMm: 900, headMm: 2100 }), "a חלון keeps its sill and head");
+    assert(windowHeights({ sillMm: 900, headMm: 5000 }, 4000).headMm === 4000, "…the head never above the wall");
+    assert(windowHeights({ sillMm: 2500, headMm: 2100 }, 4000).headMm === 2500, "…and never under the sill");
+    assert(doorOffsets(win, 6000).toEdgeMm === 2000 && doorOffsets(win, 6000).farEdgeMm === 2000, "a window is measured from a corner exactly as a door is");
+    const removed = removeWall(s2, wallId);
+    assert(removed.entrances.length === 0, "a wall taken away takes its windows with it, like its doors");
+    assert(newFeature("fountain", { x: 0, y: 0 }).shape === "circle" && newFeature("fountain", { x: 0, y: 0 }).heightMm === 1500, "a new fountain is a round basin with the height of its jet");
+    assert(!featureMovable({ kind: "fountain" }), "a fountain is the property's — a sketch does not move it");
   }
 
   console.log("venue structure self-check passed");

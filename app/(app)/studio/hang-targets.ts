@@ -45,7 +45,7 @@ export function hangTargetsOf(doc: DesignDocumentContent, structure: VenueStruct
     out.push(hangTarget(`placement:${p.id}`, placementFootprint(p), p.position, p.rotation ?? 0, !!p.mirrored, p.stage ? 1 : p.scale || 1));
   }
   for (const f of structure.features) {
-    if (f.kind === "surface") continue; // the ground is not furniture
+    if (f.kind === "surface" || f.kind === "curtain") continue; // the ground is not furniture; a curtain is the wall
     out.push(hangTarget(`feature:${f.id}`, featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0));
   }
   return out;

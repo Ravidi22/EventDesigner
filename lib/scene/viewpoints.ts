@@ -12,7 +12,7 @@
 import type { Point } from "@/lib/studio/hall";
 import { polygonCentroid, type Bounds } from "@/lib/studio/geometry";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { doorOffsets, featureFootprint, nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
+import { doorOffsets, featureFootprint, isDoor, nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { ResolvedZone } from "@/lib/venues/zone";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
@@ -78,6 +78,8 @@ export function defaultViewpoints(input: DefaultsInput): Viewpoint[] {
   const nodes = nodeMap(structure);
   let doorN = 0;
   for (const e of structure.entrances) {
+    // A window is an opening nobody stands in.
+    if (!isDoor(e)) continue;
     const wall = structure.walls.find((w) => w.id === e.wallId);
     const pts = wall ? wallPoints(structure, wall, nodes) : null;
     if (!pts) continue;

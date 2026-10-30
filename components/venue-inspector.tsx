@@ -18,7 +18,10 @@ import {
   Sprout,
   TreeDeciduous,
   TreePalm,
+  AppWindow,
+  Blinds,
   DoorOpen,
+  Droplets,
   Footprints,
   GlassWater,
   Presentation,
@@ -88,6 +91,9 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   ramp: Accessibility,
   // The sketch's own block of chairs wears the same (app/(app)/studio/inspector.tsx).
   seating: Rows3,
+  // The catalog's own for its fountains (lib/catalog/categories.ts).
+  fountain: Droplets,
+  curtain: Blinds,
 };
 
 /** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one
@@ -119,6 +125,7 @@ export const PLANT_ICON: Record<PlantSpecies, LucideIcon> = {
 
 export const ADD_TOOL_ICON: Record<string, LucideIcon> = {
   entrance: DoorOpen,
+  window: AppWindow,
   ...FEATURE_ICON,
   ...Object.fromEntries(PLANT_SPECIES.map((p) => [`plant:${p}`, PLANT_ICON[p]])),
   ...Object.fromEntries(SURFACE_MATERIALS.map((m) => [`surface:${m}`, SURFACE_ICON[m]])),
@@ -128,7 +135,8 @@ export const ADD_TOOL_ICON: Record<string, LucideIcon> = {
 export function addToolIconKey(tool: AddTool): string {
   if (tool.plant) return `plant:${tool.plant}`;
   if (tool.surface) return `surface:${tool.surface}`;
-  return tool.kind ?? "entrance";
+  // The two tools hung on a wall rather than placed: the door, and the window.
+  return tool.kind ?? (tool.id === "window" ? "window" : "entrance");
 }
 // The hall editor's selection UI is app/(app)/halls/selection-bar.tsx — the sketch's own Bar of
 // chips under the selection. What stays here are the field groups it opens in its panels (a

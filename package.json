@@ -36,6 +36,7 @@
     "check:sketches": "tsx lib/studio/sketches.ts",
     "check:seating": "tsx lib/venues/seating.ts",
     "check:column": "tsx lib/venues/column.ts",
+    "check:curtain": "tsx lib/venues/curtain.ts",
     "check:groups": "tsx lib/design-document/groups.ts",
     "check:block": "tsx lib/design-document/block.ts",
     "check:features": "tsx lib/design-document/features.ts",

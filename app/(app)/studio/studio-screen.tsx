@@ -1660,8 +1660,33 @@ export function StudioScreen({
     const f = plan.structure.features.find((x) => x.id === sole.id);
     if (!f) return null;
     const here = arrangedFeature(doc, f);
-    return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id) };
-  }, [sole, plan.structure, doc]);
+    // A curtain offers the catalog's own curtains to hang in its place (lib/venues/curtain.ts).
+    const drapes = f.kind === "curtain" ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall") : [];
+    const curtainSwap: SwapPanel | null = drapes.length ? { kind: "items", count: 1, current: null, similar: 0, options: drapes } : null;
+    return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id), curtainSwap };
+  }, [sole, plan.structure, doc, catalog]);
+
+  /** The venue's curtain down for this event, a catalog curtain up on the same stretch of wall —
+   *  one entry: the drape is an ordinary placement from here on (quoted, packed, its ends dragged),
+   *  and "פריטי מתחם שהוסרו" brings the venue's own back. */
+  const swapCurtain = useCallback(
+    (featureId: string, productId: string) => {
+      const f = plan.structure.features.find((x) => x.id === featureId);
+      const product = catalog.find((p) => p.id === productId);
+      if (!f || f.kind !== "curtain" || !f.curtain || !product) return;
+      const id = uid();
+      batch([
+        { type: "removeFeatures", featureIds: [featureId] },
+        {
+          type: "addPlacement",
+          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, span: { wallId: f.curtain.wallId, from: f.curtain.from, to: f.curtain.to } },
+        },
+      ]);
+      setSelected([{ kind: "placement", id }]);
+      showHint(`${product.name} במקום הווילון של המתחם — הווילון המקורי ב״פריטי מתחם שהוסרו״`);
+    },
+    [plan.structure, catalog, batch, setSelected, showHint],
+  );
 
   // --- stacking ----------------------------------------------------------------------------------
   // Rugs, tables and free objects are ONE stack over the floor — what a designer overlaps is not
@@ -4988,6 +5013,7 @@ export function StudioScreen({
                 selectedCount={selected.length}
                 feature={featurePanel}
                 onResetFeature={resetFeature}
+                onSwapCurtain={swapCurtain}
                 facing={sharedFacing}
                 onFace={faceSelection}
                 spin={spin}

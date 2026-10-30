@@ -23,7 +23,7 @@ import { uShapeBandOf } from "@/lib/studio/footprint";
 import { usesDiameter } from "@/lib/catalog/types";
 import { rotateKnobPoint } from "@/components/plan-canvas";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
-import { doorOffsets, nodeMap, wallPoints, type StructureEntrance, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { doorOffsets, isDoor, nodeMap, wallPoints, type StructureEntrance, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import type { ResolvedZone } from "@/lib/venues/zone";
 import { asRound, curveSides } from "@/lib/outputs/measurements";
 
@@ -144,8 +144,9 @@ const WallDoors = memo(function WallDoors({
   if (len < 1 || doors.length === 0) return null;
   const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
   const n = { x: -u.y, y: u.x };
-  // Which side the leaves sweep — the figures go on the other one.
-  const first = doors[0];
+  // Which side the leaves sweep — the figures go on the other one. A wall of windows alone has no
+  // leaf to read; its figures take the first side.
+  const first = doors.find(isDoor) ?? doors[0];
   const geo = doorGeometry(a, b, first.distanceMm, first.widthMm, first.swingInward, { x: hx, y: hy }, first.doubleDoor, null);
   const tip = geo.leaves[0]?.tip ?? geo.center;
   const away = -(Math.sign((tip.x - geo.center.x) * n.x + (tip.y - geo.center.y) * n.y) || 1);

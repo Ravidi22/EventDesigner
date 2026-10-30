@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Point, EdgeCurve, Entrance, Fixture, FixtureShape, Column } from "@/lib/studio/hall";
+import { WindowGlazing } from "@/components/window-glazing";
 import {
   edgePathD,
   edgeMidpoint,
@@ -3109,7 +3110,9 @@ export function EntranceDoor({
   clientToMm,
   mm,
 }: {
-  entrance: Pick<Entrance, "distanceMm" | "widthMm" | "swingInward" | "doubleDoor">;
+  /** A window (a venue's StructureEntrance.kind) is the same handle over the same gap, with the
+   *  glazing drawn across it instead of a leaf and its swing. */
+  entrance: Pick<Entrance, "distanceMm" | "widthMm" | "swingInward" | "doubleDoor"> & { kind?: "door" | "window" };
   a: Point;
   b: Point;
   /** The wall's own bow, if any — absent/null for a straight wall. Without this, every point below
@@ -3125,6 +3128,7 @@ export function EntranceDoor({
   mm: (px: number) => number;
 }) {
   const half = entrance.widthMm / 2;
+  const window = entrance.kind === "window";
   const door = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, entrance.swingInward, interiorHint, entrance.doubleDoor, curve);
   // The hitbox/handle and the keyboard nudge still reason in the door's own local jamb-to-jamb
   // frame (gapStart/gapEnd/center), now sourced from the same curve-aware geometry as the leaves —
@@ -3165,7 +3169,7 @@ export function EntranceDoor({
       {...drag}
       tabIndex={0}
       role="button"
-      aria-label="פתח — גרירה לאורך הקיר"
+      aria-label={window ? "חלון — גרירה לאורך הקיר" : "פתח — גרירה לאורך הקיר"}
       aria-pressed={selected}
       onKeyDown={nudgeAlongWall}
       className={`group cursor-move touch-none ${HANDLE_CLS}`}
@@ -3184,7 +3188,8 @@ export function EntranceDoor({
           swing arc from that tip back to the wall (or, on a double door, to the opening's centre).
           Ink by default, same as a wall; accent on hover/selection, same as everything else here. */}
       <g className={selected ? "text-accent" : "text-ink-soft group-hover:text-accent"}>
-        {door.leaves.map((leaf, i) => (
+        {window && <WindowGlazing a={gapStart} b={gapEnd} offsetMm={mm(2.5)} strokeWidth={selected ? 1.6 : 1.2} glassWidth={1} />}
+        {!window && door.leaves.map((leaf, i) => (
           <g key={i}>
             <line x1={leaf.hinge.x} y1={leaf.hinge.y} x2={leaf.tip.x} y2={leaf.tip.y} stroke="currentColor" strokeWidth={selected ? 2 : 1.5} vectorEffect="non-scaling-stroke" />
             <path

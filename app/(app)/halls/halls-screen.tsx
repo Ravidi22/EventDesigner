@@ -88,7 +88,8 @@ import {
   featureStage,
   surfaceMaterialPatch,
 } from "@/lib/venues/structure";
-import { addSurfaceUnder, asOutline, featureWorldOutline, followsWalls, surfaceFilling, surfaceFromBoundary, surfaceInFace, syncFaceSurfaces } from "@/lib/venues/face-surfaces";
+import { addSurfaceUnder, asOutline, buildingFilling, buildingFromBoundary, buildingInFace, featureWorldOutline, followsWalls, surfaceFilling, surfaceFromBoundary, surfaceInFace, syncFaceSurfaces } from "@/lib/venues/face-surfaces";
+import { ItemSymbol } from "@/components/item-symbol";
 import { insertRegionPoint, moveRegionPoint, removeRegionPoint, tidyRegion } from "@/lib/venues/region-edit";
 import { detectFaces, faceAt, pointInPolygon, type Face } from "@/lib/venues/faces";
 import {
@@ -106,6 +107,7 @@ import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-row
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
 import { defineColumns } from "@/lib/venues/column";
+import { curtainEndT, curtainPatch, newCurtain, syncCurtains } from "@/lib/venues/curtain";
 import {
   ZoneRegions,
   StructureFeatures,
@@ -208,6 +210,8 @@ type Mode = "select" | "walls" | "zones";
 // (see ToolPreview) — so they aren't in here.
 const ADD_TOOL_PREVIEW: Record<string, string> = {
   entrance: "#f3c6d6",
+  window: "#d6e6f3",
+  curtain: "#dcd8e4",
   pool: "#bcdcf5",
   stage: "#f6df9b",
   bar: "#f3c99b",
@@ -241,7 +245,8 @@ const DRAW_SURFACE = "surface:draw";
  *  edit that moved a wall or a corner re-lays them, inside that same history entry — so a wall drag
  *  carries the floor with it frame by frame, and one undo takes both back. */
 function settleWalls(before: VenueStructure, after: VenueStructure): VenueStructure {
-  return after.nodes === before.nodes && after.walls === before.walls ? after : syncFaceSurfaces(after);
+  // …and the curtains hung on them (lib/venues/curtain.ts), the same way.
+  return after.nodes === before.nodes && after.walls === before.walls ? after : syncCurtains(syncFaceSurfaces(after));
 }
 
 /** A feature's box as it stands, turned — what alignment and snapping measure. */
@@ -897,6 +902,19 @@ export function HallsScreen() {
     [dragStructure],
   );
 
+  // One end of a curtain slid along its wall (lib/venues/curtain.ts): the point lands at a fraction
+  // of the wall, the span and the box are re-laid from it, amended into the live gesture's entry.
+  const curtainEnd = useCallback(
+    (id: string, end: "from" | "to", p: Point) => {
+      dragStructure((s) => {
+        const f = s.features.find((x) => x.id === id);
+        const t = f ? curtainEndT(s, f, p) : null;
+        return f && t !== null ? updateFeature(s, id, curtainPatch(s, f, { [end]: t })) : s;
+      });
+    },
+    [dragStructure],
+  );
+
   // Turning a feature by its knob. The angle arrives absolute and already locked to 15° (or free,
   // if Alt was down) — the handle owns that — so this only has to fold it into the live gesture,
   // exactly as the resize above does. The side panel's rotation field still writes the same
@@ -1131,6 +1149,39 @@ export function HallsScreen() {
       const boundary = src.type === "region" ? src.boundary : (draftBoundary ?? []);
       if (boundary.length >= 3) {
         const { structure: next, featureId } = addSurfaceUnder(structure, surfaceFromBoundary(boundary, material));
+        editStructure(() => next);
+        setSelection([{ kind: "feature", id: featureId }]);
+      }
+      setMode("select");
+    }
+    setDraftZone(null);
+  };
+
+  /** The draft's third answer: a BUILDING — the closed shape (or the trace) as a roofed block of the
+   *  typed height, not a zone (lib/venues/face-surfaces.ts; the user, 2026-10-30: the service block
+   *  between אמרה's halls). A shape that already holds one gets its height changed instead. */
+  const saveDraftBuilding = (heightMm: number) => {
+    if (!draftZone) return;
+    const src = draftZone.source;
+    if (src.type === "face") {
+      const face = faceAt(faces, src.anchor);
+      if (face) {
+        const existing = buildingFilling(structure, face, faces);
+        if (existing) {
+          editStructure((s) => updateFeature(s, existing.id, { heightMm }));
+          setSelection([{ kind: "feature", id: existing.id }]);
+        } else {
+          const { structure: next, featureId } = addFeature(structure, buildingInFace(face, heightMm));
+          editStructure(() => next);
+          setSelection([{ kind: "feature", id: featureId }]);
+          setHint("השטח הסגור הוא עכשיו מבנה עם תקרה · צמוד לקירות שסביבו, נעול במקומו");
+        }
+      }
+      if (mode === "walls") setSelection([]);
+    } else {
+      const boundary = src.type === "region" ? src.boundary : (draftBoundary ?? []);
+      if (boundary.length >= 3) {
+        const { structure: next, featureId } = addFeature(structure, buildingFromBoundary(boundary, heightMm));
         editStructure(() => next);
         setSelection([{ kind: "feature", id: featureId }]);
       }
@@ -1408,7 +1459,11 @@ export function HallsScreen() {
   // ח instead of as a rectangle the designer then has to reshape by hand in every venue they own.
   const placeTool = (tool: AddTool, p: Point) => {
     if (!tool.kind) {
-      addDoorNear(p);
+      addOpeningNear(p, tool.id === "window" ? "window" : "door");
+      return;
+    }
+    if (tool.kind === "curtain") {
+      addCurtainNear(p);
       return;
     }
     // A ground clicked inside a closed shape that is not a zone fills that shape, wall to wall — the
@@ -1435,18 +1490,40 @@ export function HallsScreen() {
     setSelection([{ kind: "feature", id: featureId }]);
   };
 
-  const addDoorNear = (p: Point) => {
+  /** The venue's curtain (lib/venues/curtain.ts) hung along the whole of the nearest wall, on the
+   *  side of it the click fell — the bar shortens the stretch. A boundary line and a bowed wall take
+   *  none. */
+  const addCurtainNear = (p: Point) => {
+    const hit = nearestWall(structure, p);
+    const wall = hit ? structure.walls.find((w) => w.id === hit.wallId) : null;
+    if (!hit || !wall || wall.kind === "edge") {
+      setHint("וילון נתלה על קיר — לחצו ליד קיר");
+      return;
+    }
+    const made = newCurtain(structure, wall.id, p);
+    if (!made) {
+      setHint("וילון נתלה על קיר ישר — על קיר מעוגל אין וילון עדיין");
+      return;
+    }
+    const { structure: next, featureId } = addFeature(structure, made);
+    editStructure(() => next);
+    setSelection([{ kind: "feature", id: featureId }]);
+  };
+
+  /** A door — or a window, the same opening with glass in it (StructureEntrance.kind) — hung on
+   *  the nearest wall where the click fell. A new window is a ויטרינה: glass from the floor to the
+   *  wall's top, as אמרה's halls are glazed; the bar gives it a sill and a head. */
+  const addOpeningNear = (p: Point, kind: "door" | "window") => {
     const hit = nearestWall(structure, p);
     if (!hit) return;
     const wall = structure.walls.find((w) => w.id === hit.wallId);
     if (!wall || wall.kind === "edge") return; // a boundary line is not something you hang a door on
-    const { structure: next, entranceId } = addEntrance(structure, {
-      wallId: hit.wallId,
-      distanceMm: hit.distanceMm,
-      widthMm: 1600,
-      swingInward: true,
-      doubleDoor: true,
-    });
+    const { structure: next, entranceId } = addEntrance(
+      structure,
+      kind === "window"
+        ? { wallId: hit.wallId, distanceMm: hit.distanceMm, widthMm: 2000, swingInward: false, doubleDoor: false, kind: "window" }
+        : { wallId: hit.wallId, distanceMm: hit.distanceMm, widthMm: 1600, swingInward: true, doubleDoor: true },
+    );
     editStructure(() => next);
     setSelection([{ kind: "door", id: entranceId }]);
   };
@@ -1591,7 +1668,7 @@ export function HallsScreen() {
                             : tool.product
                             ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}`
                             : tool.label,
-                        disabled: tool.id === "entrance" && !structure.walls.some((w) => w.kind === "wall"),
+                        disabled: (tool.id === "entrance" || tool.id === "window" || tool.id === "curtain") && !structure.walls.some((w) => w.kind === "wall"),
                         preview: <ToolPreview tool={tool} />,
                       };
                       const firstGround = tool.section === "ground" && tools[i - 1]?.section !== "ground";
@@ -1897,6 +1974,7 @@ export function HallsScreen() {
                     onSelect={acts ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
                     onMove={acts ? (id, p, free) => moveWithGroup("feature", id, free ? p : snapFeatureAt(id, p, snap)) : undefined}
                     onResize={acts && !outlineSurface ? resizeFeature : undefined}
+                    onCurtainEnd={acts && !outlineSurface ? curtainEnd : undefined}
                     // The knob is NOT drawn here but in `topmost` below, above every wall and figure.
                     activeEdgeItem={activeEdge}
                     onSelectEdgeItem={acts ? selectEdgeItem : undefined}
@@ -2077,6 +2155,7 @@ export function HallsScreen() {
                   onSetZoneFeatures={setZoneFeatures}
                   onSaveDraftZone={saveDraftZone}
                   onDraftSurface={saveDraftSurface}
+                  onDraftBuilding={saveDraftBuilding}
                   onCancelDraftZone={() => setDraftZone(null)}
                   outlineEditId={outlineSurface?.id ?? null}
                   onToggleOutline={(id) => setOutlineEditId((cur) => (cur === id ? null : id))}
@@ -2608,9 +2687,21 @@ const SEATING_PREVIEW_BOX = (() => {
 
 // The column on its card: a new one (a 60cm plinth, a ⌀50 base, a ⌀40 shaft) drawn as it will be.
 const COLUMN_PREVIEW = newFeature("column", { x: 0, y: 0 });
+// The fountain on its card: the catalog's own picture at a new one's size.
+const FOUNTAIN_PREVIEW = newFeature("fountain", { x: 0, y: 0 });
 
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+  if (tool.kind === "fountain") {
+    const s = FOUNTAIN_PREVIEW.widthMm * 1.15;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
+          <ItemSymbol kind="fountain" footprint={{ kind: "circle", diameterMm: FOUNTAIN_PREVIEW.widthMm }} count={1} />
+        </svg>
+      </span>
+    );
+  }
   if (tool.kind === "column") {
     const s = COLUMN_PREVIEW.widthMm * 1.3;
     return (
