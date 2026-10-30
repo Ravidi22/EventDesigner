@@ -9,6 +9,7 @@
 import type { Point } from "@/lib/studio/hall";
 import type { Zone } from "./zone";
 import type { VenueStructure } from "./structure";
+import type { VenueRole } from "./access";
 
 // A floor plan the designer already has — the venue's own PDF, a photo of a printout — placed and
 // scaled over the plane so zone outlines can be traced straight off it. Optional: a venue can be
@@ -52,6 +53,22 @@ export interface Venue {
   /** Optional custom venue logo (data URL or remote URL); falls back to initials when unset. */
   logoUrl?: string;
   plan: VenuePlan;
+  /** The caller's role on it (lib/venues/access.ts resolveVenueRole) — "viewer" is everyone's floor:
+   *  every business sees every venue, and only a grant lets it edit. Set by fetchVenues; absent on a
+   *  venue built in memory, which reads as the creator's own. */
+  access?: VenueRole;
+  /** The caller's organisation owns it. */
+  owned?: boolean;
+  /** Whose it is, when it is somebody else's. */
+  ownerName?: string;
+}
+
+/** A property on the platform not on this business's list yet (fetchVenueDirectory). */
+export interface VenueDirectoryEntry {
+  id: string;
+  name: string;
+  logoUrl?: string;
+  ownerName: string;
 }
 
 export function emptyPlan(mmPerUnit = 1): VenuePlan {

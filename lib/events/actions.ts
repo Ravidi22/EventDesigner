@@ -81,11 +81,13 @@ function assertEvent(value: unknown): asserts value is EventSummary {
   if (typeof e.createdAt !== "number") throw new Error("event.createdAt must be epoch ms");
 }
 
-/** A venue and zones this studio actually owns, and zones that are actually ON that venue.
+/** A venue that exists, and zones that are actually ON that venue.
  *
- *  Both halves matter. The first stops an event being attached to another studio's property; the
- *  second stops a plan being assembled out of rooms from two different sites, which the geometry
- *  layer has no way to draw and no way to report. */
+ *  ⚠ CHANGED 2026-10-30: any business's venue, not only this studio's own. Everybody sees the same
+ *  venue (lib/venues/access.ts resolveVenueRole), so a designer books the hall its owner drew rather
+ *  than a copy of it — the cross-studio booking roadmap §6 left open. What still matters is the
+ *  second half: a plan assembled out of rooms from two different sites is one the geometry layer
+ *  has no way to draw and no way to report. */
 async function assertPlacement(
   organizationId: string,
   venueId: string | undefined,
@@ -96,11 +98,8 @@ async function assertPlacement(
     return;
   }
   const database = db();
-  const [venue] = await database
-    .select({ id: venues.id })
-    .from(venues)
-    .where(and(eq(venues.id, venueId), eq(venues.organizationId, organizationId)))
-    .limit(1);
+  void organizationId;
+  const [venue] = await database.select({ id: venues.id }).from(venues).where(eq(venues.id, venueId)).limit(1);
   if (!venue) throw new Error("venue not found");
 
   if (!zoneIds.length) return;
@@ -109,11 +108,7 @@ async function assertPlacement(
     .select({ id: zones.id })
     .from(zones)
     .where(
-      and(
-        inArray(zones.id, unique),
-        eq(zones.venueId, venueId),
-        eq(zones.organizationId, organizationId),
-      ),
+      and(inArray(zones.id, unique), eq(zones.venueId, venueId)),
     );
   if (found.length !== unique.length) throw new Error("zone not found on this venue");
 }

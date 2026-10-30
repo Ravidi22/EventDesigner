@@ -269,12 +269,9 @@ export async function assembleDemands(
     ? await database
         .select({ venueId: venueStructures.venueId, structure: venueStructures.structure })
         .from(venueStructures)
-        .where(
-          and(
-            eq(venueStructures.organizationId, organizationId),
-            inArray(venueStructures.venueId, wantedVenues),
-          ),
-        )
+        // By venue alone: a property's plan is one shared copy, whoever's event stands on it
+        // (lib/venues/access.ts resolveVenueRole).
+        .where(inArray(venueStructures.venueId, wantedVenues))
     : [];
 
   const structureByVenue = new Map(structureRows.map((r) => [r.venueId, r.structure]));

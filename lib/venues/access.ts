@@ -83,6 +83,28 @@ export interface GrantScope {
   money: boolean;
 }
 
+/** Where the caller stands toward one property — the four facts venueRoleFor reads. */
+export interface VenueStanding {
+  /** The caller's organisation owns the property. */
+  ownsVenue: boolean;
+  /** …and the caller's studio role reaches every property it owns (the owner). */
+  reachesAll: boolean;
+  /** An active member grant, inside the owning studio. */
+  memberGrant: VenueRole | null;
+  /** The highest active guest grant handed to the caller's organisation. */
+  orgGrant: VenueRole | null;
+}
+
+/** EVERYBODY SEES THE SAME VENUE (2026-10-30, the user: "the one who created it can define who can
+ *  edit it & who not"). A property is one plan shared by every business working in it, so viewing
+ *  is nobody's to grant and everyone's floor; editing and managing are what a grant conveys. The
+ *  owner's studio role reaches every property it holds; a member of that studio has their grant;
+ *  another business has the grant its organisation was handed. */
+export function resolveVenueRole(s: VenueStanding): VenueRole {
+  if (s.ownsVenue) return s.reachesAll ? "manager" : (s.memberGrant ?? "viewer");
+  return s.orgGrant ?? "viewer";
+}
+
 export function grantScope(kind: GrantKind): GrantScope {
   return kind === "guest"
     ? { plan: true, availability: true, events: false, money: false }
@@ -165,6 +187,16 @@ if (isMain(import.meta.url)) {
   // Worth an assertion because "manager" reads like seniority and is not.
   const seniorGuest = grantScope("guest");
   assert(!seniorGuest.money, "even a manager-level guest sees no money");
+
+  // Everybody sees the same venue; the grants decide who edits it.
+  const none = { ownsVenue: false, reachesAll: false, memberGrant: null, orgGrant: null };
+  assert(resolveVenueRole(none) === "viewer", "a business with no grant still sees another's venue");
+  assert(resolveVenueRole({ ...none, orgGrant: "editor" }) === "editor", "a guest grant to the organisation lets it edit");
+  assert(resolveVenueRole({ ...none, ownsVenue: true, reachesAll: true }) === "manager", "the owner manages what the studio owns");
+  assert(resolveVenueRole({ ...none, ownsVenue: true }) === "viewer", "a member with no grant sees the studio's venue, never edits it");
+  assert(resolveVenueRole({ ...none, ownsVenue: true, memberGrant: "editor" }) === "editor", "a member grant inside the studio lets them edit");
+  assert(resolveVenueRole({ ...none, ownsVenue: true, orgGrant: "manager" }) === "viewer", "a guest grant means nothing inside the owning studio");
+  assert(!canEditPlan(resolveVenueRole(none)), "seeing is not editing");
 
   assert(isVenueRole("editor") && !isVenueRole("admin"), "isVenueRole rejects a role that does not exist");
   assert(isGrantKind("member") && !isGrantKind("owner"), "isGrantKind rejects a studio role");

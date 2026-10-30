@@ -444,7 +444,7 @@ async function verifyAppointments() {
   await refuses("an event that is not this studio's", () =>
     saveAppointment({ ...prospect, id: crypto.randomUUID(), eventId: crypto.randomUUID() }),
   );
-  await refuses("a venue that is not this studio's", () =>
+  await refuses("a venue that does not exist (any business's existing venue may be named — everybody sees the same venue)", () =>
     saveAppointment({ ...prospect, id: crypto.randomUUID(), venueId: crypto.randomUUID() }),
   );
   await refuses("a date that passes the regex but does not exist", () =>

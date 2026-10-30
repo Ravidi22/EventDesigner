@@ -8,6 +8,7 @@ import {
   BringToFront,
   Building2,
   Check,
+  Eye,
   ClipboardPaste,
   Copy,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
@@ -45,6 +46,7 @@ import {
   type Zone,
 } from "@/lib/venues/storage";
 import { fetchVenues, fetchVenuePlan, saveVenuePlan, saveVenue, type BlockedZone } from "@/lib/venues/actions";
+import { canEditPlan, type VenueRole } from "@/lib/venues/access";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import {
   calibrateUnderlay,
@@ -222,6 +224,11 @@ const ADD_TOOL_PREVIEW: Record<string, string> = {
 // showed a move cursor over the one spot the designer was trying to click. Module-level so the
 // memoised feature nodes see one identity.
 const NEVER = () => false;
+/** What a viewer's edits do (see `hist` in HallsScreen): nothing. */
+const IGNORE_EDIT = () => {};
+// A viewer's selection, always: nothing on a plan they may not edit can be picked, so no bar, handle
+// or drag ever offers to change it.
+const NO_SELECTION: PlanSelection[] = [];
 
 /** How far each successive paste lands from the one before. */
 const PASTE_STEP_MM = 400;
@@ -279,14 +286,22 @@ export function HallsScreen() {
   // Starts on an EMPTY plane: server and first client render agree on "nothing drawn yet", and the
   // real graph arrives from the server in the effect below. There is no sample property to seed
   // from any more, and a fresh studio genuinely has none.
-  const hist = useHistory<PlanState>(
+  // The caller's role on the open property (fetchVenuePlan). Everybody sees every venue; only a
+  // grant lets them edit it (lib/venues/access.ts resolveVenueRole). A viewer's plan is READ-ONLY:
+  // every edit below goes through `hist`, and for a viewer its three writers do nothing — so a
+  // drag, a typed size or a pasted feature leaves the plan as it was, and nothing is ever saved.
+  const [role, setRole] = useState<VenueRole>("manager");
+  const readOnly = !canEditPlan(role);
+  const history = useHistory<PlanState>(
     () => ({ venueId: "", structure: emptyStructure(), zones: [] }),
     { keyboard: true },
   );
+  const hist = readOnly ? { ...history, set: IGNORE_EDIT, amend: IGNORE_EDIT } : history;
   const { structure, zones } = hist.present;
 
   const [mode, setMode] = useState<Mode>("select");
-  const [selection, setSelection] = useState<PlanSelection[]>([]);
+  const [pickedSelection, setSelection] = useState<PlanSelection[]>([]);
+  const selection = readOnly ? NO_SELECTION : pickedSelection;
   const [wallKind, setWallKind] = useState<WallKind>("wall");
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
   const [region, setRegion] = useState<Point[] | null>(null); // freehand zone boundary in progress
@@ -403,7 +418,16 @@ export function HallsScreen() {
       setVenueId(list.some((v) => v.id === stored) ? (stored as string) : (list[0]?.id ?? ""));
     });
   }, []);
-  useEffect(() => onActiveVenueChange((id) => setVenueId(id ?? "")), []);
+  // The list is re-read on a switch: a venue just added from the directory (followVenue) or made in
+  // the switcher is not in the copy read on mount, and its name and logo were missing here.
+  useEffect(
+    () =>
+      onActiveVenueChange((id) => {
+        setVenueId(id ?? "");
+        void fetchVenues().then(setVenues);
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (!venueId) return;
@@ -411,8 +435,9 @@ export function HallsScreen() {
     // be cleared by its own cleanup, and that is how the last edit before a venue switch was lost.
     if (pending.current) void flush();
     let live = true;
-    void fetchVenuePlan(venueId).then(({ structure: loaded, zones: loadedZones }) => {
+    void fetchVenuePlan(venueId).then(({ structure: loaded, zones: loadedZones, role: loadedRole }) => {
       if (!live) return;
+      setRole(loadedRole);
       const snapshot: PlanState = { venueId, structure: loaded, zones: loadedZones };
       // What is already on the server, so the render that follows a load doesn't write it straight
       // back — a round trip that bought nothing and stamped an empty structure row onto every
@@ -429,7 +454,7 @@ export function HallsScreen() {
       setEditingZoneId(null);
       // A property with nothing drawn on it has nothing to select or name — open on the one tool
       // that can make progress rather than on an empty grid with the wrong tool in hand.
-      setMode(loaded.walls.length === 0 ? "walls" : "select");
+      setMode(loaded.walls.length === 0 && canEditPlan(loadedRole) ? "walls" : "select");
       setReadyFor(venueId);
     });
     return () => {
@@ -930,6 +955,8 @@ export function HallsScreen() {
         return;
       }
       if (isTypingTarget()) return;
+      // A viewer's keyboard edits nothing — no delete, paste, select-all, nudge or restack.
+      if (readOnly) return;
       if (e.key === "Enter" && mode === "walls" && runNodeId) {
         e.preventDefault();
         setRunNodeId(null);
@@ -1004,7 +1031,7 @@ export function HallsScreen() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, runNodeId, region, selection, structure, addMenuOpen, armedToolId, draftZone, handTool, activeEdge, edgePick, outlineEditId, removeEdge, deleteSelection, duplicateSelection, restackSelection, finishRegion, setLocked, copySelection, cutSelection, pasteClip, editStructure]);
+  }, [readOnly, mode, runNodeId, region, selection, structure, addMenuOpen, armedToolId, draftZone, handTool, activeEdge, edgePick, outlineEditId, removeEdge, deleteSelection, duplicateSelection, restackSelection, finishRegion, setLocked, copySelection, cutSelection, pasteClip, editStructure]);
 
   // PlanCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
   // against every existing corner — so this only decides what a click *means* in the current mode.
@@ -1179,6 +1206,7 @@ export function HallsScreen() {
   /** Opens a zone's edit dialog (the ✎ on its row). The zone is selected as well, so the tint
    *  behind the scrim is the one being edited and its outline handles are waiting when it closes. */
   const editZone = (zoneId: string) => {
+    if (readOnly) return;
     setSelection([{ kind: "zone", id: zoneId }]);
     setEditingZoneId(zoneId);
   };
@@ -1236,7 +1264,7 @@ export function HallsScreen() {
    *  venue RECORD, and it needs `manager` where the graph needs `editor`. */
   const persistUnderlay = useCallback(
     async (next: PlanUnderlay | undefined) => {
-      if (!venue) return;
+      if (!venue || readOnly) return;
       try {
         const list = await saveVenue({ ...venue, plan: { ...venue.plan, underlay: next } });
         setVenues(list);
@@ -1333,6 +1361,9 @@ export function HallsScreen() {
   // itself if an undo takes the zone away.
   const editingZone = editingZoneId ? resolved.find((r) => r.zone.id === editingZoneId) : undefined;
   const isSelectMode = mode === "select";
+  // Selecting, dragging, resizing, placing — none of it for a viewer (lib/venues/access.ts): the plan
+  // is shown, panned and zoomed, and that is all.
+  const acts = isSelectMode && !readOnly;
   // Placing something: the next click is the canvas's, not a feature's (see NEVER).
   const placing = !!armedTool || !!calib;
   // The one freehand zone whose outline is open for editing: exactly one zone selected, and drawn
@@ -1472,6 +1503,9 @@ export function HallsScreen() {
             the two canvases to be one canvas (2026-10-16). */}
         <section className="relative flex min-h-96 flex-col overflow-hidden rounded-md bg-surface shadow-floating lg:h-full lg:min-h-0">
           <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+            {/* A viewer gets no tools: nothing here would do anything but look like it might. */}
+            {!readOnly && (
+              <>
             <div className="flex items-center gap-0.5">
               <IconButton label="בטל · Ctrl+Z" size="md" onClick={hist.undo} disabled={!hist.canUndo}>
                 <Undo2 className="h-4 w-4" strokeWidth={2} />
@@ -1628,6 +1662,8 @@ export function HallsScreen() {
                 הזזה
               </button>
             </div>
+              </>
+            )}
             {/* Which property, and whether it is written down — at the toolbar's end, where the
                 sketch keeps its own save state. There is no save button on this screen and never
                 was: a write that fails has to say so itself. */}
@@ -1637,7 +1673,12 @@ export function HallsScreen() {
                 <span className="truncate">{venue?.name ?? "מקום"}</span>
               </span>
               <div className="flex shrink-0 items-center gap-1.5 text-xs" aria-live="polite">
-                {saveState === "saving" ? (
+                {readOnly ? (
+                  <span className="inline-flex items-center gap-1.5 text-muted">
+                    <Eye className="h-3.5 w-3.5" strokeWidth={2} />
+                    צפייה בלבד
+                  </span>
+                ) : saveState === "saving" ? (
                   <span className="inline-flex items-center gap-1.5 text-muted">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
                     שומר…
@@ -1720,6 +1761,16 @@ export function HallsScreen() {
           {/* A zone the save refused to delete because events stand on it. Not an error — the rest
               of the plan was written — so it reads as a note on the canvas rather than turning the
               toolbar's indicator red. */}
+          {/* A property this business may look at but not draw on — everybody sees the same venue,
+              and the one who created it decides who edits (settings → שיתוף מתחם). */}
+          {readOnly && ready && (
+            <div className="pointer-events-none absolute right-4 top-4 z-10 max-w-md">
+              <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs font-medium leading-relaxed text-ink-soft shadow-floating">
+                צפייה בלבד
+                {venue?.ownerName ? ` — המתחם של ${venue.ownerName}` : ""}. רק מי שמנהל את המתחם יכול לאפשר עריכה.
+              </p>
+            </div>
+          )}
           {planNote && (
             <div className="pointer-events-none absolute right-4 top-4 z-10 max-w-md">
               <p className="rounded-md border border-border bg-warn-tint px-3 py-2 text-xs font-medium leading-relaxed text-warn-ink shadow-floating">
@@ -1740,13 +1791,13 @@ export function HallsScreen() {
                 above, and what a click means in the current mode. */}
           <PlanCanvas
             mode={isSelectMode ? "edit" : "draw"}
+            panTool={handTool || readOnly}
             outline={[]}
             edgeCurves={[]}
             selected={[]}
             onSelect={() => setSelection([])}
-            onAddVertex={onPick}
-            panTool={handTool}
-            contextMenuItems={isSelectMode ? featureMenuItems : undefined}
+            onAddVertex={readOnly ? IGNORE_EDIT : onPick}
+            contextMenuItems={acts ? featureMenuItems : undefined}
             onCloseOutline={() => {}}
             onCancelDraw={() => {
               setRunNodeId(null);
@@ -1755,12 +1806,12 @@ export function HallsScreen() {
             onMoveVertex={() => {}}
             onMoveWallHandle={() => {}}
             graph={structure}
-            onMoveGraphNode={isSelectMode ? (id, p) => moveWithGroup("node", id, p) : undefined}
+            onMoveGraphNode={acts ? (id, p) => moveWithGroup("node", id, p) : undefined}
             // Bowing a wall is a drag like any other: amended into one history entry, closed by
             // onCommit. A wall is bowed in place — no node moves — so the rooms either side of a
             // shared wall follow the curve together, exactly as they follow a dragged corner.
             onCurveGraphWall={
-              isSelectMode
+              acts
                 ? (wallId, which, p) =>
                     dragStructure((s) =>
                       which === "bulge" ? bulgeWall(s, wallId, p) : moveWallControlPoint(s, wallId, which, p),
@@ -1768,21 +1819,21 @@ export function HallsScreen() {
                 : undefined
             }
             graphSelection={graphSelection}
-            onSelectGraph={isSelectMode ? (ref, additive) => pick(ref, additive) : undefined}
-            onMarquee={isSelectMode ? marqueeSelect : undefined}
+            onSelectGraph={acts ? (ref, additive) => pick(ref, additive) : undefined}
+            onMarquee={acts ? marqueeSelect : undefined}
             onCommit={endGesture}
             drawFrom={region?.length ? region[region.length - 1] : runNode ? { x: runNode.x, y: runNode.y } : null}
             // The floating add-toolbar arms one of these instead of a right-click menu handing over
             // a point directly — so placement goes through the same "next empty-canvas click" path
             // every other click-to-place tool on this canvas already uses.
             cursor={armedTool ? "crosshair" : "default"}
-            onCanvasClick={isSelectMode ? onSelectModeCanvasClick : undefined}
+            onCanvasClick={acts ? onSelectModeCanvasClick : undefined}
             // The grid pattern's own line colour is tuned for the white bg-canvas every other host
             // still uses; against this screen's own light-purple canvas it was nearly invisible
             // (text-border and accent-tint sit a hair apart in value). accent-line is the same
             // family, several steps darker, chosen for contrast against this one background.
             onDropAt={
-              isSelectMode
+              acts
                 ? (e, p) => {
                     const tool = findAddTool(tools, e.dataTransfer.getData("text/plain"));
                     if (tool) placeTool(tool, p);
@@ -1792,7 +1843,7 @@ export function HallsScreen() {
             // The rotate knob, last of all: above the walls' hit lines and every length the canvas
             // writes, so none of them can cover it or take its press (the user, 2026-10-17).
             topmost={({ mm, clientToMm }) =>
-              isSelectMode && !placing ? (
+              acts && !placing ? (
                 <FeatureRotateHandles
                   structure={structure}
                   selectedIds={outlineSurface ? [] : featureSelection}
@@ -1823,7 +1874,7 @@ export function HallsScreen() {
                   <ZoneRegions
                     zones={resolved}
                     selectedIds={selectedZoneIds}
-                    onSelect={isSelectMode ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
+                    onSelect={acts ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
                     mm={mm}
                   />
                   {draftBoundary && draftBoundary.length >= 3 && (
@@ -1841,19 +1892,19 @@ export function HallsScreen() {
                   <StructureFeatures
                     structure={structure}
                     mm={mm}
-                    interactive={placing ? NEVER : undefined}
+                    interactive={placing || readOnly ? NEVER : undefined}
                     selectedIds={selection.filter((s) => s.kind === "feature").map((s) => s.id)}
-                    onSelect={isSelectMode ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
-                    onMove={isSelectMode ? (id, p, free) => moveWithGroup("feature", id, free ? p : snapFeatureAt(id, p, snap)) : undefined}
-                    onResize={isSelectMode && !outlineSurface ? resizeFeature : undefined}
+                    onSelect={acts ? (id, additive) => pick({ kind: "feature", id }, additive) : undefined}
+                    onMove={acts ? (id, p, free) => moveWithGroup("feature", id, free ? p : snapFeatureAt(id, p, snap)) : undefined}
+                    onResize={acts && !outlineSurface ? resizeFeature : undefined}
                     // The knob is NOT drawn here but in `topmost` below, above every wall and figure.
                     activeEdgeItem={activeEdge}
-                    onSelectEdgeItem={isSelectMode ? selectEdgeItem : undefined}
-                    onEdgeItemChange={isSelectMode ? dragEdgeItem : undefined}
+                    onSelectEdgeItem={acts ? selectEdgeItem : undefined}
+                    onEdgeItemChange={acts ? dragEdgeItem : undefined}
                     edgePick={edgePick}
-                    onPickEdge={isSelectMode ? pickEdge : undefined}
+                    onPickEdge={acts ? pickEdge : undefined}
                     wallDistance={wallDistance}
-                    onContextMenu={isSelectMode ? (id) => (contextFeatureRef.current = id) : undefined}
+                    onContextMenu={acts ? (id) => (contextFeatureRef.current = id) : undefined}
                     onCommit={endGesture}
                     clientToMm={clientToMm}
                   />
@@ -1948,8 +1999,8 @@ export function HallsScreen() {
                 <StructureDoors
                   structure={structure}
                   selectedIds={selection.filter((s) => s.kind === "door").map((s) => s.id)}
-                  onSelect={isSelectMode ? (id, additive) => pick({ kind: "door", id }, additive) : undefined}
-                  onMove={isSelectMode ? (id, distanceMm) => dragStructure((s) => updateEntrance(s, id, { distanceMm })) : undefined}
+                  onSelect={acts ? (id, additive) => pick({ kind: "door", id }, additive) : undefined}
+                  onMove={acts ? (id, distanceMm) => dragStructure((s) => updateEntrance(s, id, { distanceMm })) : undefined}
                   onCommit={endGesture}
                   clientToMm={clientToMm}
                   mm={mm}
@@ -2109,6 +2160,9 @@ export function HallsScreen() {
           {/* No card of its own any more: the panel IS the card (SidePanel's white surface), so the
               two sections sit straight on it. */}
           <div className="flex flex-col gap-3">
+          {/* The traced-over plan is the editor's tool — a viewer has nothing to upload or move. */}
+          {!readOnly && (
+          <>
           {/* Tracing panel (F-3.5 + F-3.4) — its own section, sibling to the zone-definition one
               below: a background plan you place/calibrate isn't part of "defining zones", so it
               keeps that section focused on just that instead of growing a second concern into it. */}
@@ -2329,6 +2383,8 @@ export function HallsScreen() {
             {underlayNote && <p className="mt-2 text-xs leading-relaxed text-accent-deep">{underlayNote}</p>}
           </div>
 
+          </>
+          )}
           {/* A hairline well like the section above, and no shadow of its own: it sits INSIDE a
               floating card now, and a second lift inside the first reads as a card stacked on a
               card. The zone rows in it are white (bg-canvas) against the well. */}
@@ -2407,13 +2463,15 @@ export function HallsScreen() {
                         {/* Always there, at muted weight, level with the name — never a hover reveal
                             (CLAUDE.md: card actions). The margin centres the 28px puck on the title
                             line's own centre (py-2.5 + half of text-sm's 20px line). */}
-                        <IconButton
-                          label={`עריכת האזור ${r.zone.name || "ללא שם"}`}
-                          onClick={() => editZone(r.zone.id)}
-                          className="m-1.5 shrink-0"
-                        >
-                          <Pencil className="h-4 w-4" strokeWidth={1.75} />
-                        </IconButton>
+                        {!readOnly && (
+                          <IconButton
+                            label={`עריכת האזור ${r.zone.name || "ללא שם"}`}
+                            onClick={() => editZone(r.zone.id)}
+                            className="m-1.5 shrink-0"
+                          >
+                            <Pencil className="h-4 w-4" strokeWidth={1.75} />
+                          </IconButton>
+                        )}
                       </div>
                       {r.detached && (
                         <p className="px-3 pb-2.5 text-xs text-alert">{detachedNote(r.zone)}</p>
@@ -2425,7 +2483,7 @@ export function HallsScreen() {
                 {/* The dashed "draw a new zone" shortcut the reference card carries at the bottom
                     of its list — jumps straight to the region tool rather than just switching
                     modes, since that's the tool a zone with no walls to detect actually needs. */}
-                <button
+                {!readOnly && <button
                   type="button"
                   onClick={() => {
                     setMode("zones");
@@ -2438,7 +2496,7 @@ export function HallsScreen() {
                 >
                   <Plus className="h-4 w-4 shrink-0" strokeWidth={2.25} />
                   שרטוט אזור חדש
-                </button>
+                </button>}
 
                 {zones.length === 0 && !draftZone && (
                   <p className="rounded-md border border-dashed border-accent-line bg-accent-tint p-4 text-sm text-accent-deep">

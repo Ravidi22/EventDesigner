@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { CalendarSearch, Camera, Check, ChevronDown, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { CalendarSearch, Camera, Check, ChevronDown, Loader2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { Venue } from "@/lib/venues/storage";
 import type { VenueDeleteRefusal } from "@/lib/venues/use-venues";
+import type { VenueDirectoryEntry } from "@/lib/venues/types";
+import { fetchVenueDirectory } from "@/lib/venues/actions";
 import { uploadFile } from "@/lib/files/upload";
 import { ConfirmDialog } from "./confirm-dialog";
 
@@ -56,6 +58,7 @@ export function VenueSwitcher({
   onRename,
   onSetLogo,
   onDelete,
+  onFollow,
 }: {
   venues: Venue[];
   /** Null on a studio with no venues yet — the switcher shows its own empty state. */
@@ -68,8 +71,14 @@ export function VenueSwitcher({
   onSetLogo: (id: string, logoUrl: string | null) => Promise<void>;
   /** Resolves to the refusal (e.g. "still has events on it", and how many) if the delete was refused. */
   onDelete: (id: string) => Promise<VenueDeleteRefusal | null>;
+  /** Put an existing property — somebody else's — on this business's list and open it. */
+  onFollow: (id: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  // The platform's other venues, read when "מתחם קיים" is pressed — everybody sees the same venue
+  // (lib/venues/access.ts), so a designer picks the hall its owner drew instead of tracing it.
+  const [directory, setDirectory] = useState<VenueDirectoryEntry[] | null>(null);
+  const [directoryQuery, setDirectoryQuery] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const draftRef = useRef<{ id: string; name: string; original: string } | null>(null);
@@ -309,8 +318,18 @@ export function VenueSwitcher({
                 }
               >
                 <VenueAvatar venue={v} />
-                <span className="flex-1 truncate">{v.name}</span>
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block truncate">{v.name}</span>
+                  {/* Somebody else's property: whose, and that it is read-only unless they let you edit. */}
+                  {v.ownerName && (
+                    <span className="block truncate text-[11px] font-normal text-muted">
+                      {v.ownerName}
+                      {v.access === "viewer" ? " · צפייה" : ""}
+                    </span>
+                  )}
+                </span>
                 {selected && <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={2.5} />}
+                {(v.access ?? "manager") === "manager" && (
                 <button
                   type="button"
                   aria-label={`שינוי שם ${v.name}`}
@@ -322,6 +341,8 @@ export function VenueSwitcher({
                 >
                   <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
+                )}
+                {(v.owned ?? true) && (v.access ?? "manager") === "manager" && (
                 <button
                   type="button"
                   aria-label={`מחיקת ${v.name}`}
@@ -334,6 +355,7 @@ export function VenueSwitcher({
                 >
                   <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
+                )}
               </div>
             );
           })}
@@ -375,6 +397,56 @@ export function VenueSwitcher({
             <Plus className="h-4 w-4 shrink-0" strokeWidth={2} />
             הוספת אולם
           </button>
+          {directory === null ? (
+            <button
+              type="button"
+              onClick={() => void fetchVenueDirectory().then(setDirectory)}
+              className="flex w-full items-center gap-2.5 rounded-sm px-3 py-2 text-sm text-accent transition-colors hover:bg-accent-tint"
+            >
+              <Search className="h-4 w-4 shrink-0" strokeWidth={2} />
+              מתחם קיים מהמאגר
+            </button>
+          ) : (
+            <div className="px-1 pb-1">
+              <input
+                autoFocus
+                value={directoryQuery}
+                onChange={(e) => setDirectoryQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape") return;
+                  e.stopPropagation();
+                  setDirectory(null);
+                }}
+                placeholder="חיפוש מתחם…"
+                aria-label="חיפוש מתחם קיים"
+                className="mb-1 w-full rounded-sm border border-border bg-canvas px-2 py-1.5 text-sm text-ink outline-none focus:border-accent-line"
+              />
+              <div className="max-h-56 overflow-y-auto">
+                {directory
+                  .filter((d) => !directoryQuery.trim() || d.name.includes(directoryQuery.trim()) || d.ownerName.includes(directoryQuery.trim()))
+                  .map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => {
+                        void onFollow(d.id).then(() => {
+                          setDirectory(null);
+                          closeMenu();
+                        });
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-start text-sm text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover"
+                    >
+                      <VenueAvatar venue={{ id: d.id, name: d.name, logoUrl: d.logoUrl, plan: { mmPerUnit: 1 } }} />
+                      <span className="min-w-0 flex-1 leading-tight">
+                        <span className="block truncate">{d.name}</span>
+                        {d.ownerName && <span className="block truncate text-[11px] text-muted">{d.ownerName}</span>}
+                      </span>
+                    </button>
+                  ))}
+                {directory.length === 0 && <p className="px-2 py-2 text-xs text-muted">אין מתחמים נוספים במאגר.</p>}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

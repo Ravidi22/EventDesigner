@@ -85,7 +85,9 @@ async function assertLinks(
     const [row] = await database
       .select({ id: venues.id })
       .from(venues)
-      .where(and(eq(venues.id, venueId), eq(venues.organizationId, organizationId)))
+      // Any property: everybody sees the same venue, so a meeting may concern one this studio
+      // does not own (lib/venues/access.ts resolveVenueRole).
+      .where(eq(venues.id, venueId))
       .limit(1);
     if (!row) throw new Error("venue not found");
   }

@@ -46,19 +46,18 @@ export async function designerDocument(organizationId: string, eventId: string) 
   return row ?? { content: emptyDocument(), version: 0, updatedAt: null };
 }
 
-/** The event's venue as a plan: walls, doors, features, zones. Only ever the event's own venue, in
- *  the event's own studio — the join that got us here is what entitles the client to it. */
+/** The event's venue as a plan: walls, doors, features, zones. Only ever the event's own venue — the
+ *  join that got us here is what entitles the reader to it. Read by venue alone, not by the studio:
+ *  a property is one shared plan whoever owns it (lib/venues/access.ts resolveVenueRole), and an
+ *  event may stand on a venue another business drew. */
 export async function eventGeometry(organizationId: string, venueId: string | null): Promise<VenueGeometry> {
+  void organizationId;
   if (!venueId) return { structure: emptyStructure(), zones: [], mmPerUnit: 1, access: "none" };
   const database = db();
   const [[venueRow], [structureRow], zoneRows] = await Promise.all([
-    database.select({ plan: venues.plan }).from(venues).where(and(eq(venues.id, venueId), eq(venues.organizationId, organizationId))).limit(1),
-    database
-      .select({ structure: venueStructures.structure })
-      .from(venueStructures)
-      .where(and(eq(venueStructures.venueId, venueId), eq(venueStructures.organizationId, organizationId)))
-      .limit(1),
-    database.select().from(zones).where(and(eq(zones.venueId, venueId), eq(zones.organizationId, organizationId))).orderBy(asc(zones.createdAt)),
+    database.select({ plan: venues.plan }).from(venues).where(eq(venues.id, venueId)).limit(1),
+    database.select({ structure: venueStructures.structure }).from(venueStructures).where(eq(venueStructures.venueId, venueId)).limit(1),
+    database.select().from(zones).where(eq(zones.venueId, venueId)).orderBy(asc(zones.createdAt)),
   ]);
   return {
     structure: (structureRow?.structure as VenueStructure) ?? emptyStructure(),

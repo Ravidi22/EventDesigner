@@ -5,35 +5,36 @@
 // with currentActor() and scopes every statement by the organisation, and nothing trusts an id it
 // was handed.
 //
-// WHAT CHANGED HERE: the organisation is no longer the whole answer. A venue is the one thing in
-// this app that differs BETWEEN members of one studio — the owner reaches every property, a
-// designer reaches the ones they drew or were given (lib/team/types.ts, ROLE_CAPABILITIES.venues) —
-// so every function below asks requireVenueAccess() as well. That policy existed as a shape in
-// lib/venues/access.ts for a while with nothing behind it; this file is the behind.
+// WHAT CHANGED HERE (2026-10-30, the venue-owner change): A VENUE IS ONE SHARED PROPERTY. Everybody
+// sees the same venue — any signed-in business may open any property's plan — and the one who
+// created it decides who may EDIT it, by grant (lib/venues/access.ts `resolveVenueRole`). So the
+// organisation is no longer a filter on reading a plan: the wall graph and its zones are read by
+// venue id, and written under the OWNER's organisation id whoever holds the pen. Every function
+// below still asks requireVenueAccess(), which now answers "viewer" for anyone and more for a grant.
 //
 // WHAT IS *NOT* HERE: which venue you are currently looking at. That is a per-device UI preference,
 // not studio data — it belongs in this browser, changes when you click the switcher, and would be
 // actively wrong to share between a designer's laptop and their tablet mid-setup. It stays in
 // lib/venues/storage.ts.
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, type Actor } from "@/lib/db/org";
 import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
-import { users, venues, venueGrants, zones, venueStructures, events, eventZones } from "@/lib/db/schema";
+import { organizations, users, venues, venueGrants, zones, venueStructures, events, eventZones } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import {
   atLeast,
   isGrantKind,
   isVenueRole,
+  resolveVenueRole,
   type GrantKind,
   type ShareResult,
   type VenueGrant,
   type VenueRole,
 } from "./access";
-import { grantedVenueIds } from "./granted";
 import { emptyStructure, type VenueStructure } from "./structure";
-import { emptyPlan, type Venue, type VenueGeometry } from "./types";
+import { emptyPlan, type Venue, type VenueDirectoryEntry, type VenueGeometry } from "./types";
 import type { Zone } from "./zone";
 import { toGrant, toVenue, toVenueRow, toZone, toZoneRow, toStructureRow } from "./db-mapping";
 
@@ -59,57 +60,78 @@ function today(): string {
 // ── Access ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * What this caller may do to this property, or null for "nothing, and do not say why".
+ * What this caller may do to this property, and whose it is — or null when there is no such venue.
  *
- * The org check comes first and applies to everyone including the owner: a grant is only ever
- * consulted for a property this studio actually holds, so a stolen venue id from another tenant
- * fails on the same line whatever role the caller has.
+ * Everybody sees every venue (resolveVenueRole's floor is "viewer"); editing and managing come from
+ * the owner's studio role, a member grant inside the owning studio, or a guest grant handed to the
+ * caller's organisation by a manager. `ownerOrgId` is what every WRITE below scopes by: a guest
+ * editor's save lands under the property's own organisation, never under the guest's.
  */
-async function venueRoleFor(actor: Actor, venueId: string): Promise<VenueRole | null> {
+async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: VenueRole; ownerOrgId: string } | null> {
   const database = db();
 
   const [venue] = await database
-    .select({ id: venues.id })
+    .select({ id: venues.id, organizationId: venues.organizationId })
     .from(venues)
-    .where(and(eq(venues.id, venueId), eq(venues.organizationId, actor.organizationId)))
+    .where(eq(venues.id, venueId))
     .limit(1);
   if (!venue) return null;
+  const ownsVenue = venue.organizationId === actor.organizationId;
 
   // The owner's access comes from their role, not from a row. Giving them grant rows too would put
   // them in the share list of every property they own, where "revoke" would be a button that does
   // nothing.
-  if (reachesAllVenues(actor.role)) return "manager";
-  if (!actor.userId) return null;
-
-  const [grant] = await database
-    .select({ role: venueGrants.role })
-    .from(venueGrants)
-    .where(
-      and(
-        eq(venueGrants.venueId, venueId),
-        eq(venueGrants.granteeUserId, actor.userId),
-        eq(venueGrants.kind, "member"),
-        eq(venueGrants.state, "active"),
-      ),
-    )
-    .limit(1);
-  return (grant?.role as VenueRole | undefined) ?? null;
+  const reachesAll = ownsVenue && reachesAllVenues(actor.role);
+  let memberGrant: VenueRole | null = null;
+  let orgGrant: VenueRole | null = null;
+  if (ownsVenue && !reachesAll && actor.userId) {
+    const [grant] = await database
+      .select({ role: venueGrants.role })
+      .from(venueGrants)
+      .where(
+        and(
+          eq(venueGrants.venueId, venueId),
+          eq(venueGrants.granteeUserId, actor.userId),
+          eq(venueGrants.kind, "member"),
+          eq(venueGrants.state, "active"),
+        ),
+      )
+      .limit(1);
+    memberGrant = (grant?.role as VenueRole | undefined) ?? null;
+  }
+  if (!ownsVenue) {
+    const rows = await database
+      .select({ role: venueGrants.role })
+      .from(venueGrants)
+      .where(
+        and(
+          eq(venueGrants.venueId, venueId),
+          eq(venueGrants.granteeOrgId, actor.organizationId),
+          eq(venueGrants.kind, "guest"),
+          eq(venueGrants.state, "active"),
+        ),
+      );
+    for (const r of rows) {
+      const role = r.role as VenueRole;
+      if (!orgGrant || atLeast(role, orgGrant)) orgGrant = role;
+    }
+  }
+  return { role: resolveVenueRole({ ownsVenue, reachesAll, memberGrant, orgGrant }), ownerOrgId: venue.organizationId };
 }
 
 /**
- * Gate for everything below. Throws ONE message whether the property belongs to another studio,
- * does not exist, or simply was never shared with this person — a different message for each is a
- * way to ask the server which venue ids are real.
+ * Gate for everything below. Throws ONE message whether the property does not exist or this person
+ * may not do this to it.
  */
 async function requireVenueAccess(
   venueId: string,
   min: VenueRole,
-): Promise<{ actor: Actor; role: VenueRole }> {
+): Promise<{ actor: Actor; role: VenueRole; ownerOrgId: string }> {
   assertId(venueId, "venueId");
   const actor = await currentActor();
-  const role = await venueRoleFor(actor, venueId);
-  if (!role || !atLeast(role, min)) throw new Error("אין לך גישה למתחם הזה");
-  return { actor, role };
+  const found = await venueRoleFor(actor, venueId);
+  if (!found || !atLeast(found.role, min)) throw new Error("אין לך גישה למתחם הזה");
+  return { actor, role: found.role, ownerOrgId: found.ownerOrgId };
 }
 
 // `grantedVenueIds` moved to ./granted.ts — procurement needs the same answer, and a "use server"
@@ -118,28 +140,91 @@ async function requireVenueAccess(
 
 // ── Venues ─────────────────────────────────────────────────────────────────────────────────────
 
-/** The venues this person may open, oldest first — the switcher's order, stable across reloads.
+/** The venues on this business's own list, oldest first — the switcher's order, stable across
+ *  reloads: the properties it owns, the ones another business granted it (a guest grant to its
+ *  organisation — a viewer one is how "add an existing venue" keeps a property on the list), and any
+ *  its events stand on. Each carries the caller's role on it, so a screen knows whether it may edit,
+ *  and the owner's name for a property that is somebody else's.
  *
- *  For the owner that is every property the studio holds. For a designer or the crew it is the ones
- *  they were granted, which is what makes "every member can have different venues" true rather than
- *  merely described. */
+ *  Every OTHER venue is still open to read — see fetchVenueDirectory. */
 export async function fetchVenues(): Promise<Venue[]> {
   const actor = await currentActor();
-  const allowed = await grantedVenueIds(actor);
-  // Nobody's grants, nobody's venues. `inArray` with an empty list is a SQL error in some drivers
-  // and an always-false condition in others; returning early is neither.
-  if (allowed?.length === 0) return [];
+  const database = db();
+  const [granted, used] = await Promise.all([
+    database
+      .select({ venueId: venueGrants.venueId })
+      .from(venueGrants)
+      .where(and(eq(venueGrants.granteeOrgId, actor.organizationId), eq(venueGrants.state, "active"))),
+    database
+      .selectDistinct({ venueId: events.venueId })
+      .from(events)
+      .where(and(eq(events.organizationId, actor.organizationId), isNotNull(events.venueId))),
+  ]);
+  const others = [...new Set([...granted.map((g) => g.venueId), ...used.map((u) => u.venueId as string)])];
 
-  const rows = await db()
-    .select()
+  const rows = await database
+    .select({ venue: venues, ownerName: organizations.name })
     .from(venues)
+    .leftJoin(organizations, eq(organizations.id, venues.organizationId))
     .where(
-      allowed
-        ? and(eq(venues.organizationId, actor.organizationId), inArray(venues.id, allowed))
+      others.length
+        ? or(eq(venues.organizationId, actor.organizationId), inArray(venues.id, others))
         : eq(venues.organizationId, actor.organizationId),
     )
     .orderBy(asc(venues.createdAt));
-  return rows.map(toVenue);
+
+  return Promise.all(
+    rows.map(async ({ venue, ownerName }) => {
+      const found = await venueRoleFor(actor, venue.id);
+      const owned = venue.organizationId === actor.organizationId;
+      return { ...toVenue(venue), access: found?.role ?? "viewer", owned, ownerName: owned ? undefined : (ownerName ?? undefined) };
+    }),
+  );
+}
+
+/** Every property on the platform that is NOT already on this business's list — "everybody sees
+ *  the same venue": a designer whose client booked אמרה picks the plan its owner drew instead of
+ *  tracing it again. Names and owners only; the plan itself is read once picked. */
+export async function fetchVenueDirectory(): Promise<VenueDirectoryEntry[]> {
+  const mine = new Set((await fetchVenues()).map((v) => v.id));
+  const rows = await db()
+    .select({ id: venues.id, name: venues.name, logoUrl: venues.logoUrl, ownerName: organizations.name })
+    .from(venues)
+    .leftJoin(organizations, eq(organizations.id, venues.organizationId))
+    .orderBy(asc(venues.name));
+  return rows
+    .filter((r) => !mine.has(r.id))
+    .map((r) => ({ id: r.id, name: r.name, logoUrl: r.logoUrl ?? undefined, ownerName: r.ownerName ?? "" }));
+}
+
+/** Put another business's property on this one's list — a `viewer` guest grant to this
+ *  organisation, active at once (viewing is everybody's anyway; the row is the list entry). A
+ *  manager there may raise it to editor later. Idempotent: a second follow meets the
+ *  (venue, email) key and does nothing. */
+export async function followVenue(venueId: string): Promise<{ venues: Venue[]; id: string }> {
+  const { actor, ownerOrgId } = await requireVenueAccess(venueId, "viewer");
+  if (ownerOrgId !== actor.organizationId && actor.userId) {
+    const [me] = await db().select({ email: users.email, name: users.name }).from(users).where(eq(users.id, actor.userId)).limit(1);
+    if (me) {
+      await db()
+        .insert(venueGrants)
+        .values({
+          venueId,
+          grantorOrgId: ownerOrgId,
+          granteeOrgId: actor.organizationId,
+          granteeUserId: actor.userId,
+          granteeEmail: me.email.toLowerCase(),
+          granteeName: me.name,
+          kind: "guest",
+          role: "viewer",
+          state: "active",
+          invitedAt: today(),
+        })
+        .onConflictDoNothing();
+    }
+  }
+  revalidateShell();
+  return { venues: await fetchVenues(), id: venueId };
 }
 
 /** The plan editor's whole working set for one property: the wall graph and every zone on it.
@@ -149,9 +234,9 @@ export async function fetchVenues(): Promise<Venue[]> {
  *  apart invites a moment where one has loaded and the other has not. */
 export async function fetchVenuePlan(
   venueId: string,
-): Promise<{ structure: VenueStructure; zones: Zone[] }> {
-  const { actor } = await requireVenueAccess(venueId, "viewer");
-  return venuePlanFor(actor.organizationId, venueId);
+): Promise<{ structure: VenueStructure; zones: Zone[]; role: VenueRole }> {
+  const { role } = await requireVenueAccess(venueId, "viewer");
+  return { ...(await venuePlanFor(venueId)), role };
 }
 
 /**
@@ -168,22 +253,12 @@ export async function fetchVenuePlan(
  *
  * The two reads are independent, so they go out together rather than one after the other.
  */
-async function venuePlanFor(
-  organizationId: string,
-  venueId: string,
-): Promise<{ structure: VenueStructure; zones: Zone[] }> {
+async function venuePlanFor(venueId: string): Promise<{ structure: VenueStructure; zones: Zone[] }> {
   const database = db();
+  // By venue alone: the plan is the property's, one copy, whoever reads it (see the head of file).
   const [[structureRow], zoneRows] = await Promise.all([
-    database
-      .select()
-      .from(venueStructures)
-      .where(and(eq(venueStructures.venueId, venueId), eq(venueStructures.organizationId, organizationId)))
-      .limit(1),
-    database
-      .select()
-      .from(zones)
-      .where(and(eq(zones.venueId, venueId), eq(zones.organizationId, organizationId)))
-      .orderBy(asc(zones.createdAt)),
+    database.select().from(venueStructures).where(eq(venueStructures.venueId, venueId)).limit(1),
+    database.select().from(zones).where(eq(zones.venueId, venueId)).orderBy(asc(zones.createdAt)),
   ]);
 
   return {
@@ -214,19 +289,15 @@ export async function fetchVenueGeometry(venueId: string | undefined): Promise<V
   if (!venueId) return { ...empty, access: "none" };
   assertId(venueId, "venueId");
   const actor = await currentActor();
-  const role = await venueRoleFor(actor, venueId);
-  if (!role) return { ...empty, access: "denied" };
+  const found = await venueRoleFor(actor, venueId);
+  if (!found) return { ...empty, access: "denied" };
 
   // venuePlanFor, not fetchVenuePlan: the access check is the two queries directly above, and going
   // back through the public entry point would run venueRoleFor a second time for the same answer.
   // The scale lives on the venue row and the geometry in its own tables, so both go out at once.
   const [[venueRow], { structure, zones: zoneList }] = await Promise.all([
-    db()
-      .select({ plan: venues.plan })
-      .from(venues)
-      .where(and(eq(venues.id, venueId), eq(venues.organizationId, actor.organizationId)))
-      .limit(1),
-    venuePlanFor(actor.organizationId, venueId),
+    db().select({ plan: venues.plan }).from(venues).where(eq(venues.id, venueId)).limit(1),
+    venuePlanFor(venueId),
   ]);
 
   return {
@@ -284,14 +355,18 @@ export async function saveVenuePlan(
   structure: VenueStructure,
   zoneList: Zone[],
 ): Promise<{ blocked: BlockedZone[] }> {
-  const { actor } = await requireVenueAccess(venueId, "editor");
+  const { actor, ownerOrgId } = await requireVenueAccess(venueId, "editor");
   if (!structure || typeof structure !== "object") throw new Error("structure must be an object");
   if (!Array.isArray(zoneList)) throw new Error("zones must be an array");
   for (const z of zoneList) {
     assertId(z?.id, "zone.id");
     if (z.venueId !== venueId) throw new Error("zone belongs to another venue");
   }
-  const organizationId = actor.organizationId;
+  // The rows are the PROPERTY's, written under its owner's organisation whoever holds the pen (a
+  // guest editor's save must not move the plan into the guest's tenant). The caller's own
+  // organisation is only for the event names a refusal may say out loud.
+  const organizationId = ownerOrgId;
+  const callerOrgId = actor.organizationId;
 
   return db().transaction(async (tx) => {
     const row = toStructureRow(venueId, structure, organizationId);
@@ -333,7 +408,7 @@ export async function saveVenuePlan(
       const booked = await tx
         .select({ zoneId: eventZones.zoneId, name: events.clientName, archived: events.archived })
         .from(eventZones)
-        .leftJoin(events, and(eq(events.id, eventZones.eventId), eq(events.organizationId, organizationId)))
+        .leftJoin(events, and(eq(events.id, eventZones.eventId), eq(events.organizationId, callerOrgId)))
         .where(inArray(eventZones.zoneId, gone.map((z) => z.id)));
       const bookedIds = new Set(booked.map((b) => b.zoneId));
 
@@ -436,11 +511,11 @@ export async function createVenue(): Promise<{ venues: Venue[]; id: string }> {
 
 export async function renameVenue(id: string, name: string): Promise<Venue[]> {
   assertName(name, "name");
-  const { actor } = await requireVenueAccess(id, "manager");
+  const { ownerOrgId } = await requireVenueAccess(id, "manager");
   await db()
     .update(venues)
     .set({ name: name.trim(), updatedAt: new Date() })
-    .where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
+    .where(and(eq(venues.id, id), eq(venues.organizationId, ownerOrgId)));
   revalidateShell();
   return fetchVenues();
 }
@@ -449,8 +524,8 @@ export async function renameVenue(id: string, name: string): Promise<Venue[]> {
  *  Same rules as the letterhead logo (lib/settings/actions.ts): only a file THIS studio uploaded is
  *  kept, and the file it replaces is deleted after the write, read before it. */
 export async function setVenueLogo(id: string, logoUrl: string | null): Promise<Venue[]> {
-  const { actor } = await requireVenueAccess(id, "manager");
-  const scope = and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId));
+  const { actor, ownerOrgId } = await requireVenueAccess(id, "manager");
+  const scope = and(eq(venues.id, id), eq(venues.organizationId, ownerOrgId));
   const [before] = await db().select({ logoUrl: venues.logoUrl }).from(venues).where(scope).limit(1);
   const next = ownedFileUrl(logoUrl, actor.organizationId);
   await db().update(venues).set({ logoUrl: next, updatedAt: new Date() }).where(scope);
@@ -471,13 +546,17 @@ export async function setVenueLogo(id: string, logoUrl: string | null): Promise<
  *  exactly those events (/production?venue=…). A refusal that names no way out is a dead end, and an
  *  undated event on the venue is otherwise easy to lose track of. */
 export async function deleteVenue(id: string): Promise<Venue[] | { error: string; eventCount: number }> {
-  const { actor } = await requireVenueAccess(id, "manager");
+  const { actor, ownerOrgId } = await requireVenueAccess(id, "manager");
+  // Only the business that owns a property may delete it — a guest manager runs it; it is not theirs
+  // to take away from everyone else standing in it.
+  if (ownerOrgId !== actor.organizationId) throw new Error("רק בעלי המתחם יכולים למחוק אותו");
   const database = db();
 
+  // Every business's events, not only ours: events.venue_id is RESTRICT whoever's event it is.
   const [booked] = await database
     .select({ count: sql<number>`count(*)::int` })
     .from(events)
-    .where(and(eq(events.venueId, id), eq(events.organizationId, actor.organizationId)));
+    .where(eq(events.venueId, id));
   const eventCount = booked?.count ?? 0;
   if (eventCount > 0) {
     return {
@@ -503,14 +582,16 @@ export async function deleteVenue(id: string): Promise<Venue[] | { error: string
 export async function saveVenue(venue: Venue): Promise<Venue[]> {
   if (!venue || typeof venue !== "object") throw new Error("venue must be an object");
   assertName(venue.name, "venue.name");
-  const { actor } = await requireVenueAccess(venue.id, "manager");
-  const row = toVenueRow(venue, actor.organizationId);
+  // `editor`, not `manager`: the plan's calibration and underlay are part of drawing it. The name and
+  // logo ride along unchanged from what the caller read.
+  const { ownerOrgId } = await requireVenueAccess(venue.id, "editor");
+  const row = toVenueRow(venue, ownerOrgId);
   await db()
     .insert(venues)
     .values(row)
     .onConflictDoUpdate({
       target: venues.id,
-      setWhere: eq(venues.organizationId, actor.organizationId),
+      setWhere: eq(venues.organizationId, ownerOrgId),
       set: { name: row.name, logoUrl: row.logoUrl, plan: row.plan, updatedAt: new Date() },
     });
   revalidateShell();
@@ -587,17 +668,36 @@ export async function shareVenue(input: {
     }
   }
 
+  // A guest who already has an account is granted through their ORGANISATION, at once — the venue's
+  // owner, or another designer's studio. One who has none yet stays pending and is adopted the day
+  // that address opens a business (adoptVenueGrants, lib/venues/granted.ts, from /welcome).
+  let granteeOrgId: string | null = input.kind === "member" ? actor.organizationId : null;
+  if (input.kind === "guest") {
+    const [other] = await db()
+      .select({ id: users.id, organizationId: users.organizationId })
+      .from(users)
+      .where(and(eq(users.email, address), eq(users.kind, "studio")))
+      .limit(1);
+    if (other?.organizationId === actor.organizationId) {
+      return { error: "האדם הזה חבר בסטודיו — יש לשתף אותו כחבר צוות", grants: await grantsOf(venueId) };
+    }
+    if (other?.organizationId) {
+      granteeOrgId = other.organizationId;
+      granteeUserId = other.id;
+    }
+  }
+
   try {
     await db().insert(venueGrants).values({
       venueId,
       grantorOrgId: actor.organizationId,
-      granteeOrgId: input.kind === "member" ? actor.organizationId : null,
+      granteeOrgId,
       granteeUserId,
       granteeEmail: address,
       granteeName: String(input?.name ?? "").trim() || null,
       kind: input.kind,
       role: input.role,
-      state: input.kind === "member" ? "active" : "pending",
+      state: granteeOrgId ? "active" : "pending",
       invitedAt: today(),
     });
   } catch {
