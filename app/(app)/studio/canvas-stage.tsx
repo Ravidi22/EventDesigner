@@ -42,7 +42,7 @@ import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type Canva
 import { IconButton } from "@/components/icon-button";
 import { Grid2x2Plus, ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LaidDeck, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
-import { constrainNext, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, setSideLength, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
+import { constrainNext, cornerAngle, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, setCornerAngle, setSideLength, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
 import {
   benchInRoom,
   edgeGaps,
@@ -2237,6 +2237,7 @@ export function CanvasStage({
             <OutlineHandles
               outline={shapingStage.stage.outline}
               refDeg={0}
+              front={shapingStage.stage.front}
               toRoom={(q) => toRoom(shapingStage, q)}
               fromRoom={(q) => toStageFrame(shapingStage, q)}
               ctx={ctx}
@@ -2715,6 +2716,7 @@ export function CanvasStage({
                     <OutlineHandles
                       outline={poly}
                       refDeg={refDeg}
+                      front={areaPreview.front}
                       toRoom={same}
                       fromRoom={same}
                       ctx={ctx}
@@ -4592,6 +4594,94 @@ function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | nul
  *  as every drag on this canvas does, so a click on a grip or on the body only selects and opens no
  *  undo entry. A round stage's closed rim has no corners: an item on it slides round, across the
  *  seam at edge 0, and its `t` wraps (itemSpan already reads it so). */
+/** A figure on the plan that is a button — a side's length, a corner's angle — drawn in screen pixels
+ *  at `at` (room mm). `accent` is the length (the figure the designer reads first), `quiet` the angle. */
+function FigurePill({ at, px, label, tone, aria, title, onOpen }: { at: Point; px: number; label: string; tone: "accent" | "quiet"; aria: string; title: string; onOpen: () => void }) {
+  const ink = tone === "accent" ? "var(--color-accent)" : "var(--color-ink)";
+  const size = tone === "accent" ? 12 : 11;
+  const w = label.length * size * 0.6 + 18;
+  return (
+    <g
+      transform={`translate(${at.x} ${at.y}) scale(${px})`}
+      role="button"
+      tabIndex={0}
+      aria-label={aria}
+      className="cursor-text focus:outline-none [&:focus-visible>rect]:stroke-[2.5]"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          onOpen();
+        }
+      }}
+    >
+      <title>{title}</title>
+      <rect x={-w / 2} y={-10.5} width={w} height={21} rx={10.5} fill="var(--color-surface)" stroke={tone === "accent" ? "var(--color-accent)" : "var(--color-border)"} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      <text textAnchor="middle" dominantBaseline="central" direction="ltr" fill={ink} className="nums" style={{ fontSize: size, fontWeight: 600 }}>
+        {label}
+      </text>
+    </g>
+  );
+}
+
+/** The box a figure is typed into, in place of its pill. Enter takes it, Tab takes it and moves on
+ *  (`onCommit(viaTab, backward)`), Escape closes; a refused figure is marked and the box stays. */
+function TypedBox({ at, px, unit, label, text, refused, onText, onCommit, onClose, onBlur }: {
+  at: Point;
+  px: number;
+  unit: string;
+  label: string;
+  text: string;
+  refused?: boolean;
+  onText: (text: string) => void;
+  onCommit: (viaTab: boolean, backward: boolean) => void;
+  onClose: () => void;
+  onBlur: () => void;
+}) {
+  return (
+    <g transform={`translate(${at.x} ${at.y}) scale(${px})`}>
+      <foreignObject x={-58} y={-15} width={116} height={30}>
+        <div
+          dir="ltr"
+          className={`control-group flex h-[30px] items-center gap-1 rounded-full border bg-surface px-2.5 shadow-floating ${refused ? "border-alert" : "border-accent"}`}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <input
+            autoFocus
+            inputMode="decimal"
+            aria-label={label}
+            aria-invalid={refused || undefined}
+            value={text}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (/^\d*[.,]?\d*$/.test(v)) onText(v);
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onClose();
+              } else if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                onCommit(e.key === "Tab", e.shiftKey);
+              }
+            }}
+            onBlur={onBlur}
+            className={`nums w-14 bg-transparent text-center text-[13px] font-semibold ${refused ? "text-alert-ink" : "text-ink"}`}
+          />
+          <span className="text-[11px] text-muted">{unit}</span>
+        </div>
+      </foreignObject>
+    </g>
+  );
+}
+
 /** The corners and sides of an outline, as grips — what editing a stage's SHAPE is. A corner drags
  *  where it is put and nothing else moves (Shift makes the square sides meeting it follow, so they
  *  stay square); a side pushes straight out or in. Lengths are pulled to what the decks build (`snap`, a magnet a few pixels wide) and are
@@ -4607,10 +4697,18 @@ function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | nul
  *  Every side also wears its LENGTH, outside it, and the length is a button: click it (or Enter on
  *  it), type centimetres, Enter — the side is that long (setSideLength). Tab takes the typed length
  *  and opens the next side, so a whole outline can be typed round. The end that stays is the one
- *  whose side beyond stands against a wall (`wallDistance`), else the side's first corner. */
+ *  whose side beyond stands against a wall (`wallDistance`), else the side's first corner.
+ *
+ *  And every corner wears its ANGLE — the angle inside the outline, 90° at a square corner — which
+ *  is a button the same way (2026-10-30, the user: "define the angles of the sides"): type degrees,
+ *  Enter, and one of the two sides meeting the corner turns about it to make that angle, its length
+ *  kept (setCornerAngle). The side that turns is the one leaving the corner, unless that side is the
+ *  `front` or stands against a wall and the one arriving does not — so a trapezoid is typed from its
+ *  front corners without the front moving. Tab goes round the corners. */
 function OutlineHandles({
   outline,
   refDeg,
+  front,
   toRoom: toRoomOf,
   fromRoom,
   ctx,
@@ -4624,11 +4722,14 @@ function OutlineHandles({
 }: {
   outline: Point[];
   refDeg: number;
+  /** The side that is the front — the one a typed corner angle never turns when it can turn the other. */
+  front?: number;
   toRoom: (q: Point) => Point;
   fromRoom: (q: Point) => Point;
   ctx: CanvasLayerContext;
   snap?: (mm: number, magnetMm: number) => number;
-  /** How far a point in the ROOM is from the nearest wall — which end a typed length keeps. */
+  /** How far a point in the ROOM is from the nearest wall — which end a typed length keeps, and
+   *  which side a typed angle turns. */
   wallDistance?: (q: Point) => number;
   onChange: (outline: Point[]) => void;
   onSplit?: (side: number) => void;
@@ -4639,7 +4740,8 @@ function OutlineHandles({
   onEnd?: () => void;
 }) {
   const start = useRef<{ outline: Point[]; fromRoom: (q: Point) => Point } | null>(null);
-  const [typing, setTyping] = useState<{ side: number; text: string; refused?: boolean } | null>(null);
+  /** The one box open for typing: a side's length (cm) or a corner's angle (degrees). */
+  const [typing, setTyping] = useState<{ kind: "length" | "angle"; at: number; text: string; refused?: boolean } | null>(null);
   const s = ctx.mm(5);
   const px = ctx.mm(1);
   const pull = (e: { altKey: boolean }) => (snap && !e.altKey ? (mm: number) => snap(mm, ctx.mm(8)) : (mm: number) => Math.max(10, Math.round(mm / 10) * 10));
@@ -4659,23 +4761,55 @@ function OutlineHandles({
     const b = outline[(i + 1) % n];
     return Math.hypot(b.x - a.x, b.y - a.y);
   };
-  /** The typed length, taken: true when the outline took it (a length that folds it over itself, or
-   *  leaves a side under 10cm, is refused and the box stays open, marked). */
-  const typed = (i: number, text: string) => {
-    const cm = Number(text.replace(",", "."));
-    if (!(cm > 0)) return false;
-    if (Math.abs(cm * 10 - sideLength(i)) < 1) return true;
-    const hugs = (k: number) => {
-      if (!wallDistance) return false;
-      const a = outline[k];
-      const b = outline[(k + 1) % n];
-      return wallDistance(toRoomOf({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })) <= WALL_HUG_MM;
-    };
-    const keep = hugs((i + 1) % n) && !hugs((i - 1 + n) % n) ? "end" : "start";
+  /** Side `k` stands against a wall — a side a typed figure keeps where it is when it can. */
+  const hugs = (k: number) => {
+    if (!wallDistance) return false;
+    const a = outline[k];
+    const b = outline[(k + 1) % n];
+    return wallDistance(toRoomOf({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })) <= WALL_HUG_MM;
+  };
+  /** A typed figure applied: the outline it makes, or null when it is not one the outline can take (a
+   *  shape that folds over itself, or a side under 10cm) — the box then stays open, marked. */
+  const applyTyped = (next: Point[] | null) => {
+    if (!next) return null;
     onBegin?.();
-    const ok = take(setSideLength(outline, i, Math.round(cm * 10), keep));
+    const ok = take(next);
     onEnd?.();
-    return ok;
+    return ok ? next : null;
+  };
+  /** Side `i` typed `text` cm long. The end kept is the one whose side beyond stands against a wall. */
+  const typedLength = (i: number, text: string) => {
+    const cm = Number(text.replace(",", "."));
+    if (!(cm > 0)) return null;
+    if (Math.abs(cm * 10 - sideLength(i)) < 1) return outline;
+    const keep = hugs((i + 1) % n) && !hugs((i - 1 + n) % n) ? "end" : "start";
+    return applyTyped(setSideLength(outline, i, Math.round(cm * 10), keep));
+  };
+  /** Corner `k` typed `text` degrees inside. The side leaving the corner turns, unless it is the front
+   *  or stands against a wall and the side arriving does not — then that one turns instead. */
+  const typedAngle = (k: number, text: string) => {
+    const a = Number(text.replace(",", "."));
+    if (!(a > 0 && a < 360)) return null;
+    if (Math.abs(a - cornerAngle(outline, k)) < 0.05) return outline;
+    const fixed = (i: number) => i === front || hugs(i);
+    const turn = fixed(k) && !fixed((k - 1 + n) % n) ? "prev" : "next";
+    return applyTyped(setCornerAngle(outline, k, a, turn));
+  };
+  const openLength = (i: number, on: readonly Point[] = outline) => {
+    const a = on[i];
+    const b = on[(i + 1) % n];
+    setTyping({ kind: "length", at: i, text: String(Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 10)) });
+  };
+  const openAngle = (k: number, on: readonly Point[] = outline) => setTyping({ kind: "angle", at: k, text: String(Math.round(cornerAngle(on, k))) });
+  /** Enter or Tab in the open box: the figure taken, then the box closed — or, on Tab, the next side's
+   *  or corner's opened (Shift+Tab the one before), read off the outline as it is NOW. */
+  const commitTyping = (t: NonNullable<typeof typing>, viaTab: boolean, backward: boolean) => {
+    const next = t.kind === "length" ? typedLength(t.at, t.text) : typedAngle(t.at, t.text);
+    if (!next) return setTyping({ ...t, refused: true });
+    if (!viaTab) return setTyping(null);
+    const at = (t.at + (backward ? n - 1 : 1)) % n;
+    if (t.kind === "length") openLength(at, next);
+    else openAngle(at, next);
   };
   const roomOutline = outline.map(toRoomOf);
   const outward = signedArea(roomOutline) >= 0 ? 1 : -1;
@@ -4751,75 +4885,81 @@ function OutlineHandles({
         // Outside the side, clear of its grip: the pill is drawn in screen pixels (scale px).
         const at = { x: (ra.x + rb.x) / 2 + ((outward * (rb.y - ra.y)) / rl) * px * 22, y: (ra.y + rb.y) / 2 + ((-outward * (rb.x - ra.x)) / rl) * px * 22 };
         const label = (L / 1000).toFixed(2);
-        const open = () => setTyping({ side: i, text: String(Math.round(L / 10)) });
-        if (typing?.side === i)
+        if (typing?.kind === "length" && typing.at === i)
           return (
-            <g key={`len-${i}`} transform={`translate(${at.x} ${at.y}) scale(${px})`}>
-              <foreignObject x={-58} y={-15} width={116} height={30}>
-                <div
-                  dir="ltr"
-                  className={`control-group flex h-[30px] items-center gap-1 rounded-full border bg-surface px-2.5 shadow-floating ${typing.refused ? "border-alert" : "border-accent"}`}
-                  onPointerDown={(e) => e.stopPropagation()}
-                >
-                  <input
-                    autoFocus
-                    inputMode="decimal"
-                    aria-label="אורך הצד בסנטימטרים"
-                    aria-invalid={typing.refused || undefined}
-                    value={typing.text}
-                    onFocus={(e) => e.currentTarget.select()}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (/^\d*[.,]?\d*$/.test(v)) setTyping({ side: i, text: v });
-                    }}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key === "Escape") {
-                        e.preventDefault();
-                        setTyping(null);
-                      } else if (e.key === "Enter" || e.key === "Tab") {
-                        e.preventDefault();
-                        if (!typed(i, typing.text)) return setTyping({ ...typing, refused: true });
-                        // Tab goes round the outline (Shift+Tab back), the next side's length ready.
-                        const next = e.key === "Tab" ? (i + (e.shiftKey ? n - 1 : 1)) % n : -1;
-                        setTyping(next >= 0 ? { side: next, text: String(Math.round(sideLength(next) / 10)) } : null);
-                      }
-                    }}
-                    onBlur={() => setTyping((t) => (t?.side === i ? null : t))}
-                    className={`nums w-14 bg-transparent text-center text-[13px] font-semibold ${typing.refused ? "text-alert-ink" : "text-ink"}`}
-                  />
-                  <span className="text-[11px] text-muted">ס״מ</span>
-                </div>
-              </foreignObject>
-            </g>
+            <TypedBox
+              key={`len-${i}`}
+              at={at}
+              px={px}
+              unit="ס״מ"
+              label="אורך הצד בסנטימטרים"
+              text={typing.text}
+              refused={typing.refused}
+              onText={(text) => setTyping({ ...typing, text })}
+              onCommit={(viaTab, backward) => commitTyping(typing, viaTab, backward)}
+              onClose={() => setTyping(null)}
+              onBlur={() => setTyping((t) => (t?.kind === "length" && t.at === i ? null : t))}
+            />
           );
         return (
-          <g
+          <FigurePill
             key={`len-${i}`}
-            transform={`translate(${at.x} ${at.y}) scale(${px})`}
-            role="button"
-            tabIndex={0}
-            aria-label={`אורך הצד ${label} מ׳ — לחיצה להקלדת אורך`}
-            className="cursor-text focus:outline-none [&:focus-visible>rect]:stroke-[2.5]"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              open();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                e.stopPropagation();
-                open();
-              }
-            }}
-          >
-            <title>לחיצה להקלדת אורך הצד</title>
-            <rect x={-label.length * 3.6 - 9} y={-10.5} width={label.length * 7.2 + 18} height={21} rx={10.5} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-            <text textAnchor="middle" dominantBaseline="central" direction="ltr" fill="var(--color-accent)" className="nums" style={{ fontSize: 12, fontWeight: 600 }}>
-              {label}
-            </text>
-          </g>
+            at={at}
+            px={px}
+            label={label}
+            tone="accent"
+            aria={`אורך הצד ${label} מ׳ — לחיצה להקלדת אורך`}
+            title="לחיצה להקלדת אורך הצד"
+            onOpen={() => openLength(i)}
+          />
+        );
+      })}
+      {outline.map((_, k) => {
+        // The corner's angle, outside the corner on the bisector of its two sides' outward normals —
+        // which points out of a convex corner and into the air of a notch.
+        const rc = roomOutline[k];
+        const rp = roomOutline[(k - 1 + n) % n];
+        const rq = roomOutline[(k + 1) % n];
+        const l1 = Math.hypot(rc.x - rp.x, rc.y - rp.y);
+        const l2 = Math.hypot(rq.x - rc.x, rq.y - rc.y);
+        if (l1 < 1 || l2 < 1) return null;
+        const n1 = { x: (outward * (rc.y - rp.y)) / l1, y: (-outward * (rc.x - rp.x)) / l1 };
+        const n2 = { x: (outward * (rq.y - rc.y)) / l2, y: (-outward * (rq.x - rc.x)) / l2 };
+        let bx = n1.x + n2.x;
+        let by = n1.y + n2.y;
+        const bl = Math.hypot(bx, by);
+        if (bl < 1e-6) [bx, by] = [n1.x, n1.y];
+        else [bx, by] = [bx / bl, by / bl];
+        const at = { x: rc.x + bx * px * 26, y: rc.y + by * px * 26 };
+        const angle = cornerAngle(outline, k);
+        const label = `${Math.round(angle)}°`;
+        if (typing?.kind === "angle" && typing.at === k)
+          return (
+            <TypedBox
+              key={`ang-${k}`}
+              at={at}
+              px={px}
+              unit="°"
+              label="הזווית בפינה במעלות"
+              text={typing.text}
+              refused={typing.refused}
+              onText={(text) => setTyping({ ...typing, text })}
+              onCommit={(viaTab, backward) => commitTyping(typing, viaTab, backward)}
+              onClose={() => setTyping(null)}
+              onBlur={() => setTyping((t) => (t?.kind === "angle" && t.at === k ? null : t))}
+            />
+          );
+        return (
+          <FigurePill
+            key={`ang-${k}`}
+            at={at}
+            px={px}
+            label={label}
+            tone="quiet"
+            aria={`זווית הפינה ${label} — לחיצה להקלדת זווית`}
+            title="לחיצה להקלדת הזווית בפינה"
+            onOpen={() => openAngle(k)}
+          />
         );
       })}
       {outline.map((v, i) => {

@@ -888,6 +888,58 @@ export function setSideLength(poly: readonly Point[], i: number, lengthMm: numbe
   return poly.map((v, k) => (moved.includes(k) ? { x: Math.round(v.x + u.x * d), y: Math.round(v.y + u.y * d) } : { ...v }));
 }
 
+const dirDeg = (a: Point, b: Point) => deg(Math.atan2(b.y - a.y, b.x - a.x));
+/** A turn folded into (−180, 180]. */
+const foldDeg = (d: number) => {
+  const f = ((((d + 180) % 360) + 360) % 360) - 180;
+  return f === -180 ? 180 : f;
+};
+
+/** The angle INSIDE the outline at corner `k`, in degrees: 90 at a square corner, under 90 where
+ *  the corner is sharp, over 180 where it is a notch, 180 on a straight line. Read off the two sides
+ *  meeting there, whichever way round the outline runs. */
+export function cornerAngle(poly: readonly Point[], k: number): number {
+  const n = poly.length;
+  const p = poly[(k - 1 + n) % n];
+  const c = poly[k];
+  const q = poly[(k + 1) % n];
+  const s = areaOf(poly) >= 0 ? 1 : -1;
+  const turn = foldDeg(dirDeg(c, q) - dirDeg(p, c));
+  const inside = 180 - s * turn;
+  return inside < 0 ? inside + 360 : inside;
+}
+
+/** Corner `k` made exactly `angleDeg` inside — a TYPED angle, beside dragging the corner. ONE of the
+ *  two sides meeting the corner turns about it, its length kept, and only the far corner of that side
+ *  moves (the side beyond leans to meet it, as it does when a corner is dragged): `turn: "next"` turns
+ *  the side LEAVING the corner, `"prev"` the side ARRIVING at it — the caller keeps the front, or a
+ *  side against a wall, where it is by turning the other one. An angle that is not between 0 and 360
+ *  leaves the outline alone. */
+export function setCornerAngle(poly: readonly Point[], k: number, angleDeg: number, turn: "next" | "prev" = "next"): Point[] {
+  const n = poly.length;
+  if (n < 3 || !(angleDeg > 0 && angleDeg < 360)) return [...poly];
+  const ip = (k - 1 + n) % n;
+  const inx = (k + 1) % n;
+  const p = poly[ip];
+  const c = poly[k];
+  const q = poly[inx];
+  const s = areaOf(poly) >= 0 ? 1 : -1;
+  const want = s * (180 - angleDeg);
+  const out = poly.map((v) => ({ ...v }));
+  if (turn === "next") {
+    const len = Math.hypot(q.x - c.x, q.y - c.y);
+    if (len < 1) return [...poly];
+    const d = rad(dirDeg(p, c) + want);
+    out[inx] = { x: Math.round(c.x + Math.cos(d) * len), y: Math.round(c.y + Math.sin(d) * len) };
+  } else {
+    const len = Math.hypot(c.x - p.x, c.y - p.y);
+    if (len < 1) return [...poly];
+    const d = rad(dirDeg(c, q) - want);
+    out[ip] = { x: Math.round(c.x - Math.cos(d) * len), y: Math.round(c.y - Math.sin(d) * len) };
+  }
+  return out;
+}
+
 /** Side `i` split in its middle: two corners on one point, so either half can be pushed on its own.
  *  The front stays the side it was (its first half, when it is the one split). */
 export function splitSide(poly: readonly Point[], front: number, i: number): { outline: Point[]; front: number } {
@@ -1177,6 +1229,27 @@ if (isMain(import.meta.url)) {
     assert(deep[2].y === 3660 && deep[3].y === 3660 && deep[1].y === 0, "a depth typed moves the back");
     const tri = setSideLength([{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 0, y: 3000 }], 0, 5000);
     assert(tri[1].x === 5000 && tri[2].y === 3000, "a triangle's side moves its far corner alone");
+  }
+  // A typed corner angle: one side turns about the corner, its length kept; the front stays put.
+  {
+    const r4 = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 3000 }, { x: 0, y: 3000 }];
+    const near = (a: number, b: number, tol = 0.01) => Math.abs(a - b) <= tol;
+    assert(r4.every((_, k) => near(cornerAngle(r4, k), 90)) && [...r4].reverse().every((_, k) => near(cornerAngle([...r4].reverse(), k), 90)), "a rectangle's corners are 90° whichever way round it runs");
+    const chev = [{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 4000, y: 2000 }, { x: 2000, y: 1000 }, { x: 0, y: 2000 }];
+    assert(cornerAngle(chev, 3) > 180, "a notch reads as more than 180°");
+    assert(near(cornerAngle(chev, 3), 180 + 2 * deg(Math.atan2(1000, 2000))), "…exactly: the notch of a chevron is 180° plus twice the slope");
+    const trap = setCornerAngle(r4, 1, 60);
+    assert(trap[0].x === 0 && trap[1].x === 6000 && trap[1].y === 0 && trap[3].x === 0, "the front-right corner typed 60°: the front and the left side stay where they are");
+    assert(trap[2].x === 4500 && near(trap[2].y, 2598, 1) && near(cornerAngle(trap, 1), 60, 0.05), "…the right side turned about the corner, 3m long still, leaning in to make 60°");
+    assert(near(Math.hypot(trap[2].x - trap[1].x, trap[2].y - trap[1].y), 3000, 1), "…its length kept");
+    const both = setCornerAngle(trap, 0, 60, "prev");
+    assert(both[0].x === 0 && both[1].x === 6000 && near(both[3].x, 1500, 1) && near(both[3].y, 2598, 1) && near(cornerAngle(both, 0), 60, 0.05), "the front-left corner typed 60° with the front kept: the LEFT side turns, its own far corner moving");
+    assert(near(both[2].y, both[3].y, 1), "…a symmetric trapezoid, its back level");
+    const back = setCornerAngle(setCornerAngle(r4, 1, 60), 1, 90);
+    assert(back.every((v, k) => near(v.x, r4[k].x, 1) && near(v.y, r4[k].y, 1)), "typed back to 90°, it is the rectangle again");
+    const mirrored = setCornerAngle([...r4].reverse(), 3, 60);
+    assert(near(cornerAngle(mirrored, 3), 60, 0.05), "an outline running the other way round takes the same inside angle");
+    assert(setCornerAngle(r4, 1, 0).every((v, k) => v.x === r4[k].x) && setCornerAngle(r4, 1, 360).every((v, k) => v.x === r4[k].x), "0° and 360° are no angle: refused");
   }
   console.log("stage-draw self-check passed");
 }
