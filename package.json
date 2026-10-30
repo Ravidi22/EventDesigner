@@ -144,7 +144,7 @@
     "drizzle-orm": "^0.45.2",
     "html-to-image": "^1.11.13",
     "lucide-react": "^1.24.0",
-    "next": "16.2.10",
+    "next": "16.3.8",
     "pdf-lib": "^1.17.1",
     "postgres": "^3.4.9",
     "react": "19.2.4",
@@ -161,7 +161,7 @@
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
     "tsx": "^4.23.11",
     "typescript": "^5"
