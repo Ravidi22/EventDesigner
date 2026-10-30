@@ -55,7 +55,7 @@ export function shiftDays(iso: string, delta: number): string {
 
 // ── Checkpoints ────────────────────────────────────────────────────────────────────────────────
 
-export type CheckpointId = "zones" | "gallery" | "design" | "quote" | "confirm" | "packing";
+export type CheckpointId = "zones" | "gallery" | "design" | "quote" | "confirm" | "crew" | "orders" | "packing" | "map";
 
 export interface CheckpointDef {
   id: CheckpointId;
@@ -65,17 +65,32 @@ export interface CheckpointDef {
   lateLine: (days: number) => string;
 }
 
-/** The six, in the order they must happen. Fixed, like AppointmentKind and for the same reason: a
+/** The nine, in the order they must happen. Fixed, like AppointmentKind and for the same reason: a
  *  studio-defined checkpoint would need a settings surface, a table and a migration to earn a label
- *  these already cover. What IS configurable is WHEN each is due — see CheckpointOffsets. */
+ *  these already cover. What IS configurable is WHEN each is due — see CheckpointOffsets.
+ *
+ *  They are two plans, not one (SALES_CHECKPOINTS / PRODUCTION_CHECKPOINTS below). Before the client
+ *  says yes the event is being SOLD, and what can slip is the funnel: zones, a gallery pass, a
+ *  drawing, a price, an answer. After the yes those five are history — a row that still showed them
+ *  was five ticks and a ring on every event in the lane the screen is named after — and what can
+ *  slip is the PRODUCTION: a crew, the suppliers' answers, the crew's two sheets. */
 export const CHECKPOINTS: readonly CheckpointDef[] = [
   { id: "zones", label: "אזורים", lateLine: () => "לא נבחרו אזורים באולם" },
   { id: "gallery", label: "גלריה", lateLine: () => "לא נעשה מעבר גלריה" },
   { id: "design", label: "סקיצה", lateLine: (d) => `אין סקיצה — ${d} ימים לאירוע` },
   { id: "quote", label: "הצעה", lateLine: (d) => `לא נשלחה הצעה — ${d} ימים לאירוע` },
   { id: "confirm", label: "אישור", lateLine: (d) => `ההצעה לא אושרה — ${d} ימים לאירוע` },
+  { id: "crew", label: "צוות", lateLine: (d) => `לא נבחר צוות הקמה — ${d} ימים לאירוע` },
+  { id: "orders", label: "הזמנות", lateLine: (d) => `הזמנות לספקים עוד לא אושרו — ${d} ימים לאירוע` },
   { id: "packing", label: "ציוד", lateLine: (d) => `לא הופקה רשימת ציוד — ${d} ימים לאירוע` },
+  { id: "map", label: "מפות", lateLine: (d) => `לא הודפסו מפות הצבה — ${d} ימים לאירוע` },
 ];
+
+/** What has to be true while the event is being sold. */
+export const SALES_CHECKPOINTS: readonly CheckpointId[] = ["zones", "gallery", "design", "quote", "confirm"];
+/** What has to be true once it is being produced. The drawing is in both: it is what everything
+ *  after it is counted off. */
+export const PRODUCTION_CHECKPOINTS: readonly CheckpointId[] = ["design", "crew", "orders", "packing", "map"];
 
 export const CHECKPOINT_BY_ID: Record<CheckpointId, CheckpointDef> = Object.fromEntries(
   CHECKPOINTS.map((c) => [c.id, c]),
@@ -94,7 +109,10 @@ export const DEFAULT_OFFSETS: CheckpointOffsets = {
   design: 21,
   quote: 30,
   confirm: 21,
+  crew: 14,
+  orders: 10,
   packing: 7,
+  map: 3,
 };
 
 /** Whatever came out of the database — or an older version of this app — made safe to compute with:
@@ -135,6 +153,11 @@ export interface EventFacts {
   archived?: boolean;
   /** A packing list has been exported at least once. */
   packingExportedAt?: number;
+  /** A placement-map set has been exported at least once. */
+  mapExportedAt?: number;
+  /** Epoch ms. The client sent changes to the sketch (lib/proposals) and nobody has answered them.
+   *  Derived — the proposal row's own status. */
+  proposalPendingSince?: number;
   /** F-7.4: the drawing has moved on since the quote was issued off it. */
   designChangedSinceQuote?: boolean;
   /** The last issued quote's total, for the runway's money column. Owner-visible only — this type
@@ -177,7 +200,8 @@ export type LaneId = "production" | "proposal" | "early" | "closed";
 export const LANE_LABEL: Record<LaneId, string> = {
   production: "בהפקה",
   proposal: "בהצעה",
-  early: "מוקדם",
+  // `early` is the id; the word is what is happening there. "מוקדם" read as "too soon to look at".
+  early: "בעיצוב",
   closed: "הסתיים",
 };
 
@@ -185,9 +209,26 @@ export const LANE_LABEL: Record<LaneId, string> = {
 export const LANE_HINT: Record<LaneId, string> = {
   production: "אירועים שהלקוח אישר ושעוד לא קרו — העבודה שצריך להפיק.",
   proposal: "הצעה נשלחה והלקוח עוד לא אישר. אלה האירועים שמחכים לתשובה.",
-  early: "אירועים שעוד לא נשלחה עליהם הצעה.",
-  closed: "אירועים שכבר קרו, שהלקוח לא סגר, או שהועברו לארכיון.",
+  early: "אירועים בעבודה שעוד לא נשלחה עליהם הצעה — פרטים, גלריה, סקיצה.",
+  closed: "אירועים שכבר התקיימו, שהלקוח לא סגר, או שהועברו לארכיון.",
 };
+
+/** Why a closed row is closed. Three different endings share one lane, and a wedding that happened
+ *  next to a client who said no is a win filed beside a loss — so each row says which it is. */
+export type ClosedReason = "held" | "lost" | "archived";
+
+export const CLOSED_LABEL: Record<ClosedReason, string> = {
+  held: "התקיים",
+  lost: "לא נסגר",
+  archived: "בארכיון",
+};
+
+export function closedReason(e: EventFacts): ClosedReason {
+  // Archive is a filing decision and outranks the outcome: a lost event filed away reads "בארכיון".
+  if (e.archived) return "archived";
+  if (e.lostAt) return "lost";
+  return "held";
+}
 
 export function laneOf(e: EventFacts, today: string): LaneId {
   if (e.archived || e.lostAt) return "closed";
@@ -223,8 +264,16 @@ export interface RunwayRow {
    *  problems is a row nobody reads. It is the earliest-due late checkpoint, because that is the
    *  one whose slip makes every checkpoint after it late too. */
   alert?: string;
+  /** The one thing to do about `alert`. Present exactly when the alert is. */
+  action?: NextAction;
   /** Late checkpoints, for the "דורשים טיפול" count in the filter bar. */
   lateCount: number;
+}
+
+/** Which plan a row is measured against. Confirmed = producing; otherwise selling. A closed row
+ *  keeps whichever plan it closed under, so a held wedding still reads as the production it was. */
+export function checkpointSetFor(e: EventFacts): readonly CheckpointId[] {
+  return e.confirmedAt ? PRODUCTION_CHECKPOINTS : SALES_CHECKPOINTS;
 }
 
 function checkpointsFor(e: EventFacts, offsets: CheckpointOffsets, today: string, lane: LaneId): Checkpoint[] {
@@ -234,10 +283,17 @@ function checkpointsFor(e: EventFacts, offsets: CheckpointOffsets, today: string
     design: e.hasDesign,
     quote: e.quoteSentAt !== undefined,
     confirm: e.confirmedAt !== undefined,
+    crew: (e.crew?.length ?? 0) > 0,
+    // Every order the suppliers have answered yes to — and NO orders at all is also nothing to wait
+    // on: a studio that owns its whole stock never sends one. A declined order is not "done": the
+    // equipment is not coming, and the row's alert says so in words.
+    orders: !e.orders || (e.orders.open === 0 && e.orders.declined === 0),
     packing: e.packingExportedAt !== undefined,
+    map: e.mapExportedAt !== undefined,
   };
 
-  return CHECKPOINTS.map(({ id, label }) => {
+  return checkpointSetFor(e).map((id) => {
+    const { label } = CHECKPOINT_BY_ID[id];
     const dueDate = e.date ? shiftDays(e.date, -offsets[id]) : undefined;
     return {
       id,
@@ -249,34 +305,83 @@ function checkpointsFor(e: EventFacts, offsets: CheckpointOffsets, today: string
   });
 }
 
-/** The line the row leads with when something is wrong.
- *
- *  "העיצוב השתנה" outranks a late checkpoint even though it is not one: a quote the client is
- *  holding that no longer matches the drawing is actively misleading someone RIGHT NOW, where a
- *  late checkpoint is merely behind. F-7.4 is the requirement; this is where it surfaces outside
- *  the outputs screen. */
-function alertFor(row: Omit<RunwayRow, "alert" | "lateCount">, today: string): string | undefined {
-  const { event: e, lane, checkpoints, daysUntil } = row;
-  if (lane === "closed") return undefined;
-  if (e.designChangedSinceQuote && e.quoteSentAt) return "העיצוב השתנה מאז ההצעה שנשלחה";
-  // A supplier said no. Nothing on the calendar is late yet, but the equipment the plan counts on
-  // is not coming, and the sooner that is seen the more suppliers are still an option.
-  if (e.orders?.declined) return e.orders.declined === 1 ? "ספק דחה הזמנה — צריך ספק אחר" : `${e.orders.declined} הזמנות נדחו — צריך ספק אחר`;
+// ── The next action ────────────────────────────────────────────────────────────────────────────
 
-  // Earliest-due first, so the alert names the root slip rather than the last domino.
+/** Where the row's one button goes. Named by WHAT is reached, and the screen decides how: a route,
+ *  a view on /outputs, a dialog, or the one mutation (`confirm`) this screen owns. */
+export type ActionTarget =
+  | "details"
+  | "meeting"
+  | "studio"
+  | "proposal"
+  | "quote"
+  | "confirm"
+  | "crew"
+  | "orders"
+  | "packing"
+  | "map";
+
+export interface NextAction {
+  label: string;
+  target: ActionTarget;
+}
+
+/** The verb that answers each late checkpoint. The alert names the slip; this is the way to fix it,
+ *  and it sits beside the alert so the designer never has to go looking in a menu. */
+const ACTION_FOR: Record<CheckpointId, NextAction> = {
+  zones: { label: "להשלמת הפרטים", target: "details" },
+  gallery: { label: "למעבר גלריה", target: "meeting" },
+  design: { label: "לסקיצה", target: "studio" },
+  quote: { label: "להצעת המחיר", target: "quote" },
+  confirm: { label: "אישור הזמנה", target: "confirm" },
+  crew: { label: "לבחירת צוות", target: "crew" },
+  orders: { label: "להזמנות", target: "orders" },
+  packing: { label: "לרשימת הציוד", target: "packing" },
+  map: { label: "למפות ההצבה", target: "map" },
+};
+
+/** The line the row leads with when something is wrong, and the one thing to do about it.
+ *
+ *  In order of who is waiting:
+ *    1. The CLIENT is waiting — they sent changes to the sketch and nobody has answered. Someone is
+ *       looking at their phone for a reply right now.
+ *    2. The client is being MISLED — "העיצוב השתנה": a quote they are holding no longer matches the
+ *       drawing (F-7.4). Outranks any schedule slip: a late checkpoint is merely behind.
+ *    3. A SUPPLIER said no. Nothing on the calendar is late yet, but the equipment the plan counts
+ *       on is not coming, and the sooner that is seen the more suppliers are still an option.
+ *    4. The earliest-due late checkpoint — the root slip, not the last domino.
+ *    5. Silence: a quote sitting unanswered a week. The single most common way a designer loses a
+ *       booking, and invisible on every other screen. */
+function alertFor(
+  row: Omit<RunwayRow, "alert" | "action" | "lateCount">,
+  today: string,
+): { alert?: string; action?: NextAction } {
+  const { event: e, lane, checkpoints, daysUntil } = row;
+  if (lane === "closed") return {};
+  if (e.proposalPendingSince !== undefined) {
+    return { alert: "הלקוח שלח שינויים לסקיצה — ממתינים לתשובה", action: { label: "לבדיקת השינויים", target: "proposal" } };
+  }
+  if (e.designChangedSinceQuote && e.quoteSentAt) {
+    return { alert: "העיצוב השתנה מאז ההצעה שנשלחה", action: { label: "לעדכון ההצעה", target: "quote" } };
+  }
+  if (e.orders?.declined) {
+    return {
+      alert: e.orders.declined === 1 ? "ספק דחה הזמנה — צריך ספק אחר" : `${e.orders.declined} הזמנות נדחו — צריך ספק אחר`,
+      action: { label: "להזמנות", target: "orders" },
+    };
+  }
+
   const late = checkpoints
     .filter((c) => c.late)
     .sort((a, b) => (a.dueDate! < b.dueDate! ? -1 : 1))[0];
-  if (late) return CHECKPOINT_BY_ID[late.id].lateLine(daysUntil ?? 0);
+  if (late) return { alert: CHECKPOINT_BY_ID[late.id].lateLine(daysUntil ?? 0), action: ACTION_FOR[late.id] };
 
-  // Not late by the schedule, but sitting unanswered. A quote nobody has replied to is the single
-  // most common way a designer loses a booking, and it is invisible on every other screen.
   if (lane === "proposal" && e.quoteSentAt) {
     const sent = new Date(e.quoteSentAt).toISOString().slice(0, 10);
     const waiting = daysBetween(sent, today);
-    if (waiting >= 7) return `ההצעה נשלחה לפני ${waiting} ימים — עוד לא אושרה`;
+    if (waiting >= 7) return { alert: `ההצעה נשלחה לפני ${waiting} ימים — עוד לא אושרה`, action: ACTION_FOR.confirm };
   }
-  return undefined;
+  return {};
 }
 
 export function buildRow(e: EventFacts, offsets: CheckpointOffsets, today: string): RunwayRow {
@@ -286,7 +391,7 @@ export function buildRow(e: EventFacts, offsets: CheckpointOffsets, today: strin
   const base = { event: e, lane, daysUntil, checkpoints };
   return {
     ...base,
-    alert: alertFor(base, today),
+    ...alertFor(base, today),
     lateCount: checkpoints.filter((c) => c.late).length,
   };
 }
@@ -440,6 +545,7 @@ if (isMain(import.meta.url)) {
   assert(quote.dueDate === "2026-08-11", "the quote was due 30 days before the event");
   assert(quote.late, "no quote nine days out is late");
   assert(soon.alert === CHECKPOINT_BY_ID.quote.lateLine(9), "the alert names the late checkpoint");
+  assert(soon.action?.target === "quote", "and its button goes to the quote");
 
   // The earliest-due late checkpoint wins, not the last one to slip.
   const bare = buildRow(
@@ -448,10 +554,42 @@ if (isMain(import.meta.url)) {
     TODAY,
   );
   assert(bare.alert === CHECKPOINT_BY_ID.zones.lateLine(9), "zones are due first, so zones is the alert");
-  // zones, design, quote and confirm are behind; gallery is done, and packing is not due until
-  // D-7, which is still two days away. A checkpoint with time left on it is not an alert.
+  // zones, design, quote and confirm are behind; gallery is done. The packing list is not on an
+  // unconfirmed event's plan at all — there is nothing to pack for a wedding nobody has booked.
   assert(bare.lateCount === 4, "only the four already behind are late");
-  assert(!bare.checkpoints.find((c) => c.id === "packing")!.late, "packing still has two days");
+  assert(!bare.checkpoints.some((c) => c.id === "packing"), "packing is a production checkpoint");
+
+  // The selling plan while selling; the production plan once confirmed; the design is in both.
+  assert(soon.checkpoints.map((c) => c.id).join(",") === "zones,gallery,design,quote,confirm", "unconfirmed = the sales plan");
+  const producing = buildRow({ ...base, id: "p1", date: "2026-09-10", quoteSentAt: 1, confirmedAt: 2 }, DEFAULT_OFFSETS, TODAY);
+  assert(producing.checkpoints.map((c) => c.id).join(",") === "design,crew,orders,packing,map", "confirmed = the production plan");
+  // Nine days out with no crew (due D-14), no packing list (D-7) and no maps (D-3): the crew is the
+  // earliest slip, so it is the alert, and its button opens the crew dialog.
+  assert(producing.alert === CHECKPOINT_BY_ID.crew.lateLine(9), "the crew is the first production slip");
+  assert(producing.action?.target === "crew", "and the action is to pick one");
+  assert(!producing.checkpoints.find((c) => c.id === "map")!.late, "maps are not due for six days");
+  // No orders at all is nothing to wait on; an open one is; a declined one is the alert.
+  assert(producing.checkpoints.find((c) => c.id === "orders")!.done, "no orders = nothing outstanding");
+  const waitingOnSupplier = buildRow(
+    { ...base, id: "p2", date: "2026-09-10", confirmedAt: 2, crew: [{ id: "u1", name: "דנה" }], orders: { confirmed: 1, open: 1, declined: 0 } },
+    DEFAULT_OFFSETS,
+    TODAY,
+  );
+  assert(!waitingOnSupplier.checkpoints.find((c) => c.id === "orders")!.done, "an open order is outstanding");
+  assert(waitingOnSupplier.action?.target === "orders", "and the way to it is the orders tab");
+
+  // A client waiting on an answer outranks everything else on the row.
+  const asked = buildRow(
+    { ...base, id: "p3", date: "2026-09-10", quoteSentAt: 1, designChangedSinceQuote: true, proposalPendingSince: 5 },
+    DEFAULT_OFFSETS,
+    TODAY,
+  );
+  assert(asked.alert === "הלקוח שלח שינויים לסקיצה — ממתינים לתשובה" && asked.action?.target === "proposal", "the client's changes come first");
+
+  // The closed lane says which ending it was.
+  assert(closedReason({ ...base, lostAt: 3 }) === "lost", "a no is a no");
+  assert(closedReason({ ...base, lostAt: 3, archived: true }) === "archived", "filing outranks the outcome");
+  assert(closedReason({ ...base, date: "2026-08-01" }) === "held", "a past event happened");
 
   // A design that moved on after the quote outranks any schedule slip.
   const changed = buildRow(
@@ -460,6 +598,7 @@ if (isMain(import.meta.url)) {
     TODAY,
   );
   assert(changed.alert === "העיצוב השתנה מאז ההצעה שנשלחה", "a stale quote is the loudest thing");
+  assert(changed.action?.target === "quote", "and the way to fix it is to re-issue");
 
   // A quote sitting unanswered is surfaced even when nothing is late by the calendar.
   const waiting = buildRow(
@@ -472,7 +611,7 @@ if (isMain(import.meta.url)) {
 
   // A closed event is never chased.
   const past = buildRow({ ...base, id: "e5", date: "2026-08-01", hasDesign: false }, DEFAULT_OFFSETS, TODAY);
-  assert(past.lane === "closed" && past.lateCount === 0 && !past.alert, "a settled fact raises nothing");
+  assert(past.lane === "closed" && past.lateCount === 0 && !past.alert && !past.action, "a settled fact raises nothing");
 
   // Collisions read the load-in window, not just the date.
   const pair = buildRunway(

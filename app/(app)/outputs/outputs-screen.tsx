@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, RotateCw, Share2, type LucideIcon } from "lucide-react";
+import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, RotateCw, Share2, Truck, type LucideIcon } from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
@@ -26,6 +26,7 @@ import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { Skeleton } from "@/components/skeleton";
 import { PackingList } from "./packing-list";
+import { LoadInSheet } from "./load-in-sheet";
 import { KitSchedule, PlacementMap, StageSchedule, mapWorld } from "./placement-map";
 import { TableDetail, detailWorld } from "./table-detail";
 import { sheetScale } from "./sheet-frame";
@@ -34,18 +35,23 @@ import { VenueAccessNotice } from "@/components/venue-access-notice";
 import { Quote } from "./quote";
 import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
 
-type View = "packing" | "map" | "quote";
-const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר" };
+export type View = "packing" | "map" | "quote" | "loadin";
+const TITLES: Record<View, string> = { packing: "רשימת ציוד", map: "מפת הצבה", quote: "הצעת מחיר", loadin: "דף הקמה" };
+/** Whether a `?view=` is one of the documents — the page reads it, the runway's buttons write it. */
+export const isView = (v: string | undefined): v is View => v !== undefined && v in TITLES;
 /** Rail order, and it is not TITLES' key order by accident: the quote is first because it is what
- *  this screen opens on — this is the stage that CLOSES a meeting, and the two crew sheets are
- *  prepared afterwards, with nobody else in the room. */
+ *  this screen opens on — this is the stage that CLOSES a meeting, and the crew sheets are prepared
+ *  afterwards, with nobody else in the room. The load-in sheet is last: it is the page on top of
+ *  the folder, made once the rest of it exists. */
 const VIEWS: { id: View; icon: LucideIcon }[] = [
   { id: "quote", icon: ReceiptText },
   { id: "map", icon: Map },
   { id: "packing", icon: ClipboardList },
+  { id: "loadin", icon: Truck },
 ];
-/** Which kind of sheet each view produces, for the export log (F-6.4). */
-const EXPORT_OF: Record<View, ExportType> = {
+/** Which kind of sheet each view produces, for the export log (F-6.4). The load-in sheet records
+ *  nothing: it is a cover over the other three, and no checkpoint reads it. */
+const EXPORT_OF: Partial<Record<View, ExportType>> = {
   packing: "packing_list",
   map: "placement_map",
   quote: "quote",
@@ -67,12 +73,20 @@ const MARGIN_MM = 16;
 /** `frame`: which screen this is a page of. The same component closes the meeting (app/meeting) and
  *  is /outputs on its own; the one thing that differs is where "nothing to print yet" sends the
  *  designer — back into the stepper, or out to the studio (./back-to-studio.tsx).
- *  `initialProducts`: the catalog, read on the server by /outputs (the meeting has none to hand). */
-export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "studio" | "meeting"; initialProducts?: Product[] }) {
+ *  `initialProducts`: the catalog, read on the server by /outputs (the meeting has none to hand).
+ *  `initialView`: the document to open on (`?view=`, from the runway's alert buttons); the quote
+ *  otherwise — this is the stage that closes a meeting. */
+export function OutputsScreen({
+  frame = "studio",
+  initialProducts,
+  initialView,
+}: {
+  frame?: "studio" | "meeting";
+  initialProducts?: Product[];
+  initialView?: View;
+}) {
   const meeting = frame === "meeting";
-  // Empty until the event's real document loads. A packing list is the one screen that must never
-  // show invented numbers — a crew reading a sample plan would pack for an event that doesn't exist.
-  const [view, setView] = useState<View>("quote");
+  const [view, setView] = useState<View>(initialView ?? "quote");
   const [paper, setPaper] = useState<Paper>("A4");
   const [orient, setOrient] = useState<Orient>("auto");
   // The booklet in colour (the venue's lawn, pool, trees) or in black and white for a crew that gets
@@ -248,10 +262,11 @@ export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "
   // came from rather than merely being numbered.
   // Records the export and paints its number on the sheets before they leave — print or share.
   const stamp = async () => {
-    if (!event) return;
+    const type = EXPORT_OF[view];
+    if (!event || !type) return;
     let printed = version;
     try {
-      printed = await recordExport(event.id, EXPORT_OF[view]);
+      printed = await recordExport(event.id, type);
     } catch {
       // Recording failed. The sheet still prints: a crew waiting on paper is not helped by a failed
       // log write. It simply doesn't enter the history, which is the honest outcome.
@@ -313,9 +328,9 @@ export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "
   const today = new Date().toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
   const [w, h] = sizeOf(textOrient);
   // The quote prints its own letterhead (./quote-sheet.tsx) and a plan sheet carries a proper
-  // drafting title block (sheet-frame.tsx) — only the packing list has neither, so it's the one
-  // view that needs this generic stamp above it.
-  const stamped = view === "packing";
+  // drafting title block (sheet-frame.tsx) — the packing list and the load-in sheet have neither,
+  // so they are the two views that need this generic stamp above them.
+  const stamped = view === "packing" || view === "loadin";
 
   return (
     <div className="flex h-full min-h-0 print:block print:h-auto">
@@ -348,7 +363,9 @@ export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "
           deliverable. */}
       <aside className="no-print flex w-[212px] shrink-0 flex-col border-e border-border bg-surface">
         <nav className="flex min-h-0 shrink flex-col gap-[3px] overflow-y-auto p-2.5" aria-label="מסמכי האירוע">
-          {VIEWS.map(({ id, icon: Icon }) => (
+          {/* The load-in sheet is crew paper — names and phone numbers — and the meeting frame is
+              rendered with the client in the room, so it is offered on /outputs alone. */}
+          {VIEWS.filter(({ id }) => !meeting || id !== "loadin").map(({ id, icon: Icon }) => (
             <div key={id}>
               {/* The app's own active-nav treatment, because that is what these are — the sidebar's
                   geometry and inks (CLAUDE.md § Design System Guidelines), not a second vocabulary
@@ -662,14 +679,19 @@ export function OutputsScreen({ frame = "studio", initialProducts }: { frame?: "
                       </p>
                     )}
                   </div>
-                  {/* F-6.4: date + version stamp — on screen and in print */}
+                  {/* F-6.4: date + version stamp — on screen and in print. The load-in sheet is
+                      not an export of its own, so it carries the date alone. */}
                   <p className="nums shrink-0 text-caption text-muted">
-                    {today} · גרסה {version}
+                    {view === "loadin" ? today : `${today} · גרסה ${version}`}
                   </p>
                 </header>
               )}
 
-              <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} />
+              {view === "loadin" ? (
+                <LoadInSheet event={event} doc={doc} entries={entries} meeting={meeting} />
+              ) : (
+                <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} />
+              )}
             </article>
             )}
           </div>
