@@ -3,11 +3,25 @@
 import { Combine, FileDown, FileUp, Grid3x3, List, Plus } from "lucide-react";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
 import { styleTagsOf } from "@/lib/catalog/categories";
-import type { Layer, Product } from "@/lib/catalog/types";
+import { isSourced, STOCK_KIND_LABEL, STOCK_KINDS, type Layer, type Product, type StockKind } from "@/lib/catalog/types";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
 import { IconButton } from "@/components/icon-button";
 import { SearchInput } from "@/components/search-input";
+
+/** The "רכש" lens: where a row comes from (one of the three kinds), or the two states the forecast
+ *  trips over — rented/bought rows with no supplier, owned rows with no count. */
+export type SourcingFilter = StockKind | "unsourced" | "uncounted";
+
+export const SOURCING_FILTER_LABEL: Record<SourcingFilter, string> = {
+  unsourced: "ללא ספק",
+  uncounted: "לא נספרו",
+  owned: STOCK_KIND_LABEL.owned,
+  rented: STOCK_KIND_LABEL.rented,
+  consumable: STOCK_KIND_LABEL.consumable,
+};
+
+export const SOURCING_FILTERS: readonly SourcingFilter[] = ["unsourced", "uncounted", ...STOCK_KINDS];
 
 export interface FilterState {
   search: string;
@@ -15,12 +29,22 @@ export interface FilterState {
   subcategory: string | null; // a CategoryDef id — "המוצרים" in the UI, scoped to the chosen category
   layer: Layer | null; // where the product sits — "השכבות" in the UI; orthogonal to the two above
   tags: string[];
+  /** Absent on the studio's rail, which never asks. */
+  sourcing?: SourcingFilter | null;
 }
 
-export const EMPTY_FILTERS: FilterState = { search: "", category: null, subcategory: null, layer: null, tags: [] };
+export const EMPTY_FILTERS: FilterState = { search: "", category: null, subcategory: null, layer: null, tags: [], sourcing: null };
 
 export function hasActiveFilters(f: FilterState): boolean {
-  return f.search !== "" || f.category !== null || f.subcategory !== null || f.layer !== null || f.tags.length > 0;
+  return f.search !== "" || f.category !== null || f.subcategory !== null || f.layer !== null || f.tags.length > 0 || !!f.sourcing;
+}
+
+export function matchesSourcing(p: Product, s: SourcingFilter): boolean {
+  if (p.composition) return false;
+  const kind: StockKind = p.stockKind ?? "owned";
+  if (s === "unsourced") return isSourced(kind) && !p.supplierId;
+  if (s === "uncounted") return kind === "owned" && p.stockQty === undefined;
+  return kind === s;
 }
 
 /** The predicate itself, apart from the control bar below — the studio's catalog rail filters the
@@ -34,6 +58,7 @@ export function matchesFilters(p: Product, f: FilterState): boolean {
   if (f.subcategory && p.category !== f.subcategory) return false;
   if (f.layer && p.layer !== f.layer) return false;
   if (f.tags.length > 0 && !f.tags.some((t) => p.styleTags.includes(t))) return false; // OR within tags
+  if (f.sourcing && !matchesSourcing(p, f.sourcing)) return false;
   if (f.search.trim()) {
     const q = f.search.trim().toLowerCase();
     const hay = `${p.name} ${CATEGORY_BY_ID[p.category]?.label ?? ""}`.toLowerCase();
@@ -113,6 +138,16 @@ export function Filters({
           aria-label="שכבה"
           options={[{ value: "", label: "כל השכבות" }, ...LAYERS.map((l) => ({ value: l.id, label: l.label }))]}
           className="w-32 shrink-0"
+        />
+
+        {/* The procurement lens — the same three words the drawer's chip uses, and the two states
+            the רכש screen sends the designer here to fix. */}
+        <Select
+          value={value.sourcing ?? ""}
+          onChange={(v) => set({ sourcing: (v as SourcingFilter) || null })}
+          aria-label="רכש"
+          options={[{ value: "", label: "רכש: הכול" }, ...SOURCING_FILTERS.map((s) => ({ value: s, label: SOURCING_FILTER_LABEL[s] }))]}
+          className="w-40 shrink-0"
         />
 
         <SearchInput

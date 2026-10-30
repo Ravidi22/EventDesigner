@@ -315,32 +315,41 @@ export const PRICE_UNIT_LABEL: Record<PriceUnit, string> = {
   m2: 'למ"ר',
 };
 
-/** What kind of stock an item is — and therefore which question the procurement forecast may
- *  honestly ask about it (lib/suppliers/procurement.ts).
+/** WHERE AN ITEM COMES FROM for an event — the one procurement question a product answers, and
+ *  therefore which reduction the forecast may honestly run on it (lib/suppliers/procurement.ts).
  *
- *  `owned` — the studio has it and lays it again at every event. Never summed over a month: one
- *  30m carpet used at four events is 30m of asset, not 120m to buy. Its report is peak concurrent
- *  demand against `stockQty`.
+ *  `owned` — "מהמחסן שלי": the studio has it and lays it again at every event. Never summed over a
+ *  month: one 30m carpet used at four events is 30m of asset, not 120m to buy. Its report is peak
+ *  concurrent demand against `stockQty`.
  *
- *  `consumable` — used up. The sum over a window IS the order.
+ *  `consumable` — "קונים לכל אירוע": used up. The sum over a window IS the order.
  *
- *  `rented` — brought in for one event and returned. Neither summed nor peaked: a list of order
- *  lines, one per event and date.
+ *  `rented` — "שוכרים לאירוע": brought in for one event and returned. Neither summed nor peaked: a
+ *  list of order lines, one per event and date.
  *
- *  Absent = `owned`, which is what most of a designer's catalog is. */
+ *  Absent = `owned`, which is what most of a designer's catalog is. The WORDS are the designer's
+ *  (2026-10-30 — "בבעלות / מתכלה / בהשכרה" were accounting words nobody set, so every row stayed
+ *  owned and the forecast stayed empty); the values are unchanged. */
 export type StockKind = "owned" | "consumable" | "rented";
 
+/** In the order the chip reads them. */
+export const STOCK_KINDS: readonly StockKind[] = ["owned", "rented", "consumable"];
+
 export const STOCK_KIND_LABEL: Record<StockKind, string> = {
-  owned: "בבעלות",
-  consumable: "מתכלה",
-  rented: "בהשכרה",
+  owned: "מהמחסן שלי",
+  rented: "שוכרים לאירוע",
+  consumable: "קונים לכל אירוע",
 };
 
+/** The consequence, in the designer's words — what the רכש screen does with the row. */
 export const STOCK_KIND_HINT: Record<StockKind, string> = {
-  owned: "יש לך את זה ואתה מציב שוב בכל אירוע. ברכש נבדק השיא — כמה צריך ביום העמוס ביותר.",
-  consumable: "נגמר אחרי השימוש. ברכש מסוכם כמה צריך להזמין בטווח.",
-  rented: "מובא מספק לאירוע אחד וחוזר. ברכש מופיע כשורת הזמנה לכל אירוע בנפרד.",
+  owned: "ברכש תראו כמה חסר ביום עמוס, מול כמה יש לכם.",
+  rented: "יופיע בהזמנה לספק — שורה לכל אירוע.",
+  consumable: "יסוכם להזמנה אחת לספק לכל הטווח.",
 };
+
+/** Needs a supplier to become an order: anything not laid from the studio's own store. */
+export const isSourced = (kind: StockKind | undefined): boolean => (kind ?? "owned") !== "owned";
 
 // A stretch product (a drape, a carpet — see CategoryDef.sizing) has no width or depth here: it is
 // cut or laid to whatever it has to cover, so its size is a property of the PLACEMENT, not of the
@@ -449,6 +458,11 @@ export interface Product {
   stockQty?: number;
   orderUnit?: string; // what the SUPPLIER sells in ("גבעולים") when it isn't the placed unit
   orderFactor?: number; // order-units per placed unit; absent = 1
+  /** פחת — the percentage ordered ON TOP of what the plan counts, on a consumable: "order 10% more
+   *  roses than the centrepieces need". A rule about the product like `orderFactor`, never a record
+   *  of what was used (procurement is derived — CLAUDE.md). Whole percent. Absent = the category's
+   *  default (CategoryDef.defaultSpareRate), else none. */
+  spareRate?: number;
 
   /** Set on a COMPOSITE item (category "composites", lib/catalog/composition.ts): what it is made
    *  of, as the pieces stand together. Absent on every ordinary row. */

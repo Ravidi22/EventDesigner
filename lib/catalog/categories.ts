@@ -124,6 +124,10 @@ export interface CategoryDef {
    *  then stored on the product, so a studio that rents its chairs rather than owning them can say
    *  so without the category disagreeing with the row. */
   defaultStock?: StockKind;
+  /** פחת for a consumable of this category when the row sets none (Product.spareRate): cut flowers
+   *  and the arrangements made of them lose stems to the bucket, so the florist's order is always a
+   *  little over the count. Whole percent. */
+  defaultSpareRate?: number;
   /** Absent/true = the drawer asks for height and will not save without one (most of the catalog —
    *  it is what the 3D visualisation stands the item up with). False = this category has no height
    *  of its own to ask for: a cloth drapes over its table's height rather than carrying one, and a
@@ -179,7 +183,7 @@ export const CATEGORIES: CategoryDef[] = [
   // the arrangement carries a flower spec (`flowers` — rows of flower × stems, lib/catalog/
   // flowers.ts) and typed only when it carries none. How many stems the supplier sells in a bunch
   // is a different question, and it stays where it lives — orderUnit.
-  { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", flowers: true },
+  { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", defaultSpareRate: 10, flowers: true },
   // The VESSEL — a vase, an urn, a footed bowl, a glass cylinder — as the studio stocks it: bought
   // once and set again at every event, so owned. Not a centrepiece: that is what is arranged in it,
   // used up and priced as a design, and a catalog that filed the 80cm gold vase there would count it
@@ -190,9 +194,9 @@ export const CATEGORIES: CategoryDef[] = [
   // usual one per kind), the height the stem's length, neither required. Consumable, and what an
   // arrangement's spec rows are made of; a supplier organisation publishes these on the
   // marketplace, and a studio that copies one can still drop it on a table as a single head.
-  { id: "flowers", label: "פרחים", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
-  { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
-  { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable" },
+  { id: "flowers", label: "פרחים", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
+  { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
+  { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   // Table lamps — a turned base under a linen shade, set along a knights table like candlesticks.

@@ -9,6 +9,7 @@ import { flowerSummary } from "@/lib/catalog/flowers";
 import { Menu, type MenuItem } from "@/components/menu";
 import { ProductImage } from "./product-image";
 import { compositeLine, compositeTotal } from "./composite-summary";
+import { SourcingChip } from "./sourcing-chip";
 
 // The whole card is one click target (opens the drawer), but the actions need their own click
 // handlers — nesting a <button> in a <button> isn't valid HTML, so the "whole card clickable"
@@ -113,6 +114,8 @@ export function ProductCard({
           </div>
         </div>
 
+        <SourcingChip product={product} className="pointer-events-none relative shrink-0" />
+
         <span className="pointer-events-none relative flex shrink-0 items-baseline gap-1">
           <span className="nums text-lg font-bold text-ink">{formatPrice(price)}</span>
           {priceNote && <span className="text-xs text-muted">{priceNote}</span>}
@@ -179,6 +182,7 @@ export function ProductCard({
               </span>
             </>
           )}
+          <SourcingChip product={product} className="ms-auto" />
         </div>
 
         {tags.length > 0 && (

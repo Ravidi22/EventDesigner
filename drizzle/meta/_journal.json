@@ -169,6 +169,13 @@
       "when": 1793356172799,
       "tag": "0023_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793356701197,
+      "tag": "0024_spare_rate",
+      "breakpoints": true
     }
   ]
 }

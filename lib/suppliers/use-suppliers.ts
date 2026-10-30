@@ -57,6 +57,48 @@ export function useSupplierList(enabled: boolean): SupplierSummary[] {
   return list;
 }
 
+/** The list AND a way to add one by name — for the pickers that must not send the designer to
+ *  /suppliers first (the product drawer's, the catalog's bulk bar, the "ללא ספק" group). The new
+ *  supplier is a name only; phone and what they stock are filled on /suppliers later. */
+export function useSupplierPicker(enabled: boolean): {
+  suppliers: SupplierSummary[];
+  add: (name: string) => Promise<SupplierSummary | null>;
+} {
+  const [list, setList] = useState<SupplierSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || loaded) return;
+    let live = true;
+    fetchSuppliers()
+      .then((s) => {
+        if (!live) return;
+        setList(s);
+        setLoaded(true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [enabled, loaded]);
+
+  const add = useCallback(async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    try {
+      const id = crypto.randomUUID();
+      const next = await saveSupplier({ id, name: trimmed });
+      setList(next);
+      setLoaded(true);
+      return next.find((s) => s.id === id) ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  return { suppliers: list, add };
+}
+
 export function useSuppliers(): SuppliersHandle {
   const [suppliers, setSuppliers] = useState<SupplierSummary[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);

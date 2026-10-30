@@ -78,6 +78,9 @@ function buildItemIndex(
       unit: (product.priceUnit ?? "unit") as MeasureUnit,
       orderUnit: product.orderUnit,
       orderFactor: product.orderFactor,
+      // פחת: the row's own, else the category's (cut flowers 10%). Meaningful on a consumable only;
+      // orderQuantity ignores it on anything else.
+      spareRate: product.spareRate ?? cat?.defaultSpareRate,
       costPrice: product.costPrice,
       stockQty: product.stockQty,
     };
@@ -114,6 +117,8 @@ function buildItemIndex(
               unit: "unit",
               orderUnit: field.suffix,
               orderFactor: f.qty,
+              // The stems lose what the arrangement loses.
+              spareRate: base.spareRate,
             });
             return key;
           }),

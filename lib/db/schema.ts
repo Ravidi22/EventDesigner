@@ -532,6 +532,10 @@ export const products = pgTable(
     /** Order-units per placed unit — 7 stems per centrepiece. NULL means 1, which is right for most
      *  of the catalog. Generalises the `arms` multiplier the packing list already applies. */
     orderFactor: numeric("order_factor", { precision: 10, scale: 3 }),
+    /** פחת — whole percent ordered on top of what the plan counts, on a consumable (Product.spareRate).
+     *  A rule about the product like `order_factor`, never a usage figure: procurement stays derived.
+     *  NULL = the category's default (cut flowers 10%), else none. */
+    spareRate: integer("spare_rate"),
 
     createdAt: created(),
     updatedAt: updated(),

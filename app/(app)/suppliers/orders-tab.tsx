@@ -22,7 +22,7 @@ export function StatusChip({ status }: { status: OrderStatus }) {
 
 const day = (iso: string) => iso.slice(0, 10);
 
-export function OrdersTab() {
+export function OrdersTab({ onExpense }: { onExpense?: (order: Order) => void }) {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -69,6 +69,11 @@ export function OrdersTab() {
         const actions: MenuItem[] = (["confirmed", "delivered", "declined"] as const)
           .filter((s) => s !== o.status)
           .map((s) => ({ label: `סימון: ${ORDER_STATUS_LABEL[s]}`, onSelect: () => void mark(o.id, s) }));
+        // A delivered order is a bill about to arrive: the ledger row is prefilled from it (the
+        // 10-14 spec's §4), typed only where the invoice differs. Never offered on a declined one.
+        if (onExpense && o.status !== "declined") {
+          actions.push({ label: "רישום הוצאה מההזמנה", onSelect: () => onExpense(o), separated: true });
+        }
         const expanded = open === o.id;
         return (
           <li key={o.id} className="rounded-md border border-border bg-surface px-4 py-3">

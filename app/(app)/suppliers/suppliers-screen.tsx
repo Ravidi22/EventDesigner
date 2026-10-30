@@ -19,12 +19,16 @@ import { OrdersTab } from "./orders-tab";
 
 type Tab = "suppliers" | "expenses" | "procurement" | "orders";
 
+// The derived tab first, the typed ledger last (2026-10-30): רכש is what the screen is for, and it
+// is the one tab that fills itself.
 const TABS: { id: Tab; label: string }[] = [
-  { id: "suppliers", label: "ספקים" },
-  { id: "expenses", label: "הוצאות" },
   { id: "procurement", label: "רכש" },
   { id: "orders", label: "הזמנות" },
+  { id: "suppliers", label: "ספקים" },
+  { id: "expenses", label: "הוצאות" },
 ];
+
+const DEFAULT_TAB: Tab = "procurement";
 
 const isTab = (v: string | undefined): v is Tab => TABS.some((t) => t.id === v);
 
@@ -44,7 +48,8 @@ export function SuppliersScreen({
   const { products } = useCatalog();
   const { events } = useEvents();
 
-  const [tab, setTab] = useState<Tab>(isTab(initialTab) ? initialTab : "suppliers");
+  // Arriving with `?event=` is arriving for the ledger.
+  const [tab, setTab] = useState<Tab>(isTab(initialTab) ? initialTab : initialEventId ? "expenses" : DEFAULT_TAB);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -198,7 +203,19 @@ export function SuppliersScreen({
 
       {tab === "procurement" && <ProcurementTab />}
 
-      {tab === "orders" && <OrdersTab />}
+      {tab === "orders" && (
+        <OrdersTab
+          onExpense={(o) =>
+            // The order's supplier, its estimated total and a one-line description; the amount is
+            // what the invoice says, so it is the field left to correct.
+            setEditingExpense({
+              ...blankExpense(o.supplierId),
+              amount: o.cost,
+              description: `הזמנה ל${o.supplierName} — ${o.lines.length} שורות (${o.windowFrom} – ${o.windowTo})`,
+            })
+          }
+        />
+      )}
 
       <SupplierDrawer
         supplier={editingSupplier}
