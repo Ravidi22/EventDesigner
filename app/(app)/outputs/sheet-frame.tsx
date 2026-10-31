@@ -201,13 +201,23 @@ export function SheetFrame({
   // is dropped rather than drawn over the border.
   // The count, at the band's far end — read last, after the drawing and its key.
   const summaryRoom = summary ? summary.length * LEGEND_FONT_MM * 0.52 + 6 : 0;
-  const laidLegend: (LegendRow & { swatchX: number; textX: number; fits: boolean })[] = [];
-  for (let i = 0, cursor = barLeft - 10; i < rows.length; i++) {
+  // Two lines in the band when one will not hold them (a colour booklet's key names every kind on
+  // the sheet, and the stage sheet adds a row per deck height): a row that would run past the
+  // summary starts the second line back at the bar; only one that fits on neither is dropped.
+  const laidLegend: (LegendRow & { swatchX: number; textX: number; fits: boolean; line: number })[] = [];
+  for (let i = 0, cursor = barLeft - 10, line = 0; i < rows.length; i++) {
+    const width = SWATCH_MM + 1.6 + rows[i].label.length * LEGEND_FONT_MM * 0.55 + 6;
+    if (cursor - width <= left + summaryRoom && line === 0 && cursor < barLeft - 10) {
+      line = 1;
+      cursor = barLeft - 10;
+    }
     const swatchX = cursor - SWATCH_MM;
     const textX = swatchX - 1.6;
-    cursor = textX - rows[i].label.length * LEGEND_FONT_MM * 0.55 - 6;
-    laidLegend.push({ ...rows[i], swatchX, textX, fits: cursor > left + summaryRoom });
+    cursor -= width;
+    laidLegend.push({ ...rows[i], swatchX, textX, fits: cursor > left + summaryRoom, line });
   }
+  // The second line sits under the first, inside the band (SCALE_BAND_MM).
+  const legendY = (line: number) => barTop + (laidLegend.some((r) => r.line === 1) ? 0.6 : 1.6) + line * (SWATCH_MM + 1.2);
 
   // FIVE cells, start (right) to end (left) in the order they are read, each a value and an optional
   // muted second line — what belongs together shares a cell (the sheet and its number in the set,
@@ -304,10 +314,10 @@ export function SheetFrame({
           {laidLegend.map((r, i) =>
             r.fits ? (
               <g key={i}>
-                <LegendSwatchGlyph swatch={r.swatch} mark={r.mark} color={r.color} x={r.swatchX} y={barTop + 1.6} size={SWATCH_MM} />
+                <LegendSwatchGlyph swatch={r.swatch} mark={r.mark} color={r.color} x={r.swatchX} y={legendY(r.line)} size={SWATCH_MM} />
                 <text
                   x={r.textX}
-                  y={barTop + 1.6 + SWATCH_MM / 2}
+                  y={legendY(r.line) + SWATCH_MM / 2}
                   direction="rtl"
                   textAnchor="start"
                   dominantBaseline="central"

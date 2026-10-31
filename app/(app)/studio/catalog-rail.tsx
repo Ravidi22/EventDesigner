@@ -11,7 +11,7 @@ import { catalogBox } from "@/lib/studio/footprint";
 import { ChairBlock } from "@/components/chair-block";
 import { CompositionPieces, compositionBox } from "@/components/composition-drawing";
 import type { Product } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, categoryInPass, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { fetchFolder, fetchImages } from "@/lib/gallery/actions";
 import { likedProductIds } from "@/lib/gallery/folder-logic";
@@ -39,6 +39,7 @@ import { carryProduct, carryRows, dropCarried, rowsToolId } from "@/lib/studio/d
 export function CatalogRail({
   products: all = [],
   groups,
+  pass,
   hint,
   mmPerPx,
   onAddProduct,
@@ -51,6 +52,9 @@ export function CatalogRail({
 }: {
   products?: Product[];
   groups?: CategoryGroupId[];
+  /** The drawing pass this rail serves: its scope is the pass's (categoryInPass — a rug is the hall's
+   *  though its department is not), the departments offered `groups`. Absent = `groups` alone. */
+  pass?: "hall" | "design";
   hint?: string;
   /** The canvas's current zoom, in world mm per screen pixel — a ref the canvas writes and this rail
    *  reads once, at the moment a drag starts, so the picture under the pointer is the item at the
@@ -123,7 +127,7 @@ export function CatalogRail({
     const byId = new Map(products.map((p) => [p.id, p]));
     const addedSet = new Set(addedIds);
     const likedSet = new Set(likedIds);
-    const inScope = (p: Product) => !allowedGroups || allowedGroups.has(CATEGORY_BY_ID[p.category]?.group);
+    const inScope = (p: Product) => (pass ? categoryInPass(p.category, pass) : !allowedGroups || allowedGroups.has(CATEGORY_BY_ID[p.category]?.group));
     const match = (p: Product) => inScope(p) && matchesFilters(p, filters);
     // The event folder is filtered too, not exempted: a search for "פמוט" that still shows six
     // liked chuppah photos above the result is a search that didn't happen.
@@ -133,7 +137,7 @@ export function CatalogRail({
       .filter((p): p is Product => !!p && !addedSet.has(p.id) && match(p));
     const rest = products.filter((p) => !addedSet.has(p.id) && !likedSet.has(p.id) && match(p));
     return { added, liked, rest };
-  }, [filters, addedIds, likedIds, products, allowedGroups]);
+  }, [filters, addedIds, likedIds, products, allowedGroups, pass]);
 
   // "שורות כיסאות" — a block of the studio's first chair in rows, for a ceremony (lib/design-document/
   // chair-rows.ts). One card, at the head of the catalog, wherever the chairs are in scope and the

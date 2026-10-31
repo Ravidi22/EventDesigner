@@ -28,7 +28,7 @@ import { featureStage, type VenueStructure } from "@/lib/venues/structure";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { catalogBox } from "@/lib/studio/footprint";
-import { bowsOf, rugPolygon } from "@/lib/studio/rug-shape";
+import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { turn } from "./frame";
 import { rectOutline } from "@/lib/design-document/stage";
 import { primeCatalog } from "@/lib/catalog/storage";
@@ -123,7 +123,7 @@ function rugOutline(p: Placement): Point[] | null {
   if (!product || product.category !== "rugs") return null;
   const { widthMm, depthMm } = p.sizeMm ?? catalogBox(product);
   // The four corners, or — with curved sides — the outline flattened (lib/studio/rug-shape.ts).
-  const corners = rugPolygon(widthMm, depthMm, bowsOf(p));
+  const corners = rugPolygon(widthMm, depthMm, rugShapeOf(p));
   return corners.map((c) => {
     const t = turn(c, p.rotation ?? 0);
     return { x: p.position.x + t.x, y: p.position.y + t.y };

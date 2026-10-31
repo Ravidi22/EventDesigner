@@ -9,9 +9,10 @@
 // of lib/studio.
 import type { Point } from "@/lib/studio/hall";
 import type { VenueStructure } from "@/lib/venues/structure";
-import { nodeMap, wallPoints } from "@/lib/venues/structure";
+import { isDoor, nodeMap, wallPoints } from "@/lib/venues/structure";
 import { absoluteControlPoints, cubicPointAt, pointAtDistance, projectOntoWall, wallLengthMm } from "./geometry";
 import type { WallSpan } from "@/lib/design-document/types";
+import type { DoorOpening } from "@/lib/design-document/stage";
 import { isMain } from "../self-check";
 
 export interface WallSegment {
@@ -230,6 +231,31 @@ export function nearestWall(structure: VenueStructure, p: Point): NearestWall | 
 /** The span a freshly dropped drape gets: the whole wall. Shortening it is a drag away. */
 export const WHOLE_WALL = { from: 0, to: 1 } as const;
 
+/** Every DOOR's opening in the room — its two jambs, on the wall's line (on a bowed wall, on the bow,
+ *  at the door's own parameter as doorGeometry cuts it). Windows are not openings anyone walks
+ *  through. What a stage reads to set a flight into itself at a door (lib/design-document/stage.ts
+ *  baseAtDoor). */
+export function doorOpenings(structure: VenueStructure): DoorOpening[] {
+  const nodes = nodeMap(structure);
+  const out: DoorOpening[] = [];
+  for (const e of structure.entrances) {
+    if (!isDoor(e)) continue;
+    const wall = structure.walls.find((w) => w.id === e.wallId);
+    const pts = wall ? wallPoints(structure, wall, nodes) : null;
+    if (!wall || !pts) continue;
+    const len = wallLengthMm(pts.a, pts.b) || 1;
+    const curve = wall.curve;
+    const at = curve
+      ? (d: number) => {
+          const { c1, c2 } = absoluteControlPoints(pts.a, pts.b, curve);
+          return cubicPointAt(pts.a, c1, c2, pts.b, clamp01(d / len));
+        }
+      : (d: number) => pointAtDistance(pts.a, pts.b, d);
+    out.push({ a: at(e.distanceMm - e.widthMm / 2), b: at(e.distanceMm + e.widthMm / 2) });
+  }
+  return out;
+}
+
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
@@ -281,6 +307,17 @@ if (isMain(import.meta.url)) {
   assert(nearestWall(structure, { x: 200, y: 4000 })!.wallId === "w-side", "…and a drop by the side wall picks that one");
   assert(nearestWall(structure, { x: 9000, y: 5500 })!.wallId !== "w-lip", "an edge is a boundary, not something to hang a drape on");
   assert(nearestWall({ nodes: [], walls: [], entrances: [], features: [] }, { x: 0, y: 0 }) === null, "no walls, no anchor");
+
+  // A door's opening: its jambs on the wall, half its width either side of its middle; a window is
+  // no opening to walk through.
+  const doors = doorOpenings({
+    ...structure,
+    entrances: [
+      { id: "d", wallId: "w-long", distanceMm: 3000, widthMm: 1000, swingInward: true, doubleDoor: false },
+      { id: "w", wallId: "w-long", distanceMm: 7000, widthMm: 2000, swingInward: true, doubleDoor: false, kind: "window" },
+    ],
+  });
+  assert(doors.length === 1 && near(doors[0].a.x, 2500) && near(doors[0].b.x, 3500) && near(doors[0].a.y, 0), "a door is its opening on the wall, a window is not one");
 
   // A bowed wall: a span follows the bow, is measured along it, and a point beside the bow finds
   // the bow — not the chord it bows away from.

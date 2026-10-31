@@ -6,7 +6,7 @@ import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
 import { carryHung } from "../studio/hang-over";
-import { cleanBows } from "../studio/rug-shape";
+import { cleanBows, cleanCorners } from "../studio/rug-shape";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
 const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
@@ -19,6 +19,8 @@ export type Action =
   // Take these tables out of the numbering (DesignTable.unnumbered), or put them back — a block by
   // all its tables at once. Back in, each takes a number nobody else shows (freeNumbers).
   | { type: "setTablesNumbered"; tableIds: string[]; numbered: boolean }
+  /** Pin tables and items where they stand, or free them (DesignTable.locked / Placement.locked). */
+  | { type: "setLocked"; refs: { kind: "table" | "placement"; id: string }[]; locked: boolean }
   | { type: "styleTable"; id: string; style: ElementStyle | undefined }
   // How many chairs go round this one table. Seeded from the catalog row when it was dropped, and
   // editable after: a head table seats what the family is, not what the product says.
@@ -105,6 +107,8 @@ export type Action =
   | { type: "resizePlacement"; id: string; sizeMm: { widthMm: number; depthMm: number } | null }
   // A rug's sides curved (Placement.bows). null, or every side straight, takes the field away.
   | { type: "setPlacementBows"; id: string; bows: [number, number, number, number] | null }
+  // A rug's corners rounded (Placement.corners). null, or every corner square, takes the field away.
+  | { type: "setPlacementCorners"; id: string; corners: [number, number, number, number] | null }
   | { type: "removePlacement"; id: string }
   // A stage re-drawn, re-fronted, or stretched by its handles — its build, and where it now stands.
   // `mirrored: false` when the outline was re-drawn in the room: a new outline is already the way
@@ -370,6 +374,24 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         tables: doc.tables.map((t) => (t.id === action.id ? { ...t, number } : t)),
       };
     }
+    case "setLocked": {
+      const tables = new Set(action.refs.filter((r) => r.kind === "table").map((r) => r.id));
+      const items = new Set(action.refs.filter((r) => r.kind === "placement").map((r) => r.id));
+      const changes = (x: { id: string; locked?: boolean }, ids: Set<string>) => ids.has(x.id) && !!x.locked !== action.locked;
+      if (!doc.tables.some((t) => changes(t, tables)) && !doc.placements.some((p) => changes(p, items))) return doc;
+      // Set = the flag; cleared = the key gone, so a freed thing is the plain object it was.
+      const flag = <T extends { id: string; locked?: boolean }>(x: T): T => {
+        if (action.locked) return { ...x, locked: true };
+        const { locked: _off, ...rest } = x;
+        void _off;
+        return rest as T;
+      };
+      return {
+        ...doc,
+        tables: doc.tables.map((t) => (changes(t, tables) ? flag(t) : t)),
+        placements: doc.placements.map((p) => (changes(p, items) ? flag(p) : p)),
+      };
+    }
     case "setTablesNumbered": {
       const ids = new Set(action.tableIds);
       if (!doc.tables.some((t) => ids.has(t.id) && !!t.unnumbered === action.numbered)) return doc;
@@ -586,6 +608,16 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
           const bows = action.bows ? cleanBows(action.bows) : undefined;
           const { bows: _old, ...rest } = p;
           return bows ? { ...rest, bows } : rest;
+        }),
+      };
+    case "setPlacementCorners":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const corners = action.corners ? cleanCorners(action.corners) : undefined;
+          const { corners: _old, ...rest } = p;
+          return corners ? { ...rest, corners } : rest;
         }),
       };
     case "removePlacement": {
@@ -1572,6 +1604,10 @@ if (isMain(import.meta.url)) {
     assert(apply(curved, { type: "resizePlacement", id: "p", sizeMm: { widthMm: 3000, depthMm: 900 } }).placements[0].bows?.[3] === -0.1, "stretching keeps the curves (they are fractions)");
     assert(!("bows" in apply(curved, { type: "setPlacementBows", id: "p", bows: [0, 0, 0, 0] }).placements[0]), "all sides straight takes the field away");
     assert(!("bows" in apply(curved, { type: "setPlacementBows", id: "p", bows: null }).placements[0]), "null straightens it too");
+    const rounded = apply(sized, { type: "setPlacementCorners", id: "p", corners: [300, 300, 0, 0] });
+    assert(rounded.placements[0].corners?.[0] === 300 && rounded.placements[0].corners?.[2] === 0, "a rug's corners round");
+    assert(apply(rounded, { type: "resizePlacement", id: "p", sizeMm: { widthMm: 3000, depthMm: 900 } }).placements[0].corners?.[1] === 300, "stretching keeps the radius (it is a measurement)");
+    assert(!("corners" in apply(rounded, { type: "setPlacementCorners", id: "p", corners: null }).placements[0]), "null squares them again");
 
     // A swap keeps the table and replaces only what described its old catalog row.
     const dressed: DesignDocumentContent = {

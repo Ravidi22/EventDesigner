@@ -39,7 +39,7 @@ import { Segmented } from "@/components/segmented";
 import { VENUE_EDGE_KINDS, VENUE_EDGE_LABEL, edgeRows, edgesMatter, featureGaps, takesEdgeItems, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { BUILDING_HEIGHT_MM, featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
 import { SurfaceTiles } from "@/components/surface-tiles";
-import type { WallDistance } from "@/lib/design-document/stage";
+import type { DoorOpening, WallDistance } from "@/lib/design-document/stage";
 import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
 import { Popover } from "@/components/popover";
 import { Menu, type MenuItem } from "@/components/menu";
@@ -165,10 +165,12 @@ export function SelectionBar({
   onRestack,
   canRestack,
   onAlign,
+  onAlignPreview,
   onLock,
   activeEdge,
   edgePick,
   wallDistance,
+  doors,
   onSelectEdge,
   onEdgeChange,
   onRemoveEdge,
@@ -201,6 +203,8 @@ export function SelectionBar({
   canRestack: (how: Restack) => boolean;
   /** Lines the selected features up by the first of them (lib/studio/align.ts). */
   onAlign: (op: AlignOp) => void;
+  /** The יישור row under the pointer (null when none) — the host draws the line it would align to. */
+  onAlignPreview?: (op: AlignOp | null) => void;
   /** Pins the selected features in place, or frees them (StructureFeature.locked). */
   onLock: (locked: boolean) => void;
   /** THE STAGE'S EDGES — the sketch's own stairs and ramps (lib/venues/stage-edges.ts): the item
@@ -209,6 +213,8 @@ export function SelectionBar({
   activeEdge?: { featureId: string; itemId: string } | null;
   edgePick?: { featureId: string; kind: VenueEdgeKind } | null;
   wallDistance?: WallDistance;
+  /** The doors' openings: a flight set into a stage at a door fits though the side hugs the wall. */
+  doors?: readonly DoorOpening[];
   onSelectEdge: (featureId: string, itemId: string | null) => void;
   onEdgeChange: (featureId: string, itemId: string, patch: { kind?: VenueEdgeKind; widthMm?: number; risers?: number | null; full?: boolean; inner?: boolean }) => void;
   onRemoveEdge: (featureId: string, itemId: string) => void;
@@ -473,7 +479,11 @@ export function SelectionBar({
             label="יישור — לפי הראשון שנבחר"
             icon={AlignCenterVertical}
             side="top"
-            items={ALIGN_OPS.filter((op) => !needsThree(op) || units > 2).map<MenuItem>((op) => ({ label: ALIGN_LABEL[op], onSelect: () => onAlign(op) }))}
+            items={ALIGN_OPS.filter((op) => !needsThree(op) || units > 2).map<MenuItem>((op) => ({
+              label: ALIGN_LABEL[op],
+              onSelect: () => onAlign(op),
+              onHover: onAlignPreview ? (h) => onAlignPreview(h ? op : null) : undefined,
+            }))}
           />
         )}
         {features.length > 0 && (
@@ -863,7 +873,7 @@ export function SelectionBar({
     .join(" · ");
 
   // ── one of the stage's edge items, picked on the plan: the sketch's own bar for it ───────────
-  const it = activeEdge?.featureId === feature.id ? edgeRows(feature, wallDistance).find((r) => r.id === activeEdge.itemId) : undefined;
+  const it = activeEdge?.featureId === feature.id ? edgeRows(feature, wallDistance, doors).find((r) => r.id === activeEdge.itemId) : undefined;
   if (it) {
     const change = (patch: Parameters<typeof onEdgeChange>[2]) => onEdgeChange(feature.id, it.id, patch);
     return (
@@ -1162,7 +1172,7 @@ export function SelectionBar({
           bare edge is called a fault. */}
       {takesEdgeItems(feature) &&
         (() => {
-          const rows = edgeRows(feature, wallDistance);
+          const rows = edgeRows(feature, wallDistance, doors);
           const gapsMm = featureGaps(feature, wallDistance).reduce((t, g) => t + g.lengthMm, 0);
           const flights = rows.filter((r) => r.kind === "stairs");
           const ramps = rows.filter((r) => r.kind === "ramp").length;

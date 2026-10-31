@@ -13,7 +13,7 @@ import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { resolveSpan, wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
-import { bowFromPoint, bowHandle, bowedRug, bowsOf, withBow, type RugBows } from "@/lib/studio/rug-shape";
+import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
 import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
 import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
@@ -42,13 +42,19 @@ import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
 import { Grid2x2Plus, ShieldAlert } from "lucide-react";
-import { lengthSnapper, type LaidDeck, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
-import { constrainNext, cornerAngle, ellipseArea, halfRoundArea, moveVertex, pushSide, removeVertex, selfIntersects, setCornerAngle, setSideLength, splitSide, squareUp, type AreaShape } from "@/lib/studio/stage-draw";
+import { lengthSnapper, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
+import { clipToWalls, crossesWalls, wallPolylines } from "@/lib/studio/wall-clip";
+import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
+import { sameDeckRef, type DeckRef } from "./stage-fill-panel";
+import type { StageDeck, StageHole } from "@/lib/design-document/stage";
+import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
+import { constrainNext, cornerAngle, DRAW_ANGLE_STEP_DEG, ellipseArea, firstSideAngles, halfRoundArea, laterSideAngles, moveVertex, pushSide, removeVertex, selfIntersects, setCornerAngle, setSideLength, splitSide, squareUp, wallFrameDeg, type AreaShape, type DrawAngles } from "@/lib/studio/stage-draw";
 import {
   benchInRoom,
   edgeGaps,
   edgeItemInRoom,
   edgeItemShape,
+  edgeItemStrokes,
   stageCorners,
   layStage,
   plainRect,
@@ -72,6 +78,7 @@ import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror
 import { polysBox, type ClearanceIssue, type ClearanceSubject } from "@/lib/studio/proximity";
 import { itemGeometry } from "./plan-geometry";
 import { constrainAngleDeg, type SnapBox } from "@/lib/studio/snap";
+import type { AlignGuide } from "@/lib/studio/align";
 import { carriedItem, carriedOf, type CarriedItem } from "@/lib/studio/drag-payload";
 import type { Product } from "@/lib/catalog/types";
 import { ZoneRegions, StructureFeatures, StructureDoors } from "@/components/venue-plan";
@@ -215,8 +222,10 @@ export function CanvasStage({
   onRotateMany,
   onEndDrag,
   alignKeyBox,
+  alignGuide,
   onResizePlacement,
   onBowPlacement,
+  onCornerPlacement,
   onSpanPlacement,
   onDropProduct,
   onScale,
@@ -233,6 +242,9 @@ export function CanvasStage({
   onAreaRefused,
   areaRefDeg,
   areaPreview,
+  onDeckPick,
+  onDeckMove,
+  deckMenu,
   onPickFront,
   onAreaReshape,
   areaLengthSnap,
@@ -295,12 +307,17 @@ export function CanvasStage({
   /** The KEY of a multi-selection — what יישור lines the others up with (lib/studio/align.ts) —
    *  as its turned box. Marked on the plan so the designer can see which one stays put. */
   alignKeyBox?: SnapBox | null;
+  /** The line the יישור row under the pointer would align to (`alignGuide`), drawn while the row
+   *  is aimed at — so "לימין" shows which right before it moves anything. */
+  alignGuide?: AlignGuide | null;
   /** A carpet stretched by its corner: the new size, and the centre it moved to (the opposite
    *  corner stays put, which is what dragging one corner means). */
   onResizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
   /** A rug's side pulled out or pushed in by its middle (null = all straight again). Absent on a host
    *  that only looks, which draws the curves but offers no handles. */
   onBowPlacement?: (id: string, bows: RugBows | null) => void;
+  /** A rug's corner rounded by its grip; null squares them all. */
+  onCornerPlacement?: (id: string, corners: RugCorners | null) => void;
   /** A drape's run along its wall, after dragging one of its ends. */
   onSpanPlacement: (id: string, span: WallSpan) => void;
   onDropProduct: (productId: string, x: number, y: number) => void;
@@ -335,7 +352,26 @@ export function CanvasStage({
   areaRefDeg?: number;
   /** The drawn area and the decks it would get — a preview, drawn over everything, taking no clicks.
    *  `curved`: a round area, whose dozens of chords are no sides to label. */
-  areaPreview: { polygon: Point[]; front: number; decks: LaidDeck[]; missing?: MissingPiece[]; curved?: boolean } | null;
+  areaPreview: {
+    polygon: Point[];
+    front: number;
+    /** The decks as laid, in the room — a piece (put by hand, or whole) says which (StageDeck.piece). */
+    decks: StageDeck[];
+    missing?: MissingPiece[];
+    curved?: boolean;
+    /** The decks are a step behind the outline (laid once it settles): drawn dimmed. */
+    stale?: boolean;
+    /** The stage's own frame in the room — what a dragged deck is snapped in (lib/studio/deck-move.ts). */
+    frame: { position: Point; rotation: number };
+    /** The spots left bare on purpose (StagePiece.hole), in the room; and which deck or hole is picked. */
+    holes?: StageHole[];
+    picked?: DeckRef;
+  } | null;
+  /** A deck of the preview clicked (picked for the bar's "פלטה" chip) or dragged to a new centre
+   *  in the room; and the rows of its right-click menu. Absent = the decks are a picture. */
+  onDeckPick?: (ref: DeckRef | null) => void;
+  onDeckMove?: (ref: DeckRef, centre: Point) => void;
+  deckMenu?: (ref: DeckRef) => ContextMenuItem[];
   /** A click on one of the preview's edges: that edge is the stage's front now. */
   onPickFront: (edge: number) => void;
   /** The preview's outline re-shaped by its grips (corners dragged, sides pushed, split, removed). */
@@ -606,6 +642,16 @@ export function CanvasStage({
   /** The lookups the merged pass needs: a table or placement by id, without walking a list per entry. */
   const tableById = useMemo(() => new Map(doc.tables.map((t) => [t.id, t])), [doc.tables]);
   const placementById = useMemo(() => new Map(doc.placements.map((p) => [p.id, p])), [doc.placements]);
+  /** What is pinned on this plan (DesignTable.locked / Placement.locked), as "kind:id". A locked
+   *  thing still selects and stays on `movable` (a band takes it, so it can be unlocked with the
+   *  rest), but gets no drag, nudge, handle or knob, and a group drag leaves it standing. */
+  const lockedKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of doc.tables) if (t.locked) s.add(`table:${t.id}`);
+    for (const p of doc.placements) if (p.locked) s.add(`placement:${p.id}`);
+    return s;
+  }, [doc.tables, doc.placements]);
+  const isLocked = (r: SelectionRef) => lockedKeys.has(`${r.kind}:${r.id}`);
   /** How much of each table's top its items take (catalog-resolver's tableUtilization, summed in
    *  ONE pass over the placements rather than one pass per table per render). >1 is overflow. */
   const usedByTable = useMemo(() => {
@@ -822,10 +868,14 @@ export function CanvasStage({
     setAreaTyped("");
     setRoundDraft(null);
   }
+  /** The venue's walls as polylines in the room — what a stage being drawn or reshaped may not cross. */
+  const walls = useMemo(() => wallPolylines(plan.structure), [plan.structure]);
   /** Where the next corner goes, from the pointer: the first corner snaps to walls and items like
-   *  any drag; every later one is held to 45° steps from the FIRST side and whole 10cm
-   *  (lib/studio/stage-draw.ts) — unless the snap found a wall or an item edge right on that line,
-   *  in which case it ends exactly there. Alt draws freely. Near the first corner, it closes. */
+   *  any drag; the first SIDE is held to the room's 45° grid (and along or square to a genuinely
+   *  angled wall beside it — firstSideLock), every later one to that grid and along or square to
+   *  the FIRST side (laterSideLock), and all to whole 10cm (lib/studio/stage-draw.ts) — unless the
+   *  snap found a wall or an item edge right on that line, in which case it ends exactly there. Alt
+   *  draws freely. Near the first corner, it closes. */
   const nextCorner = (ctx: CanvasLayerContext, clientX: number, clientY: number, free: boolean, typedMm?: number): Point => {
     const raw = ctx.clientToMm(clientX, clientY);
     const snapped = ctx.snap(raw, { boxes: alignTo.map((m) => m.box) });
@@ -833,29 +883,51 @@ export function CanvasStage({
     if (!last) return { x: Math.round(snapped.x), y: Math.round(snapped.y) };
     const first = areaPts[0];
     if (!typedMm && areaPts.length >= 3 && Math.hypot(raw.x - first.x, raw.y - first.y) < ctx.mm(10)) return first;
-    const ref = areaPts.length >= 2 ? (Math.atan2(areaPts[1].y - first.y, areaPts[1].x - first.x) * 180) / Math.PI : firstSideRef(first);
+    const ref = areaPts.length >= 2 ? laterSideLock(first, areaPts[1]) : firstSideLock(first);
     const c = constrainNext(last, raw, ref, {
       free,
       typedMm,
       snapLength: areaLengthSnap ? (mm) => areaLengthSnap(mm, { magnetMm: ctx.mm(8), gridMm: 100 }) : undefined,
     });
-    if (free || typedMm) return c;
+    // A side never crosses a wall: it stops on the first one in its way (lib/studio/wall-clip.ts) —
+    // a typed length and an Alt-drawn side too; a stage through a wall is never meant.
+    const inRoom = (q: Point) => (walls.length ? clipToWalls(last, q, walls) : q);
+    if (free || typedMm) return inRoom(c);
     const len = Math.hypot(c.x - last.x, c.y - last.y) || 1;
     const u = { x: (c.x - last.x) / len, y: (c.y - last.y) / len };
     const moved = Math.hypot(snapped.x - raw.x, snapped.y - raw.y) > 0.5;
     const along = (snapped.x - last.x) * u.x + (snapped.y - last.y) * u.y;
     const off = Math.abs((snapped.x - last.x) * u.y - (snapped.y - last.y) * u.x);
-    return moved && along > 0 && off < ctx.mm(10) ? { x: Math.round(last.x + u.x * along), y: Math.round(last.y + u.y * along) } : c;
+    return inRoom(moved && along > 0 && off < ctx.mm(10) ? { x: Math.round(last.x + u.x * along), y: Math.round(last.y + u.y * along) } : c);
   };
-  /** What the FIRST side is squared to: the level's stage, or the wall nearest the first corner
-   *  (its angle folded into a quarter turn — a wall at 93° squares a stage to 3°). */
-  const firstSideRef = (first: Point): number => {
-    if (areaRefDeg !== undefined) return areaRefDeg;
+  /** The angle of the wall nearest the first corner, when one stands within 3m; null otherwise. */
+  const nearWallDeg = (first: Point): number | null => {
     const near = nearestWall(plan.structure, first);
     const seg = near ? wallSegment(plan.structure, near.wallId) : null;
-    if (!seg || near!.distanceMm > 3000) return 0;
-    const a = (Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x) * 180) / Math.PI;
-    return ((a % 90) + 90) % 90;
+    if (!seg || near!.distanceMm > 3000) return null;
+    return (Math.atan2(seg.b.y - seg.a.y, seg.b.x - seg.a.x) * 180) / Math.PI;
+  };
+  /** What the FIRST side may be held to: 45° steps from the level's stage; or the room's own 45°
+   *  grid — plus, when the wall nearest the first corner genuinely stands at an angle, along that
+   *  wall or square to it (firstSideAngles in lib/studio/stage-draw.ts; a wall a few degrees off
+   *  square is read as square, so a stage beside it is not tilted with it). */
+  const firstSideLock = (first: Point): DrawAngles[] => {
+    if (areaRefDeg !== undefined) return [{ refDeg: areaRefDeg, stepDeg: DRAW_ANGLE_STEP_DEG }];
+    return firstSideAngles(nearWallDeg(first));
+  };
+  /** What every side after the first may be held to: 45° steps from the first side when drawing a
+   *  level (its frame is the stage's, and the room is not in it); otherwise the room's own 45° grid
+   *  plus along or square to the first side — a stage laid along an angled wall then goes straight
+   *  down the room's wall, or square to the angled one, as the pointer says (laterSideAngles). */
+  const laterSideLock = (first: Point, second: Point): number | DrawAngles[] => {
+    const firstDeg = (Math.atan2(second.y - first.y, second.x - first.x) * 180) / Math.PI;
+    return areaRefDeg !== undefined ? firstDeg : laterSideAngles(firstDeg);
+  };
+  /** The frame an oval's box is drawn in: the level's stage; a genuinely angled wall beside its first
+   *  corner; else the room's. Alt frees it to the room's. */
+  const ovalFrameDeg = (first: Point, free: boolean): number => {
+    if (areaRefDeg !== undefined) return areaRefDeg;
+    return free ? 0 : (wallFrameDeg(nearWallDeg(first)) ?? 0);
   };
   const areaPointer = useRef<{ x: number; y: number; alt: boolean; shift?: boolean } | null>(null);
 
@@ -887,7 +959,7 @@ export function CanvasStage({
       return { point: null, shape: { ...ellipseArea(a, d, d), label: `קוטר ${m2(d)}` } };
     }
     if (areaShape === "ellipse") {
-      const ref = firstSideRef(a);
+      const ref = ovalFrameDeg(a, free);
       const t = (-ref * Math.PI) / 180;
       const dx = (raw.x - a.x) * Math.cos(t) - (raw.y - a.y) * Math.sin(t);
       const dy = (raw.x - a.x) * Math.sin(t) + (raw.y - a.y) * Math.cos(t);
@@ -1028,7 +1100,8 @@ export function CanvasStage({
   /** The one selected thing's resize handles, when its catalog row lets it be stretched. One
    *  selection only: several things of different sizes have no one edge to pull. */
   const resizing = useMemo(() => {
-    if (selection.length !== 1) return null;
+    // A locked thing offers no handles — the whole of what the lock is for.
+    if (selection.length !== 1 || isLocked(selection[0])) return null;
     const ref = selection[0];
     if (ref.kind === "table") {
       const t = doc.tables.find((x) => x.id === ref.id);
@@ -1085,7 +1158,8 @@ export function CanvasStage({
   const edgingStage = useMemo(() => {
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
     const p = doc.placements.find((x) => x.id === selection[0].id);
-    return p?.stage ? (p as StagePlacement) : null;
+    // A locked stage's flights are not slid either (the /halls rule: "no stairs drag").
+    return p?.stage && !p.locked ? (p as StagePlacement) : null;
   }, [selection, doc]);
   const edgingGaps = useMemo(
     () =>
@@ -1117,7 +1191,8 @@ export function CanvasStage({
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
     const p = doc.placements.find((x) => x.id === selection[0].id);
     // Not a round stage: its rim is dozens of chords, and a grip on each would only dent the curve.
-    return p?.stage && !stageRect(p.stage) && !p.stage.smooth?.length ? (p as StagePlacement) : null;
+    // Not a locked one: no handles.
+    return p?.stage && !p.locked && !stageRect(p.stage) && !p.stage.smooth?.length ? (p as StagePlacement) : null;
   }, [selection, doc]);
   /** The stage as it stood when a drag of its corner or side began. */
   const shapingFrom = useRef<StagePlacement | null>(null);
@@ -1383,8 +1458,9 @@ export function CanvasStage({
     }
     if (selection.length > 1 && isSel(ref.kind, ref.id)) {
       // The pressed item is selected and draggable, so it is on `movable` and this is never empty —
-      // which is what lets the box below be taken without a guard.
-      const picked = movable.filter((m) => isSel(m.ref.kind, m.ref.id));
+      // which is what lets the box below be taken without a guard. A locked member of the selection
+      // stays where it is: the others move round it.
+      const picked = movable.filter((m) => isSel(m.ref.kind, m.ref.id) && !isLocked(m.ref));
       groupDrag.current ??= {
         start: p,
         box: unionBox(picked.map((m) => m.box)),
@@ -1500,14 +1576,16 @@ export function CanvasStage({
 
   /** Everything in the selection that HAS a facing — see the note where the handle is drawn. */
   const rotatableRefs = useMemo(
-    () => selection.filter((r) => r.kind !== "placement" || movable.some((m) => sameRef(m.ref, r))),
-    [selection, movable],
+    () => selection.filter((r) => !lockedKeys.has(`${r.kind}:${r.id}`) && (r.kind !== "placement" || movable.some((m) => sameRef(m.ref, r)))),
+    [selection, movable, lockedKeys],
   );
 
   /** Where the handle goes, and what it says it will turn. Null when there is nothing coherent to
-   *  turn — an empty selection, or one holding a cloth or a drape. */
+   *  turn — an empty selection, or one holding a cloth or a drape. A locked thing is not turned;
+   *  the knob turns the rest of the selection round it. */
   const rotatable = useMemo(() => {
-    if (rotatableRefs.length === 0 || rotatableRefs.length !== selection.length) return null;
+    const turnable = selection.filter((r) => !isLocked(r)).length;
+    if (rotatableRefs.length === 0 || rotatableRefs.length !== turnable) return null;
     const boxes = rotatableRefs
       .map((r) => movable.find((m) => sameRef(m.ref, r))?.box)
       .filter((b): b is SnapBox => !!b);
@@ -1663,7 +1741,7 @@ export function CanvasStage({
         const dx = pos.x - from.x;
         const dy = pos.y - from.y;
         const moves = movable
-          .filter((m) => isSel(m.ref.kind, m.ref.id))
+          .filter((m) => isSel(m.ref.kind, m.ref.id) && !isLocked(m.ref))
           .flatMap((m) => {
             const p = at(m.ref);
             return p ? [{ kind: m.ref.kind, id: m.ref.id, position: { x: Math.round(p.x + dx), y: Math.round(p.y + dy) } }] : [];
@@ -1681,6 +1759,7 @@ export function CanvasStage({
     focusTable: (id: string) => onFocusTable?.(id),
     resizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => onResizePlacement(id, sizeMm, position),
     bowPlacement: (id: string, bows: RugBows | null) => onBowPlacement?.(id, bows),
+    cornerPlacement: (id: string, corners: RugCorners | null) => onCornerPlacement?.(id, corners),
     selectPlacement: (id: string, additive: boolean) => onSelect({ kind: "placement", id }, additive),
     spanPlacement: (id: string, span: WallSpan) => onSpanPlacement(id, span),
   };
@@ -1695,6 +1774,7 @@ export function CanvasStage({
       focusTable: (id: string) => hostRef.current.focusTable(id),
       resizePlacement: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => hostRef.current.resizePlacement(id, sizeMm, position),
       bowPlacement: (id: string, bows: RugBows | null) => hostRef.current.bowPlacement(id, bows),
+      cornerPlacement: (id: string, corners: RugCorners | null) => hostRef.current.cornerPlacement(id, corners),
       selectPlacement: (id: string, additive: boolean) => hostRef.current.selectPlacement(id, additive),
       spanPlacement: (id: string, span: WallSpan) => hostRef.current.spanPlacement(id, span),
     }),
@@ -1973,6 +2053,46 @@ export function CanvasStage({
               </text>
             </g>
           )}
+          {/* The padlock on a locked table or item once it is selected and someone is looking for
+              the handles that are not there — /halls' own badge (components/venue-plan.tsx), over
+              the top of its turned box. */}
+          {selection.some(isLocked) && (
+            <g className="pointer-events-none" aria-hidden>
+              {selection.filter(isLocked).map((r) => {
+                const b = alignTo.find((m) => sameRef(m.ref, r))?.box;
+                if (!b) return null;
+                return (
+                  <g key={`${r.kind}:${r.id}`} transform={`translate(${b.x} ${b.y - b.depthMm / 2 - ctx.mm(16)})`}>
+                    <circle r={ctx.mm(11)} fill="#ffffff" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                    <rect x={-ctx.mm(4.5)} y={-ctx.mm(1)} width={ctx.mm(9)} height={ctx.mm(6.5)} rx={ctx.mm(1.2)} fill="var(--color-accent)" />
+                    <path
+                      d={`M ${-ctx.mm(2.8)} ${-ctx.mm(1)} v ${-ctx.mm(1.6)} a ${ctx.mm(2.8)} ${ctx.mm(2.8)} 0 0 1 ${ctx.mm(5.6)} 0 v ${ctx.mm(1.6)}`}
+                      fill="none"
+                      stroke="var(--color-accent)"
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {/* The line a יישור row would align to, while the row is under the pointer: the key's
+              edge or centre line, drawn across the whole selection in the smart guides' accent
+              (solid — it is a line things will GO to, not one they are already on). */}
+          {alignGuide && selection.length > 1 && (
+            <line
+              className="pointer-events-none"
+              aria-hidden
+              x1={alignGuide.axis === "x" ? alignGuide.at : alignGuide.from}
+              y1={alignGuide.axis === "x" ? alignGuide.from : alignGuide.at}
+              x2={alignGuide.axis === "x" ? alignGuide.at : alignGuide.to}
+              y2={alignGuide.axis === "x" ? alignGuide.to : alignGuide.at}
+              stroke="var(--color-accent)"
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
 
           {/* SAFETY DISTANCES, under everything they belong to. A halo is the item's own outline
               grown by its rule (a round-joined stroke twice the distance wide, which is exactly the
@@ -2048,7 +2168,9 @@ export function CanvasStage({
                     // footprint for the same reason: a cover consumes no room on the table it covers.)
                     cloth={sorted.coverByTable.get(t.id)}
                     ctx={ctx}
-                    drag={nodeProps({ kind: "table", id: t.id })}
+                    // A locked table (DesignTable.locked) still presses, clicks and opens — it
+                    // just does not go anywhere.
+                    drag={nodeProps({ kind: "table", id: t.id }, !t.locked)}
                     onOpen={focusTable}
                     // A grouped table draws neither a number nor a count of its own — its block draws
                     // the one of each they share.
@@ -2066,10 +2188,12 @@ export function CanvasStage({
                 <CarpetNode
                   placement={p}
                   selected={isSel("placement", p.id)}
+                  locked={p.locked}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id })}
+                  drag={nodeProps({ kind: "placement", id: p.id }, !p.locked)}
                   onResize={stable.resizePlacement}
                   onBow={onBowPlacement ? stable.bowPlacement : undefined}
+                  onCorner={onCornerPlacement ? stable.cornerPlacement : undefined}
                   onEndResize={stable.endGesture}
                 />
               </g>
@@ -2081,7 +2205,7 @@ export function CanvasStage({
                   y={p.position.y}
                   selected={isSel("placement", p.id)}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id })}
+                  drag={nodeProps({ kind: "placement", id: p.id }, !p.locked)}
                   railing={p.stage ? stageRailings?.[p.id] : undefined}
                   gaps={edgingStage?.id === p.id ? edgingGaps : undefined}
                   activeItem={edgingStage?.id === p.id ? activeEdgeItem : undefined}
@@ -2246,6 +2370,7 @@ export function CanvasStage({
               ctx={ctx}
               snap={shapingSnap ?? undefined}
               wallDistance={(q) => nearestWall(plan.structure, q)?.distanceMm ?? Infinity}
+              walls={walls}
               onBegin={() => {
                 shapingFrom.current = shapingStage;
               }}
@@ -2296,6 +2421,7 @@ export function CanvasStage({
                   // here would be true but misleading about what a drape is anchored to.
                   structure={plan.structure}
                   selected={isSel("placement", p.id)}
+                  locked={p.locked}
                   ctx={ctx}
                   onSelect={stable.selectPlacement}
                   onSpan={stable.spanPlacement}
@@ -2319,7 +2445,7 @@ export function CanvasStage({
                       y={p.position.y}
                       selected={isSel("placement", p.id)}
                       ctx={ctx}
-                      drag={nodeProps({ kind: "placement", id: p.id })}
+                      drag={nodeProps({ kind: "placement", id: p.id }, !p.locked)}
                       // Whole-body only when it is what is being worked on — and never in front of a
                       // dressed table, where the centrepiece under it must stay in reach.
                       grabbable={activeLayer === "ceiling" || (!dressingTable && isSel("placement", p.id))}
@@ -2610,36 +2736,111 @@ export function CanvasStage({
                 strokeDasharray="6 4"
                 vectorEffect="non-scaling-stroke"
               />
-              <g className="pointer-events-none">
-                {areaPreview.decks.map((d, i) =>
-                  // A whole piece — a quarter-round in a corner, a curved deck on the rim — is drawn as
-                  // its own outline.
-                  d.outline ? (
-                    <polygon
-                      key={i}
-                      points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
-                      fill="var(--color-accent-tint)"
-                      fillOpacity={0.85}
-                      stroke="var(--color-accent)"
-                      strokeWidth={1.5}
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  ) : (
-                    <rect
-                      key={i}
-                      x={-d.widthMm / 2}
-                      y={-d.depthMm / 2}
-                      width={d.widthMm}
-                      height={d.depthMm}
-                      transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-                      fill="var(--color-accent-tint)"
-                      fillOpacity={0.85}
-                      stroke="var(--color-accent)"
-                      strokeWidth={1.5}
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  ),
-                )}
+              <g className={onDeckMove ? undefined : "pointer-events-none"} opacity={areaPreview.stale ? 0.35 : 1}>
+                {(() => {
+                  // The decks and the holes, each as what the fill state knows it by (DeckRef): a
+                  // piece by its index, a laid deck by its place in the layout.
+                  type Geom = { centre: Point; rotation: number; widthMm: number; depthMm: number; outline?: Point[] };
+                  const all: { ref: DeckRef; g: Geom; hole: boolean }[] = [
+                    ...areaPreview.decks.map((d, i) => ({ ref: d.piece !== undefined ? { kind: "piece" as const, index: d.piece } : { kind: "deck" as const, index: i }, g: d as Geom, hole: false })),
+                    ...(areaPreview.holes ?? []).map((h) => ({ ref: { kind: "piece" as const, index: h.piece }, g: h as Geom, hole: true })),
+                  ];
+                  const frame = areaPreview.frame;
+                  const boxOf = (g: Geom) => deckBox(toStageFrame(frame, g.centre), g.widthMm, g.depthMm, g.rotation - frame.rotation);
+                  return all.map(({ ref, g: d, hole }, k) => {
+                    const pinnedDeck = ref.kind === "piece";
+                    const picked = sameDeckRef(areaPreview.picked, ref);
+                    const look = hole
+                      ? {
+                          fill: "var(--color-canvas)",
+                          fillOpacity: 0.9,
+                          stroke: picked ? "var(--color-accent)" : "var(--color-ink-soft)",
+                          strokeWidth: picked ? 3 : 1.5,
+                          strokeDasharray: "5 3",
+                          vectorEffect: "non-scaling-stroke" as const,
+                        }
+                      : {
+                          fill: "var(--color-accent-tint)",
+                          fillOpacity: pinnedDeck ? 1 : 0.85,
+                          stroke: "var(--color-accent)",
+                          strokeWidth: picked ? 3 : 1.5,
+                          vectorEffect: "non-scaling-stroke" as const,
+                        };
+                    /** A press on a deck: a click picks it; a drag carries it, snapped flush to its
+                     *  neighbours and the line in the STAGE's frame, and pins it where it is let go.
+                     *  The element itself is moved by a transform per frame — no render per move. */
+                    const press = onDeckMove
+                      ? (e: React.PointerEvent<SVGGElement>) => {
+                          e.stopPropagation();
+                          const el = e.currentTarget;
+                          const start = toStageFrame(frame, ctx.clientToMm(e.clientX, e.clientY));
+                          const local = toStageFrame(frame, d.centre);
+                          const box = boxOf(d);
+                          const others = all.flatMap((o, j) => {
+                            if (j === k) return [];
+                            const b = boxOf(o.g);
+                            return b ? [b] : [];
+                          });
+                          const bounds = boundsOf(areaPreview.polygon.map((q) => toStageFrame(frame, q)));
+                          let landed: Point | null = null;
+                          startPointerGesture(e, {
+                            onMove: (ev) => {
+                              const now = toStageFrame(frame, ctx.clientToMm(ev.clientX, ev.clientY));
+                              const want = { x: local.x + now.x - start.x, y: local.y + now.y - start.y };
+                              const at = box && !ev.altKey ? snapDeck({ ...box, centre: want }, others, bounds, ctx.mm(8)) : { x: Math.round(want.x), y: Math.round(want.y) };
+                              const room = toRoom(frame, at);
+                              landed = { x: Math.round(room.x), y: Math.round(room.y) };
+                              el.setAttribute("transform", `translate(${landed.x - d.centre.x} ${landed.y - d.centre.y})`);
+                            },
+                            onEnd: (_ev, moved) => {
+                              el.removeAttribute("transform");
+                              if (moved && landed) onDeckMove(ref, landed);
+                              else onDeckPick?.(ref);
+                            },
+                          });
+                        }
+                      : undefined;
+                    /** Right-click: the deck's own verbs (studio-screen deckMenu), on the deck picked. */
+                    const menu = deckMenu
+                      ? (e: React.MouseEvent<SVGGElement>) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!picked) onDeckPick?.(ref);
+                          ctx.openMenu?.(e.clientX, e.clientY, deckMenu(ref));
+                        }
+                      : undefined;
+                    const size = `${Math.round(d.widthMm / 10)}×${Math.round(d.depthMm / 10)}`;
+                    return (
+                      <g
+                        key={`${ref.kind}-${ref.index}`}
+                        className={onDeckMove ? "cursor-move touch-none" : undefined}
+                        style={onDeckMove ? { pointerEvents: "visiblePainted" } : undefined}
+                        role={onDeckMove ? "button" : undefined}
+                        aria-label={onDeckMove ? `${hole ? "פתח ללא פלטה" : "פלטה"} ${size} — גרירה למקום, לחיצה לבחירה, לחיצה ימנית לפעולות` : undefined}
+                        onPointerDown={press}
+                        onClick={onDeckMove ? (e) => e.stopPropagation() : undefined}
+                        onContextMenu={menu}
+                      >
+                        {/* A whole piece — a quarter-round in a corner, a curved deck on the rim, a deck
+                            put by hand, a hole — is drawn as its own outline. */}
+                        {d.outline ? (
+                          <polygon points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")} {...look} />
+                        ) : (
+                          <rect x={-d.widthMm / 2} y={-d.depthMm / 2} width={d.widthMm} height={d.depthMm} transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`} {...look} />
+                        )}
+                        {/* A hole is crossed out: nothing is laid there. */}
+                        {hole && d.outline && d.outline.length >= 4 && (
+                          <g className="pointer-events-none" stroke="var(--color-muted)" strokeWidth={1} vectorEffect="non-scaling-stroke">
+                            <line x1={d.outline[0].x} y1={d.outline[0].y} x2={d.outline[2].x} y2={d.outline[2].y} vectorEffect="non-scaling-stroke" />
+                            <line x1={d.outline[1].x} y1={d.outline[1].y} x2={d.outline[3].x} y2={d.outline[3].y} vectorEffect="non-scaling-stroke" />
+                          </g>
+                        )}
+                        {/* A deck put by hand wears a pin at its middle. */}
+                        {pinnedDeck && !hole && <circle cx={d.centre.x} cy={d.centre.y} r={ctx.mm(3.5)} fill="var(--color-accent)" stroke="var(--color-canvas)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" className="pointer-events-none" />}
+                      </g>
+                    );
+                  });
+                })()}
                 {/* What the catalog does not have — a quarter-round, a curved deck — where it goes:
                     the panel's "חסר בקטלוג" names it and adds it. */}
                 {areaPreview.missing?.map((m, i) => <MissingPieceShape key={`m${i}`} outline={m.outline} />)}
@@ -2725,6 +2926,7 @@ export function CanvasStage({
                       ctx={ctx}
                       snap={areaLengthSnap ? (mm, magnetMm) => areaLengthSnap(mm, { magnetMm }) : undefined}
                       wallDistance={(q) => nearestWall(plan.structure, q)?.distanceMm ?? Infinity}
+                      walls={walls}
                       onChange={(next) => onAreaReshape(next, areaPreview.front)}
                       onSplit={(i) => {
                         const r = splitSide(poly, areaPreview.front, i);
@@ -2795,6 +2997,7 @@ const DrapeNode = memo(function DrapeNode({
   placement,
   structure,
   selected,
+  locked,
   ctx,
   onSelect,
   onSpan,
@@ -2803,6 +3006,8 @@ const DrapeNode = memo(function DrapeNode({
   placement: Placement;
   structure: VenueStructure;
   selected: boolean;
+  /** Pinned on this plan (Placement.locked): selected, but its end grips are not offered. */
+  locked?: boolean;
   ctx: CanvasLayerContext;
   onSelect: (id: string, additive: boolean) => void;
   onSpan: (id: string, span: WallSpan) => void;
@@ -2874,7 +3079,7 @@ const DrapeNode = memo(function DrapeNode({
         vectorEffect="non-scaling-stroke"
         className="pointer-events-none"
       />
-      {selected &&
+      {selected && !locked &&
         ([
           ["from", from],
           ["to", to],
@@ -2917,19 +3122,25 @@ const DrapeNode = memo(function DrapeNode({
 const CarpetNode = memo(function CarpetNode({
   placement,
   selected,
+  locked,
   ctx,
   drag,
   onResize,
   onBow,
+  onCorner,
   onEndResize,
 }: {
   placement: Placement;
   selected: boolean;
+  /** Pinned on this plan (Placement.locked): selected, but no corner, side or bow grips. */
+  locked?: boolean;
   ctx: CanvasLayerContext;
   drag: DragProps;
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
   /** A side pulled out or pushed in; null = every side straight again. Absent on a host that only looks. */
   onBow?: (id: string, bows: RugBows | null) => void;
+  /** A corner rounded; null = every corner square again. */
+  onCorner?: (id: string, corners: RugCorners | null) => void;
   onEndResize: () => void;
 }) {
   const r = resolve(placement.variantId);
@@ -2938,11 +3149,13 @@ const CarpetNode = memo(function CarpetNode({
   const halfW = size.widthMm / 2;
   const halfD = size.depthMm / 2;
   const rot = placement.rotation || 0;
-  // Curved sides (lib/studio/rug-shape.ts): the same rug, about the same centre, with the outline's
-  // sides bowed. The surface and picture are drawn through a footprint the seams recentre on its
-  // bounds, so they are carried back by `centre`.
-  const bows = bowsOf(placement);
-  const bowed = bows ? bowedRug(size.widthMm, size.depthMm, bows) : null;
+  // Curved sides and rounded corners (lib/studio/rug-shape.ts): the same rug, about the same centre,
+  // with the outline's sides bowed and its corners cut to arcs. The surface and picture are drawn
+  // through a footprint the seams recentre on its bounds, so they are carried back by `centre`.
+  const rugShape = rugShapeOf(placement);
+  const bows = rugShape?.bows;
+  const corners = rugShape?.corners;
+  const bowed = rugShape ? rugOutline(size.widthMm, size.depthMm, rugShape) : null;
   // Its shade, else the fill its catalog row was given in the appearance editor, else the neutral
   // inset — translucent by default, so whatever stands on the rug still reads through it.
   const style = resolveStyle(productStyle(r?.product), "screen", {
@@ -2986,15 +3199,15 @@ const CarpetNode = memo(function CarpetNode({
           rug with curved sides they follow the curves. */}
       {r?.product.category === "rugs" && (
         <g transform={`translate(${x} ${y})`}>
-          <RugPattern w={size.widthMm} h={size.depthMm} bows={bows} />
+          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} />
         </g>
       )}
       {/* The middle of each side: pull it and the side curves, like the shape canvas's diamond. A
           double-click straightens that side again. */}
-      {selected &&
+      {selected && !locked &&
         onBow &&
         [0, 1, 2, 3].map((side) => {
-          const h = bowHandle(size.widthMm, size.depthMm, bows, side);
+          const h = bowHandle(size.widthMm, size.depthMm, rugShape, side);
           const at = { x: x + h.x, y: y + h.y };
           return (
             <g
@@ -3041,7 +3254,60 @@ const CarpetNode = memo(function CarpetNode({
             </g>
           );
         })}
-      {selected &&
+      {/* Inside each corner, on its diagonal: a round grip that pulls THAT corner's radius — a rug
+          may be rounded on two corners and square on the other two (2026-10-31, the user: "dragging
+          one should not do all of them") — and every corner's at once with Alt. A double-click
+          squares that corner. It rides the arc's middle, a few pixels in, clear of the resize grip
+          on the corner itself. */}
+      {selected && !locked &&
+        onCorner &&
+        [0, 1, 2, 3].map((i) => {
+          const inset = ctx.mm(14);
+          const g = inwardOf(i);
+          const h = cornerHandle(size.widthMm, size.depthMm, corners, i);
+          const at = { x: x + h.x + g.x * inset, y: y + h.y + g.y * inset };
+          const rounded = !!corners?.[i];
+          return (
+            <circle
+              key={`corner-${i}`}
+              cx={at.x}
+              cy={at.y}
+              r={ctx.mm(5)}
+              fill={rounded ? "var(--color-accent)" : "var(--color-canvas)"}
+              stroke="var(--color-accent)"
+              strokeWidth={2.5}
+              vectorEffect="non-scaling-stroke"
+              className="cursor-move touch-none focus:outline-none"
+              tabIndex={0}
+              role="button"
+              aria-label="פינת השטיח — גרירה לעיגול הפינה (Alt — כל הפינות יחד), לחיצה כפולה ליישור"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                drag.onPress(false);
+                const centre = { x, y };
+                startPointerGesture(e, {
+                  onMove: (ev) => {
+                    const local = toLocalFrame(ctx.clientToMm(ev.clientX, ev.clientY), centre, rot);
+                    const r = cornerFromPoint(size.widthMm, size.depthMm, i, local, inset);
+                    onCorner(placement.id, withCorner(corners, ev.altKey ? "all" : i, r) ?? null);
+                  },
+                  onEnd: (_ev, moved) => {
+                    if (moved) onEndResize();
+                  },
+                });
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (corners?.[i]) {
+                  onCorner(placement.id, withCorner(corners, i, 0) ?? null);
+                  onEndResize();
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          );
+        })}
+      {selected && !locked &&
         CORNERS.map(([sx, sy]) => {
           const corner = { x: x + sx * halfW, y: y + sy * halfD };
           return (
@@ -4144,7 +4410,9 @@ function PlacementNodeView({
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
       {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
-        <g transform={upright || undefined} className="pointer-events-none">
+        // At the band's own label point for a shaped banquette (mid-band on a crescent, not the box
+        // centre in the air it curves round) — a straight strip's is (0,0).
+        <g transform={`${bench.shaped ? `translate(${labelAnchor(footprint).x} ${labelAnchor(footprint).y}) ` : ""}${upright ?? ""}`.trim() || undefined} className="pointer-events-none">
           <TableLabel
             x={0}
             y={0}
@@ -4328,7 +4596,12 @@ function StageMarks({
 }) {
   // Every side at one weight — the front is not marked on the plan; the area tool shows it while it
   // is being chosen, and the printed stage plan writes "קהל" in front of it.
-  const laid = selected ? layStage(stage, deckOf) : null;
+  // The decks are laid from the stage as it stood once it SETTLED (use-settled.ts): a side dragged
+  // by its grip reshapes the stage on every frame, and laying the decks each time is what made the
+  // drag heavy. Drawn dimmed while they are behind the outline.
+  const settledStage = useSettled(stage, STAGE_SETTLE_MS);
+  const stale = settledStage !== stage;
+  const laid = selected ? layStage(settledStage, deckOf) : null;
   const decks = laid?.decks ?? [];
   const upright = uprightTransform(rotation, mirrored);
   return (
@@ -4357,37 +4630,39 @@ function StageMarks({
           </g>
         );
       })}
-      {decks.map((d, i) =>
-        // A piece standing whole is its own shape — a half-round apron, a disc — not a box.
-        d.outline ? (
-          <polygon
-            key={i}
-            points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeOpacity={0.55}
-            strokeWidth={1}
-            strokeDasharray="4 3"
-            vectorEffect="non-scaling-stroke"
-          />
-        ) : d.round ? null : (
-          <rect
-            key={i}
-            x={-d.widthMm / 2}
-            y={-d.depthMm / 2}
-            width={d.widthMm}
-            height={d.depthMm}
-            transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeOpacity={0.55}
-            strokeWidth={1}
-            strokeDasharray="4 3"
-            vectorEffect="non-scaling-stroke"
-          />
-        ),
-      )}
-      {laid?.missing.map((m, i) => <MissingPieceShape key={`missing-${i}`} outline={m.outline} />)}
+      <g opacity={stale ? 0.3 : 1}>
+        {decks.map((d, i) =>
+          // A piece standing whole is its own shape — a half-round apron, a disc — not a box.
+          d.outline ? (
+            <polygon
+              key={i}
+              points={d.outline.map((q) => `${q.x},${q.y}`).join(" ")}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeOpacity={0.55}
+              strokeWidth={1}
+              strokeDasharray="4 3"
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : d.round ? null : (
+            <rect
+              key={i}
+              x={-d.widthMm / 2}
+              y={-d.depthMm / 2}
+              width={d.widthMm}
+              height={d.depthMm}
+              transform={`translate(${d.centre.x} ${d.centre.y}) rotate(${d.rotation})`}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeOpacity={0.55}
+              strokeWidth={1}
+              strokeDasharray="4 3"
+              vectorEffect="non-scaling-stroke"
+            />
+          ),
+        )}
+        {laid?.missing.map((m, i) => <MissingPieceShape key={`missing-${i}`} outline={m.outline} />)}
+      </g>
       {/* Stairs, banquettes and barriers are part of the stage on the floor — drawn always: a flight
           with a line across each tread, a banquette as a seat-coloured strip, a barrier as a heavy
           line along the inside of its edge. The one being edited is in the accent. */}
@@ -4428,14 +4703,20 @@ function StageMarks({
             {shape.chairs.map((seat, k) => (
               <Chair key={`chair-${k}`} seat={seat} />
             ))}
-            <polygon
-              points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")}
-              fill={fill}
-              fillOpacity={1}
-              stroke={on ? "var(--color-accent)" : "var(--color-border)"}
-              strokeWidth={on ? 2.5 : 1.5}
-              vectorEffect="non-scaling-stroke"
-            />
+            {/* Filled, then outlined without the end lines where it runs on into another item of the
+                stage — flush, or mitred round an inside corner (edgeItemStrokes) — so two read as one run. */}
+            <polygon points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill={fill} fillOpacity={1} stroke="none" />
+            {edgeItemStrokes(shape).map((l, k) => (
+              <polyline
+                key={`o${k}`}
+                points={l.map((q) => `${q.x},${q.y}`).join(" ")}
+                fill="none"
+                stroke={on ? "var(--color-accent)" : "var(--color-border)"}
+                strokeWidth={on ? 2.5 : 1.5}
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}
@@ -4715,6 +4996,7 @@ function OutlineHandles({
   ctx,
   snap,
   wallDistance,
+  walls,
   onChange,
   onSplit,
   onRemove,
@@ -4732,6 +5014,9 @@ function OutlineHandles({
   /** How far a point in the ROOM is from the nearest wall — which end a typed length keeps, and
    *  which side a typed angle turns. */
   wallDistance?: (q: Point) => number;
+  /** The walls as polylines in the room: an outline a grip or a typed figure would put through one
+   *  is refused — the grip holds, the box is marked (lib/studio/wall-clip.ts). */
+  walls?: readonly (readonly Point[])[];
   onChange: (outline: Point[]) => void;
   onSplit?: (side: number) => void;
   onRemove?: (corner: number) => void;
@@ -4753,6 +5038,8 @@ function OutlineHandles({
       return L >= 1 && L < 100;
     });
     if (short || selfIntersects(next)) return false;
+    // Through a wall is refused as a fold is: the grip stops where the last good outline was.
+    if (walls?.length && crossesWalls(next.map(toRoomOf), walls)) return false;
     onChange(next);
     return true;
   };

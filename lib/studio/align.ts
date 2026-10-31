@@ -69,6 +69,34 @@ export function alignedCentres(boxes: readonly CentredBox[], key: number, op: Al
   });
 }
 
+/** The line an alignment goes by, to be drawn before the row is chosen: the key's edge or centre
+ *  line, across the whole selection. `axis` is the axis the line is PERPENDICULAR to — an "x" guide
+ *  is a vertical line at x = `at`, running from `from` to `to` in y. */
+export interface AlignGuide {
+  axis: "x" | "y";
+  at: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * Where יישור will put things, as one line on the plan: the key's left/centre/right (or top/middle/
+ * bottom) line, spanning the selection's extent on the other axis with a margin so the line reads
+ * as a line and not as a side of the key. Null for a distribution, which goes by no single line.
+ */
+export function alignGuide(boxes: readonly CentredBox[], key: number, op: AlignOp, marginMm = 400): AlignGuide | null {
+  if (needsThree(op)) return null;
+  const k = boxes[key] ?? boxes[0];
+  if (!k) return null;
+  const all = unionOf(boxes);
+  if (op === "left" || op === "hcenter" || op === "right") {
+    const at = op === "left" ? k.x - k.widthMm / 2 : op === "right" ? k.x + k.widthMm / 2 : k.x;
+    return { axis: "x", at, from: all.y - all.depthMm / 2 - marginMm, to: all.y + all.depthMm / 2 + marginMm };
+  }
+  const at = op === "top" ? k.y - k.depthMm / 2 : op === "bottom" ? k.y + k.depthMm / 2 : k.y;
+  return { axis: "y", at, from: all.x - all.widthMm / 2 - marginMm, to: all.x + all.widthMm / 2 + marginMm };
+}
+
 /** The box round several boxes — a group's, as one unit. */
 export function unionOf(boxes: readonly CentredBox[]): CentredBox {
   const minX = Math.min(...boxes.map((b) => b.x - b.widthMm / 2));
@@ -146,6 +174,15 @@ if (isMain(import.meta.url)) {
   // Rotation is the caller's: a 2000×1000 table turned 90° arrives as a 1000×2000 box, and aligns by it.
   const turned = alignedCentres([box(0, 0, 2000, 1000), box(5000, 0, 1000, 2000)], 0, "top");
   assert(turned[1].y === 500, "a turned item aligns by the box it actually occupies");
+
+  // The guide: the key's own line, across the selection, and nothing for a distribution.
+  const gl = alignGuide(set, 0, "left")!;
+  assert(gl.axis === "x" && gl.at === -1000, "a left guide is the vertical line on the key's left edge");
+  assert(gl.from === -3400 - 400 && gl.to === 4300 + 400, "…spanning the selection's y extent plus the margin");
+  const gb = alignGuide(set, 0, "bottom")!;
+  assert(gb.axis === "y" && gb.at === 500 && gb.from === -5300 - 400 && gb.to === 3500 + 400, "a bottom guide is the horizontal line on the key's bottom edge, across x");
+  assert(alignGuide(set, 2, "hcenter")?.at === -5000, "the guide follows whichever unit is the key");
+  assert(alignGuide(set, 0, "distribute-x") === null, "a distribution has no one line to show");
 
   console.log("align self-check passed");
 }

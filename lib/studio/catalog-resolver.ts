@@ -11,7 +11,7 @@ import type { Anchor } from "@/lib/catalog/categories";
 import { variantPrice } from "@/lib/catalog/format";
 import { shadeVariant } from "@/lib/catalog/shades";
 import { tableAreaMm2 } from "./geometry";
-import { catalogBox } from "./footprint";
+import { catalogBox, sizedFootprint } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 import type { BenchLookup } from "@/lib/design-document/bench";
 
@@ -70,7 +70,9 @@ export const benchOf: BenchLookup = (p) => {
   if (p.stage || p.perch || p.tableId) return null;
   const r = resolve(p.variantId);
   if (!r || r.product.category !== "stage-benches") return null;
-  return p.sizeMm ?? catalogBox(r.product);
+  // …and the shape it is drawn as, so a crescent or a ח banquette is laid along its band
+  // (benchLayoutFor) rather than across its box.
+  return { ...(p.sizeMm ?? catalogBox(r.product)), footprint: sizedFootprint(r.product, p.sizeMm) };
 };
 
 /** Which placements are BLOCKS OF CHAIRS IN ROWS (Placement.rows, lib/design-document/chair-rows.ts):

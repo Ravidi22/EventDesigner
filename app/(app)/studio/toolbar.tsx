@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box } from "lucide-react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, Layers, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box } from "lucide-react";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
@@ -187,48 +187,7 @@ export function Toolbar({
 
       <div className="mx-1 h-6 w-px bg-border" />
 
-      <div className="flex items-center gap-1">
-        {PLANES.map((l) => {
-          const on = layerVisible[l.id];
-          const active = activeLayer === l.id;
-          return (
-            <div
-              key={l.id}
-              className={
-                "inline-flex items-center gap-1 rounded-md border ps-1 pe-2 py-1 text-xs transition-colors " +
-                (active
-                  ? "border-accent bg-accent-tint text-accent"
-                  : on
-                    ? "border-border bg-canvas text-ink"
-                    : "border-transparent text-muted")
-              }
-            >
-              {/* The eye is visibility. It is deliberately NOT the same press as choosing a layer to
-                  work in: hiding the ceiling and working on the ceiling are different questions, and
-                  one control that did both would make each of them unreachable half the time. */}
-              <button
-                type="button"
-                onClick={() => onToggleLayer(l.id)}
-                aria-pressed={on}
-                aria-label={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
-                title={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
-                className="rounded-sm p-0.5 transition-colors hover:bg-bg"
-              >
-                {on ? <Eye className="h-3.5 w-3.5" strokeWidth={2} /> : <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => onActivateLayer(l.id)}
-                aria-pressed={active}
-                title={active ? "חזרה לכל השכבות" : `עבודה בשכבת ${l.label} בלבד`}
-                className="font-medium"
-              >
-                {l.label}
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      <PlaneRail layerVisible={layerVisible} onToggleLayer={onToggleLayer} activeLayer={activeLayer} onActivateLayer={onActivateLayer} />
 
       {/* The room in 3D beside the sketch — the תלת-ממד tab's picture, live, following what is
           selected (./scene-preview.tsx). A toggle, so it wears the pressed field while the pane is
@@ -265,6 +224,90 @@ export function Toolbar({
         )}
       </div>
     </header>
+  );
+}
+
+/** The four planes as ONE control — a section through the room, read in a row: the tables, what is
+ *  laid on them, the floor around them, what hangs above (lib/studio/planes.ts).
+ *
+ *  It is a framed row of segments, `Segmented`'s geometry (components/segmented.tsx), because the
+ *  row is one question — which part of the room am I looking at — and that frame is what the app
+ *  draws round one question with several answers. It used to be four loose pills, each with its
+ *  own border that changed meaning (accent for "being worked in", grey for "shown", none at all for
+ *  "hidden"): four chips a designer decoded one at a time (2026-10-31, the user: "redesign the
+ *  layer visibility").
+ *
+ *  Two presses per plane, kept apart on purpose. The LABEL is "work in this plane only": while it is
+ *  on, the segment wears the toolbar's own pressed field — the tinted field the 3D button and the
+ *  canvas strip's tape wear while they are live — and the other planes go muted here as they dim on
+ *  the canvas; pressed again it lets go of every plane. The EYE LEADING the label is shown/hidden
+ *  (it trailed for a moment; the user asked for it first, same day), a glyph that is also the
+ *  toggle, so a hidden plane says so exactly where it was hidden (EyeOff, the whole segment faint)
+ *  and comes back from the same spot. One press that did both would make
+ *  each unreachable half the time: hiding the ceiling and working on the ceiling are different
+ *  questions. No hover reveal — the eye is drawn at rest, at quiet weight, like every card's "…".
+ *  The Layers glyph before the frame names the group, as the ScanEye names the zone select. */
+function PlaneRail({
+  layerVisible,
+  onToggleLayer,
+  activeLayer,
+  onActivateLayer,
+}: {
+  layerVisible: Record<Plane, boolean>;
+  onToggleLayer: (l: Plane) => void;
+  activeLayer: Plane | null;
+  onActivateLayer: (l: Plane) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Layers className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} aria-hidden />
+      <div role="group" aria-label="שכבות" className="flex items-center gap-0.5 rounded-md border border-border bg-canvas p-0.5">
+        {PLANES.map((l) => {
+          const on = layerVisible[l.id];
+          const active = activeLayer === l.id;
+          const heldBack = activeLayer !== null && !active;
+          return (
+            <div key={l.id} className={"flex items-center rounded-sm ps-0.5 transition-colors " + (active ? "bg-accent-tint" : "")}>
+              <button
+                type="button"
+                onClick={() => onToggleLayer(l.id)}
+                aria-pressed={on}
+                aria-label={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
+                title={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
+                className={
+                  "rounded-pill p-1 transition-colors " +
+                  (active
+                    ? "text-accent hover:bg-accent-wash"
+                    : on
+                      ? "text-quiet hover:bg-accent-tint hover:text-accent"
+                      : "text-faint hover:bg-accent-tint hover:text-accent")
+                }
+              >
+                {on ? <Eye className="h-3.5 w-3.5" strokeWidth={2} aria-hidden /> : <EyeOff className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />}
+              </button>
+              <button
+                type="button"
+                onClick={() => onActivateLayer(l.id)}
+                aria-pressed={active}
+                title={active ? "חזרה לכל השכבות" : `עבודה בשכבת ${l.label} בלבד`}
+                className={
+                  "min-h-7 whitespace-nowrap rounded-sm ps-1 pe-2.5 text-xs leading-none transition-colors " +
+                  (active
+                    ? "font-semibold text-accent"
+                    : !on
+                      ? "font-medium text-faint hover:text-accent"
+                      : heldBack
+                        ? "font-medium text-muted hover:text-accent"
+                        : "font-medium text-ink-soft hover:text-accent")
+                }
+              >
+                {l.label}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
