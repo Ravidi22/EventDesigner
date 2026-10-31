@@ -121,6 +121,7 @@
     "check:scene-boundary": "tsx lib/scene/boundary.ts",
     "check:scene-share": "tsx lib/scene/share-boundary.ts",
     "check:viewpoints": "tsx lib/scene/viewpoints-check.ts",
+    "check:scene-focus": "tsx lib/scene/focus.ts",
     "db:verify:scene": "tsx lib/scene/verify.ts",
     "check:envelope": "tsx lib/scene/envelope.ts",
     "check:tables": "tsx lib/scene/tables.ts",

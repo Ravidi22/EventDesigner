@@ -62,6 +62,12 @@ export interface SceneViewerProps {
   onCamera?: (pose: CameraPose) => void;
   /** Sizing for the viewer's box (the Canvas fills it). */
   className?: string;
+  /** The host has hidden the viewer but keeps it mounted — the studio's 3D pane, closed: its
+   *  programs stay compiled on this GL context, and the frame loop is held at "never" until it
+   *  shows again (FrameGate). */
+  hidden?: boolean;
+  /** A small box (the studio's corner pane): the author camera's hint pill is left out. */
+  compact?: boolean;
 }
 
 let webglSupport: boolean | null = null;
@@ -101,19 +107,21 @@ function NoWebGL({ className }: { className: string }) {
 }
 
 /** Inside the Canvas, LAST (its layout effect must run after the lights, the environment and the
- *  nodes have mounted): the frame loop runs only while the document is visible and the scene's
- *  programs are compiled. A new scene holds it at "never" — with the frame already asked for
- *  cleared, or fiber would still draw it — until `compileAsync` resolves; then one frame. A scene
- *  whose programs are all cached resolves on the next poll. (A playing tour freezes its clock on the
- *  visibility signal too — ./scene-camera.tsx.) */
-function FrameGate({ scene, onWarm }: { scene: Scene; onWarm: (warm: boolean) => void }) {
+ *  nodes have mounted): the frame loop runs only while the document is visible, the host has not
+ *  hidden the viewer, and the scene's programs are compiled. A new scene holds it at "never" — with
+ *  the frame already asked for cleared, or fiber would still draw it — until `compileAsync`
+ *  resolves; then one frame. A scene whose programs are all cached resolves on the next poll. (A
+ *  playing tour freezes its clock on the visibility signal too — ./scene-camera.tsx.) A hidden
+ *  viewer still compiles a new scene's programs, so it shows ready. */
+function FrameGate({ scene, hidden, onWarm }: { scene: Scene; hidden: boolean; onWarm: (warm: boolean) => void }) {
   const get = useThree((s) => s.get);
   const setFrameloop = useThree((s) => s.setFrameloop);
   const invalidate = useThree((s) => s.invalidate);
   const shown = useRef(true);
+  const held = useRef(hidden);
   const compiling = useRef(false);
   const sync = useCallback(() => {
-    if (shown.current && !compiling.current) {
+    if (shown.current && !held.current && !compiling.current) {
       setFrameloop("demand");
       invalidate();
     } else {
@@ -134,6 +142,11 @@ function FrameGate({ scene, onWarm }: { scene: Scene; onWarm: (warm: boolean) =>
       setFrameloop("demand");
     };
   }, [sync, setFrameloop]);
+
+  useEffect(() => {
+    held.current = hidden;
+    sync();
+  }, [hidden, sync]);
 
   useLayoutEffect(() => {
     let live = true;
@@ -206,6 +219,8 @@ export default function SceneViewer({
   onLeave,
   onCamera,
   className = "",
+  hidden = false,
+  compact = false,
 }: SceneViewerProps) {
   const webgl = useMemo(() => hasWebGL(), []);
   const profile = useMemo(() => resolveDevice(device), [device]);
@@ -254,9 +269,9 @@ export default function SceneViewer({
           onCamera={onCamera}
         />
         {perf && <PerfProbe target={readout} stats={scene.stats} />}
-        <FrameGate scene={scene} onWarm={setWarm} />
+        <FrameGate scene={scene} hidden={hidden} onWarm={setWarm} />
       </Canvas>
-      {mode === "author" && (
+      {mode === "author" && !compact && (
         <div dir="rtl" className="pointer-events-none absolute bottom-3 end-3 rounded-pill bg-surface/85 px-3 py-1 text-[11px] text-muted shadow-lifted">
           גרירה: סיבוב · לחצן ימני: הזזה · גלגלת: זום לנקודה · לחיצה כפולה: מיקוד · <span dir="ltr">W A S D</span>: תנועה
         </div>
