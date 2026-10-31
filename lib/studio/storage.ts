@@ -45,6 +45,52 @@ export function saveScratch(content: DesignDocumentContent): boolean {
   }
 }
 
+// --- the 3D pane beside the sketch -----------------------------------------------------------------
+//
+// Whether the studio's 3D pane (app/(app)/studio/scene-preview.tsx) is open, in which layout and how
+// wide. Per-DEVICE UI position like the active event, not studio data: a designer who works with the
+// room beside the plan on the big screen and without it on the laptop gets each back as they left
+// it. Through this module like every other localStorage read in the app.
+
+export type ScenePreviewLayout = "corner" | "split";
+export interface ScenePreviewPrefs {
+  open: boolean;
+  layout: ScenePreviewLayout;
+  /** The corner pane's width; its height follows (the pane's aspect). */
+  widthPx: number;
+}
+/** What the corner pane's grip may drag its width between. */
+export const SCENE_PREVIEW_MIN_PX = 260;
+export const SCENE_PREVIEW_MAX_PX = 760;
+export const DEFAULT_SCENE_PREVIEW: ScenePreviewPrefs = { open: false, layout: "corner", widthPx: 400 };
+const SCENE_PREVIEW_KEY = storageKey("studio.scene-preview");
+
+export function loadScenePreview(): ScenePreviewPrefs {
+  if (typeof window === "undefined") return DEFAULT_SCENE_PREVIEW;
+  try {
+    const raw = window.localStorage.getItem(SCENE_PREVIEW_KEY);
+    if (!raw) return DEFAULT_SCENE_PREVIEW;
+    const p = JSON.parse(raw) as Partial<ScenePreviewPrefs>;
+    const width = typeof p.widthPx === "number" && Number.isFinite(p.widthPx) ? p.widthPx : DEFAULT_SCENE_PREVIEW.widthPx;
+    return {
+      open: p.open === true,
+      layout: p.layout === "split" ? "split" : "corner",
+      widthPx: Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(width))),
+    };
+  } catch {
+    return DEFAULT_SCENE_PREVIEW;
+  }
+}
+
+export function saveScenePreview(prefs: ScenePreviewPrefs): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SCENE_PREVIEW_KEY, JSON.stringify(prefs));
+  } catch {
+    // A blocked or full store loses a UI preference, nothing more.
+  }
+}
+
 // There is no clearScratch(). Nothing called the old clearDoc() either, and the one place that
 // wants this gone — "ניקוי נתוני המכשיר" in settings — drops every `eve.*` key at once
 // (lib/settings/data.ts). A second way to delete the same thing is a second thing to keep correct.

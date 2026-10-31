@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore } from "lucide-react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box } from "lucide-react";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
@@ -57,6 +57,8 @@ export function Toolbar({
   onRetrySave,
   removedFeatures = [],
   onRestoreFeatures,
+  sceneOn = false,
+  onToggleScene,
 }: {
   canUndo: boolean;
   canRedo: boolean;
@@ -101,6 +103,10 @@ export function Toolbar({
    *  to bring them back. Empty = no control at all. */
   removedFeatures?: { id: string; label: string }[];
   onRestoreFeatures?: (featureIds: string[]) => void;
+  /** The 3D pane beside the sketch (./scene-preview.tsx): whether it is up, and the toggle. No
+   *  toggle = no button. */
+  sceneOn?: boolean;
+  onToggleScene?: () => void;
 }) {
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
@@ -223,6 +229,18 @@ export function Toolbar({
           );
         })}
       </div>
+
+      {/* The room in 3D beside the sketch — the תלת-ממד tab's picture, live, following what is
+          selected (./scene-preview.tsx). A toggle, so it wears the pressed field while the pane is
+          up, like the tape measure on the canvas's own strip. */}
+      {onToggleScene && (
+        <>
+          <div className="mx-1 h-6 w-px bg-border" />
+          <IconButton label={sceneOn ? "סגירת התלת-ממד שלצד הסקיצה" : "תלת-ממד לצד הסקיצה"} size="md" onClick={onToggleScene} pressed={sceneOn}>
+            <Box className="h-4 w-4" strokeWidth={2} />
+          </IconButton>
+        </>
+      )}
 
       <div className="ms-auto flex items-center gap-1.5 text-xs" aria-live="polite">
         {saveState === "saving" ? (

@@ -19,6 +19,7 @@ import type { CameraPose } from "@/components/scene/camera-rules";
 import { detectDevice } from "@/components/scene/device";
 import { previewScene } from "@/components/scene/preview-scene";
 import { Popover } from "@/components/popover";
+import { Segmented } from "@/components/segmented";
 import { SidePanel } from "@/components/side-panel";
 import { fetchStageRules } from "@/lib/settings/actions";
 import { useSceneSettings } from "./use-scene-settings";
@@ -220,14 +221,14 @@ export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "st
         expandedClassName="w-[300px]"
         collapsedClassName="w-[96px]"
         scrolls
-        rail={<MoodRail mood={settings.mood} onMood={setMood} compact />}
+        rail={<MoodRail mood={settings.mood} onMood={setMood} />}
       >
         <div className="flex flex-col gap-4">
+          {/* Titled like the panel's other sections (viewpoints-panel.tsx), and the row is the app's
+              one segmented control — it was a hand-rolled pill whose three words spread unevenly. */}
           <section className="flex flex-col gap-2">
-            <h2 className="font-label text-[10px] font-medium tracking-[3px] text-muted" dir="ltr">
-              LIGHT
-            </h2>
-            <MoodRail mood={settings.mood} onMood={setMood} />
+            <h3 className="text-sm font-bold text-ink">תאורה</h3>
+            <Segmented label="תאורה" hideLabel value={settings.mood} options={MOOD_OPTIONS} onChange={setMood} />
           </section>
           {/* In the meeting the same panel is also in the corner puck; here it is only for the
               designer who opens the side panel. */}
@@ -252,10 +253,15 @@ export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "st
   );
 }
 
-/** The three moods as the event rail's chips — the same three the client's bar offers. */
-function MoodRail({ mood, onMood, compact = false }: { mood: Mood; onMood: (m: Mood) => void; compact?: boolean }) {
+/** The light row's options — the same three the client's bar offers, each with its icon. */
+const MOOD_OPTIONS = MOODS.map((m) => [m, MOOD_LABEL[m], MOOD_ICON[m]] as const);
+
+/** The three moods in the COLLAPSED side panel: icon rows in the nav's own geometry (the rule for
+ *  every collapsed side panel — components/side-panel.tsx, /halls' zone rail), the active one
+ *  wearing the nav's tint. */
+function MoodRail({ mood, onMood }: { mood: Mood; onMood: (m: Mood) => void }) {
   return (
-    <div className={"flex items-center gap-0.5 rounded-pill bg-inset p-1 " + (compact ? "flex-col" : "")} role="radiogroup" aria-label="תאורה">
+    <div className="flex flex-col gap-[3px]" role="radiogroup" aria-label="תאורה">
       {MOODS.map((m) => {
         const Icon = MOOD_ICON[m];
         const active = m === mood;
@@ -265,15 +271,15 @@ function MoodRail({ mood, onMood, compact = false }: { mood: Mood; onMood: (m: M
             type="button"
             role="radio"
             aria-checked={active}
+            aria-label={MOOD_LABEL[m]}
             title={MOOD_LABEL[m]}
             onClick={() => onMood(m)}
             className={
-              "inline-flex items-center gap-1.5 rounded-pill px-3 py-1.5 text-caption transition-colors " +
-              (active ? "bg-accent-tint font-bold text-accent" : "font-semibold text-ink-soft hover:bg-surface hover:text-ink")
+              "flex items-center justify-center rounded-md py-[11px] transition-colors " +
+              (active ? "bg-accent-tint text-accent" : "text-muted hover:bg-accent-tint hover:text-accent-hover")
             }
           >
-            <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-            {!compact && MOOD_LABEL[m]}
+            <Icon className="h-[18px] w-[18px]" strokeWidth={1.4} />
           </button>
         );
       })}
