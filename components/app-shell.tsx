@@ -10,8 +10,11 @@ import {
   LayoutGrid,
   Images,
   Truck,
+  ReceiptText,
   Store,
   Inbox,
+  CalendarHeart,
+  UtensilsCrossed,
   LogOut,
   type LucideIcon,
 } from "lucide-react";
@@ -24,6 +27,7 @@ import { NotificationBell } from "@/components/notification-bell";
 import { HeaderSearchProvider } from "@/components/header-search-context";
 import { HeaderSlotProvider } from "@/components/header-slot";
 import { EventDialog } from "@/components/event-dialog";
+import { requestNewEvent } from "@/components/new-event-request";
 import { SidePanel } from "@/components/side-panel";
 import { OrgKindProvider } from "@/components/org-kind-context";
 import { ORG_HOME, type OrgKind } from "@/lib/auth/kinds";
@@ -38,26 +42,35 @@ interface NavItem {
 }
 
 const GENERAL: NavItem[] = [
-  { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard },
+  { href: "/dashboard", label: "לוח בקרה", icon: LayoutDashboard, for: ["studio", "venue"] },
+  // A venue's book of evenings — its bookings, not a designer's production runway.
+  { href: "/bookings", label: "אירועים", icon: CalendarHeart, for: ["venue"] },
   // הפקה, not אירועים: the screen behind it is a backward-planned deadline list, not a filing
   // cabinet of events — and CalendarClock rather than CalendarHeart for the same reason. A heart on
   // a wedding app reads as "the nice part"; what this tab actually says is "how long do I have".
   { href: "/production", label: "הפקה", icon: CalendarClock },
-  { href: "/halls", label: "תוכנית המתחם", icon: Building2 },
+  { href: "/halls", label: "תוכנית המתחם", icon: Building2, for: ["studio", "venue"] },
+  // What a venue sells: its dishes and the packages they are sold in (lib/menus).
+  { href: "/menus", label: "תפריטים", icon: UtensilsCrossed, for: ["venue"] },
   { href: "/catalog", label: "קטלוג מוצרים", icon: LayoutGrid, for: ["studio", "supplier"] },
   // A supplier's inbox: the orders studios sent them. A designer's orders live under ספקים ורכש.
   { href: "/orders", label: "הזמנות", icon: Inbox, for: ["supplier"] },
   { href: "/suppliers", label: "ספקים ורכש", icon: Truck },
+  // The income side (lib/billing): orders, invoices, receipts — the studio's own books.
+  { href: "/billing", label: "חשבונות", icon: ReceiptText, for: ["studio", "venue"] },
   { href: "/marketplace", label: "שוק הספקים", icon: Store },
-  { href: "/gallery", label: "גלריה ומצגות", icon: Images },
+  { href: "/gallery", label: "גלריה ומצגות", icon: Images, for: ["studio", "venue"] },
 ];
 
 const TITLES: { test: (p: string) => boolean; title: string }[] = [
   { test: (p) => p.startsWith("/dashboard"), title: "לוח בקרה" },
   { test: (p) => p.startsWith("/production"), title: "הפקה" },
+  { test: (p) => p.startsWith("/bookings"), title: "אירועים" },
+  { test: (p) => p.startsWith("/menus"), title: "תפריטים" },
   { test: (p) => p.startsWith("/halls"), title: "תוכנית המתחם" },
   { test: (p) => p.startsWith("/catalog"), title: "קטלוג מוצרים" },
   { test: (p) => p.startsWith("/suppliers"), title: "ספקים ורכש" },
+  { test: (p) => p.startsWith("/billing"), title: "חשבונות" },
   { test: (p) => p.startsWith("/marketplace"), title: "שוק הספקים" },
   { test: (p) => p.startsWith("/orders"), title: "הזמנות" },
   { test: (p) => p.startsWith("/gallery"), title: "גלריה ומצגות" },
@@ -99,7 +112,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // the provider re-resolves, so the switcher stays live without holding state of its own. `remove`
   // needs no such override either — deleting a venue updates the provider's own list, and its
   // activeVenueId falls back on its own once the deleted id is no longer in it.
-  const { venues, activeVenueId, add, rename, setLogo, remove } = useVenues();
+  const { venues, activeVenueId, add, rename, setLogo, remove, follow } = useVenues();
 
   // The header search means something different per page (products on /catalog, clients/events
   // elsewhere) — leaving stale text behind after navigating away would silently mis-filter
@@ -114,8 +127,13 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // catalog, the gallery, settings…) it is chrome with nothing to act on. The BELL is on every studio
   // page since it has something to say (components/notification-bell.tsx): a client's changes to a
   // sketch arrive while the designer is anywhere.
+  // A hall's is its dashboard and its book of evenings, and opens the page's own booking dialog
+  // (components/new-event-request.tsx); a hall gets the bell too — a designer accepting its
+  // invitation lands there.
   const showHeaderActions =
-    user.orgKind === "studio" && (pathname.startsWith("/dashboard") || pathname.startsWith("/production"));
+    user.orgKind === "studio"
+      ? pathname.startsWith("/dashboard") || pathname.startsWith("/production")
+      : user.orgKind === "venue" && (pathname.startsWith("/dashboard") || pathname.startsWith("/bookings"));
   const nav = GENERAL.filter((item) => (item.for ?? ["studio"]).includes(user.orgKind));
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
@@ -169,8 +187,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         </Link>
 
         {/* A supplier has no properties — the switcher would be an empty list with an "add" button
-            leading to a wall editor they have no use for. */}
-        {user.orgKind === "studio" && (
+            leading to a wall editor they have no use for. A venue's are the ones it owns. */}
+        {user.orgKind !== "supplier" && (
         <VenueSwitcher
           venues={venues}
           activeId={activeVenueId}
@@ -186,6 +204,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           onRename={(id, name) => rename(id, name)}
           onSetLogo={(id, url) => setLogo(id, url)}
           onDelete={(id) => remove(id)}
+          onFollow={(id) => follow(id)}
         />
         )}
 
@@ -275,7 +294,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
             </>
           )}
 
-          {(showHeaderActions || user.orgKind === "studio") && (
+          {(showHeaderActions || user.orgKind !== "supplier") && (
             <div className="flex shrink-0 items-center gap-1.5">
               {/* Opens the details form in place rather than navigating to /meeting?new: answering
                   six questions is not worth losing the screen you were on. The dialog walks into
@@ -283,7 +302,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               {showHeaderActions && (
               <button
                 type="button"
-                onClick={() => setCreating(true)}
+                onClick={() => (user.orgKind === "venue" ? requestNewEvent() : setCreating(true))}
                 className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
               >
                 + יצירת אירוע חדש

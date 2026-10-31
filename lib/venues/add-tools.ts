@@ -65,10 +65,15 @@ export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
 // The features a designer places by drawing them, because no catalog has an opinion about them.
 const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   { id: "entrance", label: "כניסה", kind: null },
+  // A window is hung on a wall as a door is (StructureEntrance.kind) — an opening nobody walks through.
+  { id: "window", label: "חלון / ויטרינה", kind: null },
+  // Hung on a wall too — the venue's own curtain (./curtain.ts), the whole wall at a click.
+  { id: "curtain", label: FEATURE_KIND_LABEL.curtain, kind: "curtain" },
   // Where the floor changes height — beside the door, because that is where they usually are.
   { id: "stairs", label: FEATURE_KIND_LABEL.stairs, kind: "stairs" },
   { id: "ramp", label: FEATURE_KIND_LABEL.ramp, kind: "ramp" },
   { id: "pool", label: FEATURE_KIND_LABEL.pool, kind: "pool" },
+  { id: "fountain", label: FEATURE_KIND_LABEL.fountain, kind: "fountain" },
   { id: "structure", label: FEATURE_KIND_LABEL.structure, kind: "structure" },
   // A pillar — its plinth, base and shaft are the column's own (./column.ts).
   { id: "column", label: FEATURE_KIND_LABEL.column, kind: "column" },
@@ -148,7 +153,7 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 10 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the ten plain things — door, stairs, ramp, pool, structure, column, other, bar, stage, chairs in rows — and the planting");
+  assert(empty.length === 13 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the thirteen plain things — door, window, curtain, stairs, ramp, pool, fountain, structure, column, other, bar, stage, chairs in rows — and the planting");
   assert(empty.find((t) => t.kind === "seating")?.chair === undefined, "…the rows of a dining chair when there is no chair to take");
   assert(empty.filter((t) => t.product).length === 0, "…none of them backed by a row that isn't there");
   for (const kind of ["bar", "stage"] as const) {
@@ -176,6 +181,9 @@ if (isMain(import.meta.url)) {
 
   assert(findAddTool(tools, "product:b1")?.product?.id === "b1", "a drag payload finds its row");
   assert(findAddTool(tools, "entrance")?.kind === null, "the door is a tool with no feature kind");
+  assert(findAddTool(tools, "window")?.kind === null, "…and so is the window: hung on a wall, not placed");
+  assert(findAddTool(tools, "fountain")?.kind === "fountain", "a fountain is a feature of its own kind");
+  assert(findAddTool(tools, "curtain")?.kind === "curtain", "…and so is the venue's curtain");
   assert(findAddTool(tools, "product:gone") === undefined, "an id from another list is a no-op, not a guess");
   assert(findAddTool(tools, null) === undefined, "…and so is no id at all");
 

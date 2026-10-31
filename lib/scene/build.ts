@@ -24,6 +24,7 @@ import { bowsOf } from "@/lib/studio/rug-shape";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
+import { CURTAIN_FILL, curtainOf, curtainPieces } from "@/lib/venues/curtain";
 import type { Placement } from "@/lib/design-document/types";
 import type { Point } from "@/lib/studio/hall";
 import { SceneCollector } from "./collect";
@@ -52,6 +53,7 @@ export function buildScene(input: SceneInput): Scene {
   const { roofedMm } = envelopeNodes(input, out, elevation.floorUnder);
   for (const f of input.structure.features) {
     if (f.kind === "stage") venueStageNodes(f, out, stageOpts(input));
+    else if (f.kind === "curtain") venueCurtain(input, out, f);
     else venueClimb(input, out, f);
   }
   const tables = new Map(input.doc.tables.map((t) => [t.id, t]));
@@ -150,11 +152,8 @@ function curtain(input: SceneInput, out: SceneCollector, p: Placement): void {
   if (!span) return;
   const resolved = resolve(p.variantId);
   const product = resolved?.product;
-  const dx = span.to.x - span.from.x;
-  const dy = span.to.y - span.from.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const n = { x: -dy / len, y: dx / len };
-  const mid = { x: (span.from.x + span.to.x) / 2, y: (span.from.y + span.to.y) / 2 };
+  // The wall at the run's middle — out on the bow of a curved wall — and its normal there.
+  const { p: mid, n } = span.track.at((span.t0 + span.t1) / 2);
   const off = WALL_THICK_MM / 2 + CURTAIN_OFF_WALL_MM;
   // Which side is the room: the side a zone lies on; the wall's centre line when neither does.
   const zoneAt = (q: Point) => input.plan.all.find((z) => z.boundary.length >= 3 && pointInPolygon(q, z.boundary));
@@ -164,10 +163,33 @@ function curtain(input: SceneInput, out: SceneCollector, p: Placement): void {
   const zoneMinus = zoneAt(minus);
   const sign = zonePlus ? 1 : zoneMinus ? -1 : 0;
   const zone = (zonePlus ?? zoneMinus)?.zone;
-  const path = [span.from, span.to].map((q) => ({ x: q.x + n.x * off * sign, y: q.y + n.y * off * sign }));
+  // Along the wall itself, a hand off its room face — round the bow on a curved one.
+  const path = span.track.path(span.t0, span.t1, off * sign);
   const topMm = zone && zone.ceilingHeightMm > 0 ? zone.ceilingHeightMm : product?.dimensions.heightMm || 3000;
   const colour = hexOf(resolved?.swatch) ?? hexOf(product?.appearance?.style?.fill) ?? "#f3ede2";
   out.item(p.id, { type: "item", id: p.id, label: product?.name }, curtainBody(path, topMm, colour, { type: "item", id: p.id }), transform(vec3(0, 0, 0), 0));
+}
+
+/** The venue's own curtain (a feature of kind `curtain`, lib/venues/curtain.ts): the same body a
+ *  hired drape gets, along its wall stretch on the side it hangs, from the ceiling of the zone on
+ *  that side (its own height under open sky, else 3 m), in its cloth. */
+function venueCurtain(input: SceneInput, out: SceneCollector, f: StructureFeature): void {
+  const c = curtainOf(f);
+  const span = c ? resolveSpan(input.structure, c) : null;
+  if (!c || !span) return;
+  const off = (WALL_THICK_MM / 2 + CURTAIN_OFF_WALL_MM) * c.side;
+  const at = span.track.at((span.t0 + span.t1) / 2);
+  const mid = { x: at.p.x + at.n.x * off, y: at.p.y + at.n.y * off };
+  const zone = input.plan.all.find((z) => z.boundary.length >= 3 && pointInPolygon(mid, z.boundary))?.zone;
+  const topMm = zone && zone.ceilingHeightMm > 0 ? zone.ceilingHeightMm : f.heightMm > 0 ? f.heightMm : 3000;
+  const colour = hexOf(f.style?.fill) ?? CURTAIN_FILL;
+  const tag = { type: "feature" as const, id: f.id, label: f.label };
+  // In the pieces its doors leave it (curtainPieces): a doorway stays bare in the room too. Each
+  // piece along the wall itself, round the bow of a curved one.
+  curtainPieces(input.structure, f).forEach((pc, i) => {
+    const path = span.track.path(pc.t0, pc.t1, off);
+    out.item(`feature:${f.id}:${i}`, tag, curtainBody(path, topMm, colour, tag), transform(vec3(0, 0, 0), 0));
+  });
 }
 
 /** The venue's own flight or ramp (a feature of kind `stairs`/`ramp`): the same body a rented one

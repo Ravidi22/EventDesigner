@@ -1,3 +1,4 @@
+import { requireDesigner } from "@/lib/auth/guard";
 import { SuppliersScreen } from "./suppliers-screen";
 
 // Suppliers, expenses and the procurement forecast — all three read through lib/suppliers/ from the
@@ -14,6 +15,7 @@ export default async function SuppliersPage({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
+  await requireDesigner();
   const params = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 

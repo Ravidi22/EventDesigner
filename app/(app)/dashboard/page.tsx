@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
-import { requireDesigner } from "@/lib/auth/guard";
+import { requireHost } from "@/lib/auth/guard";
 import { fetchEvents } from "@/lib/events/actions";
 import { fetchAppointments } from "@/lib/appointments/actions";
 import { fetchGoogleBusy, fetchGoogleStatus } from "@/lib/google/actions";
 import { defaultBusyWindow } from "@/lib/google/mapping";
+import { fetchBookings } from "@/lib/hosting/actions";
+import { fetchMenu } from "@/lib/menus/actions";
+import { fetchStudioLinks } from "@/lib/event-links/actions";
 import { DashboardScreen } from "./dashboard-screen";
+import { VenueDashboard } from "./venue-dashboard";
 
 export const metadata: Metadata = { title: "לוח בקרה · Eve" };
 
@@ -24,22 +28,47 @@ export default async function DashboardPage() {
   // Before the reads, not alongside them: the layout's guard runs in parallel with this file and
   // therefore cannot gate it. See lib/auth/guard.ts — it is free, and it is what turns a signed-out
   // visit into a redirect rather than "not signed in" thrown out of fetchEvents.
-  await requireDesigner();
+  const session = await requireHost();
 
   // The Google window is computed here so the server's read and the client hook's idea of "what is
   // already loaded" are the same range — see defaultBusyWindow.
   const today = new Date().toISOString().slice(0, 10);
   const busyWindow = defaultBusyWindow(today);
 
+  // A venue's home is the same screen on its own rows (./venue-dashboard.tsx): its bookings, the
+  // menu they are sold from, the diary's tastings and tours, and the owner's Google busy blocks.
+  if (session.organizationKind === "venue") {
+    const [bookings, menu, appointments, busy, google] = await Promise.all([
+      fetchBookings(),
+      fetchMenu(),
+      fetchAppointments(),
+      fetchGoogleBusy(busyWindow.from, busyWindow.to),
+      fetchGoogleStatus(),
+    ]);
+    return (
+      <VenueDashboard
+        initialBookings={bookings}
+        initialAppointments={appointments}
+        initialBusy={busy}
+        busyWindow={busyWindow}
+        googleConnected={google.connection?.pullEnabled ?? false}
+        suggestGoogle={google.configured && !google.connection?.pullEnabled}
+        dishes={menu.dishes}
+        packages={menu.packages}
+      />
+    );
+  }
+
   // Google joins the same Promise.all, and it is the one read here that can be SLOW — it talks to
   // somebody else's servers. It is safe in this position for one reason: fetchGoogleBusy resolves
   // to an empty array on every failure rather than rejecting (lib/google/sync.ts), so a Google
   // outage costs this page its overlay and its patience, never its render.
-  const [events, appointments, busy, google] = await Promise.all([
+  const [events, appointments, busy, google, links] = await Promise.all([
     fetchEvents(),
     fetchAppointments(),
     fetchGoogleBusy(busyWindow.from, busyWindow.to),
     fetchGoogleStatus(),
+    fetchStudioLinks(),
   ]);
 
   return (
@@ -49,6 +78,8 @@ export default async function DashboardPage() {
       initialBusy={busy}
       busyWindow={busyWindow}
       googleConnected={google.connection?.pullEnabled ?? false}
+      suggestGoogle={google.configured && !google.connection?.pullEnabled}
+      venueLinks={links}
     />
   );
 }

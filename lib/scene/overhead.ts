@@ -362,12 +362,15 @@ export function curtainBody(path: Point[], topMm: number, colour: string, tag: N
   const b = make(clothMaterial(colour));
   if (path.length < 2) return b;
   b.parts.push({ shape: "ribbon", path, h, at: vec3(0, 0, 0), pleatMm: PLEAT_MM, amplitudeMm: PLEAT_AMPLITUDE_MM });
-  const a = path[0];
-  const z = path[path.length - 1];
-  const len = Math.hypot(z.x - a.x, z.y - a.y);
-  if (len >= 1) {
+  // The rail, one length per stretch of the path — a single rod on a straight wall, bent round the
+  // bow of a curved one (a straight rod from end to end would cut through the room).
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1];
+    const z = path[i];
+    const len = Math.hypot(z.x - a.x, z.y - a.y);
+    if (len < 1) continue;
     // A cylinder grows up from its base; tilted 90° about its own x axis AFTER rotDeg (types.ts
-    // Part) it lies along its turned +y — rotDeg = bearing − 90 lays that along the chord.
+    // Part) it lies along its turned +y — rotDeg = bearing − 90 lays that along the stretch.
     const bearing = deg(Math.atan2(z.y - a.y, z.x - a.x));
     b.parts.push({ shape: "cylinder", rTop: ROD_R_MM, rBottom: ROD_R_MM, h: len, at: vec3(a.x, a.y, h + ROD_ABOVE_MM), rotDeg: bearing - 90, tiltDeg: 90, segments: 10, material: metalMaterial(ROD) });
   }

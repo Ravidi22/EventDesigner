@@ -24,6 +24,7 @@ import {
   type CheckpointOffsets,
 } from "@/lib/production/runway";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "./types";
+import type { VatStatus } from "@/lib/billing/types";
 import type { Point, StageTemplate } from "@/lib/design-document/types";
 
 /** Postgres `numeric` arrives as a string — arbitrary precision, so the driver will not silently
@@ -66,8 +67,12 @@ export async function fetchSettings(): Promise<BusinessSettings> {
     currency: row.currency,
     quoteValidityDays: row.quoteValidityDays,
     quoteTerms: row.quoteTerms,
+    vatStatus: row.vatStatus,
+    bankDetails: row.bankDetails,
   };
 }
+
+const VAT_STATUSES = new Set<VatStatus>(["exempt", "licensed", "company"]);
 
 /**
  * Write the settings.
@@ -126,6 +131,9 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
       ? Math.min(Math.max(Math.round(Number(input.quoteValidityDays)), 0), 365)
       : DEFAULT_SETTINGS.quoteValidityDays,
     quoteTerms: clean(input.quoteTerms, 4000),
+    // Three words, checked against the list — a document's title follows from this column.
+    vatStatus: VAT_STATUSES.has(input.vatStatus) ? input.vatStatus : DEFAULT_SETTINGS.vatStatus,
+    bankDetails: clean(input.bankDetails, 300),
     // Not taken from the caller: phase 1 is shekels, the field is read-only on the screen, and a
     // currency symbol that can be set to anything is a quote that can be made to say anything.
     currency: DEFAULT_SETTINGS.currency,

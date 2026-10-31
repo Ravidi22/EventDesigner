@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, Palette, Phone, Plus } from "lucide-react";
+import { Check, Palette, Plus } from "lucide-react";
 import type { MarketItem } from "@/lib/marketplace/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { formatDimensions, formatPrice } from "@/lib/catalog/format";
@@ -9,9 +9,11 @@ import { Button } from "@/components/button";
 import { ProductImage } from "../catalog/product-image";
 
 // The catalog card's shape, without its menu: a marketplace row is not the designer's to edit,
-// duplicate or delete, so the one action is the button at the foot.
+// duplicate or delete, so the one action is the button at the foot. It stands in its supplier's
+// shop, so the supplier is the page's header, not a line on every card; and with a grid of them
+// the add button is outline weight — one filled CTA per screen.
 export function MarketCard({ item, busy, onAdd }: { item: MarketItem; busy: boolean; onAdd: () => void }) {
-  const { product, supplier, wholesalePrice, inCatalog } = item;
+  const { product, wholesalePrice, inCatalog } = item;
   const category = CATEGORY_BY_ID[product.category];
   return (
     <div className="flex flex-col rounded-lg border border-border bg-surface p-2 text-right transition duration-150 ease-fluid hover:-translate-y-0.5 hover:shadow-floating">
@@ -26,20 +28,10 @@ export function MarketCard({ item, busy, onAdd }: { item: MarketItem; busy: bool
       </div>
 
       <h3 className="font-display text-base leading-tight text-ink">{product.name}</h3>
-      <p className="nums mt-1 text-sm text-muted">
+      <p className="nums mt-1 mb-3 text-sm text-muted">
         {formatDimensions(product.dimensions)} · {category?.label}
       </p>
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-sm text-ink-soft">
-        <span className="font-semibold">{supplier.name}</span>
-        {supplier.phone && (
-          <span className="nums inline-flex items-center gap-1 text-muted" dir="ltr">
-            <Phone className="h-3 w-3" strokeWidth={2} />
-            {supplier.phone}
-          </span>
-        )}
-      </p>
-
-      <div className="-mx-2 mt-3 flex items-center justify-between gap-2 border-t border-border px-3 pt-2.5">
+      <div className="-mx-2 mt-auto flex items-center justify-between gap-2 border-t border-border px-3 pt-2.5">
         <span className="flex flex-col">
           <span className="text-xs text-muted">מחיר ספק</span>
           <span className="nums text-lg font-bold text-ink">{formatPrice(wholesalePrice)}</span>
@@ -53,7 +45,7 @@ export function MarketCard({ item, busy, onAdd }: { item: MarketItem; busy: bool
             בקטלוג שלי
           </Link>
         ) : (
-          <Button size="sm" disabled={busy} onClick={onAdd}>
+          <Button size="sm" variant="outline" disabled={busy} onClick={onAdd}>
             <Plus className="h-4 w-4" strokeWidth={2.5} />
             {busy ? "מוסיפים…" : "הוספה לקטלוג"}
           </Button>

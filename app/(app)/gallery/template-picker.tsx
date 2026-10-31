@@ -2,7 +2,9 @@
 
 import { Plus } from "lucide-react";
 import { Button } from "@/components/button";
-import { PRESENTATION_TEMPLATES, type PresentationTemplate } from "@/lib/gallery/templates";
+import { PAGE_GUTTER } from "@/components/page-gutter";
+import { PRESENTATION_TEMPLATES, VENUE_PRESENTATION_TEMPLATES, type PresentationTemplate } from "@/lib/gallery/templates";
+import { useIsVenue } from "@/components/org-kind-context";
 
 // The first screen of "מצגת חדשה" (F-2.1): pick a skeleton to start from. Each card shows the
 // named, ordered slots the builder will open with — the designer only attaches a photo to each.
@@ -17,8 +19,10 @@ export function TemplatePicker({
   onBlank: () => void;
   onCancel: () => void;
 }) {
+  // A hall shows its menu, its tables and its rooms; a designer, the event's scenes.
+  const templates = useIsVenue() ? VENUE_PRESENTATION_TEMPLATES : PRESENTATION_TEMPLATES;
   return (
-    <div className="px-8 py-7">
+    <div className={PAGE_GUTTER}>
       <div className="mb-1 flex flex-wrap items-center justify-between gap-4">
         <h1 className="font-display text-h2 text-ink">מצגת חדשה</h1>
         <Button variant="ghost" onClick={onCancel}>
@@ -34,7 +38,7 @@ export function TemplatePicker({
         className="grid gap-5"
         style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}
       >
-        {PRESENTATION_TEMPLATES.map((t) => (
+        {templates.map((t) => (
           <button
             key={t.key}
             type="button"

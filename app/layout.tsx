@@ -32,12 +32,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
+    // suppressHydrationWarning on these two only: browser extensions stamp their own attributes on
+    // <html>/<body> before React hydrates (ColorZilla's cz-shortcut-listen, Grammarly's data-gr-*,
+    // Dark Reader's data-darkreader-*). It silences attribute mismatches on THIS element, not its
+    // children — a real mismatch anywhere in the app is still reported.
     <html
       lang="he"
       dir="rtl"
       className={`${assistant.variable} ${urbanist.variable} ${grotesk.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }

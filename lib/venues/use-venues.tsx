@@ -28,7 +28,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Venue } from "./types";
-import { createVenue, renameVenue as renameVenueAction, setVenueLogo as setVenueLogoAction, deleteVenue as deleteVenueAction, fetchVenues } from "./actions";
+import { createVenue, renameVenue as renameVenueAction, setVenueLogo as setVenueLogoAction, deleteVenue as deleteVenueAction, fetchVenues, followVenue } from "./actions";
 import { VENUE_CHANGED_EVENT, loadActiveVenueId, setActiveVenueId } from "./storage";
 
 /** Why a delete was refused: the sentence to show, and how many events are still on the venue. */
@@ -57,6 +57,9 @@ export interface VenuesHandle {
    *  fallback bookkeeping needed here: updating `venues` is enough, since activeVenueId below is
    *  derived from it and re-resolves against `storedId` on its own once the deleted id drops out. */
   remove: (id: string) => Promise<VenueDeleteRefusal | null>;
+  /** Put another business's property on this list (followVenue) and open it — everybody sees the
+   *  same venue, so a designer picks the plan its owner drew rather than tracing it again. */
+  follow: (id: string) => Promise<void>;
   reload: () => Promise<void>;
 }
 
@@ -75,6 +78,9 @@ const EMPTY: VenuesHandle = {
     throw new Error("VenuesProvider is missing");
   },
   remove: async () => {
+    throw new Error("VenuesProvider is missing");
+  },
+  follow: async () => {
     throw new Error("VenuesProvider is missing");
   },
   reload: async () => {},
@@ -164,9 +170,15 @@ export function VenuesProvider({
     return null;
   }, []);
 
+  const follow = useCallback(async (id: string) => {
+    const { venues: next } = await followVenue(id);
+    setVenues(next);
+    setActiveVenueId(id);
+  }, []);
+
   const value = useMemo<VenuesHandle>(
-    () => ({ venues, ready: true, error, activeVenueId, add, rename, setLogo, remove, reload }),
-    [venues, error, activeVenueId, add, rename, setLogo, remove, reload],
+    () => ({ venues, ready: true, error, activeVenueId, add, rename, setLogo, remove, follow, reload }),
+    [venues, error, activeVenueId, add, rename, setLogo, remove, follow, reload],
   );
 
   return <VenuesContext.Provider value={value}>{children}</VenuesContext.Provider>;

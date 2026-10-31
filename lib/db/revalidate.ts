@@ -91,6 +91,14 @@ export function revalidateSettings(): void {
   revalidate("/settings");
 }
 
+/** A billing document was issued, sent or cancelled: the ledger, and the event lists that show an
+ *  event's confirmation and its late installments. */
+export function revalidateBilling(): void {
+  revalidate("/billing");
+  revalidate("/dashboard");
+  revalidate("/production");
+}
+
 /**
  * The production runway alone — for a write that changes how it is COMPUTED rather than what is on
  * it.
@@ -114,4 +122,19 @@ export function revalidateProduction(): void {
  */
 export function revalidateShell(): void {
   revalidate("/", "layout");
+}
+
+/** A venue's bookings changed: its occupancy calendar (/dashboard) and its list (/bookings). A
+ *  linked designer's event may have followed (lib/event-links/sync.ts), and that is the designer's
+ *  dashboard and runway — the same paths, another tenant's render. */
+export function revalidateBookings(): void {
+  revalidate("/dashboard");
+  revalidate("/bookings");
+  revalidate("/production");
+}
+
+/** A venue's dishes or packages changed. */
+export function revalidateMenus(): void {
+  revalidate("/menus");
+  revalidate("/bookings");
 }

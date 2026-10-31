@@ -6,9 +6,8 @@ import { loadProducts } from "@/lib/catalog/storage";
 import { CATEGORIES, CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { stemsOf } from "@/lib/catalog/flowers";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
-import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
-import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
-import { nearestWall } from "@/lib/studio/anchor";
+import type { VenueStructure } from "@/lib/venues/structure";
+import { nearestWall, wallTrack } from "@/lib/studio/anchor";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import type { MeasureContext } from "@/lib/design-document/measure";
@@ -67,16 +66,10 @@ export const priceLookup: QuoteLookup = (variantId) => {
  *  the venue structure the document deliberately doesn't carry. Pass the event's structure; without
  *  one every item falls back to being counted, which is what a caller with no plan can honestly say. */
 export function measureContext(structure?: VenueStructure): MeasureContext {
-  const nodes = structure ? nodeMap(structure) : null;
   return {
     unitOf: (variantId) => resolve(variantId)?.product.priceUnit ?? "unit",
-    wallLengthMm: structure && nodes
-      ? (wallId) => {
-          const wall = structure.walls.find((w) => w.id === wallId);
-          const pts = wall ? wallPoints(structure, wall, nodes) : null;
-          return pts ? segmentLengthMm(pts.a, pts.b) : undefined;
-        }
-      : undefined,
+    // Along the wall — a drape round a bowed wall covers the arc, not the chord.
+    wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,
     footprintMm: (variantId) => {
       const product = resolve(variantId)?.product;
       if (!product) return undefined;

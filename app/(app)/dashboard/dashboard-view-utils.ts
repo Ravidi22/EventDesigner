@@ -10,6 +10,7 @@ import {
   TreePalm,
   User,
   Users,
+  UtensilsCrossed,
   type LucideIcon,
 } from "lucide-react";
 import type { AppointmentKind } from "@/lib/appointments/types";
@@ -58,11 +59,15 @@ export const monthLabel = (d: Date) => d.toLocaleDateString("he-IL", { month: "l
 // Compact echo of StatusChip's own tone→fill mapping (components/status-chip.tsx) — a chip
 // this small can't carry StatusChip's padding/text size, but the meaning must stay identical
 // to every other status surface in the app.
-export const TONE_CLASS: Record<StatusTone, string> = {
+// `alert` is a hall's: an option that lapsed (lib/hosting BOOKING_STATUS_TONE) — the date is free
+// again and sales should hear about it. A designer's event never wears it.
+export type CardTone = StatusTone | "alert";
+export const TONE_CLASS: Record<CardTone, string> = {
   neutral: "bg-bg text-muted",
   accent: "bg-accent-wash text-accent-hover",
   success: "bg-success-tint text-success",
   warn: "bg-warn-tint text-warn-ink",
+  alert: "bg-alert-tint text-alert-ink",
 };
 
 // Calendar event cards used to be themed per-hall, but that meant a card's color didn't match
@@ -70,16 +75,19 @@ export const TONE_CLASS: Record<StatusTone, string> = {
 // its purple status text) — so the whole card (background, bar, time, percentage, status word)
 // is themed by STATUS_TONE instead, one consistent color per card, matching TONE_CLASS/StatusChip
 // everywhere else a status shows.
+// `rail` is the 3px leading edge a diary card wears too (KIND_CARD_THEME), in the status's hue.
 export interface CardTheme {
   bg: string;
   text: string;
   bar: string;
+  rail: string;
 }
-export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
-  neutral: { bg: "bg-bg", text: "text-muted", bar: "bg-faint" },
-  warn: { bg: "bg-warn-tint", text: "text-warn-ink", bar: "bg-warn" },
-  accent: { bg: "bg-accent-tint", text: "text-accent-hover", bar: "bg-accent" },
-  success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success" },
+export const STATUS_CARD_THEME: Record<CardTone, CardTheme> = {
+  neutral: { bg: "bg-bg", text: "text-muted", bar: "bg-faint", rail: "border-s-faint" },
+  warn: { bg: "bg-warn-tint", text: "text-warn-ink", bar: "bg-warn", rail: "border-s-warn" },
+  accent: { bg: "bg-accent-tint", text: "text-accent-hover", bar: "bg-accent", rail: "border-s-accent" },
+  success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success", rail: "border-s-success" },
+  alert: { bg: "bg-alert-tint", text: "text-alert-ink", bar: "bg-alert", rail: "border-s-alert" },
 };
 
 // WHAT KIND OF DAY IS THIS? — one color per סוג הרשומה.
@@ -100,8 +108,8 @@ export const STATUS_CARD_THEME: Record<StatusTone, CardTheme> = {
 // exactly this — the raw `success` swatch is 2.8:1 on success-tint and would have failed.
 //
 // `rail` is the saturated hue worn as a 3px leading edge, and it is doing two jobs: eight tints this
-// pale are close neighbours, and the rail is the channel that still separates them at arm's length —
-// and it is what tells a diary card from an event card now that the two share one geometry.
+// pale are close neighbours, and the rail is the channel that still separates them at arm's length.
+// An event card wears one too now, in its status's hue (STATUS_CARD_THEME) — the glyph is the tell.
 //
 // Surfaces with no fill to tint take `text` alone on the kind's icon and label — that is what the
 // event drawer's list does. Today's Focus takes neither: its ground is the violet gradient, and
@@ -121,10 +129,11 @@ export const KIND_CARD_THEME: Record<AppointmentKind, KindTheme> = {
   supply: { bg: "bg-magenta-tint", text: "text-magenta-ink", rail: "border-s-magenta" },
   personal: { bg: "bg-blush-tint", text: "text-blush-ink", rail: "border-s-blush-ink" },
   other: { bg: "bg-bg", text: "text-ink-soft", rail: "border-s-faint" },
+  tasting: { bg: "bg-warn-tint", text: "text-warn-ink", rail: "border-s-warn" },
 };
 
-// The glyph half of the same answer. A diary card is the only card in a day cell carrying an icon,
-// so this is also what separates it from an event at a glance — and it is what keeps the eight kinds
+// The glyph half of the same answer. An event card always wears ✦ (Sparkles), which no kind here
+// may take, so this is also what separates a diary card from an event at a glance — and it is what keeps the eight kinds
 // apart for anyone reading the grid without color, which is the whole point of not leaning on hue
 // alone. `done` swaps in a tick at the call site rather than being an entry here: it is a state, not
 // a ninth kind.
@@ -137,6 +146,7 @@ export const KIND_ICON: Record<AppointmentKind, LucideIcon> = {
   supply: Truck,
   personal: User,
   other: CalendarDays,
+  tasting: UtensilsCrossed,
 };
 
 // A HELD entry drops its hue. `done` is the designer confirming it happened, and what happened is

@@ -230,9 +230,11 @@ export function fillFeatureEdges(s: VenueStructure, featureId: string, kind: Ven
   return add.length ? setEdgeItems(s, featureId, [...(p.stage.stairs ?? []), ...add]) : s;
 }
 
-/** A stage just placed: the sketch's own default finish — a flight along every side with floor in
- *  front of it, one at the back of a round one — less the barriers the sketch would put where a wall
- *  leaves no floor (a venue's stage has no barriers; that side stays bare). */
+/** The sketch's "stairs everywhere" finish on a venue stage — a flight along every side with floor
+ *  in front of it, one at the back of a round one — less the barriers the sketch would put where a
+ *  wall leaves no floor (a venue's stage has no barriers; that side stays bare). /halls no longer
+ *  applies it when a stage is placed (2026-10-30, the user: "put nothing"); the self-check keeps the
+ *  rule, and the bar's one-click finish is `fillFeatureEdges`. */
 export function withDefaultEdges(s: VenueStructure, featureId: string, wallDistance?: WallDistance): VenueStructure {
   const f = s.features.find((x) => x.id === featureId);
   if (!f) return s;

@@ -1415,11 +1415,16 @@ export function fillGaps(p: StagePlacement, deckOf: DeckLookup, kind: StageEdgeK
   });
 }
 
-/** A new stage's finish: stairs along every open side — the default the studio asked for — or a
- *  barrier where there is no floor in front of the side for a flight to stand on. (Set into the
- *  stage is a choice the designer makes, not a default: a whole side recessed eats a strip of deck.)
- *  A ROUND stage — a rim all the way round with nothing on it yet — gets ONE flight, at its back,
- *  and the rest of its rim is skirted: stairs round a whole disc is not what anyone builds. */
+/** The "stairs everywhere" finish: stairs along every open side, or a barrier where there is no
+ *  floor in front of the side for a flight to stand on. (Set into the stage is a choice the designer
+ *  makes, not a default: a whole side recessed eats a strip of deck.) A ROUND stage — a rim all the
+ *  way round with nothing on it yet — gets ONE flight, at its back, and the rest of its rim is
+ *  skirted: stairs round a whole disc is not what anyone builds.
+ *
+ *  NOT APPLIED BY DEFAULT ANY MORE (2026-10-30, the user: a new stage gets nothing): no path in the
+ *  studio or at /halls calls it when a stage is made, reshaped or merged — every edge item is clicked
+ *  on or laid from the bar's "קצוות פתוחים". Kept as the rule set `stageFromPiece`'s `withEdges`
+ *  and the self-checks below exercise. */
 export function defaultEdgeItems(p: StagePlacement, deckOf: DeckLookup, newId: () => string, wallDistance?: WallDistance): StageStair[] {
   const items = fillGaps(p, deckOf, "stairs", newId, wallDistance).filter((it) => !it.level);
   const taken = new Set((p.stage.stairs ?? []).filter((it) => !it.level).map((it) => stageSide(p.stage, undefined, it.edge)?.edge));

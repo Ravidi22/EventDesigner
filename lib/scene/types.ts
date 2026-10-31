@@ -129,7 +129,7 @@ export interface LeafCard {
 }
 
 export type NodeType =
-  | "ground" | "floor" | "wall" | "door" | "ceiling" | "feature"
+  | "ground" | "floor" | "wall" | "door" | "window" | "ceiling" | "feature"
   | "table" | "cloth" | "chair" | "item" | "flowers" | "tableware"
   | "stage" | "deck" | "edge" | "skirt" | "corner" | "railing";
 

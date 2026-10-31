@@ -15,10 +15,11 @@
 // window, which would mean shipping a month of drawings to the client to add up numbers. The pure
 // reduction still lives in procurement.ts and still runs under node — this file only assembles its
 // inputs.
-import { and, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, currentOrg } from "@/lib/db/org";
 import { events, expenses, issuedQuotes, productVariants, products, suppliers } from "@/lib/db/schema";
+import type { StockKind } from "@/lib/catalog/types";
 import { assertEventOwned } from "@/lib/events/ownership";
 import { procurementReport, type ProcurementReport } from "./procurement";
 import { assembleDemands } from "./demand";
@@ -93,6 +94,102 @@ export async function assignSupplier(variantId: string, supplierId: string | nul
     .update(products)
     .set({ supplierId, updatedAt: new Date() })
     .where(and(eq(products.id, productId), eq(products.organizationId, organizationId)));
+}
+
+/** The "ללא ספק" group's fix for the WHOLE group: every line it holds, one supplier. Derived keys
+ *  (`derived:…`) are skipped — they have no row to write. */
+export async function assignSupplierMany(variantIds: string[], supplierId: string): Promise<void> {
+  if (!Array.isArray(variantIds) || variantIds.length > 500) throw new Error("variantIds must be a short list");
+  assertId(supplierId, "supplierId");
+  const ids = variantIds.filter((v): v is string => typeof v === "string" && UUID.test(v));
+  if (ids.length === 0) return;
+  const organizationId = await currentOrg();
+  await assertSupplierOwned(organizationId, supplierId);
+  const database = db();
+  const variants = await database
+    .select({ productId: productVariants.productId, id: productVariants.id })
+    .from(productVariants)
+    .where(and(inArray(productVariants.id, ids), eq(productVariants.organizationId, organizationId)));
+  const byVariant = new Map(variants.map((v) => [v.id, v.productId]));
+  const productIds = [...new Set(ids.map((id) => byVariant.get(id) ?? id))];
+  await database
+    .update(products)
+    .set({ supplierId, updatedAt: new Date() })
+    .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
+}
+
+/** What a product's procurement chip can change in bulk — the catalog's "N מוצרים מסוננים" bar.
+ *  `supplierId: null` clears it; a key left out is left alone. */
+export interface SourcingPatch {
+  stockKind?: StockKind;
+  supplierId?: string | null;
+}
+
+export async function setSourcing(productIds: string[], patch: SourcingPatch): Promise<void> {
+  if (!Array.isArray(productIds) || productIds.length === 0 || productIds.length > 1000) {
+    throw new Error("productIds must be a non-empty list");
+  }
+  for (const id of productIds) assertId(id, "productId");
+  const set: { stockKind?: StockKind; supplierId?: string | null; updatedAt: Date } = { updatedAt: new Date() };
+  if (patch.stockKind !== undefined) {
+    if (!isStockKind(patch.stockKind)) throw new Error("stockKind is not one of the three");
+    set.stockKind = patch.stockKind;
+  }
+  if (patch.supplierId !== undefined) {
+    if (patch.supplierId !== null) assertId(patch.supplierId, "supplierId");
+    set.supplierId = patch.supplierId;
+  }
+  if (set.stockKind === undefined && set.supplierId === undefined) return;
+  const organizationId = await currentOrg();
+  if (set.supplierId) await assertSupplierOwned(organizationId, set.supplierId);
+  await db()
+    .update(products)
+    .set(set)
+    .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
+}
+
+const isStockKind = (v: unknown): v is StockKind => v === "owned" || v === "rented" || v === "consumable";
+
+/** What stands between this studio and a forecast that says something — read off the catalog and
+ *  the events, so the רכש tab is never a blank table with "לא נספר" in every row and no word why. */
+export interface ProcurementSetup {
+  /** Live rows that are rented or bought and name no supplier: the ones that cannot become an order. */
+  unsourced: number;
+  /** Live owned rows with no count — allowed ("לא נספר" is a real answer), but said. */
+  uncounted: number;
+  /** Events from today on with a quote out and no answer from the client. */
+  awaitingClient: number;
+  /** Confirmed events dated AFTER the window's end — what a wider window would add. */
+  confirmedBeyond: number;
+}
+
+export async function fetchProcurementSetup(to: string): Promise<ProcurementSetup> {
+  assertDate(to, "to");
+  const organizationId = await currentOrg();
+  const database = db();
+
+  const [stock] = await database
+    .select({
+      unsourced: sql<number>`count(*) filter (where ${products.stockKind} <> 'owned' and ${products.supplierId} is null)::int`,
+      uncounted: sql<number>`count(*) filter (where ${products.stockKind} = 'owned' and ${products.stockQty} is null)::int`,
+    })
+    .from(products)
+    .where(and(eq(products.organizationId, organizationId), eq(products.archived, false), isNull(products.composition)));
+
+  const [ev] = await database
+    .select({
+      awaitingClient: sql<number>`count(*) filter (where ${events.confirmedAt} is null and ${events.eventDate} >= current_date and exists (select 1 from ${issuedQuotes} where ${issuedQuotes.eventId} = ${events.id}))::int`,
+      confirmedBeyond: sql<number>`count(*) filter (where ${events.confirmedAt} is not null and ${events.eventDate} > ${to})::int`,
+    })
+    .from(events)
+    .where(and(eq(events.organizationId, organizationId), eq(events.archived, false), isNull(events.lostAt)));
+
+  return {
+    unsourced: stock?.unsourced ?? 0,
+    uncounted: stock?.uncounted ?? 0,
+    awaitingClient: ev?.awaitingClient ?? 0,
+    confirmedBeyond: ev?.confirmedBeyond ?? 0,
+  };
 }
 
 // ── Suppliers ──────────────────────────────────────────────────────────────────────────────────

@@ -64,6 +64,8 @@ import { assembleDemands } from "@/lib/suppliers/demand";
 import { ORDER_STATUS_LABEL, type OrderStatus } from "@/lib/orders/types";
 import { readiness, type OrderedLine, type Readiness } from "./readiness";
 import { buildRunway, type EventFacts, type Runway } from "./runway";
+import { documentsForEvents } from "@/lib/billing/reads";
+import { eventLedger, lateInstallment } from "@/lib/billing/rules";
 
 /** Today, as the SERVER's calendar day. `toISOString().slice(0,10)` would be the UTC day, which is
  *  yesterday for anyone working after 9pm in Israel — and here that is not cosmetic: every
@@ -275,6 +277,18 @@ export async function fetchRunway(): Promise<Runway> {
     return o;
   };
 
+  // The order's payment schedule against the receipts (lib/billing): the first installment due and
+  // unpaid is the row's alert. Read for the whole book in one query, owners and designers only.
+  const lateByEvent = new Map<string, { label: string; amount: number }>();
+  if (ROLE_CAPABILITIES[actor.role].money) {
+    const now = today();
+    const byEvent = await documentsForEvents(organizationId, eventRows.map((e) => e.id));
+    for (const [eventId, docs] of byEvent) {
+      const late = lateInstallment(eventLedger(docs, now).installments);
+      if (late) lateByEvent.set(eventId, { label: late.label, amount: late.amount - late.paid });
+    }
+  }
+
   const zoned = new Set(zoneRows.map((r) => r.eventId));
   const liked = new Set(likedRows.map((r) => r.eventId));
   const versionByEvent = new Map(docRows.map((r) => [r.eventId, r.version]));
@@ -330,6 +344,7 @@ export async function fetchRunway(): Promise<Runway> {
       quoteTotal: showsMoney && quote ? toMoney(quote.total) : undefined,
       crew: crewByEvent.get(e.id),
       orders: ordersFor(e.eventDate),
+      paymentLate: showsMoney ? lateByEvent.get(e.id) : undefined,
     };
   });
 

@@ -47,6 +47,9 @@ export interface ProcurementItem {
   orderUnit?: string;
   /** Order-units per placed unit — 7 stems per centrepiece. Absent = 1. */
   orderFactor?: number;
+  /** פחת — whole percent ordered on top of the count, consumables only (Product.spareRate, else
+   *  the category's default). A rule, never a usage figure. Absent = 0. */
+  spareRate?: number;
   /** Cost per ORDER unit, always. When there is no separate order unit the two coincide, so this
    *  stays one number with one meaning rather than a column that means something different
    *  depending on a neighbouring field. */
@@ -78,9 +81,12 @@ export interface EventDemand {
 export interface OrderLine {
   variantId: string;
   label: string;
-  /** In ORDER units — placed quantity × orderFactor. */
+  /** In ORDER units — placed quantity × orderFactor, the spare included. */
   quantity: number;
   unitLabel: string;
+  /** How much of `quantity` is the פחת, in order units, and the rate it came from — so the screen
+   *  can say "+21 (10% פחת)" beside the line. Absent when the item has no rate. */
+  spare?: { units: number; rate: number };
   /** quantity × costPrice, when a cost is known. */
   cost?: number;
 }
@@ -144,9 +150,21 @@ export interface ProcurementReport {
 
 const NO_SUPPLIER = "ללא ספק";
 
-/** Order-units for a placed quantity. */
-function orderQuantity(quantity: number, item: ProcurementItem): number {
-  return round2(quantity * (item.orderFactor ?? 1));
+/** Order-units for a placed quantity: × the order factor, then the פחת on top for a consumable
+ *  (a rental is returned whole, so it takes none). Shared with the event's readiness
+ *  (lib/production/readiness.ts) so the order and the day it covers count the same units. */
+export function orderQuantity(quantity: number, item: ProcurementItem): number {
+  const base = round2(quantity * (item.orderFactor ?? 1));
+  const rate = item.stockKind === "consumable" ? (item.spareRate ?? 0) : 0;
+  return rate > 0 ? round2(base * (1 + rate / 100)) : base;
+}
+
+/** The spare share of an order quantity, for the line's note. */
+function spareOf(quantity: number, item: ProcurementItem): OrderLine["spare"] {
+  const rate = item.stockKind === "consumable" ? (item.spareRate ?? 0) : 0;
+  if (rate <= 0) return undefined;
+  const base = round2(quantity * (item.orderFactor ?? 1));
+  return { units: round2(orderQuantity(quantity, item) - base), rate };
 }
 
 function unitLabelOf(item: ProcurementItem): string {
@@ -250,6 +268,7 @@ export function procurementReport(
         label: item.label,
         quantity,
         unitLabel: unitLabelOf(item),
+        spare: spareOf(placed, item),
         cost: item.costPrice === undefined ? undefined : round2(quantity * item.costPrice),
       },
     });
@@ -443,6 +462,17 @@ if (isMain(import.meta.url)) {
   // e4's 60 chairs are owned and cost nothing to stand up again — if they were counted the figure
   // would be larger and meaningless. This is the assertion that keeps that true.
   assert(chairs.peak === 55, "an uncommitted event does not raise the owned peak either");
+
+  // פחת: a consumable with a rate orders that much over the count; a rental never does.
+  const spared = procurementReport(
+    [{ eventId: "s", label: "s", date: "2026-09-05", committed: true, drawn: true, measured: true, rows: [{ variantId: "roses", quantity: 20 }, { variantId: "drape", quantity: 10 }] }],
+    (id) => (id === "roses" ? { ...ITEMS.flowers, spareRate: 10 } : id === "drape" ? { ...ITEMS.drape, spareRate: 10 } : undefined),
+    { from: "2026-09-01", to: "2026-09-30" },
+  );
+  const roses = spared.order[0].lines[0];
+  assert(roses.quantity === 154 && roses.spare?.units === 14 && roses.spare.rate === 10, "20 × 7 stems + 10% = 154, 14 of them spare");
+  assert(roses.cost === 616, "…and the spare is paid for");
+  assert(spared.rentals[0].lines[0].quantity === 10 && spared.rentals[0].lines[0].spare === undefined, "a rental takes no פחת");
 
   // An item the catalog no longer resolves must be skipped, not crash the screen.
   const orphan = procurementReport(

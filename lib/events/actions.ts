@@ -15,7 +15,7 @@ import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { revalidateEventStage, revalidateEvents } from "@/lib/db/revalidate";
-import { appointments, events, eventZones, venues, zones } from "@/lib/db/schema";
+import { appointments, billingDocuments, events, eventZones, venues, zones } from "@/lib/db/schema";
 import { linksForAppointments, removeFromGoogle } from "@/lib/google/sync";
 import type { EventSummary } from "./types";
 import { toEvent, toEvents, toEventRow, toEventZoneRows } from "./db-mapping";
@@ -81,11 +81,13 @@ function assertEvent(value: unknown): asserts value is EventSummary {
   if (typeof e.createdAt !== "number") throw new Error("event.createdAt must be epoch ms");
 }
 
-/** A venue and zones this studio actually owns, and zones that are actually ON that venue.
+/** A venue that exists, and zones that are actually ON that venue.
  *
- *  Both halves matter. The first stops an event being attached to another studio's property; the
- *  second stops a plan being assembled out of rooms from two different sites, which the geometry
- *  layer has no way to draw and no way to report. */
+ *  ⚠ CHANGED 2026-10-30: any business's venue, not only this studio's own. Everybody sees the same
+ *  venue (lib/venues/access.ts resolveVenueRole), so a designer books the hall its owner drew rather
+ *  than a copy of it — the cross-studio booking roadmap §6 left open. What still matters is the
+ *  second half: a plan assembled out of rooms from two different sites is one the geometry layer
+ *  has no way to draw and no way to report. */
 async function assertPlacement(
   organizationId: string,
   venueId: string | undefined,
@@ -96,11 +98,8 @@ async function assertPlacement(
     return;
   }
   const database = db();
-  const [venue] = await database
-    .select({ id: venues.id })
-    .from(venues)
-    .where(and(eq(venues.id, venueId), eq(venues.organizationId, organizationId)))
-    .limit(1);
+  void organizationId;
+  const [venue] = await database.select({ id: venues.id }).from(venues).where(eq(venues.id, venueId)).limit(1);
   if (!venue) throw new Error("venue not found");
 
   if (!zoneIds.length) return;
@@ -109,11 +108,7 @@ async function assertPlacement(
     .select({ id: zones.id })
     .from(zones)
     .where(
-      and(
-        inArray(zones.id, unique),
-        eq(zones.venueId, venueId),
-        eq(zones.organizationId, organizationId),
-      ),
+      and(inArray(zones.id, unique), eq(zones.venueId, venueId)),
     );
   if (found.length !== unique.length) throw new Error("zone not found on this venue");
 }
@@ -311,10 +306,23 @@ export async function patchEvent(id: string, patch: EventPatch): Promise<EventSu
  * studio's, and the venue ladder gates properties, not the diary (see the note in
  * lib/appointments/actions.ts).
  */
-export async function deleteEvent(id: string): Promise<EventSummary[]> {
+export async function deleteEvent(id: string): Promise<EventSummary[] | { error: string }> {
   assertId(id, "id");
   const organizationId = await currentOrg();
   const database = db();
+
+  // An event with billing documents is part of the studio's BOOKS (lib/billing): a tax invoice
+  // must be kept seven years, so `billing_documents.event_id` is RESTRICT and the database would
+  // refuse this delete with a foreign-key error nobody can act on. Said here instead, as the
+  // correction it is — archive, don't delete.
+  const [booksRow] = await database
+    .select({ id: billingDocuments.id })
+    .from(billingDocuments)
+    .where(and(eq(billingDocuments.eventId, id), eq(billingDocuments.organizationId, organizationId)))
+    .limit(1);
+  if (booksRow) {
+    return { error: "לאירוע הופקו מסמכי חיוב (הזמנה, חשבונית או קבלה) והם נשמרים בספרים — העבירו אותו לארכיון במקום למחוק." };
+  }
 
   // Both reads BEFORE the delete — see above. The appointment ids are this studio's own by the
   // same scope the delete uses, so a link cannot be read for a meeting belonging to anyone else.

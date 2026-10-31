@@ -14,7 +14,7 @@
 // Nothing here is typed by anyone: the demand is the drawing's, the stock is the catalog's, the
 // orders are what was sent and what came back. And NO COST: this reaches the event drawer, which is
 // an internal screen, but the shape is built without a price so that it never can carry one.
-import type { ProcurementItem } from "@/lib/suppliers/procurement";
+import { orderQuantity, type ProcurementItem } from "@/lib/suppliers/procurement";
 import type { OrderStatus } from "@/lib/orders/types";
 import { isMain } from "@/lib/self-check";
 
@@ -115,7 +115,9 @@ export function readiness(
       const shortfall = item.stockQty !== undefined && onDay > item.stockQty ? round2(onDay - item.stockQty) : undefined;
       owned.push({ variantId: row.variantId, label: item.label, needed: row.quantity, elsewhere: others, stockQty: item.stockQty, shortfall });
     } else {
-      const needed = round2(row.quantity * (item.orderFactor ?? 1));
+      // The same units the order was sent in — factor and פחת included — or a 10% rate would read
+      // as a line forever short by a tenth.
+      const needed = orderQuantity(row.quantity, item);
       const { ordered: qty, state } = stateOf(ordered.get(row.variantId) ?? []);
       sourced.push({
         variantId: row.variantId,

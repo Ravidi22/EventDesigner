@@ -47,6 +47,7 @@ export function CatalogRail({
   addedIds = [],
   armedId = null,
   onArm,
+  eventFolder = true,
 }: {
   products?: Product[];
   groups?: CategoryGroupId[];
@@ -72,6 +73,9 @@ export function CatalogRail({
   /** A click on a row arms it; a click on the armed row, or the start of a drag, lets go (null).
    *  Absent = rows are drag-only, as they were. */
   onArm?: (productId: string | null) => void;
+  /** Pin the open event's liked products ("בתיק האירוע"). Off where no event is being drawn — the
+   *  catalog's composition editor, which builds an item for every event. */
+  eventFolder?: boolean;
 } = {}) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
@@ -87,6 +91,7 @@ export function CatalogRail({
   // This is the read that the folder's crossing was for: the likes happened on the client's tablet,
   // and this rail is on the designer's laptop.
   useEffect(() => {
+    if (!eventFolder) return;
     let live = true;
     void (async () => {
       const ev = await activeEvent();
@@ -97,7 +102,7 @@ export function CatalogRail({
     return () => {
       live = false;
     };
-  }, []);
+  }, [eventFolder]);
 
   // A product just added clears the filters, during render rather than in an effect (the same
   // pattern as useCatalog's seed): a search for "פמוט" still typed in the box would otherwise hide

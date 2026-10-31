@@ -62,6 +62,21 @@ import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { QuoteLayout } from "@/lib/quotes/layout";
 import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
 import type { SceneSettings } from "@/lib/scene/types";
+import type { Course, DishTag, PackageCourse, PackageExtra } from "@/lib/menus/types";
+import type { DaySlot, EventVendor, RunStep, ServiceStyle, SpecialMeal } from "@/lib/hosting/types";
+import type { LinkState } from "@/lib/event-links/types";
+import type {
+  AllocationStatus,
+  DocumentCredit,
+  DocumentCustomer,
+  DocumentKind,
+  DocumentLine,
+  DocumentPayment,
+  DocumentStatus,
+  DocumentTotals,
+  ScheduleItem,
+  VatStatus,
+} from "@/lib/billing/types";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────────────────────
 // Which layer of the room a product lives on (Product.layer).
@@ -91,6 +106,8 @@ export const appointmentKindEnum = pgEnum("appointment_kind", [
   "vacation",
   "supply",
   "personal",
+  // A venue's sitting: the couple tastes the menu before choosing it (lib/hosting).
+  "tasting",
 ]);
 export const exportTypeEnum = pgEnum("export_type", ["placement_map", "packing_list", "quote"]);
 export const discountTypeEnum = pgEnum("discount_type", ["amount", "percent"]);
@@ -128,7 +145,7 @@ export const inviteStateEnum = pgEnum("invite_state", ["pending", "active"]);
 /** What an organisation IS (Organization.kind). A studio designs events; a supplier publishes a
  *  catalog that studios pull from (lib/marketplace/). Same tables, same tenant seam — the kind only
  *  decides which screens exist and which cross-organisation read is allowed. */
-export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supplier"]);
+export const organizationKindEnum = pgEnum("organization_kind", ["studio", "supplier", "venue"]);
 /** The supplier's answer to an order (Order.status, lib/orders/). Typed by the OTHER party, which
  *  is why it is allowed on a screen that otherwise derives everything: "the supplier said yes" is
  *  derivable from nothing, the same reasoning as events.confirmed_at. */
@@ -340,6 +357,14 @@ export const studioSettings = pgTable("studio_settings", {
   /** 0.18 = 18%. numeric, never float — this multiplies money. */
   vatRate: numeric("vat_rate", { precision: 5, scale: 4 }).notNull().default("0.18"),
   currency: text("currency").notNull().default("₪"),
+  /** The studio's standing with VAT (VatStatus, lib/billing/types.ts): exempt | licensed | company.
+   *  Read by every billing document — a עוסק פטור may never print "חשבונית מס", so the kinds the
+   *  app offers follow from this. Text, not an enum: three words that may grow a fourth (a
+   *  non-profit) without a migration. */
+  vatStatus: text("vat_status").$type<VatStatus>().notNull().default("licensed"),
+  /** Bank, branch, account — printed on a payment request so the client can transfer. Free text:
+   *  "בנק הפועלים · סניף 612 · חשבון 123456" is how a designer writes it and nothing queries it. */
+  bankDetails: text("bank_details").notNull().default(""),
   /** The stages this studio's meeting has, in order (MeetingStepId[]). Ordered and rewritten
    *  whole by the settings screen, never queried into — an array column says exactly that. */
   meetingFlow: text("meeting_flow").array().$type<MeetingStepId[]>().notNull().default([]),
@@ -512,6 +537,10 @@ export const products = pgTable(
     /** Order-units per placed unit — 7 stems per centrepiece. NULL means 1, which is right for most
      *  of the catalog. Generalises the `arms` multiplier the packing list already applies. */
     orderFactor: numeric("order_factor", { precision: 10, scale: 3 }),
+    /** פחת — whole percent ordered on top of what the plan counts, on a consumable (Product.spareRate).
+     *  A rule about the product like `order_factor`, never a usage figure: procurement stays derived.
+     *  NULL = the category's default (cut flowers 10%), else none. */
+    spareRate: integer("spare_rate"),
 
     createdAt: created(),
     updatedAt: updated(),
@@ -639,6 +668,14 @@ export const events = pgTable(
     /** A second contact, if the couple gave one — a parent, a planner. */
     contact2Name: text("contact2_name"),
     contact2Phone: text("contact2_phone"),
+    /** The client as an INVOICE names them (lib/billing): the legal name when it differs from the
+     *  couple's ("משה ורחל כהן" is the event; "כהן אירועים בע״מ" pays), the address a tax invoice
+     *  must carry (ניהול ספרים s.9(א)(4)) and the ת.ז / ח.פ a business client needs. Asked once,
+     *  when the order is issued, and kept so every later invoice needs no asking. Null = not yet
+     *  given; the order dialog falls back to clientName. */
+    billingName: text("billing_name"),
+    billingAddress: text("billing_address"),
+    billingNumber: text("billing_number"),
     eventDate: date("event_date"),
     startTime: time("start_time"),
     // ⚠ `meeting_date` used to live here — one nullable date, i.e. exactly one scheduled meeting per
@@ -1445,4 +1482,198 @@ export const sceneLinks = pgTable(
     createdAt: created(),
   },
   (t) => [uniqueIndex("scene_links_token_key").on(t.tokenHash), index("scene_links_event_idx").on(t.eventId)],
+);
+
+// ── Billing documents (lib/billing/) ───────────────────────────────────────────────────────────
+
+/** The next number of each document series, per studio.
+ *
+ *  A document's number is taken from here with `SELECT … FOR UPDATE` inside the SAME transaction
+ *  that inserts the document (lib/billing/actions.ts) — the only way "no gaps, no duplicates"
+ *  (ניהול ספרים s.18) survives two designers issuing at once. A failed issue rolls the counter
+ *  back with the row; a number is never handed out and then not stored.
+ *
+ *  `series` is the document kind (one sequence per kind, continuing forever — DECIDE 5 in the
+ *  spec). A studio moving from another program types its next number once, on the settings screen,
+ *  while the series is still unused. */
+export const documentCounters = pgTable(
+  "document_counters",
+  {
+    organizationId: orgId(),
+    series: text("series").notNull(),
+    next: integer("next").notNull().default(1),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.series] })],
+);
+
+/** BillingDocument (lib/billing/types.ts) — הזמנה, דרישת תשלום, חשבונית מס, קבלה, חשבונית מס-קבלה,
+ *  חשבונית זיכוי.
+ *
+ *  ⚠ WRITTEN ONCE. A fiscal document may not change after it has a number (ניהול ספרים s.18, s.23א),
+ *  so every figure, line, name and address is COPIED in at issue and a trigger
+ *  (billing_documents_frozen, migration 0023) refuses an UPDATE to any column but the few the law
+ *  lets move after issue: the allocation number, the original/sent/cancelled stamps and their
+ *  details, and the superseding link. A mistake is a NEW document — a credit note, a new order.
+ *
+ *  ⚠ NEVER DELETED. `event_id` is `restrict`, not cascade: an event with documents cannot be
+ *  deleted (the drawer archives it instead), because the documents are the studio's books for seven
+ *  years (s.25(ג)) and an event is not.
+ *
+ *  jsonb for the customer, lines, totals, schedule, payment and credit: each is a small record
+ *  written whole and never queried into — the same argument every other jsonb column here makes —
+ *  and freezing them is simpler as blobs than as twenty columns. `numeric` would be the choice if
+ *  any of them were summed in SQL; the ledger sums `totals.gross` in JS over one month's rows. */
+export const billingDocuments = pgTable(
+  "billing_documents",
+  {
+    id: id(),
+    organizationId: orgId(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "restrict" }),
+    kind: text("kind").$type<DocumentKind>().notNull(),
+    series: text("series").notNull(),
+    number: integer("number").notNull(),
+    status: text("status").$type<DocumentStatus>().notNull().default("issued"),
+    issuedAt: created(),
+    issuedBy: uuid("issued_by").references(() => users.id, { onDelete: "set null" }),
+    /** The date printed. A `date`, like event_date: a document is dated a calendar day. */
+    documentDate: date("document_date").notNull(),
+    /** The document this one is against (a receipt its invoice, a credit its invoice, an invoice
+     *  its order, a superseding order the one it replaces). Self-reference, so no inline
+     *  `references` — Drizzle cannot express a self FK in the column builder without a cycle. */
+    followsId: uuid("follows_id"),
+    /** Orders only: the sealed drawing agreed on. */
+    designDocumentId: uuid("design_document_id").references(() => designDocuments.id, { onDelete: "set null" }),
+    documentVersion: integer("document_version"),
+    customer: jsonb("customer").$type<DocumentCustomer>().notNull(),
+    lines: jsonb("lines").$type<DocumentLine[]>().notNull(),
+    totals: jsonb("totals").$type<DocumentTotals>().notNull(),
+    schedule: jsonb("schedule").$type<ScheduleItem[]>(),
+    payment: jsonb("payment").$type<DocumentPayment>(),
+    credit: jsonb("credit").$type<DocumentCredit>(),
+    allocationNumber: text("allocation_number"),
+    allocationStatus: text("allocation_status").$type<AllocationStatus>().notNull().default("n/a"),
+    note: text("note").notNull().default(""),
+    originalAt: timestamp("original_at", { withTimezone: true }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    sentTo: text("sent_to"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelReason: text("cancel_reason"),
+    supersededById: uuid("superseded_by_id"),
+    contentHash: text("content_hash").notNull(),
+  },
+  (t) => [
+    uniqueIndex("billing_documents_number_key").on(t.organizationId, t.series, t.number),
+    // The ledger: this studio's documents over a month, newest first.
+    index("billing_documents_org_date_idx").on(t.organizationId, t.documentDate),
+    // The event drawer: everything about one event's money.
+    index("billing_documents_event_idx").on(t.eventId),
+  ],
+);
+
+// ── Venue owners (docs/superpowers/specs/2026-10-30-venue-owners-design.md) ────────────────────
+
+/** Dish (lib/menus/types.ts) — what a venue's kitchen makes, on a course, tagged for the questions a
+ *  tasting asks. Its own rows, not catalog products: a dish has no footprint, no stock kind, no
+ *  place on a plan, and the products table is built around all three. */
+export const menuDishes = pgTable(
+  "menu_dishes",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    course: text("course").$type<Course>().notNull(),
+    description: text("description").notNull().default(""),
+    tags: text("tags").array().$type<DishTag[]>().notNull().default([]),
+    imageUrl: text("image_url"),
+    position: integer("position").notNull().default(0),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("menu_dishes_org_idx").on(t.organizationId)],
+);
+
+/** MenuPackage (lib/menus/types.ts) — what a venue sells: prices per adult / child / vendor meal, a
+ *  minimum, its courses as "choose N of these dishes" and its priced extras. The courses and extras
+ *  are jsonb: small lists written whole with the package and never queried into. */
+export const menuPackages = pgTable(
+  "menu_packages",
+  {
+    id: id(),
+    organizationId: orgId(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    priceAdult: numeric("price_adult", { precision: 12, scale: 2 }).notNull().default("0"),
+    priceChild: numeric("price_child", { precision: 12, scale: 2 }).notNull().default("0"),
+    priceVendor: numeric("price_vendor", { precision: 12, scale: 2 }).notNull().default("0"),
+    minGuests: integer("min_guests").notNull().default(0),
+    courses: jsonb("courses").$type<PackageCourse[]>().notNull().default([]),
+    extras: jsonb("extras").$type<PackageExtra[]>().notNull().default([]),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("menu_packages_org_idx").on(t.organizationId)],
+);
+
+/** EventHosting (lib/hosting/types.ts) — the venue's side of one of its own events, 1:1 on the
+ *  event. A venue's booking IS an `events` row (so billing, the diary and the client portal work
+ *  unchanged); what only a hall asks lives here. */
+export const eventHosting = pgTable("event_hosting", {
+  eventId: uuid("event_id")
+    .primaryKey()
+    .references(() => events.id, { onDelete: "cascade" }),
+  organizationId: orgId(),
+  slot: text("slot").$type<DaySlot>().notNull().default("evening"),
+  holdUntil: date("hold_until"),
+  guaranteedMin: integer("guaranteed_min"),
+  finalGuests: integer("final_guests"),
+  finalClosedAt: timestamp("final_closed_at", { withTimezone: true }),
+  children: integer("children").notNull().default(0),
+  vendorMeals: integer("vendor_meals").notNull().default(0),
+  specialMeals: jsonb("special_meals").$type<Partial<Record<SpecialMeal, number>>>().notNull().default({}),
+  specialNote: text("special_note").notNull().default(""),
+  serviceStyle: text("service_style").$type<ServiceStyle>(),
+  runOfShow: jsonb("run_of_show").$type<RunStep[]>().notNull().default([]),
+  packageId: uuid("package_id").references(() => menuPackages.id, { onDelete: "set null" }),
+  menuChoices: jsonb("menu_choices").$type<Record<string, string[]>>().notNull().default({}),
+  extraIds: jsonb("extra_ids").$type<string[]>().notNull().default([]),
+  kitchenNotes: text("kitchen_notes").notNull().default(""),
+  floorNotes: text("floor_notes").notNull().default(""),
+  vendors: jsonb("vendors").$type<EventVendor[]>().notNull().default([]),
+  onSiteName: text("on_site_name").notNull().default(""),
+  onSitePhone: text("on_site_phone").notNull().default(""),
+  updatedAt: updated(),
+});
+
+/** EventLink (lib/event-links/types.ts) — one evening, two businesses: the venue's booking and the
+ *  designer's event, each an `events` row in its own organisation, joined here and nowhere else.
+ *
+ *  The venue invites (by the designer's address); the designer accepts onto an event of theirs or a
+ *  new one. `studio_event_id` is null until then. One designer per booking: a second invitation
+ *  replaces a declined or ended one rather than stacking beside it. lib/event-links/ is the only
+ *  module that reads across the join, through named columns (`check:event-links`). */
+export const eventLinks = pgTable(
+  "event_links",
+  {
+    id: id(),
+    venueEventId: uuid("venue_event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    venueOrgId: uuid("venue_org_id").notNull(),
+    /** The designer's studio. Null while the address belongs to nobody yet. */
+    studioOrgId: uuid("studio_org_id"),
+    studioEventId: uuid("studio_event_id").references(() => events.id, { onDelete: "set null" }),
+    invitedEmail: text("invited_email").notNull(),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+    state: text("state").$type<LinkState>().notNull().default("pending"),
+    createdAt: created(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("event_links_venue_event_key").on(t.venueEventId),
+    index("event_links_studio_event_idx").on(t.studioEventId),
+    index("event_links_studio_org_idx").on(t.studioOrgId),
+    index("event_links_email_idx").on(t.invitedEmail),
+  ],
 );

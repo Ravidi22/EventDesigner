@@ -8,9 +8,11 @@ import type { PresentationTemplate } from "@/lib/gallery/templates";
 // Reads live in page.tsx now; what is left here are the writes, which return the fresh list.
 import { saveImagesBatch, savePresentation, deletePresentation } from "@/lib/gallery/actions";
 import { Button } from "@/components/button";
+import { PAGE_GUTTER } from "@/components/page-gutter";
 import { Photo } from "@/components/photo";
 import { EmptyState } from "@/components/empty-state";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useIsVenue } from "@/components/org-kind-context";
 import { PresentationBuilder, type DraftSlide } from "./presentation-builder";
 import { TemplatePicker } from "./template-picker";
 
@@ -25,6 +27,7 @@ export function GalleryScreen({
   initialPresentations: Presentation[];
 }) {
   const router = useRouter();
+  const isVenue = useIsVenue();
   const [images, setImages] = useState<GalleryImage[]>(initialImages);
   const [presentations, setPresentations] = useState<Presentation[]>(initialPresentations);
   const [editing, setEditing] = useState<Presentation | null>(null);
@@ -151,7 +154,7 @@ export function GalleryScreen({
   }
 
   return (
-    <div className="px-8 py-7">
+    <div className={PAGE_GUTTER}>
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <h1 className="font-display text-h2 text-ink">מצגות</h1>
         {/* Hidden on first run: the empty state carries the one action, and two "new presentation"
@@ -172,7 +175,11 @@ export function GalleryScreen({
         <EmptyState
           icon={GalleryVerticalEnd}
           title="אין עדיין מצגות"
-          body="מצגת היא רצף שקופיות שעוברים עליו מול הלקוח בפגישה — חופה, שולחן אירוח, מרכזי שולחן. כל שקופית נושאת מוצר מהקטלוג, כך שמה שהלקוח מסמן ♥ נאסף לתיק האירוע ומחכה לכם בסטודיו."
+          body={
+            isVenue
+              ? "מצגת היא רצף שקופיות שעוברים עליו מול הלקוחות בפגישה — התפריט, מרכזי השולחן, האולם ערוך. מתחילים משלד מוכן ומוסיפים תמונה לכל שקופית."
+              : "מצגת היא רצף שקופיות שעוברים עליו מול הלקוח בפגישה — חופה, שולחן אירוח, מרכזי שולחן. כל שקופית נושאת מוצר מהקטלוג, כך שמה שהלקוח מסמן ♥ נאסף לתיק האירוע ומחכה לכם בסטודיו."
+          }
           action={
             <Button onClick={() => setChoosing(true)}>
               <Plus className="h-4 w-4" strokeWidth={2.5} />

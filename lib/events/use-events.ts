@@ -78,7 +78,12 @@ export function useEvents(initial?: EventSummary[]): EventsHandle {
   // The whole list back, like patch — the action already re-read it, and splicing the row out here
   // instead would leave this component's copy right and the next one to mount reading the server's.
   const remove = useCallback(async (id: string) => {
-    setEvents(await deleteEvent(id));
+    const out = await deleteEvent(id);
+    // A refusal the designer can act on (an event with billing documents is archived, not deleted)
+    // is thrown HERE, on the client, so its words reach the screen — a message thrown on the server
+    // is redacted in production.
+    if ("error" in out) throw new Error(out.error);
+    setEvents(out);
   }, []);
 
   return { events, ready, error, patch, remove, reload: load };

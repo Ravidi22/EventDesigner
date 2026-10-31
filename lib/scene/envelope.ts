@@ -51,10 +51,13 @@ import {
   PLANT_DEFAULTS,
   doorOffsets,
   featureFootprint,
+  isDoor,
+  isWindow,
   nodeMap,
   plantSpecies,
   surfaceMaterial as featureSurface,
   wallPoints,
+  windowHeights,
   type PlantSpecies,
   type StructureEntrance,
   type StructureFeature,
@@ -62,13 +65,17 @@ import {
   type Wall,
 } from "@/lib/venues/structure";
 import type { ResolvedZone } from "@/lib/venues/zone";
+import { buildingFromBoundary, featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
 import { eventPlan } from "@/lib/events/plan";
 import { emptyDocument } from "@/lib/design-document/types";
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
 import { applyTransform, headingDeg, roomTransform, turn } from "./frame";
 import { chairRequest } from "./items";
-import { ENVELOPE, foliageMaterial, hexOf, surfaceMaterial, waterMaterial } from "./materials";
+import { ENVELOPE, foliageMaterial, glassMaterial, hexOf, surfaceMaterial, waterMaterial } from "./materials";
+import { floorKindBody } from "./floor-kinds";
+import type { ItemContext } from "./item-context";
+import { DEFAULT_TONE } from "@/components/item-symbol";
 import { offsetOutline } from "./tables";
 import { hedgeParts, palmParts, plantTurn, potParts, shrubParts, treeParts } from "./plants";
 import { readStructures, shaftTopOf, type BeamReading, type ColumnReading } from "./structures";
@@ -112,6 +119,9 @@ const FRAME_TRIM_MM = 40;
 const FRAME_PROUD_MM = 10;
 /** An opening narrower than this (a door clipped off the end of its wall) gets no leaf. */
 const MIN_LEAF_MM = 100;
+/** A window's pane: this thick, down the middle of the wall. */
+export const GLASS_MM = 12;
+const GLASS_MATERIAL: MaterialRef = glassMaterial();
 /** A palm's fronds: how many, how much they droop from the crown, how thick a leaf plane is. */
 /** A flower bed: its soil slab, the heads' size and spacing, and how many heads one bed may carry
  *  (a long bed thins its grid rather than leaving its far end bare). */
@@ -119,6 +129,15 @@ const BED_SOIL_MM = 80;
 const HEAD_R_MM = 40;
 const HEAD_STEP_MM = 120;
 const MAX_HEADS = 400;
+/** A bed's foliage: leafy blobs along it, up to this share of the bed's height, in this green. */
+const BED_LEAF_SHARE = 0.7;
+const BED_LEAF = "#6f9a5c";
+const MAX_BED_BLOBS = 40;
+/** A building's roof (a face-filling `structure`, lib/venues/face-surfaces.ts): a slab this thick
+ *  whose top lies ROOF_UNDER_MM under the tops of the walls round it — the WALLS are the building's
+ *  sides (wallHeightMm raises them to its height), so the roof never doubles them. */
+const ROOF_SLAB_MM = 250;
+const ROOF_UNDER_MM = 2;
 /** The venue's own chairs, when the feature says no colour: a pale ivory, like the base chair. */
 const VENUE_CHAIR_TONE = "#f7f6fc";
 
@@ -214,9 +233,27 @@ function alongPolyline(poly: readonly Point[], t: number): { p: Point; u: Point;
   return { p: poly[0], u: { x: 1, y: 0 }, n: { x: 0, y: 1 } };
 }
 
-/** The zones a wall (as a polyline) borders: those whose boundary holds a probe point pushed one
- *  wall-thickness off the wall, on either side, at a quarter, half and three quarters along. */
-export function borderingZones(poly: readonly Point[], zones: readonly ResolvedZone[]): ResolvedZone[] {
+/** A BUILDING on the plan: a face-filling `structure` (lib/venues/face-surfaces.ts) as the region
+ *  it covers, in room mm, and its height. Its sides are the wall graph's walls round it, raised to
+ *  its height (wallHeightMm); ./featureBodies gives it a roof and nothing else — extruding it as a
+ *  solid as well drew every one of its walls twice, a wall standing in a slab (the user, 2026-10-30:
+ *  "the office and kitchen area seem to be double wall"). */
+export interface Building {
+  id: string;
+  boundary: Point[];
+  heightMm: number;
+}
+
+export function buildingsOf(structure: Pick<VenueStructure, "features">): Building[] {
+  return structure.features
+    .filter((f) => f.kind === "structure" && followsWalls(f) && f.heightMm > 0)
+    .map((f) => ({ id: f.id, boundary: featureWorldOutline(f), heightMm: f.heightMm }))
+    .filter((b) => b.boundary.length >= 3);
+}
+
+/** Probe points one wall-thickness off a wall (as a polyline), on either side, at a quarter, half
+ *  and three quarters along — what decides which regions it borders. */
+function wallProbes(poly: readonly Point[]): Point[] {
   if (poly.length < 2 || polylineLength(poly) < 1e-6) return [];
   const probes: Point[] = [];
   for (const t of BORDER_PROBES) {
@@ -224,23 +261,36 @@ export function borderingZones(poly: readonly Point[], zones: readonly ResolvedZ
     probes.push({ x: p.x + n.x * WALL_THICK_MM, y: p.y + n.y * WALL_THICK_MM });
     probes.push({ x: p.x - n.x * WALL_THICK_MM, y: p.y - n.y * WALL_THICK_MM });
   }
+  return probes;
+}
+
+/** The zones a wall (as a polyline) borders: those whose boundary holds one of its probes. */
+export function borderingZones(poly: readonly Point[], zones: readonly ResolvedZone[]): ResolvedZone[] {
+  const probes = wallProbes(poly);
   return zones.filter((z) => z.boundary.length >= 3 && probes.some((p) => pointInPolygon(p, z.boundary)));
 }
 
+/** The buildings a wall borders, by the same probes. */
+export function borderingBuildings(poly: readonly Point[], buildings: readonly Building[]): Building[] {
+  const probes = wallProbes(poly);
+  return buildings.filter((b) => probes.some((p) => pointInPolygon(p, b.boundary)));
+}
+
 /** How high a wall stands: an `edge` kind is a kerb; a `wall` is as tall as the tallest ROOFED
- *  zone (ceilingHeightMm > 0) it borders, and a garden wall when it borders none — both faces
- *  open sky, or outside every zone. */
-export function wallHeightMm(wall: Pick<Wall, "kind">, poly: readonly Point[], zones: readonly ResolvedZone[]): number {
+ *  zone (ceilingHeightMm > 0) or BUILDING it borders, and a garden wall when it borders none —
+ *  both faces open sky, or outside every zone. */
+export function wallHeightMm(wall: Pick<Wall, "kind">, poly: readonly Point[], zones: readonly ResolvedZone[], buildings: readonly Building[] = []): number {
   if (wall.kind === "edge") return KERB_MM;
   let tallest = 0;
   for (const z of borderingZones(poly, zones)) tallest = Math.max(tallest, z.zone.ceilingHeightMm || 0);
+  for (const b of borderingBuildings(poly, buildings)) tallest = Math.max(tallest, b.heightMm);
   return tallest > 0 ? tallest : GARDEN_WALL_MM;
 }
 
 /** Which side of a wall, at `p`, is INSIDE: +1 for the `n` side, −1 for the other. The side whose
- *  probe (one wall-thickness off the wall) lands in a roofed zone wins; failing that, in any zone;
- *  a tie (both roofed, neither in a zone) is +n. The same probe rule as `borderingZones`. */
-export function inwardSide(p: Point, n: Point, zones: readonly ResolvedZone[]): 1 | -1 {
+ *  probe (one wall-thickness off the wall) lands in a roofed zone or a building wins; failing that,
+ *  in any zone; a tie (both roofed, neither in a zone) is +n. The same probe rule as `borderingZones`. */
+export function inwardSide(p: Point, n: Point, zones: readonly ResolvedZone[], buildings: readonly Building[] = []): 1 | -1 {
   const score = (sign: number): number => {
     const q = { x: p.x + sign * n.x * WALL_THICK_MM, y: p.y + sign * n.y * WALL_THICK_MM };
     let best = 0;
@@ -248,6 +298,7 @@ export function inwardSide(p: Point, n: Point, zones: readonly ResolvedZone[]): 
       if (z.boundary.length < 3 || !pointInPolygon(q, z.boundary)) continue;
       best = Math.max(best, (z.zone.ceilingHeightMm || 0) > 0 ? 2 : 1);
     }
+    for (const b of buildings) if (pointInPolygon(q, b.boundary)) best = Math.max(best, 2);
     return best;
   };
   return score(1) >= score(-1) ? 1 : -1;
@@ -258,53 +309,87 @@ export interface WallOpening {
   id: string;
   startMm: number;
   endMm: number;
+  /** A WINDOW's glass (StructureEntrance.kind): the wall stays under the sill and over the head,
+   *  and a pane of glass stands between them. Absent = a door, open from the floor to DOOR_HEIGHT_MM. */
+  glass?: { sillMm: number; headMm: number };
 }
 
 /** The boxes one STRAIGHT stretch of wall becomes once its openings are cut: the solid stretches
  *  between them (the jambs, full height) and, over each opening, a lintel from DOOR_HEIGHT_MM to
- *  the top — none when the wall is no taller than the door (a kerb with a gap is just a gap).
- *  Openings are in mm along a→b; anything outside the stretch is clipped off, so a door on a bowed
- *  wall can be handed to each of its chords in turn. Every box is centred on the wall's line,
- *  `thickMm` thick, turned to the stretch's heading. */
+ *  the top — none when the wall is no taller than the door (a kerb with a gap is just a gap). A
+ *  window keeps the wall under its sill too (a solid, part of the wall), its lintel starts at its
+ *  head, and a GLASS_MM pane fills the glass between. Openings are in mm along a→b; anything
+ *  outside the stretch is clipped off, so a door on a bowed wall can be handed to each of its
+ *  chords in turn. Every box is centred on the wall's line, `thickMm` thick, turned to the
+ *  stretch's heading. */
 export function doorPieces(
   a: Point,
   b: Point,
   heightMm: number,
   thickMm: number,
   openings: readonly WallOpening[],
-): { solids: Part[]; lintels: { id: string; part: Part }[] } {
+): { solids: Part[]; lintels: { id: string; part: Part }[]; panes: { id: string; part: Part }[] } {
   const len = Math.hypot(b.x - a.x, b.y - a.y);
   const solids: Part[] = [];
   const lintels: { id: string; part: Part }[] = [];
-  if (len < 1 || heightMm <= 0) return { solids, lintels };
+  const panes: { id: string; part: Part }[] = [];
+  if (len < 1 || heightMm <= 0) return { solids, lintels, panes };
   const rot = headingDeg(a, b);
-  const box = (s: number, e: number, z: number, h: number): Part => {
+  const box = (s: number, e: number, z: number, h: number): Extract<Part, { shape: "box" }> => {
     const m = (s + e) / 2 / len;
     return { shape: "box", w: e - s, d: thickMm, h, at: vec3(a.x + (b.x - a.x) * m, a.y + (b.y - a.y) * m, z), rotDeg: rot };
   };
   const cut = openings
-    .map((o) => ({ id: o.id, s: Math.max(0, Math.min(len, o.startMm)), e: Math.max(0, Math.min(len, o.endMm)) }))
+    .map((o) => ({ id: o.id, glass: o.glass, s: Math.max(0, Math.min(len, o.startMm)), e: Math.max(0, Math.min(len, o.endMm)) }))
     .filter((o) => o.e - o.s >= 1)
     .sort((p, q) => p.s - q.s);
   let cursor = 0;
   for (const o of cut) {
     if (o.s - cursor >= 1) solids.push(box(cursor, o.s, 0, heightMm));
     const s = Math.max(cursor, o.s);
-    if (o.e - s >= 1 && heightMm > DOOR_HEIGHT_MM) lintels.push({ id: o.id, part: box(s, o.e, DOOR_HEIGHT_MM, heightMm - DOOR_HEIGHT_MM) });
+    if (o.e - s >= 1) {
+      const sill = o.glass ? Math.max(0, Math.min(o.glass.sillMm, heightMm)) : 0;
+      const head = o.glass ? Math.max(sill, Math.min(o.glass.headMm, heightMm)) : DOOR_HEIGHT_MM;
+      if (sill >= 1) solids.push(box(s, o.e, 0, sill));
+      if (heightMm > head) lintels.push({ id: o.id, part: box(s, o.e, head, heightMm - head) });
+      if (o.glass && head - sill >= 1) panes.push({ id: o.id, part: { ...box(s, o.e, sill, head - sill), d: GLASS_MM } });
+    }
     cursor = Math.max(cursor, o.e);
   }
   if (len - cursor >= 1) solids.push(box(cursor, len, 0, heightMm));
-  return { solids, lintels };
+  return { solids, lintels, panes };
 }
 
 /** The entrances on a wall as openings along its CHORD from node a (`doorOffsets` reads the corner
- *  each is measured from). */
-function wallOpenings(entrances: readonly StructureEntrance[], chordMm: number): WallOpening[] {
+ *  each is measured from); a window carries its glass, read against the wall's height. */
+function wallOpenings(entrances: readonly StructureEntrance[], chordMm: number, wallHeightMm: number): WallOpening[] {
   return entrances.map((e) => {
     const o = doorOffsets(e, chordMm);
     const centre = e.measureFrom === "b" ? chordMm - o.toCentreMm : o.toCentreMm;
-    return { id: e.id, startMm: centre - e.widthMm / 2, endMm: centre + e.widthMm / 2 };
+    return { id: e.id, startMm: centre - e.widthMm / 2, endMm: centre + e.widthMm / 2, ...(isWindow(e) ? { glass: windowHeights(e, wallHeightMm) } : {}) };
   });
+}
+
+/** A window's frame on a `wall` kind wall: a trim on each jamb from the sill to the head, and a
+ *  rail along the sill and along the head — FRAME_TRIM_MM wide, FRAME_PROUD_MM proud of both faces,
+ *  as a door's trims are. The glass itself is a pane cut with the wall (doorPieces). */
+function windowBodies(e: StructureEntrance, o: WallOpening, poly: readonly Point[], along: number, out: SceneCollector): void {
+  if (!o.glass) return;
+  const s = Math.max(0, Math.min(along, o.startMm));
+  const t = Math.max(0, Math.min(along, o.endMm));
+  const width = t - s;
+  const { sillMm, headMm } = o.glass;
+  const h = headMm - sillMm;
+  if (width < MIN_LEAF_MM || h < MIN_LEAF_MM) return;
+  const tag = { type: "window" as const, id: e.id };
+  const heading = (u: Point) => headingDeg({ x: 0, y: 0 }, u);
+  const jambA = alongPolyline(poly, s / along);
+  const jambB = alongPolyline(poly, t / along);
+  const mid = alongPolyline(poly, (s + t) / 2 / along);
+  const depth = WALL_THICK_MM + 2 * FRAME_PROUD_MM;
+  const trim = (j: ReturnType<typeof alongPolyline>): Part => ({ shape: "box", w: FRAME_TRIM_MM, d: depth, h, at: vec3(j.p.x, j.p.y, sillMm), rotDeg: heading(j.u) });
+  const rail = (z: number): Part => ({ shape: "box", w: width, d: depth, h: FRAME_TRIM_MM, at: vec3(mid.p.x, mid.p.y, z), rotDeg: heading(mid.u) });
+  out.body(`window-frame:${e.id}`, tag, FRAME_MATERIAL, [trim(jambA), trim(jambB), rail(sillMm), rail(Math.max(sillMm, headMm - FRAME_TRIM_MM))], [here()]);
 }
 
 /** A door's frame and its leaf (two for a double door), on a `wall` kind wall `wallH` high. The
@@ -314,7 +399,7 @@ function wallOpenings(entrances: readonly StructureEntrance[], chordMm: number):
  *  the wall's face on the swing side out into the room, its thickness just inside the opening so it
  *  clears the jamb. The swing side is the inward one (`inwardSide` at the door) when `swingInward`,
  *  the other otherwise. `o` is in mm along the wall's POLYLINE (`along` long), like a lintel's. */
-function doorBodies(e: StructureEntrance, o: WallOpening, poly: readonly Point[], along: number, wallH: number, zones: readonly ResolvedZone[], out: SceneCollector): void {
+function doorBodies(e: StructureEntrance, o: WallOpening, poly: readonly Point[], along: number, wallH: number, zones: readonly ResolvedZone[], out: SceneCollector, buildings: readonly Building[] = []): void {
   const s = Math.max(0, Math.min(along, o.startMm));
   const t = Math.max(0, Math.min(along, o.endMm));
   const width = t - s;
@@ -329,7 +414,7 @@ function doorBodies(e: StructureEntrance, o: WallOpening, poly: readonly Point[]
   out.body(`door-frame:${e.id}`, tag, FRAME_MATERIAL, [trim(jambA), trim(jambB)], [here()]);
 
   const mid = alongPolyline(poly, (s + t) / 2 / along);
-  const side = inwardSide(mid.p, mid.n, zones) * (e.swingInward ? 1 : -1);
+  const side = inwardSide(mid.p, mid.n, zones, buildings) * (e.swingInward ? 1 : -1);
   const leafW = e.doubleDoor ? width / 2 : width;
   // `into` is which way along the wall the opening lies from this jamb (+u from the start jamb).
   const leaf = (j: ReturnType<typeof alongPolyline>, into: 1 | -1): Part => {
@@ -348,18 +433,25 @@ function doorBodies(e: StructureEntrance, o: WallOpening, poly: readonly Point[]
  *  distance along it — a door on a bowed wall sits where its chord distance falls along the bow,
  *  scaled by the bow's extra length, which is as exact as a door hung on a chord can be. Then each
  *  door's frame and leaves (a kerb with a gap is just a gap: no leaf on an `edge`). */
-function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly StructureEntrance[], zones: readonly ResolvedZone[], out: SceneCollector): void {
+function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly StructureEntrance[], zones: readonly ResolvedZone[], out: SceneCollector, buildings: readonly Building[] = []): void {
   const pts = wallPoints(structure, wall);
   if (!pts) return;
   const poly = wallPolyline(pts.a, pts.b, wall.curve);
   const chord = Math.hypot(pts.b.x - pts.a.x, pts.b.y - pts.a.y);
   const along = polylineLength(poly);
   if (chord < 1 || along < 1) return;
-  const h = wallHeightMm(wall, poly, zones);
+  const h = wallHeightMm(wall, poly, zones, buildings);
   const thick = wall.kind === "edge" ? KERB_THICK_MM : WALL_THICK_MM;
-  const openings = wallOpenings(entrances, chord).map((o) => ({ ...o, startMm: (o.startMm * along) / chord, endMm: (o.endMm * along) / chord }));
+  const openings = wallOpenings(entrances, chord, h).map((o) => ({ ...o, startMm: (o.startMm * along) / chord, endMm: (o.endMm * along) / chord }));
+  const windows = new Set(entrances.filter(isWindow).map((e) => e.id));
   const solids: Part[] = [];
   const lintels = new Map<string, Part[]>();
+  const panes = new Map<string, Part[]>();
+  const collect = (into: Map<string, Part[]>, id: string, part: Part) => {
+    const have = into.get(id);
+    if (have) have.push(part);
+    else into.set(id, [part]);
+  };
   let from = 0;
   for (let i = 1; i < poly.length; i++) {
     const a = poly[i - 1];
@@ -368,19 +460,20 @@ function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly S
     const local = openings.map((o) => ({ ...o, startMm: o.startMm - from, endMm: o.endMm - from }));
     const pieces = doorPieces(a, b, h, thick, local);
     solids.push(...pieces.solids);
-    for (const l of pieces.lintels) {
-      const have = lintels.get(l.id);
-      if (have) have.push(l.part);
-      else lintels.set(l.id, [l.part]);
-    }
+    for (const l of pieces.lintels) collect(lintels, l.id, l.part);
+    for (const g of pieces.panes) collect(panes, g.id, g.part);
     from += len;
   }
   out.body(`wall:${wall.id}`, { type: "wall", id: wall.id }, wall.kind === "edge" ? KERB_MATERIAL : WALL_MATERIAL, solids, [here()]);
-  for (const [id, parts] of lintels) out.body(`door:${id}`, { type: "door", id }, WALL_MATERIAL, parts, [here()]);
+  for (const [id, parts] of lintels) out.body(`door:${id}`, { type: windows.has(id) ? "window" : "door", id }, WALL_MATERIAL, parts, [here()]);
+  // The glass: a pane per chord, casting no shadow — a glazed front lights the hall behind it.
+  for (const [id, parts] of panes) out.body(`window:${id}`, { type: "window", id }, GLASS_MATERIAL, parts, [here()], { castShadow: false });
   if (wall.kind !== "wall") return;
   for (const e of entrances) {
     const o = openings.find((x) => x.id === e.id);
-    if (o) doorBodies(e, o, poly, along, h, zones, out);
+    if (!o) continue;
+    if (isDoor(e)) doorBodies(e, o, poly, along, h, zones, out, buildings);
+    else windowBodies(e, o, poly, along, out);
   }
 }
 
@@ -479,6 +572,17 @@ function surfacePlane(f: StructureFeature, outlines: readonly BuiltOutline[], or
   out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [frame], { castShadow: false });
 }
 
+/** A building's ROOF: a face-filling structure is drawn as its roof slab alone (ROOF_SLAB_MM thick,
+ *  its top ROOF_UNDER_MM under the tops of the walls round it) — its sides are the walls of the wall
+ *  graph, which wallHeightMm has raised to its height. */
+function roofBody(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector): void {
+  const material: MaterialRef = { colour: hexOf(f.style?.fill) ?? FEATURE_FILL, kind: "matte" };
+  const top = f.heightMm - ROOF_UNDER_MM;
+  const h = Math.min(ROOF_SLAB_MM, Math.max(10, top));
+  const parts: Part[] = outlines.map((outline) => ({ shape: "extrude", outline, h, at: vec3(0, 0, top - h) }));
+  out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [featureFrame(f)]);
+}
+
 /** A built thing (a wall, a kiosk, a permanent bar): its footprint extruded to its height — or,
  *  when it is part of a beam the venue's columns carry (./structures.ts), only the beam's band. */
 function extrudedFeature(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, span?: { fromMm: number; toMm: number }, floorZ = 0): void {
@@ -487,6 +591,27 @@ function extrudedFeature(f: StructureFeature, outlines: readonly BuiltOutline[],
   const h = Math.max(10, (span?.toMm ?? f.heightMm ?? 0) - from);
   const parts: Part[] = outlines.map((outline) => ({ shape: "extrude", outline, h, at: vec3(0, 0, from) }));
   out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [{ ...featureFrame(f), at: vec3(f.x, f.y, floorZ) }]);
+}
+
+/** The venue's own fountain (FeatureKind "fountain"): the catalog's fountain body (./floor-kinds.ts
+ *  — the basin in the pool's water, the bowl on its stem, the jet) from the feature's size, height
+ *  and tint. Set in a POOL, it stands on the water — its basin rising out of it — rather than on
+ *  the floor the pool is cut from, which would hang it WATER_DEPTH_MM in the air over the well. */
+function fountainBody(f: StructureFeature, wells: readonly Well[], out: SceneCollector, floorZ: number): void {
+  const ctx: ItemContext = {
+    product: undefined,
+    resolved: undefined,
+    footprint: featureFootprint(f),
+    widthMm: f.widthMm,
+    depthMm: f.depthMm,
+    heightMm: Math.max(f.heightMm, 600),
+    tone: hexOf(f.style?.fill) ?? DEFAULT_TONE.fountain.toLowerCase(),
+    count: 1,
+    author: false,
+  };
+  const inPool = floorZ === 0 && wells.some((w) => w.id !== f.id && w.room.some((o) => pointInPolygon({ x: f.x, y: f.y }, closedPolyline(o))));
+  const z = inPool ? -WATER_DEPTH_MM : floorZ;
+  out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, floorKindBody("fountain", ctx), roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, z));
 }
 
 /** A column (./structures.ts — the venue's own, or read off nested footprints): the PLINTH (its
@@ -557,28 +682,60 @@ function columnBody(column: ColumnReading, top: number, floorZ: number, out: Sce
 
 // --- plants ---------------------------------------------------------------------------------------
 
-/** A planted bed: a soil slab BED_SOIL_MM high over its footprint, and heads — small spheres in the
- *  body's colour — on a grid HEAD_STEP_MM apart kept INSIDE the outline (a round bed has no heads
- *  in its corners), at heights between the soil and the bed's top. At most MAX_HEADS a bed: a long
- *  bed widens its grid rather than running out of heads halfway. The grid is the footprint's own,
- *  so every bed of one size and shape is the same geometry. */
-function bedParts(outlines: readonly BuiltOutline[], w: number, d: number, h: number): Part[] {
+/** A paler tint of a hex colour (`t` of the way to white); any other colour comes back as it is. */
+function tinted(colour: string, t: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(colour.trim());
+  if (!m) return colour;
+  const c = parseInt(m[1], 16);
+  const ch = (shift: number) => Math.round(((c >> shift) & 255) + (255 - ((c >> shift) & 255)) * t);
+  return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0")}`;
+}
+
+/** A stable 0..1 off three integers — the bed's own scatter, the same on every build. */
+const scatter = (i: number, j: number, k: number): number => (((i * 1103515245 + j * 12345 + k * 97 + 7) >>> 0) % 1000) / 1000;
+
+/** A planted bed (the user, 2026-10-30: the bed "looks very poor in 3D" — it was a soil slab with
+ *  one size of pink sphere on an exact grid): a soil slab BED_SOIL_MM high over its footprint;
+ *  over it the FOLIAGE — leafy blobs run along the bed's length, the bed's depth across, rising to
+ *  BED_LEAF_SHARE of its height in a bed green, only where the outline holds them; and the heads
+ *  scattered over the foliage: spheres of a few sizes about HEAD_R_MM, in the bed's colour and a
+ *  paler tint of it, each jittered off a HEAD_STEP_MM grid by a stable hash and kept INSIDE the
+ *  outline (a round bed has none in its corners), standing a little into the foliage. At most
+ *  MAX_HEADS a bed: a long bed widens its grid rather than running out of heads halfway. */
+function bedParts(outlines: readonly BuiltOutline[], w: number, d: number, h: number, colour: string): Part[] {
   const parts: Part[] = outlines.map((outline) => ({ shape: "extrude", outline, h: BED_SOIL_MM, at: vec3(0, 0, 0), material: SOIL_MATERIAL }));
   const polys = outlines.map(closedPolyline);
+  const inside = (x: number, y: number) => polys.some((poly) => pointInPolygon({ x, y }, poly));
+  // The foliage: blobs along the long axis as a hedge's, lower and leafier.
+  const leafTop = BED_SOIL_MM + Math.max(60, (h - BED_SOIL_MM) * BED_LEAF_SHARE);
+  const alongX = w >= d;
+  const L = Math.max(w, d);
+  const D = Math.min(w, d);
+  const r = (D / 2) * 0.95;
+  const leafH = leafTop - BED_SOIL_MM;
+  const squash = Math.max(0.2, Math.min(1.2, leafH / (2 * r)));
+  const n = Math.max(1, Math.min(MAX_BED_BLOBS, Math.ceil((L - D) / (0.6 * D)) + 1));
+  const foliage = foliageMaterial(BED_LEAF);
+  for (let i = 0; i < n; i++) {
+    const s = n === 1 ? 0 : -(L - D) / 2 + ((L - D) * i) / (n - 1);
+    const x = alongX ? s : 0;
+    const y = alongX ? 0 : s;
+    if (!inside(x, y)) continue;
+    parts.push({ shape: "blob", r, at: vec3(x, y, BED_SOIL_MM + leafH / 2), seed: 70 + i, squash, lumps: 4, rough: 0.22, detail: 2, material: foliage });
+  }
+  // The heads: a jittered grid, two tones, three sizes.
+  const tones: MaterialRef[] = [{ colour, kind: "matte" }, { colour: tinted(colour, 0.38), kind: "matte" }, { colour, kind: "matte" }];
   const step = Math.max(HEAD_STEP_MM, Math.sqrt((w * d) / (MAX_HEADS * 0.95)));
-  const lo = BED_SOIL_MM + HEAD_R_MM;
-  const hi = Math.max(lo, h - HEAD_R_MM);
   const cols = Math.max(1, Math.floor(w / step));
   const rows = Math.max(1, Math.floor(d / step));
   let heads = 0;
   for (let j = 0; j < rows && heads < MAX_HEADS; j++) {
-    const y = -d / 2 + (d - (rows - 1) * step) / 2 + j * step;
     for (let i = 0; i < cols && heads < MAX_HEADS; i++) {
-      const x = -w / 2 + (w - (cols - 1) * step) / 2 + i * step;
-      if (!polys.some((poly) => pointInPolygon({ x, y }, poly))) continue;
-      // A stable scatter of heights, so a bed is not a flat sheet of spheres.
-      const t = (((i * 1103515245 + j * 12345 + 7) >>> 0) % 1000) / 1000;
-      parts.push({ shape: "sphere", r: HEAD_R_MM, at: vec3(x, y, lo + (hi - lo) * (0.4 + 0.6 * t)), segments: 6 });
+      const x = -w / 2 + (w - (cols - 1) * step) / 2 + i * step + (scatter(i, j, 1) - 0.5) * 0.7 * step;
+      const y = -d / 2 + (d - (rows - 1) * step) / 2 + j * step + (scatter(i, j, 2) - 0.5) * 0.7 * step;
+      const rh = HEAD_R_MM * (0.6 + 0.6 * scatter(i, j, 3));
+      if (!inside(x, y)) continue;
+      parts.push({ shape: "sphere", r: rh, at: vec3(x, y, leafTop + rh * (0.1 + 0.6 * scatter(i, j, 4))), segments: 6, material: tones[Math.floor(scatter(i, j, 5) * tones.length) % tones.length] });
       heads++;
     }
   }
@@ -599,7 +756,7 @@ function plantParts(species: PlantSpecies, f: StructureFeature, w: number, d: nu
     case "hedge":
       return hedgeParts(w, d, h);
     case "flowers":
-      return bedParts(footprintOutlines(featureFootprint(f)), w, d, h);
+      return bedParts(footprintOutlines(featureFootprint(f)), w, d, h, colour);
     default:
       return shrubParts(rx, ry, 0, h, colour);
   }
@@ -685,6 +842,10 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
       case "column":
       case "structure":
       case "other": {
+        if (followsWalls(f)) {
+          roofBody(f, footprintOutlines(featureFootprint(f)), out);
+          break;
+        }
         const role = reading.role.get(f.id);
         if (role?.kind === "column") {
           // A column is one body, built where its first (biggest) footprint is met — up to the
@@ -706,12 +867,16 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
       case "bar":
         extrudedFeature(f, footprintOutlines(featureFootprint(f)), out, undefined, floorOfFeature(f, floorOf));
         break;
+      case "fountain":
+        fountainBody(f, wells, out, floorOfFeature(f, floorOf));
+        break;
       case "plant":
         plantInstance(f, out, floorOf);
         break;
       case "seating":
         seatingBodies(f, out, floorOf);
         break;
+      case "curtain": // built with the sketch's drapes (./build.ts venueCurtain)
       case "stage": // TODO(B1): featureStage → the stage builder (decks, flights, ramps, skirt)
       case "stairs": // TODO(B2): lib/venues/climb.ts flights as tread boxes
       case "ramp": // TODO(B2): a wedge over its run
@@ -753,6 +918,9 @@ export function envelopeNodes(input: SceneInput, out: SceneCollector, floorOf: F
   const groundHoles = holesIn(ground.outline, wells, here());
   out.body("ground", { type: "ground" }, surfaceMaterial("paving", ENVELOPE.ground), [{ shape: "plane", outline: ground, ...(groundHoles ? { holes: groundHoles } : {}), at: vec3(0, 0, -1) }], [here()], { castShadow: false });
 
+  // The buildings on the plan: their walls are raised to their height, their roofs drawn below.
+  const buildings = buildingsOf(structure);
+
   // Walls, each with the doors hung on it.
   const byWall = new Map<string, StructureEntrance[]>();
   for (const e of structure.entrances) {
@@ -763,7 +931,7 @@ export function envelopeNodes(input: SceneInput, out: SceneCollector, floorOf: F
   const nodes = nodeMap(structure);
   for (const wall of structure.walls) {
     if (!nodes.has(wall.a) || !nodes.has(wall.b)) continue;
-    wallBodies(structure, wall, byWall.get(wall.id) ?? [], zones, out);
+    wallBodies(structure, wall, byWall.get(wall.id) ?? [], zones, out, buildings);
   }
 
   // Ceilings over the roofed zones; the sky shows over the rest.
@@ -804,6 +972,9 @@ if (isMain(import.meta.url)) {
         { id: "n4", x: 0, y: 4000 },
         { id: "n5", x: 10000, y: 0 },
         { id: "n6", x: 10000, y: 4000 },
+        // A shed under the hall: a third face, filled by a BUILDING rather than named a zone.
+        { id: "n7", x: 0, y: 7000 },
+        { id: "n8", x: 6000, y: 7000 },
       ],
       walls: [
         { id: "w-top-a", a: "n1", b: "n2", kind: "wall" },
@@ -813,16 +984,22 @@ if (isMain(import.meta.url)) {
         { id: "w-top-b", a: "n2", b: "n5", kind: "wall", curve: bulgeToCurve({ x: 6000, y: 0 }, { x: 10000, y: 0 }, { x: 8000, y: -500 }) },
         { id: "w-right", a: "n5", b: "n6", kind: "wall" },
         { id: "w-bot-b", a: "n6", b: "n3", kind: "edge" },
+        { id: "w-left-c", a: "n4", b: "n7", kind: "wall" },
+        { id: "w-bot-c", a: "n7", b: "n8", kind: "wall" },
+        { id: "w-right-c", a: "n8", b: "n3", kind: "wall" },
       ],
       entrances: [
         { id: "door-1", wallId: "w-left", distanceMm: 2000, widthMm: 1000, swingInward: true, doubleDoor: false },
         { id: "gate-1", wallId: "w-right", distanceMm: 2000, widthMm: 1200, swingInward: false, doubleDoor: true },
+        // A window on the hall's bottom wall: a sill at 900, a head at 2100.
+        { id: "win-1", wallId: "w-bot-a", distanceMm: 1500, widthMm: 1200, swingInward: false, doubleDoor: false, kind: "window", sillMm: 900, headMm: 2100 },
       ],
       features: [
         { id: "col-1", kind: "structure", label: "עמוד", x: 1000, y: 1000, widthMm: 500, depthMm: 500, heightMm: 3000, shape: "rect", rotationDeg: 0 },
         { id: "kiosk-1", kind: "structure", label: "קיוסק", x: 4000, y: 1500, widthMm: 2000, depthMm: 1500, heightMm: 2500, shape: "rect", rotationDeg: 0 },
         { id: "lawn-1", kind: "surface", label: "דשא", x: 8000, y: 2000, widthMm: 2000, depthMm: 2000, heightMm: 0, shape: "rect", rotationDeg: 0, surface: "grass" },
         { id: "pool-1", kind: "pool", label: "בריכה", x: 8000, y: 2200, widthMm: 1600, depthMm: 1000, heightMm: 0, shape: "ellipse", rotationDeg: 0 },
+        { id: "fount-1", kind: "fountain", label: "מזרקה", x: 8000, y: 2200, widthMm: 600, depthMm: 500, heightMm: 1200, shape: "ellipse", rotationDeg: 0 },
         { id: "tree-1", kind: "plant", label: "עץ", x: 7000, y: 1200, widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle", rotationDeg: 0, plant: "tree" },
         { id: "tree-2", kind: "plant", label: "עץ", x: 9000, y: 3000, widthMm: 3500, depthMm: 3500, heightMm: 4000, shape: "circle", rotationDeg: 0, plant: "tree" },
         { id: "palm-1", kind: "plant", label: "דקל", x: 9000, y: 1000, widthMm: 4500, depthMm: 4500, heightMm: 6000, shape: "circle", rotationDeg: 0, plant: "palm" },
@@ -830,6 +1007,7 @@ if (isMain(import.meta.url)) {
         { id: "bed-1", kind: "plant", label: "ערוגה", x: 2000, y: 500, widthMm: 3000, depthMm: 1200, heightMm: 400, shape: "rect", rotationDeg: 0, plant: "flowers" },
         { id: "seats-1", kind: "seating", label: "שורות כיסאות", x: 4500, y: 1200, widthMm: 1950, depthMm: 2400, heightMm: 900, shape: "rect", rotationDeg: 90, seating: { rows: 3, perRow: 4 } },
         { id: "stage-1", kind: "stage", label: "במה", x: 2000, y: 3000, widthMm: 4000, depthMm: 2000, heightMm: 600, shape: "rect", rotationDeg: 0 },
+        { ...buildingFromBoundary([{ x: 0, y: 4000 }, { x: 6000, y: 4000 }, { x: 6000, y: 7000 }, { x: 0, y: 7000 }], 3000), fillsFace: true, id: "shed-1" },
       ],
     };
     const zone = (id: string, name: string, kind: "hall" | "open", anchor: Point, ceilingHeightMm: number) => ({ id, venueId: "v", name, kind, source: { type: "face" as const, anchor }, ceilingHeightMm, createdAt: 0 });
@@ -862,7 +1040,39 @@ if (isMain(import.meta.url)) {
     assert(ceil.shape === "plane" && ceil.at.z === 4000 && ceil.side === "down", "the ceiling is a plane at 4000 facing down");
 
     assert(boxH("wall:w-shared") === 4000, "the wall between hall and terrace takes the hall's 4000");
-    assert(boxH("wall:w-top-a") === 4000 && boxH("wall:w-bot-a") === 4000, "the hall's outer walls are 4000");
+    assert(boxH("wall:w-top-a") === 4000, "the hall's outer walls are 4000");
+    // The building: its walls stand to ITS height (not a garden wall's), and it is drawn as a roof
+    // slab alone, under their tops — never a solid that doubles every wall.
+    assert(boxH("wall:w-bot-c") === 3000 && boxH("wall:w-left-c") === 3000, "a wall bordering a building, and no roofed zone, stands to the building's height");
+    const shed = byId("feature:shed-1")!;
+    const roof = shed?.parts[0];
+    assert(!!shed && shed.parts.length === 1 && roof.shape === "extrude" && roof.h === ROOF_SLAB_MM && near(roof.at.z + roof.h, 3000 - ROOF_UNDER_MM), "a building is its roof slab, its top a hair under the walls round it");
+    // A bed: soil, a run of leafy blobs over it, and heads of several sizes and two tones scattered
+    // on the foliage — none outside the bed.
+    const bedNode = bodies.find((b) => b.id.startsWith("i:plant:flowers:"));
+    assert(!!bedNode, "the bed is an instanced plant body");
+    const bedParts = bedNode!.parts;
+    const blobs = bedParts.filter((p) => p.shape === "blob");
+    const bedHeads = bedParts.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere");
+    assert(blobs.length >= 3 && blobs.every((p) => p.material?.kind === "foliage"), `a 3 m bed carries a run of leafy blobs (${blobs.length})`);
+    assert(bedHeads.length > 50 && new Set(bedHeads.map((p) => Math.round(p.r))).size >= 3 && new Set(bedHeads.map((p) => p.material?.colour)).size === 2, "…and bedHeads of several sizes in two tones");
+    assert(bedHeads.every((p) => Math.abs(p.at.x) <= 1500 && Math.abs(p.at.y) <= 600 && p.at.z > BED_SOIL_MM + 60), "…every head inside the bed, standing on the foliage");
+    // The window: the wall split into two full jambs and the piece under the sill, a lintel over it
+    // from its head to the top, a glass pane between, a frame on four sides — and no leaf.
+    const bot = byId("wall:w-bot-a")!;
+    const botH = bot.parts.map((p) => (p.shape === "box" ? p.h : NaN)).sort((p, q) => p - q);
+    assert(botH.join() === "900,4000,4000", `a windowed wall is two full jambs and the piece under the sill (got ${botH.join()})`);
+    const winLintel = byId("door:win-1")!;
+    assert(!!winLintel && winLintel.tag.type === "window" && winLintel.parts[0].shape === "box" && winLintel.parts[0].at.z === 2100 && winLintel.parts[0].h === 1900, "…the wall over the window from its head to the top, tagged window");
+    const pane = byId("window:win-1")!;
+    const glass = pane?.parts[0];
+    assert(!!pane && pane.material.kind === "glass" && pane.parts.length === 1 && glass.shape === "box" && glass.at.z === 900 && glass.h === 1200 && near(glass.w, 1200) && glass.d === GLASS_MM, "…a GLASS_MM pane of glass from the sill to the head, the opening wide");
+    const winFrame = byId("window-frame:win-1")!;
+    assert(!!winFrame && winFrame.parts.length === 4 && winFrame.material.colour === ENVELOPE.doorFrame && winFrame.parts.every((p) => p.shape === "box" && p.at.z >= 900 && p.at.z + p.h <= 2100 + 1e-6), "…framed on four sides between the sill and the head");
+    assert(!byId("door-leaf:win-1") && !byId("door-frame:win-1"), "…and no leaf, no door frame");
+    // The fountain set in the pool stands on its water, as the catalog's fountain body.
+    const fount = byId("feature:fount-1")!;
+    assert(!!fount && near(fount.instances[0].at.z, -WATER_DEPTH_MM) && fount.parts.some((p) => p.shape === "plane" && p.material?.kind === "water") && fount.parts.some((p) => p.shape === "lathe"), "a fountain set in a pool stands on the pool's water: the basin, the bowl on its stem (./floor-kinds.ts)");
     assert(boxH("wall:w-right") === GARDEN_WALL_MM, "the terrace's outer wall, bordering no roofed zone, is a garden wall");
     assert(boxH("wall:w-top-b") === GARDEN_WALL_MM, "…and so is its bowed one");
     assert(byId("wall:w-top-b")!.parts.length >= 8, `a bowed wall is many chords (got ${byId("wall:w-top-b")!.parts.length})`);
@@ -959,7 +1169,7 @@ if (isMain(import.meta.url)) {
     assert(heads.length > 0 && heads.length <= MAX_HEADS, `…and heads, at most MAX_HEADS (got ${heads.length})`);
     assert(heads.every((p) => Math.abs(p.at.x) <= 1500 && Math.abs(p.at.y) <= 600), "…every head inside the bed's outline");
     assert(heads.every((p) => p.at.z >= BED_SOIL_MM && p.at.z <= 400), "…between the soil and the bed's top");
-    assert(bed.material.colour === PLANT_FILL.flowers && heads.every((p) => !p.material), "…in the bed's own colour");
+    assert(bed.material.colour === PLANT_FILL.flowers && heads.every((p) => p.material?.colour === PLANT_FILL.flowers || p.material?.colour === tinted(PLANT_FILL.flowers, 0.38)), "…in the bed's own colour and a paler tint of it");
     const bigBed: StructureFeature = { id: "bed-2", kind: "plant", label: "ערוגה", x: 0, y: 0, widthMm: 12000, depthMm: 3000, heightMm: 400, shape: "rect", rotationDeg: 0, plant: "flowers" };
     const big = new SceneCollector();
     plantInstance(bigBed, big);

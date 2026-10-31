@@ -60,3 +60,6 @@ next-env.d.ts
 # local file storage: the stand-in for the R2 bucket (lib/files/driver-local.ts).
 # A designer's photographs, not source — and they do not survive a deploy either way.
 /.uploads/
+
+# Local database dumps (scripts/backup-db.ts): they hold auth rows and client data.
+/backups

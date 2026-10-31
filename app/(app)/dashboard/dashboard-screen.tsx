@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMounted } from "@/lib/use-mounted";
 import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
 import { formatEventDate } from "@/lib/events/types";
@@ -15,8 +14,9 @@ import { useVenues } from "@/lib/venues/use-venues";
 import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
-import { EventStats } from "./event-stats";
 import { EventDetailDrawer } from "./event-detail-drawer";
+import { VenueInvites } from "./venue-invites";
+import type { StudioSideLink } from "@/lib/event-links/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EventDialog } from "@/components/event-dialog";
 import { PAGE_GUTTER } from "@/components/page-gutter";
@@ -26,7 +26,8 @@ import { toISODate } from "./dashboard-view-utils";
 // F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved off this screen — first
 // to the Gantt tab, and now to the production runway (/production), which plans backward from each
 // event's date instead of listing them.
-// This screen is "my week" at a glance — Today's Focus + Statistics up top (each half-width),
+// This screen is "my week" at a glance — today's events and today's meetings up top (two tiles,
+// ./today-focus.tsx; the statistics card was dropped 2026-10-30, the user's call),
 // the week/month calendar below. There's no venue picker on this page anymore — every section
 // scopes to whichever venue is active in the sidebar (useActiveVenueScope), the one shared
 // source of truth also used by /production, so switching venues in the sidebar updates everything.
@@ -41,6 +42,8 @@ export function DashboardScreen({
   initialBusy,
   busyWindow,
   googleConnected,
+  suggestGoogle = false,
+  venueLinks = [],
 }: {
   initialEvents: EventSummary[];
   initialAppointments: Appointment[];
@@ -50,6 +53,12 @@ export function DashboardScreen({
   /** Whether there is a connection with the pull switched on — see useBusy, which goes inert
    *  without one rather than asking the server the same empty question on every month click. */
   googleConnected: boolean;
+  /** Google is set up on this deployment and this person's calendar pull is off — the calendar's
+   *  header offers the way to turn it on (CalendarCard). */
+  suggestGoogle?: boolean;
+  /** Venues that named this studio the designer of an evening (lib/event-links) — the pending ones
+   *  are the invitations strip; the active ones say which events are already linked. */
+  venueLinks?: StudioSideLink[];
 }) {
   const router = useRouter();
   // Seeded by page.tsx's server-side read, so both lists are here for the first paint. The hooks
@@ -57,11 +66,6 @@ export function DashboardScreen({
   // the whole list, which is what keeps a laptop and a tablet in the same meeting agreeing.
   const { events, remove: removeEvent, reload: reloadEvents } = useEvents(initialEvents);
   const { appointments, save, remove } = useAppointments(initialAppointments);
-  // After mount, so the server and the first client render agree — the hour is not the same fact
-  // in both places.
-  const mounted = useMounted();
-  const hour = new Date().getHours();
-  const greeting = !mounted ? "שלום" : hour < 12 ? "בוקר טוב" : hour < 18 ? "צהריים טובים" : "ערב טוב";
   // The drawer's event, by id and read off the live list: an edit made from the drawer, a
   // confirmation, a delete — each re-reads the list, and the drawer shows (or leaves with) the row
   // as it now is rather than the snapshot it was opened on.
@@ -153,16 +157,11 @@ export function DashboardScreen({
     // The pointer to "which event is open on this device" can outlive the event itself, and every
     // screen that resolves it would keep asking the server about a row that is gone.
     if (loadActiveEventId() === target.id) clearActiveEventId();
-    void removeEvent(target.id).catch(() => setDeleteError("מחיקת האירוע נכשלה — נסו שוב"));
+    void removeEvent(target.id).catch((e: unknown) => setDeleteError(e instanceof Error && e.message ? e.message : "מחיקת האירוע נכשלה — נסו שוב"));
   };
 
   return (
     <div className={PAGE_GUTTER}>
-      <div className="mb-6">
-        <p className="text-sm text-muted">{greeting}, דניאל</p>
-        <h2 className="mt-1 font-display text-h1 text-ink text-balance">האירועים שלך</h2>
-      </div>
-
       {/* The delete is fire-and-forget (see confirmDelete), so a failure has nowhere else to land.
           A line at the top of the screen, the same shape the catalog's notice takes — not a dialog:
           the event is still on the calendar below, which is already the correction. */}
@@ -171,6 +170,8 @@ export function DashboardScreen({
           {deleteError}
         </p>
       )}
+
+      <VenueInvites links={venueLinks} events={events} onChanged={() => void reloadEvents()} />
 
       {/* `lg:`, not `sm:`. The two-up row is measured against the CONTENT width, and the sidebar
           takes a fixed 258px out of it before this grid sees anything — so at the sm breakpoint
@@ -185,10 +186,10 @@ export function DashboardScreen({
           onOpenAppointment={editAppointment}
           onCreateAppointment={bookToday}
         />
-        <EventStats events={visibleEvents} />
       </div>
 
       <CalendarCard
+        suggestGoogle={suggestGoogle}
         events={visibleEvents}
         appointments={visibleAppointments}
         busy={busy}

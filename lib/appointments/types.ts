@@ -29,7 +29,9 @@ export type AppointmentKind =
   | "vacation"
   | "supply"
   | "personal"
-  | "other";
+  | "other"
+  /** A venue's: the couple tastes the menu before choosing it (lib/hosting). */
+  | "tasting";
 
 export interface Appointment {
   id: string;
@@ -61,6 +63,7 @@ export const APPOINTMENT_KINDS: readonly AppointmentKind[] = [
   "supply",
   "personal",
   "other",
+  "tasting",
 ] as const;
 
 export const APPOINTMENT_KIND_LABEL: Record<AppointmentKind, string> = {
@@ -72,6 +75,7 @@ export const APPOINTMENT_KIND_LABEL: Record<AppointmentKind, string> = {
   supply: "אספקה",
   personal: "אישי",
   other: "אחר",
+  tasting: "טעימה",
 };
 
 /** Is this entry ABOUT A CLIENT? Only these carry a couple, a phone and an event — a חופשה has no
@@ -79,7 +83,7 @@ export const APPOINTMENT_KIND_LABEL: Record<AppointmentKind, string> = {
  *  `other` counts as one: it predates the non-client kinds and rows already exist under it with
  *  names on them, so hiding those fields would make old records uneditable. */
 export function isClientKind(kind: AppointmentKind): boolean {
-  return kind === "consultation" || kind === "followup" || kind === "walkthrough" || kind === "other";
+  return kind === "consultation" || kind === "followup" || kind === "walkthrough" || kind === "other" || kind === "tasting";
 }
 
 /** Guard for the action layer: `kind` arrives over HTTP from whoever chose to POST it, and the

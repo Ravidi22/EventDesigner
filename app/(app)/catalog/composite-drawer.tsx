@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import dynamic from "next/dynamic";
+import { Move, Trash2 } from "lucide-react";
 import type { CompositionLine, Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID, styleTagsOf } from "@/lib/catalog/categories";
 import { canBePart, compositeShell, compositionCounts, isTableSet, layoutRecipe } from "@/lib/catalog/composition";
@@ -19,6 +20,10 @@ import { ComboField, type ComboOption } from "@/components/combo-field";
 import { fieldLabelClassName } from "@/components/control";
 import { CompositionDrawing } from "@/components/composition-drawing";
 import { compositeTotal } from "./composite-summary";
+import type { CompositionEditorProps } from "./composition-editor";
+
+// The canvas editor carries the studio's whole canvas — its own chunk, fetched when it is opened.
+const CompositionEditor = dynamic<CompositionEditorProps>(() => import("./composition-editor"), { ssr: false });
 
 const uid = () => crypto.randomUUID();
 
@@ -35,11 +40,13 @@ export function blankComposite(): Product {
  * sum is shown, never stored), no shades, no supplier, no stock. What it does have is its name, its
  * photo and tags, and what it is made of.
  *
- * Made of — two cases. Put together HERE, from a list: the list is the item, each row a catalog row
- * and how many, and every edit lays the parts out again (layoutRecipe). Saved off a SKETCH: the
- * arrangement is the item, so the parts are listed as they are and the way to change them is to place
- * it, change it, and save it again — the drawer says so instead of offering a list that would throw
- * the arrangement away.
+ * Made of — two cases. Put together from a LIST: the list is the item, each row a catalog row and
+ * how many, and every edit lays the parts out again (layoutRecipe). ARRANGED — by hand on the
+ * composition editor's canvas (composition-editor.tsx: the parts picked off the studio's catalog rail
+ * and set out as they will stand), or saved off a sketch: the arrangement is the item, so the parts
+ * are listed as they are and changed on that canvas — never through a list that would throw the
+ * arrangement away. The canvas opens on whatever the item is now, a laid-out list included; saving it
+ * there lets the list go.
  */
 export function CompositeDrawer({
   product,
@@ -59,6 +66,7 @@ export function CompositeDrawer({
   const [submitted, setSubmitted] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [query, setQuery] = useState("");
+  const [arranging, setArranging] = useState(false);
   const composition = draft.composition ?? { tables: [], placements: [], groups: [] };
   const recipe = composition.recipe;
   const isEdit = draft.id !== "";
@@ -131,17 +139,30 @@ export function CompositeDrawer({
             autoFocus
           />
 
-          {/* What it looks like placed — the same drawing the card and the rail show. */}
-          <div
-            className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md border border-border bg-canvas p-[6%]"
-            style={{ backgroundImage: "radial-gradient(var(--color-border) 1px, transparent 1px)", backgroundSize: "10px 10px" }}
-          >
-            {empty ? (
-              <p className="text-center text-sm text-muted">{recipe ? "הוסיפו רכיבים — הם יסודרו כאן כמו שיונחו בסקיצה." : "אין בפריט רכיבים."}</p>
-            ) : (
-              <CompositionDrawing composition={composition} className="h-full w-full" />
+          {/* What it looks like placed — the same drawing the card and the rail show — and the way
+              onto the canvas where it is put together by hand. A table design is worn by a table on a
+              sketch, so it is changed there, not here. */}
+          <div className="space-y-2">
+            <div
+              className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md border border-border bg-canvas p-[6%]"
+              style={{ backgroundImage: "radial-gradient(var(--color-border) 1px, transparent 1px)", backgroundSize: "10px 10px" }}
+            >
+              {empty ? (
+                <p className="text-center text-sm text-muted">
+                  {recipe ? "בחרו רכיבים מהקטלוג וסדרו אותם על הקנבס — או הוסיפו אותם לרשימה למטה, והם יסודרו כאן כמו שיונחו בסקיצה." : "אין בפריט רכיבים."}
+                </p>
+              ) : (
+                <CompositionDrawing composition={composition} className="h-full w-full" />
+              )}
+            </div>
+            {!tableSet && (
+              <Button type="button" variant="outline" size="sm" onClick={() => setArranging(true)}>
+                <Move className="h-3.5 w-3.5" strokeWidth={2} />
+                {empty ? "בחירה וסידור על הקנבס" : "עריכת הסידור על הקנבס"}
+              </Button>
             )}
           </div>
+
 
           <div>
             <span className={fieldLabelClassName}>ממה הוא עשוי</span>
@@ -193,7 +214,7 @@ export function CompositeDrawer({
                   aria-label="הוספת רכיב מהקטלוג"
                 />
                 <p className="text-[13px] leading-relaxed text-muted">
-                  השולחנות נצמדים לשולחן אחד (עגולים — במרחק), מפה על כל שולחן, פריטי שולחן מתחלקים ביניהם, פריטי תקרה נתלים מעליהם, כיסאות הם הכיסאות סביבם, והשאר בשורה לפניהם. בסקיצה הכול נשאר שולחנות ופריטים רגילים.
+                  השולחנות נצמדים לשולחן אחד (עגולים — במרחק), מפה על כל שולחן, פריטי שולחן מתחלקים ביניהם, פריטי תקרה נתלים מעליהם, כיסאות הם הכיסאות סביבם, והשאר בשורה לפניהם. רוצים לסדר בעצמכם? ״עריכת הסידור על הקנבס״ — ומשם הסידור הוא הפריט. בסקיצה הכול נשאר שולחנות ופריטים רגילים.
                 </p>
               </div>
             ) : (
@@ -215,7 +236,7 @@ export function CompositeDrawer({
                 <p className="text-[13px] leading-relaxed text-muted">
                   {tableSet
                     ? "עיצוב שולחן מלביש שולחן שכבר בסקיצה: גוררים אותו מהקטלוג אל שולחן, או בוחרים אותו ב״עיצובי שולחן״ שבסרגל השולחן. כדי לשנות אותו — מלבישים בו שולחן, משנים ושומרים שוב."
-                    : "הסידור נשמר מהסקיצה, בדיוק כפי שעמד. כדי לשנות אותו — מניחים את הפריט בסקיצה, משנים, בוחרים הכול ושומרים שוב כפריט מורכב."}
+                    : "הסידור הוא הפריט, בדיוק כפי שהוא עומד. כדי לשנות אותו — ״עריכת הסידור על הקנבס״: מוסיפים פריטים מהקטלוג, מזיזים, מסובבים ומסדרים את מה שעל השולחנות."}
                 </p>
               </div>
             )}
@@ -292,6 +313,19 @@ export function CompositeDrawer({
           )}
         </footer>
       </form>
+      {/* Outside the form: an Enter in the editor's search box or a number field would otherwise
+          submit — save and close — the drawer behind it. */}
+      {arranging && (
+        <CompositionEditor
+          composition={composition}
+          selfId={draft.id || undefined}
+          internal={internal}
+          onSave={({ composition: arranged, widthMm, depthMm }) =>
+            setDraft((d) => ({ ...d, composition: arranged, dimensions: { ...d.dimensions, ...compositeShell(widthMm, depthMm).dimensions } }))
+          }
+          onClose={() => setArranging(false)}
+        />
+      )}
     </Drawer>
   );
 }

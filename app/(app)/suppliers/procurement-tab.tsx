@@ -1,9 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Boxes, PackageSearch, Send, ShoppingCart, Truck } from "lucide-react";
-import { assignSupplier, fetchProcurement } from "@/lib/suppliers/actions";
-import { useSupplierList } from "@/lib/suppliers/use-suppliers";
+import Link from "next/link";
+import { AlertTriangle, Boxes, CalendarCheck, PackageSearch, Send, ShoppingCart, Truck, Warehouse } from "lucide-react";
+import {
+  assignSupplier,
+  assignSupplierMany,
+  fetchProcurement,
+  fetchProcurementSetup,
+  type ProcurementSetup,
+} from "@/lib/suppliers/actions";
+import { useSupplierPicker } from "@/lib/suppliers/use-suppliers";
 import type { OrderLine, ProcurementReport, RentalLine, SupplierGroup } from "@/lib/suppliers/procurement";
 import { formatPrice } from "@/lib/catalog/format";
 import { Button } from "@/components/button";
@@ -11,6 +18,7 @@ import { DateField } from "@/components/date-field";
 import { EmptyState } from "@/components/empty-state";
 import { Select } from "@/components/select";
 import { OrderDrawer, type OrderDraft } from "./order-drawer";
+import { SupplierSelect } from "./supplier-select";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -113,25 +121,130 @@ function GroupCard({
 /** The "ללא ספק" group's fix, one line at a time: name who sells it, and the forecast regroups.
  *  A derived consumable (candles off a candlestick) has no row of its own and gets no select. */
 function SupplierPick({ line, onPick }: { line: OrderLine; onPick: (variantId: string, supplierId: string) => void }) {
-  const suppliers = useSupplierList(true);
+  const { suppliers, add } = useSupplierPicker(true);
   if (!UUID.test(line.variantId)) return <span className="text-xs text-muted">נגזר — אין שורה בקטלוג</span>;
   return (
-    <Select
+    <SupplierSelect
       aria-label={`ספק ל${line.label}`}
       value=""
+      suppliers={suppliers}
+      noneLabel={null}
+      placeholder="בחירת ספק…"
       onChange={(v) => v && onPick(line.variantId, v)}
-      options={[{ value: "", label: "בחירת ספק…" }, ...suppliers.filter((s) => !s.archived).map((s) => ({ value: s.id, label: s.name }))]}
-      className="w-40"
+      onCreate={add}
+      className="w-44"
     />
+  );
+}
+
+/** The "ללא ספק" group's fix for all of it at once — one florist for every stem on the list. The
+ *  derived lines (candles off a candlestick) are passed over: they have no row to name a supplier on. */
+function GroupSupplierPick({ group, onPick }: { group: SupplierGroup<OrderLine>; onPick: (variantIds: string[], supplierId: string) => void }) {
+  const { suppliers, add } = useSupplierPicker(true);
+  const ids = group.lines.map((l) => l.variantId).filter((id) => UUID.test(id));
+  if (ids.length === 0) return null;
+  return (
+    <span className="flex items-center gap-2 text-xs text-muted">
+      <span>שיוך כל השורות ל…</span>
+      <SupplierSelect
+        aria-label="ספק לכל השורות ללא ספק"
+        value=""
+        suppliers={suppliers}
+        noneLabel={null}
+        placeholder="בחירת ספק…"
+        onChange={(v) => v && onPick(ids, v)}
+        onCreate={add}
+        className="w-44"
+      />
+    </span>
+  );
+}
+
+/** What stands between the catalog and a forecast that says something — read off the catalog and
+ *  the events, each line a way to fix it. The tab used to open on a table of "לא נספר" with no
+ *  word why (2026-10-30); nothing here is a warning about the forecast's own arithmetic, that is
+ *  `notices` below. Silent when there is nothing to fix. */
+function SetupStrip({ setup, windowTo }: { setup: ProcurementSetup; windowTo: string }) {
+  const rows: { icon: typeof ShoppingCart; text: string; href: string; action: string; tone: "warn" | "quiet" }[] = [];
+  if (setup.unsourced > 0) {
+    rows.push({
+      icon: Truck,
+      tone: "warn",
+      text: `${setup.unsourced} פריטים שקונים או שוכרים — בלי ספק. בלי ספק הם לא יגיעו לשום הזמנה.`,
+      href: "/catalog?sourcing=unsourced",
+      action: "שיוך ספק",
+    });
+  }
+  if (setup.awaitingClient > 0) {
+    rows.push({
+      icon: CalendarCheck,
+      tone: "quiet",
+      text: `${setup.awaitingClient} אירועים עם הצעת מחיר שיצאה, ממתינים לאישור הלקוח. רק אירוע מאושר נכנס להזמנה.`,
+      href: "/production",
+      action: "לאישור",
+    });
+  }
+  if (setup.confirmedBeyond > 0) {
+    rows.push({
+      icon: CalendarCheck,
+      tone: "quiet",
+      text: `עוד ${setup.confirmedBeyond} אירועים מאושרים אחרי ${windowTo} — הרחיבו את הטווח כדי לראות אותם.`,
+      href: "",
+      action: "",
+    });
+  }
+  if (setup.uncounted > 0) {
+    rows.push({
+      icon: Warehouse,
+      tone: "quiet",
+      text: `${setup.uncounted} פריטים מהמחסן שלא נספרו — מותר, אבל בלי ספירה אין מי שיגיד שחסר.`,
+      href: "/catalog?sourcing=uncounted",
+      action: "לספור",
+    });
+  }
+  if (rows.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {rows.map((r) => (
+        <li
+          key={r.text}
+          className={
+            "flex items-center gap-2 rounded-md border px-4 py-2 text-sm leading-relaxed " +
+            (r.tone === "warn" ? "border-alert bg-alert-tint text-ink" : "border-border bg-surface text-ink-soft")
+          }
+        >
+          <r.icon className={"h-4 w-4 shrink-0 " + (r.tone === "warn" ? "text-alert" : "text-accent")} strokeWidth={2} />
+          <span className="min-w-0 flex-1">{r.text}</span>
+          {r.href && (
+            <Link href={r.href} className="shrink-0 text-sm font-semibold text-accent transition-colors hover:text-accent-hover">
+              {r.action} ←
+            </Link>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
 const rowClass = "border-b border-border-soft last:border-0";
 
+/** The spare share of a line, as the florist will read it: "+14 (10% פחת)". */
+function SpareNote({ line }: { line: OrderLine }) {
+  if (!line.spare || line.spare.units <= 0) return null;
+  return (
+    <span className="nums ms-2 text-xs text-muted">
+      +{line.spare.units} ({line.spare.rate}% פחת)
+    </span>
+  );
+}
+
 export function ProcurementTab() {
-  const [preset, setPreset] = useState<Preset>("month");
-  const [range, setRange] = useState(() => presetRange("month"));
+  // The next thirty days, not the calendar month: a confirmed wedding is usually weeks out, and a
+  // tab that opened on "this month" opened empty for most of every month.
+  const [preset, setPreset] = useState<Preset>("next30");
+  const [range, setRange] = useState(() => presetRange("next30"));
   const [report, setReport] = useState<ProcurementReport | null>(null);
+  const [setup, setSetup] = useState<ProcurementSetup | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Bumped after a send or a supplier pick, so the forecast is re-read against what changed.
@@ -142,6 +255,15 @@ export function ProcurementTab() {
   const pick = async (variantId: string, supplierId: string) => {
     try {
       await assignSupplier(variantId, supplierId);
+      setNonce((n) => n + 1);
+    } catch {
+      setError("לא ניתן לשייך ספק");
+    }
+  };
+
+  const pickMany = async (variantIds: string[], supplierId: string) => {
+    try {
+      await assignSupplierMany(variantIds, supplierId);
       setNonce((n) => n + 1);
     } catch {
       setError("לא ניתן לשייך ספק");
@@ -161,9 +283,15 @@ export function ProcurementTab() {
     void (async () => {
       setLoading(true);
       try {
-        const next = await fetchProcurement(range.from, range.to);
+        // The setup strip is a second, cheaper read; a failure there costs the strip, not the
+        // forecast.
+        const [next, s] = await Promise.all([
+          fetchProcurement(range.from, range.to),
+          fetchProcurementSetup(range.to).catch(() => null),
+        ]);
         if (live) {
           setReport(next);
+          setSetup(s);
           setError(null);
         }
       } catch {
@@ -196,7 +324,7 @@ export function ProcurementTab() {
     if (report.potential.events > 0) {
       list.push({
         tone: "quiet",
-        text: `${report.potential.events} אירועים בטווח עדיין ללא הצעת מחיר חתומה. הם לא נכללים בהזמנה${
+        text: `${report.potential.events} אירועים בטווח שהלקוח עוד לא אישר. הם לא נכללים בהזמנה${
           report.potential.cost > 0 ? ` — היו מוסיפים כ־${formatPrice(report.potential.cost)}` : ""
         }.`,
       });
@@ -258,6 +386,8 @@ export function ProcurementTab() {
         </p>
       )}
 
+      {setup && <SetupStrip setup={setup} windowTo={range.to} />}
+
       {notices.map((n) => (
         <p
           key={n.text}
@@ -282,7 +412,7 @@ export function ProcurementTab() {
         <EmptyState
           icon={PackageSearch}
           title="אין מה להזמין בטווח הזה"
-          body="הרכש נגזר מהתוכניות עצמן: אירוע שיש לו הצעת מחיר חתומה ותוכנית מצוירת מזין את הרשימה אוטומטית. אין כאן מה למלא ביד — צריך אירוע סגור בטווח."
+          body="הרכש נגזר מהתוכניות עצמן: אירוע שהלקוח אישר (הכפתור 'הלקוח אישר' בהפקה) ושיש לו תוכנית מצוירת מזין את הרשימה אוטומטית. אין כאן מה למלא ביד — צריך אירוע מאושר בטווח, ופריטים שאומרים מאיפה הם מגיעים."
         />
       ) : (
         report && (
@@ -301,6 +431,11 @@ export function ProcurementTab() {
                       group={g}
                       onSend={g.supplierId ? () => setDraft({ group: g, windowFrom: range.from, windowTo: range.to }) : undefined}
                     >
+                      {!g.supplierId && (
+                        <div className="border-b border-border-soft px-4 py-2">
+                          <GroupSupplierPick group={g} onPick={pickMany} />
+                        </div>
+                      )}
                       <table className="w-full text-sm">
                         <tbody>
                           {g.lines.map((l) => (
@@ -313,8 +448,9 @@ export function ProcurementTab() {
                                   </span>
                                 )}
                               </td>
-                              <td className="nums w-40 px-4 py-2 text-start font-semibold text-ink">
+                              <td className="nums w-48 px-4 py-2 text-start font-semibold text-ink">
                                 {l.quantity} {l.unitLabel}
+                                <SpareNote line={l} />
                               </td>
                               <td className="nums w-28 px-4 py-2 text-start text-ink-soft">
                                 {l.cost === undefined ? (

@@ -9,6 +9,7 @@ import {
   usesDiameter,
   STOCK_KIND_HINT,
   STOCK_KIND_LABEL,
+  STOCK_KINDS,
   VISIBILITY_LABEL,
   VISIBILITY_HINT,
   type FlowerLine,
@@ -25,7 +26,8 @@ import { DEFAULT_SHADE } from "@/lib/catalog/flower-draw";
 import { FlowerHead } from "@/components/flower-symbol";
 import { ComboField, type ComboOption } from "@/components/combo-field";
 import { costUnitLabel } from "@/lib/suppliers/procurement";
-import { useSupplierList } from "@/lib/suppliers/use-suppliers";
+import { useSupplierPicker } from "@/lib/suppliers/use-suppliers";
+import { SupplierSelect } from "@/app/(app)/suppliers/supplier-select";
 import { catalogBox, footprintBounds, resolveContent, resolveFootprint, roundSizeMm } from "@/lib/studio/footprint";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
 import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
@@ -78,11 +80,8 @@ const CONTENT_LABEL: Record<MapAppearance["content"], string> = {
   name: "שם",
 };
 
-const STOCK_OPTIONS: readonly (readonly [StockKind, string])[] = [
-  ["owned", STOCK_KIND_LABEL.owned],
-  ["consumable", STOCK_KIND_LABEL.consumable],
-  ["rented", STOCK_KIND_LABEL.rented],
-];
+/** The one procurement question, in the chip's order (lib/catalog/types.ts STOCK_KINDS). */
+const STOCK_OPTIONS: readonly (readonly [StockKind, string])[] = STOCK_KINDS.map((k) => [k, STOCK_KIND_LABEL[k]] as const);
 
 /** A new, empty product seeded from `c` — the catalog's first category unless the caller is
  *  narrowed to a few (the meeting's drawing passes, which only show part of the catalog). */
@@ -439,7 +438,10 @@ export function ProductDrawer({
   const [source, setSource] = useState<{ id: string; status: SourceStatus | null } | null>(null);
   // Loaded once, the first time the drawer opens — the catalog's first paint owes nothing to it.
   // Never in the meeting: the supplier list is cost-side data and nothing there would show it.
-  const suppliers = useSupplierList(product !== null && internal);
+  const { suppliers, add: addSupplier } = useSupplierPicker(product !== null && internal);
+  // "הספק מוכר ביחידה אחרת" — the two order fields stay folded on a sofa and open on their own under
+  // a flower or anything priced by the metre, where the supplier's unit really does differ.
+  const [orderUnitOpen, setOrderUnitOpen] = useState(false);
 
   useEffect(() => {
     if (product) {
@@ -560,15 +562,6 @@ export function ProductDrawer({
             : { ...d.appearance, shape: defaultShape(c), content: contentOf(d) },
       };
     });
-
-  // An archived supplier stays selectable while it is the one this product already names —
-  // otherwise opening an old product would silently unlink it and saving would make that real.
-  const supplierOptions = [
-    { value: "", label: "ללא ספק" },
-    ...suppliers
-      .filter((s) => !s.archived || s.id === draft.supplierId)
-      .map((s) => ({ value: s.id, label: s.archived ? `${s.name} (בארכיון)` : s.name })),
-  ];
 
   const toggleTag = (t: string) =>
     setDraft((d) => ({
@@ -1066,8 +1059,8 @@ export function ProductDrawer({
               {/* Said once, at the top of the section, instead of left for the designer to infer from
                   two fields called "מחיר" and "עלות" sitting a few rows apart. */}
               <p className="text-xs leading-relaxed text-muted">
-                מה שאתם משלמים על הפריט וכמה מהם צריך להזמין. פנימי — לא מופיע בהצעת המחיר ולא במסכי
-                הלקוח.
+                מאיפה הפריט מגיע לאירוע ומה הוא עולה לכם — זה מה שממלא את מסך הרכש. פנימי: לא מופיע
+                בהצעת המחיר ולא במסכי הלקוח.
               </p>
 
               {/* A row copied from the marketplace says where it came from, and the ONE thing the
@@ -1099,96 +1092,132 @@ export function ProductDrawer({
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="p-supplier" className={fieldLabelClassName}>
-                    ספק
-                  </label>
-                  <Select
-                    id="p-supplier"
-                    value={draft.supplierId ?? ""}
-                    onChange={(v) => patch({ supplierId: v || undefined })}
-                    options={supplierOptions}
-                    className="w-full"
-                  />
-                </div>
-                <NumberField
-                  id="p-cost"
-                  label={`עלות ${costUnitLabel(draft.priceUnit ?? "unit", draft.orderUnit)} (₪)`}
-                  min={0}
-                  hideZero
-                  placeholder="0"
-                  value={draft.costPrice ?? 0}
-                  onChange={(v) => patch({ costPrice: v || undefined })}
-                />
-              </div>
+              {/* THE ONE QUESTION (2026-10-30): where does it come from for an event. The three
+                  answers are the three StockKinds; everything under them is conditional, so most
+                  of the catalog sees this chip and one more field. Nothing here is required. */}
+              {(() => {
+                const kind: StockKind = draft.stockKind ?? "owned";
+                const sourced = kind !== "owned";
+                // A row from the store shows its supplier/cost only when it already HAS them (a vase
+                // copied off the marketplace, say): nothing is hidden, nothing is asked.
+                const showSource = sourced || !!draft.supplierId || !!draft.costPrice;
+                const orderUnitShown = sourced && (orderUnitOpen || !!draft.orderUnit || !!category.flowers || (draft.priceUnit ?? "unit") !== "unit");
+                return (
+                  <>
+                    <div>
+                      <Segmented
+                        label="מאיפה זה מגיע לאירוע?"
+                        value={kind}
+                        options={STOCK_OPTIONS}
+                        onChange={(k) => patch({ stockKind: k === "owned" ? undefined : k })}
+                      />
+                      <p className="mt-1 text-xs leading-relaxed text-muted">{STOCK_KIND_HINT[kind]}</p>
+                    </div>
 
-              <div>
-                <Segmented
-                  label="סוג המלאי"
-                  value={draft.stockKind ?? "owned"}
-                  options={STOCK_OPTIONS}
-                  onChange={(k) => patch({ stockKind: k === "owned" ? undefined : k })}
-                />
-                <p className="mt-1 text-xs leading-relaxed text-muted">
-                  {STOCK_KIND_HINT[draft.stockKind ?? "owned"]}
-                </p>
-              </div>
+                    {/* Only the owned kind has a count worth keeping: a consumable's stock is gone
+                        after the event, and a rental is never yours. "לא נספר" is a real answer. */}
+                    {kind === "owned" && (
+                      <NumberField
+                        id="p-stock"
+                        label="כמה יש לכם"
+                        className="w-44"
+                        min={0}
+                        hideZero
+                        placeholder="לא נספר"
+                        value={draft.stockQty ?? 0}
+                        onChange={(v) => patch({ stockQty: v || undefined })}
+                      />
+                    )}
 
-              {/* Only the owned kind has a count worth keeping: a consumable's stock is gone after
-                  the event, and a rental is never yours. Showing the field for those would be
-                  inviting a number that means nothing.
+                    {showSource && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label htmlFor="p-supplier" className={fieldLabelClassName}>
+                            ספק
+                          </label>
+                          <SupplierSelect
+                            id="p-supplier"
+                            value={draft.supplierId ?? ""}
+                            suppliers={suppliers}
+                            onChange={(v) => patch({ supplierId: v || undefined })}
+                            onCreate={addSupplier}
+                          />
+                        </div>
+                        <NumberField
+                          id="p-cost"
+                          label={`עלות ${costUnitLabel(draft.priceUnit ?? "unit", draft.orderUnit)} (₪)`}
+                          min={0}
+                          hideZero
+                          placeholder="0"
+                          value={draft.costPrice ?? 0}
+                          onChange={(v) => patch({ costPrice: v || undefined })}
+                        />
+                      </div>
+                    )}
 
-                  It stands on its own line rather than in a three-column row with the two order
-                  fields below: those two are one sentence about the SUPPLIER, this is a count of what
-                  is in your storeroom, and a grid that drops its first cell for two of the three
-                  stock kinds made the remaining pair jump sideways every time the toggle moved. */}
-              {(draft.stockKind ?? "owned") === "owned" && (
-                <NumberField
-                  id="p-stock"
-                  label="כמה יש לכם במחסן"
-                  className="w-44"
-                  min={0}
-                  hideZero
-                  placeholder="—"
-                  value={draft.stockQty ?? 0}
-                  onChange={(v) => patch({ stockQty: v || undefined })}
-                />
-              )}
+                    {/* פחת — a rule about the product (Product.spareRate), never a usage figure: the
+                        order is this much over what the plan counts. The category's default shows as
+                        the placeholder, so a blank field still means 10% on a rose. */}
+                    {kind === "consumable" && (
+                      <NumberField
+                        id="p-spare"
+                        label="פחת — כמה אחוז מזמינים מעבר לספירה"
+                        className="w-44"
+                        min={0}
+                        max={100}
+                        hideZero
+                        placeholder={String(category.defaultSpareRate ?? 0)}
+                        value={draft.spareRate ?? 0}
+                        onChange={(v) => patch({ spareRate: v || undefined })}
+                      />
+                    )}
 
-              {/* The two order fields, boxed and titled with the question they answer together. Their
-                  labels used to be "יחידת הזמנה" and "כמה ליחידה" — two nouns that only make sense
-                  once you already know the answer. The second one reads back the first now. */}
-              <div className="rounded-md border border-inset-border bg-inset p-3">
-                <p className="mb-2.5 text-xs font-semibold text-ink-soft">איך הספק מוכר את זה?</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <TextField
-                    id="p-order-unit"
-                    label="יחידת ההזמנה אצל הספק"
-                    value={draft.orderUnit ?? ""}
-                    onChange={(v) => patch({ orderUnit: v.trim() || undefined })}
-                    placeholder={category.flowers ? "גבעולים" : "מארז"}
-                  />
-                  <NumberField
-                    id="p-order-factor"
-                    label={`כמה ${draft.orderUnit?.trim() || "יחידות"} בפריט אחד`}
-                    min={0}
-                    hideZero
-                    placeholder="1"
-                    value={draft.orderFactor ?? 0}
-                    onChange={(v) => patch({ orderFactor: v || undefined })}
-                  />
-                </div>
-                <p className="mt-2 text-xs leading-relaxed text-muted">
-                  {draft.orderUnit
-                    ? `מסך הרכש יזמין ${draft.orderFactor || 1} ${draft.orderUnit} לכל ${
-                        draft.name.trim() || "פריט"
-                      } שמוצב על התוכנית.`
-                    : category.flowers
-                      ? "הגבעולים כבר נגזרים ממפרט הפרחים ומופיעים ברכש פרח־פרח. מלאו רק אם הספק מוכר את הסידור עצמו ביחידה אחרת. אחרת השאירו ריק."
-                      : "מלאו רק אם הספק מוכר ביחידה אחרת ממה שמוצב על התוכנית — מארז של 12, גליל, קרטון. אחרת השאירו ריק."}
-                </p>
-              </div>
+                    {/* The two order fields, folded: a florist sells stems and a fabric house metres,
+                        but a lamp is a lamp. Their labels read back each other, as before. */}
+                    {sourced && !orderUnitShown && (
+                      <button
+                        type="button"
+                        onClick={() => setOrderUnitOpen(true)}
+                        className="self-start text-xs font-medium text-accent transition-colors hover:text-accent-hover"
+                      >
+                        הספק מוכר ביחידה אחרת (מארז, גליל, גבעולים)…
+                      </button>
+                    )}
+                    {orderUnitShown && (
+                      <div className="rounded-md border border-inset-border bg-inset p-3">
+                        <p className="mb-2.5 text-xs font-semibold text-ink-soft">איך הספק מוכר את זה?</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <TextField
+                            id="p-order-unit"
+                            label="יחידת ההזמנה אצל הספק"
+                            value={draft.orderUnit ?? ""}
+                            onChange={(v) => patch({ orderUnit: v.trim() || undefined })}
+                            placeholder={category.flowers ? "גבעולים" : "מארז"}
+                          />
+                          <NumberField
+                            id="p-order-factor"
+                            label={`כמה ${draft.orderUnit?.trim() || "יחידות"} בפריט אחד`}
+                            min={0}
+                            hideZero
+                            placeholder="1"
+                            value={draft.orderFactor ?? 0}
+                            onChange={(v) => patch({ orderFactor: v || undefined })}
+                          />
+                        </div>
+                        <p className="mt-2 text-xs leading-relaxed text-muted">
+                          {draft.orderUnit
+                            ? `מסך הרכש יזמין ${draft.orderFactor || 1} ${draft.orderUnit} לכל ${
+                                draft.name.trim() || "פריט"
+                              } שמוצב על התוכנית.`
+                            : category.flowers
+                              ? "הגבעולים כבר נגזרים ממפרט הפרחים ומופיעים ברכש פרח־פרח. מלאו רק אם הספק מוכר את הסידור עצמו ביחידה אחרת. אחרת השאירו ריק."
+                              : "מלאו רק אם הספק מוכר ביחידה אחרת ממה שמוצב על התוכנית — מארז של 12, גליל, קרטון. אחרת השאירו ריק."}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </>
           )}
 

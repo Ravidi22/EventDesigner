@@ -21,6 +21,14 @@
 //
 // The same module turns a freehand trace into a free surface, and any surface's outline into plan
 // points and back — what the hall editor's outline handles edit.
+//
+// A closed shape may be a BUILDING the same way (the user, 2026-10-30: the service block between
+// אמרה's two halls — "the white polygon between is office and kitchen — I don't want it as a zone,
+// but as a building with a ceiling"): a `structure` feature that fills the face, `fillsFace` like a
+// surface, so it follows the walls too and every reader — the sketch, the print, the 3D scene, which
+// extrudes a structure to its height and so roofs it — sees an ordinary built block, none of them
+// needing the walls. A zone would have put the kitchen on the list of rooms an event books, and
+// would have had no mass: a zone is a floor and a ceiling, not a thing standing on the property.
 import type { Point } from "../studio/hall";
 import { polygonAreaMm2 } from "../studio/geometry";
 import { footprintPolygons } from "../studio/proximity";
@@ -28,10 +36,17 @@ import { detectFaces, pointInPolygon, type Face } from "./faces";
 import { featureFootprint, newFeature, type StructureFeature, type SurfaceMaterial, type VenueStructure } from "./structure";
 import { isMain } from "../self-check";
 
-/** Whether this surface follows the walls round it (and so takes no drag, resize or turn). */
+/** Whether this surface or building follows the walls round it (and so takes no drag, resize or turn). */
 export function followsWalls(f: Pick<StructureFeature, "kind" | "fillsFace">): boolean {
-  return f.kind === "surface" && !!f.fillsFace;
+  return (f.kind === "surface" || f.kind === "structure") && !!f.fillsFace;
 }
+
+/** A new building's height: a single storey, the ceiling the halls default to (./zone.ts). */
+export const BUILDING_HEIGHT_MM = 4000;
+
+/** How a building drawn over a face looks: a solid line and a pale solid fill, like a wall's — not
+ *  the dashed outline a loose structure rests in, which read as a hole with a name in it. */
+const BUILDING_STYLE = { fill: "#f3f1ec", stroke: "#6f6a5e", dash: "solid" as const };
 
 /** A feature's outline as drawn, in plan millimetres — its footprint turned and placed, a bowed side
  *  cut into short chords. */
@@ -74,6 +89,19 @@ export function surfaceFromBoundary(boundary: readonly Point[], material: Surfac
 /** A new surface filling `face` wall to wall, and following its walls from now on. */
 export function surfaceInFace(face: Face, material: SurfaceMaterial): Omit<StructureFeature, "id"> {
   return { ...surfaceFromBoundary(face.boundary, material), fillsFace: true };
+}
+
+/** A new building of exactly `boundary` — a freehand trace closed as a built block. */
+export function buildingFromBoundary(boundary: readonly Point[], heightMm = BUILDING_HEIGHT_MM): Omit<StructureFeature, "id"> {
+  const { edgeCurves: _none, ...shape } = asOutline(boundary);
+  return { ...newFeature("structure", { x: shape.x, y: shape.y }), ...shape, heightMm: Math.max(100, Math.round(heightMm)), style: { ...BUILDING_STYLE }, locked: true };
+}
+
+/** A new building filling `face` wall to wall — a roofed block `heightMm` high — and following its
+ *  walls from now on. Locked, like the lawn: a press meant for the thing beside it must not pick up
+ *  the whole kitchen block. */
+export function buildingInFace(face: Face, heightMm = BUILDING_HEIGHT_MM): Omit<StructureFeature, "id"> {
+  return { ...buildingFromBoundary(face.boundary, heightMm), fillsFace: true };
 }
 
 type Box = { minX: number; minY: number; maxX: number; maxY: number };
@@ -157,10 +185,16 @@ export function syncFaceSurfaces(s: VenueStructure, faces?: Face[]): VenueStruct
   return changed ? { ...s, features } : s;
 }
 
-/** The face-filling surface already laid in `face`, if there is one — a second click with a ground
- *  tool changes its material rather than stacking a copy on it. */
+/** The face-filling SURFACE already laid in `face`, if there is one — a second click with a ground
+ *  tool changes its material rather than stacking a copy on it. A building in the face is not one:
+ *  a ground tool has no material to give it. */
 export function surfaceFilling(s: VenueStructure, face: Face, faces: readonly Face[]): StructureFeature | undefined {
-  return s.features.find((f) => followsWalls(f) && faceOfSurface(f, faces) === face);
+  return s.features.find((f) => f.kind === "surface" && followsWalls(f) && faceOfSurface(f, faces) === face);
+}
+
+/** The building already standing in `face`, if there is one. */
+export function buildingFilling(s: VenueStructure, face: Face, faces: readonly Face[]): StructureFeature | undefined {
+  return s.features.find((f) => f.kind === "structure" && followsWalls(f) && faceOfSurface(f, faces) === face);
 }
 
 /** Adds a surface UNDER every surface it already contains — a courtyard paved after the beds were
@@ -249,6 +283,22 @@ if (isMain(import.meta.url)) {
   assert(paved.structure.features[0].id === paved.featureId && paved.structure.features[1].id === "bed", "the courtyard's paving is laid under the bed already in it");
   const beside = addSurfaceUnder(bedFirst, surfaceFromBoundary([{ x: 30000, y: 0 }, { x: 31000, y: 0 }, { x: 31000, y: 1000 }], "sand"));
   assert(beside.structure.features[1].id === beside.featureId, "…and one laid elsewhere goes on top as before");
+
+  // A closed shape made a BUILDING: a structure of the shape's outline, roofed at its height, that
+  // follows the walls as a face surface does — and is not what a ground tool finds in the face.
+  {
+    const faces2 = detectFaces(s);
+    const room = faces2.find((f) => pointInPolygon({ x: 2000, y: 1500 }, f.boundary))!;
+    const built = buildingInFace(room, 3500);
+    assert(built.kind === "structure" && built.fillsFace === true && built.heightMm === 3500 && built.locked === true, "a building fills the shape as a locked structure of its height");
+    assert(built.widthMm === 4000 && built.depthMm === 3000 && built.x === 2000 && built.shape === "custom" && built.style?.dash === "solid", "…laid wall to wall on the shape, drawn in a solid line");
+    assert(followsWalls(built), "…and it follows the walls");
+    const sb: VenueStructure = { ...s, features: [{ ...built, id: "b" }] };
+    const moved = syncFaceSurfaces(move(move(sb, "B", 5000, 0), "E", 5000, 3000));
+    assert(box(moved.features[0]).maxX === 5000 && moved.features[0].widthMm === 5000 && moved.features[0].heightMm === 3500, "the building follows its wall out to 5 m and keeps its height");
+    assert(surfaceFilling(sb, room, faces2) === undefined && buildingFilling(sb, room, faces2)?.id === "b", "a ground tool finds no surface in the built shape; the building is found as a building");
+    assert(buildingInFace(room).heightMm === BUILDING_HEIGHT_MM, "a building with no height typed is one storey");
+  }
 
   console.log("face surfaces: ok");
 }

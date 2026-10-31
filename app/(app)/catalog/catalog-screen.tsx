@@ -19,17 +19,27 @@ import { EmptyState, NoResults } from "@/components/empty-state";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { ProductCard } from "./product-card";
-import { Filters, EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState } from "./filters";
+import { Filters, EMPTY_FILTERS, hasActiveFilters, matchesFilters, type FilterState, type SourcingFilter } from "./filters";
+import { BulkSourcingBar } from "./bulk-sourcing-bar";
 import { ProductDrawer, blankProduct } from "./product-drawer";
 import { blankComposite } from "./composite-drawer";
 import { COMPOSITE_CATEGORY } from "@/lib/catalog/composition";
 import { knownFlowersOf, type KnownFlower } from "@/lib/catalog/flowers";
 
-export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initialProducts: Product[]; marketFlowers?: KnownFlower[] }) {
+export function CatalogScreen({
+  initialProducts,
+  marketFlowers = [],
+  initialSourcing = null,
+}: {
+  initialProducts: Product[];
+  marketFlowers?: KnownFlower[];
+  /** From `?sourcing=` — the procurement tab's "שייכו ספק" lands here with the lens set. */
+  initialSourcing?: SourcingFilter | null;
+}) {
   // The catalog comes from page.tsx's server-side read; the hook primes the studio's synchronous
   // cache with it and hands back the list plus the three write paths.
-  const { products, ready, error, save, remove, importMany } = useCatalog(initialProducts);
-  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
+  const { products, ready, error, save, remove, importMany, reload } = useCatalog(initialProducts);
+  const [filters, setFilters] = useState<FilterState>(() => ({ ...EMPTY_FILTERS, sourcing: initialSourcing }));
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<Product | null>(null);
   // The product the "…" menu has asked to delete. ONE dialog for the whole screen rather than one
@@ -187,6 +197,10 @@ export function CatalogScreen({ initialProducts, marketFlowers = [] }: { initial
             searchValue={search}
             onSearchChange={setSearch}
           />
+
+          {/* Bulk procurement facts for the filtered set — only while something IS filtered, so
+              the bar never offers to re-source the whole catalog by accident. */}
+          {hasActiveFilters({ ...filters, search }) && <BulkSourcingBar products={filtered} onDone={reload} />}
 
           {filtered.length === 0 ? (
             <NoResults

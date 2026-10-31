@@ -14,9 +14,10 @@ import { Button } from "@/components/button";
 import { Menu } from "@/components/menu";
 import { KIND_ICON, kindTheme } from "./dashboard-view-utils";
 import { DrawerSection, SectionAction } from "./drawer-section";
-import { EventBookingCard } from "./event-booking-card";
+import { EventBillingSection } from "./event-billing-section";
 import { ClientAccessCard } from "./client-access-card";
 import { ProductionSection } from "./production-section";
+import { VenueHostingSection } from "./venue-hosting-section";
 
 // The shell — the floating left-anchored <dialog>, its header and its one scrollbar — is
 // components/drawer.tsx, shared with the catalog's product form. What stays here is what this
@@ -25,7 +26,8 @@ import { ProductionSection } from "./production-section";
 //   where it stands and the way on   (status, the meeting to continue, its studio and outputs)
 //   the brief                         (פרטי האירוע — everything the details form asks — and who to call)
 //   the sittings                      (פגישות)
-//   the client's side                 (the sketch shared with them, then the quote and their yes)
+//   the client's side                 (the sketch shared with them, then the quote, their yes as an
+//                                      order, and the money — ./event-billing-section.tsx)
 //
 // It used to run status → details → meetings → quote → sharing → contacts: the phone number last,
 // the sketch the client looks at AFTER the quote they agree to, and no way to fix a detail without
@@ -183,6 +185,9 @@ export function EventDetailDrawer({
             </dl>
           </DrawerSection>
 
+          {/* The hall's card, when a venue linked this evening (lib/event-links). */}
+          <VenueHostingSection key={`venue-${event.id}`} event={event} onChanged={onEventChanged} />
+
           <DrawerSection title="אנשי קשר">
             <ul className="space-y-3">
               {contacts.map((c, i) => (
@@ -259,7 +264,7 @@ export function EventDetailDrawer({
               they say yes. */}
           <ClientAccessCard key={`clients-${event.id}`} event={event} />
 
-          <EventBookingCard key={event.id} event={event} onConfirmed={onEventChanged} />
+          <EventBillingSection key={`billing-${event.id}`} event={event} onChanged={onEventChanged} />
 
           <p className="nums text-center text-caption text-faint">
             נוצר ב־{new Date(event.createdAt).toLocaleDateString("he-IL", { day: "numeric", month: "short", year: "numeric" })}

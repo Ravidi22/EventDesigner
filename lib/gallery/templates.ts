@@ -48,3 +48,34 @@ export const PRESENTATION_TEMPLATES: PresentationTemplate[] = [
     slides: ["מרכז גבוה", "מרכז נמוך", "שולחן הכלה", "שילוב נרות"],
   },
 ];
+
+/** A hall's skeletons (the user, 2026-10-30: "the default options of the presentations need to be
+ *  related to the owner — תפריט, מרכזי שולחן…"). What a couple is shown in a hall's meeting: the
+ *  food, the tables the hall dresses as standard, the rooms themselves, the evening as it runs. A
+ *  hall has no catalog, so its slides are photographs with names — the free slide, not a product. */
+export const VENUE_PRESENTATION_TEMPLATES: PresentationTemplate[] = [
+  {
+    key: "venue-menu",
+    name: "תפריט",
+    hint: "מהקבלה ועד הקינוח — מנה אחרי מנה",
+    slides: ["קבלת פנים", "מנות ראשונות", "מנה עיקרית", "תוספות", "קינוחים", "בר ושתייה"],
+  },
+  {
+    key: "venue-centerpieces",
+    name: "מרכזי שולחן",
+    hint: "מה שהאולם מעמיד על השולחן — זה לצד זה",
+    slides: ["מרכז גבוה", "מרכז נמוך", "שולחן הכלה", "מפות ומפיות", "כלי הגשה"],
+  },
+  {
+    key: "venue-rooms",
+    name: "האולם",
+    hint: "החללים, ריקים וערוכים",
+    slides: ["כניסה", "קבלת פנים", "מתחם החופה", "האולם ערוך", "רחבת הריקודים", "הגן בלילה"],
+  },
+  {
+    key: "venue-evening",
+    name: "ערב באולם",
+    hint: "האירוע כפי שהוא מתנהל — לפי הלו״ז",
+    slides: ["קבלת פנים", "חופה", "כניסה לאולם", "ריקודים", "עמדות קינוח"],
+  },
+];

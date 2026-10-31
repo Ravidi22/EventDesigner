@@ -25,13 +25,12 @@ import type { Product } from "@/lib/catalog/types";
 import { cleanFlowers } from "@/lib/catalog/flowers";
 import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
-import { nearestWall } from "@/lib/studio/anchor";
+import { nearestWall, wallTrack } from "@/lib/studio/anchor";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { deckTypeOf } from "@/lib/design-document/stage";
 import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
-import { wallLengthMm as segmentLengthMm } from "@/lib/studio/geometry";
-import { nodeMap, wallPoints, type VenueStructure } from "@/lib/venues/structure";
+import type { VenueStructure } from "@/lib/venues/structure";
 import { grantedVenueIds } from "@/lib/venues/granted";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import type { EventDemand, ProcurementItem, ProcurementLookup } from "./procurement";
@@ -78,6 +77,9 @@ function buildItemIndex(
       unit: (product.priceUnit ?? "unit") as MeasureUnit,
       orderUnit: product.orderUnit,
       orderFactor: product.orderFactor,
+      // פחת: the row's own, else the category's (cut flowers 10%). Meaningful on a consumable only;
+      // orderQuantity ignores it on anything else.
+      spareRate: product.spareRate ?? cat?.defaultSpareRate,
       costPrice: product.costPrice,
       stockQty: product.stockQty,
     };
@@ -114,6 +116,8 @@ function buildItemIndex(
               unit: "unit",
               orderUnit: field.suffix,
               orderFactor: f.qty,
+              // The stems lose what the arrangement loses.
+              spareRate: base.spareRate,
             });
             return key;
           }),
@@ -144,17 +148,10 @@ function buildItemIndex(
 /** A MeasureContext built from product ROWS rather than the browser's primed catalog cache
  *  (lib/studio/catalog-resolver.ts is client-only). Same three questions, same fallbacks. */
 function serverMeasureContext(byVariant: Map<string, Product>, structure?: VenueStructure): MeasureContext {
-  const nodes = structure ? nodeMap(structure) : null;
   return {
     unitOf: (variantId) => (byVariant.get(variantId)?.priceUnit ?? "unit") as MeasureUnit,
-    wallLengthMm:
-      structure && nodes
-        ? (wallId) => {
-            const wall = structure.walls.find((w) => w.id === wallId);
-            const pts = wall ? wallPoints(structure, wall, nodes) : null;
-            return pts ? segmentLengthMm(pts.a, pts.b) : undefined;
-          }
-        : undefined,
+    // Along the wall — a drape round a bowed wall covers the arc, not the chord.
+    wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,
     footprintMm: (variantId) => {
       const product = byVariant.get(variantId);
       if (!product) return undefined;
@@ -264,12 +261,9 @@ export async function assembleDemands(
     ? await database
         .select({ venueId: venueStructures.venueId, structure: venueStructures.structure })
         .from(venueStructures)
-        .where(
-          and(
-            eq(venueStructures.organizationId, organizationId),
-            inArray(venueStructures.venueId, wantedVenues),
-          ),
-        )
+        // By venue alone: a property's plan is one shared copy, whoever's event stands on it
+        // (lib/venues/access.ts resolveVenueRole).
+        .where(inArray(venueStructures.venueId, wantedVenues))
     : [];
 
   const structureByVenue = new Map(structureRows.map((r) => [r.venueId, r.structure]));

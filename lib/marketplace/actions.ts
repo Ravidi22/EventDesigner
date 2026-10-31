@@ -25,7 +25,7 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { knownFlowerOfProduct, type KnownFlower } from "@/lib/catalog/flowers";
 import { STEM_CATEGORY_FALLBACK } from "@/lib/catalog/flower-spec";
 import { copyFileInto } from "@/lib/files/copy";
-import type { MarketItem, MarketSupplier, SourceStatus } from "./types";
+import type { MarketItem, MarketShop, MarketSupplier, SourceStatus } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function assertId(value: unknown, field: string): asserts value is string {
@@ -37,8 +37,8 @@ function assertId(value: unknown, field: string): asserts value is string {
 const published = () =>
   and(eq(organizations.kind, "supplier"), eq(products.visibility, "public"), eq(products.archived, false));
 
-/** The supplier's public profile: the name the organisation was opened under, and the phone and
- *  "what we supply" line from their settings. Nothing else of theirs. */
+/** The supplier's public profile: the name the organisation was opened under, and the phone, logo,
+ *  Instagram and address from their settings — their letterhead. Nothing else of theirs. */
 async function profilesOf(orgIds: string[]): Promise<Map<string, MarketSupplier>> {
   if (orgIds.length === 0) return new Map();
   const rows = await db()
@@ -47,6 +47,9 @@ async function profilesOf(orgIds: string[]): Promise<Map<string, MarketSupplier>
       name: organizations.name,
       businessName: studioSettings.businessName,
       phone: studioSettings.phone,
+      logoUrl: studioSettings.logoUrl,
+      instagram: studioSettings.instagram,
+      address: studioSettings.address,
     })
     .from(organizations)
     .leftJoin(studioSettings, eq(studioSettings.organizationId, organizations.id))
@@ -58,6 +61,9 @@ async function profilesOf(orgIds: string[]): Promise<Map<string, MarketSupplier>
         orgId: r.orgId,
         name: r.businessName?.trim() || r.name,
         phone: r.phone?.trim() || undefined,
+        logoUrl: r.logoUrl?.trim() || undefined,
+        instagram: r.instagram?.trim().replace(/^@/, "") || undefined,
+        address: r.address?.trim() || undefined,
       },
     ]),
   );
@@ -75,8 +81,10 @@ function asMarketItem(p: Product, supplier: MarketSupplier, inCatalog?: string):
   };
 }
 
-/** Everything published by every supplier, with this studio's own copies marked. */
-export async function fetchMarketplace(): Promise<MarketItem[]> {
+/** Everything published by every supplier — or by one, `supplierOrgId` — with this studio's own
+ *  copies marked. */
+export async function fetchMarketplace(supplierOrgId?: string): Promise<MarketItem[]> {
+  if (supplierOrgId !== undefined) assertId(supplierOrgId, "supplierOrgId");
   const actor = await currentActor();
   const database = db();
 
@@ -84,7 +92,7 @@ export async function fetchMarketplace(): Promise<MarketItem[]> {
     .select({ product: products })
     .from(products)
     .innerJoin(organizations, eq(organizations.id, products.organizationId))
-    .where(published());
+    .where(supplierOrgId ? and(published(), eq(products.organizationId, supplierOrgId)) : published());
   if (rows.length === 0) return [];
   const productRows = rows.map((r) => r.product);
 
@@ -108,6 +116,31 @@ export async function fetchMarketplace(): Promise<MarketItem[]> {
     })
     .filter((x): x is MarketItem => x !== null)
     .sort((a, b) => a.supplier.name.localeCompare(b.supplier.name, "he") || a.product.name.localeCompare(b.product.name, "he"));
+}
+
+/** The marketplace's first page: one shop front per supplier, digested from the same published
+ *  rows `fetchMarketplace` reads. The rows themselves stay on the server — a supplier with 300
+ *  stems sends three of them for its cover. */
+export async function fetchMarketShops(): Promise<MarketShop[]> {
+  const shops = new Map<string, { supplier: MarketSupplier; items: MarketItem[] }>();
+  for (const item of await fetchMarketplace()) {
+    const shop = shops.get(item.supplier.orgId) ?? { supplier: item.supplier, items: [] };
+    shop.items.push(item);
+    shops.set(item.supplier.orgId, shop);
+  }
+  return [...shops.values()].map(({ supplier, items }) => {
+    const byCategory = new Map<string, number>();
+    for (const i of items) byCategory.set(i.product.category, (byCategory.get(i.product.category) ?? 0) + 1);
+    const photographed = items.filter((i) => i.product.imageUrl);
+    return {
+      supplier,
+      count: items.length,
+      categories: [...byCategory.entries()].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count),
+      preview: [...photographed, ...items.filter((i) => !i.product.imageUrl)].slice(0, 3).map((i) => i.product),
+      inCatalog: items.filter((i) => i.inCatalog).length,
+      names: items.map((i) => i.product.name),
+    };
+  });
 }
 
 /**

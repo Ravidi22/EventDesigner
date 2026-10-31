@@ -316,6 +316,7 @@ export function Inspector({
   selectedCount,
   feature,
   onResetFeature,
+  onSwapCurtain,
   facing,
   onFace,
   spin,
@@ -431,8 +432,11 @@ export function Inspector({
   /** Set when the one selected thing is a VENUE feature rather than something in this document —
    *  the bar, a built stage, the pool. See lib/design-document/features.ts for what an event may say
    *  about one (where it stood it, and nothing else). */
-  feature: { id: string; label: string; kind: FeatureKind; rotationDeg: number; moved: boolean } | null;
+  feature: { id: string; label: string; kind: FeatureKind; rotationDeg: number; moved: boolean; curtainSwap?: SwapPanel | null } | null;
   onResetFeature: (featureId: string) => void;
+  /** The venue's curtain taken down for this event and a catalog curtain hung on its stretch
+   *  instead (lib/venues/curtain.ts) — a drape placement, quoted and packed as any hired one. */
+  onSwapCurtain: (featureId: string, productId: string) => void;
   /** The one angle everything selected is facing, or null when they disagree. */
   facing: number | null;
   /** Turn everything selected to this absolute angle, each about its own centre. */
@@ -1230,13 +1234,18 @@ export function Inspector({
         facts={`${FEATURE_KIND_LABEL[feature.kind]} · תוכנית המתחם`}
         onClose={onClose}
       >
-        <BarButton
-          icon={Undo2}
-          label={feature.moved ? "החזרה למקום בתוכנית" : "נמצא במקומו המקורי"}
-          disabled={!feature.moved}
-          onClick={() => onResetFeature(feature.id)}
-        />
-        <Rotation value={facing} onChange={onFace} />
+        {feature.kind !== "curtain" && (
+          <BarButton
+            icon={Undo2}
+            label={feature.moved ? "החזרה למקום בתוכנית" : "נמצא במקומו המקורי"}
+            disabled={!feature.moved}
+            onClick={() => onResetFeature(feature.id)}
+          />
+        )}
+        {feature.kind !== "curtain" && <Rotation value={facing} onChange={onFace} />}
+        {feature.kind === "curtain" && feature.curtainSwap && (
+          <SwapPopover swap={feature.curtainSwap} onSwap={(productId) => onSwapCurtain(feature.id, productId)} label="החלפה בווילון מהקטלוג" />
+        )}
         <Popover label="פריט של המתחם" icon={Info}>
           <Note>
             אפשר להזיז, לסובב ולהסיר אותו לאירוע הזה בלבד. הגודל והמקום הקבוע נקבעים במסך האולמות,

@@ -3,10 +3,14 @@
 import { doorGeometry, fromLocalFrame, outlinePathD, polygonAreaMm2, polygonCentroid, projectOntoWall, resizeFromEdge, toLocalFrame, wallLengthMm, wallSegmentD } from "@/lib/studio/geometry";
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { startPointerGesture } from "@/lib/studio/gesture";
-import { resolveStyle } from "@/lib/element-style";
+import { isDark, resolveStyle } from "@/lib/element-style";
 import { usesDiameter } from "@/lib/catalog/types";
 import { isAdditiveClick } from "@/lib/keyboard";
-import { featureFootprint, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
+import { featureFootprint, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
+import { ItemSymbol } from "@/components/item-symbol";
+import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainEnds, curtainPieces, type CurtainEnds, type CurtainPiece } from "@/lib/venues/curtain";
+import { CurtainCloth } from "@/components/curtain-cloth";
+import { WindowGlazing } from "@/components/window-glazing";
 import { FootprintShape } from "@/components/footprint-shape";
 import { PlantGlyph } from "@/components/plant-glyph";
 import { SurfaceFill, ZoneSurface } from "@/components/surface-fill";
@@ -26,6 +30,9 @@ import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import { EntranceDoor, RotateHandle } from "@/components/plan-canvas";
+
+/** No walls: a curtain read against it is drawn in its own box (curtainPieces' fallback). */
+const EMPTY_STRUCTURE: VenueStructure = { nodes: [], walls: [], entrances: [], features: [] };
 
 // World-space layers for the venue plan, meant to be handed to PlanCanvas as its `backdrop`/`overlay`.
 //
@@ -499,9 +506,12 @@ export function StructureFeatures({
   onCommit,
   clientToMm,
   onContextMenu: onContextMenuAny,
+  onCurtainEnd,
   interactive,
 }: {
   structure: VenueStructure;
+  /** One end of a curtain slid along its wall. Same opt-in rule as onResize: absent = no end grips. */
+  onCurtainEnd?: (id: string, end: "from" | "to", p: { x: number; y: number }) => void;
   mm: (px: number) => number;
   selectedIds?: string[];
   onSelect?: (id: string, additive: boolean) => void;
@@ -545,7 +555,7 @@ export function StructureFeatures({
   // The callbacks are read through a ref so a node that skipped a render still calls the host's
   // CURRENT handler; whether each is supplied at all (which switches affordances on) is passed as
   // the presence of the stable wrapper, so it still re-renders when that changes.
-  const handlers = { onSelect: onSelectAny, onMove: onMoveAny, onResize, onRotate, onCommit, clientToMm, onContextMenu: onContextMenuAny };
+  const handlers = { onSelect: onSelectAny, onMove: onMoveAny, onResize, onRotate, onCommit, clientToMm, onContextMenu: onContextMenuAny, onCurtainEnd };
   const live = useRef(handlers);
   useLayoutEffect(() => {
     live.current = handlers;
@@ -559,10 +569,26 @@ export function StructureFeatures({
       onCommit: () => live.current.onCommit?.(),
       clientToMm: (x, y) => live.current.clientToMm?.(x, y) ?? { x: 0, y: 0 },
       onContextMenu: (id) => live.current.onContextMenu?.(id),
+      onCurtainEnd: (id, end, p) => live.current.onCurtainEnd?.(id, end, p),
     }),
     [],
   );
   const labelPx = mm(FEATURE_LABEL_PX);
+  // Every curtain in the pieces its wall's doors leave it — once per structure, not per frame.
+  const piecesOf = useMemo(() => {
+    const m = new Map<string, CurtainPiece[]>();
+    for (const f of structure.features) if (f.kind === "curtain") m.set(f.id, curtainPieces(structure, f));
+    return m;
+  }, [structure]);
+  // …and its two ends on the plan, where the grips that slide them stand (round a bow too).
+  const endsOf = useMemo(() => {
+    const m = new Map<string, CurtainEnds>();
+    for (const f of structure.features) {
+      const ends = f.kind === "curtain" ? curtainEnds(structure, f) : null;
+      if (ends) m.set(f.id, ends);
+    }
+    return m;
+  }, [structure]);
   // The one selected stage whose edge items take the pointer (its grips are drawn after every
   // feature, so no neighbour covers them), and the stage whose sides are lit for a new item.
   const edging = selectedIds?.length === 1 && onEdgeItemChange && onSelectEdgeItem && clientToMm ? structure.features.find((f) => f.id === selectedIds[0] && !f.locked && takesEdgeItems(f)) : undefined;
@@ -587,6 +613,9 @@ export function StructureFeatures({
             onMove={onMove && stable.onMove}
             onResize={onResize && stable.onResize}
             onRotate={onRotate && stable.onRotate}
+            onCurtainEnd={onCurtainEnd && stable.onCurtainEnd}
+            pieces={piecesOf.get(f.id)}
+            ends={selected ? endsOf.get(f.id) : undefined}
             activeEdgeItem={activeEdgeItem?.featureId === f.id ? activeEdgeItem.itemId : null}
             wallDistance={selected ? wallDistance : undefined}
             onCommit={onCommit && stable.onCommit}
@@ -673,6 +702,8 @@ type FeatureHandlers = {
   onMove?: (id: string, p: { x: number; y: number }, free?: boolean) => void;
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void;
   onRotate?: (id: string, rotationDeg: number) => void;
+  /** One end of a curtain dragged along its wall (lib/venues/curtain.ts curtainEndT). */
+  onCurtainEnd?: (id: string, end: "from" | "to", p: { x: number; y: number }) => void;
   onCommit?: () => void;
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number };
   onContextMenu?: (id: string) => void;
@@ -692,12 +723,15 @@ const FeatureNode = memo(function FeatureNode({
   onMove: onMoveProp,
   onResize: onResizeProp,
   onRotate: onRotateProp,
+  onCurtainEnd,
+  pieces,
+  ends,
   activeEdgeItem,
   wallDistance,
   onCommit,
   clientToMm,
   onContextMenu,
-}: FeatureHandlers & { f: StructureFeature; selected: boolean; labelPx?: number; mm?: (px: number) => number; activeEdgeItem?: string | null; wallDistance?: WallDistance }) {
+}: FeatureHandlers & { f: StructureFeature; selected: boolean; labelPx?: number; mm?: (px: number) => number; activeEdgeItem?: string | null; wallDistance?: WallDistance; pieces?: CurtainPiece[]; ends?: CurtainEnds }) {
         // A locked feature (StructureFeature.locked) keeps its click and its right-click — that is how
         // it gets unlocked — and loses every gesture that would change it. The GROUND does one more
         // thing: a surface moves only once it is already selected. It is the biggest thing on the
@@ -705,7 +739,9 @@ const FeatureNode = memo(function FeatureNode({
         // the whole lawn; now that press selects it, and the next one moves it.
         // A surface laid wall to wall in a closed shape (lib/venues/face-surfaces.ts) is the walls'
         // shape: it follows them, and has no drag, size or turn of its own.
-        const pinned = !!f.locked || followsWalls(f);
+        // A curtain hangs on its wall (lib/venues/curtain.ts): its stretch is typed in the bar,
+        // never dragged, and a sketch takes it down rather than moving it.
+        const pinned = !!f.locked || followsWalls(f) || f.kind === "curtain";
         const onMove = pinned || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
         // Chairs in rows are resized by their rows (the bar's "שורות"), never by a handle that
         // would stretch the box away from the chairs in it (lib/venues/seating.ts).
@@ -818,6 +854,30 @@ const FeatureNode = memo(function FeatureNode({
                       vectorEffect="non-scaling-stroke"
                     />
                   </>
+                ) : f.kind === "curtain" ? (
+                  // The band in its cloth, pleated along it — the sketch's own drape drawing — in
+                  // the pieces its doors leave it (lib/venues/curtain.ts curtainPieces), round the
+                  // bow on a curved wall; selected, its whole stretch is outlined so the bare
+                  // doorway still reads as part of it.
+                  <>
+                    <CurtainCloth
+                      pieces={pieces ?? curtainPieces(EMPTY_STRUCTURE, f)}
+                      depthMm={CURTAIN_DEPTH_MM}
+                      fill={f.style?.fill ?? CURTAIN_FILL}
+                      fillOpacity={f.style?.fillOpacity}
+                      ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : "var(--color-ink)"}
+                      opacity={isDark(f.style?.fill ?? CURTAIN_FILL) ? 0.45 : 0.35}
+                    />
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={selected ? 2 : 0} strokeDasharray={selected ? "4 3" : undefined} vectorEffect="non-scaling-stroke" />
+                  </>
+                ) : f.kind === "fountain" ? (
+                  // A fountain: the catalog's own picture (components/item-symbol.tsx) — the basin
+                  // in the pool's water, the bowl and the spout — tinted by the feature's fill, with
+                  // the same dashed selection outline a plant gets and no name.
+                  <>
+                    <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={selected ? "var(--color-accent)" : undefined} />
+                    {selected && <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
+                  </>
                 ) : f.kind === "column" ? (
                   // A column: its plinth, base ring and shaft (lib/venues/column.ts) — drawn solid,
                   // not in the dashed line a feature's outline rests in, and with no name: the
@@ -870,7 +930,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"
@@ -890,7 +950,24 @@ const FeatureNode = memo(function FeatureNode({
                   rect/ellipse gets one handle per edge; holding Shift while dragging any of them
                   resizes the perpendicular dimension by the same ratio, matching the Shift-to-
                   constrain convention every design tool gives its resize handles. */}
-              {selected && onResize && (
+              {/* A curtain's two ends, slid along its wall — the sketch's own drape ends — a few
+                  px on past each end along the wall (round a bow, where the wall runs there). */}
+              {selected && onCurtainEnd && f.kind === "curtain" && clientToMm && ends && (
+                <g>
+                  {(["from", "to"] as const).map((end) => (
+                    <ResizeHandle
+                      key={end}
+                      label={end === "from" ? "קצה הווילון — גרירה לאורך הקיר" : "קצה הווילון השני — גרירה לאורך הקיר"}
+                      cursor="cursor-ew-resize"
+                      cx={ends[end].p.x + ends[end].out.x * mm(6)}
+                      cy={ends[end].p.y + ends[end].out.y * mm(6)}
+                      mm={mm}
+                      {...curtainEndDrag(f, end, onCurtainEnd, onCommit, clientToMm)}
+                    />
+                  ))}
+                </g>
+              )}
+              {selected && onResize && f.kind !== "curtain" && (
                 usesDiameter(f.shape) ? (
                   f.shape === "circle" ? (
                     // Four handles round the rim, on the diagonals where a designer reaches for a
@@ -1116,6 +1193,29 @@ function resizable(
 // The OPPOSITE corner stays put (in the feature's own turned frame), so dragging a hedge's end out
 // grows it away from the corner it was already lined up against. Shift keeps the proportions, which
 // on a plant is the difference between a bigger palm and an oval one.
+/** Dragging one end of a curtain: the point goes to the host, which slides that end to where it
+ *  falls along the wall (lib/venues/curtain.ts curtainEndT) — never a resize of the box. */
+function curtainEndDrag(
+  f: StructureFeature,
+  end: "from" | "to",
+  onEnd?: (id: string, end: "from" | "to", p: { x: number; y: number }) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+) {
+  if (!onEnd || !clientToMm) return {};
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      startPointerGesture(e, {
+        onMove: (ev) => onEnd(f.id, end, clientToMm(ev.clientX, ev.clientY)),
+        onEnd: (_ev, moved) => {
+          if (moved) onCommit?.();
+        },
+      });
+    },
+  };
+}
+
 function resizableCorner(
   f: StructureFeature,
   sx: 1 | -1,
@@ -1257,6 +1357,8 @@ export const StructureDoors = memo(function StructureDoors({
                 clientToMm={clientToMm}
                 mm={mm}
               />
+            ) : isWindow(e) ? (
+              <WindowMark entrance={e} a={pts.a} b={pts.b} curve={w.curve ?? null} interiorHint={wallInteriorHint(faces, pts.a, pts.b, w.a, w.b)} />
             ) : (
               <DoorLeaves entrance={e} a={pts.a} b={pts.b} curve={w.curve ?? null} interiorHint={wallInteriorHint(faces, pts.a, pts.b, w.a, w.b)} />
             )}
@@ -1266,6 +1368,26 @@ export const StructureDoors = memo(function StructureDoors({
     </>
   );
 });
+
+/** The window symbol with no handle on it: the glazing across the opening, in room mm — a 6cm band
+ *  either side of the wall's line, one ink line from afar and a window up close — between the same
+ *  two jambs the door geometry cuts (doorGeometry, bow and all). Takes no pointer, as a door's leaves. */
+function WindowMark({
+  entrance,
+  a,
+  b,
+  curve,
+  interiorHint,
+}: {
+  entrance: { distanceMm: number; widthMm: number };
+  a: Point;
+  b: Point;
+  curve: EdgeCurve | null;
+  interiorHint: Point;
+}) {
+  const geo = doorGeometry(a, b, entrance.distanceMm, entrance.widthMm, false, interiorHint, false, curve);
+  return <WindowGlazing a={geo.gapStart} b={geo.gapEnd} offsetMm={60} stroke="var(--color-ink-soft)" strokeWidth={1.2} glassWidth={0.8} className="pointer-events-none" />;
+}
 
 /** The door symbol with no handle on it: leaf from hinge to tip, and the quarter-circle it sweeps —
  *  the exact geometry EntranceDoor draws (doorGeometry), so the sketch shows the door the hall

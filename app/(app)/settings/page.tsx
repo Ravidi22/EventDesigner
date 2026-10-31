@@ -2,6 +2,7 @@ import { requireStudio } from "@/lib/auth/guard";
 import { fetchCheckpointOffsets, fetchSettings, fetchStageRules } from "@/lib/settings/actions";
 import { fetchCurrentMember, fetchMembers } from "@/lib/team/actions";
 import { fetchGoogleStatus } from "@/lib/google/actions";
+import { fetchCounters } from "@/lib/billing/actions";
 import { emailEnabled } from "@/lib/email/config";
 import { SettingsScreen } from "./settings-screen";
 
@@ -21,7 +22,7 @@ import { SettingsScreen } from "./settings-screen";
 export default async function SettingsPage() {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
   await requireStudio();
-  const [settings, me, members, google, offsets, stageRules] = await Promise.all([
+  const [settings, me, members, google, offsets, stageRules, counters] = await Promise.all([
     fetchSettings(),
     fetchCurrentMember(),
     fetchMembers(),
@@ -35,6 +36,8 @@ export default async function SettingsPage() {
     // rather than the checkpoint section's mount, for the reason above.
     fetchCheckpointOffsets(),
     fetchStageRules(),
+    // The document series' next numbers, for the billing section — one small read, same reason.
+    fetchCounters(),
   ]);
   return (
     <SettingsScreen
@@ -44,6 +47,7 @@ export default async function SettingsPage() {
       initialGoogle={google}
       initialOffsets={offsets}
       initialStageRules={stageRules}
+      initialCounters={counters}
       emailEnabled={emailEnabled()}
     />
   );

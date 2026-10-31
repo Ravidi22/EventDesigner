@@ -159,8 +159,10 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
     const run = p.span ? resolveSpan(property, p.span) : null;
     if (!run) return null;
     return remembered(p, [catalogVersion, property], () => {
-      const band = [bandPolygon(run.from, run.to, DRAPE_BAND_MM)];
-      const centre = { x: (run.from.x + run.to.x) / 2, y: (run.from.y + run.to.y) / 2 };
+      // One band per stretch of the run, so a drape round a bowed wall is the curved strip it is
+      // (each piece convex), not a rectangle across the bow.
+      const band = run.path.slice(1).map((q, i) => bandPolygon(run.path[i], q, DRAPE_BAND_MM));
+      const centre = run.path.length > 2 ? run.path[Math.floor(run.path.length / 2)] : { x: (run.from.x + run.to.x) / 2, y: (run.from.y + run.to.y) / 2 };
       return { ref, label: r.product.name, centre, polysAt: () => band, box: boxOf(band), clearanceMm: r.product.clearanceMm ?? 0, groupId: p.groupId, movable: false };
     });
   }
@@ -234,6 +236,7 @@ export function clearanceSubjects(
   // breach against the house bar as against a hired one.
   // Not the ground: a table is SET on a lawn, and one standing near a lawn's edge (or across it) was
   // reported as too close to it, as though the grass were a wall.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface") add({ kind: "feature", id: f.id });
+  // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain") add({ kind: "feature", id: f.id });
   return out;
 }

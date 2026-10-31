@@ -24,9 +24,9 @@ import { PAGE_GUTTER } from "@/components/page-gutter";
 // to drift from the first, which is what the gutter had already done (components/page-gutter.ts).
 // It is to name the handful of layout families the app actually has and let each route pick one:
 //
-//   rows    a control bar over a stack of full-width cards      production, suppliers
-//   grid    a control bar over auto-fill cards                  catalog, gallery
-//   split   two half-width cards over one tall block            dashboard
+//   rows    a control bar over a stack of full-width cards      production, suppliers, bookings
+//   grid    a control bar over auto-fill cards                  catalog, gallery, menus
+//   split   two half-width tiles over the calendar card         dashboard (designer's and hall's)
 //   aside   a fixed nav column beside a panel                   settings
 //   canvas  a full-bleed plane, optionally under a toolbar      studio, halls, outputs
 //
@@ -49,12 +49,12 @@ export interface PageSkeletonProps {
   /** How many cards to draw. Ignored by `split`, `aside` and `canvas`, which have a fixed count. */
   count?: number;
   /**
-   * An in-content title — only for the two screens that draw one. `stack` is a small line over a
-   * big one (the dashboard's greeting + "האירועים שלך"); `row` is a title with an action at the
-   * far end (the gallery's "תצוגות" + "תצוגה חדשה"). Every other screen's title lives in the top
-   * bar, where it is already real, so drawing one here would be inventing content.
+   * An in-content title — only for the one screen that draws one: a title with an action at the far
+   * end (the gallery's "תצוגות" + "תצוגה חדשה"). Every other screen's title lives in the top bar,
+   * where it is already real, so drawing one here would be inventing content. (The dashboard's
+   * greeting + "האירועים שלך" was the other, a `stack` — both went 2026-10-30, and so did the shape.)
    */
-  header?: "stack" | "row";
+  header?: "row";
   /** A filter/search/tab strip above the content. */
   toolbar?: boolean;
   /** `grid` only: the min column width, matching the screen's own auto-fill template. */
@@ -64,12 +64,6 @@ export interface PageSkeletonProps {
 export function PageSkeleton({ shape = "rows", count = 3, header, toolbar, cell = 200 }: PageSkeletonProps) {
   return (
     <div className={shape === "canvas" ? "h-full" : PAGE_GUTTER} role="status" aria-label="טוען">
-      {header === "stack" && (
-        <div className="mb-6 flex flex-col gap-2">
-          <Skeleton className="h-3.5 w-28" />
-          <Skeleton className="h-7 w-64" />
-        </div>
-      )}
       {header === "row" && (
         <div className="mb-7 flex items-center gap-4">
           <Skeleton className="h-7 w-40" />
@@ -110,11 +104,14 @@ export function PageSkeleton({ shape = "rows", count = 3, header, toolbar, cell 
         <>
           {/* `lg:` for the same reason the dashboard uses it: the sidebar takes 258px out of the
               content width before this grid sees any of it. */}
+          {/* Today's events and today's meetings (app/(app)/dashboard/today-focus.tsx), at the height
+              an empty day draws them, then the calendar card — its own radius and roughly its own
+              height, so the month lands where the bar stood rather than half a screen lower. */}
           <div className="mb-6 grid gap-6 lg:grid-cols-2">
-            <Skeleton className="h-60 rounded-md" />
-            <Skeleton className="h-60 rounded-md" />
+            <Skeleton className="h-[19rem] rounded-lg" />
+            <Skeleton className="h-[19rem] rounded-lg" />
           </div>
-          <Skeleton className="h-[26rem] w-full rounded-md" />
+          <Skeleton className="h-[56rem] w-full rounded-lg" />
         </>
       )}
 

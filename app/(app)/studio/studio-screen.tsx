@@ -72,7 +72,6 @@ import {
   mergeStages,
   mergeTouching,
   benchInRoom,
-  defaultEdgeItems,
   edgeGaps,
   edgeItemShape,
   edgeKind,
@@ -1661,8 +1660,33 @@ export function StudioScreen({
     const f = plan.structure.features.find((x) => x.id === sole.id);
     if (!f) return null;
     const here = arrangedFeature(doc, f);
-    return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id) };
-  }, [sole, plan.structure, doc]);
+    // A curtain offers the catalog's own curtains to hang in its place (lib/venues/curtain.ts).
+    const drapes = f.kind === "curtain" ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall") : [];
+    const curtainSwap: SwapPanel | null = drapes.length ? { kind: "items", count: 1, current: null, similar: 0, options: drapes } : null;
+    return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id), curtainSwap };
+  }, [sole, plan.structure, doc, catalog]);
+
+  /** The venue's curtain down for this event, a catalog curtain up on the same stretch of wall —
+   *  one entry: the drape is an ordinary placement from here on (quoted, packed, its ends dragged),
+   *  and "פריטי מתחם שהוסרו" brings the venue's own back. */
+  const swapCurtain = useCallback(
+    (featureId: string, productId: string) => {
+      const f = plan.structure.features.find((x) => x.id === featureId);
+      const product = catalog.find((p) => p.id === productId);
+      if (!f || f.kind !== "curtain" || !f.curtain || !product) return;
+      const id = uid();
+      batch([
+        { type: "removeFeatures", featureIds: [featureId] },
+        {
+          type: "addPlacement",
+          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, span: { wallId: f.curtain.wallId, from: f.curtain.from, to: f.curtain.to } },
+        },
+      ]);
+      setSelected([{ kind: "placement", id }]);
+      showHint(`${product.name} במקום הווילון של המתחם — הווילון המקורי ב״פריטי מתחם שהוסרו״`);
+    },
+    [plan.structure, catalog, batch, setSelected, showHint],
+  );
 
   // --- stacking ----------------------------------------------------------------------------------
   // Rugs, tables and free objects are ONE stack over the floor — what a designer overlaps is not
@@ -2504,14 +2528,10 @@ export function StudioScreen({
         },
       };
       // The outline may have new corners, so side numbers mean nothing now: every item goes back to
-      // the side it stood on, by where it stood; what the reshape left bare gets stairs (or a barrier
-      // where stairs cannot stand), the default for any open side — one flight at the back of a round
-      // rim left bare; runs on one side become one.
+      // the side it stood on, by where it stood; what the reshape left bare STAYS bare (2026-10-30,
+      // the user: a stage gets no flights it was not given) — runs on one side become one.
       const carried = rehomeEdgeItems(was, now, uid).filter((st) => !st.level || levels?.some((l) => l.id === st.level));
-      const wd = wallDistanceFor(old.id);
-      const withItems: StagePlacement = { ...now, stage: { ...now.stage, stairs: carried } };
-      const bare = defaultEdgeItems(withItems, deckOf, uid, wd);
-      const stairs = tidyEdgeItems({ ...now.stage, stairs: [...carried, ...bare] });
+      const stairs = tidyEdgeItems({ ...now.stage, stairs: carried });
       const kept = new Set(stairs.map((st) => st.id));
       // Dressing on a banquette the reshape took away goes with it.
       const orphans = doc.placements.filter((x) => x.perch?.stageId === old.id && !kept.has(x.perch.itemId));
@@ -2523,17 +2543,17 @@ export function StudioScreen({
       showHint(`הבמה עודכנה — ${count} פלטות`);
     } else {
       const id = uid();
-      const stage: StageBuild = { ...placement.stage, heightMm: stageHeight(placement.stage, deckOf), ...stageParts };
-      // Every open side finished — stairs, the default — so no new stage has an edge to fall off.
-      stage.stairs = defaultEdgeItems({ ...placement, stage }, deckOf, uid, wallDistanceFor(undefined));
+      // A new stage carries NO edge items (2026-10-30, the user: "put nothing") — flights, banquettes
+      // and barriers are clicked onto its sides, or laid in one go from the bar's "קצוות פתוחים".
+      const stage: StageBuild = { ...placement.stage, heightMm: stageHeight(placement.stage, deckOf), ...stageParts, stairs: [] };
       act({ type: "addPlacement", placement: { ...placement, id, variantId, stage } });
       landNew([{ kind: "placement", id }]);
       setSelected([{ kind: "placement", id }]);
       ensureStageParts();
-      showHint(`נוספה במה — ${count} פלטות, ומדרגות בכל צד פתוח. לחיצה על מדרגות מחליפה אותן בבנקט או במחסום`);
+      showHint(`נוספה במה — ${count} פלטות. לחיצה על צד מוסיפה מדרגות, בנקט או מחסום`);
     }
     setStageFill(null);
-  }, [stageFill, stagePreview, act, batch, doc.placements, stageParts, wallDistanceFor, ensureStageParts, landNew]);
+  }, [stageFill, stagePreview, act, batch, doc.placements, stageParts, ensureStageParts, landNew]);
 
   /** The one selected stage, if the selection is exactly that. */
   const soleStage = useMemo(() => {
@@ -3153,13 +3173,13 @@ export function StudioScreen({
   );
   /** A stage PIECE standing on its own — a "במה 400×300" dropped from the rail — as a stage: its box
    *  as the outline, every piece the studio has as what it may be built from (so it comes out as
-   *  itself, and grows in its own steps), its own height, the studio's stairs and skirt, and one
-   *  flight on a side off the walls. A piece of any other shape — a disc, a half-round, a triangle —
+   *  itself, and grows in its own steps), its own height, the studio's stairs and skirt, and no
+   *  edge items (2026-10-30). A piece of any other shape — a disc, a half-round, a triangle —
    *  is a stage of its own outline, its curves one side each (so stairs follow them), standing on
    *  the piece itself whole while it is the catalog's size. Null for anything that is not a stage
    *  piece. */
   const asStage = useCallback(
-    (p: Placement, withStair = true): StagePlacement | null => {
+    (p: Placement): StagePlacement | null => {
       if (p.stage) return p as StagePlacement;
       if (!isStagePiece(p)) return null;
       const product = resolve(p.variantId)?.product;
@@ -3177,7 +3197,7 @@ export function StudioScreen({
         parts: stageParts,
         deckOf,
         newId: uid,
-        withEdges: withStair,
+        withEdges: false,
         wallDistance: wallDistanceFor(p.id),
       });
     },
@@ -3410,7 +3430,7 @@ export function StudioScreen({
     // Pieces become stages WITHOUT a flight each — the merged stage gets its stairs below. Then
     // pushed together (lib/design-document/stage.ts pushTogether): square ones by their boxes, any
     // other shape — a half-round, a disc — by the shortest move that puts it against the rest.
-    const parts = pushTogether(selectedStages.map((p) => asStage(p, false)).filter((p): p is StagePlacement => !!p)).sort((a, b) => {
+    const parts = pushTogether(selectedStages.map((p) => asStage(p)).filter((p): p is StagePlacement => !!p)).sort((a, b) => {
       const area = (x: StagePlacement) => Math.abs(signedArea(x.stage.outline));
       return area(b) - area(a);
     });
@@ -3428,21 +3448,13 @@ export function StudioScreen({
 
   /** The actions that make `parts` ONE stage, `merged` being what mergeStages made of them (the
    *  first part the anchor): what stood on the others' banquettes moved to the anchor, the others
-   *  removed, the anchor given the merged build — its new edges finished (stairs where there is
-   *  floor, a barrier where there is not), as a new stage's are — and its catalog stretch dropped.
+   *  removed, the anchor given the merged build — its new edges left bare, as a new stage's are
+   *  (2026-10-30) — and its catalog stretch dropped.
    *  Shared by "איחוד לבמה אחת" and by Ctrl+G over touching stages (groupStages). */
   const mergeActions = (parts: readonly StagePlacement[], merged: { stage: StageBuild; position: DocPoint; rotation: number }): Action[] => {
     const anchor = parts[0];
     const others = new Set(parts.slice(1).map((p) => p.id));
-    const mergedAt: StagePlacement = { ...anchor, stage: merged.stage, position: merged.position, rotation: merged.rotation, mirrored: false };
-    const wd = besideNeighbours(
-      wallDistance,
-      doc.placements.filter((x) => x.stage && !others.has(x.id) && x.id !== anchor.id).map((x) => stageOutlineInRoom(x as StagePlacement)),
-    );
-    const gaps = fillGaps(mergedAt, deckOf, "stairs", uid, wd)
-      .filter((it) => !it.level)
-      .map((it) => (stairFits(mergedAt, it, deckOf, wd).ok ? it : { ...it, kind: "barrier" as const }));
-    const stage: StageBuild = { ...merged.stage, stairs: [...(merged.stage.stairs ?? []), ...gaps] };
+    const stage: StageBuild = merged.stage;
     return [
       // What stood on the others' banquettes moves to the merged stage — their items kept their ids.
       ...doc.placements
@@ -3463,7 +3475,7 @@ export function StudioScreen({
    *  — a design group, whose bar carries the stage tools. One history entry for the lot. When
    *  everything merged into one, the result is a single stage with its full bar, and no group. */
   const groupStages = useCallback(() => {
-    const parts = selectedStages.map((p) => asStage(p, false)).filter((p): p is StagePlacement => !!p);
+    const parts = selectedStages.map((p) => asStage(p)).filter((p): p is StagePlacement => !!p);
     if (parts.length < 2) return;
     const { merged, loose } = mergeTouching(parts);
     const actions: Action[] = merged.flatMap((m) => mergeActions([m.anchor, ...m.others], m));
@@ -3529,16 +3541,12 @@ export function StudioScreen({
       }
       const baseH = stageHeight(p.stage, deckOf);
       const level = { id: uid(), outline, heightMm: baseH + 200 };
-      patchStage(p.id, (s) => {
-        const next = { ...s, levels: [...(s.levels ?? []), level] };
-        // Its faces onto the base are edges too: stairs up onto it, like every other open side.
-        const faces = fillGaps({ ...p, stage: next }, deckOf, "stairs", uid, wallDistance).filter((it) => it.level === level.id);
-        return { ...next, stairs: [...(next.stairs ?? []), ...faces] };
-      });
+      // Its faces onto the base are edges too, and like every other side they start bare (2026-10-30).
+      patchStage(p.id, (s) => ({ ...s, levels: [...(s.levels ?? []), level] }));
       setSelected([{ kind: "placement", id: p.id }]);
       showHint("נוסף מפלס מוגבה — את הגובה שלו קובעים בסרגל הבמה, תחת ״גובה״");
     },
-    [toolStage, patchStage, wallDistance],
+    [toolStage, patchStage],
   );
 
   /** The sides a flight may be put against, in the room: the stage's own, and each level's faces
@@ -5005,6 +5013,7 @@ export function StudioScreen({
                 selectedCount={selected.length}
                 feature={featurePanel}
                 onResetFeature={resetFeature}
+                onSwapCurtain={swapCurtain}
                 facing={sharedFacing}
                 onFace={faceSelection}
                 spin={spin}

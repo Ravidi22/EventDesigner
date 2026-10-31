@@ -19,6 +19,8 @@ import { checkRedirectUri, googleConfig } from "@/lib/google/config";
 import { redirectUriBlocks } from "@/lib/google/types";
 import { emailEnabled } from "@/lib/email/config";
 import { installStandardCatalog } from "@/lib/catalog/standard/install";
+import { adoptVenueGrants, openFirstVenue } from "@/lib/venues/granted";
+import { adoptLinkInvites } from "@/lib/event-links/sync";
 import { revalidateSettings } from "@/lib/db/revalidate";
 import { authAccounts, eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
@@ -42,6 +44,8 @@ export interface AuthResult {
   /** The account exists but the address is not confirmed yet: a verification mail is on its way,
    *  and there is no session until it is clicked. */
   verifyEmail?: boolean;
+  /** A hall owner's first venue, opened at sign-up — the welcome screen makes it the active one. */
+  venueId?: string;
 }
 
 const TOO_MANY = "יותר מדי ניסיונות. נסו שוב בעוד דקה.";
@@ -210,8 +214,28 @@ export async function completeOnboarding(input: {
       console.error("standard catalog install failed for", organizationId, error);
     }
   }
+  // A hall's business IS its place: the name it gave is its first venue's, open and selected on
+  // arrival (the welcome screen sets it active). Best-effort like the catalog — the switcher's
+  // "מתחם חדש" is the retry.
+  let venueId: string | undefined;
+  if (orgKind === "venue") {
+    try {
+      venueId = await openFirstVenue(organizationId, studioName);
+    } catch (error) {
+      console.error("first venue failed for", organizationId, error);
+    }
+  }
+  // What was handed to this ADDRESS before it had a business is its business's now: a venue shared
+  // with it as a guest (lib/venues/granted.ts), and — for a designer — an evening a venue named it
+  // the designer of (lib/event-links/sync.ts). Best-effort, like the catalog above.
+  try {
+    await adoptVenueGrants(session.email, session.userId, organizationId);
+    if (orgKind === "studio") await adoptLinkInvites(session.email, organizationId);
+  } catch (error) {
+    console.error("adopting invitations failed for", organizationId, error);
+  }
   revalidateSettings();
-  return { home: ORG_HOME[orgKind] };
+  return { home: ORG_HOME[orgKind], venueId };
 }
 
 /**
