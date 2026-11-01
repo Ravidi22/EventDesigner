@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
-import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
+import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate, setSketchPhoto } from "@/lib/studio/sketch-actions";
+import { uploadFile } from "@/lib/files/upload";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
 import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StagePiece, StageStair, StageTemplate } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
@@ -3429,6 +3430,16 @@ export function StudioScreen({
     setSketches(await deleteSketchTemplate(id));
     showHint("הסקיצה נמחקה");
   }, []);
+  /** The photo a saved sketch wears as its card in the meeting's סקיצת פתיחה (null takes it off). */
+  const sketchPhoto = useCallback(async (id: string, file: File | null) => {
+    try {
+      const url = file ? (await uploadFile(file, "sketch")).url : null;
+      setSketches(await setSketchPhoto(id, url));
+      showHint(file ? "התמונה נשמרה — היא תוצג בכרטיס הסקיצה בפגישה" : "התמונה הוסרה");
+    } catch (err) {
+      showHint(err instanceof Error ? err.message : "לא ניתן להעלות את התמונה");
+    }
+  }, []);
 
   // ── Click-to-place ───────────────────────────────────────────────────────────────────────────
   // A click on a rail row ARMS that item; every click on the plan then puts one down, until Escape,
@@ -5035,6 +5046,7 @@ export function StudioScreen({
         onSaveSketch={(name) => void saveSketch(name)}
         onLoadSketch={(id, mode) => void loadSketch(id, mode)}
         onDeleteSketch={(id) => void deleteSketch(id)}
+        onSketchPhoto={(id, file) => void sketchPhoto(id, file)}
         saveState={saveState}
         onRetrySave={retrySave}
         removedFeatures={removedVenueFeatures}

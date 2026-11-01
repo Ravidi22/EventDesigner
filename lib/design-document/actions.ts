@@ -885,7 +885,7 @@ function withoutFeatures(doc: DesignDocumentContent): DesignDocumentContent {
  *  underneath: deleting one of a pair leaves a "group" of one, and pulling a table into a new group
  *  can do the same to the group it left. A lone member with a groupId is worse than untidy — it
  *  would draw no number of its own, waiting for a group that is no longer there to draw one for it. */
-function pruneGroups(doc: DesignDocumentContent): DesignDocumentContent {
+export function pruneGroups(doc: DesignDocumentContent): DesignDocumentContent {
   // No groups at all: still let go of any `groupId` left pointing at nothing — a table carrying one
   // draws no number and no chairs, waiting for a block that is not there.
   if (!doc.groups?.length) {

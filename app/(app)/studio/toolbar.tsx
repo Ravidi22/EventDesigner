@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, Layers, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box } from "lucide-react";
+import { useRef, useState } from "react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, Layers, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box, Camera, ImageOff } from "lucide-react";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
@@ -53,6 +53,7 @@ export function Toolbar({
   onSaveSketch,
   onLoadSketch,
   onDeleteSketch,
+  onSketchPhoto,
   saveState,
   onRetrySave,
   removedFeatures = [],
@@ -97,6 +98,8 @@ export function Toolbar({
   onSaveSketch: (name: string) => void;
   onLoadSketch: (id: string, mode: "replace" | "add") => void;
   onDeleteSketch: (id: string) => void;
+  /** A photo of the real event for a saved sketch's card in the meeting — or null to take it off. */
+  onSketchPhoto: (id: string, file: File | null) => void;
   saveState: "saving" | "saved" | "error";
   onRetrySave: () => void;
   /** The venue's own features this event took out of its room (FeaturePlacement.removed), and how
@@ -156,7 +159,7 @@ export function Toolbar({
       {/* Saved sketches: the whole drawing kept under a name, to start the next event from or to
           load into this one. Beside the numbering panel because it is the same kind of thing — a
           question about the document as a whole, not about what is selected in it. */}
-      <SketchMenu sketches={sketches} sketchEmpty={sketchEmpty} onSave={onSaveSketch} onLoad={onLoadSketch} onDelete={onDeleteSketch} />
+      <SketchMenu sketches={sketches} sketchEmpty={sketchEmpty} onSave={onSaveSketch} onLoad={onLoadSketch} onDelete={onDeleteSketch} onPhoto={onSketchPhoto} />
 
       {/* What this event wheeled out of the venue's room — only while there is something to bring
           back. Taken out from the canvas (Delete, or the feature's bar); the venue never lost it. */}
@@ -473,15 +476,20 @@ function SketchMenu({
   onSave,
   onLoad,
   onDelete,
+  onPhoto,
 }: {
   sketches: SketchTemplateSummary[];
   sketchEmpty: boolean;
   onSave: (name: string) => void;
   onLoad: (id: string, mode: "replace" | "add") => void;
   onDelete: (id: string) => void;
+  onPhoto: (id: string, file: File | null) => void;
 }) {
   const [name, setName] = useState("");
   const [confirm, setConfirm] = useState<{ kind: "replace" | "delete"; id: string; name: string } | null>(null);
+  // One hidden picker for every row; `photoFor` says whose photo it is picking.
+  const picker = useRef<HTMLInputElement>(null);
+  const photoFor = useRef<string | null>(null);
 
   // The confirmation is a native <dialog> inside the panel: the panel leaves Escape to it, and a
   // press inside it is a press inside the panel, so answering it never closes the list behind it.
@@ -521,6 +529,10 @@ function SketchMenu({
           <ul className="scroll-slim -mx-1 max-h-64 space-y-0.5 overflow-y-auto px-1">
             {sketches.map((sk) => (
               <li key={sk.id} className="flex items-center gap-1 rounded-sm px-1.5 py-1 hover:bg-inset">
+                {sk.photoUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx
+                  <img src={sk.photoUrl} alt="" className="h-8 w-8 shrink-0 rounded-sm object-cover" />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-ink" title={sk.name}>
                     {sk.name}
@@ -543,6 +555,16 @@ function SketchMenu({
                 >
                   הוספה
                 </button>
+                {/* The card's cover in the meeting's סקיצת פתיחה; without one the card draws the plan. */}
+                <BarButton
+                  icon={Camera}
+                  label={sk.photoUrl ? "החלפת תמונת האירוע" : "הוספת תמונה מהאירוע"}
+                  onClick={() => {
+                    photoFor.current = sk.id;
+                    picker.current?.click();
+                  }}
+                />
+                {sk.photoUrl && <BarButton icon={ImageOff} tone="danger" label="הסרת התמונה" onClick={() => onPhoto(sk.id, null)} />}
                 <BarButton
                   icon={Trash2}
                   tone="danger"
@@ -554,6 +576,17 @@ function SketchMenu({
           </ul>
         )}
       </div>
+      <input
+        ref={picker}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file && photoFor.current) onPhoto(photoFor.current, file);
+        }}
+      />
 
       <ConfirmDialog
         open={confirm !== null}
