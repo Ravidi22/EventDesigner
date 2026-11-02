@@ -27,10 +27,26 @@
 // Pure, no DOM, self-checked: `npm run check:bench`.
 import type { BenchSide, BenchSideKind, BenchSpec, Placement, Point, StageStair } from "./types";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
+import { footprintOutlines, type Footprint } from "../studio/footprint";
+import { footprintSpine, pointAlong, spineLength } from "../studio/spine";
+import { flatRing } from "../studio/label-anchor";
+import { polygonAreaMm2 } from "../studio/geometry";
 import { isMain } from "../self-check";
 
-/** A banquette: as deep as a seat. */
+/** A banquette nobody sits AT: as deep as a seat (a sofa side, a bare strip). */
 export const BENCH_DEPTH_MM = 450;
+/** A banquette with CHAIRS at it is their table, and a table is 60 deep (2026-10-31, the user:
+ *  "a banquette with seats needs to be 60 deep") — a 45cm strip is a shelf, not a place to eat. */
+export const BENCH_TABLE_DEPTH_MM = 600;
+
+/** How deep a banquette is when nobody typed it: table-deep with chairs along either side, seat-deep
+ *  otherwise. Read by a stage's edge banquette (lib/design-document/stage.ts) and by the drop of a
+ *  standalone one; a typed depth (BenchSpec.depthMm, a stretched Placement.sizeMm) always wins. */
+export function benchDefaultDepth(spec?: BenchSpec): number {
+  const back = spec?.back?.kind ?? DEFAULT_BACK;
+  const front = spec?.front?.kind ?? DEFAULT_FRONT;
+  return back === "chairs" || front === "chairs" ? BENCH_TABLE_DEPTH_MM : BENCH_DEPTH_MM;
+}
 /** The TOP of a banquette with chairs at it — table height above the surface the chairs stand on. */
 export const BENCH_TOP_MM = 750;
 /** The SEAT of a sofa side, above the floor the sitters' feet rest on. */
@@ -78,11 +94,18 @@ export function benchSpecOf(item: Pick<StageStair, "bench" | "seats" | "heightMm
 export interface BenchSideLayout {
   kind: BenchSideKind;
   seats: number;
+  /** A sofa side's run and seat depth as laid (typed, else the defaults) — what the bar shows. */
+  widthMm?: number;
+  depthMm?: number;
 }
 
 export interface BenchLayout {
+  /** The strip's length — along its spine, for a shaped one — and its depth (the band's). */
   widthMm: number;
   depthMm: number;
+  /** Laid along a SHAPE's spine rather than a straight strip (benchLayoutFor): the chairs and
+   *  cushions are in the footprint's frame, and the top is the footprint, not a w×d rectangle. */
+  shaped?: boolean;
   /** The top, for a chairs side — above the surface the chairs stand on. */
   heightMm: number;
   /** A sofa side's seat, above the floor. */
@@ -108,27 +131,40 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
   const half = d / 2;
   const backKind = spec?.back?.kind ?? DEFAULT_BACK;
   const frontKind = spec?.front?.kind ?? DEFAULT_FRONT;
-  const back: BenchSideLayout = { kind: backKind, seats: sideSeats(w, spec?.back, DEFAULT_BACK) };
-  const front: BenchSideLayout = { kind: frontKind, seats: sideSeats(w, spec?.front, DEFAULT_FRONT) };
+  // A cushion runs from the side's edge toward the centre line, leaving the backrest band — thinner
+  // on a shallow strip, so there is always a cushion to see.
+  const backBand = Math.max(0, Math.min(SOFA_BACK_MM, half - 100));
+  const sofaRun = (side: BenchSide | undefined) => (side?.kind === "sofa" && side.widthMm && side.widthMm > 0 ? Math.min(w, Math.round(side.widthMm)) : w);
+  const sofaDepth = (side: BenchSide | undefined) => (side?.kind === "sofa" && side.depthMm && side.depthMm > 0 ? Math.min(d, Math.round(side.depthMm)) : half - backBand);
+  const sideOf = (side: BenchSide | undefined, fallback: BenchSideKind): BenchSideLayout => {
+    const kind = side?.kind ?? fallback;
+    // A sofa seats along ITS run, not the whole strip's.
+    const run = kind === "sofa" ? sofaRun(side) : w;
+    return { kind, seats: sideSeats(run, side, fallback), ...(kind === "sofa" ? { widthMm: run, depthMm: sofaDepth(side) } : {}) };
+  };
+  const back = sideOf(spec?.back, DEFAULT_BACK);
+  const front = sideOf(spec?.front, DEFAULT_FRONT);
 
   const chairs: Seat[] = [];
   const cushions: Point[][] = [];
   const backs: [Point, Point][] = [];
-  // A cushion runs from the side's edge toward the centre line, leaving the backrest band — thinner
-  // on a shallow strip, so there is always a cushion to see.
-  const backBand = Math.max(0, Math.min(SOFA_BACK_MM, half - 100));
 
   const lay = (side: BenchSideLayout, sign: -1 | 1) => {
     const n = side.seats;
     if (n <= 0) return;
-    const xAt = (i: number) => -w / 2 + (i * w) / n;
     if (side.kind === "chairs") {
+      const xAt = (i: number) => -w / 2 + (i * w) / n;
       // Pushed in against the strip, facing it — a table's chairs, with the banquette as their table.
       for (let i = 0; i < n; i++) chairs.push({ x: xAt(i + 0.5), y: sign * (half + CHAIR_OFFSET_MM), facingDeg: sign === -1 ? 90 : -90 });
       return;
     }
+    // A sofa: its run centred on the strip, its seat from the edge in, the backrest line at the
+    // seat's inner edge (never past the strip's far edge).
+    const run = side.widthMm ?? w;
+    const seatDepth = Math.min(d - 20, Math.max(20, side.depthMm ?? half - backBand));
+    const xAt = (i: number) => -run / 2 + (i * run) / n;
     const edge = sign * half;
-    const inner = sign * backBand;
+    const inner = sign * (half - seatDepth);
     for (let i = 0; i < n; i++) {
       const x0 = xAt(i);
       const x1 = xAt(i + 1);
@@ -140,8 +176,8 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
       ]);
     }
     backs.push([
-      { x: -w / 2, y: inner },
-      { x: w / 2, y: inner },
+      { x: -run / 2, y: inner },
+      { x: run / 2, y: inner },
     ]);
   };
   lay(back, -1);
@@ -165,20 +201,92 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
   };
 }
 
+// ── A banquette of any shape ─────────────────────────────────────────────────────────────────
+
+const ringLength = (ring: readonly Point[]) => ring.reduce((t, p, i) => t + Math.hypot(ring[(i + 1) % ring.length].x - p.x, ring[(i + 1) % ring.length].y - p.y), 0);
+
+/**
+ * A banquette laid along the SHAPE it was drawn as (2026-10-31, the user: a banquette "with odd
+ * shapes doesn't behave and draw like a banquette"). A straight strip wider than deep is the plain
+ * layout above. Anything else — a crescent, a ח, a strip drawn deep, an oval — is read as a BAND:
+ * its length is its spine's (lib/studio/spine.ts, the mid-line walked along the ridge of depth),
+ * its depth the band's (2·area ÷ perimeter, the straight bar's own reading in bar-draw.ts), and
+ * each side is laid along the spine instead of along x — a chair at every seat's point, stood off
+ * the band by half its depth on that side and faced square at it; a sofa's cushions as quads
+ * between the edge line and the seat's inner line, its backrest a segment per seat so a curve bends
+ * with it. Which side is the BACK: the one that lies toward −y (where a straight strip's back is),
+ * decided once over the whole spine, so a turned crescent keeps its chairs on the same rim. In the
+ * footprint's own frame, like everything a placement draws.
+ */
+export function benchLayoutFor(footprint: Footprint, spec?: BenchSpec): BenchLayout {
+  if (footprint.kind === "rect" && footprint.widthMm >= footprint.depthMm) return benchLayout(footprint.widthMm, footprint.depthMm, spec);
+  const spine = footprintSpine(footprint);
+  const L = spineLength(spine);
+  const ring = footprintOutlines(footprint)
+    .map(flatRing)
+    .filter((r) => r.length >= 3)
+    .sort((a, b) => polygonAreaMm2(b) - polygonAreaMm2(a))[0];
+  const area = ring ? Math.abs(polygonAreaMm2(ring)) : 0;
+  const perimeter = ring ? ringLength(ring) : 0;
+  // The band's depth; a strip drawn deep (a 45×300 rectangle) is exactly its short side.
+  const d = footprint.kind === "rect" ? Math.min(footprint.widthMm, footprint.depthMm) : Math.max(1, Math.round(area > 0 && perimeter > 0 ? (2 * area) / perimeter : 0));
+  if (!(L > 0) || !(d > 0)) return { ...benchLayout(0, 0, spec), shaped: true };
+  // The straight layout, laid along a strip L long and d deep — the counts, heights and the cushion
+  // and chair positions along x — then every point carried onto the spine.
+  const straight = benchLayout(L, d, spec);
+  const eps = Math.min(50, L / 4);
+  const frame = (s: number) => {
+    const p = pointAlong(spine, s);
+    const a = pointAlong(spine, Math.max(0, s - eps));
+    const b = pointAlong(spine, Math.min(L, s + eps));
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+    return { p, u, n: { x: -u.y, y: u.x } };
+  };
+  // Which way "−y" (the back) lies off the spine: the normal side that points toward −y over the
+  // whole spine (a vertical strip's is a tie, and goes to +n — its left).
+  let lower = 0;
+  for (let k = 0; k <= 8; k++) lower += -frame((L * k) / 8).n.y;
+  const backSign = lower >= 0 ? 1 : -1; // +n lies toward −y when lower ≥ 0
+  const carry = (x: number, y: number): Point => {
+    const { p, n } = frame(x + L / 2);
+    // The straight frame's −y is the back: y < 0 goes to the back's normal side.
+    const k = -y * backSign;
+    return { x: p.x + n.x * k, y: p.y + n.y * k };
+  };
+  const face = (x: number, deg: number): number => {
+    const { u, n } = frame(x + L / 2);
+    // 90° in the straight frame faces +y; +y maps to −backSign·n. Along-strip (0°) maps to u.
+    const r = (deg * Math.PI) / 180;
+    const dir = { x: u.x * Math.cos(r) - backSign * n.x * Math.sin(r), y: u.y * Math.cos(r) - backSign * n.y * Math.sin(r) };
+    return (Math.atan2(dir.y, dir.x) * 180) / Math.PI;
+  };
+  const chairs = straight.chairs.map((c) => ({ ...carry(c.x, c.y), facingDeg: face(c.x, c.facingDeg) }));
+  const cushions = straight.cushions.map((q) => q.map((p) => carry(p.x, p.y)));
+  // A backrest line per seat rather than one end to end, so it follows the curve.
+  const backs: [Point, Point][] = [];
+  for (const q of straight.cushions) {
+    const inner = q.slice(2, 4);
+    backs.push([carry(inner[1].x, inner[1].y), carry(inner[0].x, inner[0].y)]);
+  }
+  return { ...straight, widthMm: Math.round(L), depthMm: d, chairs, cushions, backs, shaped: true };
+}
+
 // ── Standalone banquettes ─────────────────────────────────────────────────────────────────────
 
 /** Says whether a placement is a `stage-benches` row standing free, and how big: its box on the
- *  plan (stretched size, else the catalog's). Null for anything else. The CATALOG decides — a stage,
- *  a perched item and a table item are never one — so the pure code here needs no catalog of its
- *  own; lib/studio/catalog-resolver.ts has the app's one (`benchOf`). */
-export type BenchLookup = (p: Placement) => { widthMm: number; depthMm: number } | null;
+ *  plan (stretched size, else the catalog's) — and its footprint, when the caller can draw one, so
+ *  a shaped banquette is laid along its shape. Null for anything else. The CATALOG decides — a
+ *  stage, a perched item and a table item are never one — so the pure code here needs no catalog of
+ *  its own; lib/studio/catalog-resolver.ts has the app's one (`benchOf`). */
+export type BenchLookup = (p: Placement) => { widthMm: number; depthMm: number; footprint?: Footprint } | null;
 
 /** The layout of a standalone banquette, or null for a placement that is not one. */
 export function standaloneBench(p: Placement, benches: BenchLookup | undefined): BenchLayout | null {
   if (!benches || p.stage || p.perch || p.tableId) return null;
   const box = benches(p);
   if (!box) return null;
-  return benchLayout(box.widthMm, box.depthMm, p.bench);
+  return box.footprint ? benchLayoutFor(box.footprint, p.bench) : benchLayout(box.widthMm, box.depthMm, p.bench);
 }
 
 /** Everyone a document's standalone banquettes seat. A placement's quantity multiplies, as it does
@@ -196,12 +304,21 @@ export function benchIsNumbered(p: Placement, layout: BenchLayout | null): layou
   return !!layout && layout.seats > 0 && p.bench?.number !== undefined;
 }
 
-/** A spec with one side patched — kind and/or count (`seats: null` = back to automatic). */
-export function patchBenchSide(spec: BenchSpec | undefined, side: "back" | "front", patch: { kind?: BenchSideKind; seats?: number | null }): BenchSpec {
+/** A spec with one side patched — kind, count (`seats: null` = back to automatic), and a sofa's run
+ *  and seat depth (`null` = back to the whole length / the half strip). */
+export function patchBenchSide(
+  spec: BenchSpec | undefined,
+  side: "back" | "front",
+  patch: { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null },
+): BenchSpec {
   const cur: BenchSide = spec?.[side] ?? { kind: side === "back" ? DEFAULT_BACK : DEFAULT_FRONT };
   const next: BenchSide = { ...cur, ...(patch.kind !== undefined ? { kind: patch.kind } : {}) };
   if (patch.seats === null) delete next.seats;
   else if (patch.seats !== undefined) next.seats = Math.max(0, Math.round(patch.seats));
+  if (patch.widthMm === null) delete next.widthMm;
+  else if (patch.widthMm !== undefined) next.widthMm = Math.max(0, Math.round(patch.widthMm));
+  if (patch.depthMm === null) delete next.depthMm;
+  else if (patch.depthMm !== undefined) next.depthMm = Math.max(0, Math.round(patch.depthMm));
   return { ...spec, [side]: next };
 }
 
@@ -292,6 +409,44 @@ if (isMain(import.meta.url)) {
   const empty = free("m", { number: 4, back: { kind: "none" } });
   assert(!benchIsNumbered(empty, standaloneBench(empty, benches)), "…with nobody seated it takes no number");
   assert(!benchIsNumbered(free("o"), standaloneBench(free("o"), benches)), "…and without a number it is not numbered, seated or not");
+
+  // ── The default depth: table-deep with chairs, seat-deep without.
+  assert(benchDefaultDepth() === BENCH_TABLE_DEPTH_MM && benchDefaultDepth({ front: { kind: "chairs" }, back: { kind: "none" } }) === BENCH_TABLE_DEPTH_MM, "a banquette with chairs at it is 60 deep — it is their table");
+  assert(benchDefaultDepth({ back: { kind: "sofa" } }) === BENCH_DEPTH_MM && benchDefaultDepth({ back: { kind: "none" } }) === BENCH_DEPTH_MM, "…a sofa or a bare strip stays seat-deep");
+
+  // ── A sofa's own run and seat depth.
+  const shortSofa = benchLayout(6000, 600, { back: { kind: "sofa", widthMm: 2400, depthMm: 400 } });
+  assert(shortSofa.seats === 4 && shortSofa.cushions.length === 4, "a 2.4m sofa on a 6m banquette seats four, not ten");
+  assert(shortSofa.cushions.every((q) => q.every((p) => p.x >= -1200 && p.x <= 1200)), "…its cushions centred on the strip, inside its run");
+  assert(shortSofa.cushions.every((q) => Math.min(...q.map((p) => p.y)) === -300 && Math.max(...q.map((p) => p.y)) === 100), "…and 40cm deep from the edge in");
+  assert(shortSofa.backs[0][0].x === -1200 && shortSofa.backs[0][1].x === 1200 && shortSofa.backs[0][0].y === 100, "…the backrest along the run at the seat's inner edge");
+  assert(shortSofa.back.widthMm === 2400 && shortSofa.back.depthMm === 400, "…and the layout says what was laid");
+  assert(benchLayout(3000, 600, { back: { kind: "sofa", depthMm: 5000 } }).cushions.every((q) => Math.max(...q.map((p) => p.y)) <= 280), "a seat deeper than the strip stops short of its far edge");
+  const widened = patchBenchSide(patchBenchSide(undefined, "back", { kind: "sofa", widthMm: 2000, depthMm: 350 }), "back", { widthMm: null });
+  assert(widened.back?.widthMm === undefined && widened.back?.depthMm === 350, "null puts a sofa's run back to the whole length and keeps its depth");
+
+  // ── A banquette of any shape is laid along its spine.
+  const strip: Footprint = { kind: "rect", widthMm: 6000, depthMm: 600 };
+  const viaShape = benchLayoutFor(strip);
+  assert(!viaShape.shaped && viaShape.chairs.length === plain.chairs.length, "a straight strip laid by its shape is the straight layout");
+  const deep = benchLayoutFor({ kind: "rect", widthMm: 600, depthMm: 6000 });
+  assert(!!deep.shaped && deep.widthMm === 6000 && deep.depthMm === 600 && deep.chairs.length === 10, "a strip drawn deep is read along its long side — ten chairs, not one");
+  assert(deep.chairs.every((c) => Math.abs(Math.abs(c.x) - (300 + CHAIR_OFFSET_MM)) < 1 && (Math.abs(Math.abs(c.facingDeg) - 180) < 1 || Math.abs(c.facingDeg) < 1)), "…standing off its long side, facing it square");
+  // A crescent: the top half of a ring 6m across, 60cm deep, as a hand-drawn outline.
+  const arc: Point[] = [];
+  for (let k = 0; k <= 24; k++) arc.push({ x: 3000 * Math.cos(Math.PI - (Math.PI * k) / 24), y: -3000 * Math.sin(Math.PI - (Math.PI * k) / 24) });
+  for (let k = 24; k >= 0; k--) arc.push({ x: 2400 * Math.cos(Math.PI - (Math.PI * k) / 24), y: -2400 * Math.sin(Math.PI - (Math.PI * k) / 24) });
+  const crescent = benchLayoutFor({ kind: "custom", outline: arc }, { back: { kind: "chairs" }, front: { kind: "sofa", seats: 3 } });
+  // A custom outline is drawn about its BOX's centre (footprintOutlines), so the ring's centre is
+  // 1.5m down from the frame's origin.
+  const C = { x: 0, y: 1500 };
+  const rad = (p: Point) => Math.hypot(p.x - C.x, p.y - C.y);
+  assert(!!crescent.shaped && crescent.widthMm > 8000 && crescent.widthMm < 8800 && Math.abs(crescent.depthMm - 600) < 60, "a crescent's length is its arc, its depth the band's");
+  assert(crescent.chairs.length === Math.floor(crescent.widthMm / SEAT_WIDTH_MM), "…seating one per 60cm OF THE ARC");
+  assert(crescent.chairs.every((c) => rad(c) > 2700 + crescent.depthMm / 2 + CHAIR_OFFSET_MM - 40), "…its chairs round the OUTER rim (the −y side, the back)");
+  assert(crescent.chairs.every((c) => Math.abs(((((c.facingDeg - (Math.atan2(C.y - c.y, C.x - c.x) * 180) / Math.PI) % 360) + 540) % 360) - 180) < 8), "…each facing in toward the centre, square at the band");
+  assert(crescent.cushions.length === 3 && crescent.cushions.every((q) => q.every((p) => rad(p) < 2720)), "…and the sofa's cushions on the inner half of the band");
+  assert(crescent.backs.length === 3, "…its backrest in segments that follow the curve");
 
   console.log("bench self-check passed");
 }

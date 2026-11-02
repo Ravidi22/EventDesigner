@@ -27,6 +27,10 @@ export interface MenuItem {
   /** Starts a new group of rows — a hairline above it. A long "…" reads as its subjects (how it is
    *  drawn, what to select, its catalog row) rather than as one list of verbs. */
   separated?: boolean;
+  /** Told when the row is AIMED AT — under the pointer, or reached with the arrow keys — and again
+   *  with `false` when the aim leaves it or the menu closes. For a row whose effect can be shown
+   *  before it is chosen (יישור draws the line the others will go to) rather than explained. */
+  onHover?: (hovering: boolean) => void;
 }
 
 export function Menu({
@@ -60,6 +64,18 @@ export function Menu({
   const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
+
+  // The aimed-at row's `onHover`: true when the aim arrives, false when it leaves — by pointer, by
+  // the arrow keys, or because the menu closed under it. The rows are read through a ref so that a
+  // caller rebuilding its items every render does not fire a leave/arrive pair on each one.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const aimed = open ? activeIndex : -1;
+  useEffect(() => {
+    const item = itemsRef.current[aimed];
+    item?.onHover?.(true);
+    return () => item?.onHover?.(false);
+  }, [aimed]);
 
   // Memoised only so the outside-click listener below can depend on it honestly. A caller that
   // passes an inline arrow re-binds one document listener per render, which costs nothing.

@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
-import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate } from "@/lib/studio/sketch-actions";
+import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate, setSketchPhoto } from "@/lib/studio/sketch-actions";
+import { uploadFile } from "@/lib/files/upload";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StageStair, StageTemplate } from "@/lib/design-document/types";
+import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StagePiece, StageStair, StageTemplate } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
 import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { emptyDocument } from "@/lib/design-document/types";
@@ -17,12 +18,13 @@ import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
-import { benchIsNumbered, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
+import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
 import { productById } from "@/lib/catalog/storage";
 import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
-import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, HALL_PASS_GROUPS, anchorOf, isRunner, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
-import { nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
+import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
   DEFAULT_NUMBERING,
   expandToGroups,
@@ -42,7 +44,7 @@ import {
 } from "@/lib/design-document/groups";
 import { arrangedFeature, arrangedStructure, isFeatureMoved, isFeatureRemoved, removedFeatures } from "@/lib/design-document/features";
 import { FEATURE_KIND_LABEL, featureMovable } from "@/lib/venues/structure";
-import { ALIGN_LABEL, alignedCentres, alignUnits, needsThree, type AlignOp } from "@/lib/studio/align";
+import { ALIGN_LABEL, alignedCentres, alignGuide, alignUnits, needsThree, type AlignOp } from "@/lib/studio/align";
 import { mirrorFlips, type MirrorAxis, type MirrorSubject } from "@/lib/design-document/mirror";
 import { axisGap, clearanceIssues, distributedCentres, footprintPolygons, placeAtGap, polysGap, spacedCentres, spreadAxis, type CentredBox } from "@/lib/studio/proximity";
 import { defaultFront, lengthSnapper, polygonsOverlap, resizeRect, signedArea, type DeckType } from "@/lib/studio/stage-fill";
@@ -58,6 +60,7 @@ import {
   rectOutline,
   skirtMm,
   autoRisers,
+  stairStepOf,
   stageDecksInRoom,
   stageMissingInRoom,
   pieceProduct,
@@ -67,6 +70,7 @@ import {
   stageRect,
   stairFits,
   stairShape,
+  stageHolesInRoom,
   toRoom,
   toStageFrame,
   mergeStages,
@@ -92,8 +96,13 @@ import {
 import { deleteStageTemplate, fetchStageRules, fetchStageTemplates, saveStageTemplate } from "@/lib/settings/actions";
 import { TableDesignsPanel, type WearMode } from "./table-designs-panel";
 import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/studio/stage-draw";
-import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide } from "@/lib/design-document/stage";
-import { StageDrawBar, StageFillPanel, type StageFillState } from "./stage-fill-panel";
+import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide, type Frame } from "@/lib/design-document/stage";
+
+/** The room as a frame: what a stage's pieces are carried into to stand in room coordinates
+ *  (the fill tool keeps its hand-placed decks there, see StageFillState.pieces). */
+const ROOM_FRAME: Frame = { position: { x: 0, y: 0 }, rotation: 0 };
+import { StageDrawBar, StageFillPanel, sameDeckRef, type DeckAction, type DeckRef, type PickedDeck, type StageFillState } from "./stage-fill-panel";
+import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
 import { chipBox, dressBlockOf, dressingSpots, tableBlock, tableBox, tableFootprint, tableUnder } from "@/components/footprint-shape";
 import { arrange, clampToTable, fromTableFrame, spineOf, toTableFrame, type ArrangeKind, type TableBox } from "@/lib/design-document/dressing";
@@ -115,8 +124,8 @@ import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
-import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
-import { AlignCenterVertical, BringToFront, Copy, Group, PackagePlus, SendToBack, Trash2, Ungroup, X } from "lucide-react";
+import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
+import { AlignCenterVertical, BringToFront, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
 import { ProposalReview } from "./proposal-review";
 import { fetchSubmittedProposal, resolveProposal, type SubmittedProposal } from "@/lib/proposals/actions";
@@ -153,7 +162,7 @@ export type StudioMode = "full" | "hall" | "design";
 
 const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = {
   full: {},
-  hall: { groups: HALL_PASS_GROUPS, hint: "לחצו על שולחן, כיסא, במה או בר ואז על התוכנית — או גררו. העיצוב עצמו — בשלב הבא." },
+  hall: { groups: passGroups("hall"), hint: "לחצו על שולחן, כיסא, במה, בר או שטיח ואז על התוכנית — או גררו. העיצוב עצמו — בשלב הבא." },
   design: { groups: DESIGN_PASS_GROUPS, hint: "לחצו על פריט עיצוב ואז על התוכנית — או גררו. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה." },
 };
 
@@ -263,10 +272,7 @@ export function StudioScreen({
   // question belongs to /catalog).
   const [drawer, setDrawer] = useState<{ product: Product; mode: "new" | "edit" | "composite" } | null>(null);
   const [addedIds, setAddedIds] = useState<string[]>([]);
-  const railCategories = useMemo(() => {
-    const groups = RAIL[mode].groups;
-    return groups ? CATEGORIES.filter((c) => groups.includes(c.group)) : CATEGORIES;
-  }, [mode]);
+  const railCategories = useMemo(() => (mode === "hall" || mode === "design" ? CATEGORIES.filter((c) => categoryInPass(c.id, mode)) : CATEGORIES), [mode]);
   /** The categories the drawer offers: the pass's own, plus whatever the row being edited already is —
    *  a row edited from the bar may sit in a department this pass's rail does not show. */
   const drawerCategories = useMemo(() => {
@@ -399,8 +405,7 @@ export function StudioScreen({
       if (mode !== "hall" || p.stage) return true;
       if (p.tableId || p.perch) return false;
       const product = resolve(p.variantId)?.product;
-      const group = product ? CATEGORY_BY_ID[product.category]?.group : undefined;
-      return !group || HALL_PASS_GROUPS.includes(group);
+      return !product || categoryInPass(product.category, "hall");
     },
     // The catalog is in the list because resolve() reads the cache it primes: a pass opened before
     // the catalog landed must re-decide once it has.
@@ -921,8 +926,11 @@ export function StudioScreen({
       act({ type: "addPlacement", placement: tableId ? { ...hung, over: tableId } : hung });
     } else if (product.category === "stage-benches") {
       // A banquette on its own is set like a table (lib/design-document/bench.ts): chairs along its
-      // back, and the next table number — optional, cleared from its bar.
-      act({ type: "addPlacement", placement: { ...base, position: { x, y }, bench: { number: nextNumber() } } });
+      // back, and the next table number — optional, cleared from its bar. With chairs at it, it is
+      // their table, so a row shallower than a table (45) lands table-deep (BENCH_TABLE_DEPTH_MM).
+      const box = catalogBox(product);
+      const sizeMm = box.depthMm < BENCH_TABLE_DEPTH_MM ? { widthMm: box.widthMm, depthMm: BENCH_TABLE_DEPTH_MM } : undefined;
+      act({ type: "addPlacement", placement: { ...base, position: { x, y }, bench: { number: nextNumber() }, ...(sizeMm ? { sizeMm } : {}) } });
     } else {
       act({ type: "addPlacement", placement: { ...base, position: { x, y } } });
     }
@@ -958,6 +966,31 @@ export function StudioScreen({
     [],
   );
   const featureRefs = useCallback((refs: SelectionRef[]) => refs.filter((r) => r.kind === "feature"), []);
+
+  // --- locking ------------------------------------------------------------------------------------
+  /** Pinned on this plan (DesignTable.locked / Placement.locked): what every move, turn, flip,
+   *  alignment and delete here passes over — the canvas refuses the drag and the handles itself. */
+  const isLockedRef = useCallback(
+    (r: SelectionRef) =>
+      r.kind === "table" ? !!doc.tables.find((t) => t.id === r.id)?.locked : r.kind === "placement" ? !!doc.placements.find((p) => p.id === r.id)?.locked : false,
+    [doc.tables, doc.placements],
+  );
+  /** The selection less its locked members — what the verbs below act on. */
+  const unlocked = useMemo(() => selected.filter((r) => !isLockedRef(r)), [selected, isLockedRef]);
+  /** Lock or free every selected table and item (Ctrl+Shift+L, the "…" row, the right-click row):
+   *  all locked → freed; anything free → the lot locked. One entry. */
+  const toggleLock = useCallback(() => {
+    const own = docRefs(selected);
+    if (own.length === 0) return;
+    const locked = !own.every(isLockedRef);
+    act({ type: "setLocked", refs: own, locked });
+    showHint(locked ? (own.length === 1 ? "נעול במקום — בלי גרירה, ידיות או מחיקה" : `${own.length} פריטים נעולים במקום`) : own.length === 1 ? "הנעילה שוחררה" : "הנעילה שוחררה");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, docRefs, isLockedRef, act]);
+  const lockPanel: LockPanel | null = useMemo(() => {
+    const own = docRefs(selected);
+    return own.length > 0 ? { locked: own.every(isLockedRef), onToggle: toggleLock } : null;
+  }, [selected, docRefs, isLockedRef, toggleLock]);
 
   // A STAGE GROUP collapses to the member clicked. A group of stages is one thing to drag, but the
   // tools that belong to one stage — its levels, a flight on one of its sides, its outline, an exact
@@ -1221,7 +1254,12 @@ export function StudioScreen({
   // a Delete that silently took four of five selected things would read as a bug.
   const deleteSelection = useCallback(() => {
     if (selected.length === 0) return;
-    const refs = docRefs(selected);
+    // A locked table or item is left standing (DesignTable.locked) — unlock it first.
+    const refs = docRefs(unlocked);
+    if (refs.length === 0 && docRefs(selected).length > 0 && featureRefs(selected).length === 0) {
+      showHint(docRefs(selected).length === 1 ? "הפריט נעול — שחרור הנעילה (Ctrl+Shift+L) לפני מחיקה" : "הפריטים נעולים — שחרור הנעילה (Ctrl+Shift+L) לפני מחיקה");
+      return;
+    }
     // The venue's own features go out of THIS event's room only (FeaturePlacement.removed) — and
     // only the ones the venue lets a sketch move, which are the only ones a sketch can select. The
     // property keeps them; the toolbar's "פריטי מתחם שהוסרו" brings them back.
@@ -1236,7 +1274,7 @@ export function StudioScreen({
       ...(venueOut.length ? [{ type: "removeFeatures", featureIds: venueOut } satisfies Action] : []),
     ]);
     if (venueOut.length > 0) showHint(venueOut.length === 1 ? "פריט המתחם הוסר מהסקיצה של האירוע הזה בלבד" : `${venueOut.length} פריטי מתחם הוסרו מהסקיצה של האירוע הזה בלבד`);
-  }, [selected, batch, docRefs, featureRefs, plan.structure]);
+  }, [selected, unlocked, batch, docRefs, featureRefs, plan.structure]);
 
   /** Bring venue features this event took out back into its room, where it last had them. */
   const restoreFeatures = useCallback(
@@ -1435,12 +1473,14 @@ export function StudioScreen({
   const cut = useCallback(() => {
     const clip = copy();
     if (!clip) return;
-    const goneWithTable = new Set(clip.tables.map((t) => t.id));
+    // A locked table or item is copied but stays — a cut of it is a copy. What stands on a copied
+    // table goes with it (removeTable takes it) or stays with it (a locked one); never on its own.
+    const clipTables = new Set(clip.tables.map((t) => t.id));
     setSelected([]);
     batch([
-      ...clip.tables.map((t) => ({ type: "removeTable" as const, id: t.id })),
+      ...clip.tables.filter((t) => !t.locked).map((t) => ({ type: "removeTable" as const, id: t.id })),
       ...clip.placements
-        .filter((x) => x.tableId === undefined || !goneWithTable.has(x.tableId))
+        .filter((x) => !x.locked && (x.tableId === undefined || !clipTables.has(x.tableId)))
         .map((x) => ({ type: "removePlacement" as const, id: x.id })),
     ]);
     const n = clipCount(clip);
@@ -1899,7 +1939,8 @@ export function StudioScreen({
    *  did to it). The block's facing is its first member's — the frame its chairs are laid in. */
   const faceSelection = useCallback(
     (deg: number) => {
-      const refs = selected;
+      // A locked member keeps its facing; the rest of the selection turns.
+      const refs = unlocked;
       if (refs.length === 0) return;
       const turns: { kind: "table" | "placement"; id: string; position: Point; rotation: number }[] = [];
       const features: Action[] = [];
@@ -1952,7 +1993,7 @@ export function StudioScreen({
       batch([...(turns.length ? [{ type: "rotateMany" as const, turns }] : []), ...features]);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selected, batch, featureOffset, featureTurn, doc, plan.structure],
+    [unlocked, batch, featureOffset, featureTurn, doc, plan.structure],
   );
 
   /** The one facing a selection shares, or null when they disagree — what the inspector's rotation
@@ -2020,9 +2061,9 @@ export function StudioScreen({
    *  (lib/design-document/mirror.ts has the rule and the proof). One action, one undo. */
   const mirrorSelection = useCallback(
     (axis: MirrorAxis) => {
-      const geos = selected.filter(mirrorable).map(geometryOf).filter((g): g is ItemGeometry => !!g);
+      const geos = unlocked.filter(mirrorable).map(geometryOf).filter((g): g is ItemGeometry => !!g);
       if (geos.length === 0) {
-        showHint("אין כאן מה להפוך");
+        showHint(selected.some(isLockedRef) ? "נעול — שחרור הנעילה לפני היפוך" : "אין כאן מה להפוך");
         return;
       }
       const subjects: MirrorSubject<SelectionKind>[] = geos.map(({ ref }) => {
@@ -2058,7 +2099,7 @@ export function StudioScreen({
       showHint(skipped > 0 ? "הבחירה הופכה — מפות ווילונות נשארו כמו שהם" : axis === "horizontal" ? "הופך מצד לצד" : "הופך מלמעלה למטה");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selected, mirrorable, geometryOf, doc, plan.structure, act, featureOffset, featureTurn],
+    [selected, unlocked, isLockedRef, mirrorable, geometryOf, doc, plan.structure, act, featureOffset, featureTurn],
   );
   const canMirror = selected.some(mirrorable);
 
@@ -2175,7 +2216,7 @@ export function StudioScreen({
    *  would undo the grouping the designer did on purpose. Null when something selected has no free
    *  position (a cloth, a drape, a hung chandelier) — the command is then not offered at all. */
   const distributeUnits = useMemo(() => {
-    const geos = selected.map(geometryOf);
+    const geos = unlocked.map(geometryOf);
     if (geos.length < 3 || geos.some((g) => !g || !g.movable)) return null;
     const units = new Map<string, ItemGeometry[]>();
     for (const g of geos as ItemGeometry[]) {
@@ -2191,7 +2232,7 @@ export function StudioScreen({
       const box: CentredBox = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, widthMm: maxX - minX, depthMm: maxY - minY };
       return { members, box };
     });
-  }, [selected, geometryOf]);
+  }, [unlocked, geometryOf]);
   const canDistribute = distributeUnits !== null;
 
   /** EQUAL AIR between neighbours, measured edge to edge between the real (turned) sizes, along the
@@ -2228,12 +2269,13 @@ export function StudioScreen({
    *  they were selected (lib/studio/align.ts). Null when fewer than two units, or when something
    *  selected has no free position (a cloth, a drape) — the menu is then not offered. */
   const alignSet = useMemo(() => {
-    if (selected.length < 2) return null;
-    const geos = selected.map(geometryOf);
+    // A locked member is left out — it is not lined up and nothing lines up with it.
+    if (unlocked.length < 2) return null;
+    const geos = unlocked.map(geometryOf);
     if (geos.some((g) => !g || !g.movable)) return null;
     const units = alignUnits((geos as ItemGeometry[]).map((g) => ({ ...g, key: `${g.ref.kind}:${g.ref.id}` })));
     return units.length >= 2 ? units : null;
-  }, [selected, geometryOf]);
+  }, [unlocked, geometryOf]);
   /** The unit the others line up with. Remembered by key, so it survives the alignment moving the
    *  rest; when it is not (or no longer) in the selection, the FIRST selected is the key. */
   const [alignKeyId, setAlignKeyId] = useState<string | null>(null);
@@ -2279,9 +2321,17 @@ export function StudioScreen({
     },
     [alignSet, alignKey],
   );
+  /** The יישור row under the pointer, drawn on the plan as the line it would align to — so the
+   *  designer sees which edge "לימין" means before anything moves. Cleared by the menus themselves
+   *  when the aim leaves the row or the menu closes; a selection that cannot align shows none. */
+  const [alignPreview, setAlignPreview] = useState<AlignOp | null>(null);
+  const alignGuideLine = useMemo(
+    () => (alignSet && alignPreview ? alignGuide(alignSet.map((u) => u.box), alignKey, alignPreview) : null),
+    [alignSet, alignKey, alignPreview],
+  );
   /** What the bar's יישור menu and the right-click menu's both offer — null when nothing aligns. */
   const alignPanel: AlignPanel | null = alignSet
-    ? { units: alignSet.length, keyLabel: alignKeyLabel, onAlign: alignSelection, onPickKey: pickAlignKey }
+    ? { units: alignSet.length, keyLabel: alignKeyLabel, onAlign: alignSelection, onPickKey: pickAlignKey, onPreview: setAlignPreview }
     : null;
 
   // --- stage fill ---------------------------------------------------------------------------------
@@ -2324,9 +2374,10 @@ export function StudioScreen({
     return out;
   }, [doc.placements, arranged.features, geometryOf, editingStage]);
 
-  /** The stage the area tool would make, built by the SAME functions the saved stage is counted with
-   *  (lib/design-document/stage.ts) — so what the preview shows is what the quote bills. */
-  const stagePreview = useMemo(() => {
+  /** The stage the area tool would make — its outline, frame and shape — from the LIVE state: cheap,
+   *  so it follows every frame of a grip being dragged. Its decks are laid below, from the state once
+   *  it has SETTLED. */
+  const stageShape = useMemo(() => {
     if (stageFill?.phase !== "pick") return null;
     // A round area is a curve, not corners to tidy: cleanOutline would square up what it should not.
     // stageFromArea keeps a curved outline's corners in their order, so its smooth corners hold.
@@ -2344,6 +2395,8 @@ export function StudioScreen({
       const c = toRoom({ position: at.position, rotation: at.rotation }, shaped.offset);
       return { x: Math.round(c.x), y: Math.round(c.y) };
     })() : at.position;
+    // The decks put by hand stand in the room; the stage holds them in its own frame.
+    const pieces = stageFill.pieces?.length ? carryPieces(stageFill.pieces, ROOM_FRAME, { position, rotation: at.rotation }) : undefined;
     const stage: StageBuild = {
       outline: shaped ? shaped.outline : at.outline,
       front: shaped ? shaped.front : at.front,
@@ -2351,6 +2404,7 @@ export function StudioScreen({
       ...(curved ? { smooth: [...stageFill.smooth!] } : shaped?.smooth ? { smooth: shaped.smooth } : {}),
       ...(shaped && shape ? { ...(shape.roundedMm ? { roundedMm: shape.roundedMm, roundedAt: shape.roundedAt } : {}), ...(shape.bowMm ? { bowMm: shape.bowMm } : {}) } : {}),
       ...(stageFill.exceed ? { exceed: true } : {}),
+      ...(pieces?.length ? { pieces } : {}),
     };
     const placement = {
       id: stageFill.editing ?? "preview",
@@ -2362,17 +2416,28 @@ export function StudioScreen({
       rotation: at.rotation,
       stage,
     };
-    const laid = layStage(stage, deckOf);
     return {
       placement,
-      layout: { ...laid, decks: stageDecksInRoom(placement, deckOf), missing: stageMissingInRoom(placement, deckOf) },
       overlaps: stageObstacles.some((o) => polygonsOverlap(o, clean.outline)),
       /** The shaped outline where it stands in the room — what the canvas draws instead of the plain
        *  rectangle while a shape is on. */
       shapedOutline: shaped ? stageOutlineInRoom(placement) : null,
     };
   }, [stageFill, stageObstacles]);
+  /** …and its decks, built by the SAME functions the saved stage is counted with
+   *  (lib/design-document/stage.ts) — so what the preview shows is what the quote bills — from the
+   *  state as it stood STAGE_SETTLE_MS after it last changed, and never mid-drag (useSettled): laying
+   *  a big stage costs tens to hundreds of milliseconds, and a grip dragged across the plan used to
+   *  re-lay it on every frame (2026-10-31, the user: "put a debounce on the stage fill-out"). The
+   *  canvas draws the live outline over the settled decks, dimmed while they are behind it. */
+  const layPreview = useCallback((placement: StagePlacement) => {
+    const laid = layStage(placement.stage, deckOf);
+    return { ...laid, decks: stageDecksInRoom(placement, deckOf), missing: stageMissingInRoom(placement, deckOf), holes: stageHolesInRoom(placement, deckOf) };
+  }, []);
+  const settledShape = useSettled(stageShape, STAGE_SETTLE_MS);
+  const stagePreview = useMemo(() => (settledShape ? { placement: settledShape.placement, layout: layPreview(settledShape.placement) } : null), [settledShape, layPreview]);
   const stageLayout = stagePreview?.layout ?? null;
+  const previewStale = !!stageShape && settledShape !== stageShape;
   /** The lengths the decks in hand build exactly — what a side being drawn, or a corner of the
    *  preview being dragged, is pulled to (lib/studio/stage-fill.ts lengthSnapper). */
   const areaLengthSnap = useMemo(() => {
@@ -2438,9 +2503,208 @@ export function StudioScreen({
           shape: cur?.shape,
           chosen: cur?.chosen ?? lastStageDecks(),
           editing: cur?.editing,
+          ...(cur?.pieces?.length ? { pieces: cur.pieces } : {}),
         };
       }),
     [plan.structure, lastStageDecks],
+  );
+
+  /** The deck the fill tool has picked, as the bar shows it (PickedDeck): a piece by its index, or a
+   *  laid deck by its index in the preview — with its facing relative to the stage and its centre
+   *  from the area's left end and its front, in the stage's frame. */
+  const pickedDeck = useMemo((): PickedDeck | null => {
+    if (stageFill?.phase !== "pick" || !stageFill.picked || !stageShape || !stageLayout) return null;
+    const ref = stageFill.picked;
+    const frame = stageShape.placement;
+    const bounds = boundsOf(frame.stage.outline);
+    const rel = (deg: number) => (((deg - (frame.rotation || 0)) % 360) + 360) % 360;
+    const at = (centre: DocPoint) => {
+      const q = toStageFrame(frame, centre);
+      return { xMm: Math.round(q.x - bounds.minX), yMm: Math.round(q.y - bounds.minY) };
+    };
+    if (ref.kind === "piece") {
+      const pc = stageFill.pieces?.[ref.index];
+      const t = pc ? deckOf(pc.variantId) : undefined;
+      if (!pc || !t) return null;
+      return { ref, typeId: pc.variantId, widthMm: t.widthMm, depthMm: t.depthMm, pinned: true, hole: !!pc.hole, shaped: !!(t.round || t.outline), rotationDeg: rel(pc.rotation || 0), ...at(pc.centre) };
+    }
+    const d = stageLayout.decks[ref.index];
+    if (!d) return null;
+    const t = deckOf(d.typeId);
+    return { ref, typeId: d.typeId, widthMm: d.widthMm, depthMm: d.depthMm, pinned: false, hole: false, shaped: !!(t?.round || t?.outline), rotationDeg: rel(d.rotation), ...at(d.centre) };
+  }, [stageFill, stageShape, stageLayout]);
+
+  /** The designer's verbs on a deck of the preview (DeckAction) — from the bar, the deck's right-click
+   *  menu and the keys; on `on`, else on the picked one. Every one but a release pins a laid deck
+   *  where it stands: it becomes a PIECE of the stage (StageBuild.pieces — the same field a half-round
+   *  stands in; a hole is a piece of nothing), held in the fill state in the ROOM's frame, and the fill
+   *  lays the rest round it (lib/studio/deck-move.ts). One copy lands flush beside its source. */
+  const deckAction = useCallback(
+    (action: DeckAction, on?: DeckRef) => {
+      const shape = stageShape;
+      const layout = stageLayout;
+      setStageFill((cur) => {
+        if (cur?.phase !== "pick" || !shape || !layout) return cur;
+        if (action.type === "releaseAll") {
+          const { pieces: _all, picked: _p, ...rest } = cur;
+          return rest;
+        }
+        if (action.type === "unpick") {
+          const { picked: _p, ...rest } = cur;
+          return rest;
+        }
+        const ref = on ?? cur.picked;
+        if (!ref) return cur;
+        const pinned = cur.pieces ?? [];
+        const was = ref.kind === "piece" ? pinned[ref.index] : undefined;
+        const laid = ref.kind === "deck" ? layout.decks[ref.index] : undefined;
+        if (!was && !laid) return cur;
+        if (action.type === "release") {
+          if (!was) return cur;
+          const pieces = pinned.filter((_, k) => k !== ref.index);
+          const { pieces: _was, picked: _p, ...rest } = cur;
+          return pieces.length ? { ...rest, pieces } : rest;
+        }
+        const base: StagePiece = was ?? { variantId: laid!.typeId, centre: laid!.centre, rotation: laid!.rotation };
+        const frame = shape.placement;
+        const inFrame = (c: DocPoint) => toStageFrame(frame, c);
+        const bounds = boundsOf(frame.stage.outline);
+        const roomRot = (relDeg: number) => (((relDeg + (frame.rotation || 0)) % 360) + 360) % 360;
+        const round = (c: DocPoint) => ({ x: Math.round(c.x), y: Math.round(c.y) });
+        let next: StagePiece = base;
+        let extra: StagePiece | null = null;
+        switch (action.type) {
+          case "swap":
+            next = { ...base, variantId: action.typeId };
+            break;
+          case "turn":
+            next = { ...base, rotation: (((base.rotation || 0) + 90) % 360 + 360) % 360 };
+            break;
+          case "rotate":
+            next = { ...base, rotation: roomRot(action.deg) };
+            break;
+          case "flip": {
+            const { mirrored: _m, ...plain } = base;
+            next = base.mirrored ? plain : { ...base, mirrored: true };
+            break;
+          }
+          case "hole": {
+            const { hole: _h, ...plain } = base;
+            next = action.on ? { ...base, hole: true } : plain;
+            break;
+          }
+          case "place":
+            next = { ...base, centre: round(toRoom(frame, { x: bounds.minX + action.xMm, y: bounds.minY + action.yMm })) };
+            break;
+          case "move":
+            next = { ...base, centre: round(action.centre) };
+            break;
+          case "nudge":
+            next = { ...base, centre: round({ x: base.centre.x + action.dx, y: base.centre.y + action.dy }) };
+            break;
+          case "pin":
+            break;
+          case "duplicate": {
+            // Flush beside it along the stage's front, snapped as a drag would be — the others out of
+            // the way of it as snapDeck sees them.
+            const t = deckOf(base.variantId);
+            const local = inFrame(base.centre);
+            const box = t ? deckBox(local, t.widthMm, t.depthMm, (base.rotation || 0) - (frame.rotation || 0)) : null;
+            const want = box ? { x: local.x + box.widthMm, y: local.y } : { x: local.x + 1000, y: local.y };
+            const others = [...layout.decks, ...layout.holes].flatMap((o) => {
+              const b = deckBox(inFrame(o.centre), o.widthMm, o.depthMm, o.rotation - (frame.rotation || 0));
+              return b ? [b] : [];
+            });
+            const at = box ? snapDeck({ ...box, centre: want }, others, bounds, 80) : want;
+            extra = { ...base, centre: round(toRoom(frame, at)) };
+            break;
+          }
+        }
+        let pieces = was ? pinned.map((pc, k) => (k === ref.index ? next : pc)) : [...pinned, next];
+        let picked: DeckRef = was ? ref : { kind: "piece", index: pieces.length - 1 };
+        if (extra) {
+          pieces = [...pieces, extra];
+          picked = { kind: "piece", index: pieces.length - 1 };
+        }
+        return { ...cur, pieces, picked };
+      });
+    },
+    [stageShape, stageLayout],
+  );
+  /** A deck clicked: picked, or — picked already — let go of. Null clears the pick. */
+  const pickDeck = useCallback(
+    (ref: DeckRef | null) =>
+      setStageFill((cur) => {
+        if (cur?.phase !== "pick") return cur;
+        const { picked: _was, ...rest } = cur;
+        return ref === null || sameDeckRef(cur.picked, ref) ? rest : { ...rest, picked: ref };
+      }),
+    [],
+  );
+  /** The deck's right-click menu: the bar's verbs, the sizes as a submenu. */
+  const deckMenu = useCallback(
+    (ref: DeckRef): ContextMenuItem[] => {
+      const cur = stageFill?.phase === "pick" ? stageFill : null;
+      if (!cur || !stageLayout) return [];
+      const pc = ref.kind === "piece" ? cur.pieces?.[ref.index] : undefined;
+      const d = ref.kind === "deck" ? stageLayout.decks[ref.index] : undefined;
+      const typeId = pc?.variantId ?? d?.typeId;
+      const t = typeId ? deckOf(typeId) : undefined;
+      const shaped = !!(t?.round || t?.outline);
+      const act = (action: DeckAction) => () => deckAction(action, ref);
+      const sizes = deckTypes.filter((x) => !x.round && !x.outline);
+      return [
+        { label: "שכפול", icon: Copy, onSelect: act({ type: "duplicate" }) },
+        { label: "סיבוב 90°", icon: RotateCw, onSelect: act({ type: "turn" }) },
+        ...(shaped ? [{ label: "היפוך", icon: FlipHorizontal2, onSelect: act({ type: "flip" }) }] : []),
+        ...(sizes.length > 1
+          ? [
+              {
+                label: "מידה",
+                onSelect: () => {},
+                children: sizes.map((x) => ({
+                  label: `${x.name} · ${Math.round(x.widthMm / 10)}×${Math.round(x.depthMm / 10)}`,
+                  disabled: x.id === typeId,
+                  onSelect: act({ type: "swap", typeId: x.id }),
+                })),
+              },
+            ]
+          : []),
+        pc ? { label: "שחרור למילוי", icon: PinOff, onSelect: act({ type: "release" }) } : { label: "נעיצה במקום", icon: Pin, onSelect: act({ type: "pin" }) },
+        pc?.hole ? { label: "חזרה לפלטה", icon: Square, onSelect: act({ type: "hole", on: false }) } : { label: "פתח ללא פלטה", icon: Square, onSelect: act({ type: "hole", on: true }) },
+      ];
+    },
+    [stageFill, stageLayout, deckTypes, deckAction],
+  );
+  /** The keys on the fill tool's picked deck: arrows nudge a centimetre (Shift ten), R turns it a
+   *  quarter, Ctrl+D copies it, Delete releases it. True when the key was one of these. */
+  const deckKey = useCallback(
+    (e: KeyboardEvent): boolean => {
+      if (stageFill?.phase !== "pick" || !stageFill.picked) return false;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod && e.key.startsWith("Arrow")) {
+        const step = e.shiftKey ? 100 : 10;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        if (!dx && !dy) return false;
+        deckAction({ type: "nudge", dx, dy });
+        return true;
+      }
+      if (!mod && isShortcut(e, "r")) {
+        deckAction({ type: "turn" });
+        return true;
+      }
+      if (mod && isShortcut(e, "d")) {
+        deckAction({ type: "duplicate" });
+        return true;
+      }
+      if (!mod && (e.key === "Delete" || e.key === "Backspace")) {
+        deckAction({ type: "release" });
+        return true;
+      }
+      return false;
+    },
+    [stageFill, deckAction],
   );
 
   /** Take one of the layout's exact sizes: the area is redrawn at that size, front first. */
@@ -2453,10 +2717,17 @@ export function StudioScreen({
   /** The studio's railing rule (settings → במות). Off until the studio says otherwise — and off while
    *  it is being read, rather than guessing a height for a frame. */
   const [railingAboveMm, setRailingAboveMm] = useState<number | null>(null);
+  /** The studio's stair module (settings → במות): the step every NEW stage is built in
+   *  (StageBuild.riserMm / treadMm, seeded through `stageParts`). Null = the defaults. */
+  const [stairStep, setStairStepRule] = useState<{ riserMm: number | null; treadMm: number | null }>({ riserMm: null, treadMm: null });
   useEffect(() => {
     let live = true;
     fetchStageRules()
-      .then((r) => live && setRailingAboveMm(r.railingAboveMm))
+      .then((r) => {
+        if (!live) return;
+        setRailingAboveMm(r.railingAboveMm);
+        setStairStepRule({ riserMm: r.stairRiserMm, treadMm: r.stairTreadMm });
+      })
       .catch(() => {});
     return () => {
       live = false;
@@ -2468,6 +2739,9 @@ export function StudioScreen({
   /** …and, for one stage, from the other stages too: a side pushed flush against another stage (and
    *  not merged with it) needs no stairs, no skirt, and is not an open edge. Every question asked
    *  about one stage's edges goes through this, whether the stage was drawn or laid by hand. */
+  /** The doors' openings in the room: a flight may be set into a stage standing against a wall where
+   *  a door is in that wall (lib/design-document/stage.ts baseAtDoor). */
+  const doors = useMemo(() => doorOpenings(plan.structure), [plan.structure]);
   const wallDistanceFor = useCallback(
     (stageId: string | undefined) => {
       const others = doc.placements
@@ -2500,8 +2774,12 @@ export function StudioScreen({
       barrierVariant: first("stage-barriers"),
       backdropVariant: first("stage-backdrops"),
       rampVariant: first("stage-ramps"),
+      // The studio's stair module, when it has one: every new stage is built in it from here on
+      // (StageBuild.riserMm / treadMm) — and keeps it, whatever the setting says later.
+      ...(stairStep.riserMm ? { riserMm: stairStep.riserMm } : {}),
+      ...(stairStep.treadMm ? { treadMm: stairStep.treadMm } : {}),
     };
-  }, [catalog]);
+  }, [catalog, stairStep]);
   /** A studio that builds from its own stages may never have had the stairs, skirt, banquette and
    *  barrier rows — give it them (add-only, those four only) the first time a stage needs one, so
    *  the quote can count what the plan shows. */
@@ -2517,12 +2795,16 @@ export function StudioScreen({
    *  a side that is not against a wall — never a platform nobody can get onto. An EDITED one keeps
    *  all of that, its levels carried to where they stood in the room. */
   const commitStageFill = useCallback(() => {
-    if (stageFill?.phase !== "pick" || !stagePreview || stagePreview.layout.decks.length === 0) return;
-    const { placement } = stagePreview;
+    if (stageFill?.phase !== "pick" || !stageShape) return;
+    // Laid afresh from the LIVE shape: the settled preview may still be a step behind a grip let go
+    // a moment ago.
+    const { placement } = stageShape;
+    const layout = layPreview(placement);
+    if (layout.decks.length === 0) return;
     const tally = new Map<string, number>();
-    for (const d of stagePreview.layout.decks) tally.set(d.typeId, (tally.get(d.typeId) ?? 0) + 1);
+    for (const d of layout.decks) tally.set(d.typeId, (tally.get(d.typeId) ?? 0) + 1);
     const variantId = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    const count = stagePreview.layout.decks.length;
+    const count = layout.decks.length;
     const old = stageFill.editing ? doc.placements.find((p) => p.id === stageFill.editing) : undefined;
     if (old?.stage) {
       const was = old as StagePlacement;
@@ -2531,11 +2813,12 @@ export function StudioScreen({
       // The fill tool's own answers replace the old ones — the decks it may use, and whether they
       // may exceed the line — which is why `exceed` is taken off before the spread rather than
       // overwritten: switching it off has to leave no key behind.
-      // …and so do its curve (an area redrawn round, or square) and where its whole pieces stand: each
-      // carried to where it stood in the room, and kept only while it is still on the stage.
+      // …and so do its curve (an area redrawn round, or square) and its pieces — a half-round, and
+      // every deck put by hand — which the fill tool held in the room and the preview carried into
+      // the new frame; each kept only while it is still on the stage.
       // …and so does the shape (a radius, a bow) the "פינות" chip gave the rectangle, or took off it.
       const { exceed: _wasExceeding, smooth: _wasSmooth, pieces: _wasPieces, roundedMm: _wasRounded, roundedAt: _wasRoundedAt, bowMm: _wasBow, ...keep } = old.stage;
-      const pieces = carryPieces(old.stage.pieces, old, frame)?.filter((pc) => pointInPolygon(pc.centre, placement.stage.outline));
+      const pieces = placement.stage.pieces?.filter((pc) => pointInPolygon(pc.centre, placement.stage.outline));
       const now: StagePlacement = {
         ...was,
         ...frame,
@@ -2578,7 +2861,7 @@ export function StudioScreen({
       showHint(`נוספה במה — ${count} פלטות. לחיצה על צד מוסיפה מדרגות, בנקט או מחסום`);
     }
     setStageFill(null);
-  }, [stageFill, stagePreview, act, batch, doc.placements, stageParts, ensureStageParts, landNew]);
+  }, [stageFill, stageShape, layPreview, act, batch, doc.placements, stageParts, ensureStageParts, landNew]);
 
   /** The one selected stage, if the selection is exactly that. */
   const soleStage = useMemo(() => {
@@ -2630,14 +2913,14 @@ export function StudioScreen({
           id: st.id,
           kind: edgeKind(st),
           inner: shape.inner,
-          outerFits: sinkable ? stairFits(soleStage, { ...st, inner: undefined }, deckOf, wdSole).ok : true,
-          innerFits: sinkable ? stairFits(soleStage, { ...st, inner: true }, deckOf, wdSole).ok : false,
+          outerFits: sinkable ? stairFits(soleStage, { ...st, inner: undefined }, deckOf, wdSole, doors).ok : true,
+          innerFits: sinkable ? stairFits(soleStage, { ...st, inner: true }, deckOf, wdSole, doors).ok : false,
           side: st.level ? "במפלס" : stageSide(stage, undefined, st.edge)?.curved ? "על הקשת" : side(st.edge),
           widthMm: shape.widthMm,
           full: !!st.full,
           risers: shape.risers,
           riserMm: shape.riserMm,
-          autoRisers: autoRisers(shape.riseMm),
+          autoRisers: autoRisers(shape.riseMm, stairStepOf(stage).riserMm),
           manual: !!st.risers,
           depthMm: shape.depthMm,
           heightMm: shape.heightMm,
@@ -2680,13 +2963,14 @@ export function StudioScreen({
       skirtMm: skirtMm(soleStage, deckOf, wallDistanceFor(soleStage.id)),
       railingMm: railing ? railing.reduce((s, r) => s + r.lengthMm, 0) : null,
       railingAboveMm,
+      stairStep: { ...stairStepOf(stage), own: !!(stage.riserMm || stage.treadMm) },
       stairsCounted: !!(stage.stairsVariant ?? stageParts.stairsVariant),
       skirtCounted: !!(stage.skirtVariant ?? stageParts.skirtVariant),
       missing: laid.missing,
       pieceTypes: deckTypes,
       chosen: stage.decks,
     };
-  }, [soleStage, railingAboveMm, stageRailings, wallDistanceFor, activeEdge, doc.placements, stageParts, catalog, deckTypes]);
+  }, [soleStage, railingAboveMm, stageRailings, wallDistanceFor, doors, activeEdge, doc.placements, stageParts, catalog, deckTypes]);
 
   /** A rectangular stage typed to an exact size: the back stays where it stands and the front moves
    *  toward the room — what pulling its front handle does — with no snapping at all. */
@@ -2752,6 +3036,8 @@ export function StudioScreen({
       chosen: still.length ? still : deckTypes.map((t) => t.id),
       editing: soleStage.id,
       ...(soleStage.stage.exceed ? { exceed: true } : {}),
+      // Its pieces — a half-round, and every deck put by hand — stand in the room while it is edited.
+      ...(soleStage.stage.pieces?.length ? { pieces: carryPieces(soleStage.stage.pieces, soleStage, ROOM_FRAME) } : {}),
     });
   }, [soleStage, deckTypes]);
 
@@ -2854,6 +3140,25 @@ export function StudioScreen({
 
   const setStageHeightMm = useCallback(
     (heightMm: number) => soleStage && patchStage(soleStage.id, (s) => ({ ...s, heightMm: Math.round(heightMm) })),
+    [soleStage, patchStage],
+  );
+  /** The step this stage's flights are built in (StageBuild.riserMm / treadMm); null = the default.
+   *  Every flight without a typed count re-derives its steps and run from it at once. */
+  const setStairStep = useCallback(
+    (step: { riserMm?: number | null; treadMm?: number | null }) =>
+      soleStage &&
+      patchStage(soleStage.id, (s) => {
+        const next = { ...s };
+        if (step.riserMm !== undefined) {
+          if (step.riserMm === null) delete next.riserMm;
+          else next.riserMm = Math.round(step.riserMm);
+        }
+        if (step.treadMm !== undefined) {
+          if (step.treadMm === null) delete next.treadMm;
+          else next.treadMm = Math.round(step.treadMm);
+        }
+        return next;
+      }),
     [soleStage, patchStage],
   );
   const setLevelHeight = useCallback(
@@ -3125,6 +3430,16 @@ export function StudioScreen({
     setSketches(await deleteSketchTemplate(id));
     showHint("הסקיצה נמחקה");
   }, []);
+  /** The photo a saved sketch wears as its card in the meeting's סקיצת פתיחה (null takes it off). */
+  const sketchPhoto = useCallback(async (id: string, file: File | null) => {
+    try {
+      const url = file ? (await uploadFile(file, "sketch")).url : null;
+      setSketches(await setSketchPhoto(id, url));
+      showHint(file ? "התמונה נשמרה — היא תוצג בכרטיס הסקיצה בפגישה" : "התמונה הוסרה");
+    } catch (err) {
+      showHint(err instanceof Error ? err.message : "לא ניתן להעלות את התמונה");
+    }
+  }, []);
 
   // ── Click-to-place ───────────────────────────────────────────────────────────────────────────
   // A click on a rail row ARMS that item; every click on the plan then puts one down, until Escape,
@@ -3189,12 +3504,12 @@ export function StudioScreen({
       // Asked for stairs or a banquette: outside where there is floor, set into the stage where a
       // wall leaves none, a barrier only where neither stands. A round stage's open rim too — asked
       // for outright, where the default left it to the skirt.
-      const add = settleEdgeItems(soleStage, fillGaps(soleStage, deckOf, kind, uid, wd, { rims: true }), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
+      const add = settleEdgeItems(soleStage, fillGaps(soleStage, deckOf, kind, uid, wd, { rims: true }), deckOf, uid, wd, { inner: true, otherwise: "barrier", doors });
       if (!add.length) return;
       patchStage(soleStage.id, (s) => ({ ...s, stairs: [...(s.stairs ?? []), ...add] }));
       ensureStageParts();
     },
-    [soleStage, wallDistanceFor, patchStage, ensureStageParts],
+    [soleStage, wallDistanceFor, doors, patchStage, ensureStageParts],
   );
   /** A stage PIECE standing on its own — a "במה 400×300" dropped from the rail — as a stage: its box
    *  as the outline, every piece the studio has as what it may be built from (so it comes out as
@@ -3340,7 +3655,7 @@ export function StudioScreen({
   const fillGroupEdges = (kind: EdgeKindId) => {
     const acts = groupStagesOf().flatMap((p) => {
       const wd = wallDistanceFor(p.id);
-      const add = settleEdgeItems(p, fillGaps(p, deckOf, kind, uid, wd, { rims: true }), deckOf, uid, wd, { inner: true, otherwise: "barrier" });
+      const add = settleEdgeItems(p, fillGaps(p, deckOf, kind, uid, wd, { rims: true }), deckOf, uid, wd, { inner: true, otherwise: "barrier", doors });
       return add.length ? [{ type: "setPlacementStage" as const, id: p.id, stage: { ...p.stage, stairs: [...(p.stage.stairs ?? []), ...add] } }] : [];
     });
     if (!acts.length) return;
@@ -3459,7 +3774,8 @@ export function StudioScreen({
       const area = (x: StagePlacement) => Math.abs(signedArea(x.stage.outline));
       return area(b) - area(a);
     });
-    const merged = parts.length >= 2 ? mergeStages(parts) : null;
+    // Each keeps its height: a higher part becomes a raised level of the one stage (mergeStages).
+    const merged = parts.length >= 2 ? mergeStages(parts, deckOf) : null;
     if (!merged) {
       showHint("אי אפשר לאחד — הבמות צריכות לגעת זו בזו לאורך צד, בלי חור באמצע");
       return;
@@ -3467,9 +3783,12 @@ export function StudioScreen({
     batch(mergeActions(parts, merged));
     setSelected([{ kind: "placement", id: parts[0].id }]);
     ensureStageParts();
-    showHint(`${parts.length} במות אוחדו לבמה אחת`);
+    showHint(`${parts.length} במות אוחדו לבמה אחת${raisedBy(parts, merged.stage) ? " — כל חלק שומר על הגובה שלו, והמדרגות ממשיכות זו לזו" : ""}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStages, asStage, batch, wallDistance, doc.placements, ensureStageParts]);
+
+  /** How many levels a merge raised for parts standing higher than the rest (mergeStages). */
+  const raisedBy = (parts: readonly StagePlacement[], stage: StageBuild) => (stage.levels?.length ?? 0) - parts.reduce((n, p) => n + (p.stage.levels?.length ?? 0), 0);
 
   /** The actions that make `parts` ONE stage, `merged` being what mergeStages made of them (the
    *  first part the anchor): what stood on the others' banquettes moved to the anchor, the others
@@ -3502,7 +3821,7 @@ export function StudioScreen({
   const groupStages = useCallback(() => {
     const parts = selectedStages.map((p) => asStage(p)).filter((p): p is StagePlacement => !!p);
     if (parts.length < 2) return;
-    const { merged, loose } = mergeTouching(parts);
+    const { merged, loose } = mergeTouching(parts, { deckOf });
     const actions: Action[] = merged.flatMap((m) => mergeActions([m.anchor, ...m.others], m));
     // A loose piece that was never a stage becomes one — finished on every open side, as "הפיכה
     // לבמה" does — so the group holds stages only.
@@ -3520,6 +3839,7 @@ export function StudioScreen({
     showHint(
       [
         joined > 0 ? `${joined} במות אוחדו ל${merged.length === 1 ? "במה אחת" : `־${merged.length} במות`}` : null,
+        merged.some((m) => raisedBy([m.anchor, ...m.others], m.stage) > 0) ? "כל חלק שומר על הגובה שלו" : null,
         units.length > 1 ? (joined > 0 ? `${units.length} החלקים שנותרו קובצו — אינם צמודים זה לזה` : `${units.length} במות קובצו — אינן צמודות זו לזו`) : null,
       ]
         .filter(Boolean)
@@ -3594,11 +3914,11 @@ export function StudioScreen({
       const wd = wallDistanceFor(p.id);
       // Too close to a wall for its run outside, a flight (or banquette) goes INTO the stage — the
       // one way it fits there.
-      const placed = placeEdgeItem(p, itemAt(p, deckOf, stageTool?.edgeKind ?? "stairs", level, edge, t, uid(), wd), deckOf, wd);
+      const placed = placeEdgeItem(p, itemAt(p, deckOf, stageTool?.edgeKind ?? "stairs", level, edge, t, uid(), wd), deckOf, wd, doors);
       if (!placed.ok) {
         showHint(
           placed.reason === "wall"
-            ? "הצד הזה צמוד לקיר — אין מקום למדרגות. בחרו צד אחר"
+            ? "הצד הזה צמוד לקיר — אין מקום למדרגות. בחרו צד אחר, או לחצו מול דלת שבקיר — שם המדרגות שוקעות לתוך הבמה"
             : placed.reason === "flat"
               ? "המפלס לא גבוה מהבמה — אין לאן לעלות"
               : placed.reason === "solid"
@@ -3620,7 +3940,7 @@ export function StudioScreen({
       setActiveEdge(stair.id);
       ensureStageParts();
     },
-    [toolStage, wallDistanceFor, patchStage, stageTool, ensureStageParts],
+    [toolStage, wallDistanceFor, doors, patchStage, stageTool, ensureStageParts],
   );
 
   // Escape leaves stair placing (the level drawing has the area tool's own Escape).
@@ -3682,9 +4002,16 @@ export function StudioScreen({
       if (patch.seated !== undefined) bench.seated = Math.max(0, Math.round(patch.seated));
       if (patch.number === null) delete bench.number;
       else if (patch.number !== undefined) bench.number = Math.max(0, Math.round(patch.number));
-      act({ type: "setPlacementBench", id, bench: Object.keys(bench).length ? bench : null });
+      const actions: Action[] = [{ type: "setPlacementBench", id, bench: Object.keys(bench).length ? bench : null }];
+      // A side given CHAIRS makes the banquette their table, and a table is 60 deep
+      // (BENCH_TABLE_DEPTH_MM): a shallower strip is deepened with it, in the same entry. Never the
+      // other way — taking the chairs away leaves the depth the designer can see and type.
+      const box = benchOf(p);
+      const gainsChairs = patch.back?.kind === "chairs" || patch.front?.kind === "chairs";
+      if (box && gainsChairs && box.depthMm < BENCH_TABLE_DEPTH_MM) actions.push({ type: "resizePlacement", id, sizeMm: { widthMm: box.widthMm, depthMm: BENCH_TABLE_DEPTH_MM } });
+      batch(actions);
     },
-    [doc.placements, act],
+    [doc.placements, batch],
   );
 
   /** A chair set out in rows, re-set, or put back to one chair (lib/design-document/chair-rows.ts):
@@ -4529,7 +4856,10 @@ export function StudioScreen({
       // Every one of these stands down while a field has focus. Undo especially: correcting a table
       // number and pressing Ctrl+Z has to take back the digit, not the whole plan — the field owns
       // its own undo stack and the browser is already about to use it.
-      if (mod && !typing && isShortcut(e, "z")) {
+      // The fill tool's picked deck takes its keys first (deckKey) — the arrows, R, Ctrl+D, Delete.
+      if (!typing && deckKey(e)) {
+        e.preventDefault();
+      } else if (mod && !typing && isShortcut(e, "z")) {
         e.preventDefault();
         setHistory((h) => (e.shiftKey ? redo(h) : undo(h)));
       } else if (mod && !typing && isShortcut(e, "y")) {
@@ -4549,6 +4879,11 @@ export function StudioScreen({
         e.preventDefault();
         if (e.shiftKey) ungroupSelection();
         else groupAny();
+      } else if (mod && e.shiftKey && !typing && e.code === "KeyL" && docRefs(selected).length > 0) {
+        // Lock / unlock the selected tables and items — Figma's own chord, and /halls'. e.code: a
+        // Hebrew layout types "ך".
+        e.preventDefault();
+        toggleLock();
       } else if (mod && !typing && isShortcut(e, "a")) {
         if (hasTextSelection()) return;
         e.preventDefault();
@@ -4574,8 +4909,11 @@ export function StudioScreen({
         // One step back at a time: a tool first (the fill tool with its area already drawn), then
         // the edge item, then the selection, then — with nothing left selected — the zone eye and
         // the active layer, which are what keep the empty-selection bar on screen.
-        if (stageFill?.phase === "pick") setStageFill(null);
-        else if (dressing) setDressing(null);
+        if (stageFill?.phase === "pick") {
+          // A picked deck first; the tool itself on the next Escape.
+          if (stageFill.picked) pickDeck(null);
+          else setStageFill(null);
+        } else if (dressing) setDressing(null);
         else if (activeEdge) setActiveEdge(null);
         // One stage picked out of its group goes back to the group first (see pick).
         else if (backToGroup) backToGroup();
@@ -4588,15 +4926,15 @@ export function StudioScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, copy, cut, paste, groupAny, ungroupSelection, selectAll, restack, selected.length, activeEdge, removeStair, stageFill?.phase, dressing, nudgeDressing, backToGroup]);
+  }, [deleteSelection, copy, cut, paste, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup]);
 
   // --- the right-click menu ------------------------------------------------------------------------
   // The same verbs the bar offers, where the pointer already is. The menu is built the instant the
   // button goes down, before React has re-rendered with whatever the canvas just selected under it
   // — so each row reaches for the LATEST handlers through a ref rather than closing over this
   // render's, which would act on the selection as it was a click ago.
-  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection });
-  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection };
+  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel });
+  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel };
   const contextItems = useCallback(
     (refs: SelectionRef[]): ContextMenuItem[] => {
       const own = docRefs(refs);
@@ -4632,7 +4970,24 @@ export function StudioScreen({
                     const now = latest.current.align;
                     if (now) alignItems(now)[i]?.onSelect();
                   },
+                  // The row's preview too — the line it would align to, while the pointer is on it.
+                  onHover: it.onHover
+                    ? (h: boolean) => {
+                        const now = latest.current.align;
+                        if (now) alignItems(now)[i]?.onHover?.(h);
+                      }
+                    : undefined,
                 })),
+              },
+            ]
+          : []),
+        // Pin in place / free — worded by what it would do to THIS selection, read when chosen.
+        ...(own.length > 0 && latest.current.lock
+          ? [
+              {
+                label: latest.current.lock.locked ? "שחרור הנעילה" : "נעילה במקום",
+                icon: latest.current.lock.locked ? LockOpen : Lock,
+                onSelect: () => latest.current.lock?.onToggle(),
               },
             ]
           : []),
@@ -4691,6 +5046,7 @@ export function StudioScreen({
         onSaveSketch={(name) => void saveSketch(name)}
         onLoadSketch={(id, mode) => void loadSketch(id, mode)}
         onDeleteSketch={(id) => void deleteSketch(id)}
+        onSketchPhoto={(id, file) => void sketchPhoto(id, file)}
         saveState={saveState}
         onRetrySave={retrySave}
         removedFeatures={removedVenueFeatures}
@@ -4704,6 +5060,7 @@ export function StudioScreen({
         <CatalogRail
           products={catalog}
           groups={RAIL[mode].groups}
+          pass={mode === "hall" || mode === "design" ? mode : undefined}
           hint={RAIL[mode].hint}
           mmPerPx={mmPerPx}
           onAddProduct={() => setDrawer({ product: blankProduct(railCategories[0]), mode: "new" })}
@@ -4746,6 +5103,7 @@ export function StudioScreen({
               settleDrag(moved);
             }}
             alignKeyBox={alignSet ? alignSet[alignKey].box : null}
+            alignGuide={alignGuideLine}
             onContextMenu={contextItems}
             onResizePlacement={(id, sizeMm, position) => {
               // A stage's handles stretch its OUTLINE — the decks follow on their own. A round one is
@@ -4774,6 +5132,7 @@ export function StudioScreen({
               drag({ type: "movePlacement", id, position });
             }}
             onBowPlacement={(id, bows) => drag({ type: "setPlacementBows", id, bows })}
+            onCornerPlacement={(id, corners) => drag({ type: "setPlacementCorners", id, corners })}
             onSpanPlacement={(id, span) => drag({ type: "setPlacementSpan", id, span })}
             onDropProduct={dropProduct}
             onScale={(v) => {
@@ -4800,20 +5159,27 @@ export function StudioScreen({
             areaPreview={
               stageFill?.phase === "pick"
                 ? {
-                    polygon: stagePreview?.shapedOutline ?? stageFill.polygon,
-                    front: stagePreview?.shapedOutline ? stagePreview.placement.stage.front : stageFill.front,
+                    polygon: stageShape?.shapedOutline ?? stageFill.polygon,
+                    front: stageShape?.shapedOutline ? stageShape.placement.stage.front : stageFill.front,
                     decks: stageLayout?.decks ?? [],
                     missing: stageLayout?.missing ?? [],
-                    curved: !!stageFill.smooth?.length || !!stagePreview?.shapedOutline,
+                    curved: !!stageFill.smooth?.length || !!stageShape?.shapedOutline,
+                    stale: previewStale,
+                    frame: stageShape?.placement ?? ROOM_FRAME,
+                    holes: stageLayout?.holes ?? [],
+                    picked: stageFill.picked,
                   }
                 : null
             }
+            onDeckPick={pickDeck}
+            onDeckMove={(ref, centre) => deckAction({ type: "move", centre }, ref)}
+            deckMenu={deckMenu}
             onPickFront={(front) =>
               setStageFill((cur) => {
                 if (cur?.phase !== "pick") return cur;
                 // A click on the shaped outline names one of ITS edges: the plain rectangle's side
                 // nearest that edge's middle is the one meant.
-                const shown = stagePreview?.shapedOutline;
+                const shown = stageShape?.shapedOutline;
                 if (!shown) return { ...cur, front };
                 const a = shown[front];
                 const b = shown[(front + 1) % shown.length];
@@ -4834,7 +5200,7 @@ export function StudioScreen({
             // A curve is redrawn, not dented: no grips on a round area's dozens of corners — nor on a
             // shaped rectangle's; set the radius to 0 to pull its corners again.
             onAreaReshape={
-              stageFill?.phase === "pick" && (stageFill.smooth?.length || stagePreview?.shapedOutline)
+              stageFill?.phase === "pick" && (stageFill.smooth?.length || stageShape?.shapedOutline)
                 ? undefined
                 : (polygon, front) => setStageFill((cur) => (cur?.phase === "pick" ? { ...cur, polygon, front } : cur))
             }
@@ -4987,9 +5353,9 @@ export function StudioScreen({
               <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
                 {stageFill.smooth?.length
                   ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — ״מידות״ בסרגל הבמה או הידיות"
-                  : stagePreview?.shapedOutline
+                  : stageShape?.shapedOutline
                     ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בסרגל; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
-                    : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
+                    : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · גררו פלטה למקומה, לחצו עליה להחלפה או סיבוב · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
               </span>
             </div>
           )}
@@ -5029,10 +5395,13 @@ export function StudioScreen({
                   types={deckTypes}
                   layout={stageLayout}
                   onChange={setStageFill}
-                  overlaps={stagePreview?.overlaps ?? false}
-                  onRedraw={() => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape }))}
+                  overlaps={stageShape?.overlaps ?? false}
+                  onRedraw={() => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape, pieces: cur?.pieces }))}
                   onResize={resizeStageArea}
                   onCommit={commitStageFill}
+                  picked={pickedDeck}
+                  pinnedCount={stageFill.pieces?.length ?? 0}
+                  onDeck={(action) => deckAction(action)}
                   onAddPieces={(infos) => void addStagePieces(infos)}
                   onClose={() => setStageFill(null)}
                 />
@@ -5090,6 +5459,7 @@ export function StudioScreen({
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
+                onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicate={duplicate}
@@ -5114,6 +5484,7 @@ export function StudioScreen({
                 canDistribute={canDistribute}
                 onDistribute={distributeEvenly}
                 align={alignPanel}
+                lock={lockPanel}
                 dressCandidateCount={dressCandidateCount}
                 onCopyDressing={copyDressingToSelection}
                 onMirror={canMirror ? mirrorSelection : undefined}
@@ -5126,6 +5497,7 @@ export function StudioScreen({
                 onEditStage={editStage}
                 onExplodeStage={explodeStage}
                 onStageHeight={setStageHeightMm}
+                onStairStep={setStairStep}
                 onStageSize={setStageSize}
                 onAddStagePieces={(infos) => {
                   if (soleStage) void addStagePieces(infos, soleStage.id);

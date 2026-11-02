@@ -22,6 +22,9 @@ export interface AlignPanel {
   keyLabel: string;
   onAlign: (op: AlignOp) => void;
   onPickKey: (which: "next" | "last") => void;
+  /** The row under the pointer, or null when none is — the canvas draws that alignment's line
+   *  (lib/studio/align.ts `alignGuide`) while it is aimed at, so "יישור לימין" shows which right. */
+  onPreview?: (op: AlignOp | null) => void;
 }
 
 // The plan's own sides, as it is drawn on screen: the vertical-line icons are "edges on a line
@@ -38,8 +41,9 @@ const ROWS: { op: AlignOp; icon: MenuItem["icon"] }[] = [
 
 /** The rows of "יישור" — the bar's menu and the plan's right-click menu offer the same ones. */
 export function alignItems(align: AlignPanel): MenuItem[] {
+  const preview = (op: AlignOp) => (align.onPreview ? (hovering: boolean) => align.onPreview?.(hovering ? op : null) : undefined);
   return [
-    ...ROWS.map(({ op, icon }) => ({ label: ALIGN_LABEL[op], icon, onSelect: () => align.onAlign(op) })),
+    ...ROWS.map(({ op, icon }) => ({ label: ALIGN_LABEL[op], icon, onSelect: () => align.onAlign(op), onHover: preview(op) })),
     ...(align.units >= 3
       ? [
           { label: ALIGN_LABEL["distribute-x"], icon: AlignHorizontalDistributeCenter, onSelect: () => align.onAlign("distribute-x") },

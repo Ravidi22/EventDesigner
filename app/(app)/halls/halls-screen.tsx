@@ -38,6 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { polygonCentroid } from "@/lib/studio/geometry";
+import { doorOpenings } from "@/lib/studio/anchor";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
@@ -128,7 +129,7 @@ import { SelectionBar } from "./selection-bar";
 import { addEdgeItemAt, changeEdgeItem, fillFeatureEdges, removeEdgeItem, setEdgeItems, wallDistanceOf, type EdgeRefusal, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { shareSide } from "@/lib/design-document/stage";
 import type { StageStair } from "@/lib/design-document/types";
-import { ALIGN_LABEL, alignedCentres, needsThree, type AlignOp } from "@/lib/studio/align";
+import { ALIGN_LABEL, alignedCentres, alignGuide, needsThree, type AlignOp } from "@/lib/studio/align";
 import type { SnapBox } from "@/lib/studio/snap";
 import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -650,17 +651,29 @@ export function HallsScreen() {
   // ── alignment and snapping ─────────────────────────────────────────────────────────────────
   /** Lines the selected features up by the FIRST selected (lib/studio/align.ts) — the key never
    *  moves; a locked member is left out. */
-  const alignFeatures = useCallback(
-    (op: AlignOp) => {
-      const rows = selection
+  const alignRows = useMemo(
+    () =>
+      selection
         .filter((r) => r.kind === "feature")
         .map((r) => structure.features.find((f) => f.id === r.id))
-        .filter((f): f is StructureFeature => !!f && !f.locked && !followsWalls(f));
+        .filter((f): f is StructureFeature => !!f && !f.locked && !followsWalls(f)),
+    [selection, structure],
+  );
+  const alignFeatures = useCallback(
+    (op: AlignOp) => {
+      const rows = alignRows;
       if (rows.length < 2 || (needsThree(op) && rows.length < 3)) return;
       const centres = alignedCentres(rows.map(featureBox), 0, op);
       editStructure((st) => rows.reduce((acc, f, i) => updateFeature(acc, f.id, { x: centres[i].x, y: centres[i].y }), st));
     },
-    [selection, structure, editStructure],
+    [alignRows, editStructure],
+  );
+  /** The יישור row under the pointer — drawn as the line it would align to (the first selected's
+   *  edge or centre line), so the designer sees which edge before anything moves. The menus clear it. */
+  const [alignPreview, setAlignPreview] = useState<AlignOp | null>(null);
+  const alignGuideLine = useMemo(
+    () => (alignPreview && alignRows.length >= 2 ? alignGuide(alignRows.map(featureBox), 0, alignPreview) : null),
+    [alignPreview, alignRows],
   );
   /** The canvas's own alignment pull for a dragged feature: its edges and centre line up with the
    *  walls, the corners and the other features, and equal gaps are offered (the same guides a
@@ -725,7 +738,7 @@ export function HallsScreen() {
               onSelect: () => {},
               children: (["right", "hcenter", "left", "top", "vmiddle", "bottom", "distribute-x", "distribute-y"] as AlignOp[])
                 .filter((op) => !needsThree(op) || unlocked > 2)
-                .map((op) => ({ label: ALIGN_LABEL[op], onSelect: () => alignFeatures(op) })),
+                .map((op) => ({ label: ALIGN_LABEL[op], onSelect: () => alignFeatures(op), onHover: (h: boolean) => setAlignPreview(h ? op : null) })),
             } satisfies ContextMenuItem,
           ]
         : []),
@@ -818,6 +831,8 @@ export function HallsScreen() {
   const [edgePick, setEdgePick] = useState<{ featureId: string; kind: VenueEdgeKind } | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const wallDistance = useMemo(() => wallDistanceOf(structure), [structure]);
+  /** The doors' openings: a flight may be set into a stage against a wall where a door is. */
+  const doors = useMemo(() => doorOpenings(structure), [structure]);
   // An item or a stage that is gone, or no longer selected, takes its editing with it.
   if (activeEdge && !(isSelected(selection, "feature", activeEdge.featureId) && structure.features.some((f) => f.id === activeEdge.featureId && featureEdgeItems(f).some((it) => it.id === activeEdge.itemId)))) setActiveEdge(null);
   if (edgePick && !structure.features.some((f) => f.id === edgePick.featureId)) setEdgePick(null);
@@ -855,7 +870,7 @@ export function HallsScreen() {
   const pickEdge = useCallback(
     (featureId: string, edge: number, t: number) => {
       const kind = edgePick?.kind ?? "stairs";
-      const r = addEdgeItemAt(structure, featureId, kind, edge, t, wallDistance);
+      const r = addEdgeItemAt(structure, featureId, kind, edge, t, wallDistance, doors);
       if (!r.ok) {
         setHint(refusal(r.reason, kind));
         return;
@@ -866,18 +881,18 @@ export function HallsScreen() {
       setActiveEdge({ featureId, itemId: r.item.id });
       if (r.item.inner) setHint("אין מספיק מקום מחוץ לבמה בצד הזה — המדרגות שוקעות לתוך הבמה");
     },
-    [edgePick, structure, wallDistance, editStructure],
+    [edgePick, structure, wallDistance, doors, editStructure],
   );
   const changeEdge = useCallback(
     (featureId: string, itemId: string, patch: { kind?: VenueEdgeKind; widthMm?: number; risers?: number | null; full?: boolean; inner?: boolean }) => {
-      const r = changeEdgeItem(structure, featureId, itemId, patch, wallDistance);
+      const r = changeEdgeItem(structure, featureId, itemId, patch, wallDistance, doors);
       if (!r.ok) {
-        setHint(r.reason === "solid" ? "אי אפשר לשקוע מדרגות בצד הזה" : patch.inner ? "הצד הזה צמוד לקיר — אין מאיפה לעלות" : "אין מספיק מקום מחוץ לבמה בצד הזה — רק פנימי");
+        setHint(r.reason === "solid" ? "אי אפשר לשקוע מדרגות בצד הזה" : patch.inner ? "הצד הזה צמוד לקיר ואין בו דלת — אין מאיפה לעלות" : "אין מספיק מקום מחוץ לבמה בצד הזה — רק פנימי");
         return;
       }
       editStructure(() => r.structure);
     },
-    [structure, wallDistance, editStructure],
+    [structure, wallDistance, doors, editStructure],
   );
   const removeEdge = useCallback(
     (featureId: string, itemId: string) => {
@@ -886,7 +901,7 @@ export function HallsScreen() {
     },
     [editStructure],
   );
-  const fillEdges = useCallback((featureId: string, kind: VenueEdgeKind) => editStructure((s) => fillFeatureEdges(s, featureId, kind, wallDistance)), [editStructure, wallDistance]);
+  const fillEdges = useCallback((featureId: string, kind: VenueEdgeKind) => editStructure((s) => fillFeatureEdges(s, featureId, kind, wallDistance, doors)), [editStructure, wallDistance, doors]);
   const startEdge = useCallback((featureId: string, kind: VenueEdgeKind) => {
     setActiveEdge(null);
     setEdgePick((cur) => (cur && cur.featureId === featureId && cur.kind === kind ? null : { featureId, kind }));
@@ -2080,6 +2095,21 @@ export function HallsScreen() {
                   clientToMm={clientToMm}
                   mm={mm}
                 />
+                {/* The line the יישור row under the pointer would align to — the first selected's
+                    edge or centre line across the selection, while the row is aimed at. */}
+                {alignGuideLine && (
+                  <line
+                    className="pointer-events-none"
+                    aria-hidden
+                    x1={alignGuideLine.axis === "x" ? alignGuideLine.at : alignGuideLine.from}
+                    y1={alignGuideLine.axis === "x" ? alignGuideLine.from : alignGuideLine.at}
+                    x2={alignGuideLine.axis === "x" ? alignGuideLine.at : alignGuideLine.to}
+                    y2={alignGuideLine.axis === "x" ? alignGuideLine.to : alignGuideLine.at}
+                    stroke="var(--color-accent)"
+                    strokeWidth={1.5}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
                 {/* The editor's own figures under "הצגת מידות" — element sizes, door chains, the
                     selected element's gaps to the walls, freehand zone sides — and the selected
                     door's chain always (components/venue-dims.tsx). */}
@@ -2136,10 +2166,12 @@ export function HallsScreen() {
                   onRestack={(how) => restackSelection(how)}
                   canRestack={(how) => canRestack(structure, featureSelection, how)}
                   onAlign={alignFeatures}
+                  onAlignPreview={setAlignPreview}
                   onLock={(locked) => setLocked(featureSelection, locked)}
                   activeEdge={activeEdge}
                   edgePick={edgePick}
                   wallDistance={wallDistance}
+                  doors={doors}
                   onSelectEdge={selectEdgeItem}
                   onEdgeChange={changeEdge}
                   onRemoveEdge={removeEdge}

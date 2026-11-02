@@ -585,10 +585,14 @@ export function OutputsScreen({
               const pageOf = (o: "portrait" | "landscape") => ({ page: o === "portrait" ? "sheet-portrait" : "sheet-landscape" });
               // A text page of the set (cover, schedules): the page's own margin, because the map
               // view prints at `@page { margin: 0 }` — the drawing sheets own theirs inside the SVG.
+              // `sheet-text` is what keeps that padding ON PAPER: print CSS strips every sheet's
+              // padding (the drawing sheets frame themselves inside the SVG) and gives it back to
+              // this class alone (globals.css) — without it the cover and the schedules printed
+              // flush to the paper's edge, and the printer's unprintable strip cut their sides.
               const textPage = (key: string, body: React.ReactNode, fixed = false) => (
                 <article
                   key={key}
-                  className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`}
+                  className={`sheet sheet-text bg-canvas shadow-lifted${mono ? " grayscale" : ""}`}
                   style={{ ...pageOf(textOrient), width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
                 >
                   {body}
@@ -645,6 +649,9 @@ export function OutputsScreen({
                     letters={sheet.tables === "full" ? letters : undefined}
                     summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
                     mono={mono}
+                    // Colour = every element filled by its kind, named in the sheet's legend (KEY in
+                    // placement-map.tsx); B&W = the same by grey.
+                    keyed={!mono}
                     paper={paperOf(pg.o)}
                     {...frame}
                   />

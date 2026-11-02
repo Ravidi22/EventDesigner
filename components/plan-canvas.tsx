@@ -70,6 +70,9 @@ export interface ContextMenuItem {
   onSelect: () => void;
   /** A submenu: "יישור ›" and its rows. One level deep. */
   children?: ContextMenuItem[];
+  /** Told when the row is under the pointer (true) and when the pointer leaves it or the menu
+   *  closes (false) — components/menu.tsx's `MenuItem.onHover`, for a row that can show its effect. */
+  onHover?: (hovering: boolean) => void;
 }
 
 // A connected wall graph the canvas can draw and reshape alongside (or instead of) the single
@@ -166,6 +169,9 @@ export interface CanvasLayerContext {
   /** Whether the canvas's "הצגת מידות" is on — a host draws its own figures (an element's size, a
    *  door's distances) under the same switch the walls' lengths answer to. */
   dims: boolean;
+  /** Open the canvas's right-click menu at a screen point with these rows — for a thing a layer
+   *  draws that has verbs of its own (the fill tool's decks). Nothing opens for no rows. */
+  openMenu?: (clientX: number, clientY: number, items: ContextMenuItem[]) => void;
 }
 export type CanvasLayer = ReactNode | ((ctx: CanvasLayerContext) => ReactNode);
 
@@ -1525,7 +1531,16 @@ export function PlanCanvas({
   // once. Before this, the context was rebuilt — and every layer re-run — on every render of the
   // canvas, which a drag made happen per frame (each snap lit a guide line).
   const layerCtx = useMemo<CanvasLayerContext>(
-    () => ({ clientToMm, mm: (px: number) => px * mmPerPx, snap: snapHost, endSnap, dims: showDims }),
+    () => ({
+      clientToMm,
+      mm: (px: number) => px * mmPerPx,
+      snap: snapHost,
+      endSnap,
+      dims: showDims,
+      openMenu: (x: number, y: number, items: ContextMenuItem[]) => {
+        if (items.length) setMenu({ x, y, items });
+      },
+    }),
     [clientToMm, mmPerPx, snapHost, endSnap, showDims],
   );
   const backdropNode = useMemo(() => (typeof backdrop === "function" ? backdrop(layerCtx) : backdrop), [backdrop, layerCtx]);
@@ -2848,6 +2863,17 @@ function CanvasMenu({ x, y, items, onClose }: { x: number; y: number; items: Con
   // edge of the window would otherwise hang off it.
   const [at, setAt] = useState({ top: y, left: x });
   const [subAt, setSubAt] = useState<{ top: number; left: number } | null>(null);
+  // The row whose `onHover(true)` was called last — told `false` when the pointer moves on, and when
+  // the menu goes away under it (a choice, a click outside, Escape), so a preview never outlives it.
+  const hovered = useRef<ContextMenuItem | null>(null);
+  const aim = (it: ContextMenuItem | null) => {
+    if (hovered.current === it) return;
+    hovered.current?.onHover?.(false);
+    hovered.current = it;
+    it?.onHover?.(true);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => aim(null), []);
   useLayoutEffect(() => {
     const r = panel.current?.getBoundingClientRect();
     if (!r) return;
@@ -2900,7 +2926,8 @@ function CanvasMenu({ x, y, items, onClose }: { x: number; y: number; items: Con
               data-row={i}
               className={cls}
               disabled={it.disabled}
-              onMouseEnter={() => setOpen(null)}
+              onMouseEnter={() => { setOpen(null); aim(it); }}
+              onMouseLeave={() => aim(null)}
               onClick={() => { it.onSelect(); onClose(); }}
             >
               {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
@@ -2918,7 +2945,16 @@ function CanvasMenu({ x, y, items, onClose }: { x: number; y: number; items: Con
           style={subAt ?? { top: 0, left: 0, visibility: "hidden" }}
         >
           {kids.map((it, k) => (
-            <button key={k} type="button" role="menuitem" className={cls} disabled={it.disabled} onClick={() => { it.onSelect(); onClose(); }}>
+            <button
+              key={k}
+              type="button"
+              role="menuitem"
+              className={cls}
+              disabled={it.disabled}
+              onMouseEnter={() => aim(it)}
+              onMouseLeave={() => aim(null)}
+              onClick={() => { it.onSelect(); onClose(); }}
+            >
               {it.icon && <it.icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
               {it.label}
             </button>

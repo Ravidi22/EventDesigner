@@ -37,6 +37,7 @@ import {
   type CornerPiece,
   type EdgeItemShape,
   type EdgeRun,
+  stageHoles,
   type StagePlacement,
 } from "@/lib/design-document/stage";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
@@ -44,7 +45,7 @@ import { wallDistanceOf } from "@/lib/venues/stage-edges";
 import { emptyStructure, featurePlacement, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import { primeCatalog } from "@/lib/catalog/storage";
-import { rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage";
+import { mergeStages, rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage";
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
 import { applyTransform, headingDeg, roomTransform, turn } from "./frame";
@@ -142,8 +143,9 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
   const at = roomTransform(p, opts.floorZ ?? 0);
   const baseH = stageHeight(stage, deckOf);
   const levelTop = (level: string | undefined): number => (level ? (stage.levels?.find((l) => l.id === level)?.heightMm ?? baseH) : baseH);
-  /** The floor an edge item on `level` climbs from, and stands on outside the stage. */
-  const levelFloor = (level: string | undefined): number => (level ? baseH : 0);
+  /** The floor a corner piece on `level` stands on: the base deck, or the room's where the level
+   *  looks out at it (a part merged in at its own height). An edge item says its own (floorMm). */
+  const levelFloor = (level: string | undefined, outer = false): number => (level && !outer ? baseH : 0);
   const deckTop = opts.built
     ? // Stone slabs, matte: marble's veins on a near-white platform read as cracks up close.
       surfaceMaterial("paving", opts.built)
@@ -170,7 +172,13 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
   const tops: Part[] = [];
   const bodies: Part[] = [];
   for (const s of surfaces) {
-    const holes = shapes.filter(({ item, shape }) => shape.inner && shape.kind === "stairs" && item.level === s.level).map(({ shape }) => ({ outline: recessHole(shape.polygon) }));
+    // …and the spots left bare on purpose (StagePiece.hole), open all the way down.
+    const holes = [
+      ...shapes.filter(({ item, shape }) => shape.inner && shape.kind === "stairs" && item.level === s.level).map(({ shape }) => ({ outline: recessHole(shape.polygon) })),
+      ...stageHoles(stage, deckOf)
+        .filter((h) => h.level === s.level)
+        .map((h) => ({ outline: recessHole(h.outline) })),
+    ];
     const hollow = holes.length ? { holes } : {};
     tops.push({ shape: "extrude", outline: { outline: s.outline }, h: DECK_TOP_MM, at: vec3(0, 0, s.top - DECK_TOP_MM), ...hollow });
     if (s.top - DECK_TOP_MM > 0) bodies.push({ shape: "extrude", outline: { outline: s.outline }, h: s.top - DECK_TOP_MM, at: vec3(0, 0, 0), ...hollow });
@@ -187,7 +195,7 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
   const backdropH = rowHeight(stage.backdropVariant) ?? BACKDROP_HEIGHT_MM;
   for (const { item, shape } of shapes) {
     const tag: NodeTag = { type: "edge", id: item.id, label: shape.kind };
-    const floor = levelFloor(item.level);
+    const floor = shape.floorMm;
     const top = levelTop(item.level);
     const bid = `${id}:edge:${item.id}`;
     switch (shape.kind) {
@@ -219,7 +227,7 @@ function buildStage(p: StagePlacement, id: string, out: SceneCollector, opts: St
 
   // 3. Corner pieces where two runs of stairs or two banquettes meet.
   const cornerParts: Part[] = [];
-  for (const c of stageCorners(stage, deckOf)) cornerParts.push(...cornerPieceParts(c, shapes, levelFloor(c.level), levelTop(c.level)));
+  for (const c of stageCorners(stage, deckOf)) cornerParts.push(...cornerPieceParts(c, shapes, levelFloor(c.level, c.outer), levelTop(c.level)));
   if (cornerParts.length) out.body(`${id}:corners`, { type: "corner", id, label: "פינה" }, deckTop, cornerParts, [at]);
 
   // 4. The skirt: a pleated strip hanging down every open edge nothing stands against.
@@ -276,20 +284,12 @@ export function recessHole(polygon: readonly Point[]): Point[] {
 
 // --- stairs ----------------------------------------------------------------------------------
 
-/** The lines across a flight, from its edge on the stage to its foot: the edge line (the first half
- *  of `polygon`), then `treads` regrouped into one polyline per line (on a curved side each line is
- *  several segments), then `farLine`. `treads + 1` lines; the strip between two is one tread. */
+/** The lines across a flight, from its edge on the stage to its foot (EdgeItemShape.lines): `treads
+ *  + 1` of them, the strip between two one tread. A mitred end (lib/design-document/stage.ts
+ *  edgeJoints) has already cut each where its neighbour's crosses it, so the treads of two flights
+ *  meeting at an inside corner meet on the valley, block against block. */
 export function treadLines(shape: EdgeItemShape): Point[][] {
-  const n = shape.polygon.length / 2;
-  const edge = shape.polygon.slice(0, n);
-  const per = Math.max(1, n - 1);
-  const lines: Point[][] = [edge];
-  for (let i = 0; i + per <= shape.treads.length; i += per) {
-    const segs = shape.treads.slice(i, i + per);
-    lines.push([segs[0][0], ...segs.map((s) => s[1])]);
-  }
-  lines.push(shape.farLine);
-  return lines;
+  return shape.lines;
 }
 
 /** The TOP of tread `k` of a flight (k = 0 against the edge), above the flight's own floor. An outer
@@ -305,7 +305,7 @@ export function treadParts(shape: EdgeItemShape, floorZ: number): Part[] {
   const parts: Part[] = [];
   for (let k = 0; k + 1 < lines.length; k++) {
     const h = treadTop(shape, k);
-    if (h <= 0) continue;
+    if (h <= 0 || lines[k].length < 2 || lines[k + 1].length < 2) continue;
     parts.push({ shape: "extrude", outline: { outline: [...lines[k], ...[...lines[k + 1]].reverse()] }, h, at: vec3(0, 0, floorZ) });
   }
   return parts;
@@ -416,15 +416,17 @@ export function cornerPieceParts(c: CornerPiece, shapes: readonly { item: StageS
     const h = top && top.shape === "extrude" ? top.h : BENCH_TOP_MM + (deckZ - floorZ);
     return [{ shape: "extrude", outline: { outline: c.polygon }, h, at: vec3(0, 0, floorZ) }];
   }
-  const treads = Math.max(1, Math.round(d / TREAD_MM));
+  // In the stage's own tread (CornerPiece.treadMm — the crew's module), like the runs it joins.
+  const treadMm = c.treadMm || TREAD_MM;
+  const treads = Math.max(1, Math.round(d / treadMm));
   const rise = deckZ - floorZ;
   const riserMm = neighbour?.riserMm || Math.round(rise / (treads + 1));
   const parts: Part[] = [];
   for (let k = 0; k < treads; k++) {
     const h = neighbour ? treadTop(neighbour, k) : rise - (k + 1) * riserMm;
     if (h <= 0) continue;
-    const a = k * TREAD_MM;
-    const b = Math.min(d, (k + 1) * TREAD_MM);
+    const a = k * treadMm;
+    const b = Math.min(d, (k + 1) * treadMm);
     const outline: Point[] = k === 0 ? [corner, pt(b, 0), pt(b, b), pt(0, b)] : [pt(a, 0), pt(b, 0), pt(b, b), pt(0, b), pt(0, a), pt(a, a)];
     parts.push({ shape: "extrude", outline: { outline }, h, at: vec3(0, 0, floorZ) });
   }
@@ -636,6 +638,31 @@ if (isMain(import.meta.url)) {
     assert(bSlab.material.texture === "paving" && bSlab.material.colour === "#fbf9f4", "a painted venue stage's top is stone slabs in its colour");
     assert(bBodies.find((b) => b.tag.type === "edge" && b.tag.id === "vf")!.material === bSlab.material, "…its steps the same stone");
     assert(!bBodies.some((b) => b.tag.type === "skirt"), "…and no cloth hangs round a built platform");
+
+    // ── MERGED AT TWO HEIGHTS: a 4×2 at 40 beside a 4×2 at 60, one flight along each front, made ONE
+    // stage (mergeStages): the 60 part a level, its slab at 60 from the floor, its flight climbing
+    // from the floor (not from the base deck) to 60, both flights in one number of steps.
+    const tall: StageBuild = { outline: rectOutline(4000, 2000), front: 0, decks: ["deck-244x122"], heightMm: 600, stairs: [{ id: "tf", edge: 0, t: 0.5, widthMm: 4000, full: true }] };
+    const low: StageBuild = { ...tall, heightMm: 400, stairs: [{ id: "lf", edge: 0, t: 0.5, widthMm: 4000, full: true }] };
+    const merged = mergeStages(
+      [
+        { id: "lo", variantId: "deck-244x122", layer: "floor", quantity: 1, scale: 1, position: { x: 2000, y: 1000 }, rotation: 0, stage: low },
+        { id: "hi", variantId: "deck-244x122", layer: "floor", quantity: 1, scale: 1, position: { x: 6000, y: 1000 }, rotation: 0, stage: tall },
+      ],
+      deckOf,
+    )!;
+    const mOut = new SceneCollector();
+    stageNodes({ id: "m", variantId: "deck-244x122", layer: "floor", quantity: 1, scale: 1, position: merged.position, rotation: merged.rotation, stage: merged.stage }, mOut, opts);
+    const mBodies = mOut.nodes().filter((n) => n.kind === "body");
+    const mTops = mBodies.find((b) => b.id === "m:decks")!.parts.map(topOf).sort((a, b) => a - b);
+    assert(mTops.length === 2 && near(mTops[0], 400) && near(mTops[1], 600), "a merged stage at two heights stands as two slabs, at 40 and at 60");
+    const lvItem = merged.stage.stairs!.find((it) => it.level)!;
+    const lvFlight = mBodies.find((b) => b.tag.type === "edge" && b.tag.id === lvItem.id)!;
+    const baseFlight = mBodies.find((b) => b.tag.type === "edge" && b.tag.id !== lvItem.id)!;
+    assert(lvFlight.parts.every((q) => q.at.z === 0) && near(topOf(lvFlight.parts[0]), 450), "…the 60 part's flight stands on the floor, its top tread one riser under 60");
+    assert(lvFlight.parts.length === baseFlight.parts.length && near(topOf(baseFlight.parts[0]), 300), "…and the 40 part's in as many treads, its risers 10cm");
+    const mSkirt = mBodies.find((b) => b.tag.type === "skirt")!;
+    assert(mSkirt.parts.some((q) => q.shape === "ribbon" && q.h === 600 && q.at.z === 0) && mSkirt.parts.some((q) => q.shape === "ribbon" && q.h === 400 && q.at.z === 0), "…skirted from the floor at each part's own height");
 
     const stats = out.stats();
     console.log(`scene stage ok: ${stats.bodies} bodies, ${stats.instances} instances for the 6×4`);

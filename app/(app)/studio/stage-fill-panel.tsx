@@ -1,8 +1,11 @@
 "use client";
 
-import { Check, Expand, Grid2x2Plus, PenLine, Ruler, Squircle, TriangleAlert, X } from "lucide-react";
+import { Check, Copy, Expand, FlipHorizontal2, Grid2x2Plus, Move, PenLine, Pin, PinOff, RotateCw, Ruler, Square, Squircle, TriangleAlert, X } from "lucide-react";
 import type { Point } from "@/lib/studio/hall";
-import { asRect, type DeckType, type FillResult } from "@/lib/studio/stage-fill";
+import type { StagePiece } from "@/lib/design-document/types";
+import { Select } from "@/components/select";
+import { asRect, type DeckType } from "@/lib/studio/stage-fill";
+import type { StageLayout } from "@/lib/design-document/stage";
 import type { AreaShape, RoundedAt } from "@/lib/studio/stage-draw";
 import type { PieceInfo } from "@/lib/studio/stage-rim";
 import { MissingPieces } from "./missing-pieces";
@@ -34,6 +37,8 @@ export type StageFillState =
       editing?: string;
       /** Corner by corner, or round (lib/studio/stage-draw.ts AreaShape). Absent = corners. */
       shape?: AreaShape;
+      /** …and the decks put by hand (see the pick phase's), which stand in the room. */
+      pieces?: StagePiece[];
     }
   | {
       phase: "pick";
@@ -58,7 +63,66 @@ export type StageFillState =
       roundedMm?: number;
       roundedAt?: RoundedAt;
       bowMm?: number;
+      /** Decks put BY HAND — dragged to their place, swapped for another size, turned — each a piece
+       *  of the stage (StageBuild.pieces) the fill lays the rest round. In the ROOM's frame (centre
+       *  and facing in room mm/degrees), so a redraw or a reshape of the area leaves them standing;
+       *  carried into the stage's own frame for the preview and the saved stage. */
+      pieces?: StagePiece[];
+      /** The deck (or hole) picked on the plan — what the bar's "פלטה" chip, the right-click menu
+       *  and the keys act on. */
+      picked?: DeckRef;
     };
+
+/** One deck of the preview: a PIECE (StageBuild.pieces — put by hand, or a hole) by its index there,
+ *  or a deck the fill LAID by its index in the layout's decks. */
+export type DeckRef = { kind: "piece"; index: number } | { kind: "deck"; index: number };
+export const sameDeckRef = (a: DeckRef | undefined, b: DeckRef | undefined): boolean => !!a && !!b && a.kind === b.kind && a.index === b.index;
+
+/** What the designer may do to the picked deck — from the bar, the right-click menu or the keys.
+ *  Every one but "release", "releaseAll" and "unpick" PINS a laid deck where it stands (it becomes a
+ *  piece) and amends a pinned one. */
+export type DeckAction =
+  | { type: "swap"; typeId: string }
+  /** A quarter turn more. */
+  | { type: "turn" }
+  /** Facing, degrees, relative to the stage. */
+  | { type: "rotate"; deg: number }
+  /** Flipped across its own width — a shaped piece's mirror image. */
+  | { type: "flip" }
+  /** A copy, flush beside it. */
+  | { type: "duplicate" }
+  /** A laid deck pinned where it stands. */
+  | { type: "pin" }
+  /** A piece let go — the fill lays that floor again. */
+  | { type: "release" }
+  /** A bare spot — no deck laid there, the platform open — or a deck again. */
+  | { type: "hole"; on: boolean }
+  /** Its centre put at (x, y) from the area's left end and its front, in the stage's frame, mm. */
+  | { type: "place"; xMm: number; yMm: number }
+  /** Its centre put here, in the room, mm — where a drag let it go. */
+  | { type: "move"; centre: { x: number; y: number } }
+  /** Moved by (dx, dy) in the room, mm. */
+  | { type: "nudge"; dx: number; dy: number }
+  | { type: "releaseAll" }
+  | { type: "unpick" };
+
+/** The picked deck as the bar shows it. */
+export interface PickedDeck {
+  ref: DeckRef;
+  typeId: string;
+  widthMm: number;
+  depthMm: number;
+  /** A piece — put by hand, or a hole. */
+  pinned: boolean;
+  hole: boolean;
+  /** A shaped piece (a quarter-round, a curved deck): it has a mirror image worth offering. */
+  shaped: boolean;
+  /** Facing relative to the stage, degrees. */
+  rotationDeg: number;
+  /** Its centre from the area's left end and from its front, in the stage's frame, mm. */
+  xMm: number;
+  yMm: number;
+}
 
 const cm = (mm: number) => Math.round(mm / 10);
 /** Metres for a stage's own measurements: "3.66", "4" — a stage is talked about in metres. */
@@ -73,12 +137,15 @@ export function StageFillPanel({
   onRedraw,
   onResize,
   onCommit,
+  picked,
+  pinnedCount,
+  onDeck,
   onAddPieces,
   onClose,
 }: {
   state: Extract<StageFillState, { phase: "pick" }>;
   types: (DeckType & { name: string })[];
-  layout: FillResult | null;
+  layout: StageLayout | null;
   /** The area overlaps a stage already on the plan (or the venue's own). Said, not refused — a
    *  designer replacing the house stage with a bigger one means to. */
   overlaps: boolean;
@@ -86,12 +153,19 @@ export function StageFillPanel({
   onRedraw: () => void;
   onResize: (widthMm: number, depthMm: number) => void;
   onCommit: () => void;
+  /** The deck picked on the plan, and how many decks stand pinned by hand (holes among them). */
+  picked: PickedDeck | null;
+  pinnedCount: number;
+  /** What the designer asks of the picked deck (or of all the pinned ones). */
+  onDeck: (action: DeckAction) => void;
   /** Put these rim pieces — a quarter-round, a curved deck, a triangle the stage needs and the studio
    *  lacks — into the catalog (category stage-decks), chosen for this stage. */
   onAddPieces: (infos: PieceInfo[]) => void;
   onClose: () => void;
 }) {
   const decks = layout?.decks ?? [];
+  const holes = layout?.holes.length ?? 0;
+  const rectTypes = types.filter((t) => !t.round && !t.outline);
   const byType = types
     .map((t) => ({ t, n: decks.filter((d) => d.typeId === t.id).length }))
     .filter((x) => x.n > 0);
@@ -128,7 +202,7 @@ export function StageFillPanel({
     <Bar
       icon={Grid2x2Plus}
       title={state.editing ? "עריכת במה" : "מילוי במות"}
-      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, heights.length ? `גובה ${heights.join("/")} ס״מ` : null, missing.length > 0 ? `${missing.length} חסרות` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
+      facts={[roundSize, `${areaM2 < 10 ? areaM2.toFixed(2) : areaM2.toFixed(1)} מ״ר`, `${decks.length} פלטות`, holes > 0 ? (holes === 1 ? "פתח אחד" : `${holes} פתחים`) : null, heights.length ? `גובה ${heights.join("/")} ס״מ` : null, missing.length > 0 ? `${missing.length} חסרות` : null, `כיסוי ${pct}%`].filter(Boolean).join(" · ")}
       onClose={onClose}
     >
       <Popover label="אילו במות" icon={Grid2x2Plus} value={`${state.chosen.length} מתוך ${types.length}`} panelClassName="w-80">
@@ -145,6 +219,93 @@ export function StageFillPanel({
           מקבל שורת פלטות מסובבות לאורכו, והשוליים שאף פלטה לא נכנסת אליהם נשארים בצד האחורי.
         </Note>
       </Popover>
+
+      {/* A deck picked on the plan — or, with none picked, the decks pinned by hand: its size, facing
+          and place typed; a copy, a pin, a release, a hole left bare. The same verbs are on the
+          deck's right-click menu and on the keys (lib/studio/deck-move.ts; studio-screen deckAction). */}
+      {(picked || pinnedCount > 0) && (
+        <Popover
+          label={picked?.hole ? "פתח" : "פלטה"}
+          icon={picked?.hole ? Square : Move}
+          value={picked ? `${cm(picked.widthMm)}×${cm(picked.depthMm)}${picked.hole ? " · ללא פלטה" : picked.pinned ? " · במקומה" : ""}` : `${pinnedCount} במקומן`}
+          panelClassName="w-[23rem]"
+        >
+          {picked ? (
+            <>
+              <PanelRow label={picked.hole ? "מידת הפתח" : "מידה"} stack>
+                <Select
+                  value={rectTypes.some((t) => t.id === picked.typeId) ? picked.typeId : ""}
+                  onChange={(v) => v && onDeck({ type: "swap", typeId: v })}
+                  aria-label={picked.hole ? "מידת הפתח" : "מידת הפלטה"}
+                  options={[
+                    ...(rectTypes.some((t) => t.id === picked.typeId) ? [] : [{ value: "", label: "פלטה בצורה" }]),
+                    ...rectTypes.map((t) => ({ value: t.id, label: `${t.name} · ${cm(t.widthMm)}×${cm(t.depthMm)}${t.heightMm ? ` · ${cm(t.heightMm)} ס״מ` : ""}` })),
+                  ]}
+                  className="w-full"
+                />
+              </PanelRow>
+              <PanelRow label="זווית" htmlFor="deck-deg">
+                <div className="flex items-center gap-2">
+                  <NumberField id="deck-deg" decimals={0} min={0} max={359} step={5} commitOnBlur value={Math.round(picked.rotationDeg)} onChange={(v) => onDeck({ type: "rotate", deg: v })} className="w-20" />
+                  <span className="text-xs text-muted">°</span>
+                  <Button size="sm" variant="outline" onClick={() => onDeck({ type: "turn" })} title="סיבוב ברבע סיבוב · R">
+                    <RotateCw className="h-3.5 w-3.5" strokeWidth={2} />
+                    90°
+                  </Button>
+                  {picked.shaped && (
+                    <Button size="sm" variant="outline" onClick={() => onDeck({ type: "flip" })} title="תמונת ראי של הפלטה">
+                      <FlipHorizontal2 className="h-3.5 w-3.5" strokeWidth={2} />
+                      היפוך
+                    </Button>
+                  )}
+                </div>
+              </PanelRow>
+              <PanelRow label="מיקום המרכז (ס״מ)">
+                <div className="flex items-center gap-2">
+                  <NumberField aria-label="מהקצה השמאלי" decimals={0} min={0} step={10} commitOnBlur value={cm(picked.xMm)} onChange={(v) => onDeck({ type: "place", xMm: v * 10, yMm: picked.yMm })} className="w-20" />
+                  <span className="text-xs text-muted">משמאל</span>
+                  <NumberField aria-label="מהחזית" decimals={0} min={0} step={10} commitOnBlur value={cm(picked.yMm)} onChange={(v) => onDeck({ type: "place", xMm: picked.xMm, yMm: v * 10 })} className="w-20" />
+                  <span className="text-xs text-muted">מהחזית</span>
+                </div>
+              </PanelRow>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => onDeck({ type: "duplicate" })} title="עותק צמוד לידה · Ctrl+D">
+                  <Copy className="h-3.5 w-3.5" strokeWidth={2} />
+                  שכפול
+                </Button>
+                {picked.pinned ? (
+                  <Button size="sm" variant="outline" className="flex-1" onClick={() => onDeck({ type: "release" })} title="חזרה למילוי האוטומטי · Delete">
+                    <PinOff className="h-3.5 w-3.5" strokeWidth={2} />
+                    שחרור
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" className="flex-1" onClick={() => onDeck({ type: "pin" })} title="נשארת בדיוק כאן כשהשאר מסתדרות">
+                    <Pin className="h-3.5 w-3.5" strokeWidth={2} />
+                    נעיצה במקום
+                  </Button>
+                )}
+                <Button size="sm" variant={picked.hole ? "primary" : "outline"} className="flex-1" onClick={() => onDeck({ type: "hole", on: !picked.hole })} title="עמוד שעובר דרך הבמה, פתח שירות — אין שם פלטה והבמה פתוחה">
+                  <Square className="h-3.5 w-3.5" strokeWidth={2} />
+                  {picked.hole ? "חזרה לפלטה" : "פתח ללא פלטה"}
+                </Button>
+              </div>
+              <Note>
+                פלטה שגררתם, החלפתם, סובבתם או שכפלתם ננעצת במקומה והמילוי מסדר את השאר סביבה. פתח נשאר ריק —
+                אין בו פלטה, הוא לא נספר ולא מחופה. במקלדת: חצים מזיזים ס״מ (Shift — 10), R מסובב, Ctrl+D
+                משכפל, Delete משחרר, Esc מבטל את הבחירה. לחיצה ימנית על פלטה פותחת את אותן פעולות.
+              </Note>
+            </>
+          ) : (
+            <Note>{pinnedCount === 1 ? "פלטה אחת נעוצה במקומה" : `${pinnedCount} פלטות נעוצות במקומן`} — המילוי מסדר את השאר סביבן. לחיצה על פלטה בתוכנית בוחרת אותה; גרירה מזיזה.</Note>
+          )}
+          {pinnedCount > 0 && (
+            <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onDeck({ type: "releaseAll" })}>
+              <PinOff className="h-3.5 w-3.5" strokeWidth={2} />
+              שחרור כל הפלטות הנעוצות למילוי
+            </Button>
+          )}
+        </Popover>
+      )}
 
       <Popover label="חריגה מהקו" icon={Expand} value={state.exceed ? "מותרת" : "לא"} panelClassName="w-80">
         <Segmented

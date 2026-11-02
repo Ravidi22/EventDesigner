@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box } from "lucide-react";
+import { useRef, useState } from "react";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, Layers, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box, Camera, ImageOff } from "lucide-react";
 import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
 import { Button } from "@/components/button";
@@ -53,6 +53,7 @@ export function Toolbar({
   onSaveSketch,
   onLoadSketch,
   onDeleteSketch,
+  onSketchPhoto,
   saveState,
   onRetrySave,
   removedFeatures = [],
@@ -97,6 +98,8 @@ export function Toolbar({
   onSaveSketch: (name: string) => void;
   onLoadSketch: (id: string, mode: "replace" | "add") => void;
   onDeleteSketch: (id: string) => void;
+  /** A photo of the real event for a saved sketch's card in the meeting — or null to take it off. */
+  onSketchPhoto: (id: string, file: File | null) => void;
   saveState: "saving" | "saved" | "error";
   onRetrySave: () => void;
   /** The venue's own features this event took out of its room (FeaturePlacement.removed), and how
@@ -156,7 +159,7 @@ export function Toolbar({
       {/* Saved sketches: the whole drawing kept under a name, to start the next event from or to
           load into this one. Beside the numbering panel because it is the same kind of thing — a
           question about the document as a whole, not about what is selected in it. */}
-      <SketchMenu sketches={sketches} sketchEmpty={sketchEmpty} onSave={onSaveSketch} onLoad={onLoadSketch} onDelete={onDeleteSketch} />
+      <SketchMenu sketches={sketches} sketchEmpty={sketchEmpty} onSave={onSaveSketch} onLoad={onLoadSketch} onDelete={onDeleteSketch} onPhoto={onSketchPhoto} />
 
       {/* What this event wheeled out of the venue's room — only while there is something to bring
           back. Taken out from the canvas (Delete, or the feature's bar); the venue never lost it. */}
@@ -187,48 +190,7 @@ export function Toolbar({
 
       <div className="mx-1 h-6 w-px bg-border" />
 
-      <div className="flex items-center gap-1">
-        {PLANES.map((l) => {
-          const on = layerVisible[l.id];
-          const active = activeLayer === l.id;
-          return (
-            <div
-              key={l.id}
-              className={
-                "inline-flex items-center gap-1 rounded-md border ps-1 pe-2 py-1 text-xs transition-colors " +
-                (active
-                  ? "border-accent bg-accent-tint text-accent"
-                  : on
-                    ? "border-border bg-canvas text-ink"
-                    : "border-transparent text-muted")
-              }
-            >
-              {/* The eye is visibility. It is deliberately NOT the same press as choosing a layer to
-                  work in: hiding the ceiling and working on the ceiling are different questions, and
-                  one control that did both would make each of them unreachable half the time. */}
-              <button
-                type="button"
-                onClick={() => onToggleLayer(l.id)}
-                aria-pressed={on}
-                aria-label={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
-                title={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
-                className="rounded-sm p-0.5 transition-colors hover:bg-bg"
-              >
-                {on ? <Eye className="h-3.5 w-3.5" strokeWidth={2} /> : <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => onActivateLayer(l.id)}
-                aria-pressed={active}
-                title={active ? "חזרה לכל השכבות" : `עבודה בשכבת ${l.label} בלבד`}
-                className="font-medium"
-              >
-                {l.label}
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      <PlaneRail layerVisible={layerVisible} onToggleLayer={onToggleLayer} activeLayer={activeLayer} onActivateLayer={onActivateLayer} />
 
       {/* The room in 3D beside the sketch — the תלת-ממד tab's picture, live, following what is
           selected (./scene-preview.tsx). A toggle, so it wears the pressed field while the pane is
@@ -265,6 +227,90 @@ export function Toolbar({
         )}
       </div>
     </header>
+  );
+}
+
+/** The four planes as ONE control — a section through the room, read in a row: the tables, what is
+ *  laid on them, the floor around them, what hangs above (lib/studio/planes.ts).
+ *
+ *  It is a framed row of segments, `Segmented`'s geometry (components/segmented.tsx), because the
+ *  row is one question — which part of the room am I looking at — and that frame is what the app
+ *  draws round one question with several answers. It used to be four loose pills, each with its
+ *  own border that changed meaning (accent for "being worked in", grey for "shown", none at all for
+ *  "hidden"): four chips a designer decoded one at a time (2026-10-31, the user: "redesign the
+ *  layer visibility").
+ *
+ *  Two presses per plane, kept apart on purpose. The LABEL is "work in this plane only": while it is
+ *  on, the segment wears the toolbar's own pressed field — the tinted field the 3D button and the
+ *  canvas strip's tape wear while they are live — and the other planes go muted here as they dim on
+ *  the canvas; pressed again it lets go of every plane. The EYE LEADING the label is shown/hidden
+ *  (it trailed for a moment; the user asked for it first, same day), a glyph that is also the
+ *  toggle, so a hidden plane says so exactly where it was hidden (EyeOff, the whole segment faint)
+ *  and comes back from the same spot. One press that did both would make
+ *  each unreachable half the time: hiding the ceiling and working on the ceiling are different
+ *  questions. No hover reveal — the eye is drawn at rest, at quiet weight, like every card's "…".
+ *  The Layers glyph before the frame names the group, as the ScanEye names the zone select. */
+function PlaneRail({
+  layerVisible,
+  onToggleLayer,
+  activeLayer,
+  onActivateLayer,
+}: {
+  layerVisible: Record<Plane, boolean>;
+  onToggleLayer: (l: Plane) => void;
+  activeLayer: Plane | null;
+  onActivateLayer: (l: Plane) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Layers className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} aria-hidden />
+      <div role="group" aria-label="שכבות" className="flex items-center gap-0.5 rounded-md border border-border bg-canvas p-0.5">
+        {PLANES.map((l) => {
+          const on = layerVisible[l.id];
+          const active = activeLayer === l.id;
+          const heldBack = activeLayer !== null && !active;
+          return (
+            <div key={l.id} className={"flex items-center rounded-sm ps-0.5 transition-colors " + (active ? "bg-accent-tint" : "")}>
+              <button
+                type="button"
+                onClick={() => onToggleLayer(l.id)}
+                aria-pressed={on}
+                aria-label={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
+                title={on ? `הסתרת שכבת ${l.label}` : `הצגת שכבת ${l.label}`}
+                className={
+                  "rounded-pill p-1 transition-colors " +
+                  (active
+                    ? "text-accent hover:bg-accent-wash"
+                    : on
+                      ? "text-quiet hover:bg-accent-tint hover:text-accent"
+                      : "text-faint hover:bg-accent-tint hover:text-accent")
+                }
+              >
+                {on ? <Eye className="h-3.5 w-3.5" strokeWidth={2} aria-hidden /> : <EyeOff className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />}
+              </button>
+              <button
+                type="button"
+                onClick={() => onActivateLayer(l.id)}
+                aria-pressed={active}
+                title={active ? "חזרה לכל השכבות" : `עבודה בשכבת ${l.label} בלבד`}
+                className={
+                  "min-h-7 whitespace-nowrap rounded-sm ps-1 pe-2.5 text-xs leading-none transition-colors " +
+                  (active
+                    ? "font-semibold text-accent"
+                    : !on
+                      ? "font-medium text-faint hover:text-accent"
+                      : heldBack
+                        ? "font-medium text-muted hover:text-accent"
+                        : "font-medium text-ink-soft hover:text-accent")
+                }
+              >
+                {l.label}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -430,15 +476,20 @@ function SketchMenu({
   onSave,
   onLoad,
   onDelete,
+  onPhoto,
 }: {
   sketches: SketchTemplateSummary[];
   sketchEmpty: boolean;
   onSave: (name: string) => void;
   onLoad: (id: string, mode: "replace" | "add") => void;
   onDelete: (id: string) => void;
+  onPhoto: (id: string, file: File | null) => void;
 }) {
   const [name, setName] = useState("");
   const [confirm, setConfirm] = useState<{ kind: "replace" | "delete"; id: string; name: string } | null>(null);
+  // One hidden picker for every row; `photoFor` says whose photo it is picking.
+  const picker = useRef<HTMLInputElement>(null);
+  const photoFor = useRef<string | null>(null);
 
   // The confirmation is a native <dialog> inside the panel: the panel leaves Escape to it, and a
   // press inside it is a press inside the panel, so answering it never closes the list behind it.
@@ -478,6 +529,10 @@ function SketchMenu({
           <ul className="scroll-slim -mx-1 max-h-64 space-y-0.5 overflow-y-auto px-1">
             {sketches.map((sk) => (
               <li key={sk.id} className="flex items-center gap-1 rounded-sm px-1.5 py-1 hover:bg-inset">
+                {sk.photoUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx
+                  <img src={sk.photoUrl} alt="" className="h-8 w-8 shrink-0 rounded-sm object-cover" />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-ink" title={sk.name}>
                     {sk.name}
@@ -500,6 +555,16 @@ function SketchMenu({
                 >
                   הוספה
                 </button>
+                {/* The card's cover in the meeting's סקיצת פתיחה; without one the card draws the plan. */}
+                <BarButton
+                  icon={Camera}
+                  label={sk.photoUrl ? "החלפת תמונת האירוע" : "הוספת תמונה מהאירוע"}
+                  onClick={() => {
+                    photoFor.current = sk.id;
+                    picker.current?.click();
+                  }}
+                />
+                {sk.photoUrl && <BarButton icon={ImageOff} tone="danger" label="הסרת התמונה" onClick={() => onPhoto(sk.id, null)} />}
                 <BarButton
                   icon={Trash2}
                   tone="danger"
@@ -511,6 +576,17 @@ function SketchMenu({
           </ul>
         )}
       </div>
+      <input
+        ref={picker}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file && photoFor.current) onPhoto(photoFor.current, file);
+        }}
+      />
 
       <ConfirmDialog
         open={confirm !== null}

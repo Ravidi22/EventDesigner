@@ -365,6 +365,9 @@ export interface Dimensions {
 export interface ResizeRange {
   minMm: number;
   maxMm: number;
+  /** This side's own module, when it differs from the spec's `stepMm` — a banquette is laid to
+   *  length in 10cm modules but its depth is set in 5cm (45 or 60). Absent = the spec's. */
+  stepMm?: number;
 }
 
 /** A product the plan may SIZE rather than a product that comes in sizes.

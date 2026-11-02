@@ -87,8 +87,10 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   const kind = isRunner(product) ? "runner" : SYMBOL_BY_CATEGORY[product.category];
   if (!kind) return null;
   // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into. A banquette
-  // is a strip with two long sides — the same.
-  if (kind === "stairs" || kind === "ramp" || kind === "bench") return footprint.kind === "rect" ? kind : null;
+  // is a band with two long sides, and is laid along whatever band it was drawn as (lib/design-
+  // document/bench.ts benchLayoutFor) — only a circle has no long side to sit along.
+  if (kind === "stairs" || kind === "ramp") return footprint.kind === "rect" ? kind : null;
+  if (kind === "bench") return footprint.kind === "circle" ? null : kind;
   if (kind === "bar") return kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }

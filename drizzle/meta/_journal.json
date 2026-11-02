@@ -183,6 +183,20 @@
       "when": 1793373278023,
       "tag": "0025_venue_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793461501641,
+      "tag": "0026_stage_stair_step",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1793561356240,
+      "tag": "0027_sketch_pick_stage",
+      "breakpoints": true
     }
   ]
 }
