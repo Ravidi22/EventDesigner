@@ -30,7 +30,9 @@ import { ORG_HOME, type OrgKind } from "./kinds";
 /** Signed in, as anyone. */
 export async function requireSession(): Promise<Session> {
   const session = await currentSession();
-  if (!session) redirect("/login");
+  // `expired`: the browser may still carry a cookie whose session is gone, and proxy.ts bounces any
+  // cookie-holder away from /login — the flag tells it to clear the cookie instead of looping.
+  if (!session) redirect("/login?expired=1");
   return session;
 }
 
