@@ -35,9 +35,19 @@ type ShapeProps = Omit<React.SVGProps<SVGPathElement>, "d" | "ref">;
 
 /** One closed outline: filled whole, its LINE drawn without seams (outlineStrokeD) — a closed band's
  *  two caps lie on top of each other, and stroked they drew a line across a band whose entrance is
- *  0. Anything with no seam is the one path it always was. */
-export function OutlinePath({ outline, edgeCurves, ...props }: { outline: Point[]; edgeCurves?: Parameters<typeof outlinePathD>[1] } & ShapeProps) {
+ *  0. Anything with no seam is the one path it always was. An `open` one (lines only) is its lines
+ *  and no closing side, over its area left clear — clear, not absent, so it is still taken by the
+ *  pointer wherever its closed shape would be. */
+export function OutlinePath({ outline, edgeCurves, open, ...props }: { outline: Point[]; edgeCurves?: Parameters<typeof outlinePathD>[1]; open?: boolean } & ShapeProps) {
   const d = outlinePathD(outline, edgeCurves);
+  if (open) {
+    return (
+      <>
+        <path d={d} {...props} stroke="none" fillOpacity={0} />
+        <path d={outlinePathD(outline, edgeCurves, true)} {...props} fill="none" />
+      </>
+    );
+  }
   const line = props.stroke === "none" ? null : outlineStrokeD(outline, edgeCurves);
   if (!line) return <path d={d} {...props} />;
   return (
@@ -87,7 +97,7 @@ export function FootprintShape({
     return (
       <g>
         {footprint.parts.map((p, i) => (
-          <OutlinePath key={i} outline={p.outline} edgeCurves={p.edgeCurves} {...props} />
+          <OutlinePath key={i} outline={p.outline} edgeCurves={p.edgeCurves} open={p.open} {...props} />
         ))}
       </g>
     );
@@ -97,7 +107,7 @@ export function FootprintShape({
     // so a shape with one side bowed out stands on its visual centre, not its corners'.
     const b = customShapeBounds(footprint.outline, footprint.edgeCurves);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
-    return <OutlinePath outline={centered} edgeCurves={footprint.edgeCurves} {...props} />;
+    return <OutlinePath outline={centered} edgeCurves={footprint.edgeCurves} open={footprint.open} {...props} />;
   }
   const { widthMm: w, depthMm: d } = footprint;
   // Square corners. A rect footprint is a MEASUREMENT — a stage is a run of 100×200 modules, a

@@ -2,7 +2,7 @@
 // so ./items.ts (the dispatch and the table kinds), ./floor-kinds.ts and ./overhead.ts can all
 // import it without importing each other.
 import type { Footprint } from "@/lib/studio/footprint";
-import { footprintOutlines } from "@/lib/studio/footprint";
+import { buildHollow, footprintOutlines } from "@/lib/studio/footprint";
 import type { Product } from "@/lib/catalog/types";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
 import type { ChairStyle, DrawStyle } from "@/lib/catalog/symbols";
@@ -47,11 +47,18 @@ export interface ItemContext {
   chainMm?: number;
 }
 
+/** How thick a shape drawn as lines only stands in the room — a rope, a rail, a hedge-line. */
+const LINE_WALL_MM = 40;
+
 /** The ADR-5 fallback: the footprint extruded to the item's height, the row's photo on it when it
  *  has one. What an unknown category, a `symbol === false` row and "other" get. */
 export function fallbackBody(ctx: ItemContext): ItemBuild {
   const material: MaterialRef = { colour: ctx.tone, kind: "matte" };
   if (ctx.product?.imageUrl) material.image = { url: ctx.product.imageUrl, fit: "stretch" };
-  const parts: Part[] = footprintOutlines(ctx.footprint).map((outline) => ({ shape: "extrude", outline, h: Math.max(10, ctx.heightMm), at: vec3(0, 0, 0) }));
+  // A shape drawn as lines only stands as a thin wall along its lines: the band of a hollow shape
+  // whose closing side is open (buildHollow), so the side never drawn is never built.
+  const parts: Part[] = footprintOutlines(ctx.footprint)
+    .flatMap((o) => (o.open ? buildHollow(o, { bandMm: LINE_WALL_MM, openSides: [o.outline.length - 1] }) : [o]))
+    .map((outline) => ({ shape: "extrude", outline, h: Math.max(10, ctx.heightMm), at: vec3(0, 0, 0) }));
   return { parts, material, instanced: [], emitters: [] };
 }
