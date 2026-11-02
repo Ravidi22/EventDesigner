@@ -49,12 +49,13 @@ export function absoluteControlPoints(a: Point, b: Point, curve: EdgeCurve): { c
 }
 
 // SVG path "d" for a closed outline: straight edges by default, cubic bezier where
-// edgeCurves[i] is set. Edge i runs from outline[i] to outline[(i+1) % n].
-export function outlinePathD(outline: Point[], edgeCurves?: (EdgeCurve | null)[]): string {
+// edgeCurves[i] is set. Edge i runs from outline[i] to outline[(i+1) % n]. `open`: the last edge,
+// back to the first point, is left out and the path is not closed — a shape drawn as lines only.
+export function outlinePathD(outline: Point[], edgeCurves?: (EdgeCurve | null)[], open?: boolean): string {
   if (outline.length < 2) return "";
   const n = outline.length;
   let d = `M ${outline[0].x} ${outline[0].y}`;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < (open ? n - 1 : n); i++) {
     const a = outline[i];
     const b = outline[(i + 1) % n];
     const curve = edgeCurves?.[i];
@@ -65,7 +66,7 @@ export function outlinePathD(outline: Point[], edgeCurves?: (EdgeCurve | null)[]
       d += ` L ${b.x} ${b.y}`;
     }
   }
-  return d + " Z";
+  return open ? d : d + " Z";
 }
 
 // The LINE of a closed outline, without its seams: a straight edge walked once each way (a closed

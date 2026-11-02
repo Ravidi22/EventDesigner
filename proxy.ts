@@ -64,6 +64,14 @@ export function proxy(request: NextRequest) {
   // this layer must not do. The (app) layout bounces them on arrival — one extra hop for a case
   // that only happens when someone signed in navigates back to the sign-in page.
   if (hasCookie && AUTH_PAGES.includes(pathname)) {
+    // …unless the guard sent you here because that cookie names a session that no longer exists
+    // (lib/auth/guard.ts). Bouncing back would loop /dashboard ⇄ /login forever; drop the cookie
+    // and show the form.
+    if (pathname === "/login" && request.nextUrl.searchParams.has("expired")) {
+      const res = NextResponse.next();
+      for (const name of SESSION_COOKIES) res.cookies.delete(name);
+      return res;
+    }
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
