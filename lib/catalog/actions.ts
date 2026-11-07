@@ -10,7 +10,7 @@
 // clause, always.
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { currentOrg } from "@/lib/db/org";
+import { currentActor, currentOrg } from "@/lib/db/org";
 import { revalidateCatalog } from "@/lib/db/revalidate";
 import { products, productVariants, designDocuments, studioSettings } from "@/lib/db/schema";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
@@ -21,6 +21,8 @@ import { STANDARD_ITEMS, STANDARD_STAGE_KEYS, STANDARD_STAGE_PART_KEYS } from ".
 import { installStandardCatalog } from "./standard/install";
 import { standardProductId, uuidV5 } from "./standard/id";
 import { compositeShell, fromTableDesign } from "./composition";
+import { markBuiltIns, builtInKeyOf } from "./standard/built-ins";
+import { BUILT_IN_DELETE_REFUSAL, isBuiltInCategory } from "./built-in";
 
 // ── Input guards ───────────────────────────────────────────────────────────────────────────────
 //
@@ -77,7 +79,7 @@ function assertProduct(value: unknown): asserts value is Product {
  *  size, which then has to be de-duplicated anyway. At catalog scale both are instant; this one is
  *  simply less code and less garbage. */
 export async function fetchProducts(): Promise<Product[]> {
-  const organizationId = await currentOrg();
+  const { organizationId, organizationKind } = await currentActor();
   await adoptTableDesigns(organizationId);
   const database = db();
 
@@ -97,7 +99,10 @@ export async function fetchProducts(): Promise<Product[]> {
       ),
     );
 
-  return toProducts(rows, variantRows);
+  // Which rows are the studio's built-ins is derived from their ids (./standard/built-ins.ts), never
+  // stored. A supplier has no kit: what it sells in those categories is ordinary stock.
+  const list = toProducts(rows, variantRows);
+  return organizationKind === "supplier" ? list : markBuiltIns(list, organizationId);
 }
 
 /** The studio's saved table designs from before they were catalog rows (studio_settings.table_designs)
@@ -165,10 +170,21 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   // Read BEFORE the write: an upsert answers with the new row, so the old URL has to be fetched
   // while it is still the current one.
   const [existing] = await db()
-    .select({ imageUrl: products.imageUrl })
+    .select({ imageUrl: products.imageUrl, category: products.category })
     .from(products)
     .where(and(eq(products.id, product.id), eq(products.organizationId, organizationId)))
     .limit(1);
+
+  // The built-in kit (./built-in.ts): a studio never makes a NEW row in a built-in-only category —
+  // its one built-in is the category (the forms never offer it; this is a request that skipped
+  // them). A built-in itself stays in its own category and is never archived: hidden, it would be
+  // gone from the rail and the catalog with no way to make another.
+  if (builtInKeyOf(organizationId, product.id)) {
+    if (existing) row.category = existing.category;
+    row.archived = false;
+  } else if (!existing && isBuiltInCategory(row.category) && (await currentActor()).organizationKind !== "supplier") {
+    throw new Error("a built-in category takes no new row");
+  }
 
   await db().transaction(async (tx) => {
     await tx
@@ -287,10 +303,17 @@ async function isPartOfComposite(variantIds: string[], organizationId: string): 
  *  catalog instead of removed. Returns which of the two happened, so the screen can say so. */
 export async function removeProduct(
   id: string,
-): Promise<{ products: Product[]; archived: boolean }> {
+): Promise<{ products: Product[]; archived: boolean; error?: string }> {
   assertId(id, "id");
   const organizationId = await currentOrg();
   const database = db();
+
+  // A built-in is never deleted — nor archived in its place, which would hide it from the rail and
+  // the catalog just the same (./built-in.ts). A user-correctable answer, not a throw: the screen
+  // says why.
+  if (builtInKeyOf(organizationId, id)) {
+    return { products: await fetchProducts(), archived: false, error: BUILT_IN_DELETE_REFUSAL };
+  }
 
   const [row] = await database
     .select()
@@ -377,7 +400,12 @@ export async function importProducts(list: Product[]): Promise<Product[]> {
   if (!Array.isArray(list)) throw new Error("list must be an array");
   list.forEach(assertProduct);
   if (list.length === 0) return fetchProducts();
-  const organizationId = await currentOrg();
+  const { organizationId, organizationKind } = await currentActor();
+  // The import screen refuses these rows by name (lib/catalog/csv.ts parseCsvImport); this is a
+  // request that skipped it.
+  if (organizationKind !== "supplier" && list.some((p) => isBuiltInCategory(p.category))) {
+    throw new Error("a built-in category takes no imported row");
+  }
 
   await db().transaction(async (tx) => {
     await tx.insert(products).values(list.map((p) => toProductRow(p, organizationId)));

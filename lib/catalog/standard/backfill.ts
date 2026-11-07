@@ -36,8 +36,12 @@ async function main() {
   const retire = args.includes("--retire");
   const only = args.find((a) => !a.startsWith("--"));
 
-  const all = await db().select({ id: organizations.id, name: organizations.name }).from(organizations);
-  const targets = only ? all.filter((o) => o.id === only) : all;
+  const all = await db().select({ id: organizations.id, name: organizations.name, kind: organizations.kind }).from(organizations);
+  // STUDIOS only, the sign-up rule (lib/auth/actions.ts): a supplier's catalog is what it sells and a
+  // hall has none. Base rows are `visibility: "public"`, so in a supplier org they would pass the
+  // marketplace's own filter and be listed as that supplier's stock. Naming an org by id still
+  // reaches it, whatever its kind — that is a deliberate, one-off act.
+  const targets = only ? all.filter((o) => o.id === only) : all.filter((o) => o.kind === "studio");
 
   if (only && targets.length === 0) {
     console.error(`no organisation with id ${only}`);

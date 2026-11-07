@@ -23,6 +23,7 @@ import { productById } from "@/lib/catalog/storage";
 import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
+import { builtInRug } from "@/lib/catalog/built-in";
 import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import { curtainRail } from "@/lib/venues/curtain";
 import { isLedStrip, ledDropRail, ledRunRail, ledSideCandidates } from "@/lib/venues/led";
@@ -5131,8 +5132,12 @@ export function StudioScreen({
   /** What a carpet would be laid over: the link it gets, what to call it, and a first size and place
    *  for a carpet the settle cannot lay yet. */
   type CoverAim = { cover: { stageId?: string; featureId?: string }; kind: "stage" | "surface"; name: string; at: DocPoint; box: { widthMm: number; depthMm: number } };
-  // …and the dance floor: a floor laid over a surface or a stage the same way (lib/catalog/dance-floor.ts).
-  const rugRows = useMemo(() => catalog.filter((p) => (p.category === "rugs" || p.category === "dance-floors") && !p.archived), [catalog]);
+  // The studio's built-in שטיח (lib/catalog/built-in.ts) IS "שטיח מותאם…": laid to the thing it
+  // covers, no new row per use. So it is not listed again among the rows; a studio from before the
+  // kit (no built-in yet) keeps today's fresh row from the drawer.
+  const kitRug = useMemo(() => builtInRug(catalog), [catalog]);
+  // …and the dance floor among them: a floor laid over a surface or a stage the same way.
+  const rugRows = useMemo(() => catalog.filter((p) => (p.category === "rugs" || p.category === "dance-floors") && !p.archived && p !== kitRug), [catalog, kitRug]);
   /** The carpet that "שטיח מותאם…" is making a row for — laid over this when the drawer saves. */
   const coverPending = useRef<CoverAim | null>(null);
   const layCarpet = useCallback(
@@ -5147,6 +5152,12 @@ export function StudioScreen({
   );
   const customCarpet = useCallback(
     (aim: CoverAim) => {
+      // The built-in rug, laid to the thing's size and outline (layCarpet → layCover) in its first
+      // shade — the designer changes the shade on its bar, like any placed rug.
+      if (kitRug) {
+        layCarpet(aim, defaultVariantId(kitRug));
+        return;
+      }
       const rugs = CATEGORY_BY_ID.rugs;
       if (!rugs) return;
       const blank = blankProduct(rugs);
@@ -5164,7 +5175,7 @@ export function StudioScreen({
         mode: "new",
       });
     },
-    [],
+    [kitRug, layCarpet],
   );
   const coverLatest = useRef({ layCarpet, customCarpet });
   coverLatest.current = { layCarpet, customCarpet };

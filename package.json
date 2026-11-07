@@ -90,6 +90,7 @@
     "check:meeting": "tsx lib/meeting/steps.ts",
     "check:zone-selection": "tsx lib/events/zone-selection.ts",
     "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",
+    "check:built-in": "tsx lib/catalog/built-in.ts && tsx lib/catalog/standard/built-ins.ts",
     "catalog:standard": "tsx lib/catalog/standard/backfill.ts",
     "catalog:design": "tsx lib/catalog/design-items.ts",
     "check:format": "tsx lib/catalog/format.ts",

@@ -456,6 +456,11 @@ export interface Product {
    *  organisation. Provenance only — this row is the studio's. Absent on everything else. */
   sourceProductId?: string;
   sourceOrgId?: string;
+  /** The base-library key when this row is one of the studio's BUILT-INS (lib/catalog/built-in.ts;
+   *  spec 2026-11-07): never deleted or duplicated, pinned on the sketch's rail. DERIVED on read by
+   *  the server — the row's id is the built-in's id for this organisation (lib/catalog/standard/
+   *  built-ins.ts) — never stored and never trusted from a request. Absent on every other row. */
+  builtIn?: string;
   /** Absent = a thing of one size (see ResizeSpec). */
   resize?: ResizeSpec;
   /** SAFETY DISTANCE — the clear floor this item needs around it, in mm, and the one number the

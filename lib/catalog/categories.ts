@@ -224,8 +224,8 @@ export const CATEGORIES: CategoryDef[] = [
   // the metre of its runs. Each hangs on its own rail kinds only (`rails`) and is drawn to fit, so
   // `sizing: "stretch"` and no height of its own to ask — its heights are its rail's. `anchor: "wall"`
   // is the curtains' "this hangs on a rail" to every reader that sorts drapes from objects.
-  { id: "sails", label: "מפרשים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Sailboat, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["sail"], defaultPriceUnit: "m2" },
-  { id: "ceiling-drapes", label: "בדי תקרה", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Waves, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["run", "canopy"], defaultPriceUnit: "m" },
+  { id: "sails", label: "מפרשים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Sailboat, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["sail"], defaultPriceUnit: "m2", builtIn: true },
+  { id: "ceiling-drapes", label: "בדי תקרה", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Waves, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["run", "canopy"], defaultPriceUnit: "m", builtIn: true },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   // Table lamps — a turned base under a linen shade, set along a knights table like candlesticks.
   // Not a candlestick: nothing burns and nothing is packed per arm, so no count-multiplier.
@@ -243,8 +243,8 @@ export const CATEGORIES: CategoryDef[] = [
   // What a stage needs besides its decks, counted off the stage itself (lib/design-document/stage.ts)
   // rather than placed by hand: a flight of STAIRS per opening the designer put on the plan, and the
   // SKIRT that hides the legs along every open side — measured, so a skirt is usually priced למטר.
-  { id: "stage-stairs", label: "מדרגות במה", group: "grp-stages", defaultLayer: "floor", icon: Footprints, dims: "box", fields: [] },
-  { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [] },
+  { id: "stage-stairs", label: "מדרגות במה", group: "grp-stages", defaultLayer: "floor", icon: Footprints, dims: "box", fields: [], builtIn: true },
+  { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [], builtIn: true },
   // The other two ways an open stage edge is finished (StageEdgeKind): a banquette people sit on
   // along the outside of the edge, and a barrier on it. Both counted by the metre off the stage.
   //
@@ -265,13 +265,14 @@ export const CATEGORIES: CategoryDef[] = [
     // …and its depth in 5cm: seat-deep (45) on its own, table-deep (60) once chairs sit at it
     // (lib/design-document/bench.ts BENCH_TABLE_DEPTH_MM), or whatever the crew's modules make.
     defaultResize: { stepMm: 100, width: { minMm: 600, maxMm: 12000 }, depth: { minMm: 300, maxMm: 1500, stepMm: 50 } },
+    builtIn: true,
   },
-  { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [] },
+  { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [], builtIn: true },
   // A wall standing on a stage edge (a flower wall, a draped frame) by the metre; a ramp by the ramp;
   // and what covers the deck (carpet, dance floor) by the square metre of stage.
-  { id: "stage-backdrops", label: "קירות רקע לבמה", group: "grp-stages", defaultLayer: "floor", icon: PanelTop, dims: "box", fields: [] },
-  { id: "stage-ramps", label: "רמפות נגישות", group: "grp-stages", defaultLayer: "floor", icon: Accessibility, dims: "box", fields: [] },
-  { id: "stage-surfaces", label: "משטחי במה", group: "grp-stages", defaultLayer: "floor", icon: Layers2, dims: "box", fields: [], needsHeight: false },
+  { id: "stage-backdrops", label: "קירות רקע לבמה", group: "grp-stages", defaultLayer: "floor", icon: PanelTop, dims: "box", fields: [], builtIn: true },
+  { id: "stage-ramps", label: "רמפות נגישות", group: "grp-stages", defaultLayer: "floor", icon: Accessibility, dims: "box", fields: [], builtIn: true },
+  { id: "stage-surfaces", label: "משטחי במה", group: "grp-stages", defaultLayer: "floor", icon: Layers2, dims: "box", fields: [], needsHeight: false, builtIn: true },
   { id: "bars", label: "ברים", group: "grp-bars", defaultLayer: "floor", icon: Wine, dims: "both", fields: [] },
   { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [], placeOnce: true },
   // A hired PERGOLA (lib/venues/pergola.ts — the venue's own is a feature of the same definition):
@@ -281,21 +282,21 @@ export const CATEGORIES: CategoryDef[] = [
   // size the event needs by its handles (defaultResize, not `sizing: "stretch"`: a stretch row is
   // drawn and stacked as a rug and kept out of the clearance check) — and stretched, it keeps its
   // post and slat spacing in millimetres, only gaining slats.
-  { id: "pergolas", label: "פרגולות", group: "grp-chuppahs", defaultLayer: "floor", icon: Columns3, dims: "box", fields: [{ key: "postMm", label: "עובי עמוד (מ״מ)" }], defaultHeightMm: 2600, defaultResize: { stepMm: 100, width: { minMm: 1500, maxMm: 20000 }, depth: { minMm: 1500, maxMm: 20000 } } },
+  { id: "pergolas", label: "פרגולות", group: "grp-chuppahs", defaultLayer: "floor", icon: Columns3, dims: "box", fields: [{ key: "postMm", label: "עובי עמוד (מ״מ)" }], defaultHeightMm: 2600, defaultResize: { stepMm: 100, width: { minMm: 1500, maxMm: 20000 }, depth: { minMm: 1500, maxMm: 20000 } }, builtIn: true },
   { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch", rails: ["wall", "side", "rod"] },
   // The ROD a curtain on a free-standing rod hangs from (spec 2026-11-07 §6.2), billed by the metre
   // off the curtain itself (MeasureContext.rodOf — the studio's first row here), as a stage's skirt
   // is off the stage: never placed on its own.
-  { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false },
+  { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false, builtIn: true },
   // A line of LIGHT on a rail (spec 2026-11-07 §7.1, lib/venues/led.ts): along a wall at a height,
   // along a side of a stage, a bar or a building, or a free run between two points. It hangs on a
   // rail exactly as a drape does (`anchor: "wall"` sorts it with the drapes for every reader that
   // asks "is this a thing on a rail"), is billed by the metre of its lines like one, and draws as a
   // line of its shade's colour with a glow — never as cloth. No height of its own: the rail says it.
-  { id: "led-strips", label: "פסי לד", group: "grp-accessories", defaultLayer: "ceiling", icon: Zap, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["wall", "side", "run"], defaultPriceUnit: "m" },
+  { id: "led-strips", label: "פסי לד", group: "grp-accessories", defaultLayer: "ceiling", icon: Zap, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["wall", "side", "run"], defaultPriceUnit: "m", builtIn: true },
   // An LED wall (§7.2): a free floor item like a stage backdrop — a 4 × 0.1 × 2.5 panel standing on a
   // stage or the floor, its FRONT the +y face that lights. Counted per unit.
-  { id: "led-screens", label: "מסכי לד", group: "grp-accessories", defaultLayer: "floor", icon: Monitor, dims: "box", fields: [] },
+  { id: "led-screens", label: "מסכי לד", group: "grp-accessories", defaultLayer: "floor", icon: Monitor, dims: "box", fields: [], builtIn: true },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
   // A gate — two columns joined overhead by a lintel (a square entrance) or an arch (a round one),
   // set where the guests come in or at the head of the aisle. Not an arch: an arch is a dressed
