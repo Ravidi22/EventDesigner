@@ -5,6 +5,7 @@ import { catalogBox, footprintBounds, resolveFootprint } from "./footprint";
 import { solidKind } from "./catalog-resolver";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { isTableSet } from "@/lib/catalog/composition";
+import { isCeilingClothCategory } from "./ceiling-cloth";
 
 // What the pointer is carrying between the catalog rail and the canvas, for the length of one HTML5
 // drag.
@@ -49,6 +50,10 @@ export function carriedOf(product: Product): CarriedItem {
 export function landingOf(product: Product): CarriedItem["landing"] {
   // A table set lands on the table under the pointer, like the items it is made of.
   if (product.composition) return isTableSet(product.composition) ? "table" : "free";
+  // A sail or a ceiling drape is not hung on the wall under the pointer: the drop is the first tie
+  // (or the swag's first end) of a cloth drawn point by point (lib/studio/ceiling-cloth.ts), read at
+  // the raw point — no wall ghost, no snap.
+  if (isCeilingClothCategory(product.category)) return "hang";
   if (CATEGORY_BY_ID[product.category]?.anchor === "wall") return "wall";
   if (product.layer === "ceiling") return "hang";
   return product.layer === "table" ? "table" : "free";

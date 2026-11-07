@@ -98,6 +98,8 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     variants: [],
     // Seeded from the category, then owned by the product — see CategoryDef.defaultStock.
     stockKind: c.defaultStock,
+    // …and what it is priced per (CategoryDef.defaultPriceUnit): a sail by the m², a drape by the metre.
+    ...(c.defaultPriceUnit && c.defaultPriceUnit !== "unit" ? { priceUnit: c.defaultPriceUnit } : {}),
     // Written out rather than left absent, because both halves of it are a decision:
     //   shape   — it is what the measurements below it are measurements OF (see `asksFootprint`).
     //   content — EMPTY. On a true-scale plan the outline already says what the item is; the name
@@ -552,6 +554,11 @@ export function ProductDrawer({
         // Re-seeded with the layer and the category fields, for the same reason: the new category's
         // opinion is a better starting point than the old one's, and it stays editable.
         stockKind: c.defaultStock,
+        // A NEW product's price unit follows the category while it is still the old category's seed —
+        // the height's rule: a sail is sold by the m² until the designer says otherwise.
+        ...(!d.id && (d.priceUnit ?? "unit") === (CATEGORY_BY_ID[d.category]?.defaultPriceUnit ?? "unit")
+          ? { priceUnit: c.defaultPriceUnit && c.defaultPriceUnit !== "unit" ? c.defaultPriceUnit : undefined }
+          : {}),
         // The shape re-seeds with them — a centrepiece is round, a stage is a box — except when the
         // designer has drawn one by hand, which a category change must never throw away. Content is
         // carried across as whatever the plan already draws, so changing category cannot silently

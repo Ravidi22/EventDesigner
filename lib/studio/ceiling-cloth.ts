@@ -1,0 +1,518 @@
+// SAILS and CEILING DRAPES — cloth in the air (spec docs/superpowers/specs/2026-11-07-venue-heights-
+// rails-and-covers-design.md §6.3, §6.4). Both hang on a RAIL (./rail.ts): a sail (מפרש) on a `sail`
+// rail — a sheet tied at three or four corners, each at its own height — and a ceiling drape (בד
+// תקרה) on a `run` (a swag from A to B) or a `canopy` (an area of parallel swags). The rail stores
+// what the designer chose; everything here is DERIVED from it on every read: the runs a canopy is
+// cut into, each run's width, its scallops and its sag, the band the plan draws, the area a sail is
+// billed by, the tie a click lands on.
+//
+// Which placements are these is the CATEGORY's (`sails`, `ceiling-drapes`) — never guessed from the
+// rail: a run rail is an LED strip's too (spec §7.1).
+//
+// Pure: no React, no DOM. The canvas node (app/(app)/studio/ceiling-cloth-node.tsx), the printed map,
+// the 3D room (lib/scene/overhead.ts) and the quote all read through here.
+import type { Point } from "@/lib/studio/hall";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
+import type { Product } from "@/lib/catalog/types";
+import type { StructureFeature, VenueStructure } from "@/lib/venues/structure";
+import { wallTrack } from "./anchor";
+import {
+  canopyRuns,
+  defaultRailHeight,
+  featureHost,
+  featureHosts,
+  hostCorners,
+  isRailed,
+  placementHost,
+  resolveRail,
+  SIDE_MIN_HEIGHT_MM,
+  type CanopyRail,
+  type Rail,
+  type RailContext,
+  type RailHost,
+  type RailSheet,
+  type RunRail,
+  type SailRail,
+  type SailTie,
+  type TieTarget,
+} from "./rail";
+import { polygonAreaMm2 } from "./geometry";
+import { isMain } from "../self-check";
+
+// ── What is one ─────────────────────────────────────────────────────────────────────────────────
+
+/** The catalog categories this module draws: a sail (`sails`, per m² of its polygon) and a ceiling
+ *  drape (`ceiling-drapes`, per metre of its runs). */
+export const CEILING_CLOTH_CATEGORIES: readonly string[] = ["sails", "ceiling-drapes"];
+
+/** A row of one of them — what the drop starts drawing instead of hanging it on a wall. */
+export function isCeilingClothCategory(category: string | undefined): boolean {
+  return !!category && CEILING_CLOTH_CATEGORIES.includes(category);
+}
+
+export type ClothKind = "sail" | "drape";
+
+/** Which cloth a placement of `category` on `rail` is — null for anything else (a curtain, an LED
+ *  strip on a run, a sail row that somehow hangs on a wall). */
+export function clothKindOf(category: string | undefined, rail: Rail | null | undefined): ClothKind | null {
+  if (!rail) return null;
+  if (category === "sails" && rail.type === "sail") return "sail";
+  if (category === "ceiling-drapes" && (rail.type === "run" || rail.type === "canopy")) return "drape";
+  return null;
+}
+
+// ── Defaults ────────────────────────────────────────────────────────────────────────────────────
+
+/** A drape's cloth across its line when the rail says nothing (spec §6.4): a 1.2 m width. */
+export const CLOTH_WIDTH_MM = 1200;
+/** One scallop per this much run when the rail does not count them. */
+export const WAVE_PITCH_MM = 1500;
+/** How low a run's middle hangs when the rail does not say. */
+export const RUN_SAG_MM = 300;
+/** A sail's tie or a swag's height under open sky (a rod's is 2.4 m — ./rail.ts ROD_HEIGHT_MM). */
+export const CLOTH_OPEN_SKY_MM = 3000;
+export const SAIL_MIN_TIES = 3;
+export const SAIL_MAX_TIES = 4;
+/** How much of its width a swag keeps where it is gathered to its line, at the end of every
+ *  scallop — the plan's pinch and the room's. */
+export const GATHER = 0.7;
+/** The narrowest cloth and the shortest scallop honoured — a typo must not draw a hairline. */
+const MIN_WIDTH_MM = 100;
+
+/** Where a new sail tie or swag starts: the roof over the point (./rail.ts defaultRailHeight — the
+ *  hook the next round's roofs and pergolas plug into), else the open-sky 3 m. */
+export function defaultClothHeight(point: Point, roofAt?: (p: Point) => number | null): number {
+  const roof = roofAt?.(point);
+  return roof && roof > 0 ? defaultRailHeight(point, roofAt) : CLOTH_OPEN_SKY_MM;
+}
+
+/** How many scallops a run of `lengthMm` has: the rail's count, else one per WAVE_PITCH_MM. */
+export function wavesFor(lengthMm: number, waves?: number): number {
+  if (waves && waves > 0) return Math.max(1, Math.round(waves));
+  return Math.max(1, Math.round(lengthMm / WAVE_PITCH_MM));
+}
+
+// ── A drape's runs ──────────────────────────────────────────────────────────────────────────────
+
+/** One swag of cloth in the air, as every reader draws it. */
+export interface ClothRun {
+  a: Point;
+  b: Point;
+  heightMm: number;
+  sagMm: number;
+  widthMm: number;
+  waves: number;
+  lengthMm: number;
+}
+
+const runsCache = new WeakMap<RunRail | CanopyRail, ClothRun[]>();
+/** A run's one swag, or a canopy's runs (./rail.ts canopyRuns, re-cut on every read) — each with its
+ *  width, its scallops and its sag, the rail's or the defaults. Remembered per rail object, so a
+ *  drape that did not change hands every reader the same array. */
+export function clothRuns(rail: RunRail | CanopyRail): ClothRun[] {
+  const hit = runsCache.get(rail);
+  if (hit) return hit;
+  const widthMm = Math.max(MIN_WIDTH_MM, rail.widthMm ?? CLOTH_WIDTH_MM);
+  const lines = rail.type === "run" ? [rail] : canopyRuns(rail);
+  const out = lines
+    .map((r) => {
+      const lengthMm = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
+      return { a: r.a, b: r.b, heightMm: r.heightMm, sagMm: Math.max(0, rail.sagMm ?? RUN_SAG_MM), widthMm, waves: wavesFor(lengthMm, rail.waves), lengthMm };
+    })
+    .filter((r) => r.lengthMm >= 1);
+  runsCache.set(rail, out);
+  return out;
+}
+
+/** Where along a run the cloth is gathered to its line — the ends and every scallop's end. */
+export function runGathers(run: ClothRun): Point[] {
+  const out: Point[] = [];
+  for (let k = 0; k <= run.waves; k++) {
+    const f = k / run.waves;
+    out.push({ x: run.a.x + (run.b.x - run.a.x) * f, y: run.a.y + (run.b.y - run.a.y) * f });
+  }
+  return out;
+}
+
+/** How far across its line the cloth reaches, a fraction `s` (0..1) along the run: the full width at
+ *  the middle of every scallop, GATHER of it where it is gathered. */
+export function runHalfWidth(run: ClothRun, s: number): number {
+  return (run.widthMm / 2) * (GATHER + (1 - GATHER) * Math.abs(Math.sin(Math.PI * run.waves * s)));
+}
+
+/** How far below its height the cloth hangs, a fraction `s` along the run: `sagMm` at the middle of
+ *  every scallop, none where it is gathered. */
+export function runDrop(run: ClothRun, s: number): number {
+  return run.sagMm * Math.abs(Math.sin(Math.PI * run.waves * s));
+}
+
+/** The swag as the plan draws it: a band along the run whose two edges swell out to the full width
+ *  in every scallop and pinch in where it is gathered — one closed outline, `per` points a scallop. */
+export function runOutline(run: ClothRun, per = 8): Point[] {
+  const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
+  const n = { x: -u.y, y: u.x };
+  const steps = Math.max(2, run.waves * per);
+  const left: Point[] = [];
+  const right: Point[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const s = i / steps;
+    const c = { x: run.a.x + (run.b.x - run.a.x) * s, y: run.a.y + (run.b.y - run.a.y) * s };
+    const h = runHalfWidth(run, s);
+    left.push({ x: c.x + n.x * h, y: c.y + n.y * h });
+    right.push({ x: c.x - n.x * h, y: c.y - n.y * h });
+  }
+  return [...left, ...right.reverse()];
+}
+
+/** The line across the band at each gather — the plan's tick where the cloth is caught up. */
+export function runGatherTicks(run: ClothRun): [Point, Point][] {
+  const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
+  const n = { x: -u.y, y: u.x };
+  const h = (run.widthMm / 2) * GATHER;
+  return runGathers(run).map((c) => [
+    { x: c.x + n.x * h, y: c.y + n.y * h },
+    { x: c.x - n.x * h, y: c.y - n.y * h },
+  ]);
+}
+
+// ── Making and editing them ─────────────────────────────────────────────────────────────────────
+
+const round = (p: Point): Point => ({ x: Math.round(p.x), y: Math.round(p.y) });
+
+/** A new run from A to B at `heightMm` — nothing else written, so the defaults stay defaults. */
+export function newRun(a: Point, b: Point, heightMm: number): RunRail {
+  return { type: "run", a: round(a), b: round(b), heightMm: Math.round(heightMm) };
+}
+
+/** The bearing of an outline's longest side, degrees (0 = +x), folded into [0, 180). A canopy's
+ *  default direction: its runs lie along the area's longest side. */
+export function longestSideDeg(outline: readonly Point[]): number {
+  let best = { l: -1, deg: 0 };
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i];
+    const b = outline[(i + 1) % outline.length];
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    if (l > best.l) best = { l, deg: (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI };
+  }
+  return ((Math.round(best.deg * 10) / 10) % 180 + 180) % 180;
+}
+
+/** A new canopy over `outline` at `heightMm`: its runs along the area's longest side, spaced the
+ *  cloth's width apart (edge to edge — spec §6.4). */
+export function newCanopy(outline: Point[], heightMm: number, widthMm = CLOTH_WIDTH_MM): CanopyRail {
+  return { type: "canopy", outline: outline.map(round), heightMm: Math.round(heightMm), directionDeg: longestSideDeg(outline), spacingMm: widthMm };
+}
+
+/** A cloth drawn AGAIN (its bar's "ציור מחדש"): the new points, and what was typed for the old one —
+ *  a sail's tie heights (by order) and sag; a drape's height, width, sag, scallops and, onto a
+ *  canopy, its spacing. A run redrawn as an area, or an area as a run, keeps them too. The new
+ *  area's direction is its own longest side's. */
+export function redrawnCloth<R extends RunRail | CanopyRail | SailRail>(prior: Rail, next: R): R {
+  if (next.type === "sail") {
+    if (prior.type !== "sail") return next;
+    return { ...next, ties: next.ties.map((t, i) => (prior.ties[i] ? { ...t, heightMm: prior.ties[i].heightMm } : t)), ...(prior.sagMm !== undefined ? { sagMm: prior.sagMm } : {}) } as R;
+  }
+  if (prior.type !== "run" && prior.type !== "canopy") return next;
+  const kept = {
+    heightMm: prior.heightMm,
+    ...(prior.sagMm !== undefined ? { sagMm: prior.sagMm } : {}),
+    ...(prior.widthMm !== undefined ? { widthMm: prior.widthMm } : {}),
+    ...(prior.waves !== undefined ? { waves: prior.waves } : {}),
+  };
+  if (next.type === "run") return { ...next, ...kept } as R;
+  const spacingMm = prior.type === "canopy" ? prior.spacingMm : (prior.widthMm ?? next.spacingMm);
+  return { ...next, ...kept, spacingMm } as R;
+}
+
+/** A run with end `which` (0 = A, 1 = B) at `p`. */
+export function runEndMoved(rail: RunRail, which: 0 | 1, p: Point): RunRail {
+  return which === 0 ? { ...rail, a: round(p) } : { ...rail, b: round(p) };
+}
+
+/** A canopy with its corner `i` at `p`. */
+export function canopyCornerMoved(rail: CanopyRail, i: number, p: Point): CanopyRail {
+  if (i < 0 || i >= rail.outline.length) return rail;
+  const outline = rail.outline.slice();
+  outline[i] = round(p);
+  return { ...rail, outline };
+}
+
+// ── A sail's ties ───────────────────────────────────────────────────────────────────────────────
+
+/** Things a sail may be tied to by a corner: a building, a stage, a bar, a column, a pergola — any
+ *  that stands SIDE_MIN_HEIGHT_MM tall (a 40 cm stage is no anchor). Never a plant (its outline is
+ *  its crown) or the ground. */
+export const TIE_HOST_KINDS: readonly string[] = ["structure", "stage", "bar", "column", "other", "pergola"];
+
+export interface TieCandidate {
+  id: string;
+  host: RailHost;
+}
+
+const tallEnough = (host: RailHost | null): host is RailHost => !!host && host.heightMm >= SIDE_MIN_HEIGHT_MM && host.outline.length >= 3;
+
+/** Every thing a sail may be tied to: the venue's features (as this event stood them) and, in a
+ *  sketch, the document's own floor items standing tall enough. */
+export function tieCandidates(
+  features: readonly StructureFeature[],
+  doc?: Pick<DesignDocumentContent, "placements">,
+  productOf?: (variantId: string) => Product | undefined,
+): TieCandidate[] {
+  const out: TieCandidate[] = [];
+  for (const f of features) {
+    if (!TIE_HOST_KINDS.includes(f.kind)) continue;
+    const host = featureHost(f);
+    if (tallEnough(host)) out.push({ id: f.id, host });
+  }
+  for (const p of doc?.placements ?? []) {
+    if (p.layer !== "floor" || p.tableId || p.perch || isRailed(p)) continue;
+    const host = placementHost(p, productOf?.(p.variantId));
+    if (tallEnough(host)) out.push({ id: p.id, host });
+  }
+  return out;
+}
+
+/** What a tie is snapped against: the venue's walls and the things a corner may be tied to. */
+export interface TieContext {
+  structure: VenueStructure;
+  candidates: readonly TieCandidate[];
+}
+
+export interface SnappedTie {
+  p: Point;
+  to: TieTarget;
+}
+
+/** Where a tie put at `raw` lands: on the CORNER of a thing within `tolMm` (carried when it moves),
+ *  else on a WALL within `tolMm` (slid along it), else a POST of its own on open ground. A corner
+ *  wins over the wall it stands against — it is the stronger point. `free` (Alt) is always a post. */
+export function snapTie(raw: Point, ctx: TieContext, tolMm: number, free = false): SnappedTie {
+  if (!free) {
+    let best: SnappedTie | null = null;
+    let bestD = tolMm;
+    for (const c of ctx.candidates) {
+      const corners = hostCorners(c.host);
+      for (let i = 0; i < corners.length; i++) {
+        const d = Math.hypot(corners[i].x - raw.x, corners[i].y - raw.y);
+        if (d <= bestD) {
+          bestD = d;
+          best = { p: round(corners[i]), to: { kind: "feature", featureId: c.id, corner: i } };
+        }
+      }
+    }
+    if (best) return best;
+    for (const w of ctx.structure.walls) {
+      if (w.kind === "edge") continue;
+      const tr = wallTrack(ctx.structure, w.id);
+      if (!tr) continue;
+      const t = tr.nearestT(raw);
+      const q = tr.at(t).p;
+      const d = Math.hypot(q.x - raw.x, q.y - raw.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = { p: round(q), to: { kind: "wall", wallId: w.id, t: Math.round(t * 1e5) / 1e5 } };
+      }
+    }
+    if (best) return best;
+  }
+  return { p: round(raw), to: { kind: "post" } };
+}
+
+/** A new sail from its ties as placed, each at `heightOf` its point — no sag written, so it is the
+ *  8% default until the bar says otherwise. */
+export function newSail(ties: SnappedTie[], heightOf: (p: Point) => number): SailRail {
+  return { type: "sail", ties: ties.map((t) => ({ p: t.p, heightMm: Math.round(heightOf(t.p)), to: t.to })) };
+}
+
+/** A sail with tie `i` re-tied where it was dragged to — its height kept. */
+export function sailTieMoved(rail: SailRail, i: number, tie: SnappedTie): SailRail {
+  if (i < 0 || i >= rail.ties.length) return rail;
+  const ties = rail.ties.slice();
+  ties[i] = { ...ties[i], p: tie.p, to: tie.to };
+  return { ...rail, ties };
+}
+
+/** A sail with tie `i` at `heightMm`. */
+export function sailTieHeight(rail: SailRail, i: number, heightMm: number): SailRail {
+  if (i < 0 || i >= rail.ties.length) return rail;
+  const ties = rail.ties.slice();
+  ties[i] = { ...ties[i], heightMm: Math.max(0, Math.round(heightMm)) };
+  return { ...rail, ties };
+}
+
+/** Does this sail stand on its own posts alone — nothing in the room it is tied to? (What a copy may
+ *  take along: a sail tied to a wall names that wall.) */
+export function sailIsFree(rail: SailRail): boolean {
+  return rail.ties.every((t: SailTie) => !t.to || t.to.kind === "post");
+}
+
+const sheetCache = new WeakMap<SailRail, { structure: VenueStructure; hosts: (RailHost | null)[]; out: RailSheet | null }>();
+/** A sail resolved (./rail.ts resolveRail's sheet) — remembered per rail against the walls and the
+ *  things its corners are tied to, so a sail nothing moved is the same object frame after frame
+ *  (resolveRail itself never remembers a sail). Null when a wall or a thing it is tied to is gone. */
+export function sailSheet(rail: SailRail, ctx: RailContext): RailSheet | null {
+  const lookup = ctx.outlineOf ?? featureHosts(ctx.structure);
+  const hosts = rail.ties.map((t) => (t.to?.kind === "feature" ? lookup(t.to.featureId) : null));
+  const hit = sheetCache.get(rail);
+  if (hit && hit.structure === ctx.structure && hit.hosts.every((h, i) => h === hosts[i])) return hit.out;
+  const r = resolveRail(rail, ctx);
+  const out = r?.type === "sheet" ? r.sheet : null;
+  sheetCache.set(rail, { structure: ctx.structure, hosts, out });
+  return out;
+}
+
+// ── What a reader draws ─────────────────────────────────────────────────────────────────────────
+
+/** A cloth as every plan surface draws it: a sail's sheet (null when what it is tied to is gone — it
+ *  still lists and prices, but has no honest place on the plan), a drape's runs, a canopy's area. */
+export interface ClothView {
+  kind: ClothKind;
+  sheet: RailSheet | null;
+  runs: readonly ClothRun[];
+  area?: readonly Point[];
+}
+
+const NO_RUNS: readonly ClothRun[] = [];
+const viewCache = new WeakMap<Rail, ClothView>();
+/** The cloth a placement of `category` on `rail` draws, or null when it is not one (a curtain, an LED
+ *  strip). Remembered per rail while its sheet and runs are the same objects, so a memoised node is
+ *  handed the very same view frame after frame. */
+export function clothView(category: string | undefined, rail: Rail, ctx: RailContext): ClothView | null {
+  const kind = clothKindOf(category, rail);
+  if (!kind) return null;
+  const sheet = rail.type === "sail" ? sailSheet(rail, ctx) : null;
+  const runs = rail.type === "run" || rail.type === "canopy" ? clothRuns(rail) : NO_RUNS;
+  const hit = viewCache.get(rail);
+  if (hit && hit.kind === kind && hit.sheet === sheet && hit.runs === runs) return hit;
+  const out: ClothView = { kind, sheet, runs, ...(rail.type === "canopy" ? { area: rail.outline } : {}) };
+  viewCache.set(rail, out);
+  return out;
+}
+
+/** The cloth's outline(s) on the plan, room mm — what it is hit-tested and measured by: a sail's
+ *  polygon, each run's band, a canopy's area. */
+export function clothPolygons(view: ClothView): Point[][] {
+  if (view.kind === "sail") return view.sheet ? [view.sheet.polygon] : [];
+  if (view.area && view.area.length >= 3) return [[...view.area]];
+  return view.runs.map((r) => runOutline(r, 4));
+}
+
+// ── What they bill ──────────────────────────────────────────────────────────────────────────────
+
+/** The CLOTH a rail of these is, mm²: a sail's polygon (read against the room when `ctx` is given —
+ *  a tie on a wall or a thing where it now stands — else off the points as placed); a drape's runs,
+ *  each its length × its width. Undefined for any other rail. */
+export function clothAreaMm2(rail: Rail, ctx?: RailContext): number | undefined {
+  if (rail.type === "sail") {
+    if (rail.ties.length < SAIL_MIN_TIES) return undefined;
+    const sheet = ctx ? sailSheet(rail, ctx) : null;
+    return sheet ? sheet.areaMm2 : Math.abs(polygonAreaMm2(rail.ties.map((t) => t.p)));
+  }
+  if (rail.type === "run" || rail.type === "canopy") return clothRuns(rail).reduce((n, r) => n + r.lengthMm * r.widthMm, 0);
+  return undefined;
+}
+
+/** A sail's middle — where it is "at" for a zone sheet or a label: its corners' centroid, as placed. */
+export function sailCentre(rail: SailRail, sheet?: RailSheet | null): Point | null {
+  const pts = sheet?.polygon ?? rail.ties.map((t) => t.p);
+  if (!pts.length) return null;
+  return { x: pts.reduce((n, q) => n + q.x, 0) / pts.length, y: pts.reduce((n, q) => n + q.y, 0) / pts.length };
+}
+
+// ponytail: self-check. Run: npm run check:ceiling-cloth
+if (isMain(import.meta.url)) {
+  const assert = (c: boolean, m: string) => {
+    if (!c) throw new Error("FAIL: " + m);
+  };
+  const near = (a: number, b: number, tol = 1) => Math.abs(a - b) <= tol;
+
+  // Which is which: the category, never the rail alone.
+  const run: RunRail = { type: "run", a: { x: 0, y: 0 }, b: { x: 6000, y: 0 }, heightMm: 3500 };
+  assert(clothKindOf("ceiling-drapes", run) === "drape" && clothKindOf("led-strips", run) === null && clothKindOf("sails", run) === null, "a run is a drape only in the ceiling-drapes category");
+  assert(clothKindOf("sails", { type: "sail", ties: [] }) === "sail" && clothKindOf("curtains", { type: "wall", wallId: "w", from: 0, to: 1 }) === null, "a sail is the sails category's");
+  assert(isCeilingClothCategory("sails") && isCeilingClothCategory("ceiling-drapes") && !isCeilingClothCategory("curtains"), "the two categories");
+
+  // Defaults: the hook, else 3 m.
+  assert(defaultClothHeight({ x: 0, y: 0 }) === CLOTH_OPEN_SKY_MM && defaultClothHeight({ x: 0, y: 0 }, () => 4200) === 4200 && defaultClothHeight({ x: 0, y: 0 }, () => null) === 3000, "a new tie is the roof's height, else 3 m");
+
+  // A 6 m run: 4 scallops (1.5 m each), 1.2 m wide, 30 cm of sag — all defaults, none written.
+  const [r6] = clothRuns(run);
+  assert(r6.waves === 4 && r6.widthMm === CLOTH_WIDTH_MM && r6.sagMm === RUN_SAG_MM && near(r6.lengthMm, 6000), "a 6 m run: four scallops, 1.2 m wide, 30 cm of sag, by default");
+  assert(clothRuns(run) === clothRuns(run), "…remembered per rail");
+  const custom = clothRuns({ ...run, widthMm: 800, waves: 2, sagMm: 500 })[0];
+  assert(custom.waves === 2 && custom.widthMm === 800 && custom.sagMm === 500, "…or the rail's own");
+  assert(near(runDrop(r6, 0), 0) && near(runDrop(r6, 1 / 8), 300) && near(runDrop(r6, 1 / 4), 0), "it hangs its sag in the middle of every scallop and none where gathered");
+  assert(near(runHalfWidth(r6, 1 / 8), 600) && near(runHalfWidth(r6, 0), 600 * GATHER), "…full width mid-scallop, gathered at the ends");
+  const outline = runOutline(r6);
+  assert(outline.length === 2 * (4 * 8 + 1) && outline.every((q) => Math.abs(q.y) <= 600 + 1e-6), "the band's outline: both edges, inside the cloth's width");
+  assert(runGatherTicks(r6).length === 5 && runGathers(r6)[2].x === 3000, "five gathers on four scallops — the ends and three between");
+  assert(wavesFor(700) === 1 && wavesFor(10000, 3) === 3, "never fewer than one scallop");
+
+  // A canopy over a 6 × 4 m area, runs along x 1.2 m apart, carries its width to every run.
+  const area: Point[] = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 4000 }, { x: 0, y: 4000 }];
+  const canopy = newCanopy(area, 3800);
+  assert(canopy.directionDeg === 0 && canopy.spacingMm === CLOTH_WIDTH_MM && canopy.widthMm === undefined, "a new canopy runs along its longest side, a width apart, its width the default");
+  assert(longestSideDeg([{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 8000 }, { x: 0, y: 8000 }]) === 90, "…down the plan when that is the long side");
+  const runs = clothRuns(canopy);
+  assert(runs.length === 3 && runs.every((r) => near(r.lengthMm, 6000) && r.heightMm === 3800 && r.waves === 4), "three 6 m runs across a 4 m depth at 1.2 m — at its height, four scallops each");
+  assert(near(clothAreaMm2(canopy)!, 3 * 6000 * 1200), "…its cloth is the runs × the width");
+  const moved = canopyCornerMoved(canopy, 2, { x: 8000.4, y: 4000 });
+  assert(moved.outline[2].x === 8000 && canopy.outline[2].x === 6000, "a corner moved, whole millimetres, the old rail untouched");
+  assert(runEndMoved(run, 1, { x: 7000, y: 10 }).b.x === 7000 && runEndMoved(run, 0, { x: -5, y: 0 }).a.x === -5, "a run's ends move one at a time");
+  // Drawn again: what was typed stays — onto a run, and a run's width onto a canopy's spacing.
+  const typedRun: RunRail = { ...run, heightMm: 4100, widthMm: 900, sagMm: 500, waves: 2 };
+  const again = redrawnCloth(typedRun, newRun({ x: 0, y: 0 }, { x: 3000, y: 0 }, 3000));
+  assert(again.heightMm === 4100 && again.widthMm === 900 && again.sagMm === 500 && again.waves === 2 && again.b.x === 3000, "a run drawn again keeps its height, width, sag and scallops");
+  const asArea = redrawnCloth(typedRun, newCanopy(area, 3000));
+  assert(asArea.type === "canopy" && asArea.heightMm === 4100 && asArea.spacingMm === 900 && asArea.widthMm === 900, "…drawn again as an area, its width is the runs' spacing");
+
+  // Ties: a corner of a building beats the wall it stands against; a wall within reach; a post.
+  const structure: VenueStructure = {
+    nodes: [
+      { id: "n0", x: 0, y: 0 },
+      { id: "n1", x: 10000, y: 0 },
+      { id: "n2", x: 10000, y: 8000 },
+    ],
+    walls: [
+      { id: "w", a: "n0", b: "n1", kind: "wall" },
+      { id: "k", a: "n1", b: "n2", kind: "edge" },
+    ],
+    entrances: [],
+    features: [
+      { id: "b", kind: "structure", label: "מבנה", x: 3000, y: 2000, widthMm: 2000, depthMm: 2000, heightMm: 3500, shape: "rect", rotationDeg: 0 },
+      { id: "low", kind: "stage", label: "במה", x: 7000, y: 5000, widthMm: 2000, depthMm: 1000, heightMm: 400, shape: "rect", rotationDeg: 0 },
+      { id: "tree", kind: "plant", label: "עץ", x: 8000, y: 2000, widthMm: 3000, depthMm: 3000, heightMm: 5000, shape: "circle", rotationDeg: 0 },
+    ],
+  };
+  const candidates = tieCandidates(structure.features);
+  assert(candidates.map((c) => c.id).join(",") === "b", "the building may be tied to; a 40 cm stage and a tree's crown may not");
+  const tctx: TieContext = { structure, candidates };
+  const corner = snapTie({ x: 2050, y: 1030 }, tctx, 150);
+  assert(corner.to.kind === "feature" && corner.to.featureId === "b" && corner.p.x === 2000 && corner.p.y === 1000, "a click by the building's corner ties to that corner");
+  const onWall = snapTie({ x: 6000, y: 120 }, tctx, 150);
+  assert(onWall.to.kind === "wall" && onWall.to.wallId === "w" && near(onWall.to.t, 0.6, 1e-4) && onWall.p.y === 0, "a click by the wall ties to it, on its line");
+  assert(snapTie({ x: 9950, y: 4000 }, tctx, 150).to.kind === "post", "an edge (a kerb) is no wall to tie to — a post");
+  assert(snapTie({ x: 6000, y: 3000 }, tctx, 150).to.kind === "post" && snapTie({ x: 6000, y: 120 }, tctx, 150, true).to.kind === "post", "open ground is a post, and so is anything with Alt held");
+
+  // A sail of three: the wall, the building's corner, a post — 3 m each by default.
+  const sail = newSail([onWall, corner, snapTie({ x: 6000, y: 6000 }, tctx, 150)], () => defaultClothHeight({ x: 0, y: 0 }));
+  assert(sail.ties.length === 3 && sail.ties.every((t) => t.heightMm === 3000) && sail.sagMm === undefined, "a new sail: its ties at 3 m, the sag left to the 8% default");
+  const ctx: RailContext = { structure };
+  const sheet = sailSheet(sail, ctx)!;
+  assert(!!sheet && sheet.posts.length === 1 && near(sheet.polygon[1].x, 2000) && sheet.sagMm > 0, "it resolves: one post of its own, tied to the building's corner, sagging");
+  assert(sailSheet(sail, ctx) === sheet, "…remembered while nothing it is tied to moves");
+  const shifted: VenueStructure = { ...structure, features: structure.features.map((f) => (f.id === "b" ? { ...f, x: 3500 } : f)) };
+  const carried = sailSheet(sail, { structure: shifted })!;
+  assert(carried !== sheet && near(carried.polygon[1].x, 2500), "the building moved: the tied corner goes with it");
+  assert(near(clothAreaMm2(sail, ctx)!, sheet.areaMm2) && near(clothAreaMm2(sail)!, Math.abs(polygonAreaMm2(sail.ties.map((t) => t.p)))), "a sail bills its polygon — in the room, or off its points as placed");
+  assert(clothAreaMm2({ type: "wall", wallId: "w", from: 0, to: 1 }) === undefined, "a curtain has no cloth area here");
+  const raised = sailTieHeight(sail, 2, 2456.4);
+  assert(raised.ties[2].heightMm === 2456 && sail.ties[2].heightMm === 3000, "a tie's height is typed on its own");
+  const retied = sailTieMoved(sail, 2, snapTie({ x: 4000, y: 80 }, tctx, 150));
+  assert(retied.ties[2].to?.kind === "wall" && retied.ties[2].heightMm === 3000, "a post dragged to the wall ties to it, its height kept");
+  assert(!sailIsFree(sail) && sailIsFree({ type: "sail", ties: [{ p: { x: 0, y: 0 }, heightMm: 3000, to: { kind: "post" } }, { p: { x: 1, y: 0 }, heightMm: 3000 }] }), "a sail tied to nothing in the room is free to copy");
+  const gone = sailSheet({ ...sail }, { structure: { ...structure, walls: [] } });
+  assert(gone === null, "a sail whose wall is gone resolves to nothing");
+  assert(near(sailCentre(sail, sheet)!.x, (sheet.polygon[0].x + sheet.polygon[1].x + sheet.polygon[2].x) / 3), "its middle is its corners' centroid");
+  console.log("ceiling-cloth self-check passed");
+}

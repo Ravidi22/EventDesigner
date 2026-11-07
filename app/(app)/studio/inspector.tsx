@@ -127,6 +127,8 @@ import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
 import { SwitchRow } from "@/components/toggle";
 import { CANTILEVER_MAX_MM, railLengthMm, railOf, sketchRailContext, type Rail } from "@/lib/studio/rail";
+import { clothKindOf, sailSheet } from "@/lib/studio/ceiling-cloth";
+import { CeilingClothPopover } from "./ceiling-cloth-bar";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { ArrowDownToLine } from "lucide-react";
 import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
@@ -374,6 +376,7 @@ export function Inspector({
   onSpan,
   onRail,
   onDrawRod,
+  onDrawCloth,
   onResize,
   onBows,
   onCorners,
@@ -543,6 +546,9 @@ export function Inspector({
   onRail?: (id: string, rail: Rail, dropMm?: number | null) => void;
   /** Draw this drape a new free-standing rod on the canvas ("וילון על מוט" — components/rod-draw-pane.tsx). */
   onDrawRod?: (id: string) => void;
+  /** Draw a sail or a ceiling drape again on the canvas — a sail tie by tie, a drape as a run or as an
+   *  area (lib/studio/ceiling-cloth.ts). */
+  onDrawCloth?: (id: string, kind: "sail" | "run" | "canopy") => void;
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }) => void;
   /** A rug's curved sides (Placement.bows); null straightens them all. */
   onBows?: (id: string, bows: [number, number, number, number] | null) => void;
@@ -1804,6 +1810,18 @@ export function Inspector({
     const runMm = drape ? railLengthMm(drape, sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product)) : undefined;
     const run = runMm !== undefined ? { lengthMm: runMm } : null;
     const onWhat = drape?.type === "side" ? "על הצד" : drape?.type === "rod" ? "על המוט" : "על הקיר";
+    // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts): its own chip and facts, not a curtain's.
+    const clothKind = drape && r ? clothKindOf(r.product.category, drape) : null;
+    const clothSheet = clothKind && drape?.type === "sail" ? sailSheet(drape, sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product)) : null;
+    const clothFact = !clothKind
+      ? null
+      : drape?.type === "sail"
+        ? clothSheet
+          ? `${(clothSheet.areaMm2 / 1e6).toFixed(1)} מ״ר · ${drape.ties.length} קשירות`
+          : "הקיר או המבנה שהמפרש נקשר אליו הוסר"
+        : run
+          ? `${(run.lengthMm / 1000).toFixed(1)} מ׳ בד${drape?.type === "canopy" ? " על שטח" : ""}`
+          : null;
     const stretch = r?.sizing === "stretch" && !drape;
     const size = p.sizeMm;
     const shade = shades.find((s) => s.id === p.variantId);
@@ -1840,7 +1858,8 @@ export function Inspector({
           bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
           table ? tableLabel(doc, table) : null,
           overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
-          drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ ${onWhat}` : drape.type === "side" ? "הפריט שהווילון היה תלוי עליו הוסר" : "הקיר נמחק") : null,
+          drape && !clothKind ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ ${onWhat}` : drape.type === "side" ? "הפריט שהווילון היה תלוי עליו הוסר" : "הקיר נמחק") : null,
+          clothFact,
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -2130,7 +2149,16 @@ export function Inspector({
 
         {/* A drape covers its whole wall (or side) by default; this puts it back after it was
             shortened. On a rod: its height and its ר. Every rail: the drop, and a rod of its own. */}
-        {drape && (
+        {/* A sail's ties and sag, a ceiling drape's height, width, sag, scallops — its own chip. */}
+        {drape && clothKind && onRail && (
+          <CeilingClothPopover
+            rail={drape}
+            sheet={clothSheet}
+            onRail={(rail) => onRail(p.id, rail)}
+            onRedraw={onDrawCloth && !p.locked ? (kind) => onDrawCloth(p.id, kind) : undefined}
+          />
+        )}
+        {drape && !clothKind && (
           <DrapeRailPopover
             rail={drape}
             run={run}

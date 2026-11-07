@@ -151,6 +151,9 @@ export const FIXTURE_PRODUCTS: Product[] = [
   { id: "sofa", name: "ספה", category: "sofas", layer: "floor", dimensions: { widthMm: 2000, depthMm: 900, heightMm: 800 }, categoryFields: {}, styleTags: [], variants: [] },
   // 2026-11-07: a hired pergola (lib/venues/pergola.ts) — 12cm posts, a cloth roof.
   { id: "pergola", name: "פרגולה 3×3", category: "pergolas", layer: "floor", dimensions: { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, categoryFields: { postMm: 120 }, styleTags: [], appearance: { shape: "rect", content: "none", symbolStyle: "fabric" }, variants: [{ id: "v-pergola-white", name: "לבן", swatch: "#f4f1ea" }] },
+  // 2026-11-07: cloth in the air (lib/studio/ceiling-cloth.ts) — a sail, and a ceiling drape.
+  { id: "sail", name: "מפרש", category: "sails", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m2", variants: [{ id: "v-sail-sand", name: "חול", swatch: "#e9dfc9" }] },
+  { id: "ceiling-drape", name: "בד תקרה", category: "ceiling-drapes", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m", variants: [{ id: "v-drape-ivory", name: "שנהב", swatch: "#f3ede2" }] },
 ];
 
 export const FIXTURE_DOC: DesignDocumentContent = {
@@ -234,6 +237,28 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-pergola", variantId: "v-pergola-white", layer: "floor", quantity: 1, position: { x: 16500, y: 8500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 4000, depthMm: 3000 } },
     { id: "p-hung", variantId: "v-arr-blush", layer: "ceiling", quantity: 1, position: { x: 21700, y: 5600 }, rotation: 0, scale: 1 },
     { id: "p-pergola-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "side", featureId: "f-pergola", side: 0, from: 0, to: 1, out: 1 } },
+    // 2026-11-07: a SAIL tied to the hall's north wall twice and standing on two posts of its own; a
+    // ceiling drape swagged from A to B; a canopy of swags over a 4 × 1.8 m area.
+    {
+      id: "p-sail",
+      variantId: "v-sail-sand",
+      layer: "ceiling",
+      quantity: 1,
+      position: { x: 8000, y: 1750 },
+      rotation: 0,
+      scale: 1,
+      rail: {
+        type: "sail",
+        ties: [
+          { p: { x: 6000, y: 0 }, heightMm: 3600, to: { kind: "wall", wallId: "w-top-a", t: 0.3 } },
+          { p: { x: 10000, y: 0 }, heightMm: 3600, to: { kind: "wall", wallId: "w-top-a", t: 0.5 } },
+          { p: { x: 10000, y: 3500 }, heightMm: 2800, to: { kind: "post" } },
+          { p: { x: 6000, y: 3500 }, heightMm: 2800, to: { kind: "post" } },
+        ],
+      },
+    },
+    { id: "p-swag", variantId: "v-drape-ivory", layer: "ceiling", quantity: 1, position: { x: 5000, y: 8000 }, rotation: 0, scale: 1, rail: { type: "run", a: { x: 2000, y: 8000 }, b: { x: 8000, y: 8000 }, heightMm: 3500 } },
+    { id: "p-canopy", variantId: "v-drape-ivory", layer: "ceiling", quantity: 1, position: { x: 11000, y: 6900 }, rotation: 0, scale: 1, rail: { type: "canopy", outline: [{ x: 9000, y: 6000 }, { x: 13000, y: 6000 }, { x: 13000, y: 7800 }, { x: 9000, y: 7800 }], heightMm: 3600, directionDeg: 0, spacingMm: 1200 } },
   ],
   groups: [{ id: "g1", number: 2 }],
 };

@@ -27,6 +27,7 @@ import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { nearestWall, wallTrack } from "@/lib/studio/anchor";
 import { railLengthMm, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { clothAreaMm2 } from "@/lib/studio/ceiling-cloth";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
@@ -157,6 +158,11 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
     railLengthMm: railCtx ? (p) => {
       const rail = railOf(p);
       return rail ? railLengthMm(rail, railCtx) : undefined;
+    } : undefined,
+    // A sail's polygon as it hangs (lib/studio/ceiling-cloth.ts), read off the product ROWS.
+    railAreaMm2: railCtx ? (p) => {
+      const rail = railOf(p);
+      return rail ? clothAreaMm2(rail, railCtx) : undefined;
     } : undefined,
     // The rod a curtain on a free-standing rod is ordered as: the studio's first rod row.
     rodOf: () => {

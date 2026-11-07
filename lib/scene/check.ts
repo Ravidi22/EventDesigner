@@ -152,6 +152,20 @@ if (isMain(import.meta.url)) {
   const pergolaCloth = ofId("p-pergola-curtain")[0]?.parts.find((q) => q.shape === "ribbon");
   assert(!!pergolaCloth && pergolaCloth.shape === "ribbon" && near(pergolaCloth.h, 2600) && pergolaCloth.path.every((q) => q.y < 5600 - 1500), "a curtain on the pergola's side falls from its top, outside it");
 
+  // ── cloth in the air (2026-11-07, lib/studio/ceiling-cloth.ts) ───────────────────────────────────
+  // The sail: tied twice to the north wall's line at 3.6 m, on two poles of its own at 2.8 m.
+  const sailBodies = ofId("p-sail");
+  const sailSheet = sailBodies.flatMap((b) => b.parts).find((q): q is Extract<typeof q, { shape: "sheet" }> => q.shape === "sheet");
+  assert(!!sailSheet && near(sailSheet.rows[0][0].y, 0) && near(sailSheet.rows[0][0].z, 3600) && near(sailSheet.rows[0][0].x, 6000), "the sail's corner hangs on the wall at its tie's 3.6 m");
+  assert(sailBodies[0]?.material.colour === "#e9dfc9", "…in its shade");
+  assert(sailBodies.flatMap((b) => b.parts).filter((q) => q.shape === "cylinder").length === 2, "…and stands on its two poles");
+  // The swag and the canopy: one sheet each run, sagging below their height.
+  const swagSheets = ofId("p-swag").flatMap((b) => b.parts).filter((q) => q.shape === "sheet");
+  assert(swagSheets.length === 1, "the swag is one cloth");
+  const canopySheets = ofId("p-canopy").flatMap((b) => b.parts).filter((q): q is Extract<typeof q, { shape: "sheet" }> => q.shape === "sheet");
+  assert(canopySheets.length === 2 && canopySheets.every((s) => s.rows.flat().every((q) => q.z <= 3600 + 1e-6) && s.rows.flat().some((q) => q.z < 3600 - 100)), "the canopy's 1.8 m at 1.2 m is two swags, hung at 3.6 m and sagging");
+  assert(!ofId("p-swag").some((b) => b.parts.some((q) => q.shape === "ribbon")), "…never a curtain's ribbon");
+
   // ── what glows ────────────────────────────────────────────────────────────────────────────────
   const emitters = scene.nodes.filter((n) => n.kind === "emitter");
   // 5 + 7 + 9 candles and a lamp on the tables, 8 bulbs on the chandelier.

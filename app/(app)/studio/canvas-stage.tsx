@@ -15,6 +15,8 @@ import { wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
 import { isRailed, nearestSideRail, railClothLine, railLines, railOf, rodPath, rodPointMoved, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
 import { RodMarks } from "@/components/curtain-cloth";
 import { RodDrawPane } from "@/components/rod-draw-pane";
+import { CeilingClothNode, TIE_SNAP_PX, useClothTies } from "./ceiling-cloth-node";
+import { clothView, SAIL_MAX_TIES } from "@/lib/studio/ceiling-cloth";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
@@ -245,6 +247,7 @@ export function CanvasStage({
   onStageFill,
   drawArea,
   rodDraw,
+  clothDraw,
   areaShape = "corners",
   onArea,
   onCancelArea,
@@ -356,6 +359,10 @@ export function CanvasStage({
   /** Drawing a drape's free-standing ROD ("וילון על מוט", components/rod-draw-pane.tsx): every click
    *  a post, Enter or a double-click ends it. Absent = not drawing one. */
   rodDraw?: { onFinish: (points: Point[]) => void; onCancel: () => void };
+  /** Drawing a SAIL's ties (snapped to walls and corners), a ceiling drape's RUN (two clicks) or a
+   *  CANOPY's area (closed) — the rod tool's pane with its options (lib/studio/ceiling-cloth.ts).
+   *  `id` re-mounts the pane for a new drawing; `start` is the drop that began it. */
+  clothDraw?: { id: number; kind: "sail" | "run" | "canopy"; start?: Point; onFinish: (points: Point[]) => void; onCancel: () => void };
   /** …or, for a round stage, a centre and a size (a disc), a box (an oval), or a chord and a side (a
    *  half-round). Absent = corners. */
   areaShape?: AreaShape;
@@ -564,6 +571,9 @@ export function CanvasStage({
   // What a drape's rail is read against (lib/studio/rail.ts): the property's walls, and a side rail's
   // thing — a hired stage or backdrop of this document, else the venue's feature as arranged here.
   const railCtx = useMemo(() => sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product), [doc, plan.structure, structure]);
+  // What a sail's ties are snapped against while one is dragged or drawn (./ceiling-cloth-node.tsx):
+  // stable, read at the moment of the gesture.
+  const clothTies = useClothTies(doc, plan.structure, structure);
 
   // Three bands rather than two, once the eye is pointed somewhere: the zone being worked in, the
   // event's other zones, and the property around them. Held back by opacity, never hidden — placing
@@ -2449,6 +2459,25 @@ export function CanvasStage({
               sorted.drapes.map((p) => {
                 const rail = railOf(p);
                 if (!rail) return null;
+                // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts) — its own node, by its category.
+                const cloth = clothView(resolve(p.variantId)?.product.category, rail, railCtx);
+                if (cloth)
+                  return (
+                    <CeilingClothNode
+                      key={p.id}
+                      placement={p}
+                      rail={rail}
+                      cloth={cloth}
+                      selected={isSel("placement", p.id)}
+                      grabbable={activeLayer === "ceiling"}
+                      locked={p.locked || !onRailPlacement}
+                      ctx={ctx}
+                      ties={clothTies}
+                      onSelect={stable.selectPlacement}
+                      onRail={stable.railPlacement}
+                      onEnd={stable.endGesture}
+                    />
+                  );
                 return (
                   <DrapeNode
                     key={p.id}
@@ -2545,6 +2574,25 @@ export function CanvasStage({
           )}
 
           {rodDraw && <RodDrawPane ctx={ctx} onFinish={rodDraw.onFinish} onCancel={rodDraw.onCancel} />}
+          {clothDraw && (
+            <RodDrawPane
+              key={clothDraw.id}
+              ctx={ctx}
+              start={clothDraw.start}
+              onFinish={clothDraw.onFinish}
+              onCancel={clothDraw.onCancel}
+              closed={clothDraw.kind !== "run"}
+              maxPoints={clothDraw.kind === "run" ? 2 : clothDraw.kind === "sail" ? SAIL_MAX_TIES : undefined}
+              snap={
+                clothDraw.kind === "sail"
+                  ? (raw, free) => {
+                      const tie = clothTies.snap(raw, ctx.mm(TIE_SNAP_PX), free);
+                      return { p: tie.p, tied: tie.to.kind !== "post" };
+                    }
+                  : undefined
+              }
+            />
+          )}
 
           {armed && onPlaceArmed && !placeGhost && !drawArea && !stairPick && !rodDraw && (
             <ArmedPane

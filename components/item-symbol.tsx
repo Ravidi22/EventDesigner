@@ -28,6 +28,7 @@ import { ClimbGlyph } from "./climb-glyph";
 import { PergolaGlyph } from "./pergola-glyph";
 import { pergolaFromStyle } from "@/lib/venues/pergola";
 import { pleatsAlongD } from "./curtain-cloth";
+import { CeilingDrapeSymbol, SailSymbol } from "./ceiling-cloth";
 import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
@@ -89,6 +90,9 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   pergola: "#B89A74",
   // Ivory voile — a drape's cloth when its shade says nothing (never drawn as a footprint picture).
   curtain: "#F3EDE2",
+  // Sailcloth and the same voile overhead (components/ceiling-cloth.tsx).
+  sail: "#F4F1EA",
+  "ceiling-drape": "#F3EDE2",
 };
 
 export interface ItemSymbolProps {
@@ -253,6 +257,13 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       break;
     case "bench":
       body = benchSymbol(footprint, bench ?? benchLayoutFor(footprint), chairs, c, line);
+      break;
+    // Cloth in the air, as a card or a drag image shows it (on the plan each is drawn along its rail).
+    case "sail":
+      body = <SailSymbol w={w} h={h} tone={t} ink={ink} print={c.print} />;
+      break;
+    case "ceiling-drape":
+      body = along(w, h, (L, D) => <CeilingDrapeSymbol L={L} D={D} tone={t} ink={ink} print={c.print} />);
       break;
   }
   return <g className="pointer-events-none">{body}</g>;
