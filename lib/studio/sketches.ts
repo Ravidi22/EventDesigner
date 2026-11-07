@@ -7,6 +7,7 @@ import type { DesignDocumentContent, Placement } from "@/lib/design-document/typ
 import { pruneGroups } from "@/lib/design-document/actions";
 import { CATEGORY_BY_ID, categoryInPass } from "@/lib/catalog/categories";
 import { railNamesVenue, railOf } from "./rail";
+import { detachCover } from "./cover";
 import { isMain } from "../self-check";
 
 /** A saved sketch as the pickers list it — never its content, which can be hundreds of placements
@@ -67,7 +68,9 @@ export function takeLayers(
   const stageIds = new Set(kept.filter((p) => p.stage).map((p) => p.id));
   const placements = kept
     .filter((p) => (p.tableId ? tableIds.has(p.tableId) : true) && (p.perch ? stageIds.has(p.perch.stageId) : true))
-    .map((p) => (p.over && !tableIds.has(p.over) ? { ...p, over: undefined } : p));
+    .map((p) => (p.over && !tableIds.has(p.over) ? { ...p, over: undefined } : p))
+    // A carpet over a stage left behind stays where it lay, let go (lib/studio/cover.ts).
+    .map((p) => (p.cover?.stageId && !stageIds.has(p.cover.stageId) ? detachCover(p) : p));
   const { features, exceptions, ...rest } = doc;
   return pruneGroups({
     ...rest,
@@ -107,7 +110,10 @@ export function adoptSketch(content: DesignDocumentContent, sameVenue: boolean):
   return { ...rest, placements: content.placements.filter((p) => {
     const rail = railOf(p);
     return !rail || !railNamesVenue(rail, own);
-  }) };
+  })
+    // A carpet laid over one of the OTHER room's surfaces (lib/studio/cover.ts) comes along let go —
+    // the shape it was laid in, where it was — rather than linked to a feature id this room lacks.
+    .map((p) => (p.cover?.featureId ? detachCover(p) : p)) };
 }
 
 if (isMain(import.meta.url)) {
@@ -145,6 +151,20 @@ if (isMain(import.meta.url)) {
     false,
   );
   assert(railed.placements.map((p) => p.id).join(",") === "stg,on-stage,on-rod", "in another room a drape on its wall or its feature is left behind — one on the sketch's own stage or a rod comes along");
+  // Covers (lib/studio/cover.ts): a carpet over the other room's lawn comes along let go, its shape
+  // kept; one over the sketch's own stage stays laid over it.
+  const sq = [{ x: -500, y: -500 }, { x: 500, y: -500 }, { x: 500, y: 500 }, { x: -500, y: 500 }];
+  const carried = adoptSketch(
+    {
+      ...base(),
+      placements: [
+        { id: "on-lawn", variantId: "v", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, cover: { featureId: "lawn" }, outline: sq },
+        { id: "on-own", variantId: "v", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, cover: { stageId: "stg" }, outline: sq },
+      ],
+    },
+    false,
+  );
+  assert(!carried.placements[0].cover && carried.placements[0].outline === sq && carried.placements[1].cover?.stageId === "stg", "in another room a carpet over its lawn is let go, shape kept; one over the sketch's own stage stays laid");
 
   // ── takeLayers ──
   const at = { x: 0, y: 0 };

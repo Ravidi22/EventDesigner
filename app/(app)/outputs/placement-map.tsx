@@ -36,6 +36,7 @@ import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { rugOutline, rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetFootprint, carpetPathD, carpetPolygon, carpetShape, type CarpetShape } from "@/lib/studio/cover";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
@@ -179,6 +180,12 @@ const placed = (at: { x: number; y: number }, rotation: number, mirrored?: boole
 function fallbackSize(r?: Resolved): { widthMm: number; depthMm: number } {
   const b = r ? footprintBounds(resolveFootprint(r.product)) : null;
   return { widthMm: b?.w || 2000, depthMm: b?.h || 1400 };
+}
+
+/** A carpet laid to an outline WITH HOLES in it (a stage's, lib/studio/cover.ts): the outline and its
+ *  holes as one even-odd path, in place of FootprintShape (which knows no holes). */
+function CarpetCut({ carpet, ...props }: { carpet: CarpetShape } & Omit<React.SVGProps<SVGPathElement>, "d" | "ref">) {
+  return <path d={carpetPathD(carpet)} fillRule="evenodd" {...props} />;
 }
 
 /** World mm round the framed zone: room for the overall dimensions (900mm off the room) and their
@@ -482,7 +489,9 @@ export function PlacementMap({
   for (const t of doc.tables) stackBoxes.set(`table:${t.id}`, boxOf(toWorld(outlineOf(tableFootprint(t)), t.position, t.rotation, t.mirrored)));
   for (const p of floorItems) {
     const r = resolve(p.variantId);
-    const outline = p.stage ? p.stage.outline : outlineOf(r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p));
+    // A carpet laid to an outline (lib/studio/cover.ts) stacks by that outline.
+    const carpet = carpetShape(p);
+    const outline = p.stage ? p.stage.outline : carpet ? carpetPolygon(carpet) : outlineOf(r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p));
     stackBoxes.set(`placement:${p.id}`, boxOf(toWorld(outline, p.position, p.rotation, p.mirrored, p.stage ? 1 : p.scale || 1)));
   }
   const risen = new Map(autoStack(rawStack, stackBoxes, rawStack.map((e) => e.ref)).map((a) => [`${a.kind}:${a.id}`, a.order]));
@@ -518,7 +527,9 @@ export function PlacementMap({
     // not by its box.
     const rugShape = rug && r?.sizing === "stretch" ? rugShapeOf(p) : undefined;
     const curved = rugShape && fp.kind === "rect" ? rugPolygon(fp.widthMm, fp.depthMm, rugShape) : null;
-    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(curved ?? outlineOf(fp), p.position, p.rotation, p.mirrored, p.scale || 1) });
+    // …and one laid to an outline (over a surface or a stage, lib/studio/cover.ts) along that.
+    const carpet = rug ? carpetShape(p) : null;
+    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(carpet ? carpetPolygon(carpet) : (curved ?? outlineOf(fp)), p.position, p.rotation, p.mirrored, p.scale || 1) });
   }
   // The venue's own stairs and ramps (lib/venues/climb.ts). Nobody on the crew places them, so they
   // are never sized or tied — but a table has to keep their foot and head clear, so the gap to the
@@ -1669,15 +1680,20 @@ export function PlacementGlyph({
   // that draw a custom footprint recentre it on its bounds, so `lift` carries it back onto the
   // rectangle's centre — which is where the rug is.
   const stretched = r?.sizing === "stretch" ? (placement.sizeMm ?? fallbackSize(r)) : undefined;
-  const rugShape = stretched && !shape ? rugShapeOf(placement) : undefined;
+  // A carpet laid to an outline — over a surface or a stage, or let go from one (lib/studio/cover.ts):
+  // that outline, centred on its box; its holes cut (CarpetCut); no bows of its own.
+  const carpet = stretched && !shape ? carpetShape(placement) : null;
+  const carpetFp = carpet ? carpetFootprint(carpet) : undefined;
+  const cut = carpet && carpet.holes.length ? carpet : null;
+  const rugShape = stretched && !shape && !carpet ? rugShapeOf(placement) : undefined;
   const bowed = rugShape && stretched ? rugOutline(stretched.widthMm, stretched.depthMm, rugShape) : null;
   const lift = bowed ? `translate(${bowed.centre.x} ${bowed.centre.y})` : undefined;
   const footprint: Footprint = shape ?? (
     stretched
-      ? (bowed?.footprint ?? { kind: "rect", ...stretched })
+      ? (carpetFp ?? bowed?.footprint ?? { kind: "rect", ...stretched })
       : placementFootprint(placement)); // at the size it was stretched to, when its row allows that
   // The rectangle a rug's border and fringe are laid in: its footprint, or — curved — the box it bows from.
-  const patternBox = footprint.kind === "rect" ? { w: footprint.widthMm, h: footprint.depthMm } : bowed && stretched ? { w: stretched.widthMm, h: stretched.depthMm } : null;
+  const patternBox = carpet ? { w: carpet.widthMm, h: carpet.depthMm } : footprint.kind === "rect" ? { w: footprint.widthMm, h: footprint.depthMm } : bowed && stretched ? { w: stretched.widthMm, h: stretched.depthMm } : null;
   const scale = placement.scale || 1;
   // The row's own weight and dash, collapsed to ink-on-paper (TableGlyph's reason). A stage keeps the
   // sheet's furniture weight whatever deck it was built from, as it does on screen.
@@ -1716,7 +1732,18 @@ export function PlacementGlyph({
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
         {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
-        {!symbol && !block && (
+        {!symbol && !block && cut && (
+          <CarpetCut
+            carpet={cut}
+            fill={own ?? screen.fill}
+            fillOpacity={own ? 1 : screen.fillOpacity}
+            stroke={screen.stroke}
+            strokeWidth={screen.strokeWidth}
+            strokeDasharray={screen.dashArray.length ? screen.dashArray.join(" ") : undefined}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {!symbol && !block && !cut && (
           <g transform={lift}>
             <FootprintShape
               footprint={footprint}
@@ -1735,7 +1762,7 @@ export function PlacementGlyph({
             <ItemSurface appearance={r?.product.appearance} footprint={footprint} color={own} seed={placement.id} />
           </g>
         )}
-        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} />}
+        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} footprint={carpetFp} />}
       </g>
     );
   }
@@ -1750,6 +1777,9 @@ export function PlacementGlyph({
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
+      {cut ? (
+        <CarpetCut carpet={cut} fill={flat ?? style.fill} stroke={style.stroke} strokeWidth={style.strokeWidth} strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined} vectorEffect="non-scaling-stroke" />
+      ) : (
       <g transform={lift}>
         <FootprintShape
           footprint={footprint}
@@ -1761,11 +1791,12 @@ export function PlacementGlyph({
           vectorEffect="non-scaling-stroke"
         />
       </g>
+      )}
       {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. Its
           contour (lib/catalog/border.ts) is a step darker than the rug's own grey, so a bordered rug
           still reads as one photocopied. */}
       {rug && patternBox && (
-        <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} />
+        <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} footprint={carpetFp} />
       )}
     </g>
   );

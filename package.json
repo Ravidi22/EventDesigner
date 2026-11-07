@@ -18,6 +18,7 @@
     "check:spine": "tsx lib/studio/spine.ts",
     "check:rug-shape": "tsx lib/studio/rug-shape.ts",
     "check:border": "tsx lib/catalog/border.ts",
+    "check:cover": "tsx lib/studio/cover.ts",
     "check:shaped-outline": "tsx lib/studio/shaped-outline.ts",
     "check:shape-list": "tsx lib/catalog/shape-list.ts",
     "check:hang-over": "tsx lib/studio/hang-over.ts",

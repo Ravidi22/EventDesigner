@@ -276,11 +276,13 @@ function settleOne(p: Placement, doc: DesignDocumentContent, ctx: CoverContext, 
   const laid = "stage" in target ? layOnStage(target.stage, cover.insetMm ?? 0, ctx.deckOf) : layOnFeature(target.feature, cover.insetMm ?? 0);
   if (!laid) return p;
   // A rectangle's bows and corners mean nothing on an outline; the outline's own curves say it all.
-  const { bows: _b, corners: _c, edgeCurves: _e, holes: _h, ...rest } = p;
+  // Nor is the carpet ever mirrored — a mirrored stage's outline is flipped into it (layOnStage).
+  const { bows: _b, corners: _c, edgeCurves: _e, holes: _h, mirrored: _m, ...rest } = p;
   void _b;
   void _c;
   void _e;
   void _h;
+  void _m;
   const next: Placement = { ...rest, ...laid };
   if (prev && same(next, prev)) return prev;
   return same(next, p) ? p : next;
@@ -499,7 +501,8 @@ if (isMain(import.meta.url)) {
   const d2 = settleCovers(undefined, doc([holed, rug({ stageId: "st" })]), ctx);
   const c2 = d2.placements[1];
   assert(c2.holes?.length === 2, "the stage's two holes are holes in its carpet");
-  assert(near(carpetAreaMm2(c2)!, 24e6 - 0.5e6 - 0.25e6 * 1, 2e3), `…the one in the middle whole, the one at the rim only where the carpet is (${carpetAreaMm2(c2)})`);
+  // The rim one is a 1000×500 deck stood on end at x 2550…3050: 45cm of it over the carpet.
+  assert(near(carpetAreaMm2(c2)!, 24e6 - 0.5e6 - 0.45e6, 2e3), `…the one in the middle whole, the one at the rim only where the carpet is (${carpetAreaMm2(c2)})`);
   const blind = settleCovers(d0, { ...d0, placements: [holed, c0] }, {});
   assert(blind.placements[1] === c0, "with no lookup to size its holes, a holed stage's carpet is left as it stands");
   // A mirrored stage of a non-symmetric outline: the carpet lies over the stage as the plan draws it.

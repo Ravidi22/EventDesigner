@@ -29,6 +29,7 @@ import { pointInPolygon } from "@/lib/venues/faces";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { catalogBox } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetPolygon, carpetShape } from "@/lib/studio/cover";
 import { turn } from "./frame";
 import { rectOutline } from "@/lib/design-document/stage";
 import { primeCatalog } from "@/lib/catalog/storage";
@@ -122,6 +123,13 @@ function samplesOf(outlines: readonly Point[][]): Point[] {
 function rugOutline(p: Placement): Point[] | null {
   const product = resolve(p.variantId)?.product;
   if (!product || product.category !== "rugs") return null;
+  // A carpet laid to an outline (over a stage, a lawn — lib/studio/cover.ts): that outline.
+  const carpet = carpetShape(p);
+  if (carpet)
+    return carpetPolygon(carpet).map((c) => {
+      const t = turn(c, p.rotation ?? 0);
+      return { x: p.position.x + t.x, y: p.position.y + t.y };
+    });
   const { widthMm, depthMm } = p.sizeMm ?? catalogBox(product);
   // The four corners, or — with curved sides — the outline flattened (lib/studio/rug-shape.ts).
   const corners = rugPolygon(widthMm, depthMm, rugShapeOf(p));
@@ -262,5 +270,14 @@ if (isMain(import.meta.url)) {
   assert(el.floorUnder(square(-3100, 1500, 400)) === 0, "a quarter on the deck: on the floor");
   assert(el.floorUnder(square(20000, 0)) === 1000 && el.floorUnder(square(30000, 0)) === 0, "a low built terrace is a floor; a tall building is not stood on");
   assert(el.floorUnder(square(0, 5000)) === 0, "a tall partition is not a platform");
+  // A carpet laid to an OUTLINE (lib/studio/cover.ts) — an L over the stage, its notch bare: read by
+  // the outline, not by its box.
+  const ell: Placement = {
+    ...floor("ell", "rug", 0, 0),
+    sizeMm: { widthMm: 6000, depthMm: 4000 },
+    outline: [{ x: -3000, y: -2000 }, { x: 3000, y: -2000 }, { x: 3000, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 2000 }, { x: -3000, y: 2000 }],
+  };
+  const onEll = elevationOf({ ...doc, placements: [stage, ell] }, { nodes: [], walls: [], entrances: [], features: [] });
+  assert(onEll.floorUnder(square(-1500, 1000)) === 500 + RUG_MM && onEll.floorUnder(square(1500, 1000)) === 500, "on an outline carpet a thing stands a rug higher; in its notch, on the bare deck");
   console.log("scene elevation ok");
 }
