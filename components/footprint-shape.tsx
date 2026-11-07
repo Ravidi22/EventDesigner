@@ -17,6 +17,7 @@ import { climbKindOf } from "@/lib/studio/climb-item";
 import { catalogVersion } from "@/lib/catalog/storage";
 import type { RugShape } from "@/lib/studio/rug-shape";
 import { sameBorder, type Border } from "@/lib/catalog/border";
+import { carpetFootprint, carpetShape } from "@/lib/studio/cover";
 
 /** Two rug shapes (RugShape) that say the same: the same bows, the same corners. */
 function sameRugShape(a: RugShape, b: RugShape): boolean {
@@ -345,6 +346,10 @@ export function dressingSpots(
 export function placementFootprint(placement: Placement): Footprint {
   // A stage is its own outline, whatever deck it was mostly built from (Placement.stage).
   if (placement.stage) return { kind: "custom", outline: placement.stage.outline };
+  // A carpet laid to an outline — over a surface or a stage, or let go from one (Placement.outline,
+  // lib/studio/cover.ts) — is that outline, stretched to its size.
+  const carpet = carpetShape(placement);
+  if (carpet) return carpetFootprint(carpet);
   // A block of chairs in rows takes the floor its rows do (lib/design-document/chair-rows.ts) — what
   // it is hit, selected, measured and kept clear by, while each chair is drawn at its own size.
   const block = chairBlockOf(placement);

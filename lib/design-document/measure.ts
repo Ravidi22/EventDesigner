@@ -14,6 +14,7 @@ import type { DesignDocumentContent, Placement } from "./types";
 import { edgeItemShape, edgeKind, skirtMm, stageAreaMm2, stageCorners, stageDeckCounts, type DeckLookup, type StagePlacement, type WallDistance } from "./stage";
 import { standaloneBench, type BenchLookup } from "./bench";
 import { railLengthMm, railOf, rodPath } from "../studio/rail";
+import { carpetAreaMm2 } from "../studio/cover";
 import { isMain } from "../self-check";
 
 /** What a placement's amount is counted in, decided by the product's price unit. */
@@ -107,6 +108,10 @@ export function measure(p: Placement, ctx: MeasureContext): number {
     // No span and no size to fall back on: count it, rather than quietly bill zero metres.
     return mm ? round2((mm / 1000) * p.quantity) : p.quantity;
   }
+  // A carpet laid to an outline (over a surface or a stage — lib/studio/cover.ts) is billed by the
+  // floor it covers, curves and holes and all, not by the box round it.
+  const outlined = carpetAreaMm2(p);
+  if (outlined !== null) return round2((outlined / 1e6) * p.quantity);
   if (!size?.widthMm || !size?.depthMm) return p.quantity;
   return round2(((size.widthMm / 1000) * (size.depthMm / 1000)) * p.quantity);
 }
@@ -238,6 +243,10 @@ if (isMain(import.meta.url)) {
 
   const carpet = { ...base, id: "e", variantId: "carpet", quantity: 1, sizeMm: { widthMm: 3000, depthMm: 2500 } };
   assert(measure(carpet, ctx) === 7.5, "a 3×2.5m carpet bills 7.5 square metres");
+  // Laid to an outline (Placement.outline): an L of 3×2.5 less a 1×1 corner, and a 0.5×0.5 hole.
+  const ell = { ...carpet, id: "ell", outline: [{ x: -1500, y: -1250 }, { x: 1500, y: -1250 }, { x: 1500, y: 250 }, { x: 500, y: 250 }, { x: 500, y: 1250 }, { x: -1500, y: 1250 }], holes: [[{ x: -1000, y: -1000 }, { x: -500, y: -1000 }, { x: -500, y: -500 }, { x: -1000, y: -500 }]] };
+  assert(measure(ell, ctx) === 6.25, `a carpet laid to an L with a hole bills the floor it covers (${measure(ell, ctx)})`);
+  assert(measure({ ...ell, variantId: "candlestick" }, ctx) === 1, "…and a row priced per unit is still one");
   assert(measure({ ...carpet, quantity: 2 }, ctx) === 15, "two carpets, twice the area");
   assert(measure({ ...base, id: "f", variantId: "carpet", quantity: 3 }, ctx) === 3, "an unsized carpet falls back to its count");
 

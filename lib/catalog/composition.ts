@@ -20,6 +20,7 @@ import type { Clip } from "../studio/clipboard";
 import type { Composition, CompositionLine, Product } from "./types";
 import { anchorOf } from "./categories";
 import { catalogBox } from "../studio/footprint";
+import { detachCover } from "../studio/cover";
 import { isMain } from "../self-check";
 
 /** The category every composite row is filed under (lib/catalog/categories.ts). */
@@ -79,7 +80,10 @@ export function fromSelection(clip: Clip, box: Box): Composition {
         // in the room, and moves with the origin.
         position: p.tableId === undefined ? { x: p.position.x - cx, y: p.position.y - cy } : p.position,
       };
-    });
+    })
+    // A carpet laid over a stage that is in the item stays laid over it; over anything else (a venue
+    // surface — no venue goes into a catalog row) it is kept as the shape it was laid in.
+    .map((p) => (p.cover && !(p.cover.stageId && placementIds.has(p.cover.stageId)) ? detachCover(p) : p));
   const grouped = new Set([...tables, ...placements].map((x) => x.groupId).filter((g): g is string => !!g));
   const groups: DesignGroup[] = clip.groups.filter((g) => grouped.has(g.id)).map((g) => ({ id: g.id, ...(g.number !== undefined ? { number: g.number } : {}) }));
   return { tables, placements, groups };
