@@ -30,10 +30,14 @@
 // needing the walls. A zone would have put the kitchen on the list of rooms an event books, and
 // would have had no mass: a zone is a floor and a ceiling, not a thing standing on the property.
 import type { Point } from "../studio/hall";
+import type { EdgeCurve } from "../studio/hall";
 import { polygonAreaMm2 } from "../studio/geometry";
 import { footprintPolygons } from "../studio/proximity";
+import { customShapeBounds, footprintOutlines } from "../studio/footprint";
+import { cleanShape, hasCorners, shapedOutline, type OutlineShape } from "../studio/shaped-outline";
 import { detectFaces, pointInPolygon, type Face } from "./faces";
 import { featureFootprint, newFeature, type StructureFeature, type SurfaceMaterial, type VenueStructure } from "./structure";
+import { featureOutlineShape } from "./structure";
 import { isMain } from "../self-check";
 
 /** Whether this surface or building follows the walls round it (and so takes no drag, resize or turn). */
@@ -59,12 +63,26 @@ export function featureWorldOutline(f: StructureFeature): Point[] {
  *  may fall on a half millimetre — because featureFootprint stretches an outline to width × depth,
  *  and an outline a millimetre off its box would creep by that much on every frame of a corner drag
  *  that re-reads it. `edgeCurves: undefined` clears the curves of a shape it replaces. */
-export function asOutline(boundary: readonly Point[]): Pick<StructureFeature, "x" | "y" | "widthMm" | "depthMm" | "rotationDeg" | "shape" | "outline" | "edgeCurves"> {
+export function asOutline(
+  boundary: readonly Point[],
+  edgeCurves?: readonly (EdgeCurve | null)[],
+  corners?: readonly (number | null)[],
+): Pick<StructureFeature, "x" | "y" | "widthMm" | "depthMm" | "rotationDeg" | "shape" | "outline" | "edgeCurves"> & Pick<StructureFeature, "corners"> {
   const pts = boundary.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+  // A bowed or rounded outline (2026-11-07) keeps its bows and radii on the same points — the curves
+  // are offsets from their sides' ends and a radius is a length, so moving the lot to its box's
+  // centre changes neither — and its box is the box of what is DRAWN, the box featureFootprint
+  // measures it by (scaleOutline), so it is scaled by exactly 1 and every point lands where it was.
+  const kept = cleanShape({ outline: pts, ...(edgeCurves ? { edgeCurves: [...edgeCurves] } : {}), ...(corners ? { corners: [...corners] } : {}) });
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of pts) {
-    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  if (kept.edgeCurves || hasCorners(kept.corners)) {
+    const drawn = shapedOutline(pts, kept.edgeCurves, kept.corners);
+    ({ minX, minY, maxX, maxY } = customShapeBounds(drawn.outline, drawn.edgeCurves));
+  } else {
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
   }
   const x = (minX + maxX) / 2;
   const y = (minY + maxY) / 2;
@@ -76,8 +94,40 @@ export function asOutline(boundary: readonly Point[]): Pick<StructureFeature, "x
     rotationDeg: 0,
     shape: "custom",
     outline: pts.map((p) => ({ x: p.x - x, y: p.y - y })),
-    edgeCurves: undefined,
+    edgeCurves: kept.edgeCurves,
+    corners: kept.corners,
   };
+}
+
+/** A feature's outline as its points, bows and radii in plan millimetres — what the hall editor's
+ *  "עריכת הקווים" edits (components/venue-plan.tsx RegionOutlineEditor), handed back through
+ *  asOutline. The drawn shape's points, not its flattened polygon (featureWorldOutline): a bowed side
+ *  is one side with its bow, a rounded corner one point with its radius. Turned and placed exactly as
+ *  the drawing is — scaled like featureFootprint, about the box of what is drawn. Any single-outline
+ *  footprint will do: a rectangle is its four corners, an ellipse its four apexes and quarter arcs. */
+export function featureEditOutline(f: StructureFeature): OutlineShape {
+  const own = featureOutlineShape(f) ?? footprintOutlines(featureFootprint(f))[0];
+  if (!own) return { outline: [] };
+  const t = ((f.rotationDeg ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(t);
+  const sin = Math.sin(t);
+  const turn = (v: Point): Point => ({ x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos });
+  const outline = own.outline.map((v) => {
+    const q = turn(v);
+    return { x: f.x + q.x, y: f.y + q.y };
+  });
+  const edgeCurves = own.edgeCurves?.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null));
+  const corners = "corners" in own ? own.corners : undefined;
+  return cleanShape({ outline, ...(edgeCurves ? { edgeCurves } : {}), ...(corners ? { corners: [...corners] } : {}) });
+}
+
+/** Whether "עריכת הקווים" is offered on this feature: a pool, a surface, a building or an "אחר" —
+ *  or any other feature drawn by hand — that is one outline, free of the walls and not pinned. A
+ *  curtain, a chair block, stairs and a column are shapes derived from what they are, not drawn. */
+export function canEditOutline(f: StructureFeature): boolean {
+  if (f.locked || followsWalls(f)) return false;
+  const drawn = f.kind === "pool" || f.kind === "surface" || f.kind === "structure" || f.kind === "other" || (f.shape === "custom" && (f.kind === "bar" || f.kind === "stage"));
+  return drawn && footprintOutlines(featureFootprint(f)).length === 1;
 }
 
 /** A new free surface whose outline is `boundary` — a freehand trace closed. */

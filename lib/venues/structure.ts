@@ -14,6 +14,8 @@ import type { ElementStyle } from "@/lib/element-style";
 import type { ArcSpec, MapShape, Product, RingSpec } from "@/lib/catalog/types";
 import { canHollow } from "@/lib/catalog/types";
 import { footprintBounds, resolveFootprint, shapeFootprint, uShapeBandOf, type Footprint } from "@/lib/studio/footprint";
+import { customShapeBounds } from "@/lib/studio/footprint";
+import { hasCorners, shapedOutline } from "@/lib/studio/shaped-outline";
 import {
   absoluteControlPoints,
   bulgeDepthMm,
@@ -253,6 +255,12 @@ export interface StructureFeature {
    *  numbers are what the resize handles drag. */
   outline?: Point[];
   edgeCurves?: (EdgeCurve | null)[];
+  /** A RADIUS per point of `outline`, mm, aligned to it (null = a square corner) — a hand-drawn
+   *  pool, surface or building rounded at its corners (lib/studio/shaped-outline.ts, 2026-11-07).
+   *  A measurement, so it is not scaled when the feature is resized; turned into arcs where the
+   *  footprint is built (featureFootprint), so every reader that honours `edgeCurves` draws them.
+   *  Absent = every corner square, exactly as before. */
+  corners?: (number | null)[];
   /** iff `shape === "arc"`: how much of its circle, and how wide the band (widthMm is the circle). */
   arc?: ArcSpec;
   /** iff `shape === "oval-ring"`: the band and the opening, which the two measurements do not say. */
@@ -682,9 +690,9 @@ function counterKept(f: StructureFeature, patch: Partial<Omit<StructureFeature, 
 
 /** Gives a feature its first flight of stairs, sized to the deck it climbs (see ./stairs.ts). */
 /** The feature's shape, size and height that make it a stage to the sketch's stage module. */
-type StageSource = Pick<StructureFeature, "x" | "y" | "rotationDeg" | "shape" | "widthMm" | "depthMm" | "heightMm" | "outline" | "edgeCurves" | "arc" | "ring" | "edgeItems" | "stairs"> & { id?: string };
+type StageSource = Pick<StructureFeature, "x" | "y" | "rotationDeg" | "shape" | "widthMm" | "depthMm" | "heightMm" | "outline" | "edgeCurves" | "arc" | "ring" | "edgeItems" | "stairs"> & Pick<StructureFeature, "corners"> & { id?: string };
 
-const GEOMETRY_KEYS: (keyof StructureFeature)[] = ["shape", "widthMm", "depthMm", "outline", "edgeCurves", "arc", "ring"];
+const GEOMETRY_KEYS: (keyof StructureFeature)[] = ["shape", "widthMm", "depthMm", "outline", "edgeCurves", "arc", "ring", "corners"];
 
 function dropLegacyStairs<T extends { stairs?: FeatureStairs }>(f: T): T {
   if (!("stairs" in f)) return f;
@@ -885,7 +893,7 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
  *  a feature's two numbers are what its resize handles drag and what the inspector shows, so an
  *  outline that ignored them would be a shape the plan claims is 4m wide and draws at 3. */
 export function featureFootprint(
-  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "arc" | "ring">,
+  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "arc" | "ring"> & Pick<StructureFeature, "corners">,
 ): Footprint {
   return shapeFootprint(f.shape, {
     widthMm: f.widthMm,
@@ -897,29 +905,44 @@ export function featureFootprint(
     // A quarter's box is one radius across, so its circle is twice the width.
     diameterMm: f.shape === "quarter-circle" ? f.widthMm * 2 : f.widthMm,
     ...(f.shape === "custom" && f.outline && f.outline.length >= 3
-      ? scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm)
+      ? scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm, f.corners)
       : {}),
   });
 }
 
 /** An outline recentred on its own bounding box and stretched to `widthMm` × `depthMm`. Edge curves
  *  are offsets from their own endpoints (lib/studio/geometry), so they scale by the same two factors
- *  and stay attached to the edge they bow. */
+ *  and stay attached to the edge they bow.
+ *
+ *  A BOWED or ROUNDED outline is measured as it is DRAWN (2026-11-07): its box is the box of the
+ *  shape with its bows and arcs (customShapeBounds samples them), not of its points — every drawer
+ *  centres a custom footprint on that box, so measured by its points a side bowed out pushed the
+ *  whole drawing off its position by half the bow, and stretched it by the bow besides. Measured as
+ *  drawn, an outline baked by asOutline (lib/venues/face-surfaces.ts) is scaled by exactly 1 and
+ *  lands exactly where its points were dragged. Corner radii are applied AFTER the stretch — a
+ *  radius is a measurement, R30 stays R30. A straight, square outline is measured by its points as
+ *  it always was. */
 function scaleOutline(
   outline: Point[],
   edgeCurves: (EdgeCurve | null)[] | undefined,
   widthMm: number,
   depthMm: number,
+  corners?: (number | null)[],
+  /** True: the stretched points and bows WITHOUT the corners rounded (featureOutlineShape). */
+  unrounded = false,
 ): { outline: Point[]; edgeCurves?: (EdgeCurve | null)[] } {
-  const minX = Math.min(...outline.map((p) => p.x));
-  const maxX = Math.max(...outline.map((p) => p.x));
-  const minY = Math.min(...outline.map((p) => p.y));
-  const maxY = Math.max(...outline.map((p) => p.y));
+  const drawn = edgeCurves?.some(Boolean) || hasCorners(corners);
+  const shaped = drawn ? shapedOutline(outline, edgeCurves, corners) : null;
+  const box = shaped ? customShapeBounds(shaped.outline, shaped.edgeCurves) : null;
+  const minX = box ? box.minX : Math.min(...outline.map((p) => p.x));
+  const maxX = box ? box.maxX : Math.max(...outline.map((p) => p.x));
+  const minY = box ? box.minY : Math.min(...outline.map((p) => p.y));
+  const maxY = box ? box.maxY : Math.max(...outline.map((p) => p.y));
   const sx = maxX > minX ? widthMm / (maxX - minX) : 1;
   const sy = maxY > minY ? depthMm / (maxY - minY) : 1;
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
-  return {
+  const scaled = {
     outline: outline.map((p) => ({ x: (p.x - cx) * sx, y: (p.y - cy) * sy })),
     ...(edgeCurves
       ? {
@@ -928,6 +951,27 @@ function scaleOutline(
           ),
         }
       : {}),
+  };
+  return hasCorners(corners) && !unrounded ? shapedOutline(scaled.outline, scaled.edgeCurves, corners) : scaled;
+}
+
+/** A hand-drawn feature's points, bows and radii in its OWN frame, exactly where its drawing puts
+ *  them — stretched as featureFootprint stretches them, and moved by the same shift every drawer
+ *  applies (a custom footprint is drawn centred on the box of what is drawn, rounded corners and
+ *  all). What the hall editor's outline handles stand on. Null for a shape that is not drawn by hand. */
+export function featureOutlineShape(f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "corners">): {
+  outline: Point[];
+  edgeCurves?: (EdgeCurve | null)[];
+  corners?: (number | null)[];
+} | null {
+  if (f.shape !== "custom" || !f.outline || f.outline.length < 3) return null;
+  const raw = scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm, f.corners, true);
+  const drawn = hasCorners(f.corners) ? shapedOutline(raw.outline, raw.edgeCurves, f.corners) : raw;
+  const b = customShapeBounds(drawn.outline, drawn.edgeCurves);
+  return {
+    outline: raw.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })),
+    ...(raw.edgeCurves ? { edgeCurves: raw.edgeCurves } : {}),
+    ...(f.corners ? { corners: f.corners } : {}),
   };
 }
 
@@ -1222,6 +1266,28 @@ if (isMain(import.meta.url)) {
     assert(removed.entrances.length === 0, "a wall taken away takes its windows with it, like its doors");
     assert(newFeature("fountain", { x: 0, y: 0 }).shape === "circle" && newFeature("fountain", { x: 0, y: 0 }).heightMm === 1500, "a new fountain is a round basin with the height of its jet");
     assert(!featureMovable({ kind: "fountain" }), "a fountain is the property's — a sketch does not move it");
+  }
+
+  // CURVES AND CORNERS on a hand-drawn feature (lib/studio/shaped-outline.ts, 2026-11-07): the
+  // footprint carries the arcs as curves, is drawn exactly in its box, and a radius is a measurement
+  // the feature's stretch does not scale.
+  {
+    const sq = [{ x: -3000, y: -1500 }, { x: 3000, y: -1500 }, { x: 3000, y: 1500 }, { x: -3000, y: 1500 }];
+    const pool = { shape: "custom" as const, widthMm: 6000, depthMm: 3000, outline: sq, corners: [500, 500, 500, 500] };
+    const fp = featureFootprint(pool);
+    assert(fp.kind === "custom" && fp.outline.length === 8 && (fp.edgeCurves ?? []).filter(Boolean).length === 4, "a rounded feature's footprint has its arcs as curves");
+    const b = footprintBounds(fp);
+    assert(Math.abs(b.w - 6000) < 1 && Math.abs(b.h - 3000) < 1, `…and still fills its box (${b.w.toFixed(1)} × ${b.h.toFixed(1)})`);
+    const wide = featureFootprint({ ...pool, widthMm: 12000 });
+    const firstArc = wide.kind === "custom" ? wide.edgeCurves!.findIndex(Boolean) : -1;
+    const arcChord = wide.kind === "custom" ? Math.hypot(wide.outline[firstArc + 1].x - wide.outline[firstArc].x, wide.outline[firstArc + 1].y - wide.outline[firstArc].y) : 0;
+    assert(Math.abs(arcChord - 500 * Math.SQRT2) < 1, `…stretched twice as wide, its corners stay R500 (chord ${arcChord.toFixed(1)})`);
+    // A side bowed out is measured as drawn: the box is width × depth with the bow inside it, and the
+    // drawing is centred on it — before, the points were, and the bow hung half outside the box.
+    const bowed = { shape: "custom" as const, widthMm: 6000, depthMm: 4000, outline: sq, edgeCurves: [setBulgeDepth(sq[0], sq[1], null, 1000), null, null, null] };
+    const bb = footprintBounds(featureFootprint(bowed));
+    assert(Math.abs(bb.w - 6000) < 1 && Math.abs(bb.h - 4000) < 2, `a bowed feature is drawn exactly in its box (${bb.w.toFixed(1)} × ${bb.h.toFixed(1)})`);
+    assert(featureFootprint({ shape: "custom", widthMm: 6000, depthMm: 3000, outline: sq }).kind === "custom", "a plain custom feature is drawn as it always was");
   }
 
   console.log("venue structure self-check passed");
