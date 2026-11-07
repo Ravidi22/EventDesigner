@@ -9,15 +9,15 @@
 // everywhere = the drawing every rug and cloth had before this file: the rug's 30%-ink weave line
 // and its fringe off the short ends, a cloth's plain hem — so no existing plan changes by itself.
 //
-// A band is the region BETWEEN two insets of the item's real outline (insetOutline, the hollow
-// shapes' own offset in lib/studio/footprint.ts) — so a bowed side keeps its bow, a rounded corner
+// A band is the region BETWEEN two insets of the item's real outline (evenInset, the hollow
+// shapes' own offset in lib/studio/footprint.ts, held to its width) — so a bowed side keeps its bow, a rounded corner
 // stays concentric, and a band too deep for the item fills its middle rather than turning inside
 // out. A drawing fact like a rug's bows: the quote, the packing list and orders never read it.
 //
 // Pure; self-checked: npm run check:border.
 import type { Product } from "./types";
 import type { Point } from "../design-document/types";
-import { footprintOutlines, insetOutline, flattenEdge, type BuiltOutline, type Footprint } from "../studio/footprint";
+import { footprintOutlines, evenInset, flattenEdge, type BuiltOutline, type Footprint } from "../studio/footprint";
 import { isMain } from "../self-check";
 
 export interface Border {
@@ -126,9 +126,9 @@ export function borderBands(base: BuiltOutline, border: Border): BorderBand[] {
   const out: BorderBand[] = [];
   const band = (from: number, to: number, colour: string, which: BorderBand["which"]) => {
     if (!(to > from)) return;
-    const outer = insetOutline(base, from);
+    const outer = evenInset(base, from);
     if (!outer) return;
-    out.push({ colour, which, outer, inner: insetOutline(base, to) });
+    out.push({ colour, which, outer, inner: evenInset(base, to) });
   };
   band(0, border.widthMm, border.colour, "outer");
   if (border.inner) {

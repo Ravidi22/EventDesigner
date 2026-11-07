@@ -984,13 +984,15 @@ function emitOutline(path: readonly Piece[]): BuiltOutline {
   return { outline, ...(edgeCurves.some(Boolean) ? { edgeCurves } : {}) };
 }
 
-/** The outline pulled in `mm` all the way round — buildHollow's inner edge on its own: each edge
- *  offset as an edge (a circular arc stays concentric, a bow stays a bow), the corners trimmed, an
- *  edge the inset swallows dropped. What a band drawn as the region BETWEEN two insets needs — a
- *  rug's or a cloth's contour (lib/catalog/border.ts), where a keyhole cannot be cut by a second
- *  one. `mm` ≤ 0 is the outline itself; null when nothing is left inside (the band would be the
- *  whole shape, buildHollow's 2% rule) or the outline encloses nothing. */
-export function insetOutline(base: BuiltOutline, mm: number): BuiltOutline | null {
+/** The outline pulled in `mm` all the way round, holding its width — insetOutline with two fixes a
+ *  CONTOUR needs (a rug's or a cloth's, lib/catalog/border.ts), where the band is drawn as the
+ *  region BETWEEN two insets and a keyhole cannot be cut by a second one: a rounded corner the inset
+ *  swallows is taken as its sharp corner or its chord (squareSwallowedArcs), and a curve that is not
+ *  a true arc is offset in two halves (halveBows) — so a 12cm band is 12cm on a bow and round an R10
+ *  corner, where insetOutline drifts by a fifth. Not used for a pool's water, whose band is
+ *  buildHollow's own keyhole and must meet insetOutline exactly. `mm` ≤ 0 is the outline itself;
+ *  null when nothing is left inside (buildHollow's 2% rule) or the outline encloses nothing. */
+export function evenInset(base: BuiltOutline, mm: number): BuiltOutline | null {
   if (base.outline.length < 3) return null;
   if (!(mm > 0)) return base;
   const outerArea = shoelace(piecesRing(base.outline.map((a, i) => edgePiece(i, a, base.outline[(i + 1) % base.outline.length], base.edgeCurves?.[i]))));
@@ -2124,10 +2126,10 @@ if (isMain(import.meta.url)) {
     assert(resizeAxes({ ...bench, category: "arches" }) === null, "a category with no default leaves a plain row a thing of one size");
   }
 
-  // insetOutline (2026-11-07, a rug's and a cloth's contour): a circle pulled in stays a circle, a
+  // evenInset (2026-11-07, a rug's and a cloth's contour): a circle pulled in stays a circle, a
   // rounded corner shallower than the inset comes out as the sharp corner, nothing left is null.
   {
-    const ring = insetOutline(footprintOutlines({ kind: "circle", diameterMm: 1000 })[0], 100)!;
+    const ring = evenInset(footprintOutlines({ kind: "circle", diameterMm: 1000 })[0], 100)!;
     const rp = piecesRing(ring.outline.map((a, i) => edgePiece(i, a, ring.outline[(i + 1) % ring.outline.length], ring.edgeCurves?.[i])));
     assert(rp.every((p) => Math.abs(Math.hypot(p.x, p.y) - 400) < 1), "a ⌀1000 circle 100 in is a ⌀800 circle");
     const K100 = 0.5522847498 * 100;
@@ -2136,12 +2138,12 @@ if (isMain(import.meta.url)) {
       outline: [{ x: -500, y: -200 }, { x: -400, y: -300 }, { x: 500, y: -300 }, { x: 500, y: 300 }, { x: -500, y: 300 }],
       edgeCurves: [{ c1: { x: 0, y: -K100 }, c2: { x: -K100, y: 0 } }, null, null, null, null],
     };
-    const sharp = insetOutline(rounded, 150)!;
+    const sharp = evenInset(rounded, 150)!;
     const sb = sampledBounds([sharp]);
     assert(Math.abs(sb.minX + 350) < 0.5 && Math.abs(sb.minY + 150) < 0.5 && sharp.outline.some((p) => Math.abs(p.x + 350) < 0.5 && Math.abs(p.y + 150) < 0.5), "an R100 corner 150 in is the sharp corner");
-    const soft = insetOutline(rounded, 50)!;
+    const soft = evenInset(rounded, 50)!;
     assert(soft.edgeCurves?.some(Boolean) && sampledBounds([soft]).minX > -450.5, "…50 in it is the concentric R50");
-    assert(insetOutline(rounded, 300) === null && insetOutline(rounded, 0) === rounded, "nothing left 300 in a 600 deep shape; 0 in is the shape");
+    assert(evenInset(rounded, 300) === null && evenInset(rounded, 0) === rounded, "nothing left 300 in a 600 deep shape; 0 in is the shape");
   }
 
   console.log("footprint self-check passed");

@@ -320,7 +320,7 @@ export function rugFringe(widthMm: number, depthMm: number, shape: RugShape | un
 }
 
 /** A rug's CONTOUR (lib/catalog/border.ts) laid along the rug as it is drawn — bows and rounded
- *  corners followed, each band the region between two true insets of the outline (insetOutline), so
+ *  corners followed, each band the region between two true insets of the outline (evenInset), so
  *  a band is as wide on a bowed side and round a corner as on a straight run — about the rectangle's
  *  centre, like rugOutline. `roundMm` is the corner the canvas draws a plain rug's rectangle with (its
  *  rx), so the band does not poke past it; a shaped rug brings its own corners. */
