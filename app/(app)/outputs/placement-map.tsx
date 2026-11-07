@@ -1493,7 +1493,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             ) : f.kind === "curtain" ? (
               // The venue's curtain as a hired drape prints: the band in the elements' grey, pleated,
               // in the pieces its doors leave it, round the bow on a curved wall.
-              <CurtainCloth pieces={pieces ?? []} depthMm={CURTAIN_DEPTH_MM} fill={MONO.feature} ink={INK} opacity={0.6} />
+              <CurtainCloth pieces={pieces ?? []} depthMm={CURTAIN_DEPTH_MM} fill={MONO.feature} ink={INK} opacity={0.6} style={f.curtain?.style} rodInk={INK} />
             ) : f.kind === "fountain" ? (
               // A fountain as the catalog's prints: white basin, ink lines.
               <ItemSymbol kind="fountain" footprint={fp} count={1} print ink={INK} tone="#ffffff" />
@@ -1575,6 +1575,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
               fillOpacity={f.style?.fillOpacity}
               ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : INK}
               opacity={0.5}
+              style={f.curtain?.style}
+              rodInk={INK}
             />
           ) : (
             <FootprintShape

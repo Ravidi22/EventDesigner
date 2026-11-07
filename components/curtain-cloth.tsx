@@ -118,6 +118,8 @@ function CurtainClothView({
   ink,
   opacity,
   style,
+  postMm,
+  rodInk,
 }: {
   pieces: CurtainPiece[];
   depthMm: number;
@@ -127,6 +129,10 @@ function CurtainClothView({
   opacity: number;
   /** How the cloth is gathered (FeatureCurtain.style); absent = waves. */
   style?: CurtainStyle;
+  /** A rod's post, drawn this many mm square. Absent = 80 plan mm, legible at a hall's scale. */
+  postMm?: number;
+  /** The rod's and its posts' ink. Absent = the soft plan ink. */
+  rodInk?: string;
 }) {
   return (
     <>
@@ -134,6 +140,7 @@ function CurtainClothView({
         <g key={i}>
           <path d={polygonD(pc.band)} fill={fill} fillOpacity={fillOpacity} />
           <DrapePleatsAlong line={pc.line} depthMm={depthMm} ink={ink} opacity={opacity} style={style} />
+          {pc.rod && pc.posts && <RodMarks path={pc.rod} posts={pc.posts} postMm={postMm ?? 80} ink={rodInk ?? "var(--color-ink-soft)"} />}
         </g>
       ))}
     </>

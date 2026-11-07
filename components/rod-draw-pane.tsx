@@ -20,15 +20,18 @@ const MIN_ROD_MM = 300;
 
 export function RodDrawPane({
   ctx,
+  start,
   onFinish,
   onCancel,
 }: {
   ctx: CanvasLayerContext;
+  /** The first post, when the click that started the tool already put it (/halls' armed tool). */
+  start?: Point;
   /** The rod's points, in order (at least two). */
   onFinish: (points: Point[]) => void;
   onCancel: () => void;
 }) {
-  const [pts, setPts] = useState<Point[]>([]);
+  const [pts, setPts] = useState<Point[]>(() => (start ? [{ x: Math.round(start.x), y: Math.round(start.y) }] : []));
   const [typed, setTyped] = useState("");
   const pointer = useRef<{ x: number; y: number; alt: boolean } | null>(null);
   const live = useRef<SVGPolylineElement>(null);

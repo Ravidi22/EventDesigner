@@ -108,7 +108,9 @@ import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-row
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
 import { defineColumns } from "@/lib/venues/column";
-import { curtainEndT, curtainPatch, newCurtain, syncCurtains } from "@/lib/venues/curtain";
+import { curtainEndPatch, newCurtain, newRailCurtain, syncCurtains } from "@/lib/venues/curtain";
+import { defaultRailHeight, nearestSideRail, sideCandidates } from "@/lib/studio/rail";
+import { RodDrawPane } from "@/components/rod-draw-pane";
 import {
   ZoneRegions,
   StructureFeatures,
@@ -247,7 +249,10 @@ const DRAW_SURFACE = "surface:draw";
  *  carries the floor with it frame by frame, and one undo takes both back. */
 function settleWalls(before: VenueStructure, after: VenueStructure): VenueStructure {
   // …and the curtains hung on them (lib/venues/curtain.ts), the same way.
-  return after.nodes === before.nodes && after.walls === before.walls ? after : syncCurtains(syncFaceSurfaces(after));
+  if (after.nodes !== before.nodes || after.walls !== before.walls) return syncCurtains(syncFaceSurfaces(after));
+  // A curtain on a SIDE of a feature follows the feature (spec 2026-11-07 §6.6): re-laid when the
+  // features changed and one hangs so — the floors are not, nothing they follow moved.
+  return after.features !== before.features && after.features.some((f) => f.kind === "curtain" && f.curtain?.rail?.type === "side") ? syncCurtains(after) : after;
 }
 
 /** A feature's box as it stands, turned — what alignment and snapping measure. */
@@ -324,6 +329,8 @@ export function HallsScreen() {
   // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
   // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
   const [armedToolId, setArmedToolId] = useState<string | null>(null);
+  // "וילון על מוט" being drawn: its first post, while the rest are clicked (null = not drawing one).
+  const [rodFrom, setRodFrom] = useState<Point | null>(null);
   // The catalog, for the two departments a venue has BUILT versions of (lib/venues/add-tools.ts).
   // Read-only here, and its own hook rather than a prop: this screen has no server component above
   // it to seed from, and nothing on this plan resolves a product id while rendering, so the list
@@ -922,9 +929,10 @@ export function HallsScreen() {
   const curtainEnd = useCallback(
     (id: string, end: "from" | "to", p: Point) => {
       dragStructure((s) => {
+        // Along its wall or its side, or a rod's end post moved (lib/venues/curtain.ts curtainEndPatch).
         const f = s.features.find((x) => x.id === id);
-        const t = f ? curtainEndT(s, f, p) : null;
-        return f && t !== null ? updateFeature(s, id, curtainPatch(s, f, { [end]: t })) : s;
+        const patch = f ? curtainEndPatch(s, f, end, p) : {};
+        return f && Object.keys(patch).length ? updateFeature(s, id, patch) : s;
       });
     },
     [dragStructure],
@@ -1478,7 +1486,9 @@ export function HallsScreen() {
       return;
     }
     if (tool.kind === "curtain") {
-      addCurtainNear(p);
+      // "וילון על מוט": this click is the first post; the rest are drawn on the canvas.
+      if (tool.id === "curtain-rod") setRodFrom(p);
+      else addCurtainNear(p);
       return;
     }
     // A ground clicked inside a closed shape that is not a zone fills that shape, wall to wall — the
@@ -1511,11 +1521,34 @@ export function HallsScreen() {
   const addCurtainNear = (p: Point) => {
     const hit = nearestWall(structure, p);
     const wall = hit ? structure.walls.find((w) => w.id === hit.wallId) : null;
+    // …or the nearest SIDE of a building or a tall feature, when that is nearer (spec 2026-11-07
+    // §6.1, lib/studio/rail.ts sideCandidates): hung from its height, on the side the click fell.
+    const side = nearestSideRail(sideCandidates(structure.features), p);
+    const onWall = !!hit && !!wall && wall.kind !== "edge";
+    if (side && (!onWall || side.distanceMm < hit!.distanceMm)) {
+      const made = newRailCurtain(structure, side.rail);
+      if (!made) return;
+      const { structure: next, featureId } = addFeature(structure, made);
+      editStructure(() => next);
+      setSelection([{ kind: "feature", id: featureId }]);
+      return;
+    }
     if (!hit || !wall || wall.kind === "edge") {
-      setHint("וילון נתלה על קיר — לחצו ליד קיר");
+      setHint("וילון נתלה על קיר או על צד של מבנה — לחצו לידו, או ״וילון על מוט״");
       return;
     }
     const made = newCurtain(structure, wall.id, p);
+    if (!made) return;
+    const { structure: next, featureId } = addFeature(structure, made);
+    editStructure(() => next);
+    setSelection([{ kind: "feature", id: featureId }]);
+  };
+
+  /** "וילון על מוט" drawn: the venue's curtain on a free-standing rod at the rod's height (spec
+   *  2026-11-07 §6.2 — 2.4 m under open sky; the bar types another). */
+  const finishRod = (points: Point[]) => {
+    setRodFrom(null);
+    const made = newRailCurtain(structure, { type: "rod", points, heightMm: defaultRailHeight(points[0]) });
     if (!made) return;
     const { structure: next, featureId } = addFeature(structure, made);
     editStructure(() => next);
@@ -1931,18 +1964,23 @@ export function HallsScreen() {
             }
             // The rotate knob, last of all: above the walls' hit lines and every length the canvas
             // writes, so none of them can cover it or take its press (the user, 2026-10-17).
-            topmost={({ mm, clientToMm }) =>
-              acts && !placing ? (
-                <FeatureRotateHandles
-                  structure={structure}
-                  selectedIds={outlineSurface ? [] : featureSelection}
-                  onRotate={rotateFeature}
-                  onCommit={endGesture}
-                  clientToMm={clientToMm}
-                  mm={mm}
-                />
-              ) : null
-            }
+            topmost={(layer) => (
+              <>
+                {/* "וילון על מוט" being drawn, post by post (components/rod-draw-pane.tsx) — above
+                    everything, so every click is a post. */}
+                {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} onFinish={finishRod} onCancel={() => setRodFrom(null)} />}
+                {acts && !placing && !rodFrom ? (
+                  <FeatureRotateHandles
+                    structure={structure}
+                    selectedIds={outlineSurface ? [] : featureSelection}
+                    onRotate={rotateFeature}
+                    onCommit={endGesture}
+                    clientToMm={layer.clientToMm}
+                    mm={layer.mm}
+                  />
+                ) : null}
+              </>
+            )}
             backdrop={({ clientToMm, mm, snap }) => {
               closeSnapMmRef.current = mm(16); // 16px, matching the outline tool's own SNAP_PX
               const closable = region !== null && region.length >= 3;

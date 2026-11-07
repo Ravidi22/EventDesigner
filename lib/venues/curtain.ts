@@ -296,6 +296,9 @@ export interface CurtainPiece {
   band: Point[];
   /** The band's middle line, node a → node b — what the pleats are drawn along. */
   line: Point[];
+  /** On a free-standing ROD: the rod itself and its posts (none under a ר's arm), in the same frame. */
+  rod?: Point[];
+  posts?: Point[];
 }
 
 /** The pieces a curtain hangs in: its stretch of the wall less every door on it MARKED to be kept
@@ -317,6 +320,7 @@ export function curtainPieces(s: VenueStructure, f: StructureFeature): CurtainPi
       lengthMm: Math.round(line.lengthMm),
       band: railBand(line, CURTAIN_DEPTH_MM).map(local),
       line: railClothLine(line, CURTAIN_DEPTH_MM).map(local),
+      ...(line.posts ? { rod: line.path.map(local), posts: line.posts.map(local) } : {}),
     }));
   }
   if (!c || !tr || tr.chordMm < 1) {

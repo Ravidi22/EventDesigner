@@ -79,6 +79,8 @@ import { NumberField } from "@/components/number-field";
 import { Segmented } from "@/components/segmented";
 import { StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
+import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
+import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { AppearancePreview, PlanContent } from "./appearance-preview";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { IconPicker } from "./icon-picker";
@@ -1641,6 +1643,18 @@ export function AppearanceModal({
               <div className="flex h-full flex-col items-center justify-center gap-4 p-8 pb-24">
                 <AppearancePreview product={preview} className="max-h-[70%] w-full max-w-md" />
                 <p className="text-center text-xs text-muted">{`${category?.label ?? "פריטים אלה"} נמדדים על התוכנית — הגודל נקבע כשמותחים אותם באירוע.`}</p>
+                {/* A curtain's style (SYMBOL_STYLES.curtain, spec 2026-11-07 §6.5) — the plan and the 3D
+                    only; the quote bills its length whatever it is. */}
+                {draft.category === "curtains" && (
+                  <div className="w-full max-w-md">
+                    <CurtainStyleTiles
+                      value={curtainStyleOf(preview)}
+                      tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
+                      onPick={(symbolStyle) => setAppearance({ symbolStyle })}
+                      labelClassName={fieldLabelClassName}
+                    />
+                  </div>
+                )}
               </div>
             ) : (
               <PlanCanvas

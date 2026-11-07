@@ -12,7 +12,7 @@ import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { CATEGORY_BY_ID, anchorOf } from "@/lib/catalog/categories";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
-import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
@@ -33,7 +33,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
     return (
       <svg viewBox="-1400 -700 2800 1400" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
         <rect x={-1200} y={-160} width={2400} height={320} fill={colour} stroke="currentColor" strokeOpacity={0.5} strokeWidth={1} vectorEffect="non-scaling-stroke" />
-        <DrapePleats lengthMm={2400} depthMm={320} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.5 : 0.35} />
+        <DrapePleats lengthMm={2400} depthMm={320} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.5 : 0.35} style={curtainStyleOf(product)} />
       </svg>
     );
   }
