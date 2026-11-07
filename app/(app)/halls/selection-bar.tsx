@@ -808,7 +808,7 @@ export function SelectionBar({
         )}
         {/* A curtain on this wall (lib/venues/curtain.ts): over the door, or parted for it — the
             main entrance stays clear, a service door is hidden behind the cloth. */}
-        {!window && structure.features.some((f) => f.kind === "curtain" && f.curtain?.wallId === door.wallId) && (
+        {!window && structure.features.some((f) => f.kind === "curtain" && curtainOf(f)?.wallId === door.wallId) && (
           <SegmentedToggle
             value={!!door.curtainClear}
             options={[

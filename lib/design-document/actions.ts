@@ -7,6 +7,7 @@ import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
 import { carryHung } from "../studio/hang-over";
 import { cleanBows, cleanCorners } from "../studio/rug-shape";
+import { withRail, type Rail } from "../studio/rail";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
 const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
@@ -97,6 +98,9 @@ export type Action =
   | { type: "setPlacementVariant"; id: string; variantId: string }
   // A drape's run along its wall, or a moved/relaid one.
   | { type: "setPlacementSpan"; id: string; span: WallSpan }
+  // A drape's RAIL (lib/studio/rail.ts) — its stretch slid or typed, a rod bent, a side flipped —
+  // and its drop (null = to the floor). Writes `rail` and lets a legacy `span` go.
+  | { type: "setPlacementRail"; id: string; rail: Rail; dropMm?: number | null }
   // A whole drawing put in place of this one — a saved sketch loaded (lib/studio/sketches.ts). The
   // calibration stays: it is the venue's, not the sketch's. One entry, so one Ctrl+Z brings back the
   // drawing it replaced.
@@ -562,6 +566,18 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
       return {
         ...doc,
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, span: action.span } : p)),
+      };
+    case "setPlacementRail":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const next = withRail(p, action.rail);
+          if (action.dropMm === undefined) return next;
+          const { dropMm: _old, ...rest } = next;
+          void _old;
+          return action.dropMm && action.dropMm > 0 ? { ...rest, dropMm: Math.round(action.dropMm) } : rest;
+        }),
       };
     case "loadDocument": {
       const c = action.content;
@@ -1162,6 +1178,11 @@ if (isMain(import.meta.url)) {
   });
   h = dispatch(h, { type: "setPlacementSpan", id: "drape", span: { wallId: "w1", from: 0.25, to: 0.75 } });
   assert(h.present.placements.find((p) => p.id === "drape")?.span?.from === 0.25, "setPlacementSpan shortens the run");
+  h = dispatch(h, { type: "setPlacementRail", id: "drape", rail: { type: "wall", wallId: "w1", from: 0.25, to: 0.5 }, dropMm: 2400 });
+  const railed = h.present.placements.find((p) => p.id === "drape");
+  assert(railed?.rail?.type === "wall" && railed.rail.to === 0.5 && !railed.span && railed.dropMm === 2400, "setPlacementRail writes the rail, lets the legacy span go, and sets the drop");
+  h = dispatch(h, { type: "setPlacementRail", id: "drape", rail: railed!.rail!, dropMm: null });
+  assert(h.present.placements.find((p) => p.id === "drape")?.dropMm === undefined, "…a null drop is to the floor again");
   h = dispatch(h, { type: "resizePlacement", id: "drape", sizeMm: { widthMm: 3000, depthMm: 2000 } });
   assert(h.present.placements.find((p) => p.id === "drape")?.sizeMm?.widthMm === 3000, "resizePlacement records the drawn size");
 

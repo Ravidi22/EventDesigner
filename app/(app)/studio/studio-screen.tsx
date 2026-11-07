@@ -23,6 +23,8 @@ import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
 import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { curtainRail } from "@/lib/venues/curtain";
+import { type Rail } from "@/lib/studio/rail";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
   DEFAULT_NUMBERING,
@@ -1737,13 +1739,18 @@ export function StudioScreen({
     (featureId: string, productId: string) => {
       const f = plan.structure.features.find((x) => x.id === featureId);
       const product = catalog.find((p) => p.id === productId);
-      if (!f || f.kind !== "curtain" || !f.curtain || !product) return;
+      // The venue curtain's own rail (lib/venues/curtain.ts curtainRail — its legacy wall fields
+      // read the same way): on a wall the drape hangs on the wall's line as every hired drape does,
+      // on a side or a rod exactly where the venue's hung.
+      const venueRail = f?.kind === "curtain" ? curtainRail(f) : null;
+      if (!f || !venueRail || !product) return;
+      const rail: Rail = venueRail.type === "wall" ? { type: "wall", wallId: venueRail.wallId, from: venueRail.from, to: venueRail.to } : venueRail;
       const id = uid();
       batch([
         { type: "removeFeatures", featureIds: [featureId] },
         {
           type: "addPlacement",
-          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, span: { wallId: f.curtain.wallId, from: f.curtain.from, to: f.curtain.to } },
+          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, rail, ...(f.curtain?.dropMm ? { dropMm: f.curtain.dropMm } : {}) },
         },
       ]);
       setSelected([{ kind: "placement", id }]);

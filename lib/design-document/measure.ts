@@ -13,6 +13,7 @@
 import type { DesignDocumentContent, Placement } from "./types";
 import { edgeItemShape, edgeKind, skirtMm, stageAreaMm2, stageCorners, stageDeckCounts, type DeckLookup, type StagePlacement, type WallDistance } from "./stage";
 import { standaloneBench, type BenchLookup } from "./bench";
+import { railOf, rodPath } from "../studio/rail";
 import { isMain } from "../self-check";
 
 /** What a placement's amount is counted in, decided by the product's price unit. */
@@ -47,16 +48,46 @@ export interface MeasureContext {
   /** The vase or jug an arrangement stands in (lib/catalog/vessel.ts vesselOf) — counted beside it,
    *  one per arrangement. Absent = no catalog to say, and none is counted. */
   vesselOf?: (p: Placement) => string | undefined;
+  /** How long a drape's RAIL is along itself, mm, for a rail that is not a wall (a side of a thing, a
+   *  rod — lib/studio/rail.ts railLengthMm), read against the WHOLE document and the venue: a side
+   *  rail's thing may be in another quote section's subset. Absent / undefined = no plan to read it
+   *  against, and the drape falls back as a wall drape with no plan does. A wall rail is measured as
+   *  it always was, through `wallLengthMm`. */
+  railLengthMm?: (p: Placement) => number | undefined;
+  /** The studio's row a drape's free-standing ROD is billed as (category `curtain-rods`, per metre —
+   *  spec 2026-11-07 §6.2, as a stage's skirt is billed off the stage). Absent / undefined = the studio
+   *  has no rod row, and the drape's quote line says it is partial. */
+  rodOf?: () => string | undefined;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /** The run of a drape along its wall, in millimetres — the span fraction against the real wall. */
 export function spanLengthMm(p: Placement, wallLengthMm?: (wallId: string) => number | undefined): number | undefined {
-  if (!p.span || !wallLengthMm) return undefined;
-  const full = wallLengthMm(p.span.wallId);
+  // The legacy span and a wall rail are the same stretch (lib/studio/rail.ts railOf).
+  const rail = railOf(p);
+  if (!rail || rail.type !== "wall" || !wallLengthMm) return undefined;
+  const full = wallLengthMm(rail.wallId);
   if (!full) return undefined; // wall deleted at the venue, or no plan loaded
-  return Math.abs(p.span.to - p.span.from) * full;
+  return Math.abs(rail.to - rail.from) * full;
+}
+
+/** A drape's run along ANY rail, mm: a wall's as always (the stretch's fraction of the wall's arc), a
+ *  side's or a rod's read through the context. Undefined with nothing to read it against. */
+export function railRunMm(p: Placement, ctx: Pick<MeasureContext, "wallLengthMm" | "railLengthMm">): number | undefined {
+  const rail = railOf(p);
+  if (!rail) return undefined;
+  if (rail.type === "wall") return spanLengthMm(p, ctx.wallLengthMm);
+  return ctx.railLengthMm?.(p);
+}
+
+/** How many metres of rod a drape on a free-standing rod brings — its polyline, the cantilevered arm
+ *  held to its reach; 0 on any other rail. Pure: a rod is its own points. */
+export function rodLengthMm(p: Placement): number {
+  const rail = railOf(p);
+  if (!rail || rail.type !== "rod") return 0;
+  const path = rodPath(rail);
+  return path.slice(1).reduce((n, q, i) => n + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0);
 }
 
 /** The billable amount of one placement: metres for a drape, square metres for a laid carpet,
@@ -69,7 +100,7 @@ export function measure(p: Placement, ctx: MeasureContext): number {
   const size = p.sizeMm ?? ctx.footprintMm?.(p.variantId);
   if (unit === "m") {
     const along = ctx.climbOf?.(p.variantId) === "ramp" ? size?.depthMm : size?.widthMm;
-    const mm = spanLengthMm(p, ctx.wallLengthMm) ?? along;
+    const mm = railRunMm(p, ctx) ?? along;
     // No span and no size to fall back on: count it, rather than quietly bill zero metres.
     return mm ? round2((mm / 1000) * p.quantity) : p.quantity;
   }
@@ -162,6 +193,12 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
     // The vessel an arrangement stands in: one of it under every one of them.
     const vessel = ctx.vesselOf?.(p);
     if (vessel) add(vessel, p.quantity);
+    // A drape on a free-standing ROD brings its rod: the studio's rod row, by the metre of the rod
+    // (or one rod, for a row priced per unit) — the stage's skirt pattern. No row = nothing billed,
+    // and the quote says the drape's line is partial.
+    const rodMm = rodLengthMm(p);
+    const rod = rodMm > 0 ? ctx.rodOf?.() : undefined;
+    if (rod) add(rod, (ctx.unitOf(rod) === "unit" ? 1 : round2(rodMm / 1000)) * p.quantity);
     add(p.variantId, measure(p, ctx));
   }
   for (const t of doc.tables) {
