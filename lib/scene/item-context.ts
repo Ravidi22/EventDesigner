@@ -10,6 +10,7 @@ import type { FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import type { ChairRows, PlacementClimb } from "@/lib/design-document/types";
 import type { BenchLayout } from "@/lib/design-document/bench";
 import type { RugShape } from "@/lib/studio/rug-shape";
+import type { Border } from "@/lib/catalog/border";
 import type { ItemBuild } from "./collect";
 import { type MaterialRef, type NodeTag, type Part, vec3 } from "./types";
 
@@ -42,6 +43,9 @@ export interface ItemContext {
   /** A rug with curved sides or rounded corners (Placement.bows / corners): the slab, border and
    *  fringe follow them. */
   rug?: RugShape;
+  /** A rug's or a runner's contour (lib/catalog/border.ts, borderOf — this plan's, else its row's):
+   *  its bands laid on top in their colours, its fringe in the fringe's. Absent = the woven band. */
+  border?: Border;
   /** A ceiling item: how far above the item's TOP the ceiling is (a chain that long rises from
    *  it); absent = open sky, no chain. */
   chainMm?: number;
