@@ -12,7 +12,7 @@ import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
-import { isRailed, railClothLine, railLines, railOf, rodPath, rodPointMoved, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
+import { isRailed, nearestSideRail, railClothLine, railLines, railOf, rodPath, rodPointMoved, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
 import { RodMarks } from "@/components/curtain-cloth";
 import { RodDrawPane } from "@/components/rod-draw-pane";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
@@ -5507,7 +5507,12 @@ function ArmedPane({
   const footprint: Footprint = size ? { kind: "rect", ...size } : resolveFootprint(product);
   const table = onTable && at ? tableUnder(doc.tables, at) : undefined;
   const near = onWall && at ? nearestWall(structure, at) : null;
-  const wall = near ? wallTrack(structure, near.wallId) : null;
+  // …or the side of a tall thing, when that is nearer — where the drop will hang it (lib/studio/rail.ts,
+  // the studio's dropProduct reads the same two).
+  const arrangedNow = onWall && at ? arrangedStructure(structure, doc) : null;
+  const side = arrangedNow && at ? nearestSideRail(sideCandidates(arrangedNow.features, doc, (v) => resolve(v)?.product), at) : null;
+  const sideLine = side && (!near || side.distanceMm < near.distanceMm) && arrangedNow ? railLines(side.rail, sketchRailContext(doc, structure, arrangedNow, (v) => resolve(v)?.product))[0] : undefined;
+  const wall = near && !sideLine ? wallTrack(structure, near.wallId) : null;
   const ghost = (p: Point, faint = false) => (
     <g className="pointer-events-none" transform={`translate(${p.x} ${p.y})`} opacity={faint ? 0.45 : 1}>
       {/* A composite lands as its parts, about this point: they are what follows the pointer. */}
@@ -5579,6 +5584,18 @@ function ArmedPane({
         </>
       )}
       {at && onTable && !table && ghost(at, true)}
+      {at && onWall && sideLine && (
+        <polyline
+          className="pointer-events-none"
+          points={sideLine.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeOpacity={0.55}
+          strokeWidth={10}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
       {at && onWall && wall && (
         <polyline
           className="pointer-events-none"

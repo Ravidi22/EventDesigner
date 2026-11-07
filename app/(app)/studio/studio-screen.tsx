@@ -802,12 +802,17 @@ export function StudioScreen({
       // end grips shorten it from there. With neither in the room (an open lawn), it stands on a rod
       // of its own, 3 m along the drop at the rod's height; the bar's "תלייה על מוט" draws any drape
       // a rod post by post (spec §6.1, §6.2).
-      const near = nearestWall(plan.structure, { x, y });
-      const side = nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y });
+      // Only the rails the row's CATEGORY takes (CategoryDef.rails — absent = every one).
+      const takes = (t: Rail["type"]) => !cat.rails || cat.rails.includes(t);
+      const near = takes("wall") ? nearestWall(plan.structure, { x, y }) : null;
+      const side = takes("side") ? nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y }) : null;
       let rail: Rail;
       if (side && (!near || side.distanceMm < near.distanceMm)) rail = side.rail;
       else if (near) rail = { type: "wall", wallId: near.wallId, ...WHOLE_WALL };
-      else {
+      else if (!takes("rod")) {
+        showHint("אין קיר לתלות עליו — שרטטו את המתחם ב״אולמות״");
+        return false;
+      } else {
         const half = ROD_DROP_MM / 2;
         rail = { type: "rod", points: [{ x: Math.round(x - half), y: Math.round(y) }, { x: Math.round(x + half), y: Math.round(y) }], heightMm: defaultRailHeight({ x, y }) };
       }
