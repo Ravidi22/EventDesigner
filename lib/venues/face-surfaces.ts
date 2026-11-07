@@ -126,7 +126,9 @@ export function featureEditOutline(f: StructureFeature): OutlineShape {
  *  curtain, a chair block, stairs and a column are shapes derived from what they are, not drawn. */
 export function canEditOutline(f: StructureFeature): boolean {
   if (f.locked || followsWalls(f)) return false;
-  const drawn = f.kind === "pool" || f.kind === "surface" || f.kind === "structure" || f.kind === "other" || (f.shape === "custom" && (f.kind === "bar" || f.kind === "stage"));
+  // A pergola too (lib/venues/pergola.ts): its posts stand on whatever corners its outline has,
+  // bowed and rounded ones included, so its outline is the venue's to draw.
+  const drawn = f.kind === "pool" || f.kind === "surface" || f.kind === "structure" || f.kind === "other" || f.kind === "pergola" || (f.shape === "custom" && (f.kind === "bar" || f.kind === "stage"));
   return drawn && footprintOutlines(featureFootprint(f)).length === 1;
 }
 
@@ -375,6 +377,7 @@ if (isMain(import.meta.url)) {
     const world = featureWorldOutline(turned);
     assert(tr.outline.length === 4 && tr.outline.every((p) => world.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 1e-6)), "a turned rectangle reads as its four drawn corners");
     assert(canEditOutline(turned) && !canEditOutline({ ...turned, locked: true }) && !canEditOutline({ ...turned, kind: "column" }), "a pool's lines are editable; a pinned one's and a column's are not");
+    assert(canEditOutline({ ...turned, kind: "pergola" }), "…and a pergola's: its posts stand on whatever corners it is drawn with");
   }
 
   console.log("face surfaces: ok");

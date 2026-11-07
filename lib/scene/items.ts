@@ -250,6 +250,7 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     case "chuppah":
     case "stairs":
     case "ramp":
+    case "pergola":
       return floorKindBody(kind, ctx);
     case "chandelier":
       return overheadKindBody(kind, ctx);

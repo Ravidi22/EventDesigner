@@ -43,6 +43,7 @@ import { type BenchLayout, SOFA_BACK_MM, benchLayout } from "@/lib/design-docume
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { type ClimbHost, climbRisers, climbTreads, riserHeightMm, treadDepthMm } from "@/lib/venues/climb";
 import { isMain } from "../self-check";
+import { pergolaFromStyle, pergolaGeometry, pergolaLines, pergolaPostOf } from "@/lib/venues/pergola";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { chairParts, chairRequest, darkened, pale } from "./items";
@@ -265,6 +266,8 @@ export function floorKindBody(kind: SymbolKind, ctx: ItemContext): ItemBuild {
       return stairsBody(ctx);
     case "ramp":
       return rampBody(ctx);
+    case "pergola":
+      return pergolaBody(ctx);
     default:
       return fallbackBody(ctx);
   }
@@ -969,6 +972,82 @@ function borderedRugBody(ctx: ItemContext, b: ItemBuild, fabric: MaterialRef, bo
   return b;
 }
 
+// ── pergola (components/pergola-glyph.tsx, lib/venues/pergola.ts) ───────────────────────────────
+
+/** A slat's section and a lattice batten's, and the cloth's lift over the beams. */
+const SLAT_W_MM = 45;
+const SLAT_H_MM = 90;
+const SOLID_ROOF_MM = 80;
+const BATTEN_MM = 30;
+const BATTEN_PITCH_MM = 150;
+const LATTICE_FOOT_MM = 100;
+
+/** A box laid along a segment, `w` wide and `h` high, its bottom at `z` — a beam, a slat, a rail. */
+function alongSeg(a: Point, b: Point, w: number, h: number, z: number, material: MaterialRef, extend = 0): Part | null {
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  if (L < 1) return null;
+  return box(L + extend, w, h, vec3((a.x + b.x) / 2, (a.y + b.y) / 2, z), material, (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI);
+}
+
+/** A pergola — the venue's own (ctx.pergola, envelope.ts featureBodies) or a hired row (its post
+ *  from categoryFields.postMm, its roof its drawing style) — from the geometry the plan draws: a
+ *  square post at every post of pergolaGeometry, from the floor to the beams; a beam along every
+ *  side on the beam line, a fifth wider than deep; and across the top, by its roof: slats as thin
+ *  boxes at their spacing on top of the beams, one solid slab, a cloth plane in the row's shade a
+ *  hair over them, or nothing. A closed side is a lattice — vertical battens every 15 cm along the
+ *  beam line, on a bottom rail, up to the beam. Its top is the pergola's height whatever the roof. */
+export function pergolaBody(ctx: ItemContext): ItemBuild {
+  const spec = ctx.pergola ?? pergolaFromStyle(ctx.drawStyle, pergolaPostOf(ctx.product));
+  const g = pergolaGeometry(ctx.footprint, spec);
+  if (!g) return fallbackBody(ctx);
+  const H = Math.max(ctx.heightMm, 1000);
+  const wood = matte(ctx.tone);
+  const b = make(wood);
+  const P = g.postMm;
+  const beamW = Math.max(40, P * 0.8);
+  const beamH = Math.max(120, P * 1.2);
+  const roofDepth = spec.roof === "slats" ? SLAT_H_MM : spec.roof === "solid" ? SOLID_ROOF_MM : 0;
+  const beamTop = H - roofDepth;
+  const beamBottom = beamTop - beamH;
+  for (const post of g.posts) b.parts.push(box(P, P, beamTop, vec3(post.at.x, post.at.y, 0), wood, post.deg));
+  const ring = g.ring;
+  ring.forEach((a, i) => {
+    const part = alongSeg(a, ring[(i + 1) % ring.length], beamW, beamH, beamBottom, wood, beamW * 0.5);
+    if (part) b.parts.push(part);
+  });
+  if (spec.roof === "slats") {
+    for (const [a, c] of pergolaLines(g, g.slatDeg, g.spacingMm)) {
+      const part = alongSeg(a, c, SLAT_W_MM, SLAT_H_MM, beamTop, wood, beamW);
+      if (part) b.parts.push(part);
+    }
+  } else if (spec.roof === "solid") {
+    b.parts.push(extrude({ outline: g.outline }, SOLID_ROOF_MM, vec3(0, 0, beamTop), wood));
+  } else if (spec.roof === "fabric") {
+    b.parts.push(plane({ outline: ring }, vec3(0, 0, beamTop + 5), clothMaterial(ctx.tone), "both"));
+  }
+  // Lattice panels: battens up from a bottom rail to the beam, along the beam line.
+  for (const i of spec.closedSides ?? []) {
+    const side = g.sides[i];
+    if (!side) continue;
+    const path = side.inner;
+    for (let k = 1; k < path.length; k++) {
+      const a = path[k - 1];
+      const c = path[k];
+      const L = Math.hypot(c.x - a.x, c.y - a.y);
+      if (L < 1) continue;
+      const rail = alongSeg(a, c, BATTEN_MM, BATTEN_MM, LATTICE_FOOT_MM, wood);
+      if (rail) b.parts.push(rail);
+      const deg = (Math.atan2(c.y - a.y, c.x - a.x) * 180) / Math.PI;
+      const count = Math.max(1, Math.floor(L / BATTEN_PITCH_MM));
+      for (let j = 0; j < count; j++) {
+        const t = (j + 0.5) / count;
+        b.parts.push(box(BATTEN_MM, BATTEN_MM * 0.6, Math.max(10, beamBottom - LATTICE_FOOT_MM), vec3(a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t, LATTICE_FOOT_MM), wood, deg));
+      }
+    }
+  }
+  return b;
+}
+
 // ── chairs in rows (lib/design-document/chair-rows.ts) ──────────────────────────────────────────
 
 /** A block of chairs in rows (Placement.rows): one instance of the chair per `chairRowsLayout`
@@ -1184,8 +1263,25 @@ if (isMain(import.meta.url)) {
   const layout = chairRowsLayout({ rows: 3, perRow: 4 }, FALLBACK_CHAIR);
   assert(rows.instanced.every((r, i) => near(r.at.at.x, layout.chairs[i].x) && near(r.at.at.y, layout.chairs[i].y)), "…where chairRowsLayout stands them");
 
+  // A pergola 4 × 4 × 2.6 (lib/venues/pergola.ts): four posts in its corners up to the beams, a beam
+  // along every side, slats across the top ending at its height; the same row laid 6 × 4 keeps its
+  // posts; a cloth roof is one plane; a closed side carries battens.
+  const pergola = floorKindBody("pergola", ctxOf({ kind: "rect", widthMm: 4000, depthMm: 4000 }, 2600, DEFAULT_TONE.pergola));
+  const posts = boxes(pergola).filter((p) => p.w === 150 && p.d === 150);
+  assert(posts.length === 4 && posts.every((p) => near(Math.abs(p.at.x), 1925) && near(Math.abs(p.at.y), 1925) && near(top(p), 2600 - SLAT_H_MM)), `pergola: four posts in its corners up to the beams (${posts.length})`);
+  const slats = boxes(pergola).filter((p) => p.h === SLAT_H_MM);
+  assert(slats.length >= 10 && slats.every((p) => near(top(p), 2600)), `pergola: slats across the top, ending at its height (${slats.length})`);
+  assert(boxes(pergola).filter((p) => near(top(p), 2600 - SLAT_H_MM) && p.h !== 2600 - SLAT_H_MM).length === 4, "pergola: a beam along every side, under the slats");
+  const widePergola = floorKindBody("pergola", ctxOf({ kind: "rect", widthMm: 6000, depthMm: 4000 }, 2600, DEFAULT_TONE.pergola));
+  assert(boxes(widePergola).filter((p) => p.w === 150 && p.d === 150).length === 4 && boxes(widePergola).filter((p) => p.h === SLAT_H_MM).length > slats.length, "pergola: laid 6 × 4 it keeps its 15cm posts and gains slats");
+  const cloth = floorKindBody("pergola", ctxOf({ kind: "rect", widthMm: 4000, depthMm: 4000 }, 2600, "#f3ede2", { pergola: { postMm: 120, roof: "fabric", closedSides: [0] } }));
+  assert(cloth.parts.filter((p) => p.shape === "plane").length === 1 && boxes(cloth).filter((p) => p.h === SLAT_H_MM).length === 0, "pergola: a cloth roof is one plane, no slats");
+  assert(boxes(cloth).filter((p) => p.w === BATTEN_MM).length > 20, "pergola: a closed side is a lattice of battens");
+  const roundPergola = floorKindBody("pergola", ctxOf({ kind: "circle", diameterMm: 6000 }, 2800, DEFAULT_TONE.pergola, { pergola: { postMm: 150, roof: "none" } }));
+  assert(boxes(roundPergola).filter((p) => p.w === 150 && p.d === 150).length === 6 && boxes(roundPergola).every((p) => top(p) <= 2800 + 1e-6), "pergola: a round one on six posts, beams only, no higher than its height");
+
   // Everything stands on its own floor and builds the same twice.
-  for (const [kind, b] of [["sofa", sofa], ["column", column], ["fountain", fountain], ["arch", arch], ["tree", tree], ["bar", bar], ["chuppah", chuppah], ["stairs", stairs]] as const) {
+  for (const [kind, b] of [["sofa", sofa], ["column", column], ["fountain", fountain], ["arch", arch], ["tree", tree], ["bar", bar], ["chuppah", chuppah], ["stairs", stairs], ["pergola", pergola]] as const) {
     assert(b.parts.every((p) => (p.shape === "sphere" ? p.at.z - p.r : p.at.z) >= -1e-6), `${kind} stands on the floor`);
   }
   assert(JSON.stringify(arch) === JSON.stringify(floorKindBody("arch", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 600 }, 2500, DEFAULT_TONE.arch))), "the same arch builds the same twice");

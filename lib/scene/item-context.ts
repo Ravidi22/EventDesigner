@@ -11,6 +11,7 @@ import type { ChairRows, PlacementClimb } from "@/lib/design-document/types";
 import type { BenchLayout } from "@/lib/design-document/bench";
 import type { RugShape } from "@/lib/studio/rug-shape";
 import type { CarpetShape } from "@/lib/studio/cover";
+import type { Pergola } from "@/lib/venues/pergola";
 import type { Border } from "@/lib/catalog/border";
 import type { ItemBuild } from "./collect";
 import { type MaterialRef, type NodeTag, type Part, vec3 } from "./types";
@@ -54,6 +55,9 @@ export interface ItemContext {
   /** A ceiling item: how far above the item's TOP the ceiling is (a chain that long rises from
    *  it); absent = open sky, no chain. */
   chainMm?: number;
+  /** A VENUE's pergola (StructureFeature.pergola, lib/venues/pergola.ts): its spec, which a catalog
+   *  row says through its post field and drawing style instead. Absent = read off the row. */
+  pergola?: Pergola;
 }
 
 /** How thick a shape drawn as lines only stands in the room — a rope, a rail, a hedge-line. */

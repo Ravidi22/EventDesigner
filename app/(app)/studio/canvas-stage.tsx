@@ -42,6 +42,7 @@ import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { pergolaFromStyle, pergolaGeometry, pergolaPostOf, postSquare, type Pergola } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
@@ -4288,6 +4289,19 @@ function samePlacementProps<P extends object>(a: P, b: P): boolean {
 
 const PlacementNode = memo(PlacementNodeView, samePlacementProps);
 
+/** What takes the pointer on an unselected pergola: a band along its outline and its posts. */
+function PergolaHit({ footprint, pergola }: { footprint: Footprint; pergola: Pergola }) {
+  const g = pergolaGeometry(footprint, pergola);
+  return (
+    <>
+      <FootprintShape footprint={footprint} fill="none" stroke="transparent" strokeWidth={14} vectorEffect="non-scaling-stroke" style={{ pointerEvents: "stroke" }} />
+      {g?.posts.map((p, i) => (
+        <polygon key={i} points={postSquare(p, g.postMm).map((q) => `${q.x},${q.y}`).join(" ")} fill="transparent" stroke="transparent" strokeWidth={10} vectorEffect="non-scaling-stroke" />
+      ))}
+    </>
+  );
+}
+
 function PlacementNodeView({
   placement,
   x,
@@ -4492,6 +4506,7 @@ function PlacementNodeView({
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          postMm={pergolaPostOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}
           mirrored={rise ? placement.mirrored : undefined}
@@ -4501,6 +4516,11 @@ function PlacementNodeView({
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
+      {/* A PERGOLA (lib/venues/pergola.ts) has tables standing under it: until it is selected it is
+          taken by its posts and a finger-wide band along its outline alone, never by the floor
+          inside it — the chandelier's rule (`grabbable`), for the same reason. Selected, its whole
+          footprint is its handle again (the invisible fill below). */}
+      {symbol === "pergola" && !selected && product && <PergolaHit footprint={footprint} pergola={pergolaFromStyle(drawStyleOf(product), pergolaPostOf(product))} />}
       {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
         // At the band's own label point for a shaped banquette (mid-band on a crescent, not the box
         // centre in the air it curves round) — a straight strip's is (0,0).
@@ -4526,7 +4546,7 @@ function PlacementNodeView({
           overhead={overhead}
           fill="#ffffff"
           fillOpacity={0}
-          className={overhead && !grabbable ? "pointer-events-none" : undefined}
+          className={(overhead && !grabbable) || (symbol === "pergola" && !selected) ? "pointer-events-none" : undefined}
           stroke={selected ? "var(--color-accent)" : overhead ? style.stroke : "none"}
           strokeOpacity={selected ? 1 : style.strokeOpacity}
           strokeWidth={selected ? 2 : 1}

@@ -26,6 +26,7 @@ import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPas
 import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import { curtainRail } from "@/lib/venues/curtain";
 import { defaultRailHeight, isRailed, nearestSideRail, railOf, sideCandidates, type Rail } from "@/lib/studio/rail";
+import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
   DEFAULT_NUMBERING,
@@ -639,6 +640,11 @@ export function StudioScreen({
     hintTimer.current = setTimeout(() => setHint(null), 2600);
   };
 
+  /** What is overhead on this sketch, as a height (lib/venues/roofs.ts — rail.ts defaultRailHeight's
+   *  hook): read when a rod is placed, never per render — the venue as this event arranged it, every
+   *  zone on the property, and the pergolas hired into this drawing. */
+  const sketchRoofOf = () => roofHeightAt(arrangedStructure(plan.structure, doc), plan.all, sketchPergolas(doc.placements, (v) => resolve(v)?.product));
+
   // F-3.3: auto-running table numbering, editable per table. Off the numbers the plan SHOWS — a
   // block's own number, not the hidden ones of its members, and no unnumbered table (groups.ts).
   // Past every number a table or a seated banquette shows, and every number a banquette holds.
@@ -825,7 +831,9 @@ export function StudioScreen({
         return false;
       } else {
         const half = ROD_DROP_MM / 2;
-        rail = { type: "rod", points: [{ x: Math.round(x - half), y: Math.round(y) }, { x: Math.round(x + half), y: Math.round(y) }], heightMm: defaultRailHeight({ x, y }) };
+        // At what is overhead where it lands (lib/venues/roofs.ts): a zone's ceiling, a building's
+        // roof, the venue's pergola or a hired one in this sketch — the rod's 2.4 m under open sky.
+        rail = { type: "rod", points: [{ x: Math.round(x - half), y: Math.round(y) }, { x: Math.round(x + half), y: Math.round(y) }], heightMm: defaultRailHeight({ x, y }, sketchRoofOf()) };
       }
       act({
         type: "addPlacement",
@@ -5289,7 +5297,7 @@ export function StudioScreen({
                       setRodDraw(null);
                       if (!p) return;
                       // The height a rod had stays; a new one starts where a rod does (defaultRailHeight).
-                      const heightMm = was?.type === "rod" ? was.heightMm : defaultRailHeight(points[0]);
+                      const heightMm = was?.type === "rod" ? was.heightMm : defaultRailHeight(points[0], sketchRoofOf());
                       act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}) } });
                     },
                     onCancel: () => setRodDraw(null),
@@ -5597,6 +5605,7 @@ export function StudioScreen({
                 renderDesigns={renderDesigns}
                 onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
                 onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
+                roofOf={(pt) => sketchRoofOf()(pt)}
                 onCentreOver={centreHung}
                 onSpreadRow={spreadAlongRow}
                 onHangOverDressing={hangOverDressing}

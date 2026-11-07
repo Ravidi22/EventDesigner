@@ -31,6 +31,7 @@ import {
 } from "./structure";
 import { CLIMB_BY_CATEGORY } from "./climb";
 import { POOL_PRESETS, POOL_PRESET_LABEL, type PoolPreset } from "./pool";
+import { PERGOLA_CATEGORY } from "./pergola";
 import { isMain } from "../self-check";
 
 export type AddToolSection = "structure" | "pool" | "ground" | "plants" | "bars" | "stages" | "seating";
@@ -83,6 +84,8 @@ const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   { id: "structure", label: FEATURE_KIND_LABEL.structure, kind: "structure" },
   // A pillar — its plinth, base and shaft are the column's own (./column.ts).
   { id: "column", label: FEATURE_KIND_LABEL.column, kind: "column" },
+  // Posts, beams and a roof (./pergola.ts) — the venue's own; a hired one is the catalog's, below.
+  { id: "pergola", label: FEATURE_KIND_LABEL.pergola, kind: "pergola" },
   { id: "other", label: FEATURE_KIND_LABEL.other, kind: "other" },
 ];
 
@@ -134,6 +137,13 @@ export function addTools(products: Product[] = []): AddTool[] {
       tools.push({ id: `product:${product.id}`, label: product.name, section, kind: CLIMB_BY_CATEGORY[product.category] ?? kind, product });
     }
   }
+  // The studio's own pergolas (lib/catalog/categories.ts `pergolas`), beside the plain one: a venue
+  // that rents the same 4 × 4 every week is drawn as that row — its post, its roof — and lands as the
+  // venue's pergola (newFeatureFromProduct carries the spec). The plain one stays: a property's built
+  // pergola is no catalog's.
+  for (const product of products.filter((p) => !p.archived && p.category === PERGOLA_CATEGORY).sort((a, b) => a.name.localeCompare(b.name, "he"))) {
+    tools.push({ id: `product:${product.id}`, label: product.name, section: "structure", kind: "pergola", product });
+  }
   // The ceremony seating in front of a חופה — the venue's own chairs, five rows of five to start.
   const chair = products.find((p) => !p.archived && p.category === "chairs");
   tools.push({ id: "seating", label: FEATURE_KIND_LABEL.seating, section: "seating", kind: "seating", ...(chair ? { chair } : {}) });
@@ -165,7 +175,8 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 13 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the thirteen plain things — door, window, curtain, a curtain on a rod, stairs, ramp, fountain, structure, column, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
+  assert(empty.length === 14 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the fourteen plain things — door, window, curtain, a curtain on a rod, stairs, ramp, fountain, structure, column, pergola, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
+  assert(findAddTool(empty, "pergola")?.kind === "pergola" && findAddTool(empty, "pergola")?.section === "structure", "a pergola is a structure of its own kind, with no row behind it");
   const pools = empty.filter((t) => t.section === "pool");
   assert(pools.map((t) => t.pool).join() === "rect,ellipse,kidney,L,free" && pools.every((t) => t.kind === "pool"), "the pools come shape first: מלבן · אליפסה · כליה · ר · חופשי");
   assert(findAddTool(empty, "pool")?.pool === "ellipse", "…the oval keeping the one pool tool's id");
@@ -183,7 +194,9 @@ if (isMain(import.meta.url)) {
     product("s1", "במה 400×300", "stages"),
     product("r1", "רמפת נגישות", "stage-ramps"),
     product("t1", "עגול 180", "tables"),
+    product("pg1", "פרגולה 4×4", "pergolas"),
   ]);
+  assert(findAddTool(tools, "product:pg1")?.kind === "pergola" && findAddTool(tools, "product:pg1")?.section === "structure" && !!findAddTool(tools, "pergola"), "a pergola row lands as the venue's pergola, beside the plain one");
   const bars = tools.filter((t) => t.section === "bars");
   assert(bars.length === 2, "a department with rows offers the rows, not the plain kind");
   assert(bars.every((t) => t.kind === "bar"), "…and every one of them still lands as a bar on the plan");

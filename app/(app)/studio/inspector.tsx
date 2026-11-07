@@ -130,6 +130,8 @@ import { CANTILEVER_MAX_MM, railLengthMm, railOf, sketchRailContext, type Rail }
 import { arrangedStructure } from "@/lib/design-document/features";
 import { ArrowDownToLine } from "lucide-react";
 import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
+import { ceilingUndersideMm } from "@/lib/scene/overhead";
+import type { Point } from "@/lib/studio/hall";
 import type { Selection, SpinMode } from "./canvas-stage";
 import type { DeckType, MissingPiece } from "@/lib/studio/stage-fill";
 import type { PieceInfo } from "@/lib/studio/stage-rim";
@@ -360,6 +362,7 @@ export function Inspector({
   renderDesigns,
   onScale,
   onHang,
+  roofOf,
   onCentreOver,
   onSpreadRow,
   onHangOverDressing,
@@ -514,6 +517,9 @@ export function Inspector({
   /** How high one CEILING item hangs above the floor (Placement.hangHeightMm); null = its catalog
    *  row's default again. A rigging fact — nothing priced or packed reads it. */
   onHang?: (placementId: string, heightMm: number | null) => void;
+  /** What is overhead at a point, as a height (lib/venues/roofs.ts) — a ceiling item with no height of
+   *  its own or its row's shows where the room hangs it under that (lib/scene/overhead.ts). */
+  roofOf?: (p: Point) => number | null;
   /** A ceiling item back over the middle of the table it hangs over. */
   onCentreOver?: (placementId: string) => void;
   /** N of a ceiling item strung along the row (or column) of tables its table stands in. */
@@ -2119,7 +2125,7 @@ export function Inspector({
           />
         )}
         {p.layer === "ceiling" && !drape && onHang && (
-          <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
+          <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} underRoof={roofOf ? ceilingUndersideMm(roofOf(p.position), r?.product.dimensions.heightMm ?? 0) : undefined} onHang={(mm) => onHang(p.id, mm)} />
         )}
 
         {/* A drape covers its whole wall (or side) by default; this puts it back after it was
@@ -3078,8 +3084,11 @@ function DrapeRailPopover({
   );
 }
 
-function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: number; onHang: (mm: number | null) => void }) {
+function HangPopover({ own, fallback, underRoof, onHang }: { own?: number; fallback?: number; underRoof?: number; onHang: (mm: number | null) => void }) {
   const shown = own ?? fallback;
+  // Neither this plan nor the row says: the room hangs it a guest's clearance under what is overhead
+  // (a ceiling, a pergola — lib/venues/roofs.ts), or at 3 m under open sky. Shown, never stored.
+  const roofed = own === undefined && !fallback && underRoof ? underRoof : undefined;
   return (
     <Popover label="גובה תלייה" icon={ArrowDownToLine} value={shown ? ltr(`${(shown / 1000).toFixed(2)} מ׳`) : "לא צוין"}>
       <PanelRow label="מהרצפה (ס״מ)" htmlFor="placement-hang">
@@ -3089,7 +3098,7 @@ function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: numbe
           min={0}
           max={HANG_MAX_MM / 10}
           hideZero
-          placeholder={fallback ? String(Math.round(fallback / 10)) : "—"}
+          placeholder={fallback ? String(Math.round(fallback / 10)) : roofed ? String(Math.round(roofed / 10)) : "—"}
           value={own ? Math.round(own / 10) : 0}
           onChange={(v) => onHang(v > 0 ? v * 10 : null)}
           className="w-20"
@@ -3100,7 +3109,7 @@ function HangPopover({ own, fallback, onHang }: { own?: number; fallback?: numbe
           {fallback ? `חזרה לגובה מהקטלוג (${(fallback / 1000).toFixed(2)} מ׳)` : "ניקוי הגובה"}
         </Button>
       )}
-      <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
+      <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}{roofed ? `בלי גובה — בתלת־ממד נתלה בגובה ${(roofed / 1000).toFixed(2)} מ׳, מתחת למה שמעליו. ` : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
     </Popover>
   );
 }

@@ -177,6 +177,17 @@ export const DESIGN_ITEMS: DesignItem[] = [
     { name: "זהב", swatch: GOLD },
   ], { spec: "שני עמודים וקשת עגולה ביניהם", styleTags: ["קלאסי", "רומנטי"], appearance: drawn("rect", "arched") }),
 
+  // A hired pergola (lib/venues/pergola.ts): its roof is its picture's version, its post a field.
+  item("pergola-slats-400", "פרגולת עץ 4×4 — רפפות", "pergolas", { widthMm: 4000, depthMm: 4000, heightMm: 2600 }, [
+    { name: "עץ טבעי", swatch: "#B89A74" },
+    { name: "לבן", swatch: WHITE },
+  ], { spec: "עמודי 15×15, רפפות כל 30 ס״מ", styleTags: ["כפרי"], categoryFields: { postMm: 150 }, appearance: drawn("rect") }),
+
+  item("pergola-fabric-300", "פרגולת בד 3×3", "pergolas", { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, [
+    { name: "שמנת", swatch: CREAM },
+    { name: "לבן", swatch: WHITE },
+  ], { spec: "מסגרת מתכת, בד מתוח מעל", styleTags: ["רומנטי"], categoryFields: { postMm: 100 }, appearance: drawn("rect", "fabric") }),
+
   item("arch-corner-220", "קשת עגולה — פרחים בפינות", "arches", { widthMm: 2200, depthMm: 500, heightMm: 2200 }, [
     { name: "לבן־ירוק", swatch: GREENERY },
     { name: "פסטל", swatch: "#F0DCE6" },

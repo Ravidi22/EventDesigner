@@ -39,6 +39,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
+import { Columns3 } from "lucide-react";
 import type { RailType } from "@/lib/studio/rail";
 
 export interface CategoryField {
@@ -249,6 +250,15 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "stage-surfaces", label: "משטחי במה", group: "grp-stages", defaultLayer: "floor", icon: Layers2, dims: "box", fields: [], needsHeight: false },
   { id: "bars", label: "ברים", group: "grp-bars", defaultLayer: "floor", icon: Wine, dims: "both", fields: [] },
   { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [], placeOnce: true },
+  // A hired PERGOLA (lib/venues/pergola.ts — the venue's own is a feature of the same definition):
+  // posts at its corners, beams along its sides, a roof of slats, a deck, a cloth or nothing — the
+  // roof is the row's drawing style (SYMBOL_STYLES.pergola), the post its `postMm` (mm; no suffix,
+  // so it multiplies nothing on the packing list). Beside the חופות it stands in for. Laid to the
+  // size the event needs by its handles (defaultResize, not `sizing: "stretch"`: a stretch row is
+  // drawn and stacked as a rug and kept out of the clearance check) — and stretched, it keeps its
+  // post and slat spacing in millimetres, only gaining slats.
+  { id: "pergolas", label: "פרגולות", group: "grp-chuppahs", defaultLayer: "floor", icon: Columns3, dims: "box", fields: [{ key: "postMm", label: "עובי עמוד (מ״מ)" }], defaultHeightMm: 2600, defaultResize: { stepMm: 100, width: { minMm: 1500, maxMm: 20000 }, depth: { minMm: 1500, maxMm: 20000 } } },
+  { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch" },
   { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch", rails: ["wall", "side", "rod"] },
   // The ROD a curtain on a free-standing rod hangs from (spec 2026-11-07 §6.2), billed by the metre
   // off the curtain itself (MeasureContext.rodOf — the studio's first row here), as a stage's skirt
