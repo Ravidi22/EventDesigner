@@ -157,6 +157,8 @@ export const FIXTURE_PRODUCTS: Product[] = [
   // 2026-11-07: cloth in the air (lib/studio/ceiling-cloth.ts) — a sail, and a ceiling drape.
   { id: "sail", name: "מפרש", category: "sails", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m2", variants: [{ id: "v-sail-sand", name: "חול", swatch: "#e9dfc9" }] },
   { id: "ceiling-drape", name: "בד תקרה", category: "ceiling-drapes", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m", variants: [{ id: "v-drape-ivory", name: "שנהב", swatch: "#f3ede2" }] },
+  // 2026-11-07 (built-in kit): the studio's dance floor, a black gloss one on this plan.
+  { id: "dance-floor", name: "רחבת ריקודים", category: "dance-floors", layer: "floor", dimensions: { widthMm: 6000, depthMm: 6000, heightMm: 20 }, categoryFields: {}, styleTags: [], priceUnit: "m2", variants: [{ id: "v-dance-black", name: "שחור", swatch: "#1c1b20" }] },
 ];
 
 export const FIXTURE_DOC: DesignDocumentContent = {
@@ -243,6 +245,8 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     // 2026-11-07 (spec §7): an amber strip along the hall's top wall at the floor line, and a screen.
     { id: "p-led", variantId: "v-led-amber", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "wall", wallId: "w-top-a", from: 0.25, to: 0.75, side: 1, heightMm: 0 } },
     { id: "p-screen", variantId: "led-screen", layer: "floor", quantity: 1, position: { x: 10000, y: 1000 }, rotation: 0, scale: 1 },
+    // 2026-11-07: a dance floor laid 3 × 2 m by the south wall, its corners rounded 40cm.
+    { id: "p-dance", variantId: "v-dance-black", layer: "floor", quantity: 1, position: { x: 4700, y: 10500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 }, corners: [400, 400, 400, 400] },
     // 2026-11-07: a SAIL tied to the hall's north wall twice and standing on two posts of its own; a
     // ceiling drape swagged from A to B; a canopy of swags over a 4 × 1.8 m area.
     {

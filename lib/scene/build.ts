@@ -39,6 +39,7 @@ import { roomTransform } from "./frame";
 import { chairRequest, itemBody } from "./items";
 import { type ItemContext } from "./item-context";
 import { floorKindBody, rugBody } from "./floor-kinds";
+import { danceFloorBody } from "./dance-floor";
 import { hexOf } from "./materials";
 import { ceilingUndersideMm, curtainBody, hungFlowersBody } from "./overhead";
 import { ceilingDrapeBody, sailBody } from "./overhead";
@@ -140,13 +141,15 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
     return;
   }
   const { product, kind, ctx, footprint } = contextOf(input, p);
-  if (product?.category === "rugs") {
+  if (product?.category === "rugs" || product?.category === "dance-floors") {
     // The rug's own top is what floorZ reads under it; its base is a rug lower. A carpet laid to an
     // outline (over a stage, a lawn — lib/studio/cover.ts) is read by its whole footprint, as anything
     // standing on a platform is: its middle may be over a hole, or in a ring's hollow.
     const carpet = carpetShape(p);
     const z = (carpet ? elevation.floorUnder(footprintPolygons(carpetFootprint(carpet), p.position, p.rotation ?? 0), p.id) : elevation.floorZ(p.position)) - RUG_MM;
-    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody({ ...ctx, rug: rugShapeOf(p), ...(carpet ? { carpet } : {}) }), roomTransform(p, Math.max(0, z)));
+    // A dance floor lies the same way, as its gloss panels (./dance-floor.ts).
+    const laid = { ...ctx, rug: rugShapeOf(p), ...(carpet ? { carpet } : {}) };
+    out.item(p.id, { type: "item", id: p.id, label: product.name }, product.category === "dance-floors" ? danceFloorBody(laid) : rugBody(laid), roomTransform(p, Math.max(0, z)));
     return;
   }
   out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, floorOf(footprint)));

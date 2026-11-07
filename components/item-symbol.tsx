@@ -40,6 +40,7 @@ import { rugBorderBands } from "@/lib/studio/rug-shape";
 import { borderBands, clothHem, darkerShade, edgeFringe, footprintBorderBands, fringeOf, type Border, type BorderBand } from "@/lib/catalog/border";
 import { ledSymbol, screenSymbol, SCREEN_BODY } from "./led-glyph";
 import { LED_COLOUR } from "@/lib/venues/led";
+import { DanceFloorPattern } from "./dance-floor";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -98,6 +99,8 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   // Sailcloth and the same voile overhead (components/ceiling-cloth.tsx).
   sail: "#F4F1EA",
   "ceiling-drape": "#F3EDE2",
+  // A white gloss dance floor, the one most halls hire (a black one says so through its shade).
+  "dance-floor": "#F5F3F8",
 };
 
 export interface ItemSymbolProps {
@@ -280,6 +283,10 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       break;
     case "ceiling-drape":
       body = along(w, h, (L, D) => <CeilingDrapeSymbol L={L} D={D} tone={t} ink={ink} print={c.print} />);
+      break;
+    // Its panels over its own fill, clipped to whatever outline it was drawn at (components/dance-floor.tsx).
+    case "dance-floor":
+      body = <DanceFloorPattern w={w} h={h} footprint={footprint.kind === "rect" ? undefined : footprint} tone={t} ink={ink} print={c.print} base />;
       break;
   }
   return <g className="pointer-events-none">{body}</g>;

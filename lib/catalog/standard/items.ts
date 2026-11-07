@@ -319,6 +319,28 @@ export const STANDARD_BARS: StandardItem[] = [
   bar("bar-round-150", "בר עגול 150", { diameterMm: 1500 }),
 ];
 
+// ── רחבת ריקודים ─────────────────────────────────────────────────────────────
+
+// The dance floor every studio is given (the built-in kit, docs/superpowers/specs/2026-11-07-built-
+// in-kit-design.md §2): one row, laid and stretched on the plan like a rug, drawn as its panels in its
+// shade, billed by the square metre of the floor it really covers. 6×6m is a first size for a hall of
+// 300; the designer drags it to the room. No price and no shades: those are the studio's to add.
+export const STANDARD_DANCE_FLOOR: StandardItem = {
+  key: "builtin-dance-floor",
+  builtIn: true,
+  product: {
+    name: "רחבת ריקודים",
+    category: "dance-floors",
+    layer: "floor",
+    dimensions: { widthMm: 6000, depthMm: 6000, heightMm: 20 },
+    categoryFields: {},
+    priceUnit: "m2",
+    styleTags: [],
+    visibility: "public",
+    appearance: { shape: "rect", content: "none" },
+  },
+};
+
 /** The base items a stage is built and finished with — what the studio installs on its own the
  *  first time the stage tool finds none of them (installStageBasics, lib/catalog/actions.ts). */
 export const STANDARD_STAGE_KEYS: string[] = [...STANDARD_DECKS, ...STANDARD_STAGE_PARTS].map((i) => i.key);
@@ -327,7 +349,7 @@ export const STANDARD_STAGE_KEYS: string[] = [...STANDARD_DECKS, ...STANDARD_STA
 export const STANDARD_STAGE_PART_KEYS: string[] = STANDARD_STAGE_PARTS.map((i) => i.key);
 
 /** Everything the install writes. Concatenate the next department here. */
-export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_DECKS, ...STANDARD_STAGE_PARTS, ...STANDARD_BARS];
+export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_DECKS, ...STANDARD_STAGE_PARTS, ...STANDARD_BARS, STANDARD_DANCE_FLOOR];
 
 // ponytail: self-check. Run: npm run check:standard
 if (isMain(import.meta.url)) {
@@ -426,6 +448,13 @@ if (isMain(import.meta.url)) {
   for (const item of STANDARD_BARS) {
     check(item.product.dimensions.heightMm >= 1000, `${item.key}: is counter height, not table height`);
   }
+
+  // The dance floor: a built-in of a built-in-only category, laid like a rug, billed per m².
+  const dance = STANDARD_DANCE_FLOOR.product;
+  check(
+    STANDARD_DANCE_FLOOR.builtIn === true && CATEGORY_BY_ID[dance.category]?.builtIn === true && CATEGORY_BY_ID[dance.category]?.sizing === "stretch" && dance.priceUnit === "m2",
+    "the dance floor is a built-in, stretched like a rug and priced by the square metre",
+  );
 
   if (failures.length) {
     console.error(`${failures.length} failed`);

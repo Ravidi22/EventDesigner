@@ -44,6 +44,7 @@ import type { RailType } from "@/lib/studio/rail";
 import { Monitor, Zap } from "lucide-react";
 import type { PriceUnit } from "./types";
 import { Sailboat, Waves } from "lucide-react";
+import { Grid3x3 } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -230,6 +231,10 @@ export const CATEGORIES: CategoryDef[] = [
   // Not a candlestick: nothing burns and nothing is packed per arm, so no count-multiplier.
   { id: "lamps", label: "מנורות ואהילים", group: "grp-table-design", defaultLayer: "table", icon: Lamp, dims: "round", fields: [] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
+  // A dance floor (רחבת ריקודים — the built-in kit, spec 2026-11-07 §2): laid, stretched, rounded at
+  // its corners and stacked exactly as a rug is (a stretch floor row is the canvas's CarpetNode), drawn
+  // as its panels (lib/catalog/dance-floor.ts), billed by the square metre of its real outline.
+  { id: "dance-floors", label: "רחבות ריקודים", group: "grp-accessories", defaultLayer: "floor", icon: Grid3x3, dims: "box", fields: [], sizing: "stretch", needsHeight: false, defaultPriceUnit: "m2", builtIn: true },
   { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [], placeOnce: true },
   // The loose modules a stage is built from — a 244×122 sheet, the 244×80/60/40 strips that finish a row's depth.
   // The stage-fill tool (lib/studio/stage-fill.ts) builds from these AND from the studio's own
@@ -353,7 +358,7 @@ export const HALL_PASS_GROUPS: CategoryGroupId[] = ["grp-seating", "grp-stages",
  *  the tables when the room is set out, not when it is dressed (2026-10-31, the user: "a rug is not
  *  a design — it's related to the table sketch"). Offered in the hall pass's rail, drawn on its
  *  canvas, and taken off the design pass's rail. */
-export const HALL_PASS_CATEGORIES: string[] = ["rugs"];
+export const HALL_PASS_CATEGORIES: string[] = ["rugs", "dance-floors"];
 
 /** Is a row of this category one of `pass`'s — in its rail, on its canvas? An unknown category is
  *  shown rather than guessed away. */

@@ -122,7 +122,8 @@ function samplesOf(outlines: readonly Point[][]): Point[] {
 /** A rug's rectangle where it lies in the room (the plan ignores a rug's mirror too). */
 function rugOutline(p: Placement): Point[] | null {
   const product = resolve(p.variantId)?.product;
-  if (!product || product.category !== "rugs") return null;
+  // A dance floor lies as a rug does, one rug's thickness high (lib/scene/dance-floor.ts).
+  if (!product || (product.category !== "rugs" && product.category !== "dance-floors")) return null;
   // A carpet laid to an outline (over a stage, a lawn — lib/studio/cover.ts): that outline.
   const carpet = carpetShape(p);
   if (carpet)

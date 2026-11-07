@@ -5131,7 +5131,8 @@ export function StudioScreen({
   /** What a carpet would be laid over: the link it gets, what to call it, and a first size and place
    *  for a carpet the settle cannot lay yet. */
   type CoverAim = { cover: { stageId?: string; featureId?: string }; kind: "stage" | "surface"; name: string; at: DocPoint; box: { widthMm: number; depthMm: number } };
-  const rugRows = useMemo(() => catalog.filter((p) => p.category === "rugs" && !p.archived), [catalog]);
+  // …and the dance floor: a floor laid over a surface or a stage the same way (lib/catalog/dance-floor.ts).
+  const rugRows = useMemo(() => catalog.filter((p) => (p.category === "rugs" || p.category === "dance-floors") && !p.archived), [catalog]);
   /** The carpet that "שטיח מותאם…" is making a row for — laid over this when the drawer saves. */
   const coverPending = useRef<CoverAim | null>(null);
   const layCarpet = useCallback(
@@ -5174,7 +5175,7 @@ export function StudioScreen({
       const on = aim.kind === "stage" ? "על הבמה" : "על המשטח";
       const rows: ContextMenuItem[] = [
         ...rugRows.map((product) => ({
-          label: flat ? `שטיח ${on}: ${product.name}` : product.name,
+          label: flat ? (product.category === "dance-floors" ? `${product.name} ${on}` : `שטיח ${on}: ${product.name}`) : product.name,
           icon: RugIcon,
           onSelect: () => coverLatest.current.layCarpet(aim, defaultVariantId(product)),
         })),

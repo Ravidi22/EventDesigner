@@ -36,6 +36,7 @@ import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { DanceFloorPattern } from "@/components/dance-floor";
 import { borderOf, darkerShade, type Border } from "@/lib/catalog/border";
 import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostOf, pergolaPostsInRoom } from "@/lib/venues/pergola";
@@ -552,10 +553,13 @@ export function PlacementMap({
     if (!rug && Math.max(b.w, b.h) * (p.scale || 1) < 1500) continue;
     // A rug with curved sides or rounded corners is measured along them (lib/studio/rug-shape.ts),
     // not by its box.
-    const rugShape = rug && r?.sizing === "stretch" ? rugShapeOf(p) : undefined;
+    // A dance floor is laid as a rug is, and measured along its real outline the same way — but as an
+    // element: the gap from a table to its edge is one the crew checks.
+    const laid = rug || r?.product.category === "dance-floors";
+    const rugShape = laid && r?.sizing === "stretch" ? rugShapeOf(p) : undefined;
     const curved = rugShape && fp.kind === "rect" ? rugPolygon(fp.widthMm, fp.depthMm, rugShape) : null;
     // …and one laid to an outline (over a surface or a stage, lib/studio/cover.ts) along that.
-    const carpet = rug ? carpetShape(p) : null;
+    const carpet = laid ? carpetShape(p) : null;
     solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(carpet ? carpetPolygon(carpet) : (curved ?? outlineOf(fp)), p.position, p.rotation, p.mirrored, p.scale || 1) });
   }
   // The venue's own stairs and ramps (lib/venues/climb.ts). Nobody on the crew places them, so they
@@ -1800,7 +1804,10 @@ export function PlacementGlyph({
   // the designer put a chair (lib/catalog/symbols.ts). A block of chairs in rows is every one of its
   // chairs, where the studio puts them (lib/design-document/chair-rows.ts).
   const block = chairBlockOf(placement);
-  const symbol = placement.stage || block ? null : symbolOf(r?.product, footprint);
+  // A dance floor laid on the plan is drawn as a rug is — its fill through the stretch path below —
+  // with its panels over it (DanceFloorPattern), never as a picture in a box.
+  const dance = !!stretched && r?.product.category === "dance-floors" && r.product.appearance?.symbol !== false;
+  const symbol = placement.stage || block || dance ? null : symbolOf(r?.product, footprint);
   // A flight or a ramp on its own: the step it covers on this plan, its slope kept upright.
   const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(r?.product, placement.climb) : undefined;
   const climbProps = rise ? { rise, turnDeg: placement.rotation, mirrored: placement.mirrored, textMm } : {};
@@ -1861,6 +1868,7 @@ export function PlacementGlyph({
           </g>
         )}
         {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} footprint={carpetFp} />}
+        {dance && patternBox && <DanceFloorPattern w={patternBox.w} h={patternBox.h} shape={rugShape} footprint={carpetFp} holes={carpet?.holes} tone={own ?? screen.fill} ink={MUTED} />}
       </g>
     );
   }
@@ -1896,6 +1904,8 @@ export function PlacementGlyph({
       {rug && patternBox && (
         <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} footprint={carpetFp} />
       )}
+      {/* A dance floor's panels and seams over its grey (the B&W booklet: MONO's item grey). */}
+      {dance && patternBox && <DanceFloorPattern w={patternBox.w} h={patternBox.h} shape={rugShape} footprint={carpetFp} holes={carpet?.holes} tone={flat ?? style.fill} ink={INK} print />}
     </g>
   );
 }

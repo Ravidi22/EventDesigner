@@ -55,7 +55,12 @@ export type SymbolKind =
    *  cloth on its ties, a scalloped band. On the plan each is drawn along its rail
    *  (lib/studio/ceiling-cloth.ts), never in a footprint. */
   | "sail"
-  | "ceiling-drape";
+  | "ceiling-drape"
+  /** A dance floor (lib/catalog/dance-floor.ts) — its panels, every other one a shade off, a seam
+   *  between each, an edge trim round it. On the plan it is laid as a rug is (CarpetNode, the printed
+   *  map's stretch path), which draws the same panels by its category; this is the card's and the
+   *  drag image's. */
+  | "dance-floor";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -96,6 +101,8 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   // Cloth in the air (spec 2026-11-07 §6.3/§6.4): its card and its drag image.
   sails: "sail",
   "ceiling-drapes": "ceiling-drape",
+  // Panels clicked together (the built-in kit, spec 2026-11-07 §2).
+  "dance-floors": "dance-floor",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */
@@ -119,6 +126,8 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   // A pergola is posts on its OUTLINE's corners and a roof clipped to it, so any outline will do —
   // a hand-drawn one, bowed or rounded (lib/venues/pergola.ts).
   if (kind === "pergola") return kind;
+  // A dance floor's panels are clipped to whatever outline it has (lib/catalog/dance-floor.ts).
+  if (kind === "dance-floor") return kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 
