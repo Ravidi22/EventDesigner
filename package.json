@@ -24,6 +24,7 @@
     "check:snap": "tsx lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",
+    "check:rim": "tsx lib/venues/rim.ts",
     "check:climb": "tsx lib/venues/climb.ts",
     "check:stairs": "tsx lib/venues/stairs.ts",
     "check:stage-edges": "tsx lib/venues/stage-edges.ts",

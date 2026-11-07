@@ -1087,6 +1087,28 @@ export function buildHollow(base: BuiltOutline, spec: HollowSpec): BuiltOutline[
   return out.length ? out : [base];
 }
 
+/** A shape's outline moved `byMm` INWARD all the way round — the inner edge of the closed band
+ *  buildHollow would cut that deep, as an outline of its own: the water inside a pool's rim
+ *  (lib/venues/rim.ts). The same arithmetic, so curves stay curves (an ellipse's quarters move as
+ *  quarters, a circle's are concentric) and the corners are trimmed as the band's are. In the
+ *  outline's own frame, wound as it is. `byMm` ≤ 0 is the outline itself; null when nothing is left
+ *  inside — a band as deep as the shape is the solid shape, buildHollow's own rule. */
+export function insetOutline(base: BuiltOutline, byMm: number): BuiltOutline | null {
+  const P = base.outline;
+  const n = P.length;
+  if (n < 2) return null;
+  if (!(byMm > 0)) return base;
+  const outer = P.map((a, i) => edgePiece(i, a, P[(i + 1) % n], base.edgeCurves?.[i]));
+  const outerArea = shoelace(piecesRing(outer));
+  if (!(Math.abs(outerArea) > 1e-6)) return null;
+  const sgn = outerArea > 0 ? 1 : -1;
+  const segs = innerLoop(base, P.map(() => byMm), sgn);
+  if (!segs) return null;
+  const inner = loopPieces(segs);
+  if (shoelace(piecesRing(inner)) * sgn <= 0.02 * Math.abs(outerArea)) return null;
+  return emitOutline(inner);
+}
+
 /** The sides of a shape that may be opened (HollowSpec.openSides): the edges of its solid outline
  *  (hollowOuter), each with a name for the editor's chips — the direction its middle faces from the
  *  shape's centre, measured in the shape's own box so an ellipse's quarters read as diagonals, in

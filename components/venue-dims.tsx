@@ -26,6 +26,7 @@ import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { doorOffsets, isDoor, nodeMap, wallPoints, type StructureEntrance, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import type { ResolvedZone } from "@/lib/venues/zone";
 import { asRound, curveSides } from "@/lib/outputs/measurements";
+import { rimMeasure, rimOf } from "@/lib/venues/rim";
 
 type Mm = (px: number) => number;
 type Tone = "accent" | "ink" | "muted";
@@ -106,6 +107,17 @@ const FeatureSize = memo(function FeatureSize({ f, mm, knob }: { f: StructureFea
       {band !== null && px(band) >= MIN_SIDE_PX / 2 && <Dim a={at(hw - band, hd + gap * 2.6)} b={at(hw, hd + gap * 2.6)} text={metres(band)} mm={mm} avoid={knob} />}
     </>
   );
+});
+
+/** A pool's rim (or a surface's edging) figured once — across the band, at the outline's +x middle
+ *  (lib/venues/rim.ts rimMeasure), in the element's own frame carried onto the plan. The figure sits
+ *  beside its short line when the band is too thin to carry it (Dim's own rule). */
+const RimWidth = memo(function RimWidth({ f, mm }: { f: StructureFeature; mm: Mm }) {
+  const m = rimMeasure(f);
+  const w = rimOf(f)?.rim.widthMm;
+  if (!m || !w) return null;
+  const at = (p: Point) => fromLocalFrame(p, { x: f.x, y: f.y }, f.rotationDeg ?? 0);
+  return <Dim a={at(m.a)} b={at(m.b)} text={metres(w)} mm={mm} />;
 });
 
 /** The doors on one wall, figured along it just outside the wall on the side their leaves do not
@@ -316,6 +328,7 @@ export function VenueDims({
         structure.features
           .filter((f) => f.kind !== "plant" && f.kind !== "surface")
           .map((f) => <FeatureSize key={f.id} f={f} mm={mm} knob={knobOf(f)} />)}
+      {dims && structure.features.filter((f) => rimOf(f)).map((f) => <RimWidth key={`rim-${f.id}`} f={f} mm={mm} />)}
       {structure.walls.map((w) => {
         const doors = structure.entrances.filter((e) => e.wallId === w.id);
         if (doors.length === 0 || (!dims && !doors.some((e) => selectedDoorIds.includes(e.id)))) return null;
