@@ -22,7 +22,7 @@
 //   • a stage's decks, stairs and skirt — a stage is ONE line, "תוספת במה", priced as the sum of
 //     everything it is built from (lib/design-document/stage.ts), with what it includes in words.
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
-import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { measureTotals, rodLengthMm, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { layStage } from "@/lib/design-document/stage";
 import type { NumberedUnit } from "@/lib/design-document/groups";
 import { tableKits } from "./table-kits";
@@ -218,9 +218,48 @@ function stagesLine(sectionKey: string, doc: DesignDocumentContent, stages: Plac
 function placeLines(sectionKey: string, doc: DesignDocumentContent, placements: Placement[], opts: SectionOptions): SectionLine[] {
   const stages = placements.filter((p) => p.stage);
   const rest = placements.filter((p) => !p.stage);
-  const lines = linesOf(sectionKey, measureTotals({ ...doc, tables: [], placements: rest }, ctxOf(opts)), opts);
+  const lines = withRods(linesOf(sectionKey, measureTotals({ ...doc, tables: [], placements: rest }, ctxOf(opts)), opts), rest, opts);
   const stage = stagesLine(sectionKey, doc, stages, opts);
   return stage ? [stage, ...lines] : lines;
+}
+
+/** A curtain on a free-standing ROD brings its rod (spec 2026-11-07 §6.2, the stage's skirt
+ *  pattern): measureTotals billed the rod's metres to the studio's rod row; here they are folded into
+ *  the CURTAIN's line — its total, and "כולל מוט 6 מ׳" in words — and the rod row's own line goes.
+ *  With no rod row (or one with no price) the curtain's line says it is partial. */
+function withRods(lines: SectionLine[], placements: Placement[], opts: SectionOptions): SectionLine[] {
+  const rodMm = new Map<string, number>();
+  for (const p of placements) {
+    const mm = rodLengthMm(p) * p.quantity;
+    if (mm > 0) rodMm.set(p.variantId, (rodMm.get(p.variantId) ?? 0) + mm);
+  }
+  if (rodMm.size === 0) return lines;
+  const ctx = ctxOf(opts);
+  const rod = ctx.rodOf?.();
+  const rodInfo = rod ? opts.lookup(rod) : undefined;
+  const rodUnit = rod ? ctx.unitOf(rod) : "m";
+  const price = typeof rodInfo?.unitPrice === "number" ? rodInfo.unitPrice : undefined;
+  let folded = 0;
+  const out = lines.map((l) => {
+    const mm = rodMm.get(l.variantId);
+    if (!mm || l.variantId === rod) return l;
+    const count = placements.filter((p) => p.variantId === l.variantId && rodLengthMm(p) > 0).reduce((n, p) => n + p.quantity, 0);
+    const amount = rodUnit === "unit" ? count : round2(mm / 1000);
+    if (rod) folded += amount;
+    const metres = (mm / 1000).toFixed(mm % 1000 === 0 ? 0 : 1);
+    return {
+      ...l,
+      lineTotal: round2(l.lineTotal + (price ?? 0) * (rod ? amount : 0)),
+      partial: l.partial || !rod || price === undefined,
+      detail: [l.detail, `כולל מוט ${metres} מ׳`].filter(Boolean).join(" · "),
+    };
+  });
+  // The rod row's own line keeps only what was NOT folded (a rod someone placed on its own).
+  return out.flatMap((l) => {
+    if (!rod || l.variantId !== rod || folded <= 0) return [l];
+    const quantity = round2(l.quantity - folded);
+    return quantity > 0 ? [{ ...l, quantity, lineTotal: round2((l.unitPrice ?? 0) * quantity) }] : [];
+  });
 }
 
 /** The sections of one ROOM: kits, floor, ceiling — and its chairs, returned apart so the caller
@@ -415,6 +454,17 @@ if (isMain(import.meta.url)) {
   });
   assert(zoned[0].key === "zone:z-chuppah" && zoned[0].title === "עיצוב חופה", "the ceremony zone comes first, as its own section");
   assert(zoned.some((s) => s.key === "kit:r1"), "the hall still breaks down into kits");
+
+  // 2026-11-07: a curtain on a ROD brings its rod — 6 m of curtain on a 6 m rod at 30/m folded into
+  // the curtain's line ("כולל מוט 6 מ׳"); no rod row, and the curtain's line is partial.
+  info.rod = { cat: "curtain-rods", price: 30 };
+  const rodded = { ...free("rc", "ceiling", "curtain"), rail: { type: "rod" as const, points: [{ x: 0, y: 0 }, { x: 6000, y: 0 }], heightMm: 2400 } };
+  const rodDoc: DesignDocumentContent = { calibration: doc.calibration, tables: [], placements: [rodded] };
+  const rodCtx = (rodOf?: () => string | undefined): MeasureContext => ({ unitOf: (v) => (v === "curtain" || v === "rod" ? "m" : "unit"), railLengthMm: () => 6000, rodOf });
+  const withRod = quoteSections(rodDoc, { lookup, ctx: rodCtx(() => "rod") }).find((s) => s.key === "floor")!.lines;
+  assert(withRod.length === 1 && withRod[0].variantId === "curtain" && withRod[0].lineTotal === 6 * 50 + 6 * 30 && withRod[0].detail === "כולל מוט 6 מ׳" && !withRod[0].partial, `the rod is in the curtain's line, in words: ${JSON.stringify(withRod)}`);
+  const noRod = quoteSections(rodDoc, { lookup, ctx: rodCtx(() => undefined) }).find((s) => s.key === "floor")!.lines;
+  assert(noRod.length === 1 && noRod[0].lineTotal === 300 && noRod[0].partial === true && noRod[0].detail === "כולל מוט 6 מ׳", "no rod row: the curtain alone, partial");
 
   console.log("quote-sections self-check passed");
 }

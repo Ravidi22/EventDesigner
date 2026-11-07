@@ -13,7 +13,7 @@
 import type { DesignDocumentContent, Placement } from "./types";
 import { edgeItemShape, edgeKind, skirtMm, stageAreaMm2, stageCorners, stageDeckCounts, type DeckLookup, type StagePlacement, type WallDistance } from "./stage";
 import { standaloneBench, type BenchLookup } from "./bench";
-import { railOf, rodPath } from "../studio/rail";
+import { railLengthMm, railOf, rodPath } from "../studio/rail";
 import { isMain } from "../self-check";
 
 /** What a placement's amount is counted in, decided by the product's price unit. */
@@ -78,8 +78,11 @@ export function railRunMm(p: Placement, ctx: Pick<MeasureContext, "wallLengthMm"
   const rail = railOf(p);
   if (!rail) return undefined;
   if (rail.type === "wall") return spanLengthMm(p, ctx.wallLengthMm);
+  // A rod, a run, a canopy are their own points — no plan needed to measure them.
+  if (rail.type === "rod" || rail.type === "run" || rail.type === "canopy") return railLengthMm(rail, { structure: NO_VENUE });
   return ctx.railLengthMm?.(p);
 }
+const NO_VENUE = { nodes: [], walls: [], entrances: [], features: [] };
 
 /** How many metres of rod a drape on a free-standing rod brings — its polyline, the cantilevered arm
  *  held to its reach; 0 on any other rail. Pure: a rod is its own points. */
@@ -245,6 +248,19 @@ if (isMain(import.meta.url)) {
 
   const totals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [counted, wholeWall, carpet] }, ctx);
   assert(totals.get("candlestick") === 4 && totals.get("drape") === 14 && totals.get("carpet") === 7.5, "totals per variant");
+
+  // RAILS (2026-11-07): a wall rail measures as the legacy span; a side or a rod through the context;
+  // a rod brings its rod row by the metre.
+  assert(measure({ ...wholeWall, span: undefined, rail: { type: "wall", wallId: "w14", from: 0, to: 0.5 } }, ctx) === 7, "a wall rail bills its stretch of the wall, as the span did");
+  const onRod = { ...base, id: "rod", variantId: "drape", quantity: 1, rail: { type: "rod" as const, points: [{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 4000, y: 2000 }], heightMm: 2400 } };
+  const railCtx: MeasureContext = { ...ctx, unitOf: (v) => (v === "rod-row" ? "m" : ctx.unitOf(v)), railLengthMm: () => 6000, rodOf: () => "rod-row" };
+  assert(measure(onRod, railCtx) === 6 && rodLengthMm(onRod) === 6000, "a curtain on a rod bills the rod's 6 m of cloth");
+  const rodTotals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [onRod] }, railCtx);
+  assert(rodTotals.get("drape") === 6 && rodTotals.get("rod-row") === 6, "…and 6 m of the studio's rod");
+  assert(!measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [onRod] }, { ...railCtx, rodOf: () => undefined }).has("rod-row"), "no rod row, no rod billed");
+  assert(measure(onRod, { ...railCtx, railLengthMm: undefined }) === 6, "a rod is its own points — measured with no plan at all");
+  const onSide = { ...base, id: "side", variantId: "drape", quantity: 1, rail: { type: "side" as const, featureId: "bar", side: 0, from: 0, to: 1, out: 1 as const } };
+  assert(measure(onSide, { ...railCtx, railLengthMm: () => 2500 }) === 2.5 && measure(onSide, { ...railCtx, railLengthMm: undefined }) === 3, "a side rail reads its side through the plan, or falls back to its catalog width");
 
   // Tables off the rail are counted; a table placed before tables came out of the catalog carries
   // no row and cannot be, which is what keeps every document drawn until now totalling as it did.
