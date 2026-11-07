@@ -86,6 +86,9 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 /** Category id of the hung items that read as part of the ROOM, not the ceiling: a curtain is
  *  drawn on the ceiling layer because it hangs, but a client thinks of it beside the bar and rug. */
 const ROOM_ON_CEILING = new Set(["curtains"]);
+// An LED strip rides a rail as a curtain does (spec 2026-11-07 §7.1) and lights the room's walls and
+// edges — the client reads it with the room, by the metre of its lines.
+ROOM_ON_CEILING.add("led-strips");
 
 /** What a stage includes, said in words, by the catalog category of its parts. */
 const STAGE_PARTS: Record<string, string> = {
@@ -379,6 +382,7 @@ if (isMain(import.meta.url)) {
     roses: { cat: "flower-arrangements", price: 80 },
     bar: { cat: "bars", price: 5000 },
     curtain: { cat: "curtains", price: 50 },
+    led: { cat: "led-strips", price: 40 },
     chandelier: { cat: "chandeliers" },
     venezia: { cat: "chairs", price: 15 },
     macao: { cat: "chairs", price: 25 },
@@ -408,6 +412,7 @@ if (isMain(import.meta.url)) {
       on("d", "s1", "roses", 4), on("e", "s2", "roses", 4),
       on("f", "k1", "lamp"),
       free("g1", "floor", "bar"), free("g2", "ceiling", "curtain", 2), free("g3", "ceiling", "chandelier", 6),
+      free("g4", "ceiling", "led"),
     ],
   };
   const sections = quoteSections(doc, { lookup, chairOf: (tb) => tb.chairVariantId ?? "venezia" });
@@ -424,6 +429,7 @@ if (isMain(import.meta.url)) {
   assert(sections.some((s) => s.title === "עיצוב שולחן אביר"), "a block of tables reads as an אביר table");
   assert(!sections.some((s) => s.lines.some((l) => l.variantId.startsWith("tbl-"))), "no table furniture anywhere");
   assert(by("floor")!.lines.some((l) => l.variantId === "curtain"), "a curtain belongs to the room, not the ceiling");
+  assert(by("floor")!.lines.some((l) => l.variantId === "led") && !by("ceiling")!.lines.some((l) => l.variantId === "led"), "an LED strip is the room's too, beside its curtains");
   assert(by("ceiling")!.lines[0].quantity === 6 && !by("ceiling")!.lines[0].priced, "six unpriced chandeliers, flagged");
 
   const chairs = by("chairs")!;

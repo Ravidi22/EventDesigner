@@ -129,6 +129,7 @@ import { pergolaOf } from "@/lib/venues/pergola";
 import { roofHeightAt } from "@/lib/venues/roofs";
 import { defineColumns } from "@/lib/venues/column";
 import { curtainEndPatch, newCurtain, newRailCurtain, syncCurtains } from "@/lib/venues/curtain";
+import { ledDropRail, ledEndPatch, ledRunRail, ledSideCandidates, ledsFollowFeatures, newLedFeature, syncLeds } from "@/lib/venues/led";
 import { defaultRailHeight, nearestSideRail, sideCandidates } from "@/lib/studio/rail";
 import { RodDrawPane } from "@/components/rod-draw-pane";
 import {
@@ -268,6 +269,9 @@ const DRAW_SURFACE = "surface:draw";
  *  edit that moved a wall or a corner re-lays them, inside that same history entry — so a wall drag
  *  carries the floor with it frame by frame, and one undo takes both back. */
 function settleWalls(before: VenueStructure, after: VenueStructure): VenueStructure {
+  // The venue's LED strips (lib/venues/led.ts) are re-laid on their walls and their features' sides
+  // the same way, in the same entry.
+  if (after.nodes !== before.nodes || after.walls !== before.walls || (after.features !== before.features && ledsFollowFeatures(after))) after = syncLeds(after);
   // …and the curtains hung on them (lib/venues/curtain.ts), the same way.
   if (after.nodes !== before.nodes || after.walls !== before.walls) return syncCurtains(syncFaceSurfaces(after));
   // A curtain on a SIDE of a feature follows the feature (spec 2026-11-07 §6.6): re-laid when the
@@ -357,6 +361,8 @@ export function HallsScreen() {
   const [armedToolId, setArmedToolId] = useState<string | null>(null);
   // "וילון על מוט" being drawn: its first post, while the rest are clicked (null = not drawing one).
   const [rodFrom, setRodFrom] = useState<Point | null>(null);
+  // The rod pane is drawing an LED strip's free run (two ends), not a curtain's rod.
+  const [ledRun, setLedRun] = useState(false);
   // The catalog, for the two departments a venue has BUILT versions of (lib/venues/add-tools.ts).
   // Read-only here, and its own hook rather than a prop: this screen has no server component above
   // it to seed from, and nothing on this plan resolves a product id while rendering, so the list
@@ -969,6 +975,11 @@ export function HallsScreen() {
       dragStructure((s) => {
         // Along its wall or its side, or a rod's end post moved (lib/venues/curtain.ts curtainEndPatch).
         const f = s.features.find((x) => x.id === id);
+        // …or an LED strip's end, along its wall or side, or a run's end point (lib/venues/led.ts).
+        if (f?.kind === "led") {
+          const led = ledEndPatch(s, f, end, p);
+          return Object.keys(led).length ? updateFeature(s, id, led) : s;
+        }
         const patch = f ? curtainEndPatch(s, f, end, p) : {};
         return f && Object.keys(patch).length ? updateFeature(s, id, patch) : s;
       });
@@ -1576,6 +1587,14 @@ export function HallsScreen() {
       addOpeningNear(p, tool.id === "window" ? "window" : "door");
       return;
     }
+    if (tool.kind === "led") {
+      // "פס לד חופשי": this click is its start, the next its end; else the nearest wall or side.
+      if (tool.id === "led-run") {
+        setLedRun(true);
+        setRodFrom(p);
+      } else addLedNear(p);
+      return;
+    }
     if (tool.kind === "curtain") {
       // "וילון על מוט": this click is the first post; the rest are drawn on the canvas.
       if (tool.id === "curtain-rod") setRodFrom(p);
@@ -1644,7 +1663,36 @@ export function HallsScreen() {
 
   /** "וילון על מוט" drawn: the venue's curtain on a free-standing rod at the rod's height (spec
    *  2026-11-07 §6.2 — 2.4 m under open sky; the bar types another). */
+  /** The venue's LED strip (lib/venues/led.ts) along the nearest wall at the floor line, or the nearest
+   *  side of anything with height (a stage's deck edge, a bar's counter, a pergola's beam), whichever is
+   *  nearer — the whole of it; the bar shortens it and sets its height. A boundary line takes none. */
+  const addLedNear = (p: Point) => {
+    const hit = nearestWall(structure, p);
+    const wall = hit ? structure.walls.find((w) => w.id === hit.wallId) : null;
+    const rail = ledDropRail(structure, p, hit && wall && wall.kind !== "edge" ? hit : null, ledSideCandidates(structure.features), 0, (t) => t !== "run");
+    const made = rail ? newLedFeature(structure, rail) : null;
+    if (!made) {
+      setHint("פס לד רץ לאורך קיר או צד של אלמנט — לחצו לידו, או ״פס לד חופשי״");
+      return;
+    }
+    const { structure: next, featureId } = addFeature(structure, made);
+    editStructure(() => next);
+    setSelection([{ kind: "feature", id: featureId }]);
+  };
+
   const finishRod = (points: Point[]) => {
+    // "פס לד חופשי" drawn: a run between its two ends, under the roof there or at a rod's height.
+    if (ledRun) {
+      setLedRun(false);
+      setRodFrom(null);
+      const run = ledRunRail(points, defaultRailHeight(points[0], roofHeightAt(structure, resolved)));
+      const made = run ? newLedFeature(structure, run) : null;
+      if (!made) return;
+      const { structure: next, featureId } = addFeature(structure, made);
+      editStructure(() => next);
+      setSelection([{ kind: "feature", id: featureId }]);
+      return;
+    }
     setRodFrom(null);
     // Under a roof the rod starts at it — a zone's ceiling, a building's, the pergola it stands
     // under (lib/venues/roofs.ts); under open sky, the rod's 2.4 m.
@@ -2077,7 +2125,7 @@ export function HallsScreen() {
               <>
                 {/* "וילון על מוט" being drawn, post by post (components/rod-draw-pane.tsx) — above
                     everything, so every click is a post. */}
-                {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} onFinish={finishRod} onCancel={() => setRodFrom(null)} />}
+                {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} onFinish={finishRod} onCancel={() => { setRodFrom(null); setLedRun(false); }} />}
                 {acts && !placing && !rodFrom ? (
                   <FeatureRotateHandles
                     structure={structure}
@@ -2945,6 +2993,21 @@ function ToolPreview({ tool }: { tool: AddTool }) {
       <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
         <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
           <PergolaGlyph footprint={featureFootprint(PERGOLA_PREVIEW)} pergola={pergolaOf(PERGOLA_PREVIEW)} stroke="var(--color-muted)" postFill="var(--color-ink-soft)" />
+        </svg>
+      </span>
+    );
+  }
+  // The venue's LED (spec 2026-11-07 §7.3): a strip's glowing line, a screen's dark bar — the drawing
+  // each lands as.
+  if (tool.kind === "led" || tool.kind === "screen") {
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox="-2300 -2300 4600 4600" className="h-9 w-9" aria-hidden>
+          {tool.kind === "led" ? (
+            <ItemSymbol kind="led" footprint={{ kind: "rect", widthMm: 4000, depthMm: 1400 }} count={1} />
+          ) : (
+            <ItemSymbol kind="screen" footprint={{ kind: "rect", widthMm: 4000, depthMm: 500 }} count={1} />
+          )}
         </svg>
       </span>
     );

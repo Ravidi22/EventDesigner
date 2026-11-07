@@ -9,6 +9,8 @@ import { isAdditiveClick } from "@/lib/keyboard";
 import { featureFootprint, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
 import { ItemSymbol } from "@/components/item-symbol";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainEnds, curtainPieces, type CurtainEnds, type CurtainPiece } from "@/lib/venues/curtain";
+import { ledColour, ledEnds, ledPieces } from "@/lib/venues/led";
+import { LedLine } from "@/components/led-glyph";
 import { CurtainCloth } from "@/components/curtain-cloth";
 import { WindowGlazing } from "@/components/window-glazing";
 import { FootprintShape } from "@/components/footprint-shape";
@@ -882,13 +884,15 @@ export function StructureFeatures({
   const piecesOf = useMemo(() => {
     const m = new Map<string, CurtainPiece[]>();
     for (const f of structure.features) if (f.kind === "curtain") m.set(f.id, curtainPieces(structure, f));
+    // …and every LED strip in the lines its rail resolves to (lib/venues/led.ts), the same way.
+    for (const f of structure.features) if (f.kind === "led") m.set(f.id, ledPieces(structure, f));
     return m;
   }, [structure]);
   // …and its two ends on the plan, where the grips that slide them stand (round a bow too).
   const endsOf = useMemo(() => {
     const m = new Map<string, CurtainEnds>();
     for (const f of structure.features) {
-      const ends = f.kind === "curtain" ? curtainEnds(structure, f) : null;
+      const ends = f.kind === "curtain" ? curtainEnds(structure, f) : f.kind === "led" ? ledEnds(structure, f) : null;
       if (ends) m.set(f.id, ends);
     }
     return m;
@@ -974,7 +978,7 @@ export function FeatureRotateHandles({
   return (
     <>
       {structure.features
-        .filter((f) => selectedIds.includes(f.id) && !f.locked && !followsWalls(f))
+        .filter((f) => selectedIds.includes(f.id) && !f.locked && !followsWalls(f) && f.kind !== "led")
         .map((f) => (
           <RotateHandle
             key={f.id}
@@ -1045,7 +1049,8 @@ const FeatureNode = memo(function FeatureNode({
         // shape: it follows them, and has no drag, size or turn of its own.
         // A curtain hangs on its wall (lib/venues/curtain.ts): its stretch is typed in the bar,
         // never dragged, and a sketch takes it down rather than moving it.
-        const pinned = !!f.locked || followsWalls(f) || f.kind === "curtain";
+        // An LED strip likewise rides its rail (lib/venues/led.ts) — its ends slide, its body does not.
+        const pinned = !!f.locked || followsWalls(f) || f.kind === "curtain" || f.kind === "led";
         const onMove = pinned || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
         // Chairs in rows are resized by their rows (the bar's "שורות"), never by a handle that
         // would stretch the box away from the chairs in it (lib/venues/seating.ts).
@@ -1189,6 +1194,23 @@ const FeatureNode = memo(function FeatureNode({
                     />
                     <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={selected ? 2 : 0} strokeDasharray={selected ? "4 3" : undefined} vectorEffect="non-scaling-stroke" />
                   </>
+                ) : f.kind === "led" ? (
+                  // The venue's LED strip (lib/venues/led.ts): its light along the lines its rail
+                  // resolves to, as a hired one is drawn (components/led-glyph.tsx); its band an
+                  // invisible hit area, outlined when selected. No name.
+                  <>
+                    {(pieces ?? ledPieces(EMPTY_STRUCTURE, f)).map((pc, i) => (
+                      <LedLine key={i} path={pc.line} colour={ledColour(f)} core={2.5} glow={10} nonScaling />
+                    ))}
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={selected ? 2 : 0} strokeDasharray={selected ? "4 3" : undefined} vectorEffect="non-scaling-stroke" />
+                  </>
+                ) : f.kind === "screen" ? (
+                  // The venue's LED screen: the catalog's drawing — a dark bar, its pixel grid, its
+                  // front (+y) marked, its name behind it.
+                  <>
+                    <ItemSymbol kind="screen" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} label={f.label} textMm={labelPx} />
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+                  </>
                 ) : f.kind === "fountain" ? (
                   // A fountain: the catalog's own picture (components/item-symbol.tsx) — the basin
                   // in the pool's water, the bowl and the spout — tinted by the feature's fill, with
@@ -1273,7 +1295,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led" && f.kind !== "screen" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"
@@ -1295,7 +1317,7 @@ const FeatureNode = memo(function FeatureNode({
                   constrain convention every design tool gives its resize handles. */}
               {/* A curtain's two ends, slid along its wall — the sketch's own drape ends — a few
                   px on past each end along the wall (round a bow, where the wall runs there). */}
-              {selected && onCurtainEnd && f.kind === "curtain" && clientToMm && ends && (
+              {selected && onCurtainEnd && (f.kind === "curtain" || f.kind === "led") && clientToMm && ends && (
                 <g>
                   {(["from", "to"] as const).map((end) => (
                     <ResizeHandle
@@ -1310,7 +1332,7 @@ const FeatureNode = memo(function FeatureNode({
                   ))}
                 </g>
               )}
-              {selected && onResize && f.kind !== "curtain" && (
+              {selected && onResize && f.kind !== "curtain" && f.kind !== "led" && (
                 usesDiameter(f.shape) ? (
                   f.shape === "circle" ? (
                     // Four handles round the rim, on the diagonals where a designer reaches for a
