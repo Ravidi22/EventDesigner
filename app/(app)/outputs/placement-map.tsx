@@ -33,7 +33,9 @@ import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { borderOf, darkerShade, type Border } from "@/lib/catalog/border";
 import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
-import { pergolaPostOf } from "@/lib/venues/pergola";
+import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostOf, pergolaPostsInRoom } from "@/lib/venues/pergola";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { DEFAULT_TONE } from "@/components/item-symbol";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { rugOutline, rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
@@ -511,6 +513,13 @@ export function PlacementMap({
       continue;
     }
     const r = resolve(p.variantId);
+    // A hired PERGOLA (lib/venues/pergola.ts): its posts, fixed — the tables stand under its roof, so
+    // a gap is measured to a post, never to the outline round the tables.
+    if (r && isPergolaRow(r.product)) {
+      const g = pergolaGeometry(placementFootprint(p), pergolaOfProduct(r.product));
+      if (g) pergolaPostsInRoom(g, p.position, p.rotation || 0, !!p.mirrored, p.scale || 1).forEach((polygon, i) => solids.push({ id: `${p.id}:post-${i}`, kind: "fixed", polygon }));
+      continue;
+    }
     const fp: Footprint = r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p);
     const b = footprintBounds(fp);
     const rug = r?.product.category === "rugs";
@@ -526,6 +535,13 @@ export function PlacementMap({
   // nearest table is measured and flagged, and no figure is written across them. By their real
   // outline: a curved flight is a band of a ring, not the box round it.
   for (const f of structure.features) {
+    // A pergola's POSTS are fixed the same way (lib/venues/pergola.ts): the tables stand under its
+    // roof, so the gap is measured to each post, never to the outline round them.
+    if (f.kind === "pergola") {
+      const g = pergolaGeometry(featureFootprint(f), pergolaOf(f));
+      if (g) pergolaPostsInRoom(g, { x: f.x, y: f.y }, f.rotationDeg ?? 0).forEach((polygon, i) => solids.push({ id: `${f.id}:post-${i}`, kind: "fixed", polygon }));
+      continue;
+    }
     if (!isClimb(f.kind)) continue;
     const [polygon] = footprintPolygons(featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0);
     if (polygon?.length >= 3) solids.push({ id: f.id, kind: "fixed", polygon });
@@ -1504,6 +1520,10 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             ) : f.kind === "fountain" ? (
               // A fountain as the catalog's prints: white basin, ink lines.
               <ItemSymbol kind="fountain" footprint={fp} count={1} print ink={INK} tone="#ffffff" />
+            ) : f.kind === "pergola" ? (
+              // A pergola (lib/venues/pergola.ts): its posts in the elements' grey, its outline, slats
+              // and lattice in ink — no name, the drawing says what it is.
+              <PergolaGlyph footprint={fp} pergola={pergolaOf(f)} stroke={MUTED} strokeWidth={style.strokeWidth} postFill={MONO.feature} />
             ) : f.kind === "column" ? (
               // A column: its plinth white, the shaft in the elements' grey so it reads solid.
               <ColumnGlyph f={f} fill="#ffffff" stroke={MUTED} strokeWidth={style.strokeWidth} shaftFill={MONO.feature} />
@@ -1525,7 +1545,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             )}
           </g>
         </g>
-        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && f.label && (
+        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && f.label && (
           <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT} stroke="#ffffff" strokeWidth={0.5 * den} strokeLinejoin="round" paintOrder="stroke">
             {f.label}
           </text>
@@ -1570,6 +1590,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             <PlantGlyph species={plantSpecies(f)} w={f.widthMm} d={f.depthMm} id={`q-${f.id}`} color={f.style?.fill} opacity={f.style?.fillOpacity} />
           ) : f.kind === "seating" ? (
             <SeatingGlyph spec={seatingOf(f)} tone={f.style?.fill} ink={MUTED} />
+          ) : f.kind === "pergola" ? (
+            <PergolaGlyph footprint={featureFootprint(f)} pergola={pergolaOf(f)} stroke={INK_SOFT} strokeWidth={style.strokeWidth} postFill={f.style?.fill ?? DEFAULT_TONE.pergola} />
           ) : f.kind === "column" ? (
             <ColumnGlyph f={f} fill={style.fill} fillOpacity={style.fillOpacity} stroke={style.stroke} strokeWidth={style.strokeWidth} />
           ) : f.kind === "fountain" ? (
@@ -1599,7 +1621,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
         </g>
       </g>
       {/* Upright, outside the turn — a name drawn at the feature's angle reads as a mark. */}
-      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && f.label && (
+      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && f.label && (
         <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
           {f.label}
         </text>

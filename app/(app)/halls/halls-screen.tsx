@@ -126,6 +126,7 @@ import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
 import { PergolaGlyph } from "@/components/pergola-glyph";
 import { pergolaOf } from "@/lib/venues/pergola";
+import { roofHeightAt } from "@/lib/venues/roofs";
 import { defineColumns } from "@/lib/venues/column";
 import { curtainEndPatch, newCurtain, newRailCurtain, syncCurtains } from "@/lib/venues/curtain";
 import { defaultRailHeight, nearestSideRail, sideCandidates } from "@/lib/studio/rail";
@@ -1645,7 +1646,9 @@ export function HallsScreen() {
    *  2026-11-07 §6.2 — 2.4 m under open sky; the bar types another). */
   const finishRod = (points: Point[]) => {
     setRodFrom(null);
-    const made = newRailCurtain(structure, { type: "rod", points, heightMm: defaultRailHeight(points[0]) });
+    // Under a roof the rod starts at it — a zone's ceiling, a building's, the pergola it stands
+    // under (lib/venues/roofs.ts); under open sky, the rod's 2.4 m.
+    const made = newRailCurtain(structure, { type: "rod", points, heightMm: defaultRailHeight(points[0], roofHeightAt(structure, resolved)) });
     if (!made) return;
     const { structure: next, featureId } = addFeature(structure, made);
     editStructure(() => next);

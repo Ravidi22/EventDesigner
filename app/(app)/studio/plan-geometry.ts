@@ -17,6 +17,7 @@ import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { obstacleFootprint } from "@/lib/venues/rim";
+import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostsInRoom } from "@/lib/venues/pergola";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
 import { bandPolygon, footprintPolygons, polysBox, type CentredBox, type ClearanceSubject, type Poly } from "@/lib/studio/proximity";
@@ -241,6 +242,13 @@ export function clearanceSubjects(
       continue;
     }
     if (p.layer !== "floor" || r?.sizing === "stretch" || !visible.floor) continue;
+    // A PERGOLA is a roof (lib/venues/pergola.ts): tables are set UNDER it, so its posts are the only
+    // thing of it in anyone's way — never the floor its footprint covers.
+    if (r && isPergolaRow(r.product)) {
+      const g = pergolaGeometry(placementFootprint(p), pergolaOfProduct(r.product));
+      if (g) out.push({ key: `placement:${p.id}`, polys: pergolaPostsInRoom(g, p.position, p.rotation || 0, !!p.mirrored, p.scale || 1), clearanceMm: r.product.clearanceMm ?? 0, groupId: p.groupId, label: r.product.name });
+      continue;
+    }
     add({ kind: "placement", id: p.id });
   }
   // The venue's own furniture asks for nothing, but a table that asked for aisle room is as much in
@@ -248,6 +256,13 @@ export function clearanceSubjects(
   // Not the ground: a table is SET on a lawn, and one standing near a lawn's edge (or across it) was
   // reported as too close to it, as though the grass were a wall.
   // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain") add({ kind: "feature", id: f.id });
+  // A venue's pergola, as a hired one: its posts alone.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola") add({ kind: "feature", id: f.id });
+  if (visible.floor)
+    for (const f of structure.features) {
+      if (f.kind !== "pergola") continue;
+      const g = pergolaGeometry(featureFootprint(f), pergolaOf(f));
+      if (g) out.push({ key: `feature:${f.id}`, polys: pergolaPostsInRoom(g, { x: f.x, y: f.y }, f.rotationDeg ?? 0), clearanceMm: 0, label: f.label });
+    }
   return out;
 }

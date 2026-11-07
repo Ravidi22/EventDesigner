@@ -124,9 +124,9 @@ export const SMOOTH_TURN_DEG = 3;
 /** The narrowest canopy spacing honoured — a typo of "1" must not cut ten thousand runs. */
 const MIN_SPACING_MM = 100;
 
-/** The height a NEW rod or run starts at, at the point it starts from. The one hook the roofs of the
- *  next round (spec §5.3: a pergola is a roof — "the roof at the first point") plug into: point it at
- *  `roofAt` then. Today there is nothing overhead to read, so it is the open-sky default. */
+/** The height a NEW rod or run starts at, at the point it starts from: what is overhead there (spec
+ *  §5.3 — a zone's ceiling, a building, a pergola: lib/venues/roofs.ts `roofHeightAt`, which every
+ *  caller hands in), else the open-sky default. */
 export function defaultRailHeight(point: Point, roofAt?: (p: Point) => number | null): number {
   const roof = roofAt?.(point);
   return roof && roof > 0 ? roof : ROD_HEIGHT_MM;
@@ -367,8 +367,8 @@ export function placementHost(p: Placement, product: Product | undefined): RailH
 }
 
 /** The feature kinds a curtain may hang on the side of (spec §6.1): a structure (a building), a
- *  stage, a bar, an "other" — never a column (a post, not a side). A pergola joins them the day it is
- *  a kind (wave 2). */
+ *  stage, a bar, an "other" — never a column (a post, not a side) — and a pergola (lib/venues/
+ *  pergola.ts), whose sides are its beams. */
 export const SIDE_HOST_KINDS: readonly string[] = ["structure", "stage", "bar", "other", "pergola"];
 /** …and the catalog categories a sketch item offers its side from. */
 export const SIDE_HOST_CATEGORIES: readonly string[] = ["stages", "stage-backdrops", "bars", "other", "pergolas"];
@@ -891,6 +891,22 @@ if (isMain(import.meta.url)) {
   assert(onStage?.type === "lines" && near(onStage.lengthMm, 4000) && onStage.lines[0].topMm === 1200, "a side rail on a sketch stage reads its outline, turned, at its height");
   assert(near(onStage.lines[0].path[0].x, 1000) && near(onStage.lines[0].path[0].y, -2000), "…turned with the stage (its front edge now stands at x = +1 m)");
   assert(resolveRail({ type: "side", featureId: "b", side: 0, from: 0, to: 1, out: 1 }, sketchCtx)?.type === "lines", "…and a venue feature through the same lookup");
+
+  // A PERGOLA (lib/venues/pergola.ts, 2026-11-07) offers its sides — the venue's own, and a hired one
+  // in a sketch at the size it was laid to — each from its own height.
+  const pergolaVenue: VenueStructure = {
+    ...structure,
+    features: [{ id: "pg", kind: "pergola", label: "פרגולה", x: 20000, y: 3000, widthMm: 4000, depthMm: 3000, heightMm: 2600, shape: "rect", rotationDeg: 0, pergola: { postMm: 150, roof: "slats" } }],
+  };
+  assert(sideCandidates(pergolaVenue.features).map((c) => c.id).join(",") === "pg", "a venue's pergola offers its sides");
+  const onPergola = asLines(resolveRail({ type: "side", featureId: "pg", side: 2, from: 0, to: 1, out: 1 }, { structure: pergolaVenue }), "pergola side");
+  assert(near(onPergola.lengthMm, 4000) && onPergola.lines[0].topMm === 2600, "…a curtain on its front runs its 4 m from its 2.6 m top");
+  const hiredRow: Product = { id: "hp", name: "פרגולה 4×4", category: "pergolas", layer: "floor", dimensions: { widthMm: 4000, depthMm: 4000, heightMm: 2800 }, categoryFields: {}, styleTags: [], variants: [] };
+  const hiredPl: Placement = { id: "hpl", variantId: "hp", layer: "floor", quantity: 1, position: { x: 0, y: 12000 }, rotation: 0, scale: 1, sizeMm: { widthMm: 6000, depthMm: 3000 } };
+  const hiredOf = (v: string) => (v === "hp" ? hiredRow : undefined);
+  assert(sideCandidates([], { placements: [hiredPl] }, hiredOf).map((c) => c.id).join(",") === "hpl", "a hired pergola in a sketch offers its sides");
+  const onHired = asLines(resolveRail({ type: "side", featureId: "hpl", side: 0, from: 0, to: 1, out: 1 }, sketchRailContext({ placements: [hiredPl] }, structure, structure, hiredOf)), "hired pergola side");
+  assert(near(onHired.lengthMm, 6000) && onHired.lines[0].topMm === 2800, "…laid 6 × 3, a curtain on its long side runs 6 m from its row's 2.8 m");
 
   // ROD — a ר: a 3 m run, a bend, and a 4 m arm with no post under its end (held to 3 m).
   const rod: RodRail = { type: "rod", points: [{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 4000 }], heightMm: 2400, cantilever: "end" };
