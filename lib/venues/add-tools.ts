@@ -77,6 +77,11 @@ const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   { id: "curtain", label: FEATURE_KIND_LABEL.curtain, kind: "curtain" },
   // …or on a free-standing rod (spec 2026-11-07 §6.2): a click for every post, Enter to end.
   { id: "curtain-rod", label: "וילון על מוט", kind: "curtain" },
+  // The venue's own LED (spec 2026-11-07 §7.3, ./led.ts): a strip along the nearest wall or side of a
+  // thing with height at a click, or between two points drawn; and a screen.
+  { id: "led", label: FEATURE_KIND_LABEL.led, kind: "led" },
+  { id: "led-run", label: "פס לד חופשי", kind: "led" },
+  { id: "screen", label: FEATURE_KIND_LABEL.screen, kind: "screen" },
   // Where the floor changes height — beside the door, because that is where they usually are.
   { id: "stairs", label: FEATURE_KIND_LABEL.stairs, kind: "stairs" },
   { id: "ramp", label: FEATURE_KIND_LABEL.ramp, kind: "ramp" },
@@ -175,7 +180,8 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 14 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the fourteen plain things — door, window, curtain, a curtain on a rod, stairs, ramp, fountain, structure, column, pergola, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
+  assert(empty.length === 17 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the seventeen plain things — door, window, curtain, a curtain on a rod, an LED strip on a wall or a side, a free one, an LED screen, stairs, ramp, fountain, structure, column, pergola, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
+  assert(findAddTool(empty, "led")?.kind === "led" && findAddTool(empty, "led-run")?.kind === "led" && findAddTool(empty, "screen")?.kind === "screen", "the venue's LED strip (on a wall or a side, or drawn free) and its screen");
   assert(findAddTool(empty, "pergola")?.kind === "pergola" && findAddTool(empty, "pergola")?.section === "structure", "a pergola is a structure of its own kind, with no row behind it");
   const pools = empty.filter((t) => t.section === "pool");
   assert(pools.map((t) => t.pool).join() === "rect,ellipse,kidney,L,free" && pools.every((t) => t.kind === "pool"), "the pools come shape first: מלבן · אליפסה · כליה · ר · חופשי");

@@ -9,6 +9,11 @@ import type { BodyNode, Mood } from "@/lib/scene/types";
 /** How much of an emitter's halo shows: nothing by day, most of it in the evening, all at night. */
 export const HALO_BY_MOOD: Record<Mood, number> = { day: 0, evening: 0.6, night: 1 };
 
+/** How strongly an LED face (a strip, a screen — MaterialKind `glow`) shines: faint by day, when an
+ *  LED barely reads against the sun; most of it in the evening; full at night. Written as a uniform,
+ *  never a light — the pool's size never changes (spec 2026-11-07 §7). */
+export const GLOW_BY_MOOD: Record<Mood, number> = { day: 0.35, evening: 1.3, night: 2 };
+
 /** How much of an emitter's real light shows (spec §4: evening at half). */
 export const LIGHT_BY_MOOD: Record<Mood, number> = { day: 0, evening: 0.5, night: 1 };
 

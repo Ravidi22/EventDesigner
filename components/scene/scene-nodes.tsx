@@ -31,6 +31,7 @@ import { fromWorld, toWorld, worldRotationY } from "@/lib/scene/frame";
 import type { BodyNode, EmitterNode, LabelNode, Mood, NodeType, Scene, Transform } from "@/lib/scene/types";
 import { GeometryCache, geometrySignature } from "./scene-geometry";
 import { MaterialCache } from "./scene-materials";
+import { GLOW_BY_MOOD } from "./scene-rules";
 import { HALO_BY_MOOD, floorRank, hasFarBox, lodMatters, lodVisibility, renderOrderOf } from "./scene-rules";
 import { useCameraSettle } from "./scene-settle";
 
@@ -361,6 +362,11 @@ export function SceneNodes({ scene, mood, author, lodScale = 1 }: { scene: Scene
   useEffect(() => {
     invalidate();
   }, [mood, author, invalidate]);
+  // Every LED face shines by the mood (lib/scene/led.ts): a uniform written in place before the frame,
+  // and again whenever a new body may have made a glow material — never a light, never a recompile.
+  useLayoutEffect(() => {
+    if (caches.material.setGlow(GLOW_BY_MOOD[mood])) invalidate();
+  }, [mood, bodies, caches, invalidate]);
 
   // The bodies register in their own layout effects, which run before this one: a new scene is
   // evaluated against the camera where it stands before its first frame.

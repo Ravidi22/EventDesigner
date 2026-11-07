@@ -41,6 +41,12 @@ export type SymbolKind =
   | "bench"
   | "lamp"
   | "gate"
+  /** An LED strip (spec 2026-11-07 §7.1) — a line of light: the card's and the drag image's short
+   *  glowing line. On the plan a strip is drawn along its RAIL (components/led-glyph.tsx), not in a
+   *  footprint. */
+  | "led"
+  /** An LED screen (§7.2) — a thick dark bar with a fine pixel grid, its front (+y) marked. */
+  | "screen"
   | "pergola"
   /** A curtain's cloth — never a picture of its own (a drape is drawn along its rail, not in a
    *  footprint, so no category maps here); the key its versions (SYMBOL_STYLES.curtain) hang on. */
@@ -84,6 +90,9 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   // A banquette standing on its own (lib/design-document/bench.ts): its top, the chairs along a
   // chairs side, the cushions of a sofa side. A stage's edge banquette is drawn by the stage itself.
   "stage-benches": "bench",
+  // A line of light, and the panel that lights (spec 2026-11-07 §7).
+  "led-strips": "led",
+  "led-screens": "screen",
   // Cloth in the air (spec 2026-11-07 §6.3/§6.4): its card and its drag image.
   sails: "sail",
   "ceiling-drapes": "ceiling-drape",

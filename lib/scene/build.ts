@@ -30,6 +30,9 @@ import { isRailed, offsetPath, railLines, railOf, sketchRailContext } from "@/li
 import type { Placement } from "@/lib/design-document/types";
 import type { Point } from "@/lib/studio/hall";
 import { SceneCollector } from "./collect";
+import { LED_COLOUR, isLedStrip, ledColour, ledLines, ledRail } from "@/lib/venues/led";
+import type { RailLine } from "@/lib/studio/rail";
+import { SCREEN_FRAME, ledStripBody, screenBody, stripBaseMm } from "./led";
 import { envelopeNodes } from "./envelope";
 import { elevationOf, RUG_MM, type Elevation } from "./elevation";
 import { roomTransform } from "./frame";
@@ -61,6 +64,11 @@ export function buildScene(input: SceneInput): Scene {
     else if (f.kind === "curtain") venueCurtain(input, out, f);
     else venueClimb(input, out, f);
   }
+  // The venue's own LED (spec 2026-11-07 §7.3): a strip along its rail, a screen on what is under it.
+  for (const f of input.structure.features) {
+    if (f.kind === "led") venueLed(input, out, f);
+    else if (f.kind === "screen") venueScreen(out, f, elevation);
+  }
   // What a hanging thing hangs from (lib/venues/roofs.ts): the roofed zone it is in, else the
   // building, else the venue's pergola, else a hired one in this sketch — never "the tallest ceiling
   // anywhere on the plan", which gave a chandelier on the open terrace a chain to the hall's roof.
@@ -72,6 +80,11 @@ export function buildScene(input: SceneInput): Scene {
   });
   for (const p of input.doc.placements) {
     if (p.tableId || p.layer === "table") continue; // on a table: tables.ts drew it
+    // An LED strip rides a rail as a drape does, and is built as light, not cloth (./led.ts).
+    if (isLedStrip(resolve(p.variantId)?.product)) {
+      ledStrip(input, out, p);
+      continue;
+    }
     if (isRailed(p) && ceilingCloth(input, out, p)) continue; // a sail or a ceiling drape
     if (isRailed(p)) curtain(input, out, p);
     else if (p.perch) perched(input, out, p, elevation);
@@ -260,6 +273,57 @@ function venueCurtain(input: SceneInput, out: SceneCollector, f: StructureFeatur
     const path = span.track.path(pc.t0, pc.t1, off);
     out.item(`feature:${f.id}:${i}`, tag, curtainBody(path, topMm, colour, tag, opts), transform(vec3(0, 0, 0), 0));
   });
+}
+
+/** A strip's lines in the room, each at the height its light runs (./led.ts): on a WALL a hand off the
+ *  wall's face on its side, at the rail's typed height (0 = the floor line; absent = just under the
+ *  wall's top — the room's ceiling or the wall's own typed height, as a curtain's); on a SIDE just
+ *  proud of the thing's face, just under its top (a deck's edge, a counter's); a RUN where drawn. */
+function stripLines(input: SceneInput, lines: RailLine[], wallHeightMm: number | undefined): { path: Point[]; z: number }[] {
+  return lines.map((line) => {
+    if (line.wall) {
+      const off = (WALL_THICK_MM / 2 + 6) * (line.hang || 1);
+      const path = line.wall.track.path(line.wall.t0, line.wall.t1, off);
+      if (wallHeightMm !== undefined) return { path, z: stripBaseMm(wallHeightMm, false) };
+      const { p: mid, n } = line.wall.track.at((line.wall.t0 + line.wall.t1) / 2);
+      const q = { x: mid.x + n.x * off * 2, y: mid.y + n.y * off * 2 };
+      const zone = input.plan.all.find((z) => z.boundary.length >= 3 && pointInPolygon(q, z.boundary))?.zone;
+      const top = wallCurtainTop(zone?.ceilingHeightMm, wallTypedHeight(input, line.wall.wallId)) ?? 2400;
+      return { path, z: stripBaseMm(top, true) };
+    }
+    if (line.side) return { path: line.hang ? offsetPath(line.path, 8 * line.hang) : line.path, z: stripBaseMm(line.topMm ?? 0, true) };
+    return { path: line.path, z: stripBaseMm(line.topMm ?? 0, false) };
+  });
+}
+
+/** A hired LED strip on its rail (spec §7.1), glowing in its shade. */
+function ledStrip(input: SceneInput, out: SceneCollector, p: Placement): void {
+  const rail = railOf(p);
+  if (!rail) return;
+  const lines = railLines(rail, sketchRailContext(input.doc, input.structure, input.structure, (v) => resolve(v)?.product));
+  const resolved = resolve(p.variantId);
+  const colour = hexOf(resolved?.swatch) ?? hexOf(resolved?.product.appearance?.style?.fill) ?? LED_COLOUR;
+  const tag = { type: "item" as const, id: p.id, label: resolved?.product.name };
+  stripLines(input, lines, rail.type === "wall" ? rail.heightMm : undefined).forEach((s, i) => out.item(i ? `${p.id}:${i}` : p.id, tag, ledStripBody(s.path, s.z, colour), transform(vec3(0, 0, 0), 0)));
+}
+
+/** The venue's own strip (a feature of kind `led`, lib/venues/led.ts) — the hired strip's body. */
+function venueLed(input: SceneInput, out: SceneCollector, f: StructureFeature): void {
+  const rail = ledRail(f);
+  const tag = { type: "feature" as const, id: f.id, label: f.label };
+  const colour = hexOf(ledColour(f)) ?? LED_COLOUR;
+  stripLines(input, ledLines(input.structure, f), rail?.type === "wall" ? rail.heightMm : undefined).forEach((s, i) =>
+    out.item(`feature:${f.id}:${i}`, tag, ledStripBody(s.path, s.z, colour), transform(vec3(0, 0, 0), 0)),
+  );
+}
+
+/** The venue's own screen (a feature of kind `screen`): the catalog screen's body standing on what is
+ *  under it, its front (+y) turned with it. */
+function venueScreen(out: SceneCollector, f: StructureFeature, elevation: Elevation): void {
+  const footprint: Footprint = { kind: "rect", widthMm: f.widthMm, depthMm: f.depthMm };
+  const z = elevation.floorUnder(footprintPolygons(footprint, { x: f.x, y: f.y }, f.rotationDeg ?? 0, false, 1));
+  const build = screenBody({ widthMm: f.widthMm, depthMm: f.depthMm, heightMm: f.heightMm, tone: hexOf(f.style?.fill) ?? SCREEN_FRAME });
+  out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, build, roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, z));
 }
 
 /** The venue's own flight or ramp (a feature of kind `stairs`/`ramp`): the same body a rented one

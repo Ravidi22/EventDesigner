@@ -19,6 +19,7 @@ import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { carpetPolygon, carpetShape } from "@/lib/studio/cover";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { obstacleFootprint } from "@/lib/venues/rim";
+import { isLedStrip } from "@/lib/venues/led";
 import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostsInRoom } from "@/lib/venues/pergola";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
@@ -259,6 +260,8 @@ export function clearanceSubjects(
   for (const p of doc.placements) {
     if (p.tableId) continue;
     const r = resolve(p.variantId);
+    // An LED strip is a line of light on a wall or an edge — nobody needs room from it (spec §7).
+    if (isLedStrip(r?.product)) continue;
     // A sail or a ceiling drape is over people's heads, as a chandelier is — no one's obstacle (spec §6.3).
     if (r?.anchor === "wall" && isCeilingClothCategory(r.product.category)) continue;
     if (r?.anchor === "wall") {
@@ -280,8 +283,9 @@ export function clearanceSubjects(
   // Not the ground: a table is SET on a lawn, and one standing near a lawn's edge (or across it) was
   // reported as too close to it, as though the grass were a wall.
   // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
+  // Nor the venue's LED strip, for the same reason as a hired one.
   // A venue's pergola, as a hired one: its posts alone.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola") add({ kind: "feature", id: f.id });
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led") add({ kind: "feature", id: f.id });
   if (visible.floor)
     for (const f of structure.features) {
       if (f.kind !== "pergola") continue;

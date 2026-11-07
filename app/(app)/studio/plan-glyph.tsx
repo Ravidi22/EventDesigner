@@ -98,6 +98,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
           border={symbol === "runner" ? border : undefined}
+          label={symbol === "screen" ? product.name : undefined}
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}

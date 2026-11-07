@@ -152,6 +152,18 @@ if (isMain(import.meta.url)) {
   const pergolaCloth = ofId("p-pergola-curtain")[0]?.parts.find((q) => q.shape === "ribbon");
   assert(!!pergolaCloth && pergolaCloth.shape === "ribbon" && near(pergolaCloth.h, 2600) && pergolaCloth.path.every((q) => q.y < 5600 - 1500), "a curtain on the pergola's side falls from its top, outside it");
 
+  // LED (spec 2026-11-07 §7, ./led.ts): a hired strip at the floor line of the hall's top wall, on its
+  // room face; the venue's strip along its pergola's beam, just under the top; a hired screen and the
+  // venue's — each glowing through its material alone (the emitter count below is unchanged).
+  const ledRib = ofId("p-led")[0]?.parts.find((q) => q.shape === "ribbon");
+  assert(!!ledRib && ledRib.shape === "ribbon" && ofId("p-led")[0].material.kind === "glow" && ofId("p-led")[0].material.colour === "#ffb347", "the hired strip is a glowing ribbon in its shade");
+  assert(!!ledRib && ledRib.shape === "ribbon" && ledRib.at.z < 100 && ledRib.path.every((q) => q.y > 0 && q.y < 200) && near(Math.abs(ledRib.path[ledRib.path.length - 1].x - ledRib.path[0].x), 10000), "…10 m of it at the floor line, on the hall's face of the wall");
+  const venueRib = ofId("feature:f-led:0")[0]?.parts.find((q) => q.shape === "ribbon");
+  assert(!!venueRib && venueRib.shape === "ribbon" && venueRib.at.z > 2400 && venueRib.at.z < 2600 && ofId("feature:f-led:0")[0].material.colour === "#7fd4ff", "the venue's strip runs the pergola's beam just under its 2.6 m top");
+  const screenFace = (b: BodyNode | undefined) => b?.parts.find((q) => q.material?.kind === "glow");
+  const hiredScreen = ofId("p-screen").find((b) => b.tag.type === "item");
+  assert(!!hiredScreen && hiredScreen.parts.some((q) => q.shape === "box" && q.h === 2500) && !!screenFace(hiredScreen), "the hired screen stands 2.5 m with a glowing face");
+  assert(!!screenFace(ofId("feature:f-screen")[0]), "…and so does the venue's own");
   // ── cloth in the air (2026-11-07, lib/studio/ceiling-cloth.ts) ───────────────────────────────────
   // The sail: tied twice to the north wall's line at 3.6 m, on two poles of its own at 2.8 m.
   const sailBodies = ofId("p-sail");

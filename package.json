@@ -45,6 +45,8 @@
     "check:seating": "tsx lib/venues/seating.ts",
     "check:seats": "tsx lib/studio/seating.ts",
     "check:column": "tsx lib/venues/column.ts",
+    "check:led": "tsx lib/venues/led.ts",
+    "check:scene-led": "tsx lib/scene/led.ts",
     "check:pergola": "tsx lib/venues/pergola.ts",
     "check:roofs": "tsx lib/venues/roofs.ts",
     "check:curtain": "tsx lib/venues/curtain.ts",

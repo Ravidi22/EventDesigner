@@ -7,6 +7,7 @@ import { DoubleSide, Vector3 } from "three";
 import { GeometryCache, bodyGeometry, geometrySignature, partGeometry, proxyGeometry } from "@/components/scene/scene-geometry";
 import { previewScene } from "@/components/scene/preview-scene";
 import { MaterialCache, tint } from "@/components/scene/scene-materials";
+import { GLOW_BY_MOOD } from "@/components/scene/scene-rules";
 import { CHAIR_BOX_MM, floorRank, intensityOf, lightDistanceM, lodVisibility, pickLit, polygonOffsetOf, renderOrderOf } from "@/components/scene/scene-rules";
 import { CAPABLE, MODEST, resolveDevice } from "@/components/scene/device";
 import { COMPOSED_ASPECT, fitFov,
@@ -288,6 +289,15 @@ assert(groundMat !== floorMat && floorMat !== surfaceMat, "materials: the same p
 assert(groundMat.polygonOffset && groundMat.polygonOffsetFactor === 2 && groundMat.polygonOffsetUnits === 2, "ground (rank −2): pushed back by a polygon offset of +2");
 assert(!floorMat.polygonOffset, "floor (rank 0): no offset — the reference plane");
 assert(surfaceMat.polygonOffset && surfaceMat.polygonOffsetFactor === -1, "a surface on the floor (rank 1): pulled toward the camera by −1");
+// An LED face (spec 2026-11-07 §7): emissive in its colour, brightened by the mood as a uniform.
+{
+  const led = materials.get({ colour: "#ff8800", kind: "glow" }, false);
+  assert(led.emissive.getHexString() === "ff8800" && near(led.emissiveIntensity, 1), "glow: emissive in its own colour");
+  assert(materials.setGlow(GLOW_BY_MOOD.night) && near(led.emissiveIntensity, GLOW_BY_MOOD.night) && !materials.setGlow(GLOW_BY_MOOD.night), "glow: the mood writes its strength in place, once");
+  assert(near(materials.get({ colour: "#00ff00", kind: "glow" }, false).emissiveIntensity, GLOW_BY_MOOD.night), "glow: a face made later starts at the mood's strength");
+  assert(GLOW_BY_MOOD.day < GLOW_BY_MOOD.evening && GLOW_BY_MOOD.evening < GLOW_BY_MOOD.night, "glow: faint by day, full at night");
+  materials.setGlow(1);
+}
 assert(materials.get(paving, false) === floorMat, "materials: rank 0 is the plain material");
 materials.dispose();
 

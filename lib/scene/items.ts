@@ -36,6 +36,7 @@ import { type ItemContext, fallbackBody } from "./item-context";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { floorKindBody } from "./floor-kinds";
 import { overheadKindBody } from "./overhead";
+import { screenBody } from "./led";
 
 export { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
@@ -254,6 +255,9 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
       return floorKindBody(kind, ctx);
     case "chandelier":
       return overheadKindBody(kind, ctx);
+    // An LED screen: its dark box and the face that glows (./led.ts).
+    case "screen":
+      return screenBody(ctx);
     default:
       return fallbackBody(ctx);
   }

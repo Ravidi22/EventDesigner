@@ -35,6 +35,7 @@ import { FALLBACK_CHAIR, NEW_BLOCK, chairRowsLayout } from "../design-document/c
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import type { FeatureClimb } from "./climb";
 import type { FeatureCurtain } from "./curtain";
+import type { FeatureLed } from "./led";
 import { NEW_PERGOLA, pergolaOfProduct, type Pergola } from "./pergola";
 import { isMain } from "../self-check";
 
@@ -176,10 +177,14 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 // A curtain (the user, same day: "a default וילון, like אמרה has in both halls — can be removed or
 // changed in the sketch") hangs on a WALL: its span is stored, its box derived (./curtain.ts).
 //
+// The venue's own LED (2026-11-07, spec §7.3): a strip is a line of light on a RAIL — a wall at a
+// height, a side of a stage or a bar, two points in the air — its box derived from the rail as a
+// curtain's is (./led.ts); a screen is a box, drawn as the catalog's LED screen.
+//
 // A pergola (2026-11-07, spec §5): posts at its outline's corners, beams along its sides, a roof of
 // slats, a deck, a cloth or nothing across them (./pergola.ts) — the one definition a hired pergola
 // in the catalog shares. Tables stand under it, so only its posts are in anyone's way.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola";
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola" | "led" | "screen";
 
 /** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
  *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
@@ -320,6 +325,9 @@ export interface StructureFeature {
   /** iff `kind === "curtain"`: the wall stretch it hangs on and which side (./curtain.ts). The box
    *  is derived from it and written with it; a curtain with no span keeps the box it has. */
   curtain?: FeatureCurtain;
+  /** iff `kind === "led"`: the rail the strip runs along and its colour (./led.ts). The box is
+   *  derived from the rail and written with it, as a curtain's is. */
+  led?: FeatureLed;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
   /** iff `kind` is "pool" or "surface": the band round its edge, inside its outline (./rim.ts).
@@ -352,7 +360,10 @@ export interface StructureFeature {
 export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
   // Chairs in rows too: an event sets the ceremony where its חופה is tonight. A curtain is "movable"
   // so a sketch may take it DOWN for its event (the drawing pins it to its wall either way).
-  return f.movable ?? (f.kind === "bar" || f.kind === "stage" || f.kind === "seating" || f.kind === "curtain");
+  // The venue's LED strip likewise (spec 2026-11-07 §7.3): pinned to its rail, taken down for one
+  // event. Its screen is the room's, like a column.
+  if (f.movable === undefined && f.kind === "led") return true;
+  return f.movable ??(f.kind === "bar" || f.kind === "stage" || f.kind === "seating" || f.kind === "curtain");
 }
 
 /** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
@@ -389,6 +400,8 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   seating: "שורות כיסאות",
   fountain: "מזרקה",
   curtain: "וילון",
+  led: "פס לד",
+  screen: "מסך לד",
   pergola: "פרגולה",
 };
 
@@ -853,6 +866,10 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   fountain: { widthMm: 3000, depthMm: 3000, heightMm: 1500, shape: "circle" },
   // A band along its wall (./curtain.ts re-lays it); no height of its own — it hangs from the ceiling.
   curtain: { widthMm: 4000, depthMm: 220, heightMm: 0, shape: "rect" },
+  // A strip along its rail (./led.ts re-lays it): a thin band; its height is the rail's.
+  led: { widthMm: 4000, depthMm: 60, heightMm: 0, shape: "rect" },
+  // An LED wall: 4 m wide, 10 cm deep, 2.5 m tall, its FRONT (+y) the face that lights.
+  screen: { widthMm: 4000, depthMm: 100, heightMm: 2500, shape: "rect" },
   // A 4 × 4 pergola, 2.6 m to the top of its slats (./pergola.ts).
   pergola: { widthMm: 4000, depthMm: 4000, heightMm: 2600, shape: "rect" },
 };

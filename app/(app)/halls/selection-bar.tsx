@@ -61,6 +61,8 @@ import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venue
 import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
 import { CURTAIN_FILL, curtainLengthMm, curtainLines, curtainLookPatch, curtainOf, curtainPatch, curtainRail, curtainRailPatch } from "@/lib/venues/curtain";
 import { CANTILEVER_MAX_MM, type RailLine } from "@/lib/studio/rail";
+import { ledLengthMm } from "@/lib/venues/led";
+import { VenueLedPopover } from "./led-panel";
 import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { wallTrack } from "@/lib/studio/anchor";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, type ChairStyle } from "@/lib/catalog/symbols";
@@ -884,6 +886,9 @@ export function SelectionBar({
   // curtain is `isCurtain`; `curtain` is the wall reading alone.
   const isCurtain = feature.kind === "curtain";
   const curtainLine = isCurtain && !curtain ? curtainLines(structure, feature)[0] : undefined;
+  // The venue's LED strip (lib/venues/led.ts): a line of light on a rail — no shape, size, turn or
+  // look of its own; its colour, stretch and height are its panel's (./led-panel.tsx).
+  const isLed = feature.kind === "led";
   // Measured ALONG the wall — round the bow of a curved one (lib/studio/anchor.ts WallTrack).
   const curtainWall = curtain ? wallTrack(structure, curtain.wallId) : null;
   // A column: its plinth is the size; its shaft and base are its own panel (lib/venues/column.ts).
@@ -898,6 +903,8 @@ export function SelectionBar({
       ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ לאורך ה${curtainWall?.curved ? "קיר המעוגל" : "קיר"}${curtainWall ? ` (${(curtainWall.lengthMm / 1000).toFixed(2)} מ׳)` : ""}`
     : isCurtain
       ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ ${curtainLine?.side ? "לאורך הצד" : "על המוט"}`
+    : isLed
+      ? `${(ledLengthMm(structure, feature) / 1000).toFixed(2)} מ׳`
     : seating
       ? `${seatingCount(feature)} כיסאות · ${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`
       : feature.shape === "circle"
@@ -1030,7 +1037,7 @@ export function SelectionBar({
               {feature.style?.fill && <Note>החלפת החומר מחזירה את הצבע שלו — הגוון שנבחר לחומר הקודם יורד.</Note>}
             </Popover>
           )}
-          {!bound && !isCurtain && (
+          {!bound && !isCurtain && !isLed && (
             <Popover label="צורה" icon={Shapes} value={SHAPE_LABEL[feature.shape]}>
               <PanelRow label="צורה" stack>
                 <Select
@@ -1084,6 +1091,8 @@ export function SelectionBar({
             </>
           );
         })()
+      ) : isLed ? (
+        <VenueLedPopover feature={feature} structure={structure} apply={apply} />
       ) : isCurtain ? (
         <Popover label="קטע" icon={FEATURE_ICON.curtain} value={size} panelClassName="w-80">
           {curtain && curtainWall ? (
@@ -1252,7 +1261,7 @@ export function SelectionBar({
           );
         })()}
 
-      {!climb && !bound && !isCurtain && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
+      {!climb && !bound && !isCurtain && !isLed && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
 
       {/* THE EDGES — the sketch's own panel: what stands on them, what is still bare (and one
           click to finish it), and adding one more, which is then clicked onto a side; each one is
@@ -1329,7 +1338,7 @@ export function SelectionBar({
           );
         })()}
 
-      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || isCurtain)}
+      {!isLed && styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || isCurtain)}
 
       {/* A surface that fills a closed shape follows its walls; cut loose, it is a free surface of
           the same outline. A free one is reshaped point by point, as a freehand zone is. */}
