@@ -8,7 +8,7 @@
 // on a banquette shares its geometry with the chairs round the tables, a vase on a banquette stands
 // on its top, a chandelier hangs where its row says.
 import { isMain } from "../self-check";
-import { buildScene } from "./build";
+import { buildScene, wallCurtainTop } from "./build";
 import { fixtureInput, SECRET_PRICE } from "./fixture";
 import { DOOR_HEIGHT_MM, KERB_MM, type BodyNode } from "./types";
 
@@ -111,6 +111,19 @@ if (isMain(import.meta.url)) {
   const ribbon = curtain.parts.find((q) => q.shape === "ribbon");
   assert(!!ribbon && near((ribbon as { h: number }).h, 4000), "the curtain falls the hall's full 4 m along its wall");
   assert(ribbon!.shape === "ribbon" && ribbon!.path.every((q) => q.x > 100), "…hung on the room's side of the wall, not inside it");
+  // 2026-11-07: a wall with a typed height lower than the room's ceiling caps the curtain on it.
+  const lowWall = fixtureInput(true);
+  const capped = buildScene({ ...lowWall, structure: { ...lowWall.structure, walls: lowWall.structure.walls.map((w) => (w.id === "w-left" ? { ...w, heightMm: 3200 } : w)) } });
+  const cappedRibbon = capped.nodes.filter((n): n is BodyNode => n.kind === "body" && n.tag.id === "p-curtain").flatMap((b) => b.parts).find((q) => q.shape === "ribbon");
+  assert(!!cappedRibbon && near((cappedRibbon as { h: number }).h, 3200), "a curtain hangs from the lower of the ceiling and its wall's own height");
+  assert(wallCurtainTop(4000, 3200) === 3200 && wallCurtainTop(0, 2800) === 2800 && wallCurtainTop(4000, undefined) === 4000 && wallCurtainTop(0, undefined) === undefined, "…the lower of the two; open sky and no height leaves it to the row");
+  // A curtain on a ROD (lib/studio/rail.ts): under the rod at its 2.4 m, a post at its start and its
+  // bend, none under the ר's arm.
+  const rodCurtain = ofId("p-rod-curtain")[0];
+  const rodCloth = rodCurtain?.parts.find((q) => q.shape === "ribbon");
+  assert(!!rodCloth && near((rodCloth as { h: number }).h, 2400), "a rod's curtain falls from the rod's 2.4 m");
+  const rodPosts = rodCurtain.parts.filter((q) => q.shape === "box");
+  assert(rodPosts.length === 2 && !rodPosts.some((q) => near(q.at.y, 9500)), `two posts, none under the cantilevered arm (got ${rodPosts.length})`);
 
   // ── what glows ────────────────────────────────────────────────────────────────────────────────
   const emitters = scene.nodes.filter((n) => n.kind === "emitter");

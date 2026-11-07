@@ -204,6 +204,8 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-chuppah", variantId: "v-chuppah-cream", layer: "floor", quantity: 1, position: { x: 25000, y: 6000 }, rotation: 0, scale: 1 },
     { id: "p-chandelier", variantId: "v-chand-gold", layer: "ceiling", quantity: 1, position: { x: 5000, y: 5000 }, rotation: 0, scale: 1, over: "t1" },
     { id: "p-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, span: { wallId: "w-left", from: 0.2, to: 0.6 } },
+    // 2026-11-07: a curtain on a free-standing ROD on the terrace — a ר, its arm out past its last post.
+    { id: "p-rod-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "rod", points: [{ x: 21000, y: 8000 }, { x: 24000, y: 8000 }, { x: 24000, y: 9500 }], heightMm: 2400, cantilever: "end" } },
   ],
   groups: [{ id: "g1", number: 2 }],
 };
