@@ -21,6 +21,8 @@ import { VesselMark } from "@/components/vessel-mark";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { borderOf } from "@/lib/catalog/border";
 import { isLedStrip } from "@/lib/venues/led";
+import { isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
+import { CeilingDrapeSymbol, SailSymbol } from "@/components/ceiling-cloth";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
@@ -34,6 +36,17 @@ export function AppearancePreview({ product, className }: { product: Product; cl
     return (
       <svg viewBox="-1400 -700 2800 1400" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
         <ItemSymbol kind="led" footprint={{ kind: "rect", widthMm: 2600, depthMm: 500 }} count={1} tone={swatch ?? product.appearance?.style?.fill} />
+      </svg>
+    );
+  }
+
+  // Nor has a sail or a ceiling drape: each is drawn to the points it is tied to (lib/studio/
+  // ceiling-cloth.ts), so it previews as one of itself — a sail on four ties, a scalloped swag.
+  if (isCeilingClothCategory(product.category)) {
+    const colour = swatch ?? product.appearance?.style?.fill ?? (product.category === "sails" ? "#F4F1EA" : "#F3EDE2");
+    return (
+      <svg viewBox="-2300 -1500 4600 3000" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
+        {product.category === "sails" ? <SailSymbol w={4000} h={2600} tone={colour} ink="currentColor" /> : <CeilingDrapeSymbol L={4200} D={1400} tone={colour} ink="currentColor" />}
       </svg>
     );
   }

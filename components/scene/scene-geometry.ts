@@ -271,6 +271,41 @@ function pleated(path: Point[], pleatMm: number, amplitudeMm: number): Point[] {
 
 /** A vertical strip along the path, both faces (a skirt is seen from outside, a curtain from
  *  inside, and the builder's path runs whichever way the edge does). UV: u metres along, v up. */
+/** A cloth in the air (Part "sheet" — a sail, a swag): its grid as given, plan mm into three metres,
+ *  stitched into quads and smooth-shaded — and stitched AGAIN with the winding reversed over its own
+ *  copy of the points, so it is lit from below as well as above whatever the material's side. */
+function sheetGeometry(rows: Vec3[][]): BufferGeometry {
+  const R = rows.length;
+  const C = R ? rows[0].length : 0;
+  const g = new BufferGeometry();
+  if (R < 2 || C < 2 || rows.some((r) => r.length !== C)) return g;
+  const pos: number[] = [];
+  const uv: number[] = [];
+  for (let face = 0; face < 2; face++)
+    for (const row of rows)
+      for (const q of row) {
+        pos.push(m(q.x), m(q.z), m(q.y));
+        uv.push(m(q.x), m(q.y));
+      }
+  const idx: number[] = [];
+  const N = R * C;
+  for (let j = 0; j < R - 1; j++) {
+    for (let i = 0; i < C - 1; i++) {
+      const a = j * C + i;
+      const b = a + 1;
+      const c = a + C;
+      const d = c + 1;
+      idx.push(a, c, b, b, c, d);
+      idx.push(N + a, N + b, N + c, N + b, N + d, N + c);
+    }
+  }
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 function ribbonGeometry(path: Point[], h: number, pleatMm: number | undefined, amplitudeMm: number | undefined): BufferGeometry {
   const pts = pleated(path, pleatMm ?? 0, amplitudeMm ?? DEFAULT_AMPLITUDE_MM);
   const H = m(h);
@@ -600,6 +635,8 @@ export function partGeometry(part: Part): BufferGeometry {
       return planeGeometry(part.outline, part.side ?? "up", part.holes);
     case "ribbon":
       return ribbonGeometry(part.path, part.h, part.pleatMm, part.amplitudeMm);
+    case "sheet":
+      return sheetGeometry(part.rows);
   }
 }
 
@@ -835,6 +872,13 @@ export function geometrySignature(body: BodyNode): string {
         num(p.band ? p.band[1] : -1);
         num(p.outline.length);
         for (const q of p.outline) pt(q);
+        break;
+      case "sheet":
+        num(p.rows.length);
+        for (const row of p.rows) {
+          num(row.length);
+          for (const q of row) v3(q);
+        }
         break;
     }
   }

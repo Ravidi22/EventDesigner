@@ -14,6 +14,7 @@ import type { DesignDocumentContent, Placement } from "./types";
 import { edgeItemShape, edgeKind, skirtMm, stageAreaMm2, stageCorners, stageDeckCounts, type DeckLookup, type StagePlacement, type WallDistance } from "./stage";
 import { standaloneBench, type BenchLookup } from "./bench";
 import { railLengthMm, railOf, rodPath } from "../studio/rail";
+import { clothAreaMm2 } from "../studio/ceiling-cloth";
 import { carpetAreaMm2 } from "../studio/cover";
 import { isMain } from "../self-check";
 
@@ -59,6 +60,10 @@ export interface MeasureContext {
    *  spec 2026-11-07 §6.2, as a stage's skirt is billed off the stage). Absent / undefined = the studio
    *  has no rod row, and the drape's quote line says it is partial. */
   rodOf?: () => string | undefined;
+  /** The CLOTH a sail or a ceiling drape is, mm² (lib/studio/ceiling-cloth.ts clothAreaMm2), read
+   *  against the room — a sail tied to a wall or a thing where it now stands. Absent / undefined = off
+   *  its own points as placed. What a row priced per m² bills (spec 2026-11-07 §6.3). */
+  railAreaMm2?: (p: Placement) => number | undefined;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -108,6 +113,11 @@ export function measure(p: Placement, ctx: MeasureContext): number {
     // No span and no size to fall back on: count it, rather than quietly bill zero metres.
     return mm ? round2((mm / 1000) * p.quantity) : p.quantity;
   }
+  // A sail (its polygon) or a ceiling drape (its runs × its width) — lib/studio/ceiling-cloth.ts —
+  // billed by the cloth it is, read against the room when the caller can, else off its own points.
+  const clothRail = railOf(p);
+  const cloth = clothRail ? (ctx.railAreaMm2?.(p) ?? clothAreaMm2(clothRail)) : undefined;
+  if (cloth !== undefined) return round2((cloth / 1e6) * p.quantity);
   // A carpet laid to an outline (over a surface or a stage — lib/studio/cover.ts) is billed by the
   // floor it covers, curves and holes and all, not by the box round it.
   const outlined = carpetAreaMm2(p);
@@ -270,6 +280,14 @@ if (isMain(import.meta.url)) {
   assert(measure(onRod, { ...railCtx, railLengthMm: undefined }) === 6, "a rod is its own points — measured with no plan at all");
   const onSide = { ...base, id: "side", variantId: "drape", quantity: 1, rail: { type: "side" as const, featureId: "bar", side: 0, from: 0, to: 1, out: 1 as const } };
   assert(measure(onSide, { ...railCtx, railLengthMm: () => 2500 }) === 2.5 && measure(onSide, { ...railCtx, railLengthMm: undefined }) === 3, "a side rail reads its side through the plan, or falls back to its catalog width");
+  // SAILS and CEILING DRAPES (lib/studio/ceiling-cloth.ts): a sail per m² of its polygon, a drape per
+  // metre of its runs — or per m² of its cloth, its runs × its width.
+  const clothCtx: MeasureContext = { unitOf: (v) => (v === "sail" ? "m2" : v === "drape-m2" ? "m2" : v === "swag" ? "m" : "unit") };
+  const sail = { ...base, id: "sail", variantId: "sail", quantity: 1, rail: { type: "sail" as const, ties: [{ p: { x: 0, y: 0 }, heightMm: 3000 }, { p: { x: 4000, y: 0 }, heightMm: 3000 }, { p: { x: 4000, y: 3000 }, heightMm: 3000 }, { p: { x: 0, y: 3000 }, heightMm: 3000 }] } };
+  assert(measure(sail, clothCtx) === 12 && measure(sail, { ...clothCtx, railAreaMm2: () => 10_500_000 }) === 10.5, "a sail bills its polygon's m² — off its points, or as it hangs in the room");
+  assert(measure({ ...sail, variantId: "unit-sail" }, clothCtx) === 1, "…and one sail when its row is per unit");
+  const canopy = { ...base, id: "canopy", variantId: "swag", quantity: 1, rail: { type: "canopy" as const, outline: [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 4000 }, { x: 0, y: 4000 }], heightMm: 3500, directionDeg: 0, spacingMm: 1000 } };
+  assert(measure(canopy, clothCtx) === 24 && measure({ ...canopy, variantId: "drape-m2" }, clothCtx) === 28.8, "a canopy of four 6 m runs is 24 m of drape — 28.8 m² of 1.2 m cloth");
 
   // Tables off the rail are counted; a table placed before tables came out of the catalog carries
   // no row and cannot be, which is what keeps every document drawn until now totalling as it did.

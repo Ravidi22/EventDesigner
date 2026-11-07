@@ -51,6 +51,7 @@
     "check:roofs": "tsx lib/venues/roofs.ts",
     "check:curtain": "tsx lib/venues/curtain.ts",
     "check:rail": "tsx lib/studio/rail.ts",
+    "check:ceiling-cloth": "tsx lib/studio/ceiling-cloth.ts",
     "check:groups": "tsx lib/design-document/groups.ts",
     "check:block": "tsx lib/design-document/block.ts",
     "check:features": "tsx lib/design-document/features.ts",

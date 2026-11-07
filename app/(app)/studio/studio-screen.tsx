@@ -27,6 +27,7 @@ import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import { curtainRail } from "@/lib/venues/curtain";
 import { isLedStrip, ledDropRail, ledRunRail, ledSideCandidates } from "@/lib/venues/led";
 import { defaultRailHeight, isRailed, nearestSideRail, railOf, sideCandidates, type Rail } from "@/lib/studio/rail";
+import { defaultClothHeight, isCeilingClothCategory, newCanopy, newRun, newSail, redrawnCloth, SAIL_MAX_TIES, snapTie, tieCandidates } from "@/lib/studio/ceiling-cloth";
 import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
@@ -384,6 +385,10 @@ export function StudioScreen({
   // "וילון על מוט": the drape whose free-standing rod is being drawn on the canvas, post by post
   // (components/rod-draw-pane.tsx) — null when no rod is being drawn.
   const [rodDraw, setRodDraw] = useState<string | null>(null);
+  // A sail's ties, a ceiling drape's run or a canopy's area being drawn (lib/studio/ceiling-cloth.ts):
+  // for a NEW placement of `productId`, dropped at `start`, or redrawing `placementId`. `id` re-mounts
+  // the pane for each drawing.
+  const [clothDraw, setClothDraw] = useState<{ id: number; kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point } | null>(null);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -646,6 +651,53 @@ export function StudioScreen({
    *  zone on the property, and the pergolas hired into this drawing. */
   const sketchRoofOf = () => roofHeightAt(arrangedStructure(plan.structure, doc), plan.all, sketchPergolas(doc.placements, (v) => resolve(v)?.product));
 
+  /** Begin drawing cloth in the air on the canvas (lib/studio/ceiling-cloth.ts): a new sail or drape
+   *  dropped off the rail (its drop is the first point), or a placed one drawn again from its bar.
+   *  Nothing is added until the drawing ends — one entry, and Escape leaves the plan untouched. */
+  const startClothDraw = (draw: { kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point }) => {
+    // The armed row lets go (the pane takes every click from here), and so does a rod being drawn.
+    setArmedId(null);
+    setRodDraw(null);
+    setClothDraw({ ...draw, id: Date.now() });
+    showHint(
+      draw.kind === "sail"
+        ? "לחיצה לכל קשירה — ליד קיר או פינה של מבנה היא נקשרת אליהם, אחרת עמוד · לחיצה על הראשונה, Enter או הרביעית לסיום · Alt — עמוד · Esc לביטול"
+        : draw.kind === "run"
+          ? "לחיצה לקצה השני של הבד · Esc לביטול"
+          : "לחיצה לכל פינה של השטח · לחיצה על הראשונה או Enter לסגירה · Esc לביטול",
+    );
+  };
+  /** The drawing ended: the new sail or drape placed on its rail, or the redrawn one's rail replaced
+   *  — keeping what was typed for it (heights, width, sag, scallops). */
+  const finishClothDraw = (points: Point[]) => {
+    const draw = clothDraw;
+    setClothDraw(null);
+    if (!draw || points.length < 2) return;
+    const roof = sketchRoofOf();
+    const was = draw.placementId ? doc.placements.find((x) => x.id === draw.placementId) : undefined;
+    let rail: Rail;
+    if (draw.kind === "sail") {
+      // The pane put every point where its tie lands (a wall, a thing's corner, a post); read each
+      // tie back off its point against the same walls and things.
+      const tctx = { structure: plan.structure, candidates: tieCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product) };
+      rail = newSail(points.slice(0, SAIL_MAX_TIES).map((q) => snapTie(q, tctx, 3)), (q) => defaultClothHeight(q, roof));
+    } else if (draw.kind === "run") rail = newRun(points[0], points[1], defaultClothHeight(points[0], roof));
+    else rail = newCanopy(points, defaultClothHeight(points[0], roof));
+    const prior = was ? railOf(was) : null;
+    if (prior) rail = redrawnCloth(prior, rail);
+    if (was) {
+      act({ type: "setPlacementRail", id: was.id, rail });
+      setSelected([{ kind: "placement", id: was.id }]);
+      return;
+    }
+    const product = draw.productId ? productById(draw.productId) : undefined;
+    if (!product) return;
+    const id = uid();
+    const at = { x: Math.round(points.reduce((n, q) => n + q.x, 0) / points.length), y: Math.round(points.reduce((n, q) => n + q.y, 0) / points.length) };
+    act({ type: "addPlacement", placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: at, rail } });
+    setSelected([{ kind: "placement", id }]);
+  };
+
   // F-3.3: auto-running table numbering, editable per table. Off the numbers the plan SHOWS — a
   // block's own number, not the hidden ones of its members, and no unnumbered table (groups.ts).
   // Past every number a table or a seated banquette shows, and every number a banquette holds.
@@ -810,6 +862,13 @@ export function StudioScreen({
       });
       landNew([{ kind: "table", id }]);
       setSelected([{ kind: "table", id }]);
+      return true;
+    }
+
+    // A SAIL is drawn tie by tie and a CEILING DRAPE end to end, from the drop (spec 2026-11-07
+    // §6.3/§6.4) — it is placed when the drawing ends. An area of swags is the drape's bar's "ציור כשטח".
+    if (isCeilingClothCategory(product.category)) {
+      startClothDraw({ kind: product.category === "sails" ? "sail" : "run", productId: product.id, start: { x, y } });
       return true;
     }
 
@@ -5330,9 +5389,12 @@ export function StudioScreen({
                       act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}) } });
                     },
                     onCancel: () => setRodDraw(null),
+                    // An LED strip's free run is its two ends — the second click ends it.
+                    maxPoints: isLedStrip(resolve(doc.placements.find((x) => x.id === rodDraw)?.variantId ?? "")?.product) ? 2 : undefined,
                   }
                 : undefined
             }
+            clothDraw={clothDraw ? { id: clothDraw.id, kind: clothDraw.kind, start: clothDraw.start, onFinish: finishClothDraw, onCancel: () => setClothDraw(null) } : undefined}
             areaShape={stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (stageFill.shape ?? "corners") : "corners"}
             onArea={stageTool?.kind === "level" ? addLevel : openStageFill}
             onCancelArea={() => {
@@ -5649,9 +5711,10 @@ export function StudioScreen({
                   setRodDraw(id);
                   // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
                   const drawn = doc.placements.find((x) => x.id === id);
-                  if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה כפולה בסופו · Esc לביטול");
+                  if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה בסופו · Esc לביטול");
                   showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
                 }}
+                onDrawCloth={(id, kind) => startClothDraw({ kind, placementId: id })}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
                 onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}

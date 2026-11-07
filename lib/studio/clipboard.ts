@@ -1,10 +1,14 @@
 import type { DesignDocumentContent, DesignGroup, DesignTable, Placement } from "../design-document/types";
 import { railMoved, type Rail } from "./rail";
+import { sailIsFree } from "./ceiling-cloth";
 import { isMain } from "../self-check";
 
 /** A rail made of its own points — a rod, a run, a canopy — names nothing in the room. */
 function ownsItsRail(p: Pick<Placement, "rail">): boolean {
   const t: Rail["type"] | undefined = p.rail?.type;
+  // …and a sail standing on its own posts (lib/studio/ceiling-cloth.ts) — one tied to a wall or a
+  // thing names it, and is not copied, as a curtain on a wall is not.
+  if (p.rail?.type === "sail") return sailIsFree(p.rail);
   return t === "rod" || t === "run" || t === "canopy";
 }
 
@@ -285,6 +289,21 @@ if (isMain(import.meta.url)) {
   const rodPasted = pasteInto(rodClip, { dx: 500, dy: 200, firstNumber: 1, newId: () => "n" });
   const pastedRail = rodPasted.placements[0]?.rail;
   assert(clipCount(rodClip) === 1 && pastedRail?.type === "rod" && pastedRail.points[1].x === 3500 && pastedRail.points[1].y === 200, "a curtain on its own rod is copied, and its rod pasted a step along");
+  // Cloth in the air (lib/studio/ceiling-cloth.ts): a run and a sail on posts of its own copy and move;
+  // a sail tied to a wall names that wall, and stays.
+  const posts = [{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 1500, y: 2000 }].map((p) => ({ p, heightMm: 3000, to: { kind: "post" as const } }));
+  const clothDoc: DesignDocumentContent = {
+    ...doc,
+    placements: [
+      { ...free("p-run", "curtain", 0, 0), rail: { type: "run", a: { x: 0, y: 0 }, b: { x: 4000, y: 0 }, heightMm: 3500, widthMm: 900 } },
+      { ...free("p-sail", "curtain", 0, 0), rail: { type: "sail", ties: posts } },
+      { ...free("p-tied", "curtain", 0, 0), rail: { type: "sail", ties: [{ ...posts[0], to: { kind: "wall", wallId: "w", t: 0.5 } }, posts[1], posts[2]] } },
+    ],
+  };
+  const clothClip = copySelection(clothDoc, ["p-run", "p-sail", "p-tied"].map((id) => ({ kind: "placement" as const, id })), isDrape);
+  const clothPasted = pasteInto(clothClip, { dx: 100, dy: 0, firstNumber: 1, newId: () => "n" }).placements.map((p) => p.rail);
+  assert(clipCount(clothClip) === 2 && clothPasted[0]?.type === "run" && clothPasted[0].a.x === 100 && clothPasted[0].widthMm === 900, "a run is copied and moved with its width");
+  assert(clothPasted[1]?.type === "sail" && clothPasted[1].ties[2].p.x === 1600, "a sail on its own posts is copied and moved; a tied one is not");
 
   // Selecting a table AND one of its items copies that item once, not twice.
   const both = copySelection(doc, [{ kind: "table", id: "t1" }, { kind: "placement", id: "p-vase" }], isDrape);

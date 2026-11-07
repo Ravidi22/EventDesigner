@@ -13,6 +13,7 @@ import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
 import { railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { clothPolygons, clothView, isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { carpetPolygon, carpetShape } from "@/lib/studio/cover";
@@ -161,6 +162,20 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
   if (!p || p.tableId) return null;
   const r = resolve(p.variantId);
 
+  // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts): its sheet, its runs' bands, its canopy's
+  // area — what the tape measures to and the guides frame. Never moved by a drag of the plan's own
+  // (its grips are its own), and never an obstacle (clearanceSubjects leaves it out).
+  const clothRail = r?.anchor === "wall" ? railOf(p) : null;
+  const cloth = clothRail ? clothView(r?.product.category, clothRail, sketchRailContext(doc, property, structure, (v) => resolve(v)?.product)) : null;
+  if (cloth) {
+    const polys = clothPolygons(cloth);
+    if (!polys.length) return null;
+    return remembered(p, [catalogVersion, cloth], () => {
+      const box = boxOf(polys);
+      return { ref, label: r?.product.name ?? "", centre: { x: box.x, y: box.y }, polysAt: () => polys, box, clearanceMm: 0, groupId: p.groupId, movable: false };
+    });
+  }
+
   if (r?.anchor === "wall") {
     // Its RAIL (lib/studio/rail.ts) — a wall's stretch as always, a side of a thing, a rod — read
     // against the property's walls and, for a side, the thing where this event stood it.
@@ -247,6 +262,8 @@ export function clearanceSubjects(
     const r = resolve(p.variantId);
     // An LED strip is a line of light on a wall or an edge — nobody needs room from it (spec §7).
     if (isLedStrip(r?.product)) continue;
+    // A sail or a ceiling drape is over people's heads, as a chandelier is — no one's obstacle (spec §6.3).
+    if (r?.anchor === "wall" && isCeilingClothCategory(r.product.category)) continue;
     if (r?.anchor === "wall") {
       if (visible.ceiling) add({ kind: "placement", id: p.id });
       continue;

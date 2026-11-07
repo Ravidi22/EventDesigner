@@ -2125,7 +2125,7 @@ export function HallsScreen() {
               <>
                 {/* "וילון על מוט" being drawn, post by post (components/rod-draw-pane.tsx) — above
                     everything, so every click is a post. */}
-                {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} onFinish={finishRod} onCancel={() => { setRodFrom(null); setLedRun(false); }} />}
+                {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} maxPoints={ledRun ? 2 : undefined} onFinish={finishRod} onCancel={() => { setRodFrom(null); setLedRun(false); }} />}
                 {acts && !placing && !rodFrom ? (
                   <FeatureRotateHandles
                     structure={structure}

@@ -42,6 +42,8 @@ import type { Layer, ResizeSpec, StockKind } from "./types";
 import { Columns3 } from "lucide-react";
 import type { RailType } from "@/lib/studio/rail";
 import { Monitor, Zap } from "lucide-react";
+import type { PriceUnit } from "./types";
+import { Sailboat, Waves } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -164,6 +166,10 @@ export interface CategoryDef {
    *  "wall"` still says "this hangs on a rail" to every reader that sorts drapes from objects; this
    *  says which kinds of rail the placing offers. */
   rails?: RailType[];
+  /** What a NEW product of this category is priced per (Product.priceUnit) — a seed for the drawer,
+   *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
+   *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
+  defaultPriceUnit?: PriceUnit;
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -207,6 +213,14 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
+  // Cloth in the air (spec 2026-11-07 §6.3/§6.4, lib/studio/ceiling-cloth.ts): a SAIL tied at three or
+  // four corners — a wall, a corner of a thing, a post of its own — billed by the square metre of its
+  // polygon; a CEILING DRAPE swagged from A to B, or laid over an area as parallel swags, billed by
+  // the metre of its runs. Each hangs on its own rail kinds only (`rails`) and is drawn to fit, so
+  // `sizing: "stretch"` and no height of its own to ask — its heights are its rail's. `anchor: "wall"`
+  // is the curtains' "this hangs on a rail" to every reader that sorts drapes from objects.
+  { id: "sails", label: "מפרשים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Sailboat, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["sail"], defaultPriceUnit: "m2" },
+  { id: "ceiling-drapes", label: "בדי תקרה", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Waves, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["run", "canopy"], defaultPriceUnit: "m" },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   // Table lamps — a turned base under a linen shade, set along a knights table like candlesticks.
   // Not a candlestick: nothing burns and nothing is packed per arm, so no count-multiplier.
@@ -270,7 +284,7 @@ export const CATEGORIES: CategoryDef[] = [
   // rail exactly as a drape does (`anchor: "wall"` sorts it with the drapes for every reader that
   // asks "is this a thing on a rail"), is billed by the metre of its lines like one, and draws as a
   // line of its shade's colour with a glow — never as cloth. No height of its own: the rail says it.
-  { id: "led-strips", label: "פסי לד", group: "grp-accessories", defaultLayer: "ceiling", icon: Zap, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["wall", "side", "run"] },
+  { id: "led-strips", label: "פסי לד", group: "grp-accessories", defaultLayer: "ceiling", icon: Zap, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["wall", "side", "run"], defaultPriceUnit: "m" },
   // An LED wall (§7.2): a free floor item like a stage backdrop — a 4 × 0.1 × 2.5 panel standing on a
   // stage or the floor, its FRONT the +y face that lights. Counted per unit.
   { id: "led-screens", label: "מסכי לד", group: "grp-accessories", defaultLayer: "floor", icon: Monitor, dims: "box", fields: [] },

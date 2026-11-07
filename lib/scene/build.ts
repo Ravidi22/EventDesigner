@@ -41,6 +41,8 @@ import { type ItemContext } from "./item-context";
 import { floorKindBody, rugBody } from "./floor-kinds";
 import { hexOf } from "./materials";
 import { ceilingUndersideMm, curtainBody, hungFlowersBody } from "./overhead";
+import { ceilingDrapeBody, sailBody } from "./overhead";
+import { clothView } from "@/lib/studio/ceiling-cloth";
 import { chairSpecOf, itemContextOf, tableNodes, topsOf } from "./tables";
 import { stageNodes, venueStageNodes, type StageOpts } from "./stage";
 import { type Scene, type SceneInput, WALL_THICK_MM, transform, vec3 } from "./types";
@@ -83,6 +85,7 @@ export function buildScene(input: SceneInput): Scene {
       ledStrip(input, out, p);
       continue;
     }
+    if (isRailed(p) && ceilingCloth(input, out, p)) continue; // a sail or a ceiling drape
     if (isRailed(p)) curtain(input, out, p);
     else if (p.perch) perched(input, out, p, elevation);
     else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofOf(p.position));
@@ -173,6 +176,23 @@ function ceilingPlacement(input: SceneInput, out: SceneCollector, p: Placement, 
  *  one), from the room's ceiling — or the wall's own typed height when lower (Wall.heightMm) — or the
  *  row's height under open sky. On a SIDE: a hand off the thing's face on the side it hangs, from the
  *  thing's height. On a ROD: under the rod at its height, the rod on its posts. */
+/** A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts — the canvas's own reading of its rail): a
+ *  sagging sheet on its ties and its own poles, or a swag per run, in the row's shade. False when the
+ *  placement is not one (a curtain, an LED strip), for the caller to go on. */
+function ceilingCloth(input: SceneInput, out: SceneCollector, p: Placement): boolean {
+  const rail = railOf(p);
+  const resolved = resolve(p.variantId);
+  const view = rail ? clothView(resolved?.product.category, rail, sketchRailContext(input.doc, input.structure, input.structure, (v) => resolve(v)?.product)) : null;
+  if (!view) return false;
+  const product = resolved?.product;
+  const colour = hexOf(resolved?.swatch) ?? hexOf(product?.appearance?.style?.fill) ?? (view.kind === "sail" ? "#f4f1ea" : "#f3ede2");
+  const tag = { type: "item" as const, id: p.id, label: product?.name };
+  if (view.kind === "sail") {
+    if (view.sheet) out.item(p.id, tag, sailBody(view.sheet, colour), transform(vec3(0, 0, 0), 0));
+  } else if (view.runs.length) out.item(p.id, tag, ceilingDrapeBody(view.runs, colour), transform(vec3(0, 0, 0), 0));
+  return true;
+}
+
 function curtain(input: SceneInput, out: SceneCollector, p: Placement): void {
   const rail = railOf(p);
   const line = rail ? railLines(rail, sketchRailContext(input.doc, input.structure, input.structure, (v) => resolve(v)?.product))[0] : undefined;

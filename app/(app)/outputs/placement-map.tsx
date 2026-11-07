@@ -22,6 +22,8 @@ import { railBand, railClothLine, railLines, railOf, sketchRailContext } from "@
 import { LED_COLOUR, LED_DEPTH_MM, isLedStrip, ledColour, ledPieces } from "@/lib/venues/led";
 import { LedLine, ScreenGlyph } from "@/components/led-glyph";
 import type { Point } from "@/lib/studio/hall";
+import { clothView, isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
+import { DrapeRuns, SailCloth } from "@/components/ceiling-cloth";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { featureEdgeShapes } from "@/lib/venues/stage-edges";
 import { isClimb } from "@/lib/venues/climb";
@@ -421,7 +423,9 @@ export function PlacementMap({
     if (sheet.id !== "stage" && floorItems.some((p) => p.stage)) row("במות", flat.stage);
     if (floorItems.some((p) => !p.stage && isRug(p))) row("שטיחים", flat.rug);
     if (floorItems.some((p) => !p.stage && !isRug(p))) row("פריטים על הרצפה", flat.item);
-    if (drapes.length > 0) row("וילונות", flat.drape);
+    const isCloth = (p: Placement) => isCeilingClothCategory(resolve(p.variantId)?.product.category);
+    if (drapes.some((p) => !isCloth(p))) row("וילונות", flat.drape);
+    if (drapes.some(isCloth)) row("מפרשים ובדי תקרה", flat.overhead ?? flat.drape);
     if (ceilingItems.length > 0) row("פריטים תלויים", flat.overhead);
   }
   // An LED strip on a crew sheet is an ink dash-dot line (spec §7.1) — the key says what it is: the
@@ -955,6 +959,19 @@ export function PlacementMap({
           {/* Drapes — a band along the wall they hang on. */}
           {drapes.map((p) => {
             const rail = railOf(p);
+            // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts) — the studio's own drawing: in its
+            // shade in colour, the overhead grey in the booklets, every tie's height for the riggers.
+            const cloth = rail ? clothView(resolve(p.variantId)?.product.category, rail, sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product)) : null;
+            if (cloth) {
+              const fill = colour ? (resolve(p.variantId)?.swatch ?? "#f4f1ea") : flat ? (flat.overhead ?? flat.drape) : "#ffffff";
+              return cloth.kind === "sail" ? (
+                cloth.sheet ? (
+                  <SailCloth key={p.id} sheet={cloth.sheet} fill={fill} fillOpacity={colour ? 0.35 : 0.6} ink={INK} inkOpacity={1} tieMm={1.8 * den} textMm={2.2 * den} textFill={INK} halo="#ffffff" postFill={INK} strokeWidth={LINE_WEIGHTS.overhead} dash={OVERHEAD_DASH} />
+                ) : null
+              ) : (
+                <DrapeRuns key={p.id} runs={cloth.runs} area={cloth.area} fill={fill} fillOpacity={colour ? 0.5 : 0.7} ink={INK} inkOpacity={1} dash={OVERHEAD_DASH} />
+              );
+            }
             // The property's own walls, not the arranged copy — nothing on this surface moves a
             // wall, so a drape always measures itself against the real one; a side rail's thing
             // where this event stood it (lib/studio/rail.ts).
