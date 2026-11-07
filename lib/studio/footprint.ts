@@ -15,7 +15,7 @@ export type Footprint =
   | { kind: "rect"; widthMm: number; depthMm: number }
   | { kind: "circle"; diameterMm: number }
   | { kind: "ellipse"; widthMm: number; depthMm: number }
-  | { kind: "custom"; outline: Point[]; edgeCurves?: (EdgeCurve | null)[] }
+  | { kind: "custom"; outline: Point[]; edgeCurves?: (EdgeCurve | null)[]; open?: boolean }
   /** An item drawn as several shapes at once — its base shape and the parts added beside it
    *  (MapAppearance.parts). Each part is an outline already turned and placed in the item's frame,
    *  and the lot is centred on the bounding box of all of them, like every other footprint. */
@@ -63,6 +63,8 @@ export interface BuiltOutline {
    *  Read through pieceOf — the surfaces (ItemSurface) and the bar's back counters (bar-draw) both
    *  ask "which shape is this", not "which outline". */
   of?: number;
+  /** Drawn as lines only: no fill, and no side from the last point back to the first (ShapePart.open). */
+  open?: boolean;
 }
 
 /** Which of the item's shapes the `i`-th piece of a composite draws (BuiltOutline.of). */
@@ -408,6 +410,12 @@ export function buildShapeOutline(
     case "triangle":
       return { outline: [{ x: -hw, y: hh }, { x: hw, y: hh }, { x: 0, y: -hh }] };
 
+    // A straight line: `w` long and `d` thick — a thin rectangle to everything that measures, and an
+    // outline (not a "rect" footprint) so it is never drawn as its category's picture. In 3D it is
+    // the fallback's extrude: a bar of its thickness, at its product's layer and height.
+    case "line":
+      return { outline: [{ x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: hh }, { x: -hw, y: hh }] };
+
     // Top edge half the base — the proportion that lets a run of them bend a head table.
     case "trapezoid":
       return {
@@ -502,6 +510,8 @@ export interface ShapeDims {
   arc?: Partial<ArcSpec>;
   ring?: Partial<RingSpec>;
   hollow?: HollowSpec;
+  /** Lines only (ShapePart.open) — a hand-drawn outline's. */
+  open?: boolean;
 }
 
 /** A shape plus the measurements it is drawn from, resolved to the one footprint every surface in
@@ -516,13 +526,13 @@ export interface ShapeDims {
  *  outline — a keyhole, or a band open on a side — as a custom footprint, or several (a band opened
  *  in two places) as a multi, whose pieces all say they are the one shape (BuiltOutline.of). */
 export function shapeFootprint(shape: MapShape, d: ShapeDims): Footprint {
-  return hollowOf(shape, d.hollow) ? piecesFootprint(shapePieces(shape, d)) : solidFootprint(shape, d);
+  return hollowOf(shape, d.hollow, d.open) ? piecesFootprint(shapePieces(shape, d)) : solidFootprint(shape, d);
 }
 
-/** The hollow spec a shape is actually drawn with — none for a shape that cannot be hollow, or a
- *  band of nothing. */
-const hollowOf = (shape: MapShape, h: HollowSpec | undefined): HollowSpec | undefined =>
-  h && canHollow(shape) && h.bandMm > 0 ? h : undefined;
+/** The hollow spec a shape is actually drawn with — none for a shape that cannot be hollow, a band
+ *  of nothing, or lines with no inside to cut a band from. */
+const hollowOf = (shape: MapShape, h: HollowSpec | undefined, open?: boolean): HollowSpec | undefined =>
+  h && canHollow(shape) && h.bandMm > 0 && !(open && shape === "custom") ? h : undefined;
 
 /** The shape drawn SOLID, as one outline centred on its own box: the outline a hollow shape's band
  *  is cut inside, and whose edges are the sides that may be opened (HollowSpec.openSides). For the
@@ -539,7 +549,7 @@ export function hollowOuter(shape: MapShape, d: ShapeDims): BuiltOutline {
  *  of that box. */
 export function shapePieces(shape: MapShape, d: ShapeDims): BuiltOutline[] {
   const outer = hollowOuter(shape, d);
-  const h = hollowOf(shape, d.hollow);
+  const h = hollowOf(shape, d.hollow, d.open);
   return h ? buildHollow(outer, h) : [outer];
 }
 
@@ -548,7 +558,7 @@ export function shapePieces(shape: MapShape, d: ShapeDims): BuiltOutline[] {
 export function piecesFootprint(pieces: readonly BuiltOutline[]): Footprint {
   if (pieces.length === 1) {
     const p = pieces[0];
-    return { kind: "custom", outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}) };
+    return { kind: "custom", outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}), ...(p.open ? { open: true } : {}) };
   }
   const b = sampledBounds(pieces);
   return {
@@ -556,6 +566,7 @@ export function piecesFootprint(pieces: readonly BuiltOutline[]): Footprint {
     parts: pieces.map((p) => ({
       outline: p.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })),
       ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}),
+      ...(p.open ? { open: true } : {}),
       of: 0,
     })),
   };
@@ -1133,7 +1144,7 @@ export const defaultHollowBand = (w: number, d: number): number => Math.max(10, 
 function solidFootprint(shape: MapShape, d: ShapeDims): Footprint {
   if (shape === "custom") {
     const { outline, edgeCurves } = d;
-    if (outline && outline.length >= 3) return { kind: "custom", outline, ...(edgeCurves ? { edgeCurves } : {}) };
+    if (outline && outline.length >= 3) return { kind: "custom", outline, ...(edgeCurves ? { edgeCurves } : {}), ...(d.open ? { open: true } : {}) };
     // malformed custom → fall through to a safe rectangle
   }
   if (shape === "circle") {
@@ -1181,7 +1192,7 @@ export function resolveFootprint(product: Product): Footprint {
   const d = product.dimensions;
   const a = product.appearance;
   const shape = a?.shape ?? (d.diameterMm ? "circle" : "rect");
-  const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
+  const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, open: a?.open, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
   // With parts, the base joins the composite as its pieces in its OUTER box's frame (shapePieces) —
   // the frame the parts' offsets are measured from — rather than re-centred on what a hollow band
   // opened on a side leaves of it.
@@ -1202,7 +1213,7 @@ export function footprintOutlines(f: Footprint): BuiltOutline[] {
       return f.parts;
     case "custom": {
       const b = customShapeBounds(f.outline, f.edgeCurves);
-      return [{ outline: f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves: f.edgeCurves }];
+      return [{ outline: f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves: f.edgeCurves, ...(f.open ? { open: true } : {}) }];
     }
     case "rect": {
       const hw = f.widthMm / 2;
@@ -1273,6 +1284,7 @@ function placeInPart(o: BuiltOutline, part: ShapePart): BuiltOutline {
       return { x: q.x + (part.x || 0), y: q.y + (part.y || 0) };
     }),
     ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null)) } : {}),
+    ...(o.open ? { open: true } : {}),
   };
 }
 
@@ -1422,7 +1434,7 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
         ? { kind: "circle", diameterMm: f.diameterMm * sx }
         : { kind: "ellipse", widthMm: f.diameterMm * sx, depthMm: f.diameterMm * sy };
     case "custom":
-      return { kind: "custom", outline: f.outline.map(pt), ...(f.edgeCurves ? { edgeCurves: curves(f.edgeCurves) } : {}) };
+      return { kind: "custom", outline: f.outline.map(pt), ...(f.edgeCurves ? { edgeCurves: curves(f.edgeCurves) } : {}), ...(f.open ? { open: true } : {}) };
     case "multi":
       return { kind: "multi", parts: f.parts.map((p) => ({ ...p, outline: p.outline.map(pt), ...(p.edgeCurves ? { edgeCurves: curves(p.edgeCurves) } : {}) })) };
   }
@@ -1446,7 +1458,7 @@ export function sizedFootprint(product: Product, sizeMm?: { widthMm: number; dep
   // A hand-drawn outline drawn hollow: the OUTLINE is stretched and the band cut inside it again, so
   // the band stays the depth of its modules, as it does on a derived shape. (With parts the whole
   // composite is scaled, band and all — the one reading of "bigger" a composite has.)
-  const hollow = !a?.parts?.length ? hollowOf(shape, a?.hollow) : undefined;
+  const hollow = !a?.parts?.length ? hollowOf(shape, a?.hollow, a?.open) : undefined;
   if (hollow) {
     const outer = hollowOuter(shape, { outline: a?.outline, edgeCurves: a?.edgeCurves });
     const ob = sampledBounds([outer]);
@@ -1492,7 +1504,7 @@ if (isMain(import.meta.url)) {
   // Rule 1 (the bounding box IS width × depth) and rule 2 (every extreme is a vertex, which is what
   // makes rule 1 measurable at all), for every shape in the vocabulary — at a size whose width and
   // depth differ, so a shape that quietly squared itself cannot pass.
-  const derived: MapShape[] = ["stadium", "half-circle", "quarter-circle", "crescent", "oval-ring", "horseshoe", "triangle", "trapezoid", "hexagon", "octagon", "u-shape", "rounded-u"];
+  const derived: MapShape[] = ["stadium", "half-circle", "quarter-circle", "crescent", "oval-ring", "horseshoe", "triangle", "trapezoid", "hexagon", "octagon", "u-shape", "rounded-u", "line"];
   for (const shape of derived) {
     const built = buildShapeOutline(shape, 1200, 600);
     if (!built) throw new Error(`FAIL: ${shape} is not built — it would fall back to a rectangle`);

@@ -914,6 +914,8 @@ export const sketchTemplates = pgTable(
     name: text("name").notNull(),
     venueId: uuid("venue_id").references(() => venues.id, { onDelete: "set null" }),
     content: jsonb("content").$type<DesignDocumentContent>().notNull(),
+    /** A photograph of the real event — the card's cover in the meeting's סקיצת פתיחה. */
+    photoUrl: text("photo_url"),
     createdAt: created(),
     updatedAt: updated(),
   },

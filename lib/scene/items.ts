@@ -33,6 +33,7 @@ import type { BenchLayout } from "@/lib/design-document/bench";
 import { isMain } from "../self-check";
 import { type InstanceRequest, type ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
+import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { floorKindBody } from "./floor-kinds";
 import { overheadKindBody } from "./overhead";
 
@@ -914,6 +915,10 @@ if (isMain(import.meta.url)) {
   const sofa = itemBody("sofa", ctxOf({ kind: "rect", widthMm: 1800, depthMm: 900 }, 800, { tone: DEFAULT_TONE.sofa }));
   assert(sofa.parts.length > 1 && !sofa.parts.some((q) => q.shape === "extrude" && q.h === 800), "a sofa is built by the floor kinds (back, arms, cushions), not the fallback box");
   assert(itemBody(null, ctxOf({ kind: "rect", widthMm: 300, depthMm: 300 }, 0)).parts[0].shape === "extrude", "no picture: the fallback");
+  // Lines only (a |_| drawn and never closed): a thin wall along the three drawn sides, not the box.
+  const cup = itemBody(null, ctxOf({ kind: "custom", open: true, outline: [{ x: -1000, y: -500 }, { x: -1000, y: 500 }, { x: 1000, y: 500 }, { x: 1000, y: -500 }] }, 900));
+  const cupArea = cup.parts.reduce((s, q) => s + (q.shape === "extrude" ? Math.abs(polygonAreaMm2(q.outline.outline)) : 0), 0);
+  assert(cupArea > 0 && cupArea < 4000 * 60, `lines only stands as a thin wall (${Math.round(cupArea)} mm²)`);
   // Vessels by what their name says, else by their proportions.
   assert(vesselForm("אגרטל מרטיני זהב 80", 200, 200, 800) === "trumpet", "a martini vase stands on a stem");
   assert(vesselForm("צילינדר זכוכית מפוספס 50", 60, 60, 500) === "cylinder", "a cylinder is straight");

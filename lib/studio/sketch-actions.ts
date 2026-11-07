@@ -12,6 +12,7 @@ import { currentOrg } from "@/lib/db/org";
 import { events, sketchTemplates } from "@/lib/db/schema";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
+import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import { saveDocument } from "./actions";
 import {
   adoptSketch,
@@ -47,6 +48,7 @@ export async function fetchSketchTemplates(): Promise<SketchTemplateSummary[]> {
       venueId: sketchTemplates.venueId,
       tables: sql<number>`jsonb_array_length(${sketchTemplates.content}->'tables')`,
       items: sql<number>`jsonb_array_length(${sketchTemplates.content}->'placements')`,
+      photoUrl: sketchTemplates.photoUrl,
       createdAt: sketchTemplates.createdAt,
     })
     .from(sketchTemplates)
@@ -58,6 +60,7 @@ export async function fetchSketchTemplates(): Promise<SketchTemplateSummary[]> {
     venueId: r.venueId ?? null,
     tables: Number(r.tables) || 0,
     items: Number(r.items) || 0,
+    photoUrl: r.photoUrl ?? null,
     createdAt: r.createdAt.getTime(),
   }));
 }
@@ -88,9 +91,25 @@ export async function saveSketchTemplate(input: {
 export async function deleteSketchTemplate(id: unknown): Promise<SketchTemplateSummary[]> {
   const organizationId = await currentOrg();
   if (!isId(id)) throw new Error("id must be a uuid");
-  await db()
+  const [gone] = await db()
     .delete(sketchTemplates)
-    .where(and(eq(sketchTemplates.id, id), eq(sketchTemplates.organizationId, organizationId)));
+    .where(and(eq(sketchTemplates.id, id), eq(sketchTemplates.organizationId, organizationId)))
+    .returning({ photoUrl: sketchTemplates.photoUrl });
+  await removeReplacedFile(gone?.photoUrl, null, organizationId);
+  return fetchSketchTemplates();
+}
+
+/** The photograph a sketch's card wears in the meeting — a URL this studio uploaded (lib/files), or
+ *  null to take it off. Anything else is dropped like every other stored file URL (ownedFileUrl). */
+export async function setSketchPhoto(id: unknown, url: unknown): Promise<SketchTemplateSummary[]> {
+  const organizationId = await currentOrg();
+  if (!isId(id)) throw new Error("id must be a uuid");
+  const next = ownedFileUrl(url, organizationId);
+  const where = and(eq(sketchTemplates.id, id), eq(sketchTemplates.organizationId, organizationId));
+  const [row] = await db().select({ photoUrl: sketchTemplates.photoUrl }).from(sketchTemplates).where(where).limit(1);
+  if (!row) return fetchSketchTemplates();
+  await db().update(sketchTemplates).set({ photoUrl: next, updatedAt: new Date() }).where(where);
+  await removeReplacedFile(row.photoUrl, next, organizationId);
   return fetchSketchTemplates();
 }
 

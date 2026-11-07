@@ -1,28 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  CircleDot,
-  Crosshair,
-  DoorOpen,
-  GlassWater,
-  Layers,
-  Lock,
-  Maximize,
-  Minus,
-  Plus,
-  Presentation,
-  Redo2,
-  Ruler,
-  RulerDimensionLine,
-  SeparatorHorizontal,
-  Trash2,
-  Undo2,
-  Unlock,
-  X,
-  type LucideIcon,
-} from "lucide-react";
-import type { Point, EdgeCurve, Entrance, Fixture, FixtureShape, Column } from "@/lib/studio/hall";
+import { Crosshair, Maximize, Minus, Plus, Redo2, Ruler, RulerDimensionLine, Undo2, X, type LucideIcon } from "lucide-react";
+import type { Point, EdgeCurve, Entrance, Fixture, Column } from "@/lib/studio/hall";
 import { WindowGlazing } from "@/components/window-glazing";
 import {
   edgePathD,
@@ -31,8 +11,6 @@ import {
   doorGeometry,
   wallLengthMm,
   wallAngleDeg,
-  bulgeDepthMm,
-  maxBulgeDepthMm,
   pointAtDistance,
   wallSegmentD,
   toLocalFrame,
@@ -48,10 +26,7 @@ import { addTape, anchorAt, pruneTape, removeTape, resolveTape, tapeId, tapeRead
 import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { cancelAllGestures, startPointerGesture, swallowNextClick } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
-import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
-import { NumberField } from "@/components/number-field";
-import { StyleFields } from "@/components/style-fields";
 import type { SelectedKind, SelectedRef } from "@/lib/studio/use-outline-editor";
 
 export type StructureDragType = "entrance" | "stage" | "bar";
@@ -405,6 +380,7 @@ export function PlanCanvas({
   lengthUnit = "m",
   drawAngleStepDeg = 5,
   drawAngleFromFirstSide = false,
+  drawAngleFree = false,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -484,9 +460,12 @@ export function PlanCanvas({
   lengthUnit?: "m" | "cm";
   /** The angle lock while drawing: the step, and whether it is counted from the shape's FIRST side
    *  (the stage tool's rule — a table drawn at an angle is square to itself) or from the page's own
-   *  axes (how a hall is traced). Alt frees it either way. */
+   *  axes (how a hall is traced). Alt frees it either way — or, with `drawAngleFree`, the lock is OFF
+   *  and Alt puts it on: a side then goes where the pointer is, pulled square only by the points
+   *  already drawn (the catalog's free draw, 2026-11-01, the user: "it forces the direction"). */
   drawAngleStepDeg?: number;
   drawAngleFromFirstSide?: boolean;
+  drawAngleFree?: boolean;
   canUndo?: boolean; // the undo/redo pair only renders when the host offers a history
   canRedo?: boolean;
   onUndo?: () => void;
@@ -1160,7 +1139,7 @@ export function PlanCanvas({
 
   const drawAnchor =
     mode === "draw" ? (outline.length > 0 ? outline[outline.length - 1] : (drawFrom ?? null)) : null;
-  const snapDraw = (p: Point, releaseAngle: boolean): SnapResult =>
+  const snapDraw = (p: Point, alt: boolean): SnapResult =>
     snapPoint(p, {
       toleranceMm: SNAP_TOL_PX * mmPerPx,
       // Existing graph corners are snap references too — that is what lets a new wing land flush on
@@ -1170,7 +1149,7 @@ export function PlanCanvas({
       fixtures: fixtureRefs(),
       gridMm,
       anchor: drawAnchor ?? undefined,
-      constrainAngle: !releaseAngle,
+      constrainAngle: drawAngleFree ? alt : !alt,
       angleStepDeg: drawAngleStepDeg,
       // Counted from the first side once there is one — the second side of a shape drawn at an
       // angle is square to the first, not to the page. The first side itself is held to the page.
@@ -2874,6 +2853,18 @@ function CanvasMenu({ x, y, items, onClose }: { x: number; y: number; items: Con
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => aim(null), []);
+  // Escape closes the menu and nothing else: taken in the capture phase and marked handled, so the
+  // host's own Escape (deselect, step back) never runs for the same press.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
   useLayoutEffect(() => {
     const r = panel.current?.getBoundingClientRect();
     if (!r) return;
@@ -3490,8 +3481,6 @@ function ResizeHandle({
   );
 }
 
-const SHAPE_LABEL: Record<FixtureShape, string> = { rect: "מלבן", circle: "עיגול", ellipse: "אליפסה" };
-
 // The floating inspector's shell. Exported so a second inspector over the same canvas (the venue
 // plan's walls/doors/features) is the same object, not a lookalike that drifts.
 export const INSPECTOR_WRAP =
@@ -3556,318 +3545,6 @@ export function SegmentedToggle<T extends string | number | boolean>({
           {o.label}
         </button>
       ))}
-    </div>
-  );
-}
-
-export function SelectionInspector({
-  selected,
-  outline,
-  edgeCurves,
-  lockedEdges = [],
-  entrances = [],
-  stage,
-  bars = [],
-  onUpdateEntrance = () => {},
-  onUpdateStage = () => {},
-  onUpdateBar = () => {},
-  onRemoveEntrance = () => {},
-  onRemoveStage = () => {},
-  onRemoveBar = () => {},
-  onRemoveVertex,
-  onRemoveSelection = () => {},
-  onInsertVertexOnWall,
-  onSetWallLength,
-  onSetWallAngle,
-  onSetWallBulgeDepth,
-  onToggleWallLock = () => {},
-  onClose,
-  edgeNoun = "קיר",
-  lengthUnit = "m",
-}: {
-  selected: SelectedRef[];
-  outline: Point[];
-  edgeCurves: (EdgeCurve | null)[];
-  lockedEdges?: boolean[];
-  edgeNoun?: string; // what an outline edge is called — "קיר" in a hall, "צלע" for a product footprint
-  /** The unit the edge's length is asked in — the same one the canvas it sits on shows (PlanCanvas's
-   *  lengthUnit). onSetWallLength is still handed metres whichever it is. */
-  lengthUnit?: "m" | "cm";
-  entrances?: Entrance[];
-  stage?: Fixture | undefined;
-  bars?: Fixture[];
-  onUpdateEntrance?: (id: string, patch: Partial<Entrance>) => void;
-  onUpdateStage?: (patch: Partial<Fixture>) => void;
-  onUpdateBar?: (id: string, patch: Partial<Fixture>) => void;
-  onRemoveEntrance?: (id: string) => void;
-  onRemoveStage?: () => void;
-  onRemoveBar?: (id: string) => void;
-  onRemoveVertex: (idx: number) => void;
-  onRemoveSelection?: (refs: SelectedRef[]) => void;
-  onInsertVertexOnWall: (edgeIdx: number) => void;
-  onSetWallLength: (edgeIdx: number, meters: number) => void;
-  onSetWallAngle: (edgeIdx: number, degrees: number) => void;
-  onSetWallBulgeDepth: (edgeIdx: number, depthMm: number) => void;
-  onToggleWallLock?: (edgeIdx: number) => void;
-  onClose: () => void;
-}) {
-  const wrap = INSPECTOR_WRAP;
-  const mmToCm = (mm: number) => mm / 10;
-  const closeBtn = (
-    <IconButton label="סגירת בחירה" className="ms-auto" onClick={onClose}>
-      <X className="h-4 w-4" strokeWidth={2} />
-    </IconButton>
-  );
-  const shapeToggle = (shape: FixtureShape, onPick: (s: FixtureShape) => void) => (
-    <SegmentedToggle
-      value={shape}
-      options={(Object.keys(SHAPE_LABEL) as FixtureShape[]).map((s) => ({ value: s, label: SHAPE_LABEL[s] }))}
-      onChange={onPick}
-      ariaLabel="צורה"
-    />
-  );
-  // A plain two-way segmented control — door direction/leaf-count, either boolean.
-  const boolToggle = (value: boolean, onLabel: string, offLabel: string, onPick: (v: boolean) => void) => (
-    <SegmentedToggle
-      value={value}
-      options={[
-        { value: true, label: onLabel },
-        { value: false, label: offLabel },
-      ]}
-      onChange={onPick}
-    />
-  );
-  const rotationField = (rotationDeg: number, onChange: (deg: number) => void) => (
-    <NumberField layout="inline" label="זווית (°)" decimals={0} min={0} max={360} value={rotationDeg} onChange={onChange} className="w-20" />
-  );
-
-  if (selected.length === 0) return null;
-  // A multi-select gets its own compact panel — the individual fields below only make sense for
-  // one kind of thing at a time, so a mixed (or same-kind) group just gets a count and a delete.
-  if (selected.length > 1) {
-    return (
-      <div className={wrap}>
-        <InspectorHeader icon={Layers} label={`${selected.length} נבחרו`} />
-        <InspectorDivider />
-        <Button variant="danger" size="sm" onClick={() => onRemoveSelection(selected)}>
-          <Trash2 className="h-4 w-4" strokeWidth={2} />
-          מחיקה
-        </Button>
-        {closeBtn}
-      </div>
-    );
-  }
-  const selectedOne = selected[0];
-
-  if (selectedOne.kind === "entrance") {
-    const e = entrances.find((x) => x.id === selectedOne.id);
-    if (!e) return null;
-    const a = outline[e.wallIndex];
-    const b = outline[(e.wallIndex + 1) % outline.length];
-    const wallLen = a && b ? wallLengthMm(a, b) : 0;
-    return (
-      <div className={wrap}>
-        <InspectorHeader icon={DoorOpen} label="כניסה" />
-        <InspectorDivider />
-        <InspectorGroup>
-          <NumberField
-            layout="inline"
-            label="מרחק מקצה הקיר (מ׳)"
-            decimals={2}
-            min={0}
-            max={wallLen / 1000}
-            value={e.distanceMm / 1000}
-            onChange={(m) => onUpdateEntrance(e.id, { distanceMm: m * 1000 })}
-            className="w-20"
-          />
-          <NumberField
-            layout="inline"
-            label="רוחב (ס״מ)"
-            decimals={0}
-            min={40}
-            value={mmToCm(e.widthMm)}
-            onChange={(cm) => onUpdateEntrance(e.id, { widthMm: cm * 10 })}
-            className="w-20"
-          />
-        </InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>
-          {boolToggle(e.doubleDoor, "כפולה", "יחידה", (v) => onUpdateEntrance(e.id, { doubleDoor: v }))}
-          {boolToggle(e.swingInward, "פנימה", "החוצה", (v) => onUpdateEntrance(e.id, { swingInward: v }))}
-        </InspectorGroup>
-        <InspectorDivider />
-        <Button variant="danger" size="sm" onClick={() => onRemoveEntrance(e.id)}>
-          <Trash2 className="h-4 w-4" strokeWidth={2} />
-          מחיקה
-        </Button>
-        {closeBtn}
-      </div>
-    );
-  }
-
-  if (selectedOne.kind === "stage") {
-    if (!stage) return null;
-    return (
-      <div className={wrap}>
-        <InspectorHeader icon={Presentation} label="במה" />
-        <InspectorDivider />
-        <InspectorGroup>
-          <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(stage.widthMm)} onChange={(cm) => onUpdateStage({ widthMm: cm * 10 })} className="w-20" />
-          <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(stage.depthMm)} onChange={(cm) => onUpdateStage({ depthMm: cm * 10 })} className="w-20" />
-          <NumberField layout="inline" label="גובה במה (ס״מ)" decimals={0} min={0} value={mmToCm(stage.heightMm)} onChange={(cm) => onUpdateStage({ heightMm: cm * 10 })} className="w-20" />
-        </InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>{rotationField(stage.rotationDeg ?? 0, (deg) => onUpdateStage({ rotationDeg: deg }))}</InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>
-          <StyleFields style={stage.style} onChange={(style) => onUpdateStage({ style })} strokeWidthDefault={1.5} />
-        </InspectorGroup>
-        <InspectorDivider />
-        <Button variant="danger" size="sm" onClick={onRemoveStage}>
-          <Trash2 className="h-4 w-4" strokeWidth={2} />
-          הסרה
-        </Button>
-        {closeBtn}
-      </div>
-    );
-  }
-
-  if (selectedOne.kind === "bar") {
-    const b = bars.find((x) => x.id === selectedOne.id);
-    if (!b) return null;
-    const shape = b.shape ?? "rect";
-    return (
-      <div className={wrap}>
-        <InspectorHeader icon={GlassWater} label="עמדת בר" />
-        <InspectorDivider />
-        <InspectorGroup>{shapeToggle(shape, (s) => onUpdateBar(b.id, { shape: s }))}</InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>
-          {shape === "circle" ? (
-            <NumberField
-              layout="inline"
-              label="קוטר (ס״מ)"
-              decimals={0}
-              min={0}
-              value={mmToCm(b.widthMm)}
-              onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10, depthMm: cm * 10 })}
-              className="w-20"
-            />
-          ) : (
-            <>
-              <NumberField layout="inline" label="רוחב (ס״מ)" decimals={0} min={0} value={mmToCm(b.widthMm)} onChange={(cm) => onUpdateBar(b.id, { widthMm: cm * 10 })} className="w-20" />
-              <NumberField layout="inline" label="עומק (ס״מ)" decimals={0} min={0} value={mmToCm(b.depthMm)} onChange={(cm) => onUpdateBar(b.id, { depthMm: cm * 10 })} className="w-20" />
-            </>
-          )}
-          <NumberField layout="inline" label="גובה (ס״מ)" decimals={0} min={0} value={mmToCm(b.heightMm)} onChange={(cm) => onUpdateBar(b.id, { heightMm: cm * 10 })} className="w-20" />
-        </InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>{rotationField(b.rotationDeg ?? 0, (deg) => onUpdateBar(b.id, { rotationDeg: deg }))}</InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>
-          <StyleFields style={b.style} onChange={(style) => onUpdateBar(b.id, { style })} strokeWidthDefault={1.5} />
-        </InspectorGroup>
-        <InspectorDivider />
-        <Button variant="danger" size="sm" onClick={() => onRemoveBar(b.id)}>
-          <Trash2 className="h-4 w-4" strokeWidth={2} />
-          מחיקה
-        </Button>
-        {closeBtn}
-      </div>
-    );
-  }
-
-  if (selectedOne.kind === "wall") {
-    const idx = Number(selectedOne.id);
-    if (idx < 0 || idx >= outline.length) return null;
-    const n = outline.length;
-    const a = outline[idx];
-    const b = outline[(idx + 1) % n];
-    const curve = edgeCurves[idx] ?? null;
-    const maxBulgeCm = Math.round(maxBulgeDepthMm(wallLengthMm(a, b)) / 10);
-    const locked = !!lockedEdges[idx];
-    return (
-      <div className={wrap}>
-        <InspectorHeader icon={SeparatorHorizontal} label={`${edgeNoun} ${idx + 1}`} />
-        <InspectorDivider />
-        <InspectorGroup>
-          <IconButton
-            label={locked ? "שחרור נעילת האורך" : "נעילת האורך"}
-            onClick={() => onToggleWallLock(idx)}
-            className={locked ? "text-accent" : undefined}
-          >
-            {locked ? <Lock className="h-4 w-4" strokeWidth={2} /> : <Unlock className="h-4 w-4" strokeWidth={2} />}
-          </IconButton>
-          {lengthUnit === "cm" ? (
-            <NumberField
-              layout="inline"
-              label="אורך (ס״מ)"
-              decimals={1}
-              min={0.1}
-              disabled={locked}
-              value={wallLengthMm(a, b) / 10}
-              onChange={(cm) => onSetWallLength(idx, cm / 100)}
-              className="w-20"
-            />
-          ) : (
-            <NumberField
-              layout="inline"
-              label="אורך (מ׳)"
-              decimals={2}
-              min={0.001}
-              disabled={locked}
-              value={wallLengthMm(a, b) / 1000}
-              onChange={(m) => onSetWallLength(idx, m)}
-              className="w-20"
-            />
-          )}
-        </InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>
-          <NumberField
-            layout="inline"
-            label="זווית (°)"
-            decimals={1}
-            value={wallAngleDeg(a, b)}
-            onChange={(deg) => onSetWallAngle(idx, deg)}
-            className="w-20"
-          />
-        </InspectorGroup>
-        <InspectorDivider />
-        <InspectorGroup>
-          <NumberField
-            layout="inline"
-            label={`עיקום (ס״מ, עד ${maxBulgeCm})`}
-            decimals={0}
-            min={0}
-            max={maxBulgeCm}
-            value={mmToCm(bulgeDepthMm(a, b, curve))}
-            onChange={(cm) => onSetWallBulgeDepth(idx, cm * 10)}
-            className="w-20"
-          />
-        </InspectorGroup>
-        <InspectorDivider />
-        <Button variant="ghost" size="sm" onClick={() => onInsertVertexOnWall(idx)}>
-          <Plus className="h-4 w-4" strokeWidth={2} />
-          הוספת נקודה
-        </Button>
-        {closeBtn}
-      </div>
-    );
-  }
-
-  const idx = Number(selectedOne.id);
-  const v = outline[idx];
-  if (!v) return null;
-  return (
-    <div className={wrap}>
-      <InspectorHeader icon={CircleDot} label={`נקודה ${idx + 1}`} />
-      <InspectorDivider />
-      <Button variant="danger" size="sm" disabled={outline.length <= 3} onClick={() => onRemoveVertex(idx)}>
-        <Trash2 className="h-4 w-4" strokeWidth={2} />
-        מחיקה
-      </Button>
-      {closeBtn}
     </div>
   );
 }
