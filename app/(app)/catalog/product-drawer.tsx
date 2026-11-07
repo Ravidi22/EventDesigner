@@ -38,6 +38,7 @@ import { acceptSourcePrice, fetchSourceStatus } from "@/lib/marketplace/actions"
 import type { SourceStatus } from "@/lib/marketplace/types";
 import { formatPrice } from "@/lib/catalog/format";
 import { useIsSupplier } from "@/components/org-kind-context";
+import { canDelete, offeredCategories } from "@/lib/catalog/built-in";
 import { Button } from "@/components/button";
 import { Drawer } from "@/components/drawer";
 import { TagToggle } from "@/components/tag-toggle";
@@ -698,7 +699,12 @@ export function ProductDrawer({
               value={draft.category}
               onChange={changeCategory}
               // A composite is made in its own form, never by re-filing an ordinary row.
-              options={categories.filter((c) => c.id !== COMPOSITE_CATEGORY).map((c) => ({ value: c.id, label: c.label }))}
+              // …and a studio never files a NEW row under a built-in-only category (lib/catalog/
+              // built-in.ts): its one built-in is that category. A row already in one keeps it; a
+              // built-in is offered its own alone.
+              options={offeredCategories(categories, { isSupplier: supplierOrg, product })
+                .filter((c) => c.id !== COMPOSITE_CATEGORY)
+                .map((c) => ({ value: c.id, label: c.label }))}
               className="w-full"
             />
           </div>
@@ -1276,7 +1282,7 @@ export function ProductDrawer({
           <Button variant="ghost" onClick={onClose}>
             ביטול
           </Button>
-          {isEdit && onDelete && (
+          {isEdit && onDelete && canDelete(product) && (
             <Button
               variant="danger"
               className="ms-auto"

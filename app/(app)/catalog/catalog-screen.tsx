@@ -8,7 +8,7 @@ import { useCatalog } from "@/lib/catalog/use-catalog";
 import {
   CSV_BOM,
   inventoryFileName,
-  parseCsvProducts,
+  parseCsvImport,
   productsToCsv,
   type CsvSupplier,
 } from "@/lib/catalog/csv";
@@ -25,6 +25,7 @@ import { ProductDrawer, blankProduct } from "./product-drawer";
 import { blankComposite } from "./composite-drawer";
 import { COMPOSITE_CATEGORY } from "@/lib/catalog/composition";
 import { knownFlowersOf, type KnownFlower } from "@/lib/catalog/flowers";
+import { useIsSupplier } from "@/components/org-kind-context";
 
 export function CatalogScreen({
   initialProducts,
@@ -39,6 +40,8 @@ export function CatalogScreen({
   // The catalog comes from page.tsx's server-side read; the hook primes the studio's synchronous
   // cache with it and hands back the list plus the three write paths.
   const { products, ready, error, save, remove, importMany, reload } = useCatalog(initialProducts);
+  // A supplier sells LED strips and stage skirts; a studio has one built-in of each (lib/catalog/built-in.ts).
+  const supplierOrg = useIsSupplier();
   const [filters, setFilters] = useState<FilterState>(() => ({ ...EMPTY_FILTERS, sourcing: initialSourcing }));
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<Product | null>(null);
@@ -94,13 +97,25 @@ export function CatalogScreen({
     if (!file) return;
     // A composite is made of other rows (lib/catalog/composition.ts) and a spreadsheet line cannot say
     // which: its category is not one a row can be imported into.
-    const added = parseCsvProducts(await file.text(), CATEGORIES.filter((c) => c.id !== COMPOSITE_CATEGORY), () => crypto.randomUUID());
+    // A studio's built-in-only categories (lib/catalog/built-in.ts) take no row by hand: those lines
+    // are left out and named, one sentence each. A supplier sells those things and imports them.
+    const { products: added, refused } = parseCsvImport(
+      await file.text(),
+      CATEGORIES.filter((c) => c.id !== COMPOSITE_CATEGORY),
+      () => crypto.randomUUID(),
+      { refuseBuiltIn: !supplierOrg },
+    );
+    const refusedNote = refused.length ? ` לא יובאו: ${refused.join(" ")}` : "";
     if (added.length === 0) {
-      setNotice("לא נמצאו שורות תקינות בקובץ. עמודות: שם, קטגוריה, קוטר/רוחב/עומק/גובה (ס״מ), מחיר.");
+      setNotice(
+        refused.length
+          ? `לא יובאו שורות מהקובץ.${refusedNote}`
+          : "לא נמצאו שורות תקינות בקובץ. עמודות: שם, קטגוריה, קוטר/רוחב/עומק/גובה (ס״מ), מחיר.",
+      );
       return;
     }
     await importMany(added);
-    setNotice(`נוספו ${added.length} מוצרים מהקובץ. וריאנטים ושדות מיוחדים מוזנים ידנית.`);
+    setNotice(`נוספו ${added.length} מוצרים מהקובץ. וריאנטים ושדות מיוחדים מוזנים ידנית.${refusedNote}`);
   };
 
   // The stock sheet: what the studio owns, how much of it, what it costs and who it comes from.

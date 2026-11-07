@@ -10,6 +10,8 @@ import { Menu, type MenuItem } from "@/components/menu";
 import { ProductImage } from "./product-image";
 import { compositeLine, compositeTotal } from "./composite-summary";
 import { SourcingChip } from "./sourcing-chip";
+import { canDelete, canDuplicate } from "@/lib/catalog/built-in";
+import { useIsSupplier } from "@/components/org-kind-context";
 
 // The whole card is one click target (opens the drawer), but the actions need their own click
 // handlers — nesting a <button> in a <button> isn't valid HTML, so the "whole card clickable"
@@ -53,11 +55,20 @@ export function ProductCard({
   const [menuOpen, setMenuOpen] = useState(false);
   const lifted = menuOpen ? " z-30" : "";
 
+  // A built-in (lib/catalog/built-in.ts) is never copied or deleted — and nothing in a built-in-only
+  // category is copied, since a studio makes no second row there.
+  const supplierOrg = useIsSupplier();
   const actions: MenuItem[] = [
     { label: "עריכה", icon: Pencil, onSelect: () => onEdit(product) },
-    { label: "שכפול", icon: Copy, onSelect: () => onDuplicate(product) },
-    { label: "מחיקה", icon: Trash2, onSelect: () => onDelete(product), danger: true },
+    ...(canDuplicate(product, supplierOrg) ? [{ label: "שכפול", icon: Copy, onSelect: () => onDuplicate(product) }] : []),
+    ...(canDelete(product) ? [{ label: "מחיקה", icon: Trash2, onSelect: () => onDelete(product), danger: true }] : []),
   ];
+  // "מובנה" — the studio's one row of this thing, installed with the studio and shaped on the plan.
+  const builtInTag = product.builtIn ? (
+    <span className="inline-flex shrink-0 items-center rounded-sm bg-accent-tint px-1.5 py-0.5 text-xs font-medium text-accent" title="פריט מובנה — לא נמחק ולא משוכפל; כל השדות שלו ניתנים לעריכה">
+      מובנה
+    </span>
+  ) : null;
   const menu = (
     <Menu
       label={`אפשרויות ל${product.name}`}
@@ -99,6 +110,7 @@ export function ProductCard({
             <span>{formatDimensions(product.dimensions)}</span>
             <span className="text-border" aria-hidden="true">·</span>
             <span>{category?.label}</span>
+            {builtInTag}
             {flowers && (
               <>
                 <span className="text-border" aria-hidden="true">·</span>
@@ -172,6 +184,7 @@ export function ProductCard({
 
         <div className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
           <span>{category?.label}</span>
+          {builtInTag}
           {/* A composite stands on no one layer — its parts each have their own. */}
           {!product.composition && (
             <>

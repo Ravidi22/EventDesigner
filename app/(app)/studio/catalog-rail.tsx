@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Copy, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { Pin } from "lucide-react";
+import { canDuplicate, railBuiltIns } from "@/lib/catalog/built-in";
 import { Menu } from "@/components/menu";
 import type { ChairRows } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsLayout } from "@/lib/design-document/chair-rows";
@@ -123,7 +125,7 @@ export function CatalogRail({
 
   const allowedGroups = useMemo(() => (groups ? new Set(groups) : null), [groups]);
 
-  const { added, liked, rest } = useMemo(() => {
+  const { added, pinned, liked, rest } = useMemo(() => {
     const byId = new Map(products.map((p) => [p.id, p]));
     const addedSet = new Set(addedIds);
     const likedSet = new Set(likedIds);
@@ -132,11 +134,15 @@ export function CatalogRail({
     // The event folder is filtered too, not exempted: a search for "פמוט" that still shows six
     // liked chuppah photos above the result is a search that didn't happen.
     const added = addedIds.map((id) => byId.get(id)).filter((p): p is Product => !!p && match(p));
+    // The studio's built-ins placed directly (lib/catalog/built-in.ts), pinned like "שורות כיסאות":
+    // the one LED strip, sail, rug… the designer shapes on the plan rather than picks from a list.
+    const pinned = railBuiltIns(products, match).filter((p) => !addedSet.has(p.id));
+    const pinnedSet = new Set(pinned.map((p) => p.id));
     const liked = likedIds
       .map((id) => byId.get(id))
-      .filter((p): p is Product => !!p && !addedSet.has(p.id) && match(p));
-    const rest = products.filter((p) => !addedSet.has(p.id) && !likedSet.has(p.id) && match(p));
-    return { added, liked, rest };
+      .filter((p): p is Product => !!p && !addedSet.has(p.id) && !pinnedSet.has(p.id) && match(p));
+    const rest = products.filter((p) => !addedSet.has(p.id) && !likedSet.has(p.id) && !pinnedSet.has(p.id) && match(p));
+    return { added, pinned, liked, rest };
   }, [filters, addedIds, likedIds, products, allowedGroups, pass]);
 
   // "שורות כיסאות" — a block of the studio's first chair in rows, for a ceremony (lib/design-document/
@@ -152,7 +158,7 @@ export function CatalogRail({
     return chair;
   }, [products, allowedGroups, filters]);
 
-  const empty = added.length === 0 && liked.length === 0 && rest.length === 0 && !rowsChair;
+  const empty = added.length === 0 && pinned.length === 0 && liked.length === 0 && rest.length === 0 && !rowsChair;
   const active = hasActiveFilters(filters);
 
   return (
@@ -246,6 +252,19 @@ export function CatalogRail({
             </ul>
           </>
         )}
+        {pinned.length > 0 && (
+          <>
+            <SectionLabel>
+              <Pin className="h-3.5 w-3.5 text-accent" strokeWidth={2} />
+              מובנים
+            </SectionLabel>
+            <ul className="mb-4 flex flex-col gap-1">
+              {pinned.map((p) => (
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
+              ))}
+            </ul>
+          </>
+        )}
         {liked.length > 0 && (
           <>
             <SectionLabel>
@@ -261,7 +280,7 @@ export function CatalogRail({
             <SectionLabel className="mt-4">כל הקטלוג</SectionLabel>
           </>
         )}
-        {added.length > 0 && liked.length === 0 && rest.length > 0 && <SectionLabel>כל הקטלוג</SectionLabel>}
+        {(added.length > 0 || pinned.length > 0) && liked.length === 0 && (rest.length > 0 || !!rowsChair) && <SectionLabel>כל הקטלוג</SectionLabel>}
         <ul className="flex flex-col gap-1">
           {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
           {rest.map((p) => (
@@ -465,7 +484,7 @@ function ProductRow({
   armed,
   onArm,
   onEdit,
-  onDuplicate,
+  onDuplicate: offerDuplicate,
 }: {
   product: Product;
   mmPerPx?: RefObject<number>;
@@ -474,6 +493,9 @@ function ProductRow({
   onEdit?: (productId: string) => void;
   onDuplicate?: (product: Product) => void;
 }) {
+  // A built-in, or anything in a built-in-only category, is never copied (lib/catalog/built-in.ts).
+  // The sketch is a studio's, so there is no supplier to except.
+  const onDuplicate = canDuplicate(p) ? offerDuplicate : undefined;
   const toggle = () => onArm?.(armed ? null : p.id);
   // The open panel hangs over the rows below, which come later in the DOM: lifted while it is open
   // (the catalog card's rule, app/(app)/catalog/product-card.tsx).
