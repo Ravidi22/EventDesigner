@@ -106,6 +106,10 @@ if (isMain(import.meta.url)) {
   const rings = rug.parts.filter((q): q is Extract<typeof q, { shape: "extrude" }> => q.shape === "extrude" && near(q.at.z, 12));
   assert(rings.length === 2 && rings.every((q) => (q.holes?.length ?? 0) === 1), "the rug's contour is two rings on its top");
   assert(rings[0].material?.colour === "#c9a24a" && rings[1].material?.colour === "#f5efe0", "…in the contour's colours, the edge band first");
+  // A carpet laid OVER the stage (lib/studio/cover.ts): its outline extruded, on the 600 deck.
+  const onStage = ofId("p-stage-rug")[0];
+  const slab = onStage?.parts[0];
+  assert(!!onStage && slab?.shape === "extrude" && slab.outline.outline.length === 4 && near(onStage.instances[0].at.z, 600), "the carpet over the stage is its outline, lying on the deck");
   // The cloth's hem: the bottom 80 of its fall, gold, over the same folds.
   const hem = bodies.find((b) => b.id.startsWith("cloth-hem:p-cloth"));
   const hemFall = hem?.parts[0];
@@ -133,6 +137,20 @@ if (isMain(import.meta.url)) {
   assert(!!rodCloth && near((rodCloth as { h: number }).h, 2400), "a rod's curtain falls from the rod's 2.4 m");
   const rodPosts = rodCurtain.parts.filter((q) => q.shape === "box");
   assert(rodPosts.length === 2 && !rodPosts.some((q) => near(q.at.y, 9500)), `two posts, none under the cantilevered arm (got ${rodPosts.length})`);
+  // PERGOLAS (lib/venues/pergola.ts, 2026-11-07): the venue's on the terrace and a hired one in the
+  // hall are one body (./floor-kinds.ts pergolaBody) — posts, beams, a roof — at their heights.
+  const venuePergola = ofId("feature:f-pergola")[0];
+  const pergolaTop = (b: BodyNode) => Math.max(...b.parts.map((q) => topOf(q as { shape: string; at: { z: number }; h?: number })));
+  assert(!!venuePergola && venuePergola.parts.filter((q) => q.shape === "box" && q.w === 150 && q.d === 150).length === 4 && near(pergolaTop(venuePergola), 2600), "the terrace's pergola: four posts, its slats ending at 2.6 m");
+  const hiredPergola = ofId("p-pergola").find((b) => b.tag.type === "item")!;
+  assert(!!hiredPergola && hiredPergola.parts.filter((q) => q.shape === "box" && q.w === 120 && q.d === 120).length === 4 && hiredPergola.parts.some((q) => q.shape === "plane"), "the hired pergola: its row's 12cm posts, laid 4 × 3, under its cloth");
+  // What is overhead decides the chain (lib/venues/roofs.ts): under the terrace's pergola an
+  // arrangement hangs 1.2 m under its 2.6 m top and is chained to it — never to the hall's 4 m roof.
+  const hung = ofId("p-hung")[0];
+  assert(!!hung && near(hung.instances[0].at.z, 2600 - 1200) && hung.parts.some((q) => q.shape === "cylinder" && near(topOf(q) + hung.instances[0].at.z, 2600)), "an arrangement hung under the pergola is chained to the pergola");
+  // A curtain on the pergola's front side (a SIDE rail): from its 2.6 m, a hand outside it.
+  const pergolaCloth = ofId("p-pergola-curtain")[0]?.parts.find((q) => q.shape === "ribbon");
+  assert(!!pergolaCloth && pergolaCloth.shape === "ribbon" && near(pergolaCloth.h, 2600) && pergolaCloth.path.every((q) => q.y < 5600 - 1500), "a curtain on the pergola's side falls from its top, outside it");
 
   // ── what glows ────────────────────────────────────────────────────────────────────────────────
   const emitters = scene.nodes.filter((n) => n.kind === "emitter");

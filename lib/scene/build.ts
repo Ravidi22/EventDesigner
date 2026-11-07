@@ -21,6 +21,7 @@ import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { hangHeightOf } from "@/lib/studio/hang";
 import { resolveSpan } from "@/lib/studio/anchor";
 import { rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetFootprint, carpetShape } from "@/lib/studio/cover";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
@@ -41,6 +42,7 @@ import { chairSpecOf, itemContextOf, tableNodes, topsOf } from "./tables";
 import { stageNodes, venueStageNodes, type StageOpts } from "./stage";
 import { type Scene, type SceneInput, WALL_THICK_MM, transform, vec3 } from "./types";
 import type { StagePlacement } from "@/lib/design-document/stage";
+import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 
 /** A curtain hangs this far off the wall's face into the room. */
 const CURTAIN_OFF_WALL_MM = 60;
@@ -57,6 +59,10 @@ export function buildScene(input: SceneInput): Scene {
     else if (f.kind === "curtain") venueCurtain(input, out, f);
     else venueClimb(input, out, f);
   }
+  // What a hanging thing hangs from (lib/venues/roofs.ts): the roofed zone it is in, else the
+  // building, else the venue's pergola, else a hired one in this sketch — never "the tallest ceiling
+  // anywhere on the plan", which gave a chandelier on the open terrace a chain to the hall's roof.
+  const roofOf = roofHeightAt(input.structure, input.plan.all, sketchPergolas(input.doc.placements, (v) => resolve(v)?.product));
   const tables = new Map(input.doc.tables.map((t) => [t.id, t]));
   tableNodes(input, out, (tableId) => {
     const t = tables.get(tableId);
@@ -66,7 +72,7 @@ export function buildScene(input: SceneInput): Scene {
     if (p.tableId || p.layer === "table") continue; // on a table: tables.ts drew it
     if (isRailed(p)) curtain(input, out, p);
     else if (p.perch) perched(input, out, p, elevation);
-    else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofedMm);
+    else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofOf(p.position));
     else floorPlacement(input, out, p, elevation);
   }
   return { nodes: out.nodes(), bounds: input.plan.bounds, roofedMm, stats: out.stats() };
@@ -119,9 +125,12 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
   }
   const { product, kind, ctx, footprint } = contextOf(input, p);
   if (product?.category === "rugs") {
-    // The rug's own top is what floorZ reads under it; its base is a rug lower.
-    const z = elevation.floorZ(p.position) - RUG_MM;
-    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody({ ...ctx, rug: rugShapeOf(p) }), roomTransform(p, Math.max(0, z)));
+    // The rug's own top is what floorZ reads under it; its base is a rug lower. A carpet laid to an
+    // outline (over a stage, a lawn — lib/studio/cover.ts) is read by its whole footprint, as anything
+    // standing on a platform is: its middle may be over a hole, or in a ring's hollow.
+    const carpet = carpetShape(p);
+    const z = (carpet ? elevation.floorUnder(footprintPolygons(carpetFootprint(carpet), p.position, p.rotation ?? 0), p.id) : elevation.floorZ(p.position)) - RUG_MM;
+    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody({ ...ctx, rug: rugShapeOf(p), ...(carpet ? { carpet } : {}) }), roomTransform(p, Math.max(0, z)));
     return;
   }
   out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, floorOf(footprint)));

@@ -15,9 +15,11 @@ import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
 import { railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetPolygon, carpetShape } from "@/lib/studio/cover";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { obstacleFootprint } from "@/lib/venues/rim";
 import { isLedStrip } from "@/lib/venues/led";
+import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostsInRoom } from "@/lib/venues/pergola";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
 import { bandPolygon, footprintPolygons, polysBox, type CentredBox, type ClearanceSubject, type Poly } from "@/lib/studio/proximity";
@@ -193,8 +195,12 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
       });
     // A rug with curved sides is measured along its curves; the rectangle it was is only its box.
     const bows = rugShapeOf(p);
+    // A carpet laid to an outline (lib/studio/cover.ts) is measured, hit and stacked by that outline.
+    const carpet = carpetShape(p);
     const polysAt =
-      r?.sizing === "stretch"
+      carpet
+        ? (c: Point): Poly[] => [carpetPolygon(carpet).map((q) => toRoom({ position: c, rotation: p.rotation }, q))]
+        : r?.sizing === "stretch"
         ? bows
           ? (c: Point): Poly[] => {
               const s = stretchSize(p);
@@ -211,7 +217,9 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
       clearanceMm,
       groupId: p.groupId,
       solid: r?.solid,
-      movable: true,
+      // A carpet laid over a surface or a stage goes where that goes — never aligned, spaced or
+      // spread on its own.
+      movable: !p.cover,
     };
   });
 }
@@ -244,6 +252,13 @@ export function clearanceSubjects(
       continue;
     }
     if (p.layer !== "floor" || r?.sizing === "stretch" || !visible.floor) continue;
+    // A PERGOLA is a roof (lib/venues/pergola.ts): tables are set UNDER it, so its posts are the only
+    // thing of it in anyone's way — never the floor its footprint covers.
+    if (r && isPergolaRow(r.product)) {
+      const g = pergolaGeometry(placementFootprint(p), pergolaOfProduct(r.product));
+      if (g) out.push({ key: `placement:${p.id}`, polys: pergolaPostsInRoom(g, p.position, p.rotation || 0, !!p.mirrored, p.scale || 1), clearanceMm: r.product.clearanceMm ?? 0, groupId: p.groupId, label: r.product.name });
+      continue;
+    }
     add({ kind: "placement", id: p.id });
   }
   // The venue's own furniture asks for nothing, but a table that asked for aisle room is as much in
@@ -252,6 +267,13 @@ export function clearanceSubjects(
   // reported as too close to it, as though the grass were a wall.
   // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
   // Nor the venue's LED strip, for the same reason as a hired one.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "led") add({ kind: "feature", id: f.id });
+  // A venue's pergola, as a hired one: its posts alone.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led") add({ kind: "feature", id: f.id });
+  if (visible.floor)
+    for (const f of structure.features) {
+      if (f.kind !== "pergola") continue;
+      const g = pergolaGeometry(featureFootprint(f), pergolaOf(f));
+      if (g) out.push({ key: `feature:${f.id}`, polys: pergolaPostsInRoom(g, { x: f.x, y: f.y }, f.rotationDeg ?? 0), clearanceMm: 0, label: f.label });
+    }
   return out;
 }

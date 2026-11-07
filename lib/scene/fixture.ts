@@ -149,6 +149,8 @@ export const FIXTURE_PRODUCTS: Product[] = [
   { id: "curtain", name: "וילון", category: "curtains", layer: "ceiling", dimensions: { widthMm: 4000, depthMm: 220, heightMm: 4000 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-curtain-ivory", name: "שנהב", swatch: "#f3ede2" }] },
   { id: "rug", name: "שטיח", category: "rugs", layer: "floor", dimensions: { widthMm: 3000, depthMm: 2000, heightMm: 0 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-rug-plum", name: "סגול", swatch: "#4b3a6e" }] },
   { id: "sofa", name: "ספה", category: "sofas", layer: "floor", dimensions: { widthMm: 2000, depthMm: 900, heightMm: 800 }, categoryFields: {}, styleTags: [], variants: [] },
+  // 2026-11-07: a hired pergola (lib/venues/pergola.ts) — 12cm posts, a cloth roof.
+  { id: "pergola", name: "פרגולה 3×3", category: "pergolas", layer: "floor", dimensions: { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, categoryFields: { postMm: 120 }, styleTags: [], appearance: { shape: "rect", content: "none", symbolStyle: "fabric" }, variants: [{ id: "v-pergola-white", name: "לבן", swatch: "#f4f1ea" }] },
 ];
 
 export const FIXTURE_DOC: DesignDocumentContent = {
@@ -201,12 +203,37 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-sofa", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 2000, y: 10000 }, rotation: 90, scale: 1 },
     // A contour of its own on this plan (lib/catalog/border.ts): a gold band, a second one inside it.
     { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 }, border: { widthMm: 120, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 60, colour: "#f5efe0" } } },
+    // A carpet laid OVER the stage, 20cm in from its edge (lib/studio/cover.ts) — stored as the settle
+    // writes it: the stage's 6×4 outline pulled in to 5.6×3.6, on the stage's middle.
+    {
+      id: "p-stage-rug",
+      variantId: "v-rug-plum",
+      layer: "floor",
+      quantity: 1,
+      position: { x: 10000, y: 9500 },
+      rotation: 0,
+      scale: 1,
+      sizeMm: { widthMm: 5600, depthMm: 3600 },
+      cover: { stageId: "p-stage", insetMm: 200 },
+      outline: [
+        { x: -2800, y: -1800 },
+        { x: 2800, y: -1800 },
+        { x: 2800, y: 1800 },
+        { x: -2800, y: 1800 },
+      ],
+    },
     { id: "p-rows", variantId: "v-chair-ivory", layer: "floor", quantity: 10, position: { x: 25000, y: 9500 }, rotation: 0, scale: 1, rows: { rows: 2, perRow: 5 } },
     { id: "p-chuppah", variantId: "v-chuppah-cream", layer: "floor", quantity: 1, position: { x: 25000, y: 6000 }, rotation: 0, scale: 1 },
     { id: "p-chandelier", variantId: "v-chand-gold", layer: "ceiling", quantity: 1, position: { x: 5000, y: 5000 }, rotation: 0, scale: 1, over: "t1" },
     { id: "p-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, span: { wallId: "w-left", from: 0.2, to: 0.6 } },
     // 2026-11-07: a curtain on a free-standing ROD on the terrace — a ר, its arm out past its last post.
     { id: "p-rod-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "rod", points: [{ x: 21000, y: 8000 }, { x: 24000, y: 8000 }, { x: 24000, y: 9500 }], heightMm: 2400, cantilever: "end" } },
+    // 2026-11-07: a hired pergola in the hall, laid 4 × 3; on the terrace, an arrangement hung under
+    // the venue's own pergola (lib/venues/roofs.ts — its chain reaches the pergola, not the hall's
+    // roof) and a curtain on that pergola's front side (a side rail).
+    { id: "p-pergola", variantId: "v-pergola-white", layer: "floor", quantity: 1, position: { x: 16500, y: 8500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 4000, depthMm: 3000 } },
+    { id: "p-hung", variantId: "v-arr-blush", layer: "ceiling", quantity: 1, position: { x: 21700, y: 5600 }, rotation: 0, scale: 1 },
+    { id: "p-pergola-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "side", featureId: "f-pergola", side: 0, from: 0, to: 1, out: 1 } },
   ],
   groups: [{ id: "g1", number: 2 }],
 };
@@ -238,6 +265,8 @@ export const FIXTURE_STRUCTURE: VenueStructure = {
     { id: "f-palm", kind: "plant", label: "דקל", x: 28500, y: 1500, widthMm: 4500, depthMm: 4500, heightMm: 6000, shape: "circle", rotationDeg: 0, plant: "palm" },
     { id: "f-pool", kind: "pool", label: "בריכה", x: 24000, y: 2500, widthMm: 6000, depthMm: 2500, heightMm: 0, shape: "ellipse", rotationDeg: 0 },
     { id: "f-seating", kind: "seating", label: "שורות כיסאות", x: 28000, y: 6000, widthMm: 2000, depthMm: 1500, heightMm: 900, shape: "rect", rotationDeg: 0, seating: { rows: 3, perRow: 4, chairStyle: "dining", chairWidthMm: 450, chairDepthMm: 500 } },
+    // 2026-11-07: the terrace's own pergola, slatted, 2.6 m.
+    { id: "f-pergola", kind: "pergola", label: "פרגולה", x: 21700, y: 5600, widthMm: 3000, depthMm: 3000, heightMm: 2600, shape: "rect", rotationDeg: 0, pergola: { postMm: 150, roof: "slats" } },
   ],
 };
 

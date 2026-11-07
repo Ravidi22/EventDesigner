@@ -36,9 +36,13 @@ import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
 import { borderOf, darkerShade, type Border } from "@/lib/catalog/border";
 import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostOf, pergolaPostsInRoom } from "@/lib/venues/pergola";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { DEFAULT_TONE } from "@/components/item-symbol";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { rugOutline, rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetFootprint, carpetPathD, carpetPolygon, carpetShape, type CarpetShape } from "@/lib/studio/cover";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
@@ -182,6 +186,12 @@ const placed = (at: { x: number; y: number }, rotation: number, mirrored?: boole
 function fallbackSize(r?: Resolved): { widthMm: number; depthMm: number } {
   const b = r ? footprintBounds(resolveFootprint(r.product)) : null;
   return { widthMm: b?.w || 2000, depthMm: b?.h || 1400 };
+}
+
+/** A carpet laid to an outline WITH HOLES in it (a stage's, lib/studio/cover.ts): the outline and its
+ *  holes as one even-odd path, in place of FootprintShape (which knows no holes). */
+function CarpetCut({ carpet, ...props }: { carpet: CarpetShape } & Omit<React.SVGProps<SVGPathElement>, "d" | "ref">) {
+  return <path d={carpetPathD(carpet)} fillRule="evenodd" {...props} />;
 }
 
 /** World mm round the framed zone: room for the overall dimensions (900mm off the room) and their
@@ -495,7 +505,9 @@ export function PlacementMap({
   for (const t of doc.tables) stackBoxes.set(`table:${t.id}`, boxOf(toWorld(outlineOf(tableFootprint(t)), t.position, t.rotation, t.mirrored)));
   for (const p of floorItems) {
     const r = resolve(p.variantId);
-    const outline = p.stage ? p.stage.outline : outlineOf(r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p));
+    // A carpet laid to an outline (lib/studio/cover.ts) stacks by that outline.
+    const carpet = carpetShape(p);
+    const outline = p.stage ? p.stage.outline : carpet ? carpetPolygon(carpet) : outlineOf(r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p));
     stackBoxes.set(`placement:${p.id}`, boxOf(toWorld(outline, p.position, p.rotation, p.mirrored, p.stage ? 1 : p.scale || 1)));
   }
   const risen = new Map(autoStack(rawStack, stackBoxes, rawStack.map((e) => e.ref)).map((a) => [`${a.kind}:${a.id}`, a.order]));
@@ -523,6 +535,13 @@ export function PlacementMap({
       continue;
     }
     const r = resolve(p.variantId);
+    // A hired PERGOLA (lib/venues/pergola.ts): its posts, fixed — the tables stand under its roof, so
+    // a gap is measured to a post, never to the outline round the tables.
+    if (r && isPergolaRow(r.product)) {
+      const g = pergolaGeometry(placementFootprint(p), pergolaOfProduct(r.product));
+      if (g) pergolaPostsInRoom(g, p.position, p.rotation || 0, !!p.mirrored, p.scale || 1).forEach((polygon, i) => solids.push({ id: `${p.id}:post-${i}`, kind: "fixed", polygon }));
+      continue;
+    }
     const fp: Footprint = r?.sizing === "stretch" ? { kind: "rect", ...(p.sizeMm ?? fallbackSize(r)) } : placementFootprint(p);
     const b = footprintBounds(fp);
     const rug = r?.product.category === "rugs";
@@ -531,13 +550,22 @@ export function PlacementMap({
     // not by its box.
     const rugShape = rug && r?.sizing === "stretch" ? rugShapeOf(p) : undefined;
     const curved = rugShape && fp.kind === "rect" ? rugPolygon(fp.widthMm, fp.depthMm, rugShape) : null;
-    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(curved ?? outlineOf(fp), p.position, p.rotation, p.mirrored, p.scale || 1) });
+    // …and one laid to an outline (over a surface or a stage, lib/studio/cover.ts) along that.
+    const carpet = rug ? carpetShape(p) : null;
+    solids.push({ id: p.id, kind: rug ? "rug" : "item", polygon: toWorld(carpet ? carpetPolygon(carpet) : (curved ?? outlineOf(fp)), p.position, p.rotation, p.mirrored, p.scale || 1) });
   }
   // The venue's own stairs and ramps (lib/venues/climb.ts). Nobody on the crew places them, so they
   // are never sized or tied — but a table has to keep their foot and head clear, so the gap to the
   // nearest table is measured and flagged, and no figure is written across them. By their real
   // outline: a curved flight is a band of a ring, not the box round it.
   for (const f of structure.features) {
+    // A pergola's POSTS are fixed the same way (lib/venues/pergola.ts): the tables stand under its
+    // roof, so the gap is measured to each post, never to the outline round them.
+    if (f.kind === "pergola") {
+      const g = pergolaGeometry(featureFootprint(f), pergolaOf(f));
+      if (g) pergolaPostsInRoom(g, { x: f.x, y: f.y }, f.rotationDeg ?? 0).forEach((polygon, i) => solids.push({ id: `${f.id}:post-${i}`, kind: "fixed", polygon }));
+      continue;
+    }
     if (!isClimb(f.kind)) continue;
     const [polygon] = footprintPolygons(featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0);
     if (polygon?.length >= 3) solids.push({ id: f.id, kind: "fixed", polygon });
@@ -1533,6 +1561,10 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             ) : f.kind === "fountain" ? (
               // A fountain as the catalog's prints: white basin, ink lines.
               <ItemSymbol kind="fountain" footprint={fp} count={1} print ink={INK} tone="#ffffff" />
+            ) : f.kind === "pergola" ? (
+              // A pergola (lib/venues/pergola.ts): its posts in the elements' grey, its outline, slats
+              // and lattice in ink — no name, the drawing says what it is.
+              <PergolaGlyph footprint={fp} pergola={pergolaOf(f)} stroke={MUTED} strokeWidth={style.strokeWidth} postFill={MONO.feature} />
             ) : f.kind === "column" ? (
               // A column: its plinth white, the shaft in the elements' grey so it reads solid.
               <ColumnGlyph f={f} fill="#ffffff" stroke={MUTED} strokeWidth={style.strokeWidth} shaftFill={MONO.feature} />
@@ -1554,7 +1586,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             )}
           </g>
         </g>
-        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && f.label && (
+        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && f.label && (
           <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT} stroke="#ffffff" strokeWidth={0.5 * den} strokeLinejoin="round" paintOrder="stroke">
             {f.label}
           </text>
@@ -1599,6 +1631,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             <PlantGlyph species={plantSpecies(f)} w={f.widthMm} d={f.depthMm} id={`q-${f.id}`} color={f.style?.fill} opacity={f.style?.fillOpacity} />
           ) : f.kind === "seating" ? (
             <SeatingGlyph spec={seatingOf(f)} tone={f.style?.fill} ink={MUTED} />
+          ) : f.kind === "pergola" ? (
+            <PergolaGlyph footprint={featureFootprint(f)} pergola={pergolaOf(f)} stroke={INK_SOFT} strokeWidth={style.strokeWidth} postFill={f.style?.fill ?? DEFAULT_TONE.pergola} />
           ) : f.kind === "column" ? (
             <ColumnGlyph f={f} fill={style.fill} fillOpacity={style.fillOpacity} stroke={style.stroke} strokeWidth={style.strokeWidth} />
           ) : f.kind === "fountain" ? (
@@ -1628,7 +1662,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
         </g>
       </g>
       {/* Upright, outside the turn — a name drawn at the feature's angle reads as a mark. */}
-      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && f.label && (
+      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && f.label && (
         <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
           {f.label}
         </text>
@@ -1727,15 +1761,20 @@ export function PlacementGlyph({
   // that draw a custom footprint recentre it on its bounds, so `lift` carries it back onto the
   // rectangle's centre — which is where the rug is.
   const stretched = r?.sizing === "stretch" ? (placement.sizeMm ?? fallbackSize(r)) : undefined;
-  const rugShape = stretched && !shape ? rugShapeOf(placement) : undefined;
+  // A carpet laid to an outline — over a surface or a stage, or let go from one (lib/studio/cover.ts):
+  // that outline, centred on its box; its holes cut (CarpetCut); no bows of its own.
+  const carpet = stretched && !shape ? carpetShape(placement) : null;
+  const carpetFp = carpet ? carpetFootprint(carpet) : undefined;
+  const cut = carpet && carpet.holes.length ? carpet : null;
+  const rugShape = stretched && !shape && !carpet ? rugShapeOf(placement) : undefined;
   const bowed = rugShape && stretched ? rugOutline(stretched.widthMm, stretched.depthMm, rugShape) : null;
   const lift = bowed ? `translate(${bowed.centre.x} ${bowed.centre.y})` : undefined;
   const footprint: Footprint = shape ?? (
     stretched
-      ? (bowed?.footprint ?? { kind: "rect", ...stretched })
+      ? (carpetFp ?? bowed?.footprint ?? { kind: "rect", ...stretched })
       : placementFootprint(placement)); // at the size it was stretched to, when its row allows that
   // The rectangle a rug's border and fringe are laid in: its footprint, or — curved — the box it bows from.
-  const patternBox = footprint.kind === "rect" ? { w: footprint.widthMm, h: footprint.depthMm } : bowed && stretched ? { w: stretched.widthMm, h: stretched.depthMm } : null;
+  const patternBox = carpet ? { w: carpet.widthMm, h: carpet.depthMm } : footprint.kind === "rect" ? { w: footprint.widthMm, h: footprint.depthMm } : bowed && stretched ? { w: stretched.widthMm, h: stretched.depthMm } : null;
   const scale = placement.scale || 1;
   // The row's own weight and dash, collapsed to ink-on-paper (TableGlyph's reason). A stage keeps the
   // sheet's furniture weight whatever deck it was built from, as it does on screen.
@@ -1772,9 +1811,20 @@ export function PlacementGlyph({
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
-        {!symbol && !block && (
+        {!symbol && !block && cut && (
+          <CarpetCut
+            carpet={cut}
+            fill={own ?? screen.fill}
+            fillOpacity={own ? 1 : screen.fillOpacity}
+            stroke={screen.stroke}
+            strokeWidth={screen.strokeWidth}
+            strokeDasharray={screen.dashArray.length ? screen.dashArray.join(" ") : undefined}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {!symbol && !block && !cut && (
           <g transform={lift}>
             <FootprintShape
               footprint={footprint}
@@ -1793,7 +1843,7 @@ export function PlacementGlyph({
             <ItemSurface appearance={r?.product.appearance} footprint={footprint} color={own} seed={placement.id} />
           </g>
         )}
-        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} />}
+        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} footprint={carpetFp} />}
       </g>
     );
   }
@@ -1804,10 +1854,13 @@ export function PlacementGlyph({
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
+      {cut ? (
+        <CarpetCut carpet={cut} fill={flat ?? style.fill} stroke={style.stroke} strokeWidth={style.strokeWidth} strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined} vectorEffect="non-scaling-stroke" />
+      ) : (
       <g transform={lift}>
         <FootprintShape
           footprint={footprint}
@@ -1819,11 +1872,12 @@ export function PlacementGlyph({
           vectorEffect="non-scaling-stroke"
         />
       </g>
+      )}
       {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. Its
           contour (lib/catalog/border.ts) is a step darker than the rug's own grey, so a bordered rug
           still reads as one photocopied. */}
       {rug && patternBox && (
-        <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} />
+        <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} footprint={carpetFp} />
       )}
     </g>
   );

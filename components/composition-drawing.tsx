@@ -7,6 +7,7 @@ import { footprintBounds } from "@/lib/studio/footprint";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { chairBlockOf, resolve } from "@/lib/studio/catalog-resolver";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { resolveStyle } from "@/lib/element-style";
@@ -188,6 +189,7 @@ function Piece({ placement: p, at, rotation, footprint, overhead }: { placement:
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          postMm={pergolaPostOf(product)}
           rise={symbol === "stairs" || symbol === "ramp" ? climbRise(product, p.climb) : undefined}
           detail={false}
           border={symbol === "runner" ? borderOf(p, product) : undefined}

@@ -13,6 +13,7 @@ import { anchorOf } from "@/lib/catalog/categories";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
@@ -94,6 +95,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
           border={symbol === "runner" ? border : undefined}
           label={symbol === "screen" ? product.name : undefined}

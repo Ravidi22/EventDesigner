@@ -17,6 +17,9 @@ import { SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { ClimbGlyph } from "@/components/climb-glyph";
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { pergolaOf } from "@/lib/venues/pergola";
+import { DEFAULT_TONE } from "@/components/item-symbol";
 import { seatingOf } from "@/lib/venues/seating";
 import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
 import { NO_DECKS, edgesMatter, takesEdgeItems } from "@/lib/venues/stage-edges";
@@ -1194,6 +1197,30 @@ const FeatureNode = memo(function FeatureNode({
                     <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={selected ? "var(--color-accent)" : undefined} />
                     {selected && <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
                   </>
+                ) : f.kind === "pergola" ? (
+                  // A pergola (lib/venues/pergola.ts): its posts, its roof across them and any
+                  // lattice sides — no name, the drawing says what it is. Tables, a bar, the lawn
+                  // stand UNDER it, so until it is selected it is picked up by its posts and a
+                  // finger-wide band along its outline alone; selected, its whole footprint is its
+                  // handle (the chandelier's rule in the sketch, canvas-stage's PlacementNode).
+                  <>
+                    <PergolaGlyph
+                      footprint={featureFootprint(f)}
+                      pergola={pergolaOf(f)}
+                      stroke={selected ? "var(--color-accent)" : (f.style?.stroke ?? "var(--color-ink-soft)")}
+                      strokeWidth={selected ? 2 : 1.25}
+                      postFill={f.style?.fill ?? DEFAULT_TONE.pergola}
+                      hitPosts
+                    />
+                    <FootprintShape
+                      footprint={featureFootprint(f)}
+                      fill={selected ? "transparent" : "none"}
+                      stroke="transparent"
+                      strokeWidth={14}
+                      vectorEffect="non-scaling-stroke"
+                      style={{ pointerEvents: selected ? "visiblePainted" : "stroke" }}
+                    />
+                  </>
                 ) : f.kind === "column" ? (
                   // A column: its plinth, base ring and shaft (lib/venues/column.ts) — drawn solid,
                   // not in the dashed line a feature's outline rests in, and with no name: the
@@ -1246,7 +1273,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"

@@ -82,6 +82,7 @@ import { offsetOutline } from "./tables";
 import { hedgeParts, palmParts, plantTurn, potParts, shrubParts, treeParts } from "./plants";
 import { readStructures, shaftTopOf, type BeamReading, type ColumnReading } from "./structures";
 import { elevationOf } from "./elevation";
+import { pergolaOf } from "@/lib/venues/pergola";
 import {
   DEFAULT_SETTINGS,
   DOOR_HEIGHT_MM,
@@ -653,6 +654,26 @@ function fountainBody(f: StructureFeature, wells: readonly Well[], out: SceneCol
   out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, floorKindBody("fountain", ctx), roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, z));
 }
 
+/** The venue's own pergola (FeatureKind "pergola", lib/venues/pergola.ts): the catalog's pergola
+ *  body (./floor-kinds.ts pergolaBody — one function for both) from the feature's footprint as drawn,
+ *  its height, its spec and its tint, standing on the floor under it (a pergola built on a terrace
+ *  stands on the terrace). */
+function pergolaFeatureBody(f: StructureFeature, out: SceneCollector, floorZ: number): void {
+  const ctx: ItemContext = {
+    product: undefined,
+    resolved: undefined,
+    footprint: featureFootprint(f),
+    widthMm: f.widthMm,
+    depthMm: f.depthMm,
+    heightMm: f.heightMm > 0 ? f.heightMm : 2600,
+    tone: hexOf(f.style?.fill) ?? DEFAULT_TONE.pergola.toLowerCase(),
+    count: 1,
+    author: false,
+    pergola: pergolaOf(f),
+  };
+  out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, floorKindBody("pergola", ctx), roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, floorZ));
+}
+
 /** A column (./structures.ts — the venue's own, or read off nested footprints): the PLINTH (its
  *  biggest footprint) a short block, the BASE mouldings (those between) a drum with a roll round
  *  its foot, the SHAFT (the smallest) rising with a slight entasis to the beam it carries or its
@@ -917,6 +938,9 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
         break;
       case "fountain":
         fountainBody(f, wells, out, floorOfFeature(f, floorOf));
+        break;
+      case "pergola":
+        pergolaFeatureBody(f, out, floorOfFeature(f, floorOf));
         break;
       case "plant":
         plantInstance(f, out, floorOf);
@@ -1352,6 +1376,26 @@ if (isMain(import.meta.url)) {
       assert(!ab.some((b) => b.id === "feature:pool-1") && !(ab.find((b) => b.id === "floor:z-terrace")!.parts[0] as Extract<Part, { shape: "plane" }>).holes, "a rim deeper than the pool leaves no water and no hole in the floor");
       const solid = ab.find((b) => b.id === "rim:pool-1")!.parts[0];
       assert(solid.shape === "plane" && !solid.holes, "…the band is the whole outline");
+    }
+
+    // A PERGOLA (lib/venues/pergola.ts): the catalog's own body (./floor-kinds.ts pergolaBody), turned
+    // with the feature, its four posts up from the floor under it to the beams, its slats ending at
+    // its height, a lattice on its closed side — and on a raised floor it stands on that floor.
+    {
+      const perg: StructureFeature = { id: "perg-1", kind: "pergola", label: "פרגולה", x: 8000, y: 2000, widthMm: 3000, depthMm: 2000, heightMm: 2600, shape: "rect", rotationDeg: 30, pergola: { postMm: 150, roof: "slats", closedSides: [1] } };
+      const withPergola: VenueStructure = { ...structure, features: [...structure.features, perg] };
+      const built = (floorOf?: FloorOf) => {
+        const c = new SceneCollector();
+        envelopeNodes({ doc: emptyDocument(), plan, structure: withPergola, settings: DEFAULT_SETTINGS, author: true }, c, floorOf);
+        return c.nodes().find((n): n is Extract<typeof n, { kind: "body" }> => n.kind === "body" && n.id === "feature:perg-1");
+      };
+      const pb = built();
+      const tops = (pb?.parts ?? []).map((p) => (p.shape === "box" ? p.at.z + p.h : p.shape === "extrude" ? p.at.z + p.h : p.at.z));
+      assert(!!pb && pb.parts.filter((p) => p.shape === "box" && p.w === 150 && p.d === 150).length === 4, "a venue pergola stands on its four posts");
+      assert(near(Math.max(...tops), 2600) && pb!.instances[0].at.z === 0 && near(pb!.instances[0].rotationDeg, 30), "…its top at its height, on the floor, turned with it");
+      assert(pb!.parts.filter((p) => p.shape === "box" && p.w === 30).length > 10, "…its closed side a lattice of battens");
+      const raised = built((_, id) => (id === "feature:perg-1" ? 600 : 0));
+      assert(!!raised && raised.instances[0].at.z === 600, "…and built on a 60 cm terrace it stands on the terrace");
     }
 
     const total = out.stats();

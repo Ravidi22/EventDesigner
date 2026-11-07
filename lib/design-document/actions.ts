@@ -1,6 +1,7 @@
 // ADR-4: the ONE actions layer. No renderer mutates the document directly — every
 // change is an action applied here. That constraint is what makes undo/redo nearly free.
 import type { BenchSpec, ChairRows, DesignDocumentContent, DesignGroup, FeaturePlacement, Placement, PlacementClimb, DesignTable, Point, WallSpan, StageBuild } from "./types";
+import type { PlacementCover } from "./types";
 import { chairRowsCount, cleanRows } from "./chair-rows";
 import type { ElementStyle } from "../element-style";
 import { isMain } from "../self-check";
@@ -9,6 +10,7 @@ import { carryHung } from "../studio/hang-over";
 import { cleanBows, cleanCorners } from "../studio/rug-shape";
 import { withRail, type Rail } from "../studio/rail";
 import { cleanBorder, sameBorder, type Border } from "../catalog/border";
+import { cleanCover, detachCover, settleCovers } from "../studio/cover";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
 const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
@@ -106,6 +108,10 @@ export type Action =
   // A drape's RAIL (lib/studio/rail.ts) — its stretch slid or typed, a rod bent, a side flipped —
   // and its drop (null = to the floor). Writes `rail` and lets a legacy `span` go.
   | { type: "setPlacementRail"; id: string; rail: Rail; dropMm?: number | null }
+  // A rug laid over a venue surface or a stage, or its margin changed (Placement.cover,
+  // lib/studio/cover.ts — the shape is laid by settleCovers after this); null lets the link go and
+  // keeps the shape it was laid in ("ניתוק מהמשטח").
+  | { type: "setPlacementCover"; id: string; cover: PlacementCover | null }
   // A whole drawing put in place of this one — a saved sketch loaded (lib/studio/sketches.ts). The
   // calibration stays: it is the venue's, not the sketch's. One entry, so one Ctrl+Z brings back the
   // drawing it replaced.
@@ -199,7 +205,9 @@ export type RetypedTable = Pick<DesignTable, "type" | "variantId"> &
   Pick<Partial<DesignTable>, "diameterMm" | "widthMm" | "depthMm" | "seats">;
 
 export function apply(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
-  return settleHung(doc, reduce(doc, action));
+  // …and a carpet laid over a stage or a venue surface goes where that goes, in the same entry
+  // (lib/studio/cover.ts settleCovers — the venue it reads is the one the studio primed).
+  return settleCovers(doc, settleHung(doc, reduce(doc, action)));
 }
 
 /** What hangs over a table goes where the table goes. Run after EVERY action rather than inside the
@@ -645,6 +653,17 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
           return bows ? { ...rest, bows } : rest;
         }),
       };
+    case "setPlacementCover": {
+      const want = cleanCover(action.cover);
+      let changed = false;
+      const placements = doc.placements.map((p) => {
+        if (p.id !== action.id) return p;
+        const next = want ? { ...p, cover: want } : detachCover(p);
+        if (next !== p) changed = true;
+        return next;
+      });
+      return changed ? { ...doc, placements } : doc;
+    }
     case "setPlacementCorners":
       return {
         ...doc,
@@ -1778,6 +1797,34 @@ if (isMain(import.meta.url)) {
     assert(slid.placements.find((p) => p.id === "i1")?.tableId === "b" && slid.placements.find((p) => p.id === "i1")?.position.x === -400, "an item moves to the table it was put on");
     assert(slid.tables.find((t) => t.id === "b")?.arranged === true, "…which is arranged from then on");
     assert(apply(base, { type: "arrangeOnTables", positions: [{ id: "i1", tableId: "nope", position: { x: 0, y: 0 } }] }) === base, "no such table, no edit");
+  }
+
+  // A CARPET OVER A STAGE (lib/studio/cover.ts): laid when added, carried when the stage is dragged —
+  // in the drag's own entry — and let go with its shape kept.
+  {
+    const stage: Placement = {
+      id: "st",
+      variantId: "deck",
+      layer: "floor",
+      quantity: 1,
+      position: { x: 0, y: 0 },
+      rotation: 0,
+      scale: 1,
+      stage: { outline: [{ x: -2000, y: -1000 }, { x: 2000, y: -1000 }, { x: 2000, y: 1000 }, { x: -2000, y: 1000 }], front: 0, decks: [] },
+    };
+    let h = initHistory({ calibration: { mmPerUnit: 1 }, tables: [], placements: [stage] });
+    h = dispatch(h, { type: "addPlacement", placement: { id: "rug", variantId: "rug", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, cover: { stageId: "st", insetMm: 100 } } });
+    const laid = h.present.placements.find((p) => p.id === "rug")!;
+    assert(laid.sizeMm?.widthMm === 3800 && laid.outline?.length === 4, "a carpet laid over a 4×2 stage, 10cm in, is 3.8 wide");
+    const depth = h.past.length;
+    h = dispatch(h, { type: "moveMany", moves: [{ kind: "placement", id: "st", position: { x: 5000, y: 3000 } }] });
+    const carried = h.present.placements.find((p) => p.id === "rug")!;
+    assert(carried.position.x === 5000 && carried.position.y === 3000 && h.past.length === depth + 1, "the stage dragged carries its carpet, in the same entry");
+    const still = dispatch(h, { type: "movePlacement", id: "rug", position: { x: 0, y: 0 } });
+    assert(still === h, "a covered carpet does not move on its own, and the try is no history entry");
+    h = dispatch(h, { type: "setPlacementCover", id: "rug", cover: null });
+    const loose = h.present.placements.find((p) => p.id === "rug")!;
+    assert(!loose.cover && loose.outline === carried.outline && loose.position === carried.position, "let go, it keeps the shape it was laid in");
   }
 
   console.log("actions self-check passed");
