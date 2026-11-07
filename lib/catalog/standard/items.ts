@@ -34,6 +34,9 @@ export interface StandardItem {
   /** Everything but the id and the shades. A base item has no variants on purpose: a shade is a
    *  studio's own stock, and a bare table is the same table everywhere. */
   product: Omit<Product, "id" | "variants">;
+  /** One of the studio's BUILT-INS (docs/superpowers/specs/2026-11-07-built-in-kit-design.md): never
+   *  deleted or duplicated, pinned on the rail; otherwise the designer's to edit like any row. */
+  builtIn?: true;
 }
 
 /** One studio's copy of a base item. The id comes from the caller — the install derives a stable

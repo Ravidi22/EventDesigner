@@ -166,6 +166,10 @@ export interface CategoryDef {
    *  "wall"` still says "this hangs on a rail" to every reader that sorts drapes from objects; this
    *  says which kinds of rail the placing offers. */
   rails?: RailType[];
+  /** BUILT-IN ONLY (docs/superpowers/specs/2026-11-07-built-in-kit-design.md): the category's one row is
+   *  the studio's built-in (lib/catalog/standard/items.ts, installed at sign-up), so a studio's new-item
+   *  form and CSV import never offer it. Absent = an ordinary category, created by hand. */
+  builtIn?: true;
   /** What a NEW product of this category is priced per (Product.priceUnit) — a seed for the drawer,
    *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
    *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
