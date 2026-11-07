@@ -18,7 +18,7 @@
 import type { EdgeCurve, Point } from "../studio/hall";
 import { bowShapeSide, roundShapeCorner, shapedOutline, type OutlineShape } from "../studio/shaped-outline";
 import { customShapeBounds } from "../studio/footprint";
-import { asOutline } from "./face-surfaces";
+import { asOutline, featureEditOutline, featureWorldOutline } from "./face-surfaces";
 import { featureFootprint, newFeature, type StructureFeature } from "./structure";
 import { isMain } from "../self-check";
 
@@ -171,6 +171,16 @@ if (isMain(import.meta.url)) {
   const big = newPoolFeature("kidney", at, { widthMm: 16000, depthMm: 6000 });
   const bb = footprintBoxOf(big);
   assert(near(bb.w, 16000, 160) && near(bb.h, 6000, 60), `a kidney asked 16 × 6 is drawn 16 × 6 (${bb.w.toFixed(0)} × ${bb.h.toFixed(0)})`);
+  // A kidney TURNED 30° and handed to the outline editor: read and written straight back (the first
+  // edit bakes the turn into the points), it is drawn where it was — bows, arcs and all.
+  const turned = { ...kidney, id: "k", rotationDeg: 30 } as StructureFeature;
+  const before = featureWorldOutline(turned);
+  const read = featureEditOutline(turned);
+  const baked = { ...turned, ...asOutline(read.outline, read.edgeCurves, read.corners) } as StructureFeature;
+  assert(baked.rotationDeg === 0 && baked.corners?.length === 4 && !!baked.edgeCurves?.[0], "an edit bakes the turn, keeping the bows and radii");
+  const after = featureWorldOutline(baked);
+  const drift = after.length === before.length ? Math.max(...before.map((p, i) => Math.hypot(p.x - after[i].x, p.y - after[i].y))) : Infinity;
+  assert(drift < 2, `…and draws it where it stood, point for point (${drift.toFixed(2)}mm — the points' rounding to whole mm)`);
   console.log("pool presets: ok");
 }
 
