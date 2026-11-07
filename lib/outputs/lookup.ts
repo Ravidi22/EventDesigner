@@ -14,6 +14,7 @@ import type { MeasureContext } from "@/lib/design-document/measure";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { railLengthMm, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { clothAreaMm2 } from "@/lib/studio/ceiling-cloth";
 import type { ItemLookup } from "./aggregate";
 import type { QuoteLookup } from "./quote";
 
@@ -77,6 +78,12 @@ export function measureContext(structure?: VenueStructure, doc?: DesignDocumentC
     railLengthMm: railCtx ? (p) => {
       const rail = railOf(p);
       return rail ? railLengthMm(rail, railCtx) : undefined;
+    } : undefined,
+    // A sail's polygon as it hangs in the room (lib/studio/ceiling-cloth.ts) — a corner tied to a wall
+    // or a thing where that stands now.
+    railAreaMm2: railCtx ? (p) => {
+      const rail = railOf(p);
+      return rail ? clothAreaMm2(rail, railCtx) : undefined;
     } : undefined,
     // The rod a curtain on a free-standing rod is billed as: the studio's first rod row.
     rodOf: () => {

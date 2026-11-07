@@ -203,6 +203,27 @@ export function newCanopy(outline: Point[], heightMm: number, widthMm = CLOTH_WI
   return { type: "canopy", outline: outline.map(round), heightMm: Math.round(heightMm), directionDeg: longestSideDeg(outline), spacingMm: widthMm };
 }
 
+/** A cloth drawn AGAIN (its bar's "ציור מחדש"): the new points, and what was typed for the old one —
+ *  a sail's tie heights (by order) and sag; a drape's height, width, sag, scallops and, onto a
+ *  canopy, its spacing. A run redrawn as an area, or an area as a run, keeps them too. The new
+ *  area's direction is its own longest side's. */
+export function redrawnCloth<R extends RunRail | CanopyRail | SailRail>(prior: Rail, next: R): R {
+  if (next.type === "sail") {
+    if (prior.type !== "sail") return next;
+    return { ...next, ties: next.ties.map((t, i) => (prior.ties[i] ? { ...t, heightMm: prior.ties[i].heightMm } : t)), ...(prior.sagMm !== undefined ? { sagMm: prior.sagMm } : {}) } as R;
+  }
+  if (prior.type !== "run" && prior.type !== "canopy") return next;
+  const kept = {
+    heightMm: prior.heightMm,
+    ...(prior.sagMm !== undefined ? { sagMm: prior.sagMm } : {}),
+    ...(prior.widthMm !== undefined ? { widthMm: prior.widthMm } : {}),
+    ...(prior.waves !== undefined ? { waves: prior.waves } : {}),
+  };
+  if (next.type === "run") return { ...next, ...kept } as R;
+  const spacingMm = prior.type === "canopy" ? prior.spacingMm : (prior.widthMm ?? next.spacingMm);
+  return { ...next, ...kept, spacingMm } as R;
+}
+
 /** A run with end `which` (0 = A, 1 = B) at `p`. */
 export function runEndMoved(rail: RunRail, which: 0 | 1, p: Point): RunRail {
   return which === 0 ? { ...rail, a: round(p) } : { ...rail, b: round(p) };
@@ -438,6 +459,12 @@ if (isMain(import.meta.url)) {
   const moved = canopyCornerMoved(canopy, 2, { x: 8000.4, y: 4000 });
   assert(moved.outline[2].x === 8000 && canopy.outline[2].x === 6000, "a corner moved, whole millimetres, the old rail untouched");
   assert(runEndMoved(run, 1, { x: 7000, y: 10 }).b.x === 7000 && runEndMoved(run, 0, { x: -5, y: 0 }).a.x === -5, "a run's ends move one at a time");
+  // Drawn again: what was typed stays — onto a run, and a run's width onto a canopy's spacing.
+  const typedRun: RunRail = { ...run, heightMm: 4100, widthMm: 900, sagMm: 500, waves: 2 };
+  const again = redrawnCloth(typedRun, newRun({ x: 0, y: 0 }, { x: 3000, y: 0 }, 3000));
+  assert(again.heightMm === 4100 && again.widthMm === 900 && again.sagMm === 500 && again.waves === 2 && again.b.x === 3000, "a run drawn again keeps its height, width, sag and scallops");
+  const asArea = redrawnCloth(typedRun, newCanopy(area, 3000));
+  assert(asArea.type === "canopy" && asArea.heightMm === 4100 && asArea.spacingMm === 900 && asArea.widthMm === 900, "…drawn again as an area, its width is the runs' spacing");
 
   // Ties: a corner of a building beats the wall it stands against; a wall within reach; a post.
   const structure: VenueStructure = {

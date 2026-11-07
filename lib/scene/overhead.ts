@@ -32,6 +32,7 @@ import { applyTransform } from "./frame";
 import { ENVELOPE, clothMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
 import { frondSpan } from "./organic";
+import { runDrop, runHalfWidth, type ClothRun } from "@/lib/studio/ceiling-cloth";
 
 // ── the constants ───────────────────────────────────────────────────────────────────────────────
 
@@ -225,6 +226,16 @@ function partSpan(p: Part): [number, number] {
       }
       return Number.isFinite(lo) ? [p.at.z + lo, p.at.z + hi] : [p.at.z, p.at.z];
     }
+    case "sheet": {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const row of p.rows)
+        for (const q of row) {
+          lo = Math.min(lo, q.z);
+          hi = Math.max(hi, q.z);
+        }
+      return Number.isFinite(lo) ? [p.at.z + lo, p.at.z + hi] : [p.at.z, p.at.z];
+    }
   }
 }
 
@@ -265,6 +276,8 @@ function flipPart(p: Part, H: number): Part {
       return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z), side: p.side === "down" ? "up" : p.side === "both" ? "both" : "down" };
     case "leaves":
       return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z), centre: vec3(p.centre.x, p.centre.y, -p.centre.z), cards: p.cards.map((c) => ({ ...c, z: -c.z, pitchDeg: -c.pitchDeg })) };
+    case "sheet":
+      return { ...p, at: vec3(p.at.x, p.at.y, H - p.at.z), rows: p.rows.map((row) => row.map((q) => vec3(q.x, q.y, -q.z))) };
   }
 }
 
@@ -400,6 +413,101 @@ export function curtainBody(path: Point[], topMm: number, colour: string, tag: N
     const bearing = deg(Math.atan2(z.y - a.y, z.x - a.x));
     b.parts.push({ shape: "cylinder", rTop: ROD_R_MM, rBottom: ROD_R_MM, h: len, at: vec3(a.x, a.y, h + ROD_ABOVE_MM), rotDeg: bearing - 90, tiltDeg: 90, segments: 10, material: metalMaterial(ROD) });
   }
+  return b;
+}
+
+// ── cloth in the air: a sail and a ceiling drape (spec 2026-11-07 §6.3/§6.4) ──────────────────────
+
+/** The grid a sail's sheet and a swag are stitched from: this many cells a side of a sail, this many
+ *  a scallop of a swag, this many across it. */
+const SAIL_GRID = 12;
+const SWAG_PER_WAVE = 12;
+const SWAG_ACROSS = 4;
+/** A sail's post of its own: a pole 4 cm across, from the ground to its tie. */
+const SAIL_POST_R_MM = 40;
+
+/** A sail's sheet as a grid in room mm (Part "sheet"): its corners at their tie heights, straight and
+ *  taut along every edge, and its middle `sagMm` below the ties' mean — a quad by its two edge
+ *  fractions (the bump 16·u(1−u)·v(1−v), 1 at the middle), a triangle from its first edge to its apex
+ *  (27·b₁b₂b₃ over its barycentric weights, 1 at the centroid). */
+export function sailGrid(polygon: Point[], heights: number[], sagMm: number, n = SAIL_GRID): Vec3[][] {
+  const h = (i: number) => heights[i] ?? heights[0] ?? 0;
+  const rows: Vec3[][] = [];
+  if (polygon.length === 3) {
+    const [A, B, C] = polygon;
+    for (let j = 0; j <= n; j++) {
+      const v = j / n;
+      const row: Vec3[] = [];
+      for (let i = 0; i <= n; i++) {
+        const u = i / n;
+        const b1 = (1 - v) * (1 - u);
+        const b2 = (1 - v) * u;
+        const b3 = v;
+        row.push(vec3(b1 * A.x + b2 * B.x + b3 * C.x, b1 * A.y + b2 * B.y + b3 * C.y, b1 * h(0) + b2 * h(1) + b3 * h(2) - sagMm * 27 * b1 * b2 * b3));
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+  if (polygon.length !== 4) return rows;
+  const [A, B, C, D] = polygon;
+  for (let j = 0; j <= n; j++) {
+    const v = j / n;
+    const row: Vec3[] = [];
+    for (let i = 0; i <= n; i++) {
+      const u = i / n;
+      const wA = (1 - u) * (1 - v);
+      const wB = u * (1 - v);
+      const wC = u * v;
+      const wD = (1 - u) * v;
+      row.push(vec3(wA * A.x + wB * B.x + wC * C.x + wD * D.x, wA * A.y + wB * B.y + wC * C.y + wD * D.y, wA * h(0) + wB * h(1) + wC * h(2) + wD * h(3) - sagMm * 16 * u * (1 - u) * v * (1 - v)));
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** A SAIL (lib/studio/ceiling-cloth.ts, rail.ts RailSheet): its sagging sheet, two-sided, in its
+ *  cloth, and a pole under every tie that stands on a post of its own. Built in the ROOM frame, as a
+ *  curtain is: the caller places it at `transform(vec3(0, 0, 0), 0)`. */
+export function sailBody(sheet: { polygon: Point[]; heights: number[]; sagMm: number; posts: Point[] }, colour: string): ItemBuild {
+  const b = make(clothMaterial(colour));
+  if (sheet.polygon.length < 3) return b;
+  b.parts.push({ shape: "sheet", rows: sailGrid(sheet.polygon, sheet.heights, sheet.sagMm), at: vec3(0, 0, 0) });
+  for (const q of sheet.posts) {
+    const i = sheet.polygon.findIndex((p) => Math.hypot(p.x - q.x, p.y - q.y) < 1);
+    const h = i >= 0 ? (sheet.heights[i] ?? 0) : 0;
+    if (h > 0) b.parts.push(cyl(SAIL_POST_R_MM, h + 60, vec3(q.x, q.y, 0), metalMaterial(ROD), 10));
+  }
+  return b;
+}
+
+/** One swag as a grid (Part "sheet"): along the run, its height less its drop in every scallop
+ *  (ceiling-cloth.ts runDrop); across it, as wide as the plan draws it there (runHalfWidth — gathered
+ *  to GATHER of its width at every gather), its middle a little lower than its edges, as cloth hangs. */
+export function swagGrid(run: ClothRun): Vec3[][] {
+  const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
+  const nrm = { x: -u.y, y: u.x };
+  const cols = Math.max(8, run.waves * SWAG_PER_WAVE);
+  const rows: Vec3[][] = [];
+  for (let k = 0; k <= SWAG_ACROSS; k++) {
+    const t = (k / SWAG_ACROSS) * 2 - 1;
+    const row: Vec3[] = [];
+    for (let i = 0; i <= cols; i++) {
+      const s = i / cols;
+      const drop = runDrop(run, s);
+      const half = runHalfWidth(run, s);
+      row.push(vec3(run.a.x + (run.b.x - run.a.x) * s + nrm.x * t * half, run.a.y + (run.b.y - run.a.y) * s + nrm.y * t * half, run.heightMm - drop - 0.15 * drop * (1 - t * t)));
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** A CEILING DRAPE — a run, or a canopy's runs: one swag each, two-sided, in its cloth. Room frame. */
+export function ceilingDrapeBody(runs: readonly ClothRun[], colour: string): ItemBuild {
+  const b = make(clothMaterial(colour));
+  for (const run of runs) b.parts.push({ shape: "sheet", rows: swagGrid(run), at: vec3(0, 0, 0) });
   return b;
 }
 
@@ -571,5 +679,32 @@ if (isMain(import.meta.url)) {
   assert(ceilingUndersideMm(4000, 600) === 2800, "under a 4 m ceiling a chandelier's underside is at 2.8 m");
   assert(ceilingUndersideMm(null, 600) === 3000, "under open sky it hangs at 3 m");
   assert(ceilingUndersideMm(800, 600) === 0, "…and never below the floor");
+
+  // 2026-11-07: a SAIL — a 4 × 3 m quad tied at 3 m, 3.2 m, 2.6 m and 2.8 m, sagging 40 cm; one post.
+  const quad = [{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 4000, y: 3000 }, { x: 0, y: 3000 }];
+  const sail = sailBody({ polygon: quad, heights: [3000, 3200, 2600, 2800], sagMm: 400, posts: [quad[2]] }, "#f4f1ea");
+  const sheet = sail.parts.find((p): p is Extract<Part, { shape: "sheet" }> => p.shape === "sheet")!;
+  const g = sheet.rows;
+  assert(!!sheet && g.length === SAIL_GRID + 1 && g.every((r) => r.length === SAIL_GRID + 1), "a sail is one sheet, a 12 × 12 grid");
+  assert(near(g[0][0].z, 3000) && near(g[0][SAIL_GRID].z, 3200) && near(g[SAIL_GRID][SAIL_GRID].z, 2600) && near(g[SAIL_GRID][0].z, 2800), "…its corners at their tie heights");
+  assert(near(g[6][6].z, 2900 - 400) && near(g[6][6].x, 2000) && near(g[6][6].y, 1500), "…its middle 40 cm under the ties' mean");
+  assert(near(g[0][6].z, 3100), "…every edge taut between its ties");
+  assert(sail.material.kind === "fabric" && sail.material.colour === "#f4f1ea", "…in its cloth");
+  const pole = sail.parts.find((p) => p.shape === "cylinder");
+  assert(!!pole && pole.at.x === 4000 && pole.at.z === 0 && pole.shape === "cylinder" && pole.h > 2600, "a pole from the ground to the tie on a post of its own");
+  const tri = sailGrid([{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 1500, y: 3000 }], [3000, 3000, 3600], 300, 6);
+  const centroid = tri[2][3];
+  assert(near(centroid.x, 1500) && near(centroid.y, 1000) && near(centroid.z, 3200 - 300), "a triangle sags at its centroid, under its ties' mean");
+  assert(partSpan(sheet)[1] === 3200 && flipPart(sheet, 4000).shape === "sheet", "a sheet's span is its grid's");
+  // A SWAG — a 6 m run at 3.5 m, four scallops, 30 cm of sag, 1.2 m wide.
+  const run: ClothRun = { a: { x: 0, y: 0 }, b: { x: 6000, y: 0 }, heightMm: 3500, sagMm: 300, widthMm: 1200, waves: 4, lengthMm: 6000 };
+  const swag = ceilingDrapeBody([run, { ...run, a: { x: 0, y: 1500 }, b: { x: 6000, y: 1500 } }], "#f3ede2");
+  const strips = swag.parts.filter((p): p is Extract<Part, { shape: "sheet" }> => p.shape === "sheet");
+  assert(strips.length === 2, "a canopy's runs are a swag each");
+  const mid = strips[0].rows[SWAG_ACROSS / 2];
+  const atS = (s: number) => mid[Math.round(s * (mid.length - 1))];
+  assert(near(atS(0).z, 3500) && near(atS(1 / 4).z, 3500) && near(atS(1 / 8).z, 3500 - 300 - 45), "it hangs from its height where gathered and sags in every scallop");
+  const edge = strips[0].rows[0];
+  assert(near(Math.abs(edge[0].y), 600 * 0.7) && near(Math.abs(edge[Math.round((edge.length - 1) / 8)].y), 600), "…gathered to 70% of its width, full width mid-scallop");
   console.log("scene overhead ok");
 }

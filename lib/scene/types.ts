@@ -125,7 +125,12 @@ export type Part =
   /** A flower head of real petals (./flowers.ts bloomMesh), opening up +z, `r` across its widest
    *  ring as the plan draws it. `at` is its CENTRE, as a sphere's; `seed` varies its petals; a face
    *  has `petals` round a `disc` (#rrggbb) of its own colour — a sunflower's brown. */
-  | { shape: "bloom"; form: BloomForm; r: number; at: Vec3; seed: number; disc?: string; petals?: number; material?: MaterialRef };
+  | { shape: "bloom"; form: BloomForm; r: number; at: Vec3; seed: number; disc?: string; petals?: number; material?: MaterialRef }
+  /** A cloth stretched in the air — a sail, a swag across a ceiling (./overhead.ts sailBody,
+   *  ceilingDrapeBody): a GRID of points, rows × columns (every row the same length), in the part's
+   *  frame about `at`. The builder works out every point's sag; the viewer only stitches the grid into
+   *  a smooth surface seen from both faces. */
+  | { shape: "sheet"; rows: Vec3[][]; at: Vec3; material?: MaterialRef };
 
 /** One leaf card: `size` across, centred at (x, y, z), turned `yawDeg` on the plan and tipped
  *  `pitchDeg` back from upright (0 = a vertical card, 90 = lying flat), showing atlas `tile` (0–3)

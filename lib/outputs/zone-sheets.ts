@@ -16,6 +16,7 @@ import type { ResolvedZone } from "@/lib/venues/zone";
 import { zonesBounds } from "@/lib/venues/zone";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { railLines, railMidpoint, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { sailCentre, sailSheet } from "@/lib/studio/ceiling-cloth";
 import type { Bounds } from "@/lib/studio/geometry";
 import type { Point } from "@/lib/studio/hall";
 import { isMain } from "../self-check";
@@ -102,6 +103,8 @@ export function zoneSheets(doc: DesignDocumentContent, plan: EventPlan): ZoneShe
       const line = railLines(rail, railCtx)[0];
       if (line) return railMidpoint(line);
       if (rail.type === "side") return placementById.get(rail.featureId)?.position ?? null;
+      // A sail (lib/studio/ceiling-cloth.ts) is on the sheet of the zone its middle is over.
+      if (rail.type === "sail") return sailCentre(rail, sailSheet(rail, railCtx));
       return null;
     }
     if (p.perch) {
