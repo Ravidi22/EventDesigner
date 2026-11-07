@@ -14,6 +14,7 @@ import { tableAreaMm2 } from "./geometry";
 import { catalogBox, sizedFootprint } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 import type { BenchLookup } from "@/lib/design-document/bench";
+import { isRailed } from "./rail";
 
 export interface Resolved {
   product: Product;
@@ -80,7 +81,7 @@ export const benchOf: BenchLookup = (p) => {
  *  the chair it is made of and that chair's own box, which every chair in it is laid at. The one
  *  definition the footprint, the canvas, the printed map and the bar all read. */
 export function chairBlockOf(p: Placement): { spec: ChairRows; product: Product; chair: { widthMm: number; depthMm: number } } | null {
-  if (!p.rows || p.stage || p.perch || p.tableId || p.span) return null;
+  if (!p.rows || p.stage || p.perch || p.tableId || isRailed(p)) return null;
   const r = resolve(p.variantId);
   if (!r || r.product.category !== "chairs") return null;
   return { spec: p.rows, product: r.product, chair: catalogBox(r.product) };

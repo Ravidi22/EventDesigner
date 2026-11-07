@@ -15,7 +15,7 @@ import type { EventPlan } from "@/lib/events/plan";
 import type { ResolvedZone } from "@/lib/venues/zone";
 import { zonesBounds } from "@/lib/venues/zone";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { resolveSpan } from "@/lib/studio/anchor";
+import { railLines, railMidpoint, railOf, sketchRailContext } from "@/lib/studio/rail";
 import type { Bounds } from "@/lib/studio/geometry";
 import type { Point } from "@/lib/studio/hall";
 import { isMain } from "../self-check";
@@ -89,14 +89,20 @@ export function zoneSheets(doc: DesignDocumentContent, plan: EventPlan): ZoneShe
   const placementById = new Map(doc.placements.map((p) => [p.id, p]));
 
   const tableById = new Map(doc.tables.map((t) => [t.id, t]));
+  const railCtx = sketchRailContext(doc, plan.structure, plan.structure, () => undefined);
   // A table's dressing stands where its table does — its own `position` is in the table's frame.
   const placementAt = (p: Placement): Point | null => {
     const onTable = p.layer === "table" && p.tableId ? tableById.get(p.tableId) : undefined;
     if (onTable) return tableAt(onTable);
-    if (p.span) {
-      const s = resolveSpan(plan.structure, p.span);
-      // The middle of the run on the wall itself — out on the bow of a curved one, not its chord.
-      return s ? s.track.at((s.t0 + s.t1) / 2).p : null;
+    const rail = railOf(p);
+    if (rail) {
+      // The middle of the run on its rail — on a wall, out on the bow of a curved one, not its chord.
+      // No catalog here: a side rail on a hired thing that is not a stage goes by where that thing
+      // stands, which is the zone it hangs in anyway.
+      const line = railLines(rail, railCtx)[0];
+      if (line) return railMidpoint(line);
+      if (rail.type === "side") return placementById.get(rail.featureId)?.position ?? null;
+      return null;
     }
     if (p.perch) {
       const stage = placementById.get(p.perch.stageId);

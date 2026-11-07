@@ -32,6 +32,7 @@ import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { turn } from "./frame";
 import { rectOutline } from "@/lib/design-document/stage";
 import { primeCatalog } from "@/lib/catalog/storage";
+import { isRailed } from "@/lib/studio/rail";
 import { isMain } from "../self-check";
 
 /** A rug is this much higher than the floor it lies on. */
@@ -141,7 +142,7 @@ export function elevationOf(doc: DesignDocumentContent, structure: VenueStructur
       platforms.push(...stagePlatforms(p.id, p as StagePlacement, p.stage));
       continue;
     }
-    if (p.tableId || p.layer !== "floor" || p.perch || p.span) continue;
+    if (p.tableId || p.layer !== "floor" || p.perch || isRailed(p)) continue;
     const rug = rugOutline(p);
     if (rug) rugs.push(rug);
     else if (platformRow(resolve(p.variantId)?.product)) loose.push(p);

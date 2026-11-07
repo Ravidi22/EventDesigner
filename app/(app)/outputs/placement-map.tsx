@@ -17,7 +17,8 @@ import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, isDoor, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature } from "@/lib/venues/structure";
 import { WindowGlazing } from "@/components/window-glazing";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainPieces, type CurtainPiece } from "@/lib/venues/curtain";
-import { CurtainCloth, DrapePleatsAlong, polygonD } from "@/components/curtain-cloth";
+import { CurtainCloth, DrapePleatsAlong, RodMarks, polygonD } from "@/components/curtain-cloth";
+import { railBand, railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { featureEdgeShapes } from "@/lib/venues/stage-edges";
 import { isClimb } from "@/lib/venues/climb";
@@ -30,7 +31,7 @@ import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
-import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { rugOutline, rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
@@ -68,7 +69,7 @@ import { uprightTransform } from "@/lib/design-document/mirror";
 import { darkFill, deckLabel, heightColour } from "@/lib/outputs/deck-colours";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
-import { nearestWall, resolveSpan, spanBand } from "@/lib/studio/anchor";
+import { nearestWall } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
@@ -906,23 +907,31 @@ export function PlacementMap({
 
           {/* Drapes — a band along the wall they hang on. */}
           {drapes.map((p) => {
-            if (!p.span) return null;
+            const rail = railOf(p);
             // The property's own walls, not the arranged copy — nothing on this surface moves a
-            // wall, so a drape always measures itself against the real one.
-            const resolved = resolveSpan(plan.structure, p.span);
-            if (!resolved) return null;
-            // Centred on the wall's own line — round the bow on a curved wall (lib/studio/anchor.ts).
+            // wall, so a drape always measures itself against the real one; a side rail's thing
+            // where this event stood it (lib/studio/rail.ts).
+            const lines = rail ? railLines(rail, sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product)) : [];
+            if (!lines.length) return null;
+            const style = curtainStyleOf(resolve(p.variantId)?.product);
+            // On the wall's own line — round the bow on a curved wall — out on its side for a side
+            // rail, under its rod with the rod's posts for a rod.
             return (
               <g key={p.id}>
-                <path
-                  d={polygonD(spanBand(resolved.track, resolved.t0, resolved.t1, -DRAPE_MM / 2, DRAPE_MM / 2))}
-                  fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : flat ? flat.drape : "none"}
-                  stroke={INK}
-                  strokeWidth={LINE_WEIGHTS.overhead}
-                  strokeDasharray={OVERHEAD_DASH}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <DrapePleatsAlong line={resolved.path} depthMm={DRAPE_MM} ink={INK} opacity={0.6} />
+                {lines.map((line, i) => (
+                  <g key={i}>
+                    <path
+                      d={polygonD(railBand(line, DRAPE_MM))}
+                      fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : flat ? flat.drape : "none"}
+                      stroke={INK}
+                      strokeWidth={LINE_WEIGHTS.overhead}
+                      strokeDasharray={OVERHEAD_DASH}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <DrapePleatsAlong line={railClothLine(line, DRAPE_MM)} depthMm={DRAPE_MM} ink={INK} opacity={0.6} style={style} />
+                    {line.posts && <RodMarks path={line.path} posts={line.posts} postMm={1.6 * den} ink={INK} />}
+                  </g>
+                ))}
               </g>
             );
           })}

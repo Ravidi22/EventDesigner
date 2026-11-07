@@ -374,6 +374,49 @@ export function hostsSide(host: RailHost | null): host is RailHost {
   return !!host && host.heightMm >= SIDE_MIN_HEIGHT_MM && host.outline.length >= 3;
 }
 
+/** A thing a curtain may hang on the side of, by id. */
+export interface SideCandidate {
+  id: string;
+  host: RailHost;
+}
+
+/** Every thing a curtain may hang on the side of (spec §6.1): the venue's features of a SIDE_HOST_KINDS
+ *  kind (`features` — as a sketch arranged them, or the venue as drawn), and — in a sketch — the
+ *  document's floor items of a SIDE_HOST_CATEGORIES row; each only when it stands SIDE_MIN_HEIGHT_MM
+ *  tall. */
+export function sideCandidates(
+  features: readonly StructureFeature[],
+  doc?: Pick<DesignDocumentContent, "placements">,
+  productOf?: (variantId: string) => Product | undefined,
+): SideCandidate[] {
+  const out: SideCandidate[] = [];
+  for (const f of features) {
+    if (!SIDE_HOST_KINDS.includes(f.kind)) continue;
+    const host = featureHost(f);
+    if (hostsSide(host)) out.push({ id: f.id, host });
+  }
+  for (const p of doc?.placements ?? []) {
+    if (p.layer !== "floor" || p.tableId || p.perch || isRailed(p)) continue;
+    const product = productOf?.(p.variantId);
+    if (!product || (!p.stage && !SIDE_HOST_CATEGORIES.includes(product.category))) continue;
+    const host = placementHost(p, product);
+    if (hostsSide(host)) out.push({ id: p.id, host });
+  }
+  return out;
+}
+
+/** The side rail a curtain dropped at `p` would hang on: the nearest side of the nearest candidate,
+ *  the WHOLE side (the bar shortens it), on the side of it the point fell. Null with none. */
+export function nearestSideRail(candidates: readonly SideCandidate[], p: Point): { rail: SideRail; distanceMm: number } | null {
+  let best: { rail: SideRail; distanceMm: number } | null = null;
+  for (const c of candidates) {
+    const hit = nearestHostSide(c.host, p);
+    if (!hit || (best && hit.distanceMm >= best.distanceMm)) continue;
+    best = { rail: { type: "side", featureId: c.id, side: hit.side.edge, from: 0, to: 1, out: hit.out }, distanceMm: hit.distanceMm };
+  }
+  return best;
+}
+
 // ── The context, and what a rail resolves to ────────────────────────────────────────────────────
 
 /** What a rail is read against: the venue's WALLS (the property as drawn — no arrangement on a sketch
@@ -399,6 +442,7 @@ export function featureHosts(s: VenueStructure): (id: string) => RailHost | null
   return fn;
 }
 
+const placementHosts = new WeakMap<Placement, { product: Product | undefined; host: RailHost | null }>();
 const sketchLookup = new WeakMap<DesignDocumentContent["placements"], WeakMap<VenueStructure, (id: string) => RailHost | null>>();
 /** The context a SKETCH reads its rails in: walls from the property, a side rail's thing from the
  *  document's own items first (a hired stage, bar, backdrop), then the venue's features where this
@@ -419,12 +463,17 @@ export function sketchRailContext(
   if (!fn) {
     const placements = new Map(doc.placements.map((p) => [p.id, p]));
     const features = featureHosts(arranged);
-    const hosts = new WeakMap<Placement, RailHost | null>();
     fn = (id: string) => {
       const p = placements.get(id);
       if (!p) return features(id);
-      if (!hosts.has(p)) hosts.set(p, placementHost(p, productOf(p.variantId)));
-      return hosts.get(p) ?? null;
+      // Remembered per placement row (and its catalog row) across documents, so a drag of something
+      // ELSE leaves this host — and every rail resolved against it — the same object.
+      const product = productOf(p.variantId);
+      const hit = placementHosts.get(p);
+      if (hit && hit.product === product) return hit.host;
+      const host = placementHost(p, product);
+      placementHosts.set(p, { product, host });
+      return host;
     };
     byStructure.set(arranged, fn);
   }
@@ -589,6 +638,22 @@ export function rodPath(rail: RodRail): Point[] {
   const l = Math.hypot(b.x - a.x, b.y - a.y);
   if (l > CANTILEVER_MAX_MM) pts[tip] = { x: a.x + ((b.x - a.x) * CANTILEVER_MAX_MM) / l, y: a.y + ((b.y - a.y) * CANTILEVER_MAX_MM) / l };
   return pts;
+}
+
+/** A rod with its point `i` moved to `p` (whole millimetres) — a post dragged, or the tip of a ר's
+ *  arm, held to CANTILEVER_MAX_MM from the post before it. */
+export function rodPointMoved(rail: RodRail, i: number, p: Point): RodRail {
+  const pts = rail.points.slice();
+  if (i < 0 || i >= pts.length) return rail;
+  let q = { x: Math.round(p.x), y: Math.round(p.y) };
+  const tip = (i === 0 && rail.cantilever === "start") || (i === pts.length - 1 && rail.cantilever === "end");
+  if (tip && pts.length >= 2) {
+    const base = pts[i === 0 ? 1 : pts.length - 2];
+    const l = Math.hypot(q.x - base.x, q.y - base.y);
+    if (l > CANTILEVER_MAX_MM) q = { x: Math.round(base.x + ((q.x - base.x) * CANTILEVER_MAX_MM) / l), y: Math.round(base.y + ((q.y - base.y) * CANTILEVER_MAX_MM) / l) };
+  }
+  pts[i] = q;
+  return { ...rail, points: pts };
 }
 
 /** A canopy's runs: parallel lines across its outline at `directionDeg`, cut where they cross it,
@@ -797,6 +862,10 @@ if (isMain(import.meta.url)) {
   const hit = nearestHostSide(featureHost(structure.features[0])!, { x: 3000, y: 1300 })!;
   assert(hit.side.edge === 0 && near(hit.t, 0.5, 0.01) && hit.out === 1 && near(hit.distanceMm, 200), "a click 20 cm above the building's top side finds it, outside, at its middle");
   assert(nearestHostSide(featureHost(structure.features[0])!, { x: 3000, y: 1700 })!.out === -1, "…a click just inside it is inside");
+  const offered = sideCandidates(structure.features);
+  assert(offered.map((c) => c.id).join(",") === "b,round", "the building and the tall round thing offer their sides; the 40 cm stage does not");
+  const dropped = nearestSideRail(offered, { x: 5300, y: 3000 })!;
+  assert(dropped.rail.featureId === "b" && dropped.rail.side === 1 && dropped.rail.out === 1 && dropped.rail.from === 0 && dropped.rail.to === 1 && near(dropped.distanceMm, 300), "a curtain dropped beside the building's right side hangs the whole of it, outside");
   // A sketch item resolves through the caller's lookup — the document first.
   const stagePl: Placement = { id: "st", variantId: "v", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 90, scale: 1, stage: { outline: [{ x: -2000, y: -1000 }, { x: 2000, y: -1000 }, { x: 2000, y: 1000 }, { x: -2000, y: 1000 }], front: 0, decks: [], heightMm: 1200 } };
   const sketchCtx = sketchRailContext({ placements: [stagePl] }, structure, structure, () => undefined);

@@ -31,7 +31,7 @@ import type { Point } from "@/lib/studio/hall";
 import type { WallSpan } from "@/lib/design-document/types";
 import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { spanBand, wallTrack, type WallTrack } from "@/lib/studio/anchor";
-import { CANTILEVER_MAX_MM, featureHosts, hostSide, railBand, railClothLine, resolveRail, type Rail, type RailContext, type RailLine, type RodRail, type SideRail } from "@/lib/studio/rail";
+import { featureHosts, rodPointMoved, hostSide, railBand, railClothLine, resolveRail, type Rail, type RailContext, type RailLine, type RodRail, type SideRail } from "@/lib/studio/rail";
 import { fromLocalFrame, toLocalFrame, wallAngleDeg } from "@/lib/studio/geometry";
 import { doorsOf, newFeature, type StructureFeature, type VenueStructure } from "./structure";
 import { isMain } from "../self-check";
@@ -444,17 +444,7 @@ export function sideFraction(s: VenueStructure, rail: SideRail, p: Point): numbe
 /** A rod with one END moved to `p`: the post goes there; a cantilevered end's arm is held to its
  *  reach from the post before it. */
 export function rodEndMoved(rail: RodRail, end: "from" | "to", p: Point): RodRail {
-  const pts = rail.points.slice();
-  const i = end === "from" ? 0 : pts.length - 1;
-  let q = { x: Math.round(p.x), y: Math.round(p.y) };
-  const cantilevered = (end === "from" && rail.cantilever === "start") || (end === "to" && rail.cantilever === "end");
-  if (cantilevered && pts.length >= 2) {
-    const base = pts[end === "from" ? 1 : pts.length - 2];
-    const l = Math.hypot(q.x - base.x, q.y - base.y);
-    if (l > CANTILEVER_MAX_MM) q = { x: Math.round(base.x + ((q.x - base.x) * CANTILEVER_MAX_MM) / l), y: Math.round(base.y + ((q.y - base.y) * CANTILEVER_MAX_MM) / l) };
-  }
-  pts[i] = q;
-  return { ...rail, points: pts };
+  return rodPointMoved(rail, end === "from" ? 0 : rail.points.length - 1, p);
 }
 
 /** Every curtain re-laid on its wall as it stands now — run after any edit of the walls or corners,
