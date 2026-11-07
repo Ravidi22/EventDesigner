@@ -41,6 +41,7 @@ import { chairSpecOf, itemContextOf, tableNodes, topsOf } from "./tables";
 import { stageNodes, venueStageNodes, type StageOpts } from "./stage";
 import { type Scene, type SceneInput, WALL_THICK_MM, transform, vec3 } from "./types";
 import type { StagePlacement } from "@/lib/design-document/stage";
+import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 
 /** A curtain hangs this far off the wall's face into the room. */
 const CURTAIN_OFF_WALL_MM = 60;
@@ -57,6 +58,10 @@ export function buildScene(input: SceneInput): Scene {
     else if (f.kind === "curtain") venueCurtain(input, out, f);
     else venueClimb(input, out, f);
   }
+  // What a hanging thing hangs from (lib/venues/roofs.ts): the roofed zone it is in, else the
+  // building, else the venue's pergola, else a hired one in this sketch — never "the tallest ceiling
+  // anywhere on the plan", which gave a chandelier on the open terrace a chain to the hall's roof.
+  const roofOf = roofHeightAt(input.structure, input.plan.all, sketchPergolas(input.doc.placements, (v) => resolve(v)?.product));
   const tables = new Map(input.doc.tables.map((t) => [t.id, t]));
   tableNodes(input, out, (tableId) => {
     const t = tables.get(tableId);
@@ -66,7 +71,7 @@ export function buildScene(input: SceneInput): Scene {
     if (p.tableId || p.layer === "table") continue; // on a table: tables.ts drew it
     if (isRailed(p)) curtain(input, out, p);
     else if (p.perch) perched(input, out, p, elevation);
-    else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofedMm);
+    else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofOf(p.position));
     else floorPlacement(input, out, p, elevation);
   }
   return { nodes: out.nodes(), bounds: input.plan.bounds, roofedMm, stats: out.stats() };
