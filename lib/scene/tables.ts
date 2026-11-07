@@ -30,6 +30,7 @@ import { chairOf } from "@/lib/catalog/chairs";
 import { CLOTH_DROP_MM, chairStyleOf, drawStyleOf, symbolCount, symbolOf, type ChairStyle } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { vesselOf } from "@/lib/catalog/vessel";
+import { borderOf, type Border } from "@/lib/catalog/border";
 import { type DressingSpot, dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { primeCatalog } from "@/lib/catalog/storage";
@@ -264,6 +265,30 @@ export function clothParts(footprint: Footprint, tableHeightMm: number): Part[] 
   return parts;
 }
 
+/** A cloth's contour in the room (lib/catalog/border.ts): the hem is at the FLOOR, where the fall
+ *  ends, so the band at the cloth's edge is the bottom `widthMm` of the fall, the second band
+ *  `gapMm` above it — real widths, as the cloth is made (the plan squeezes them into the strip of
+ *  fabric it can show from above). Each as heights above the floor, held to the table's height. */
+export function hemBands(border: Border, tableHeightMm: number): { colour: string; range: [number, number] }[] {
+  const out: { colour: string; range: [number, number] }[] = [];
+  const add = (from: number, to: number, colour: string) => {
+    const a = Math.max(0, Math.min(tableHeightMm, from));
+    const b = Math.max(0, Math.min(tableHeightMm, to));
+    if (b - a > 1) out.push({ colour, range: [a, b] });
+  };
+  add(0, border.widthMm, border.colour);
+  if (border.inner) add(border.widthMm + border.inner.gapMm, border.widthMm + border.inner.gapMm + border.inner.widthMm, border.inner.colour);
+  return out;
+}
+
+/** The stretch `range` (heights above the floor) of a cloth's fall — clothParts' drape, the same
+ *  folds and flare, cut to a band (Part "drape" `band`). */
+export function clothHemParts(footprint: Footprint, tableHeightMm: number, range: [number, number]): Part[] {
+  return clothParts(footprint, tableHeightMm)
+    .filter((p): p is Extract<Part, { shape: "drape" }> => p.shape === "drape")
+    .map((p) => ({ ...p, band: range }));
+}
+
 // --- the chairs -----------------------------------------------------------------------------------
 
 export interface ChairSpec {
@@ -409,6 +434,8 @@ function contextFor(product: Product | undefined, resolved: Resolved | undefined
     if (climb) ctx.climb = climb;
     const bench = standaloneBench(placement, benchOf);
     if (bench) ctx.bench = bench;
+    const border = borderOf(placement, product);
+    if (border) ctx.border = border;
   }
   return ctx;
 }
@@ -555,6 +582,14 @@ export function tableNodes(input: Pick<SceneInput, "doc" | "author"> & { setting
       const c = resolve(cover.variantId);
       const colour = hexOf(c?.swatch) ?? hexOf(c?.product.appearance?.style?.fill) ?? BARE_CLOTH_TONE;
       out.body(`cloth:${cover.id}`, { type: "cloth", id: cover.id, label: c?.product.name }, clothMaterial(colour), clothParts(footprint, heightMm), [frame]);
+      // Its contour (lib/catalog/border.ts): each band a stretch of the same fall at the hem, in its
+      // own colour, a hair proud of the cloth.
+      const hem = borderOf(cover, c?.product);
+      if (hem) {
+        hemBands(hem, heightMm).forEach((band, k) => {
+          out.body(`cloth-hem:${cover.id}:${k}`, { type: "cloth", id: cover.id, label: c?.product.name }, clothMaterial(hexOf(band.colour) ?? colour), clothHemParts(footprint, heightMm, band.range), [frame]);
+        });
+      }
     }
 
     // The chairs: a lone table's own ring; a block's once, the block's (never its members').
@@ -688,6 +723,14 @@ if (isMain(import.meta.url)) {
     assert(labels2.length === 0, "…nor over a block");
     const candle3 = bodies2.find((n) => n.id === "p-c3");
     assert(!!candle3 && near(candle3.instances[0].at.z, 750) && near(candle3.instances[0].at.x, 11200, 1), "a lone item on an auto-laid block stands on the block's middle — the seam — at the top height");
+
+    // A cloth's contour in the room (lib/catalog/border.ts): the band at its edge is the bottom of the
+    // fall, the second band above it past the gap, never above the table; each the same fall cut.
+    const hemmed = hemBands({ widthMm: 80, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 50, colour: "#ffffff" } }, 750);
+    assert(hemmed.length === 2 && hemmed[0].range[0] === 0 && hemmed[0].range[1] === 80 && hemmed[1].range[0] === 130 && hemmed[1].range[1] === 170, "a contour is the hem at the floor and a band above it");
+    assert(hemBands({ widthMm: 900, colour: "#000000" }, 750)[0].range[1] === 750, "…never higher than the table");
+    const hemFall = clothHemParts({ kind: "circle", diameterMm: 1800 }, 750, [0, 80]);
+    assert(hemFall.length === 1 && hemFall[0].shape === "drape" && hemFall[0].h === 750 && hemFall[0].band?.[1] === 80, "…a stretch of the very fall the cloth is (its folds, its height)");
 
     // A cloth on a rectangle: the outline grown by the drop, rounded at the corners, to the floor.
     const rectCloth = clothParts({ kind: "rect", widthMm: 2400, depthMm: 1200 }, 750);

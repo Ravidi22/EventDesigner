@@ -30,9 +30,10 @@ import {
   type SurfaceMaterial,
 } from "./structure";
 import { CLIMB_BY_CATEGORY } from "./climb";
+import { POOL_PRESETS, POOL_PRESET_LABEL, type PoolPreset } from "./pool";
 import { isMain } from "../self-check";
 
-export type AddToolSection = "structure" | "ground" | "plants" | "bars" | "stages" | "seating";
+export type AddToolSection = "structure" | "pool" | "ground" | "plants" | "bars" | "stages" | "seating";
 
 export interface AddTool {
   /** Stable within one list, and the entire payload of a drag onto the canvas. */
@@ -49,12 +50,16 @@ export interface AddTool {
   surface?: SurfaceMaterial;
   /** The chair the rows are made of, iff `kind === "seating"` — absent for a studio with no chairs. */
   chair?: Product;
+  /** The shape a pool is put down in, iff `kind === "pool"` (./pool.ts) — "free" is the freehand
+   *  trace in water, which the screen starts rather than places. */
+  pool?: PoolPreset;
 }
 
-export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "ground", "plants", "bars", "stages", "seating"];
+export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "pool", "ground", "plants", "bars", "stages", "seating"];
 
 export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   structure: "מבנה",
+  pool: "בריכה",
   ground: "רצפה וקרקע",
   plants: "צמחייה",
   bars: "ברים ומזנונים",
@@ -74,7 +79,6 @@ const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   // Where the floor changes height — beside the door, because that is where they usually are.
   { id: "stairs", label: FEATURE_KIND_LABEL.stairs, kind: "stairs" },
   { id: "ramp", label: FEATURE_KIND_LABEL.ramp, kind: "ramp" },
-  { id: "pool", label: FEATURE_KIND_LABEL.pool, kind: "pool" },
   { id: "fountain", label: FEATURE_KIND_LABEL.fountain, kind: "fountain" },
   { id: "structure", label: FEATURE_KIND_LABEL.structure, kind: "structure" },
   // A pillar — its plinth, base and shaft are the column's own (./column.ts).
@@ -99,6 +103,12 @@ const CATALOG_BACKED: { section: AddToolSection; group: CategoryGroupId; kind: F
  */
 export function addTools(products: Product[] = []): AddTool[] {
   const tools: AddTool[] = PLAIN.map((t) => ({ ...t, section: "structure" }));
+  // A pool is put down by its SHAPE (./pool.ts): rectangle, oval, kidney, ר, or traced by hand. The
+  // oval keeps the id the one pool tool always had — it is that tool — so a drag payload naming
+  // "pool" still lands the pool it always did.
+  for (const pool of POOL_PRESETS) {
+    tools.push({ id: pool === "ellipse" ? "pool" : `pool:${pool}`, label: POOL_PRESET_LABEL[pool], section: "pool", kind: "pool", pool });
+  }
   // The ground and the planting are drawn, not picked off a shelf — no catalog has an opinion
   // about a lawn or a palm.
   for (const surface of SURFACE_MATERIALS) {
@@ -155,7 +165,10 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 14 + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the fourteen plain things — door, window, curtain, a curtain on a rod, stairs, ramp, pool, fountain, structure, column, other, bar, stage, chairs in rows — and the planting");
+  assert(empty.length === 13 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the thirteen plain things — door, window, curtain, a curtain on a rod, stairs, ramp, fountain, structure, column, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
+  const pools = empty.filter((t) => t.section === "pool");
+  assert(pools.map((t) => t.pool).join() === "rect,ellipse,kidney,L,free" && pools.every((t) => t.kind === "pool"), "the pools come shape first: מלבן · אליפסה · כליה · ר · חופשי");
+  assert(findAddTool(empty, "pool")?.pool === "ellipse", "…the oval keeping the one pool tool's id");
   assert(empty.find((t) => t.kind === "seating")?.chair === undefined, "…the rows of a dining chair when there is no chair to take");
   assert(empty.filter((t) => t.product).length === 0, "…none of them backed by a row that isn't there");
   for (const kind of ["bar", "stage"] as const) {

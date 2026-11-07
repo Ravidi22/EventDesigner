@@ -27,6 +27,9 @@ import type { BuiltOutline, Footprint } from "@/lib/studio/footprint";
 import { catalogBox, footprintOutlines, pieceOf, resolveFootprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import { rugFringe, rugInset, rugOutline } from "@/lib/studio/rug-shape";
+import { rugBorderBands } from "@/lib/studio/rug-shape";
+import { fringeOf, type Border } from "@/lib/catalog/border";
+import { hexOf } from "./materials";
 import { flatRing, signedDistance } from "@/lib/studio/label-anchor";
 import type { Product } from "@/lib/catalog/types";
 import type { SymbolKind } from "@/lib/catalog/symbols";
@@ -849,6 +852,7 @@ export function rugBody(ctx: ItemContext): ItemBuild {
   const b1 = Math.min(m * 0.07, 160);
   const b2 = Math.min(m * 0.12, 260);
   const band = b2 - b1;
+  if (ctx.border) return borderedRugBody(ctx, b, fabric, ctx.border);
   if (ctx.rug) return curvedRugBody(ctx, b, weave, { m, b1, b2 });
   b.parts.push(box(w, d, RUG_MM, vec3(0, 0, 0), fabric));
   if (band > 2 && m > b2 * 3) {
@@ -895,6 +899,40 @@ function curvedRugBody(ctx: ItemContext, b: ItemBuild, weave: MaterialRef, k: { 
     const deg = (Math.atan2(t.ny, t.nx) * 180) / Math.PI;
     // A box turned about its own centre: put the centre half a strand out along the normal.
     b.parts.push(box(fringe, RUG_FRINGE_W_MM, RUG_FRINGE_W_MM, vec3(t.x + (t.nx * fringe) / 2, t.y + (t.ny * fringe) / 2, 0), weave, deg));
+  }
+  return b;
+}
+
+/** A rug with a CONTOUR (lib/catalog/border.ts): its slab as always (the plain box, or the shaped
+ *  outline extruded), each band a flat ring RUG_BAND_MM thick on top — its outer edge and its inner
+ *  one cut out, the plan's own bands (rugBorderBands: bows and rounded corners followed) — in the
+ *  band's colour, and the fringe the contour's: on or off, in its colour. A band mesh, not a texture:
+ *  a curved rug's band follows its outline exactly where a painted canvas would have to be stretched
+ *  over it. One material per colour, so identical rugs still share theirs. */
+function borderedRugBody(ctx: ItemContext, b: ItemBuild, fabric: MaterialRef, border: Border): ItemBuild {
+  const { widthMm: w, depthMm: d, rug, tone } = ctx;
+  if (rug) {
+    const slab = rugOutline(w, d, rug);
+    b.parts.push({ shape: "extrude", outline: { outline: slab.outline, edgeCurves: slab.edgeCurves }, h: RUG_MM, at: vec3(0, 0, 0) });
+  } else b.parts.push(box(w, d, RUG_MM, vec3(0, 0, 0), fabric));
+  for (const band of rugBorderBands(w, d, rug, border)) {
+    b.parts.push({
+      shape: "extrude",
+      outline: band.outer,
+      ...(band.inner ? { holes: [band.inner] } : {}),
+      h: RUG_BAND_MM,
+      at: vec3(0, 0, RUG_MM),
+      material: clothMaterial(hexOf(band.colour) ?? darkened(tone, 0.2)),
+    });
+  }
+  const fr = fringeOf(border, "rugs");
+  if (fr.on) {
+    const strand = clothMaterial(hexOf(fr.colour) ?? darkened(tone, 0.2));
+    const fringe = Math.min(70, Math.min(w, d) * 0.05);
+    for (const t of rugFringe(w, d, rug, RUG_FRINGE_PITCH_MM, RUG_FRINGE_MAX)) {
+      const deg = (Math.atan2(t.ny, t.nx) * 180) / Math.PI;
+      b.parts.push(box(fringe, RUG_FRINGE_W_MM, RUG_FRINGE_W_MM, vec3(t.x + (t.nx * fringe) / 2, t.y + (t.ny * fringe) / 2, 0), strand, deg));
+    }
   }
   return b;
 }
@@ -1084,6 +1122,20 @@ if (isMain(import.meta.url)) {
   const strands = boxes(curved).filter((p) => p.h === 3);
   assert(strands.length === 40, `curved rug: twenty strands an end (${strands.length})`);
   assert(strands.some((p) => p.at.x > 1500 + 350), "curved rug: the fringe rides the bulge");
+
+  // A rug with a CONTOUR (lib/catalog/border.ts): the woven band gives way to its bands — flat rings
+  // on the slab in their colours — and the fringe is the contour's, in its colour or none at all.
+  const gold = { widthMm: 120, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 60, colour: "#ffffff" } };
+  const bordered = rugBody(ctxOf({ kind: "rect", widthMm: 3000, depthMm: 2000 }, 12, "#4b3a6e", { border: gold }));
+  const bands = bordered.parts.filter((p): p is Extract<Part, { shape: "extrude" }> => p.shape === "extrude" && p.at.z === 12);
+  assert(bordered.parts[0].shape === "box" && bands.length === 2 && bands.every((p) => p.holes?.length === 1), "bordered rug: the slab, then two rings on it");
+  assert(bands[0].material?.colour === "#c9a24a" && bands[1].material?.colour === "#ffffff", "bordered rug: each band in its colour");
+  assert(!boxes(bordered).some((p) => p.h === 2), "bordered rug: no woven strips under the contour");
+  const goldStrands = boxes(bordered).filter((p) => p.h === 3);
+  assert(goldStrands.length === 40 && goldStrands.every((p) => p.material?.colour === "#c9a24a"), "bordered rug: the fringe in the contour's colour");
+  assert(boxes(rugBody(ctxOf({ kind: "rect", widthMm: 3000, depthMm: 2000 }, 12, "#4b3a6e", { border: { ...gold, fringe: false } }))).filter((p) => p.h === 3).length === 0, "bordered rug: no fringe when it says so");
+  const bentBordered = rugBody(ctxOf({ kind: "rect", widthMm: 3000, depthMm: 2000 }, 12, "#4b3a6e", { rug: { bows: [0, 0.2, 0, 0], corners: [300, 300, 0, 0] }, border: gold }));
+  assert(bentBordered.parts[0].shape === "extrude" && bentBordered.parts.filter((p) => p.shape === "extrude" && p.at.z === 12).length === 2, "bordered curved rug: its bands follow the bowed, rounded slab");
 
   // Chairs in rows 3×4: twelve instances, all facing +y.
   const rows = chairRowsBody(ctxOf({ kind: "rect", widthMm: 1950, depthMm: 2400 }, 900, DEFAULT_TONE.chair, { rows: { rows: 3, perRow: 4 } }));

@@ -18,6 +18,7 @@ import { climbRise } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "@/components/vessel-mark";
 import { resolve } from "@/lib/studio/catalog-resolver";
+import { borderOf } from "@/lib/catalog/border";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
@@ -91,12 +92,13 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
           rise={climbRise(product)}
+          border={symbol === "runner" ? borderOf(undefined, product) : undefined}
         />
         {vessel && <VesselMark variantId={vessel} pass="over" holder={f} />}
         </>
       ) : (
         <>
-          {cloth && <ClothDrape footprint={f} colour={resolved.fill} />}
+          {cloth && <ClothDrape footprint={f} colour={resolved.fill} border={borderOf(undefined, product)} />}
           {shape}
           {surfaced && (
             <>
@@ -104,7 +106,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
               <FootprintShape footprint={f} fill="none" stroke={resolved.stroke} strokeWidth={resolved.strokeWidth} vectorEffect="non-scaling-stroke" />
             </>
           )}
-          {product.category === "rugs" && f.kind === "rect" && <RugPattern w={f.widthMm} h={f.depthMm} />}
+          {product.category === "rugs" && f.kind === "rect" && <RugPattern w={f.widthMm} h={f.depthMm} border={borderOf(undefined, product)} />}
           {/* A cloth is the table's surface on the plan, never labelled there — so not here either. */}
           {!cloth && <PlanContent content={content} w={w} h={h} at={labelAnchor(f)} />}
         </>

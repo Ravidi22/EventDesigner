@@ -5496,6 +5496,7 @@ export function StudioScreen({
                 onSpreadRow={spreadAlongRow}
                 onHangOverDressing={hangOverDressing}
                 onVessel={(ids, vessel) => act({ type: "setPlacementVessel", ids, vessel })}
+                onBorder={(ids, border) => act({ type: "setPlacementBorder", ids, border })}
                 onClimb={(id, edit) => act({ type: "setPlacementClimb", id, ...edit })}
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}

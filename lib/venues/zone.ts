@@ -16,6 +16,8 @@
 //            it crosses) and the zone is the area round them, a margin wide, re-derived from where
 //            they stand on every read (./feature-zones.ts) — moved with them, never a stale copy.
 import type { Point } from "@/lib/studio/hall";
+import type { EdgeCurve } from "@/lib/studio/hall";
+import { cleanShape, flattenOutline, hasCorners, shapedOutline, type OutlineShape } from "@/lib/studio/shaped-outline";
 import type { ElementStyle } from "@/lib/element-style";
 import { outlineBounds, polygonAreaMm2, type Bounds } from "@/lib/studio/geometry";
 import { faceAt, type Face } from "./faces";
@@ -37,7 +39,10 @@ export const ZONE_KIND_LABEL: Record<ZoneKind, string> = {
 
 export type ZoneSource =
   | { type: "face"; anchor: Point }
-  | { type: "region"; boundary: Point[] }
+  /** `edgeCurves` and `corners` (2026-11-07): a traced region's sides bowed and its corners rounded,
+   *  aligned to `boundary` as a feature's are to its outline (lib/studio/shaped-outline.ts). Absent =
+   *  straight sides and square corners, as every region drew before. */
+  | { type: "region"; boundary: Point[]; edgeCurves?: (EdgeCurve | null)[]; corners?: (number | null)[] }
   /** The features it is made of, and how far round them it reaches (always written, so a later
    *  default never moves a zone already drawn). */
   | { type: "features"; featureIds: string[]; marginMm: number };
@@ -71,17 +76,33 @@ export interface Zone {
 export interface ResolvedZone {
   zone: Zone;
   boundary: Point[];
+  /** The TRUE outline of a region whose sides bow or whose corners are rounded — its curves, for the
+   *  drawers (the zone's tint, the printed map). `boundary` is that outline flattened, the polygon
+   *  every geometric reader walks. Absent = the boundary is the outline. */
+  shape?: { outline: Point[]; edgeCurves?: (EdgeCurve | null)[] };
   /** Face-sourced, but the walls no longer enclose its anchor — someone deleted or opened a wall —
    *  or made of features none of which is on the plan any more. Surfaced rather than silently
    *  dropped: the designer needs to know a named area came undone. */
   detached: boolean;
 }
 
+const shapedRegions = new WeakMap<object, { boundary: Point[]; shape: NonNullable<ResolvedZone["shape"]> }>();
+
 /** `features` is the venue's own (the structure the faces were detected in) — what a features zone
  *  is resolved against. A caller with none resolves such a zone as detached. */
 export function resolveZone(zone: Zone, faces: Face[], features: readonly StructureFeature[] = []): ResolvedZone {
   const src = zone.source;
-  if (src.type === "region") return { zone, boundary: src.boundary, detached: false };
+  if (src.type === "region") {
+    if (!src.edgeCurves?.some(Boolean) && !hasCorners(src.corners)) return { zone, boundary: src.boundary, detached: false };
+    // Shaped once per source object — the zones are re-resolved on every frame of a feature drag.
+    let hit = shapedRegions.get(src);
+    if (!hit) {
+      const shape = shapedOutline(src.boundary, src.edgeCurves, src.corners);
+      hit = { boundary: flattenOutline(shape.outline, shape.edgeCurves), shape };
+      shapedRegions.set(src, hit);
+    }
+    return { zone, boundary: hit.boundary, shape: hit.shape, detached: false };
+  }
   if (src.type === "features") {
     const boundary = featuresBoundary(features, src.featureIds, src.marginMm);
     return { zone, boundary, detached: boundary.length === 0 };
@@ -92,6 +113,17 @@ export function resolveZone(zone: Zone, faces: Face[], features: readonly Struct
 
 export function resolveZones(zones: Zone[], faces: Face[], features: readonly StructureFeature[] = []): ResolvedZone[] {
   return zones.map((z) => resolveZone(z, faces, features));
+}
+
+/** A region's outline as the editor holds it: its points, bows and radii. */
+export function regionShape(src: Extract<ZoneSource, { type: "region" }>): OutlineShape {
+  return { outline: src.boundary, ...(src.edgeCurves ? { edgeCurves: src.edgeCurves } : {}), ...(src.corners ? { corners: src.corners } : {}) };
+}
+
+/** …and back: the region source of an edited outline, storing no empty list of curves or radii. */
+export function regionSource(shape: OutlineShape): Extract<ZoneSource, { type: "region" }> {
+  const clean = cleanShape(shape);
+  return { type: "region", boundary: clean.outline, ...(clean.edgeCurves ? { edgeCurves: clean.edgeCurves } : {}), ...(clean.corners ? { corners: clean.corners } : {}) };
 }
 
 /** What a detached zone's row says came undone — the walls, or the features it was made of. */

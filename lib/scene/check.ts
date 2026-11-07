@@ -51,7 +51,7 @@ if (isMain(import.meta.url)) {
   const round = tops.find((b) => b.tag.id === "t1")!;
   assert(round.parts.some((q) => q.shape === "extrude" && near(q.at.z, 720)), "the round table's top is a 30 mm slab whose face is at 750");
   assert(near(round.instances[0].at.x, 5000) && near(round.instances[0].at.y, 5000), "…standing where the document puts it");
-  const cloth = byType("cloth");
+  const cloth = byType("cloth").filter((b) => !b.id.startsWith("cloth-hem:")); // a contour's hem bands are the cloth's too
   assert(cloth.length === 1 && minZ(cloth[0].parts) < 1, "the cloth falls to the floor");
   for (const id of ["p-ring", "p-cluster", "p-lamp"]) {
     const b = bodies.find((x) => x.tag.id === id && x.instances.length === 1);
@@ -101,6 +101,15 @@ if (isMain(import.meta.url)) {
   assert(ofId("p-sofa")[0].parts.length > 3, "the sofa is a sofa, not a box");
   const rug = ofId("p-rug")[0];
   assert(rug.parts[0].shape === "box" && (rug.parts[0] as { h: number }).h === 12, "the rug is a 12 mm slab");
+  // Its contour (lib/catalog/border.ts): two flat rings on the slab in their colours, the gold one at
+  // the edge, the cream one inside it — each its outer edge with its inner cut out.
+  const rings = rug.parts.filter((q): q is Extract<typeof q, { shape: "extrude" }> => q.shape === "extrude" && near(q.at.z, 12));
+  assert(rings.length === 2 && rings.every((q) => (q.holes?.length ?? 0) === 1), "the rug's contour is two rings on its top");
+  assert(rings[0].material?.colour === "#c9a24a" && rings[1].material?.colour === "#f5efe0", "…in the contour's colours, the edge band first");
+  // The cloth's hem: the bottom 80 of its fall, gold, over the same folds.
+  const hem = bodies.find((b) => b.id.startsWith("cloth-hem:p-cloth"));
+  const hemFall = hem?.parts[0];
+  assert(!!hem && hem.material.colour === "#c9a24a" && hemFall?.shape === "drape" && hemFall.band?.[0] === 0 && hemFall.band?.[1] === 80, "the cloth's contour is the bottom 80 of its fall, in gold");
   const chuppah = ofId("p-chuppah").find((b) => b.tag.type === "item")!;
   assert(chuppah.parts.filter((q) => q.shape === "cylinder" && near(topOf(q), 2600)).length === 4, "the chuppah stands on four poles to 2600");
   const chandelier = ofId("p-chandelier")[0];

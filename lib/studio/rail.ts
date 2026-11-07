@@ -324,7 +324,11 @@ export function footprintHost(f: Footprint, at: Point, rotationDeg: number, heig
     const into = tangent((i - 1 + n) % n, true);
     const outOf = tangent(i, false);
     const turn = (Math.acos(Math.max(-1, Math.min(1, into.x * outOf.x + into.y * outOf.y))) * 180) / Math.PI;
-    if (turn < SMOOTH_TURN_DEG) smooth.push(pts.length);
+    // Only where a CURVE runs on into a curve (a circle's quarters, an ellipse's): the point where a
+    // straight run meets a rounded corner is a real corner, as on a stage (stage-draw's rule) — else a
+    // rounded rectangle would be one closed side and a curtain on its front would wrap the building.
+    const curvedBoth = !!edgeCurves?.[(i - 1 + n) % n] && !!edgeCurves?.[i];
+    if (curvedBoth && turn < SMOOTH_TURN_DEG) smooth.push(pts.length);
     const edge = flattenEdge(outline[i], outline[(i + 1) % n], edgeCurves?.[i]);
     edge.slice(0, -1).forEach((q, k) => {
       if (k > 0) smooth.push(pts.length);
@@ -856,6 +860,20 @@ if (isMain(import.meta.url)) {
   const rim = resolveRail({ type: "side", featureId: "round", side: 0, from: 0, to: 1, out: 1 }, ctx);
   assert(rim?.type === "lines" && near(rim.lengthMm, Math.PI * 4000, 40) && rim.lines[0].path.length > 16, `a round thing is ONE side, followed round its rim (${Math.round(rim?.type === "lines" ? rim.lengthMm : 0)})`);
   assert(hostSides(featureHost(structure.features[2])!).length === 1 && hostSides(featureHost(structure.features[0])!).length === 4, "a circle has one side, a rectangle four");
+  // A rectangle rounded at its corners: each straight run and each arc is a side of its own — the
+  // front is not wrapped round the building.
+  const rounded = footprintHost(
+    {
+      kind: "custom",
+      outline: [{ x: -1500, y: -1000 }, { x: 1500, y: -1000 }, { x: 2000, y: -500 }, { x: 2000, y: 500 }, { x: 1500, y: 1000 }, { x: -1500, y: 1000 }, { x: -2000, y: 500 }, { x: -2000, y: -500 }],
+      edgeCurves: [null, { c1: { x: 276, y: 0 }, c2: { x: 0, y: -276 } }, null, { c1: { x: 0, y: 276 }, c2: { x: 276, y: 0 } }, null, { c1: { x: -276, y: 0 }, c2: { x: 0, y: 276 } }, null, { c1: { x: 0, y: -276 }, c2: { x: -276, y: 0 } }],
+    },
+    { x: 0, y: 0 },
+    0,
+    3000,
+  )!;
+  const roundedSides = hostSides(rounded);
+  assert(roundedSides.length === 8 && near(roundedSides[0].L, 3000) && roundedSides[1].curved, `a rounded rectangle is eight sides — four runs, four arcs (got ${roundedSides.length})`);
   assert(resolveRail({ type: "side", featureId: "nobody", side: 0, from: 0, to: 1, out: 1 }, ctx) === null, "a dangling thing is null");
   assert(resolveRail({ type: "side", featureId: "b", side: 9, from: 0, to: 1, out: 1 }, ctx) === null, "…and so is a side it does not have");
   assert(hostsSide(featureHost(structure.features[0])) && !hostsSide(featureHost(structure.features[1])), "a 3.5 m building offers its sides, a 40 cm stage does not");
