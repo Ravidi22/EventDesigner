@@ -109,8 +109,10 @@ export function useCatalog(initial?: Product[]): CatalogHandle {
   const remove = useCallback(
     async (id: string) => {
       try {
-        const { products: next, archived } = await removeProduct(id);
+        const { products: next, archived, error: refused } = await removeProduct(id);
         adopt(next);
+        // A built-in is refused by the server, with the reason (lib/catalog/built-in.ts).
+        if (refused) setError(refused);
         return { archived };
       } catch {
         setError("המחיקה נכשלה");

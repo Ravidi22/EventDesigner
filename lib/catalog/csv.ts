@@ -26,6 +26,8 @@ export interface CsvCategory {
   id: string;
   label: string;
   defaultLayer: Layer;
+  /** A built-in-only category (CategoryDef.builtIn): a studio's import refuses rows in it. */
+  builtIn?: true;
 }
 
 /** Split a CSV into rows of fields, per RFC 4180: a field may be quoted, and a quoted field may
@@ -75,19 +77,38 @@ export function splitCsvRows(text: string): string[][] {
 }
 
 export function parseCsvProducts(text: string, categories: CsvCategory[], makeId: () => string): Product[] {
+  return parseCsvImport(text, categories, makeId, { refuseBuiltIn: false }).products;
+}
+
+/** The import, with the rows it REFUSES named: a studio's built-in-only categories (an LED strip, a
+ *  stage skirt — lib/catalog/built-in.ts) take no row by hand, so a line filed under one is left out
+ *  with a sentence saying which line and why, rather than silently re-filed under another category.
+ *  `refuseBuiltIn` is false for a supplier, which sells those things. Line numbers are the sheet's
+ *  own (the header is line 1). */
+export function parseCsvImport(
+  text: string,
+  categories: CsvCategory[],
+  makeId: () => string,
+  { refuseBuiltIn }: { refuseBuiltIn: boolean },
+): { products: Product[]; refused: string[] } {
   const rows = splitCsvRows(text);
-  if (rows.length < 2) return [];
+  const refused: string[] = [];
+  if (rows.length < 2) return { products: [], refused };
   const header = rows[0].map((h) => COLS[h.trim().toLowerCase()] ?? "");
   const byLabel = new Map(categories.map((c) => [c.label, c]));
   const byId = new Map(categories.map((c) => [c.id, c]));
   const out: Product[] = [];
-  for (const cells of rows.slice(1)) {
+  for (const [index, cells] of rows.slice(1).entries()) {
     const row: Record<string, string> = {};
     header.forEach((key, i) => {
       if (key) row[key] = (cells[i] ?? "").trim();
     });
     if (!row.name) continue;
     const cat = byLabel.get(row.category) ?? byId.get(row.category) ?? categories[0];
+    if (refuseBuiltIn && cat.builtIn) {
+      refused.push(`שורה ${index + 2} (${row.name}): "${cat.label}" היא קטגוריה מובנית — יש בקטלוג פריט אחד כזה, ועורכים אותו שם.`);
+      continue;
+    }
     const num = (v?: string) => (v && !isNaN(parseFloat(v)) ? Math.round(parseFloat(v) * 10) : undefined);
     out.push({
       id: makeId(),
@@ -101,7 +122,7 @@ export function parseCsvProducts(text: string, categories: CsvCategory[], makeId
       variants: [],
     });
   }
-  return out;
+  return { products: out, refused };
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────────────────────────
@@ -237,6 +258,15 @@ if (isMain(import.meta.url)) {
   assert(rows[1].unitPrice === undefined, "empty price stays undefined, not 0");
   const english = parseCsvProducts("name,category,height,price\nRunner,tablecloths,2,22\n", cats, id);
   assert(english[0].category === "tablecloths" && english[0].unitPrice === 22, "english header + category id");
+
+  // ── a studio's built-in-only categories (lib/catalog/built-in.ts) ─────────────────────────────
+  const withKit: CsvCategory[] = [...cats, { id: "led-strips", label: "פסי לד", defaultLayer: "ceiling", builtIn: true }];
+  const kitSheet = "שם,קטגוריה\nפס לד חם,פסי לד\nכיסא,כיסאות\n";
+  const studio = parseCsvImport(kitSheet, withKit, id, { refuseBuiltIn: true });
+  assert(studio.products.length === 1 && studio.products[0].category === "chairs", "a studio's import leaves out the built-in category's row…");
+  assert(studio.refused.length === 1 && studio.refused[0].includes("שורה 2") && studio.refused[0].includes("פס לד חם"), "…and names the line and the item");
+  const supplier = parseCsvImport(kitSheet, withKit, id, { refuseBuiltIn: false });
+  assert(supplier.products.length === 2 && supplier.refused.length === 0, "a supplier imports it like any row");
 
   // ── the quoted forms the naive split used to break on ────────────────────────────────────────
   const tricky = parseCsvProducts('שם,מפרט\n"רהיט ""מיוחד""","שתי\nשורות"\n', cats, id);
