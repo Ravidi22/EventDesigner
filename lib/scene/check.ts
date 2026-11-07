@@ -110,6 +110,14 @@ if (isMain(import.meta.url)) {
   const onStage = ofId("p-stage-rug")[0];
   const slab = onStage?.parts[0];
   assert(!!onStage && slab?.shape === "extrude" && slab.outline.outline.length === 4 && near(onStage.instances[0].at.z, 600), "the carpet over the stage is its outline, lying on the deck");
+  // The dance floor (lib/scene/dance-floor.ts): a gloss slab of its rounded outline, the other panels a
+  // hair proud of it in a lighter gloss, and the metal trim round its edge — lying on the floor.
+  const dance = ofId("p-dance")[0];
+  const danceSlab = dance?.parts[0];
+  assert(!!dance && dance.material.kind === "gloss" && dance.material.colour === "#1c1b20" && danceSlab?.shape === "extrude" && !!danceSlab.outline.edgeCurves?.some(Boolean) && near(dance.instances[0].at.z, 0), "the dance floor is a black gloss slab of its rounded outline, on the floor");
+  const panels = dance.parts.filter((q) => q.shape === "extrude" && near(q.at.z, 12) && q.material?.kind === "gloss");
+  assert(panels.length > 4 && panels.every((q) => q.material!.colour !== "#1c1b20"), `…its other panels a shade off on top (${panels.length})`);
+  assert(dance.parts.some((q) => q.shape === "extrude" && q.material?.kind === "metal" && (q.holes?.length ?? 0) === 1), "…and a metal trim round its edge");
   // The cloth's hem: the bottom 80 of its fall, gold, over the same folds.
   const hem = bodies.find((b) => b.id.startsWith("cloth-hem:p-cloth"));
   const hemFall = hem?.parts[0];

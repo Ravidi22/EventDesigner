@@ -39,6 +39,7 @@ import { VesselMark } from "@/components/vessel-mark";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { DanceFloorPattern } from "@/components/dance-floor";
 import { borderOf } from "@/lib/catalog/border";
 import { DrapePleatsAlong } from "@/components/curtain-cloth";
 import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
@@ -3344,7 +3345,7 @@ const CarpetNode = memo(function CarpetNode({
       ) : bowed ? (
         <path {...shape} transform={`translate(${x} ${y})`} d={outlinePathD(bowed.outline, bowed.edgeCurves)} />
       ) : (
-        <rect {...shape} x={x - halfW} y={y - halfD} width={size.widthMm} height={size.depthMm} rx={Math.min(size.widthMm, size.depthMm) * 0.03} />
+        <rect {...shape} x={x - halfW} y={y - halfD} width={size.widthMm} height={size.depthMm} rx={r?.product.category === "dance-floors" ? 0 : Math.min(size.widthMm, size.depthMm) * 0.03} />
       )}
       {/* A lawn runner, a sisal mat, a printed rug: what it is woven of (or the designer's own
           picture of it), tinted by its shade. Over the rect (which keeps the pointer), under the
@@ -3361,6 +3362,14 @@ const CarpetNode = memo(function CarpetNode({
           {/* Its contour (lib/catalog/border.ts) — this plan's, else its row's — in place of the woven
               line; on a plain rug laid inside the rectangle's own rounded corners. */}
           <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} border={borderOf(placement, r?.product)} rx={Math.min(size.widthMm, size.depthMm) * 0.03} footprint={carpetFp} />
+        </g>
+      )}
+      {/* A dance floor (lib/catalog/dance-floor.ts): its panels over its fill, cut to its outline —
+          bowed, rounded, or laid over a surface or a stage with its holes. Its row's picture switch
+          (MapAppearance.symbol) brings back the plain fill, as the card shows. */}
+      {r?.product.category === "dance-floors" && r.product.appearance?.symbol !== false && (
+        <g transform={`translate(${x} ${y})`}>
+          <DanceFloorPattern w={size.widthMm} h={size.depthMm} shape={rugShape} footprint={carpetFp} holes={carpet?.holes} tone={swatchOf(r, style.fill)} />
         </g>
       )}
       {/* The middle of each side: pull it and the side curves, like the shape canvas's diamond. A

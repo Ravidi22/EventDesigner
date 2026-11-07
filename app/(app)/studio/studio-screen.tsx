@@ -5136,7 +5136,8 @@ export function StudioScreen({
   // covers, no new row per use. So it is not listed again among the rows; a studio from before the
   // kit (no built-in yet) keeps today's fresh row from the drawer.
   const kitRug = useMemo(() => builtInRug(catalog), [catalog]);
-  const rugRows = useMemo(() => catalog.filter((p) => p.category === "rugs" && !p.archived && p !== kitRug), [catalog, kitRug]);
+  // …and the dance floor among them: a floor laid over a surface or a stage the same way.
+  const rugRows = useMemo(() => catalog.filter((p) => (p.category === "rugs" || p.category === "dance-floors") && !p.archived && p !== kitRug), [catalog, kitRug]);
   /** The carpet that "שטיח מותאם…" is making a row for — laid over this when the drawer saves. */
   const coverPending = useRef<CoverAim | null>(null);
   const layCarpet = useCallback(
@@ -5185,7 +5186,7 @@ export function StudioScreen({
       const on = aim.kind === "stage" ? "על הבמה" : "על המשטח";
       const rows: ContextMenuItem[] = [
         ...rugRows.map((product) => ({
-          label: flat ? `שטיח ${on}: ${product.name}` : product.name,
+          label: flat ? (product.category === "dance-floors" ? `${product.name} ${on}` : `שטיח ${on}: ${product.name}`) : product.name,
           icon: RugIcon,
           onSelect: () => coverLatest.current.layCarpet(aim, defaultVariantId(product)),
         })),

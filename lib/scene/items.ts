@@ -37,6 +37,7 @@ import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { floorKindBody } from "./floor-kinds";
 import { overheadKindBody } from "./overhead";
 import { screenBody } from "./led";
+import { danceFloorBody } from "./dance-floor";
 
 export { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
@@ -258,6 +259,9 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     // An LED screen: its dark box and the face that glows (./led.ts).
     case "screen":
       return screenBody(ctx);
+    // A dance floor: a gloss slab of panels (./dance-floor.ts) — laid by build.ts as a rug is.
+    case "dance-floor":
+      return danceFloorBody(ctx);
     default:
       return fallbackBody(ctx);
   }

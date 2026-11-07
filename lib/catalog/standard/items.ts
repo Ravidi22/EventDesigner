@@ -327,6 +327,28 @@ export const STANDARD_BARS: StandardItem[] = [
   bar("bar-round-150", "בר עגול 150", { diameterMm: 1500 }),
 ];
 
+// ── רחבת ריקודים ─────────────────────────────────────────────────────────────
+
+// The dance floor every studio is given (the built-in kit, docs/superpowers/specs/2026-11-07-built-
+// in-kit-design.md §2): one row, laid and stretched on the plan like a rug, drawn as its panels in its
+// shade, billed by the square metre of the floor it really covers. 6×6m is a first size for a hall of
+// 300; the designer drags it to the room. No price and no shades: those are the studio's to add.
+export const STANDARD_DANCE_FLOOR: StandardItem = {
+  key: "builtin-dance-floor",
+  builtIn: true,
+  product: {
+    name: "רחבת ריקודים",
+    category: "dance-floors",
+    layer: "floor",
+    dimensions: { widthMm: 6000, depthMm: 6000, heightMm: 20 },
+    categoryFields: {},
+    priceUnit: "m2",
+    styleTags: [],
+    visibility: "public",
+    appearance: { shape: "rect", content: "none" },
+  },
+};
+
 // ── הערכה המובנית ───────────────────────────────────────────────────────────
 
 // The studio's BUILT-INS (docs/superpowers/specs/2026-11-07-built-in-kit-design.md): things a designer
@@ -359,6 +381,8 @@ export const STANDARD_KIT: StandardItem[] = [
   // Sized, because it is also laid as one: "שטיח מותאם…" lays it to the surface it covers.
   kit("builtin-rug", { name: "שטיח", category: "rugs", layer: "floor", dimensions: { widthMm: 3000, depthMm: 2000, heightMm: 0 }, priceUnit: "m2" }),
   // A drape's height is its DROP — the one number its category still asks.
+  // The dance floor (above), laid like a rug and drawn as its panels.
+  STANDARD_DANCE_FLOOR,
   kit("builtin-curtain", { name: "וילון", category: "curtains", layer: "ceiling", dimensions: { heightMm: 3000 }, spec: "נפילה 3.0 מ׳ — נמתח לאורך הקיר, הצד או המוט", priceUnit: "m" }),
 ];
 
@@ -407,13 +431,12 @@ if (isMain(import.meta.url)) {
 
   // The built-in kit (spec 2026-11-07): every built-in-only category has exactly ONE built-in row —
   // it IS the category for a studio, which can make no other — and a built-in in a mixed category
-  // (rugs, curtains) stands beside the rows made by hand. The dance floor's category ships with its
-  // own item; until both are here it is the one category allowed to have none.
+  // (rugs, curtains) stands beside the rows made by hand.
   const builtIns = STANDARD_ITEMS.filter((i) => i.builtIn);
-  check(builtIns.length >= 15, `the kit ships its built-ins (${builtIns.length})`);
+  check(builtIns.length >= 16, `the kit ships its built-ins (${builtIns.length})`);
   for (const c of CATEGORIES.filter((c) => c.builtIn)) {
     const n = builtIns.filter((i) => i.product.category === c.id).length;
-    check(n === 1 || (n === 0 && c.id === "dance-floors"), `${c.id}: built-in only, so exactly one built-in row (${n})`);
+    check(n === 1, `${c.id}: built-in only, so exactly one built-in row (${n})`);
   }
   for (const item of builtIns) {
     check(item.product.unitPrice === undefined && item.product.costPrice === undefined, `${item.key}: a built-in carries no price — the studio sets it`);
@@ -494,6 +517,13 @@ if (isMain(import.meta.url)) {
   for (const item of STANDARD_BARS) {
     check(item.product.dimensions.heightMm >= 1000, `${item.key}: is counter height, not table height`);
   }
+
+  // The dance floor: a built-in of a built-in-only category, laid like a rug, billed per m².
+  const dance = STANDARD_DANCE_FLOOR.product;
+  check(
+    STANDARD_DANCE_FLOOR.builtIn === true && CATEGORY_BY_ID[dance.category]?.builtIn === true && CATEGORY_BY_ID[dance.category]?.sizing === "stretch" && dance.priceUnit === "m2",
+    "the dance floor is a built-in, stretched like a rug and priced by the square metre",
+  );
 
   if (failures.length) {
     console.error(`${failures.length} failed`);
