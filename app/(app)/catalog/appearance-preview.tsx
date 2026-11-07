@@ -19,6 +19,7 @@ import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "@/components/vessel-mark";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { borderOf } from "@/lib/catalog/border";
+import { isLedStrip } from "@/lib/venues/led";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
@@ -26,6 +27,15 @@ export function AppearancePreview({ product, className }: { product: Product; cl
   const cat = CATEGORY_BY_ID[product.category];
   // The colour the plan draws it in when nothing else says: its first shade.
   const swatch = product.variants.find((v) => !v.archived && v.swatch)?.swatch;
+
+  // An LED strip rides a rail as a drape does, but is LIGHT: a length of its glowing line, in its shade.
+  if (isLedStrip(product)) {
+    return (
+      <svg viewBox="-1400 -700 2800 1400" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
+        <ItemSymbol kind="led" footprint={{ kind: "rect", widthMm: 2600, depthMm: 500 }} count={1} tone={swatch ?? product.appearance?.style?.fill} />
+      </svg>
+    );
+  }
 
   // A drape has no width of its own — it is cut to whatever wall it hangs on — so it previews as a
   // length of itself: the band, its pleats, in its shade.
@@ -93,6 +103,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           drawStyle={drawStyleOf(product)}
           rise={climbRise(product)}
           border={symbol === "runner" ? borderOf(undefined, product) : undefined}
+          label={symbol === "screen" ? product.name : undefined}
         />
         {vessel && <VesselMark variantId={vessel} pass="over" holder={f} />}
         </>

@@ -115,6 +115,8 @@ import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { productVessel, takesVessel } from "@/lib/catalog/vessel";
 import { borderOf, cleanBorder, takesBorder, type Border } from "@/lib/catalog/border";
 import { BorderPanel } from "@/components/border-fields";
+import { LedRailPopover } from "./led-popover";
+import { isLedStrip } from "@/lib/venues/led";
 import { fieldLabelClassName } from "@/components/control";
 import { VesselPicker, vesselChoices } from "../catalog/vessel-picker";
 import { loadProducts } from "@/lib/catalog/storage";
@@ -1282,7 +1284,7 @@ export function Inspector({
         facts={`${FEATURE_KIND_LABEL[feature.kind]} · תוכנית המתחם`}
         onClose={onClose}
       >
-        {feature.kind !== "curtain" && (
+        {feature.kind !== "curtain" && feature.kind !== "led" && (
           <BarButton
             icon={Undo2}
             label={feature.moved ? "החזרה למקום בתוכנית" : "נמצא במקומו המקורי"}
@@ -1290,7 +1292,7 @@ export function Inspector({
             onClick={() => onResetFeature(feature.id)}
           />
         )}
-        {feature.kind !== "curtain" && <Rotation value={facing} onChange={onFace} />}
+        {feature.kind !== "curtain" && feature.kind !== "led" && <Rotation value={facing} onChange={onFace} />}
         {feature.kind === "curtain" && feature.curtainSwap && (
           <SwapPopover swap={feature.curtainSwap} onSwap={(productId) => onSwapCurtain(feature.id, productId)} label="החלפה בווילון מהקטלוג" />
         )}
@@ -2075,7 +2077,12 @@ export function Inspector({
 
         {/* A drape covers its whole wall (or side) by default; this puts it back after it was
             shortened. On a rod: its height and its ר. Every rail: the drop, and a rod of its own. */}
-        {drape && (
+        {/* An LED strip rides the same rail but is light, not cloth: its height, its stretch, a run
+            of its own (./led-popover.tsx) — no drop, no rod. */}
+        {drape && isLedStrip(r?.product) && (
+          <LedRailPopover rail={drape} lengthMm={runMm} onRail={(rail) => onRail?.(p.id, rail)} onDrawRun={onRail && onDrawRod && !p.locked ? () => onDrawRod(p.id) : undefined} />
+        )}
+        {drape && !isLedStrip(r?.product) && (
           <DrapeRailPopover
             rail={drape}
             run={run}

@@ -15,6 +15,8 @@ import { wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
 import { isRailed, nearestSideRail, railClothLine, railLines, railOf, rodPath, rodPointMoved, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
 import { RodMarks } from "@/components/curtain-cloth";
 import { RodDrawPane } from "@/components/rod-draw-pane";
+import { LedStripNode } from "./led-strip-node";
+import { isLedStrip, ledSideCandidates } from "@/lib/venues/led";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
@@ -734,6 +736,8 @@ export function CanvasStage({
           if (f.kind === "surface") continue;
           // Nor a curtain: it is the wall's face, not a thing to align a table to.
           if (f.kind === "curtain") continue;
+          // …nor an LED strip: a line of light on a wall or an edge, not furniture.
+          if (f.kind === "led") continue;
           out.push({
             ref: { kind: "feature", id: f.id },
             // Through its real shape, like everything else here: the venue's round bar is a
@@ -2437,6 +2441,22 @@ export function CanvasStage({
               sorted.drapes.map((p) => {
                 const rail = railOf(p);
                 if (!rail) return null;
+                // An LED strip rides the same rail but is a line of light, not cloth (spec §7.1).
+                if (isLedStrip(resolve(p.variantId)?.product))
+                  return (
+                    <LedStripNode
+                      key={p.id}
+                      placement={p}
+                      rail={rail}
+                      lines={railLines(rail, railCtx)}
+                      selected={isSel("placement", p.id)}
+                      locked={p.locked || !onRailPlacement}
+                      ctx={ctx}
+                      onSelect={stable.selectPlacement}
+                      onRail={stable.railPlacement}
+                      onEndSpan={stable.endGesture}
+                    />
+                  );
                 return (
                   <DrapeNode
                     key={p.id}
@@ -4480,6 +4500,8 @@ function PlacementNodeView({
           textMm={rise ? ctx.mm(11) : undefined}
           bench={bench ?? undefined}
           border={symbol === "runner" ? borderOf(placement, product) : undefined}
+          // An LED screen writes its row's name behind it (components/led-glyph.tsx).
+          label={symbol === "screen" ? product.name : undefined}
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
@@ -5514,7 +5536,9 @@ function ArmedPane({
   // …or the side of a tall thing, when that is nearer — where the drop will hang it (lib/studio/rail.ts,
   // the studio's dropProduct reads the same two).
   const arrangedNow = onWall && at ? arrangedStructure(structure, doc) : null;
-  const side = arrangedNow && at ? nearestSideRail(sideCandidates(arrangedNow.features, doc, (v) => resolve(v)?.product), at) : null;
+  // A strip runs along any side with height (a 40cm deck's edge); a curtain needs a tall one.
+  const sidesOf = isLedStrip(product) ? ledSideCandidates : sideCandidates;
+  const side = arrangedNow && at ? nearestSideRail(sidesOf(arrangedNow.features, doc, (v) => resolve(v)?.product), at) : null;
   const sideLine = side && (!near || side.distanceMm < near.distanceMm) && arrangedNow ? railLines(side.rail, sketchRailContext(doc, structure, arrangedNow, (v) => resolve(v)?.product))[0] : undefined;
   const wall = near && !sideLine ? wallTrack(structure, near.wallId) : null;
   const ghost = (p: Point, faint = false) => (

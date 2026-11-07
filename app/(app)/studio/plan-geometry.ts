@@ -17,6 +17,7 @@ import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { obstacleFootprint } from "@/lib/venues/rim";
+import { isLedStrip } from "@/lib/venues/led";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
 import { bandPolygon, footprintPolygons, polysBox, type CentredBox, type ClearanceSubject, type Poly } from "@/lib/studio/proximity";
@@ -236,6 +237,8 @@ export function clearanceSubjects(
   for (const p of doc.placements) {
     if (p.tableId) continue;
     const r = resolve(p.variantId);
+    // An LED strip is a line of light on a wall or an edge — nobody needs room from it (spec §7).
+    if (isLedStrip(r?.product)) continue;
     if (r?.anchor === "wall") {
       if (visible.ceiling) add({ kind: "placement", id: p.id });
       continue;
@@ -248,6 +251,7 @@ export function clearanceSubjects(
   // Not the ground: a table is SET on a lawn, and one standing near a lawn's edge (or across it) was
   // reported as too close to it, as though the grass were a wall.
   // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain") add({ kind: "feature", id: f.id });
+  // Nor the venue's LED strip, for the same reason as a hired one.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "led") add({ kind: "feature", id: f.id });
   return out;
 }

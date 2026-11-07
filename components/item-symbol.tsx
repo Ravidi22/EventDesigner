@@ -34,6 +34,8 @@ import { outlinePathD } from "@/lib/studio/geometry";
 import { rugFringe, rugInset, type RugShape } from "@/lib/studio/rug-shape";
 import { rugBorderBands } from "@/lib/studio/rug-shape";
 import { borderBands, clothHem, darkerShade, edgeFringe, footprintBorderBands, fringeOf, type Border, type BorderBand } from "@/lib/catalog/border";
+import { ledSymbol, screenSymbol, SCREEN_BODY } from "./led-glyph";
+import { LED_COLOUR } from "@/lib/venues/led";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -84,6 +86,9 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   gate: "#F1ECE3",
   // Ivory voile — a drape's cloth when its shade says nothing (never drawn as a footprint picture).
   curtain: "#F3EDE2",
+  // Warm white light; a screen's dark body (components/led-glyph.tsx).
+  led: LED_COLOUR,
+  screen: SCREEN_BODY,
 };
 
 export interface ItemSymbolProps {
@@ -129,9 +134,12 @@ export interface ItemSymbolProps {
   /** For a runner: its contour (lib/catalog/border.ts) — bands along its edge in their colours, its
    *  tassels in the fringe's. Absent = its stitched hem, as always. */
   border?: Border;
+  /** What a picture that writes its name writes — an LED screen's row name (or the venue screen's
+   *  label). Absent = nothing written. */
+  label?: string;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true, border }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, label }: ItemSymbolProps) {
   const { w, h, round } = boxOf(footprint);
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
@@ -234,6 +242,14 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       break;
     case "bench":
       body = benchSymbol(footprint, bench ?? benchLayoutFor(footprint), chairs, c, line);
+      break;
+    case "led":
+      // A strip's own picture is its RAIL's line (components/led-glyph.tsx); in a box — the card, the
+      // drag image — a short glowing line.
+      body = ledSymbol(w, h, tone, c.print, ink);
+      break;
+    case "screen":
+      body = screenSymbol(w, h, label, { tone, print: c.print, ink, textMm });
       break;
   }
   return <g className="pointer-events-none">{body}</g>;

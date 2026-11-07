@@ -25,6 +25,7 @@ import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
 import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
 import { curtainRail } from "@/lib/venues/curtain";
+import { isLedStrip, ledDropRail, ledRunRail, ledSideCandidates } from "@/lib/venues/led";
 import { defaultRailHeight, isRailed, nearestSideRail, railOf, sideCandidates, type Rail } from "@/lib/studio/rail";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
@@ -804,6 +805,27 @@ export function StudioScreen({
       // a rod post by post (spec §6.1, §6.2).
       // Only the rails the row's CATEGORY takes (CategoryDef.rails — absent = every one).
       const takes = (t: Rail["type"]) => !cat.rails || cat.rails.includes(t);
+      // An LED STRIP (spec 2026-11-07 §7.1, lib/venues/led.ts): the nearest wall at the floor line, or
+      // the nearest side of anything with height — a 40cm deck's edge, a bar's counter — whichever is
+      // nearer; with neither, a run through the drop at a rod's height. Its bar types the rest.
+      if (isLedStrip(product)) {
+        const led = ledDropRail(
+          plan.structure,
+          { x, y },
+          nearestWall(plan.structure, { x, y }),
+          ledSideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product),
+          defaultRailHeight({ x, y }),
+          takes,
+        );
+        if (!led) {
+          showHint("אין קיר או צד להניח עליו את הפס");
+          return false;
+        }
+        act({ type: "addPlacement", placement: { ...base, position: { x, y }, rail: led } });
+        landNew([{ kind: "placement", id }]);
+        setSelected([{ kind: "placement", id }]);
+        return true;
+      }
       const near = takes("wall") ? nearestWall(plan.structure, { x, y }) : null;
       const side = takes("side") ? nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y }) : null;
       let rail: Rail;
@@ -5183,6 +5205,13 @@ export function StudioScreen({
                       const was = p ? railOf(p) : null;
                       setRodDraw(null);
                       if (!p) return;
+                      // An LED strip drawn free is a RUN between the two ends drawn (spec §7.1) — its
+                      // height kept when it was a run already.
+                      if (isLedStrip(resolve(p.variantId)?.product)) {
+                        const run = ledRunRail(points, was?.type === "run" ? was.heightMm : defaultRailHeight(points[0]));
+                        if (run) act({ type: "setPlacementRail", id: p.id, rail: run });
+                        return;
+                      }
                       // The height a rod had stays; a new one starts where a rod does (defaultRailHeight).
                       const heightMm = was?.type === "rod" ? was.heightMm : defaultRailHeight(points[0]);
                       act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}) } });
@@ -5504,6 +5533,9 @@ export function StudioScreen({
                 onRail={(id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm })}
                 onDrawRod={(id) => {
                   setRodDraw(id);
+                  // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
+                  const drawn = doc.placements.find((x) => x.id === id);
+                  if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה כפולה בסופו · Esc לביטול");
                   showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
                 }}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}

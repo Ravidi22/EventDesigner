@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
 import type { RailType } from "@/lib/studio/rail";
+import { Monitor, Zap } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -254,6 +255,15 @@ export const CATEGORIES: CategoryDef[] = [
   // off the curtain itself (MeasureContext.rodOf — the studio's first row here), as a stage's skirt
   // is off the stage: never placed on its own.
   { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false },
+  // A line of LIGHT on a rail (spec 2026-11-07 §7.1, lib/venues/led.ts): along a wall at a height,
+  // along a side of a stage, a bar or a building, or a free run between two points. It hangs on a
+  // rail exactly as a drape does (`anchor: "wall"` sorts it with the drapes for every reader that
+  // asks "is this a thing on a rail"), is billed by the metre of its lines like one, and draws as a
+  // line of its shade's colour with a glow — never as cloth. No height of its own: the rail says it.
+  { id: "led-strips", label: "פסי לד", group: "grp-accessories", defaultLayer: "ceiling", icon: Zap, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["wall", "side", "run"] },
+  // An LED wall (§7.2): a free floor item like a stage backdrop — a 4 × 0.1 × 2.5 panel standing on a
+  // stage or the floor, its FRONT the +y face that lights. Counted per unit.
+  { id: "led-screens", label: "מסכי לד", group: "grp-accessories", defaultLayer: "floor", icon: Monitor, dims: "box", fields: [] },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
   // A gate — two columns joined overhead by a lintel (a square entrance) or an arch (a round one),
   // set where the guests come in or at the head of the aisle. Not an arch: an arch is a dressed

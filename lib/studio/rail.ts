@@ -837,6 +837,10 @@ if (isMain(import.meta.url)) {
   assert(near(wall.lines[0].path[0].x, 2000) && near(wall.lines[0].path[1].x, 5000), "…from 2 m to 5 m along");
   const sided = resolveRail({ type: "wall", wallId: "w", from: 0, to: 1, side: -1 }, ctx);
   assert(sided?.type === "lines" && sided.lines[0].hang === -1, "a venue curtain's side rides on the wall rail");
+  // An LED strip's height on a wall (spec §7.1): 0 is the floor line — a top of 0, not "the ceiling".
+  const skirting = resolveRail({ type: "wall", wallId: "w", from: 0, to: 1, side: 1, heightMm: 0 }, ctx);
+  const raised = resolveRail({ type: "wall", wallId: "w", from: 0, to: 1, side: 1, heightMm: 1200 }, ctx);
+  assert(skirting?.type === "lines" && skirting.lines[0].topMm === 0 && raised?.type === "lines" && raised.lines[0].topMm === 1200, "a strip's wall height is its line's top — 0 the floor line, 1.2 m where it was typed");
   const bowTrack = wallTrack(structure, "bow")!;
   const bowLen = railLengthMm({ type: "wall", wallId: "bow", from: 0, to: 1 }, ctx);
   assert(bowLen !== undefined && near(bowLen, bowTrack.lengthMm) && bowLen > 6000 + 100, `on a bowed wall the length is the ARC, not the 6 m chord (${Math.round(bowLen ?? 0)})`);

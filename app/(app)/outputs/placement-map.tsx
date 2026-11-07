@@ -19,6 +19,9 @@ import { WindowGlazing } from "@/components/window-glazing";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainPieces, type CurtainPiece } from "@/lib/venues/curtain";
 import { CurtainCloth, DrapePleatsAlong, RodMarks, polygonD } from "@/components/curtain-cloth";
 import { railBand, railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { LED_COLOUR, LED_DEPTH_MM, isLedStrip, ledColour, ledPieces } from "@/lib/venues/led";
+import { LedLine, ScreenGlyph } from "@/components/led-glyph";
+import type { Point } from "@/lib/studio/hall";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { featureEdgeShapes } from "@/lib/venues/stage-edges";
 import { isClimb } from "@/lib/venues/climb";
@@ -365,6 +368,8 @@ export function PlacementMap({
   // clusters on its table, a ceiling item is drawn overhead, and everything else is a free object on
   // the floor.
   const drapes: Placement[] = [];
+  // LED strips ride a rail as drapes do but print as a line of light (spec 2026-11-07 §7.1).
+  const leds: Placement[] = [];
   const ceilingItems: Placement[] = [];
   const floorItems: Placement[] = [];
   const chipsByTable = new Map<string, Placement[]>();
@@ -377,6 +382,10 @@ export function PlacementMap({
       continue;
     }
     if (r?.anchor === "table") continue; // the table's own cloth — drawn as the table's surface
+    if (isLedStrip(r?.product)) {
+      leds.push(p);
+      continue;
+    }
     if (r?.anchor === "wall") {
       drapes.push(p);
     } else if (p.layer === "table" && p.tableId) {
@@ -405,6 +414,10 @@ export function PlacementMap({
     if (drapes.length > 0) row("וילונות", flat.drape);
     if (ceilingItems.length > 0) row("פריטים תלויים", flat.overhead);
   }
+  // An LED strip on a crew sheet is an ink dash-dot line (spec §7.1) — the key says what it is: the
+  // hired ones on any sheet that is not the client's look, the venue's own in the B&W booklet (the
+  // crew's colour sheets draw the venue in colour, its strips glowing as on screen).
+  if (!colour && (leds.length > 0 || (mono && framedFeatures.some((f) => f.kind === "led")))) kindKey.push({ label: "LED", swatch: "dash-dot" });
 
   // The cover each table wears, for the colour mode — read off the whole document, because a sheet
   // that shows only the floor still has tables wearing cloths.
@@ -708,7 +721,7 @@ export function PlacementMap({
           {/* Venue features in their own colours, as the quote and the studio draw them — the crew
               sheets too: a lawn, a palm and a pool read faster in colour than as labelled outlines.
               Flattened to one pale tone each in the B&W booklet (`mono`). */}
-          {groundFirst(structure.features).map((f) => <ColourFeature key={f.id} f={f} den={den} mono={mono} pieces={f.kind === "curtain" ? curtainPieces(structure, f) : undefined} />)}
+          {groundFirst(structure.features).map((f) => <ColourFeature key={f.id} f={f} den={den} mono={mono} pieces={f.kind === "curtain" ? curtainPieces(structure, f) : f.kind === "led" ? ledPieces(structure, f) : undefined} />)}
 
           {/* THE FLOOR, back to front (stackOrder). Tables: "full" is the studio's own shape and style;
               "ghost" flattens every table to the same faint dot pattern, numbered only where the
@@ -937,6 +950,21 @@ export function PlacementMap({
                     <DrapePleatsAlong line={railClothLine(line, DRAPE_MM)} depthMm={DRAPE_MM} ink={INK} opacity={0.6} style={style} />
                     {line.posts && <RodMarks path={line.path} posts={line.posts} postMm={1.6 * den} ink={INK} />}
                   </g>
+                ))}
+              </g>
+            );
+          })}
+
+          {/* LED strips — a line of light along the rail, glowing in the client's look, an ink dash-dot
+              line on a crew sheet ("LED" in the key). */}
+          {leds.map((p) => {
+            const rail = railOf(p);
+            const lines = rail ? railLines(rail, sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product)) : [];
+            const r = resolve(p.variantId);
+            return (
+              <g key={p.id}>
+                {lines.map((line, i) => (
+                  <LedPrintLine key={i} path={railClothLine(line, LED_DEPTH_MM)} colour={r?.swatch ?? r?.product.appearance?.style?.fill ?? LED_COLOUR} den={den} mono={!colour} />
                 ))}
               </g>
             );
@@ -1437,6 +1465,8 @@ function groundFirst(features: StructureFeature[]): StructureFeature[] {
  *  plant its canopy's outline, a stage and a pool the hatches the key names, any other fixture one
  *  light grey whatever it is painted — so the furniture is what the eye finds, not a dark lawn. */
 function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; den: number; mono?: boolean; pieces?: CurtainPiece[] }) {
+  // The venue's own LED (spec 2026-11-07 §7.3) prints as the hired one does.
+  if (f.kind === "led" || f.kind === "screen") return <VenueLedPrint f={f} den={den} mono={mono} pieces={pieces} />;
   // The stage's flights and ramps — the sketch's own edge items, in the room (lib/venues/stage-edges.ts).
   const edges = featureEdgeShapes(f);
   const style = resolveStyle(f.style, "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.feature });
@@ -1607,6 +1637,34 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
   );
 }
 
+/** An LED strip's line on a sheet (components/led-glyph.tsx): glowing in its colour, or — `mono`, every
+ *  crew sheet's hired strip and the B&W booklet's — an ink dash-dot line, the key's "LED". Weights in
+ *  printed px like every line here; the dash in printed mm × the denominator (OVERHEAD_DASH's way). */
+function LedPrintLine({ path, colour, den, mono }: { path: Point[]; colour: string; den: number; mono: boolean }) {
+  return mono ? (
+    <LedLine path={path} core={LINE_WEIGHTS.feature} glow={LINE_WEIGHTS.feature} nonScaling mono ink={INK} dash={`${4 * den} ${1.2 * den} ${0.8 * den} ${1.2 * den}`} />
+  ) : (
+    <LedLine path={path} colour={colour} core={LINE_WEIGHTS.wall} glow={LINE_WEIGHTS.wall * 4} nonScaling />
+  );
+}
+
+/** The venue's own strip or screen (a feature of kind `led` / `screen`), as a hired one prints: the
+ *  strip along its rail in the pieces it was read into (lib/venues/led.ts ledPieces — the feature's own
+ *  frame), the screen as its bar with its name. No name on a strip. */
+function VenueLedPrint({ f, den, mono, pieces }: { f: StructureFeature; den: number; mono: boolean; pieces?: CurtainPiece[] }) {
+  return (
+    <g transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}>
+      <g transform={`translate(${f.x} ${f.y})`}>
+        {f.kind === "screen" ? (
+          <ScreenGlyph w={f.widthMm} h={f.depthMm} label={f.label} tone={mono ? MONO.feature : f.style?.fill} print={mono} ink={INK} textMm={2.6 * den} />
+        ) : (
+          (pieces ?? []).map((pc, i) => <LedPrintLine key={i} path={pc.line} colour={ledColour(f)} den={den} mono={mono} />)
+        )}
+      </g>
+    </g>
+  );
+}
+
 /** A table drawn faint and unnumbered — a sheet that is not about the tables still has to show a
  *  rigger or a stage crew which one is under them. */
 function GhostTable({ t }: { t: DesignTable }) {
@@ -1714,7 +1772,7 @@ export function PlacementGlyph({
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
         {!symbol && !block && (
           <g transform={lift}>
@@ -1746,7 +1804,7 @@ export function PlacementGlyph({
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
