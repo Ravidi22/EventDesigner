@@ -113,6 +113,9 @@ import { AlignMenu, type AlignPanel } from "./align-menu";
 import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { productVessel, takesVessel } from "@/lib/catalog/vessel";
+import { borderOf, cleanBorder, takesBorder, type Border } from "@/lib/catalog/border";
+import { BorderPanel } from "@/components/border-fields";
+import { fieldLabelClassName } from "@/components/control";
 import { VesselPicker, vesselChoices } from "../catalog/vessel-picker";
 import { loadProducts } from "@/lib/catalog/storage";
 import { Amphora } from "lucide-react";
@@ -358,6 +361,7 @@ export function Inspector({
   onSpreadRow,
   onHangOverDressing,
   onVessel,
+  onBorder,
   onClimb,
   onApplyToAllTables,
   onVariant,
@@ -511,6 +515,9 @@ export function Inspector({
   /** The vase an arrangement stands in (lib/catalog/vessel.ts): a variant, null = none, undefined =
    *  its catalog row's own. */
   onVessel?: (placementIds: string[], vessel: string | null | undefined) => void;
+  /** A rug's or a cloth's contour on this plan (Placement.border, lib/catalog/border.ts): a contour,
+   *  null = none here, undefined = its catalog row's again. Several ids: a block's cloths at once. */
+  onBorder?: (placementIds: string[], border: Border | null | undefined) => void;
   /** A rented flight or ramp standing on its own: its rise, steps or direction, with the run that
    *  follows and where it now stands (lib/studio/climb-item.ts builds the edit). */
   onClimb?: (placementId: string, edit: ClimbEdit) => void;
@@ -794,6 +801,19 @@ export function Inspector({
             )}
             {blockShades.length > 0 && (
               <SwatchPicker options={blockShades} value={blockCloth.variantId} onChange={(v) => onBlockCloth(group.tableIds, { variantId: v })} label="גוון המפה" />
+            )}
+            {/* Its contour — the first cloth's shown, a change hems every cloth of the block. */}
+            {onBorder && (
+              <div className="mt-3 border-t border-border-soft pt-2">
+                <span className={fieldLabelClassName}>קונטור</span>
+                <BorderPanel
+                  own={blockCloth.border}
+                  row={cleanBorder(resolve(blockCloth.variantId)?.product.appearance?.border)}
+                  category="tablecloths"
+                  onBorder={(b) => onBorder(covers.map((c) => c.id), b)}
+                  idPrefix={`border-${blockCloth.id}`}
+                />
+              </div>
             )}
             {covers.length < members.length && <Note>{`${members.length - covers.length} מהשולחנות בבלוק בלי מפה — שינוי כאן חל על מי שיש לו. להלבשת כולם: גוררים מפה מהסרגל על הבלוק.`}</Note>}
             <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(blockCloth.id)}>
@@ -1910,6 +1930,20 @@ export function Inspector({
           <VesselPopover own={p.vessel} rowVessel={productVessel(r.product)} onVessel={(v) => onVessel([p.id], v)} />
         )}
 
+        {/* A rug's (or a runner's) contour on THIS plan — its row's until it is given its own. */}
+        {onBorder && r && takesBorder(r.product) && (
+          <Popover
+            label="קונטור"
+            leading={<Swatch color={borderOf(p, r.product)?.colour} size={14} />}
+            value={(() => {
+              const b = borderOf(p, r.product);
+              return b ? ltr(`${Math.round(b.widthMm) / 10}`) : "ללא";
+            })()}
+          >
+            <BorderPanel own={p.border} row={cleanBorder(r.product.appearance?.border)} category={r.product.category} onBorder={(b) => onBorder([p.id], b)} idPrefix={`border-${p.id}`} />
+          </Popover>
+        )}
+
         {/* A carpet is sized here as well as by its corners — a number is faster when the client
             says "three by two". */}
         {stretch && (
@@ -2288,6 +2322,19 @@ export function Inspector({
               onChange={(v) => onVariant(cloth.id, v)}
               label="גוון המפה"
             />
+          )}
+          {/* Its contour — the hem the plan draws round the table (ClothDrape). */}
+          {onBorder && (
+            <div className="mt-3 border-t border-border-soft pt-2">
+              <span className={fieldLabelClassName}>קונטור</span>
+              <BorderPanel
+                own={cloth.border}
+                row={cleanBorder(resolve(cloth.variantId)?.product.appearance?.border)}
+                category="tablecloths"
+                onBorder={(b) => onBorder([cloth.id], b)}
+                idPrefix={`border-${cloth.id}`}
+              />
+            </div>
           )}
           <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(cloth.id)}>
             <Copy className="h-3.5 w-3.5" strokeWidth={2} />
