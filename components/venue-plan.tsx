@@ -21,6 +21,8 @@ import { seatingOf } from "@/lib/venues/seating";
 import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
 import { NO_DECKS, edgesMatter, takesEdgeItems } from "@/lib/venues/stage-edges";
 import { followsWalls } from "@/lib/venues/face-surfaces";
+import { rimOf } from "@/lib/venues/rim";
+import { RimFill } from "@/components/rim-fill";
 import type { StageEdgeKind, StageStair } from "@/lib/design-document/types";
 import type { WallDistance } from "@/lib/design-document/stage";
 import { isClimb } from "@/lib/venues/climb";
@@ -753,6 +755,8 @@ const FeatureNode = memo(function FeatureNode({
         // and with no items there was nothing drawing them.
         const edgeItems = featureEdgeItems(f);
         const stageP = edgeItems.length > 0 || (selected && edgesMatter(f)) ? featurePlacement(f) : null;
+        // A pool's שפה or a surface's edging (lib/venues/rim.ts) — read once per feature object.
+        const rim = rimOf(f);
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",
           stroke: selected ? "var(--color-accent)" : "var(--color-muted)",
@@ -783,7 +787,19 @@ const FeatureNode = memo(function FeatureNode({
                   footprint is centred on its own origin, so the position is a translate — the
                   label and the resize handles below keep their absolute coordinates. */}
               <g transform={`translate(${f.x} ${f.y})`}>
-                {f.kind === "surface" ? (
+                {rim ? (
+                  // A pool or a surface with a rim: the band in its own material, the water (or the
+                  // surface's own material) inside it — components/rim-fill.tsx. A pool's water edge
+                  // keeps the pool's own line (the band's hairlines are the rest); selected, the
+                  // whole outline is dashed in accent, as a surface's is.
+                  <>
+                    <RimFill f={f} seed={f.id} />
+                    {f.kind === "pool" && <FootprintShape footprint={rim.inside ?? featureFootprint(f)} {...common} fill="none" />}
+                    {selected && (
+                      <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+                    )}
+                  </>
+                ) : f.kind === "surface" ? (
                   <>
                     {/* The ground: a real-scale texture filling its own shape, with the same
                         dashed selection outline as a plant rather than a dashed resting border. */}

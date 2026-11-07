@@ -160,7 +160,9 @@ export const BLOCKS_SIGHT_MM = 1500;
 export function sightOf(structure: VenueStructure, zones: ResolvedZone[], doc?: DesignDocumentContent): Sight {
   const nodes = nodeMap(structure);
   const segments: { a: Point; b: Point }[] = structure.walls
-    .filter((w) => w.kind === "wall")
+    // A wall with a typed height (Wall.heightMm) answers by it: a half wall hides nothing from a
+    // standing eye, a tall fence on an edge does.
+    .filter((w) => (w.heightMm !== undefined && w.heightMm > 0 ? w.heightMm >= BLOCKS_SIGHT_MM : w.kind === "wall"))
     .map((w) => wallPoints(structure, w, nodes))
     .filter((p): p is { a: Point; b: Point } => !!p);
   const solids: Point[][] = [];

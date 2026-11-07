@@ -63,3 +63,6 @@ next-env.d.ts
 
 # Local database dumps (scripts/backup-db.ts): they hold auth rows and client data.
 /backups
+
+# brainstorming mockups (superpowers visual companion)
+.superpowers/

@@ -16,6 +16,7 @@ import { MeetingGalleryScreen } from "@/app/(app)/gallery/meeting-gallery";
 import { StudioScreen } from "@/app/(app)/studio/studio-screen";
 import { OutputsScreen } from "@/app/(app)/outputs/outputs-screen";
 import { SceneScreen } from "@/app/(app)/scene/scene-screen";
+import { SketchPickStage } from "./sketch-pick-stage";
 
 // The guided client-meeting flow (F-1.1–F-1.9). One resumable stepper: every stage autosaves,
 // exiting mid-flow is always safe, and an existing event re-enters at the stage in the URL
@@ -204,6 +205,9 @@ export function MeetingScreen() {
 
       <main className={"min-h-0 flex-1 print:block print:overflow-visible " + (isCanvas ? "overflow-hidden" : "overflow-auto")}>
         {step.id === "details" && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
+        {/* A saved sketch to start from, picked with the couple — or a blank page. It writes the
+            drawing and then moves on itself, so the footer below offers only the way back. */}
+        {step.id === "start" && event && <SketchPickStage onDone={() => advance(at + 1)} />}
         {/* Both sketches are the same document on the same canvas — a narrower set of tools each
             (StudioMode), not a second drawing. */}
         {step.id === "hall" && (
@@ -247,6 +251,7 @@ export function MeetingScreen() {
         <FlowFooter
           backLabel={prevStep?.label ?? null}
           nextLabel={nextStep ? `השלב הבא: ${nextStep.label}` : null}
+          hideNext={step.id === "start"}
           onBack={() => guarded(() => go(at - 1))}
           onContinue={() => guarded(() => advance(at + 1))}
           onFinish={() => guarded(() => router.push("/dashboard"))}
@@ -337,12 +342,15 @@ function Stepper({
 function FlowFooter({
   backLabel,
   nextLabel,
+  hideNext = false,
   onBack,
   onContinue,
   onFinish,
 }: {
   backLabel: string | null;
   nextLabel: string | null;
+  /** The stage moves on from its own button (סקיצת פתיחה) — one filled CTA a screen. */
+  hideNext?: boolean;
   onBack: () => void;
   onContinue: () => void;
   onFinish: () => void;
@@ -353,7 +361,7 @@ function FlowFooter({
         <ChevronRight className="h-4 w-4" strokeWidth={2} />
         {backLabel ? `חזרה ל${backLabel}` : "לשלב הקודם"}
       </Button>
-      {nextLabel ? (
+      {hideNext ? null : nextLabel ? (
         <Button onClick={onContinue}>
           {nextLabel}
           <ArrowLeft className="h-4 w-4" strokeWidth={2.2} />
@@ -386,7 +394,8 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
           does not scroll here either — `main` is the scroller on this screen, so the form keeps its
           full height and the popovers keep their room. */}
       <div className="rounded-lg bg-surface shadow-floating">
-        <EventForm event={event} onSaved={onSaved} />
+        {/* No saved-sketch picker here: the meeting's own סקיצת פתיחה stage is that choice. */}
+        <EventForm event={event} onSaved={onSaved} offerSketch={false} />
       </div>
     </div>
   );
