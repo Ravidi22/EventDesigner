@@ -40,7 +40,10 @@ export function EventForm({
   className = "",
   bodyClassName = "",
   submitLabel,
+  offerSketch: sketchWanted = true,
 }: {
+  /** False in the meeting frame, whose סקיצת פתיחה stage is where a saved sketch is picked. */
+  offerSketch?: boolean;
   /** null = create. Anything else = edit that event in place. */
   event: EventSummary | null;
   /** Awaited, so the submit button stays disabled through whatever the caller does next — the
@@ -121,7 +124,7 @@ export function EventForm({
   }, []);
 
   useEffect(() => {
-    if (event) return;
+    if (event || !sketchWanted) return;
     let live = true;
     fetchSketchTemplates()
       .then((list) => live && setSketches(list))
@@ -129,7 +132,7 @@ export function EventForm({
     return () => {
       live = false;
     };
-  }, [event]);
+  }, [event, sketchWanted]);
 
   // The zones offered depend on the venue picked above, so this refetches when that changes.
   useEffect(() => {

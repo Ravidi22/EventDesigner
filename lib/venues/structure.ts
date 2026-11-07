@@ -52,6 +52,14 @@ export interface Wall {
   b: string; // StructureNode id
   kind: WallKind;
   curve?: EdgeCurve | null; // bow, stored as offsets from a→b (same convention as lib/studio/hall)
+  /** The wall's own height, typed (the user, 2026-11-07: "define walls height, not must to be an
+   *  area" — a half wall, a מחיצה inside a hall, a parapet over an open terrace; "the ceiling does
+   *  not have one height"). It WINS over what the room would give it, higher or lower: a wall lower
+   *  than its zone's ceiling simply stops under the roof, which does not move. On an `edge` it makes
+   *  the kerb a fence of that height in 3D; on the plan an edge stays the line it is. Absent = the
+   *  height is DERIVED, exactly as before (lib/scene/envelope.ts wallHeightMm). Set through
+   *  setWallHeight, which drops the key rather than store an empty one. */
+  heightMm?: number;
 }
 
 // Doors hang off a wall id rather than a positional index. The old Hall stored `wallIndex` into an
@@ -191,6 +199,23 @@ export interface FeatureSeating extends ChairRows {
   chairDepthMm?: number;
 }
 
+/** A pool's שפה — the stone band round its water — or the edging round any surface (the user,
+ *  2026-11-07: "add to pool שפה like a stroke"; ./rim.ts). The band is cut INSIDE the feature's own
+ *  outline, `widthMm` deep, by the hollow band's arithmetic (lib/studio/footprint.ts buildHollow):
+ *  the outline is untouched and the WATER shrinks — so the box the handles drag is still the pool's.
+ *  It is floor: people stand on it, so the pool's obstacle is the water's edge (./rim.ts
+ *  obstacleFootprint). A band as deep as the shape leaves no water at all. Absent (or width 0) =
+ *  none, and a pool draws to its outline's edge exactly as before. */
+export interface FeatureRim {
+  widthMm: number;
+  /** What the band is laid in — the ground materials' textures. */
+  material: SurfaceMaterial;
+  /** How far the band stands above the floor in 3D. Absent/0 = flush. */
+  raisedMm?: number;
+  /** Its tint (`fill`) and opacity — the material's own colour when absent. */
+  style?: ElementStyle;
+}
+
 /** What a `surface` feature is laid in — the ground under everything else: a lawn, a paved court, a
  *  timber deck. Drawn as a real-scale texture (components/surface-fill.tsx), always beneath the
  *  other features, and never in the way of a table: you set a table ON a floor. */
@@ -281,6 +306,9 @@ export interface StructureFeature {
   curtain?: FeatureCurtain;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
+  /** iff `kind` is "pool" or "surface": the band round its edge, inside its outline (./rim.ts).
+   *  Absent = none. */
+  rim?: FeatureRim;
   /** A surface laid wall to wall in a CLOSED SHAPE of the walls, without that shape being a zone
    *  (./face-surfaces.ts): its outline is re-laid on the shape after every edit of the walls, and
    *  it takes no drag, resize or turn of its own. Absent = a free surface (or any other feature). */
@@ -448,6 +476,19 @@ export function setWallAngle(s: VenueStructure, wallId: string, angleDeg: number
   const wall = s.walls.find((w) => w.id === wallId);
   const pts = wall ? wallPoints(s, wall) : null;
   return pts ? reaimWall(s, wallId, wallLengthMm(pts.a, pts.b), angleDeg) : s;
+}
+
+/** Types a wall's own height (Wall.heightMm), in whole millimetres — or, with no number (or 0, or
+ *  anything not a positive length), hands it back to the room: the key is DROPPED, not stored
+ *  empty, so a wall that was never typed and one typed and cleared read exactly alike. Per wall:
+ *  the bar never sets a room's walls at once (the user, 2026-11-07). */
+export function setWallHeight(s: VenueStructure, wallId: string, heightMm: number | undefined): VenueStructure {
+  const wall = s.walls.find((w) => w.id === wallId);
+  if (!wall) return s;
+  const h = heightMm !== undefined && Number.isFinite(heightMm) && heightMm >= 1 ? Math.round(heightMm) : undefined;
+  if (h === wall.heightMm) return s;
+  const { heightMm: _was, ...rest } = wall;
+  return { ...s, walls: s.walls.map((w) => (w.id === wallId ? (h === undefined ? rest : { ...rest, heightMm: h }) : w)) };
 }
 
 // --- curved walls ----------------------------------------------------------
@@ -987,6 +1028,23 @@ if (isMain(import.meta.url)) {
   // The guarantee is "the wall did not change size", not a bit-exact float.
   assert(Math.abs(wallLengthMm(tp.a, tp.b) - 4000) < 1, "re-aiming a wall keeps its length");
   assert(Math.round(wallAngleDeg(tp.a, tp.b)) === 45, "…at exactly the angle asked for");
+
+  // --- setWallHeight ----------------------------------------------------------------------------
+  // A typed height is stored in whole millimetres on that wall alone; cleared (or 0, or nonsense) the
+  // key is GONE, so the wall reads exactly as one never typed — the derived height comes back.
+  {
+    const typed = setWallHeight(base, "w-shared", 1200.4);
+    assert(typed.walls.find((w) => w.id === "w-shared")!.heightMm === 1200, "a typed wall height is stored, in whole millimetres");
+    assert(typed.walls.filter((w) => w.heightMm !== undefined).length === 1, "…on that wall alone — never the room's other walls");
+    assert(!("heightMm" in base.walls.find((w) => w.id === "w-shared")!), "…without touching the structure it was given");
+    for (const cleared of [undefined, 0, -5, NaN]) {
+      const back = setWallHeight(typed, "w-shared", cleared).walls.find((w) => w.id === "w-shared")!;
+      assert(!("heightMm" in back), `clearing the height (${cleared}) drops the key — the wall is derived again`);
+    }
+    assert(setWallHeight(typed, "w-shared", 1200) === typed, "the same height again is no edit");
+    assert(setWallHeight(base, "no-such-wall", 1200) === base, "an unknown wall id is a no-op");
+    assert(setWallLength(typed, "w-shared", 6000).walls.find((w) => w.id === "w-shared")!.heightMm === 1200, "a wall keeps its height through a change of length");
+  }
 
   // A length of zero is not an edit, it's a request to collapse a wall into nothing — refused.
   assert(setWallLength(base, "w-shared", 0) === base, "a zero length is rejected rather than collapsing the wall");

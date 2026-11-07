@@ -99,6 +99,10 @@ import { ClimbFields, FEATURE_ICON, PLANT_ICON, SURFACE_ICON } from "@/component
 import { ZONE_KIND_LABEL, type ZoneKind, type ZoneSource } from "@/lib/venues/zone";
 import { MAX_ZONE_MARGIN_MM } from "@/lib/venues/feature-zones";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
+// The venue round of 2026-11-07 (spec §2, §9): a wall's own height, and a pool's / surface's rim.
+import { SquareSquare } from "lucide-react";
+import { setWallHeight } from "@/lib/venues/structure";
+import { rimPatch, rimSpecOf, takesRim } from "@/lib/venues/rim";
 
 // The selection bar of the hall editor — the same `Bar` of chips the sketch puts under a selected
 // table (components/inspector-bar.tsx), at the bottom centre of the canvas, each chip a small
@@ -557,6 +561,24 @@ export function SelectionBar({
               className="w-24"
             />
           </PanelRow>
+          {/* The wall's own height (Wall.heightMm) — blank is the room's: as tall as the roofed zone
+              or building it borders, a garden wall, a kerb for a boundary. A number wins either way,
+              a half wall inside a hall or a parapet over a terrace; per wall, nothing on the plan. */}
+          <PanelRow label="גובה (ס״מ)" htmlFor="wall-height">
+            <NumberField
+              id="wall-height"
+              decimals={0}
+              min={0}
+              step={10}
+              commitOnBlur
+              hideZero
+              placeholder="לפי החדר"
+              value={wall.heightMm ? Math.round(wall.heightMm / 10) : 0}
+              onChange={(cm) => apply((s) => setWallHeight(s, wall.id, cm > 0 ? cm * 10 : undefined))}
+              className="w-24"
+            />
+          </PanelRow>
+          <Note>{wall.kind === "edge" ? "גובה לגבול הופך אותו לגדר או לקיר נמוך בתלת־ממד. 0 — גבול נמוך בלבד, כמו עד היום." : "0 — לפי החדר: כגובה התקרה של האזור או המבנה שהקיר גובל בו."}</Note>
         </Popover>
         <Rotation value={Math.round(wallAngleDeg(pts.a, pts.b))} onChange={(deg) => apply((s) => setWallAngle(s, wall.id, deg))} />
         {/* A wall can carry doors; a boundary is a line you can see but not walk into, so switching
@@ -676,7 +698,12 @@ export function SelectionBar({
     // panel for the glass — floor to ceiling (a ויטרינה), or between a sill and a head.
     const window = isWindow(door);
     const vitrine = window && isVitrine(door);
-    const glassWords = !window ? (door.doubleDoor ? "כנף כפולה" : "כנף יחידה") : vitrine ? "זכוכית מהרצפה עד התקרה" : `אדן ${Math.round((door.sillMm ?? 0) / 10)} ס״מ · עד ${Math.round((door.headMm ?? WINDOW_HEAD_MM) / 10)} ס״מ`;
+    // Said the way the user says it (2026-11-07): how high off the floor, and how tall the glass —
+    // never sill and head. Storage is unchanged: the glass is `headMm − sillMm`, and no head is the
+    // wall's own top.
+    const sillMm = door.sillMm ?? 0;
+    const glassMm = door.headMm !== undefined ? Math.max(0, door.headMm - sillMm) : null;
+    const glassWords = !window ? (door.doubleDoor ? "כנף כפולה" : "כנף יחידה") : vitrine ? "זכוכית מהרצפה עד התקרה" : `${Math.round(sillMm / 10)} ס״מ מהרצפה · ${glassMm !== null ? `גובה ${Math.round(glassMm / 10)} ס״מ` : "עד הקיר"}`;
     return (
       <Bar
         icon={window ? AppWindow : DoorOpen}
@@ -754,35 +781,42 @@ export function SelectionBar({
                 onChange={(v) => apply((s) => updateEntrance(s, door.id, v === "vitrine" ? { sillMm: undefined, headMm: undefined } : { sillMm: WINDOW_SILL_MM, headMm: WINDOW_HEAD_MM }))}
               />
             </div>
-            {!vitrine && (
-              <>
-                <PanelRow label="אדן — גובה מהרצפה (ס״מ)" htmlFor="window-sill">
-                  <NumberField
-                    id="window-sill"
-                    decimals={0}
-                    min={0}
-                    step={10}
-                    commitOnBlur
-                    value={Math.round((door.sillMm ?? 0) / 10)}
-                    onChange={(cm) => apply((s) => updateEntrance(s, door.id, { sillMm: Math.max(0, Math.round(cm * 10)) }))}
-                    className="w-24"
-                  />
-                </PanelRow>
-                <PanelRow label="משקוף — גובה מהרצפה (ס״מ)" htmlFor="window-head">
-                  <NumberField
-                    id="window-head"
-                    decimals={0}
-                    min={10}
-                    step={10}
-                    commitOnBlur
-                    value={Math.round((door.headMm ?? WINDOW_HEAD_MM) / 10)}
-                    onChange={(cm) => apply((s) => updateEntrance(s, door.id, { headMm: Math.max(100, Math.round(cm * 10)) }))}
-                    className="w-24"
-                  />
-                </PanelRow>
-              </>
-            )}
-            <Note>{vitrine ? "ויטרינה — זכוכית מהרצפה עד גובה הקיר. בתוכנית היא קטע מזוגג בקיר; במבט התלת־ממדי, זכוכית במקום הקיר." : "חלון בקיר: הקיר נשאר מתחת לאדן ומעל המשקוף, ובין שניהם זכוכית."}</Note>
+            {/* How high off the floor and how tall — the user's words (2026-11-07), on a ויטרינה too
+                (0 off the floor, as tall as the wall). Stored as before: the sill, and the head at
+                the sill plus the height; no height = the glass runs to the wall's top. Raising the
+                window keeps its height — the head moves with the sill. */}
+            <PanelRow label="גובה מהרצפה (ס״מ)" htmlFor="window-sill">
+              <NumberField
+                id="window-sill"
+                decimals={0}
+                min={0}
+                step={10}
+                commitOnBlur
+                value={Math.round(sillMm / 10)}
+                onChange={(cm) =>
+                  apply((s) => {
+                    const sill = Math.max(0, Math.round(cm * 10));
+                    return updateEntrance(s, door.id, { sillMm: sill, ...(glassMm !== null ? { headMm: sill + glassMm } : {}) });
+                  })
+                }
+                className="w-24"
+              />
+            </PanelRow>
+            <PanelRow label="גובה החלון (ס״מ)" htmlFor="window-height">
+              <NumberField
+                id="window-height"
+                decimals={0}
+                min={0}
+                step={10}
+                commitOnBlur
+                hideZero
+                placeholder="עד הקיר"
+                value={glassMm !== null ? Math.round(glassMm / 10) : 0}
+                onChange={(cm) => apply((s) => updateEntrance(s, door.id, { headMm: cm > 0 ? sillMm + Math.max(100, Math.round(cm * 10)) : undefined }))}
+                className="w-24"
+              />
+            </PanelRow>
+            <Note>{vitrine ? "ויטרינה — זכוכית מהרצפה עד גובה הקיר. בתוכנית היא קטע מזוגג בקיר; במבט התלת־ממדי, זכוכית במקום הקיר." : "חלון בקיר: הקיר נשאר מתחתיו ומעליו, ובין שניהם זכוכית. גובה החלון 0 — הזכוכית עד ראש הקיר."}</Note>
           </Popover>
         ) : (
           <>
@@ -1162,6 +1196,38 @@ export function SelectionBar({
           <Note>הבסיס המרובע או העגול שהעמוד עומד עליו הוא האלמנט עצמו — הגודל שלו ב״מידות״. עמוד ברוחב הבסיס הוא עמוד בלי בסיס; טבעת 0 היא בלי טבעת.</Note>
         </Popover>
       )}
+
+      {/* A pool's שפה, a surface's edging (lib/venues/rim.ts): a band INSIDE the outline — the water
+          (or the surface) shrinks to make room, the size in "מידות" stays the whole thing. Its width,
+          what it is laid in, how far it stands up in 3D, its tint. Width 0 takes it away. */}
+      {takesRim(feature) &&
+        (() => {
+          const rim = rimSpecOf(feature);
+          const setRim = (p: Parameters<typeof rimPatch>[1]) => patch(rimPatch(feature, p));
+          return (
+            <Popover label="שפה" icon={SquareSquare} value={rim ? `${cmOf(rim.widthMm)} ס״מ · ${SURFACE_MATERIAL_LABEL[rim.material]}` : "ללא"} panelClassName="w-80">
+              <PanelRow label="רוחב (ס״מ)" htmlFor="rim-width">
+                <NumberField id="rim-width" decimals={0} min={0} step={5} commitOnBlur hideZero placeholder="ללא" value={rim ? cmOf(rim.widthMm) : 0} onChange={(cm) => setRim({ widthMm: cm * 10 })} className="w-20" />
+              </PanelRow>
+              <div className="py-1.5">
+                <SurfaceTiles label="ממה היא עשויה" value={rim?.material} onChange={(m) => m && setRim({ material: m })} />
+              </div>
+              {rim && (
+                <>
+                  <PanelRow label="מוגבהת (ס״מ)" htmlFor="rim-raised">
+                    <NumberField id="rim-raised" decimals={0} min={0} step={5} commitOnBlur value={cmOf(rim.raisedMm ?? 0)} onChange={(cm) => setRim({ raisedMm: cm * 10 })} className="w-20" />
+                  </PanelRow>
+                  <StyleFields style={rim.style} onChange={(style) => setRim({ style })} strokeWidthDefault={1} fillOnly fillLabel="גוון" />
+                </>
+              )}
+              <Note>
+                {feature.kind === "pool"
+                  ? "השפה בתוך קו הבריכה: המים מצטמצמים, והגודל של הבריכה לא משתנה. השפה היא רצפה — המרחק לשולחנות נמדד משפת המים. רוחב 0 — בלי שפה."
+                  : "השוליים בתוך קו המשטח: המשטח מצטמצם, והגודל לא משתנה. ״מוגבהת״ — אבן שפה בתלת־ממד. רוחב 0 — בלי שוליים."}
+              </Note>
+            </Popover>
+          );
+        })()}
 
       {!climb && !bound && !curtain && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
 
