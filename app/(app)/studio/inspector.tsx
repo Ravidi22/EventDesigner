@@ -67,6 +67,8 @@ import { patternUnits, unitOf, unitsOf } from "./dressing-units";
 import { WaveFields, waveOf } from "./dressing-bar";
 import type { HeightWave } from "@/lib/studio/hang-over";
 import { ArrowUpFromLine } from "lucide-react";
+import { Link2, Unlink } from "lucide-react";
+import { coverTarget } from "@/lib/studio/cover";
 import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
@@ -372,6 +374,9 @@ export function Inspector({
   onResize,
   onBows,
   onCorners,
+  onCoverInset,
+  onDetachCover,
+  stageCoverItems,
   onRenumber,
   onStyleTable,
   onDuplicate,
@@ -537,6 +542,14 @@ export function Inspector({
   onBows?: (id: string, bows: [number, number, number, number] | null) => void;
   /** A rug's rounded corners (Placement.corners), radius mm each; null squares them all. */
   onCorners?: (id: string, corners: [number, number, number, number] | null) => void;
+  /** A carpet laid over a surface or a stage (Placement.cover, lib/studio/cover.ts): how far in from
+   *  its edge it stops, mm. */
+  onCoverInset?: (id: string, insetMm: number) => void;
+  /** …and let go of it, its shape kept ("ניתוק מהמשטח"). */
+  onDetachCover?: (id: string) => void;
+  /** The stage bar's "…" rows that lay a carpet over THIS stage — one per catalog rug, and "שטיח
+   *  מותאם…" (a new row of the studio's own). Empty / absent = none offered. */
+  stageCoverItems?: MenuItem[];
   onRenumber: (id: string, number: number) => void;
   onStyleTable: (id: string, style: ElementStyle | undefined) => void;
   /** Copy + paste in one press — offered by every bar, because "another one of these" is the same
@@ -1767,7 +1780,7 @@ export function Inspector({
               beside "עריכת הבמה" a slip away from it. */}
           <MoreMenu
             label="עוד פעולות לבמה"
-            sections={[mirrorItems(onMirror), stackItems(canRestack, onRestack), [{ label: "פירוק לפלטות נפרדות", icon: Blocks, onSelect: onExplodeStage }], lockItems(lock)]}
+            sections={[mirrorItems(onMirror), stackItems(canRestack, onRestack), stageCoverItems ?? [], [{ label: "פירוק לפלטות נפרדות", icon: Blocks, onSelect: onExplodeStage }], lockItems(lock)]}
           />
           <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הבמה" onDelete={onDelete} deleteLabel="מחיקת הבמה" />
         </Bar>
@@ -1955,9 +1968,43 @@ export function Inspector({
           </Popover>
         )}
 
+        {/* A carpet laid OVER a surface or a stage (lib/studio/cover.ts) is that thing's shape: in
+            place of a size it says what it lies on, takes a margin, and lets go — the shape kept. A
+            covered thing since gone is said, in warn ink: the carpet stands as it was laid. */}
+        {stretch && p.cover && (() => {
+          const on = coverTarget(p, doc, structure);
+          const name = on?.name ?? "המשטח";
+          const inset = Math.round((p.cover.insetMm ?? 0) / 10);
+          return (
+            <Popover label={on?.present ? `על ${name}` : `${name} — לא בתוכנית`} icon={Link2} tone={on?.present ? "default" : "warn"} value={inset ? ltr(`${inset}`) : undefined}>
+              {!on?.present && <Note>{`${name} כבר לא בתוכנית — השטיח נשאר בצורה שבה הונח עליו.`}</Note>}
+              {onCoverInset && (
+                <PanelRow label="שוליים (ס״מ)" htmlFor={`cover-inset-${p.id}`}>
+                  <NumberField
+                    id={`cover-inset-${p.id}`}
+                    decimals={0}
+                    min={0}
+                    step={5}
+                    value={inset}
+                    onChange={(v) => onCoverInset(p.id, Math.max(0, v) * 10)}
+                    className="w-20"
+                  />
+                </PanelRow>
+              )}
+              <Note>{`השטיח בצורת ${name} ונע איתו${on?.kind === "feature" ? "; שינוי צורה באולם משנה אותו בפתיחה הבאה של הסקיצה" : ""}.`}</Note>
+              {onDetachCover && (
+                <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onDetachCover(p.id)}>
+                  <Unlink className="h-3.5 w-3.5" strokeWidth={2} />
+                  ניתוק מהמשטח
+                </Button>
+              )}
+            </Popover>
+          );
+        })()}
+
         {/* A carpet is sized here as well as by its corners — a number is faster when the client
             says "three by two". */}
-        {stretch && (
+        {stretch && !p.cover && (
           <Popover
             label="גודל (ס״מ)"
             icon={Ruler}
@@ -1985,8 +2032,8 @@ export function Inspector({
             {/* Rounded corners, as the stage's "פינות": one radius for all four, and each corner on its
                 own — a rug may be rounded on two corners only (2026-10-31). The four fields stand
                 where their corners are on the rug (left to right whatever the page direction), as the
-                points on the plan do. */}
-            {onCorners && (
+                points on the plan do. Not on a carpet laid to an outline: those are a rectangle's. */}
+            {onCorners && !p.outline && (
               <>
                 <PanelRow label="כל הפינות (ס״מ)" htmlFor="rug-corners">
                   <NumberField
@@ -2029,7 +2076,9 @@ export function Inspector({
                 </PanelRow>
               </>
             )}
-            {onBows && (
+            {/* A carpet laid to an outline (let go from a surface or a stage) scales its shape here. */}
+            {p.outline && <Note>השטיח בצורה שבה הונח על המשטח — שינוי הגודל מותח את הצורה.</Note>}
+            {onBows && !p.outline && (
               <>
                 <Note>
                   גרירת הריבוע באמצע כל צד מעקמת אותו; לחיצה כפולה עליו מיישרת אותו.
@@ -2119,11 +2168,12 @@ export function Inspector({
           </>
         )}
 
-        <Rotation value={facing} onChange={onFace} />
+        {/* A carpet laid over a surface or a stage faces as that does (lib/studio/cover.ts). */}
+        {!p.cover && <Rotation value={facing} onChange={onFace} />}
         <MoreMenu
           label="עוד פעולות לפריט"
           sections={[
-            !table && !drape ? mirrorItems(onMirror) : [],
+            !table && !drape && !p.cover ? mirrorItems(onMirror) : [],
             stackItems(canRestack, onRestack),
             selectItems,
             overTable
