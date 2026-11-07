@@ -23,6 +23,7 @@ import type { Placement } from "@/lib/design-document/types";
 import type { EdgeCurve, Point } from "./hall";
 import { customShapeBounds, flattenEdge, type Footprint } from "./footprint";
 import { bulgeToCurve, edgeMidpoint } from "./geometry";
+import { borderBands, type Border, type BorderBand } from "../catalog/border";
 import { isMain } from "../self-check";
 
 /** Top, right, bottom, left — each side's bow as a fraction of its length; + is outward. */
@@ -318,6 +319,26 @@ export function rugFringe(widthMm: number, depthMm: number, shape: RugShape | un
   return out;
 }
 
+/** A rug's CONTOUR (lib/catalog/border.ts) laid along the rug as it is drawn — bows and rounded
+ *  corners followed, each band the region between two true insets of the outline (evenInset), so
+ *  a band is as wide on a bowed side and round a corner as on a straight run — about the rectangle's
+ *  centre, like rugOutline. `roundMm` is the corner the canvas draws a plain rug's rectangle with (its
+ *  rx), so the band does not poke past it; a shaped rug brings its own corners. */
+export function rugBorderBands(widthMm: number, depthMm: number, shape: RugShape | undefined, border: Border, roundMm = 0): BorderBand[] {
+  // Kept for the last few rugs asked about: a bowed, rounded rug's true insets cost a few ms, and one
+  // rug is drawn by the canvas, every printed sheet and the 3D room alike.
+  const key = `${widthMm}|${depthMm}|${roundMm}|${JSON.stringify(shape ?? null)}|${JSON.stringify(border)}`;
+  const hit = BAND_CACHE.get(key);
+  if (hit) return hit;
+  const s = shape ?? (roundMm > 0 ? { corners: [roundMm, roundMm, roundMm, roundMm] as RugCorners } : undefined);
+  const { outline, edgeCurves } = rugOutline(widthMm, depthMm, s);
+  const bands = borderBands({ outline, ...(edgeCurves.some(Boolean) ? { edgeCurves } : {}) }, border);
+  if (BAND_CACHE.size >= 48) BAND_CACHE.delete(BAND_CACHE.keys().next().value!);
+  BAND_CACHE.set(key, bands);
+  return bands;
+}
+const BAND_CACHE = new Map<string, BorderBand[]>();
+
 // ponytail: self-check. Run: npm run check:rug-shape
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => { if (!c) throw new Error("FAIL: " + m); };
@@ -402,5 +423,44 @@ if (isMain(import.meta.url)) {
   // Bows and corners together: the bowed run bulges between the arcs.
   const both = rugOutline(W, D, { bows, corners });
   assert(both.outline.length === 8 && both.edgeCurves.every(Boolean) === false && both.runs[0].curve !== null, "a bowed side keeps its bow between rounded corners");
+
+  // A CONTOUR on a bowed-and-rounded rug (2026-11-07): every band inside the rug, the edge band's
+  // inside 12cm in all the way round — on the bows and round the arcs too — and the second band
+  // nested inside it, past the gap.
+  {
+    const shape: RugShape = { bows: [0.15, -0.2, 0.1, -0.3], corners: [300, 0, 500, 100] };
+    const W2 = 3000, D2 = 2000;
+    const border: Border = { widthMm: 120, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 60, colour: "#ffffff" } };
+    const rugPoly = rugPolygon(W2, D2, shape);
+    const inside = (p: Point, poly: Point[]) => {
+      let c = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i], b = poly[j];
+        if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c;
+      }
+      return c;
+    };
+    const segDist = (p: Point, a: Point, b: Point) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const L2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2));
+      return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+    };
+    const edgeDist = (p: Point) => Math.min(...rugPoly.map((a, i) => segDist(p, a, rugPoly[(i + 1) % rugPoly.length])));
+    const flat = (o: { outline: Point[]; edgeCurves?: (EdgeCurve | null)[] }) =>
+      o.outline.flatMap((a, i) => flattenEdge(a, o.outline[(i + 1) % o.outline.length], o.edgeCurves?.[i]).slice(0, -1));
+    const bands = rugBorderBands(W2, D2, shape, border);
+    assert(bands.length === 2 && bands[0].which === "outer" && bands[1].which === "inner", "two bands, the edge's and the inner one");
+    assert(bands[0].outer.outline.length === rugOutline(W2, D2, shape).outline.length, "the edge band starts at the rug's own outline");
+    const edgeIn = flat(bands[0].inner!);
+    const ds = edgeIn.map(edgeDist);
+    assert(edgeIn.every((p) => inside(p, rugPoly)), "the edge band's inside is inside the rug");
+    assert(Math.min(...ds) > 120 - 4 && Math.max(...ds) < 120 + 6, `…12cm in all the way round, bows and arcs too (${Math.min(...ds).toFixed(1)}–${Math.max(...ds).toFixed(1)})`);
+    const second = [...flat(bands[1].outer), ...flat(bands[1].inner!)];
+    assert(second.every((p) => inside(p, rugPoly) && edgeDist(p) > 180 - 6), "the second band is inside the rug, past the first and the gap");
+    // A plain rug the canvas draws with rounded corners: the band follows them.
+    const plain = rugBorderBands(2000, 1000, undefined, { widthMm: 100, colour: "#000" }, 30);
+    assert(plain[0].outer.edgeCurves?.filter(Boolean).length === 4, "a plain rug's band follows the canvas's rounded corners");
+  }
   console.log("rug-shape: ok");
 }

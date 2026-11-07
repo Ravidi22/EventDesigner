@@ -20,6 +20,7 @@ import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { edgeItemShape, toRoom, type StagePlacement } from "@/lib/design-document/stage";
 import { placementFootprint, tableBlock, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
+import { isRailed } from "@/lib/studio/rail";
 import type { DesignTable } from "@/lib/design-document/types";
 import {
   DEFAULT_DWELL_MS,
@@ -177,7 +178,7 @@ export function sightOf(structure: VenueStructure, zones: ResolvedZone[], doc?: 
   // The sketch's own tall pieces: a stage's backdrop (seen on plan A: a close-up stood on the stage
   // facing its 2.4 m backdrop), and anything standing on the floor taller than an eye.
   for (const p of doc?.placements ?? []) {
-    if (p.tableId || p.layer !== "floor" || p.span || p.perch) continue;
+    if (p.tableId || p.layer !== "floor" || isRailed(p) || p.perch) continue;
     if (p.stage) {
       for (const item of p.stage.stairs ?? []) {
         if ((item.kind ?? "stairs") !== "backdrop") continue;

@@ -26,6 +26,8 @@ import { cleanFlowers } from "@/lib/catalog/flowers";
 import { toProducts } from "@/lib/catalog/db-mapping";
 import { measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { nearestWall, wallTrack } from "@/lib/studio/anchor";
+import { railLengthMm, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { arrangedStructure } from "@/lib/design-document/features";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { deckTypeOf } from "@/lib/design-document/stage";
@@ -147,8 +149,20 @@ function buildItemIndex(
 
 /** A MeasureContext built from product ROWS rather than the browser's primed catalog cache
  *  (lib/studio/catalog-resolver.ts is client-only). Same three questions, same fallbacks. */
-function serverMeasureContext(byVariant: Map<string, Product>, structure?: VenueStructure): MeasureContext {
+function serverMeasureContext(byVariant: Map<string, Product>, structure?: VenueStructure, doc?: DesignDocumentContent): MeasureContext {
+  // A drape on a side or a rod (lib/studio/rail.ts), against the whole document and the venue as
+  // this event arranged it — read off the product ROWS, as everything here is.
+  const railCtx = structure && doc ? sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => byVariant.get(v)) : null;
   return {
+    railLengthMm: railCtx ? (p) => {
+      const rail = railOf(p);
+      return rail ? railLengthMm(rail, railCtx) : undefined;
+    } : undefined,
+    // The rod a curtain on a free-standing rod is ordered as: the studio's first rod row.
+    rodOf: () => {
+      for (const [variantId, p] of byVariant) if (p.category === "curtain-rods" && !p.archived) return variantId;
+      return undefined;
+    },
     unitOf: (variantId) => (byVariant.get(variantId)?.priceUnit ?? "unit") as MeasureUnit,
     // Along the wall — a drape round a bowed wall covers the arc, not the chord.
     wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,
@@ -286,7 +300,7 @@ export async function assembleDemands(
       const rows: { variantId: string; quantity: number }[] = [];
 
       if (doc) {
-        const ctx = serverMeasureContext(byVariant, structure);
+        const ctx = serverMeasureContext(byVariant, structure, doc);
         const totals = measureTotals(doc, ctx);
         for (const [variantId, quantity] of totals) rows.push({ variantId, quantity });
       }

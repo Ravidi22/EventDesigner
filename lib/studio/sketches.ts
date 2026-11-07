@@ -6,6 +6,7 @@
 import type { DesignDocumentContent, Placement } from "@/lib/design-document/types";
 import { pruneGroups } from "@/lib/design-document/actions";
 import { CATEGORY_BY_ID, categoryInPass } from "@/lib/catalog/categories";
+import { railNamesVenue, railOf } from "./rail";
 import { isMain } from "../self-check";
 
 /** A saved sketch as the pickers list it — never its content, which can be hundreds of placements
@@ -100,7 +101,13 @@ export const MAX_SKETCH_NAME = 80;
 export function adoptSketch(content: DesignDocumentContent, sameVenue: boolean): DesignDocumentContent {
   if (sameVenue) return content;
   const { features: _theirs, ...rest } = content;
-  return { ...rest, placements: content.placements.filter((p) => !p.span) };
+  // Since rails (lib/studio/rail.ts): what names the OTHER room is a drape on its wall or on one of
+  // its features; a drape on a hired stage of this very sketch, or on a free-standing rod, comes along.
+  const own = new Set(content.placements.map((p) => p.id));
+  return { ...rest, placements: content.placements.filter((p) => {
+    const rail = railOf(p);
+    return !rail || !railNamesVenue(rail, own);
+  }) };
 }
 
 if (isMain(import.meta.url)) {
@@ -122,6 +129,22 @@ if (isMain(import.meta.url)) {
   assert(other.placements.length === 1 && other.placements[0].id === "rug", "in another room the drapes are left behind…");
   assert(other.features === undefined, "…and so are the arrangements of the other room's own furniture");
   assert(other.tables.length === 1 && other.tables[0].position.x === 0, "…while everything with a place of its own keeps it");
+  // Rails: a drape on the other room's wall rail or feature stays behind; one on this sketch's own
+  // stage, or on a rod, comes along.
+  const railed = adoptSketch(
+    {
+      ...base(),
+      placements: [
+        { id: "stg", variantId: "s", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+        { id: "on-wall", variantId: "d", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "wall", wallId: "w", from: 0, to: 1 } },
+        { id: "on-bar", variantId: "d", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "side", featureId: "venue-bar", side: 0, from: 0, to: 1, out: 1 } },
+        { id: "on-stage", variantId: "d", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "side", featureId: "stg", side: 0, from: 0, to: 1, out: 1 } },
+        { id: "on-rod", variantId: "d", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "rod", points: [{ x: 0, y: 0 }, { x: 3000, y: 0 }], heightMm: 2400 } },
+      ],
+    },
+    false,
+  );
+  assert(railed.placements.map((p) => p.id).join(",") === "stg,on-stage,on-rod", "in another room a drape on its wall or its feature is left behind — one on the sketch's own stage or a rod comes along");
 
   // ── takeLayers ──
   const at = { x: 0, y: 0 };

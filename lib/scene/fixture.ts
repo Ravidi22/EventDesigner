@@ -159,7 +159,7 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "t3", type: "rectangle", number: 3, position: { x: 14400, y: 4000 }, rotation: 0, seats: 8, variantId: "table-rect", groupId: "g1" },
   ],
   placements: [
-    { id: "p-cloth", variantId: "v-cloth-plum", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+    { id: "p-cloth", variantId: "v-cloth-plum", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, border: { widthMm: 80, colour: "#c9a24a" } },
     { id: "p-arr", variantId: "v-arr-blush", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     { id: "p-ring", variantId: "v-candle-gold", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     { id: "p-cluster", variantId: "candle-cluster", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
@@ -199,11 +199,14 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-perched-vase", variantId: "vase", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, perch: { stageId: "p-stage", itemId: "bench-1" } },
     { id: "p-bar", variantId: "bar-straight", layer: "floor", quantity: 1, position: { x: 17000, y: 1500 }, rotation: 0, scale: 1 },
     { id: "p-sofa", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 2000, y: 10000 }, rotation: 90, scale: 1 },
-    { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 } },
+    // A contour of its own on this plan (lib/catalog/border.ts): a gold band, a second one inside it.
+    { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 }, border: { widthMm: 120, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 60, colour: "#f5efe0" } } },
     { id: "p-rows", variantId: "v-chair-ivory", layer: "floor", quantity: 10, position: { x: 25000, y: 9500 }, rotation: 0, scale: 1, rows: { rows: 2, perRow: 5 } },
     { id: "p-chuppah", variantId: "v-chuppah-cream", layer: "floor", quantity: 1, position: { x: 25000, y: 6000 }, rotation: 0, scale: 1 },
     { id: "p-chandelier", variantId: "v-chand-gold", layer: "ceiling", quantity: 1, position: { x: 5000, y: 5000 }, rotation: 0, scale: 1, over: "t1" },
     { id: "p-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, span: { wallId: "w-left", from: 0.2, to: 0.6 } },
+    // 2026-11-07: a curtain on a free-standing ROD on the terrace — a ר, its arm out past its last post.
+    { id: "p-rod-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "rod", points: [{ x: 21000, y: 8000 }, { x: 24000, y: 8000 }, { x: 24000, y: 9500 }], heightMm: 2400, cantilever: "end" } },
   ],
   groups: [{ id: "g1", number: 2 }],
 };

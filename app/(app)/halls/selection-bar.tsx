@@ -59,7 +59,9 @@ import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
 import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
 import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
-import { curtainLengthMm, curtainOf, curtainPatch } from "@/lib/venues/curtain";
+import { CURTAIN_FILL, curtainLengthMm, curtainLines, curtainLookPatch, curtainOf, curtainPatch, curtainRail, curtainRailPatch } from "@/lib/venues/curtain";
+import { CANTILEVER_MAX_MM, type RailLine } from "@/lib/studio/rail";
+import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { wallTrack } from "@/lib/studio/anchor";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, type ChairStyle } from "@/lib/catalog/symbols";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
@@ -843,7 +845,7 @@ export function SelectionBar({
         )}
         {/* A curtain on this wall (lib/venues/curtain.ts): over the door, or parted for it — the
             main entrance stays clear, a service door is hidden behind the cloth. */}
-        {!window && structure.features.some((f) => f.kind === "curtain" && f.curtain?.wallId === door.wallId) && (
+        {!window && structure.features.some((f) => f.kind === "curtain" && curtainOf(f)?.wallId === door.wallId) && (
           <SegmentedToggle
             value={!!door.curtainClear}
             options={[
@@ -871,6 +873,10 @@ export function SelectionBar({
   const seating = feature.kind === "seating";
   // A curtain: a stretch of its wall (lib/venues/curtain.ts) — no shape, size or turn of its own.
   const curtain = feature.kind === "curtain" ? curtainOf(feature) : null;
+  // …or a stretch of a SIDE of a tall feature, or a free-standing ROD (lib/studio/rail.ts): every
+  // curtain is `isCurtain`; `curtain` is the wall reading alone.
+  const isCurtain = feature.kind === "curtain";
+  const curtainLine = isCurtain && !curtain ? curtainLines(structure, feature)[0] : undefined;
   // Measured ALONG the wall — round the bow of a curved one (lib/studio/anchor.ts WallTrack).
   const curtainWall = curtain ? wallTrack(structure, curtain.wallId) : null;
   // A column: its plinth is the size; its shaft and base are its own panel (lib/venues/column.ts).
@@ -883,6 +889,8 @@ export function SelectionBar({
     ? `${(feature.widthMm / 1000).toFixed(2)} × ${(climbRunMm(feature) / 1000).toFixed(2)} מ׳ · עולה ${Math.round(feature.heightMm / 10)} ס״מ`
     : curtain
       ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ לאורך ה${curtainWall?.curved ? "קיר המעוגל" : "קיר"}${curtainWall ? ` (${(curtainWall.lengthMm / 1000).toFixed(2)} מ׳)` : ""}`
+    : isCurtain
+      ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ ${curtainLine?.side ? "לאורך הצד" : "על המוט"}`
     : seating
       ? `${seatingCount(feature)} כיסאות · ${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`
       : feature.shape === "circle"
@@ -1014,7 +1022,7 @@ export function SelectionBar({
               {feature.style?.fill && <Note>החלפת החומר מחזירה את הצבע שלו — הגוון שנבחר לחומר הקודם יורד.</Note>}
             </Popover>
           )}
-          {!bound && !curtain && (
+          {!bound && !isCurtain && (
             <Popover label="צורה" icon={Shapes} value={SHAPE_LABEL[feature.shape]}>
               <PanelRow label="צורה" stack>
                 <Select
@@ -1068,9 +1076,9 @@ export function SelectionBar({
             </>
           );
         })()
-      ) : curtain ? (
+      ) : isCurtain ? (
         <Popover label="קטע" icon={FEATURE_ICON.curtain} value={size} panelClassName="w-80">
-          {curtainWall ? (
+          {curtain && curtainWall ? (
             <>
               <PanelRow label="מתחילת הקיר (מ׳)" htmlFor="curtain-from">
                 <NumberField
@@ -1111,9 +1119,12 @@ export function SelectionBar({
               </PanelRow>
               <Note>הווילון תלוי על הקיר וזז איתו. בסקיצה אפשר להסיר אותו לאירוע אחד או להחליף אותו בווילון מהקטלוג — המתחם עצמו לא משתנה.</Note>
             </>
+          ) : curtainLine ? (
+            <VenueRailFields feature={feature} line={curtainLine} apply={apply} />
           ) : (
-            <Note>הקיר שהווילון היה תלוי עליו נמחק. מחקו את הווילון ותלו אחד חדש.</Note>
+            <Note>{curtainRail(feature)?.type === "side" ? "האלמנט שהווילון היה תלוי עליו נמחק. מחקו את הווילון ותלו אחד חדש." : "הקיר שהווילון היה תלוי עליו נמחק. מחקו את הווילון ותלו אחד חדש."}</Note>
           )}
+          <CurtainLookFields feature={feature} onPatch={patch} />
         </Popover>
       ) : bound ? null : (
         <Popover label="מידות" icon={Ruler} value={size}>
@@ -1230,7 +1241,7 @@ export function SelectionBar({
           );
         })()}
 
-      {!climb && !bound && !curtain && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
+      {!climb && !bound && !isCurtain && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
 
       {/* THE EDGES — the sketch's own panel: what stands on them, what is still bare (and one
           click to finish it), and adding one more, which is then clicked onto a side; each one is
@@ -1307,7 +1318,7 @@ export function SelectionBar({
           );
         })()}
 
-      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || !!curtain)}
+      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || isCurtain)}
 
       {/* A surface that fills a closed shape follows its walls; cut loose, it is a free surface of
           the same outline. A free one is reshaped point by point, as a freehand zone is. */}
@@ -1349,5 +1360,78 @@ export function SelectionBar({
         deleteOnly("מחיקת האלמנט")
       )}
     </Bar>
+  );
+}
+
+/** The venue curtain on a SIDE or a ROD (lib/studio/rail.ts, spec 2026-11-07 §6.1/§6.2): a side's
+ *  stretch typed in metres along the side, the whole side again, the other side of it; a rod's height
+ *  and its ר — no post under its end, the arm held to its reach. */
+function VenueRailFields({ feature, line, apply }: { feature: StructureFeature; line: RailLine; apply: (fn: (s: VenueStructure) => VenueStructure) => void }) {
+  const rail = curtainRail(feature);
+  const re = (fn: (s: VenueStructure, f: StructureFeature) => Partial<Omit<StructureFeature, "id">>) =>
+    apply((s) => {
+      const f = s.features.find((x) => x.id === feature.id);
+      return f ? updateFeature(s, f.id, fn(s, f)) : s;
+    });
+  if (rail?.type === "side" && line.side) {
+    const L = line.side.side.L;
+    const at = (t: number) => (Math.max(0, Math.min(1, t)) * L) / 1000;
+    return (
+      <>
+        <PanelRow label="מתחילת הצד (מ׳)" htmlFor="curtain-side-from">
+          <NumberField id="curtain-side-from" decimals={2} min={0} max={L / 1000} step={0.1} commitOnBlur value={at(Math.min(rail.from, rail.to))} onChange={(m) => re((s, f) => curtainPatch(s, f, { from: (m * 1000) / L }))} className="w-24" />
+        </PanelRow>
+        <PanelRow label="עד (מ׳)" htmlFor="curtain-side-to">
+          <NumberField id="curtain-side-to" decimals={2} min={0} max={L / 1000} step={0.1} commitOnBlur value={at(Math.max(rail.from, rail.to))} onChange={(m) => re((s, f) => curtainPatch(s, f, { to: (m * 1000) / L }))} className="w-24" />
+        </PanelRow>
+        <div className="flex gap-2 py-1">
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => re((s, f) => curtainPatch(s, f, { from: 0, to: 1 }))}>
+            כל הצד
+          </Button>
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => re((s, f) => curtainPatch(s, f, { side: rail.out === 1 ? -1 : 1 }))}>
+            {rail.out === 1 ? "לצד הפנימי" : "לצד החיצוני"}
+          </Button>
+        </div>
+        <Note>{`תלוי על צד של האלמנט מגובהו (${((line.topMm ?? 0) / 1000).toFixed(2)} מ׳) וזז איתו.`}</Note>
+      </>
+    );
+  }
+  if (rail?.type === "rod") {
+    return (
+      <>
+        <PanelRow label="גובה המוט (מ׳)" htmlFor="curtain-rod-h">
+          <NumberField id="curtain-rod-h" decimals={2} min={0.5} max={8} step={0.1} commitOnBlur value={rail.heightMm / 1000} onChange={(m) => re((s, f) => curtainRailPatch(s, f, { ...rail, heightMm: Math.round(m * 1000) }))} className="w-24" />
+        </PanelRow>
+        <label className="flex items-center justify-between gap-3 py-1 text-sm text-ink">
+          <span>ללא עמוד בקצה (ר)</span>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-[var(--color-accent)]"
+            checked={rail.cantilever === "end"}
+            onChange={(e) => {
+              const { cantilever: _c, ...plain } = rail;
+              void _c;
+              re((s, f) => curtainRailPatch(s, f, e.target.checked ? { ...plain, cantilever: "end" } : plain));
+            }}
+          />
+        </label>
+        <Note>{`מוט עומד על עמודים בכל קצה ופינה. בלי עמוד בקצה — הזרוע יוצאת מהעמוד האחרון, עד ${CANTILEVER_MAX_MM / 1000} מ׳. גוררים את קצוות המוט על הקנבס.`}</Note>
+      </>
+    );
+  }
+  return null;
+}
+
+/** A venue curtain's look and drop (FeatureCurtain.style / dropMm — spec 2026-11-07 §6.5): the style
+ *  tiles in its own cloth, and how far it comes down (blank = to the floor). Drawing and 3D only. */
+function CurtainLookFields({ feature, onPatch }: { feature: StructureFeature; onPatch: (p: Partial<Omit<StructureFeature, "id">>) => void }) {
+  const drop = feature.curtain?.dropMm;
+  return (
+    <div className="mt-2 flex flex-col gap-2 border-t border-border-soft pt-2">
+      <CurtainStyleTiles value={feature.curtain?.style} tone={feature.style?.fill ?? CURTAIN_FILL} onPick={(style) => onPatch(curtainLookPatch(feature, { style: style ?? null }))} />
+      <PanelRow label="אורך הבד (ס״מ)" htmlFor="curtain-drop">
+        <NumberField id="curtain-drop" decimals={0} min={0} max={1200} hideZero placeholder="עד הרצפה" value={drop ? Math.round(drop / 10) : 0} onChange={(v) => onPatch(curtainLookPatch(feature, { dropMm: v > 0 ? v * 10 : null }))} className="w-24" />
+      </PanelRow>
+    </div>
   );
 }

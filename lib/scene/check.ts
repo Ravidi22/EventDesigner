@@ -8,7 +8,7 @@
 // on a banquette shares its geometry with the chairs round the tables, a vase on a banquette stands
 // on its top, a chandelier hangs where its row says.
 import { isMain } from "../self-check";
-import { buildScene } from "./build";
+import { buildScene, wallCurtainTop } from "./build";
 import { fixtureInput, SECRET_PRICE } from "./fixture";
 import { DOOR_HEIGHT_MM, KERB_MM, type BodyNode } from "./types";
 
@@ -51,7 +51,7 @@ if (isMain(import.meta.url)) {
   const round = tops.find((b) => b.tag.id === "t1")!;
   assert(round.parts.some((q) => q.shape === "extrude" && near(q.at.z, 720)), "the round table's top is a 30 mm slab whose face is at 750");
   assert(near(round.instances[0].at.x, 5000) && near(round.instances[0].at.y, 5000), "…standing where the document puts it");
-  const cloth = byType("cloth");
+  const cloth = byType("cloth").filter((b) => !b.id.startsWith("cloth-hem:")); // a contour's hem bands are the cloth's too
   assert(cloth.length === 1 && minZ(cloth[0].parts) < 1, "the cloth falls to the floor");
   for (const id of ["p-ring", "p-cluster", "p-lamp"]) {
     const b = bodies.find((x) => x.tag.id === id && x.instances.length === 1);
@@ -101,6 +101,15 @@ if (isMain(import.meta.url)) {
   assert(ofId("p-sofa")[0].parts.length > 3, "the sofa is a sofa, not a box");
   const rug = ofId("p-rug")[0];
   assert(rug.parts[0].shape === "box" && (rug.parts[0] as { h: number }).h === 12, "the rug is a 12 mm slab");
+  // Its contour (lib/catalog/border.ts): two flat rings on the slab in their colours, the gold one at
+  // the edge, the cream one inside it — each its outer edge with its inner cut out.
+  const rings = rug.parts.filter((q): q is Extract<typeof q, { shape: "extrude" }> => q.shape === "extrude" && near(q.at.z, 12));
+  assert(rings.length === 2 && rings.every((q) => (q.holes?.length ?? 0) === 1), "the rug's contour is two rings on its top");
+  assert(rings[0].material?.colour === "#c9a24a" && rings[1].material?.colour === "#f5efe0", "…in the contour's colours, the edge band first");
+  // The cloth's hem: the bottom 80 of its fall, gold, over the same folds.
+  const hem = bodies.find((b) => b.id.startsWith("cloth-hem:p-cloth"));
+  const hemFall = hem?.parts[0];
+  assert(!!hem && hem.material.colour === "#c9a24a" && hemFall?.shape === "drape" && hemFall.band?.[0] === 0 && hemFall.band?.[1] === 80, "the cloth's contour is the bottom 80 of its fall, in gold");
   const chuppah = ofId("p-chuppah").find((b) => b.tag.type === "item")!;
   assert(chuppah.parts.filter((q) => q.shape === "cylinder" && near(topOf(q), 2600)).length === 4, "the chuppah stands on four poles to 2600");
   const chandelier = ofId("p-chandelier")[0];
@@ -111,6 +120,19 @@ if (isMain(import.meta.url)) {
   const ribbon = curtain.parts.find((q) => q.shape === "ribbon");
   assert(!!ribbon && near((ribbon as { h: number }).h, 4000), "the curtain falls the hall's full 4 m along its wall");
   assert(ribbon!.shape === "ribbon" && ribbon!.path.every((q) => q.x > 100), "…hung on the room's side of the wall, not inside it");
+  // 2026-11-07: a wall with a typed height lower than the room's ceiling caps the curtain on it.
+  const lowWall = fixtureInput(true);
+  const capped = buildScene({ ...lowWall, structure: { ...lowWall.structure, walls: lowWall.structure.walls.map((w) => (w.id === "w-left" ? { ...w, heightMm: 3200 } : w)) } });
+  const cappedRibbon = capped.nodes.filter((n): n is BodyNode => n.kind === "body" && n.tag.id === "p-curtain").flatMap((b) => b.parts).find((q) => q.shape === "ribbon");
+  assert(!!cappedRibbon && near((cappedRibbon as { h: number }).h, 3200), "a curtain hangs from the lower of the ceiling and its wall's own height");
+  assert(wallCurtainTop(4000, 3200) === 3200 && wallCurtainTop(0, 2800) === 2800 && wallCurtainTop(4000, undefined) === 4000 && wallCurtainTop(0, undefined) === undefined, "…the lower of the two; open sky and no height leaves it to the row");
+  // A curtain on a ROD (lib/studio/rail.ts): under the rod at its 2.4 m, a post at its start and its
+  // bend, none under the ר's arm.
+  const rodCurtain = ofId("p-rod-curtain")[0];
+  const rodCloth = rodCurtain?.parts.find((q) => q.shape === "ribbon");
+  assert(!!rodCloth && near((rodCloth as { h: number }).h, 2400), "a rod's curtain falls from the rod's 2.4 m");
+  const rodPosts = rodCurtain.parts.filter((q) => q.shape === "box");
+  assert(rodPosts.length === 2 && !rodPosts.some((q) => near(q.at.y, 9500)), `two posts, none under the cantilevered arm (got ${rodPosts.length})`);
 
   // ── what glows ────────────────────────────────────────────────────────────────────────────────
   const emitters = scene.nodes.filter((n) => n.kind === "emitter");

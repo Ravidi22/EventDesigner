@@ -7,6 +7,8 @@ import { isMain } from "../self-check";
 import { freeNumbers, numberedUnits } from "./groups";
 import { carryHung } from "../studio/hang-over";
 import { cleanBows, cleanCorners } from "../studio/rug-shape";
+import { withRail, type Rail } from "../studio/rail";
+import { cleanBorder, sameBorder, type Border } from "../catalog/border";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
 const tableNo = (n: number): number | null => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
@@ -75,6 +77,10 @@ export type Action =
   /** The vase these arrangements stand in (lib/catalog/vessel.ts): a variant id, null = none on this
    *  plan, undefined = back to what their catalog row says. */
   | { type: "setPlacementVessel"; ids: string[]; vessel: string | null | undefined }
+  /** A rug's or a cloth's contour on THIS plan (Placement.border, lib/catalog/border.ts): a contour of
+   *  its own, null = none here whatever its row says, undefined = back to its row's ("כמו בקטלוג").
+   *  Several ids: a block's cloths, every member at once. */
+  | { type: "setPlacementBorder"; ids: string[]; border: Border | null | undefined }
   // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
   // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
   | { type: "setPlacementHang"; id: string; heightMm: number | null }
@@ -97,6 +103,9 @@ export type Action =
   | { type: "setPlacementVariant"; id: string; variantId: string }
   // A drape's run along its wall, or a moved/relaid one.
   | { type: "setPlacementSpan"; id: string; span: WallSpan }
+  // A drape's RAIL (lib/studio/rail.ts) — its stretch slid or typed, a rod bent, a side flipped —
+  // and its drop (null = to the floor). Writes `rail` and lets a legacy `span` go.
+  | { type: "setPlacementRail"; id: string; rail: Rail; dropMm?: number | null }
   // A whole drawing put in place of this one — a saved sketch loaded (lib/studio/sketches.ts). The
   // calibration stays: it is the venue's, not the sketch's. One entry, so one Ctrl+Z brings back the
   // drawing it replaced.
@@ -495,6 +504,20 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
       });
       return changed ? { ...doc, placements } : doc;
     }
+    case "setPlacementBorder": {
+      const ids = new Set(action.ids);
+      // Cleaned on the way in (whole millimetres, a colour on every band) — the drawing trusts it.
+      const want = action.border === null || action.border === undefined ? action.border : cleanBorder(action.border);
+      if (action.border && !want) return doc;
+      let changed = false;
+      const placements = doc.placements.map((p) => {
+        if (!ids.has(p.id)) return p;
+        const next = withBorder(p, want);
+        if (next !== p) changed = true;
+        return next;
+      });
+      return changed ? { ...doc, placements } : doc;
+    }
     case "setPlacementHang": {
       // Whole centimetres, inside a room; 0 or null clears it back to the row's default.
       const h = action.heightMm === null ? 0 : Math.round(Math.min(30000, Math.max(0, action.heightMm)) / 10) * 10;
@@ -562,6 +585,18 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
       return {
         ...doc,
         placements: doc.placements.map((p) => (p.id === action.id ? { ...p, span: action.span } : p)),
+      };
+    case "setPlacementRail":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const next = withRail(p, action.rail);
+          if (action.dropMm === undefined) return next;
+          const { dropMm: _old, ...rest } = next;
+          void _old;
+          return action.dropMm && action.dropMm > 0 ? { ...rest, dropMm: Math.round(action.dropMm) } : rest;
+        }),
       };
     case "loadDocument": {
       const c = action.content;
@@ -945,9 +980,14 @@ function wearDressing(
     : kept.map((p) => {
         if (p.layer !== "table" || !p.tableId || !targetSet.has(p.tableId) || !swap.has(p.variantId)) return p;
         covered.add(p.tableId);
-        if (p.variantId === cover.variantId) return p;
+        // …and its contour (Placement.border): "make these match that one" is the hem as well.
+        if (p.variantId === cover.variantId) {
+          const same = withBorder(p, cover.border);
+          if (same !== p) recoloured++;
+          return same;
+        }
         recoloured++;
-        return { ...p, variantId: cover.variantId };
+        return withBorder({ ...p, variantId: cover.variantId }, cover.border);
       });
 
   const added: Placement[] = [];
@@ -1005,6 +1045,19 @@ export function groupOf(doc: DesignDocumentContent, groupId: string | undefined)
  *  product's other variant ids — it is the one holding the catalog; this layer stays pure. The swap
  *  is a straight substitution rather than remove+add, so it never records the removal as a
  *  deliberate divergence the next apply would then have to honour. */
+/** `p` with `border` as its contour on this plan (Placement.border): a contour, null (none here) or
+ *  undefined (the field taken away — its row's again). The same object back when nothing changes. */
+function withBorder(p: Placement, border: Border | null | undefined): Placement {
+  if (border === undefined) {
+    if (!("border" in p)) return p;
+    const { border: _b, ...rest } = p;
+    void _b;
+    return rest;
+  }
+  if (border === null ? p.border === null : !!p.border && sameBorder(p.border, border)) return p;
+  return { ...p, border };
+}
+
 function spreadOverTables(
   doc: DesignDocumentContent,
   tables: DesignTable[],
@@ -1015,12 +1068,20 @@ function spreadOverTables(
   const targets = new Set(tables.map((t) => t.id));
   const added: Placement[] = [];
   const covered = new Set<string>(); // tables whose existing item was recoloured in place
+  let carried = 0; // tables that already wore it and took its contour
 
   const placements = doc.placements.map((p) => {
     if (!p.tableId || !targets.has(p.tableId) || p.layer !== "table") return p;
-    if (!swap.has(p.variantId) || p.variantId === placement.variantId) return p;
+    // A table already wearing it takes its contour (Placement.border) — "על כל השולחנות" is the hem
+    // too; one wearing another shade it replaces is recoloured, contour and all.
+    if (p.variantId === placement.variantId) {
+      const same = withBorder(p, placement.border);
+      if (same !== p) carried++;
+      return same;
+    }
+    if (!swap.has(p.variantId)) return p;
     covered.add(p.tableId);
-    return { ...p, variantId: placement.variantId };
+    return withBorder({ ...p, variantId: placement.variantId }, placement.border);
   });
 
   for (const t of tables) {
@@ -1035,7 +1096,7 @@ function spreadOverTables(
     if (!has && !excepted) added.push({ ...placement, id: crypto.randomUUID(), tableId: t.id });
   }
 
-  if (added.length === 0 && covered.size === 0) return doc;
+  if (added.length === 0 && covered.size === 0 && carried === 0) return doc;
   return { ...doc, placements: [...placements, ...added] };
 }
 
@@ -1162,6 +1223,11 @@ if (isMain(import.meta.url)) {
   });
   h = dispatch(h, { type: "setPlacementSpan", id: "drape", span: { wallId: "w1", from: 0.25, to: 0.75 } });
   assert(h.present.placements.find((p) => p.id === "drape")?.span?.from === 0.25, "setPlacementSpan shortens the run");
+  h = dispatch(h, { type: "setPlacementRail", id: "drape", rail: { type: "wall", wallId: "w1", from: 0.25, to: 0.5 }, dropMm: 2400 });
+  const railed = h.present.placements.find((p) => p.id === "drape");
+  assert(railed?.rail?.type === "wall" && railed.rail.to === 0.5 && !railed.span && railed.dropMm === 2400, "setPlacementRail writes the rail, lets the legacy span go, and sets the drop");
+  h = dispatch(h, { type: "setPlacementRail", id: "drape", rail: railed!.rail!, dropMm: null });
+  assert(h.present.placements.find((p) => p.id === "drape")?.dropMm === undefined, "…a null drop is to the floor again");
   h = dispatch(h, { type: "resizePlacement", id: "drape", sizeMm: { widthMm: 3000, depthMm: 2000 } });
   assert(h.present.placements.find((p) => p.id === "drape")?.sizeMm?.widthMm === 3000, "resizePlacement records the drawn size");
 
@@ -1191,6 +1257,12 @@ if (isMain(import.meta.url)) {
   assert(g.present.placements.length === 2, "recolouring every table adds no second cloth");
   assert(g.present.placements.every((p) => p.variantId === "cream"), "…and every table now wears cream");
   assert((g.present.exceptions?.length ?? 0) === 0, "a swap is not a removal, so it records no exception");
+  // …and the cloth's contour goes with it: on the tables already in cream as on the recoloured ones.
+  const hem = { widthMm: 40, colour: "#c9a24a" };
+  g = dispatch(g, { type: "applyToTables", tableIds: g.present.tables.map((t) => t.id), placement: { ...cloth, variantId: "cream", border: hem }, replaces: ["gold", "cream"] });
+  assert(g.present.placements.length === 2 && g.present.placements.every((p) => p.border?.colour === "#c9a24a"), "applying a hemmed cloth hems every table's cloth, adding none");
+  g = dispatch(g, { type: "applyToTables", tableIds: g.present.tables.map((t) => t.id), placement: { ...cloth, variantId: "gold" }, replaces: ["gold", "cream"] });
+  assert(g.present.placements.every((p) => p.variantId === "gold" && !("border" in p)), "…and a plain one takes the hem away again, back to the row's");
 
   // Applying to an explicit list of tables — the general case the two old actions were both
   // special cases of.
@@ -1318,6 +1390,14 @@ if (isMain(import.meta.url)) {
     assert(apply(vased, { type: "setPlacementVessel", ids: ["a"], vessel: null }).placements[0].vessel === null, "…taken out of every vase with null");
     assert(!("vessel" in apply(vased, { type: "setPlacementVessel", ids: ["a"], vessel: undefined }).placements[0]), "…and back to its row's own with undefined");
     assert(apply(vased, { type: "setPlacementVessel", ids: ["a"], vessel: "jug" }) === vased, "the same vase again changes nothing");
+    // A contour on this plan (Placement.border): its own, none here (null), or back to the row's.
+    const gold = { widthMm: 80, colour: "#c9a24a" };
+    const hemmed = apply(base, { type: "setPlacementBorder", ids: ["a"], border: { ...gold, widthMm: 80.4 } });
+    assert(hemmed.placements[0].border?.widthMm === 80 && hemmed.placements[0].border?.colour === "#c9a24a", "a contour is kept, cleaned to whole millimetres");
+    assert(apply(hemmed, { type: "setPlacementBorder", ids: ["a"], border: { ...gold } }) === hemmed, "the same contour again changes nothing");
+    assert(apply(hemmed, { type: "setPlacementBorder", ids: ["a"], border: null }).placements[0].border === null, "…none on this plan with null");
+    assert(!("border" in apply(hemmed, { type: "setPlacementBorder", ids: ["a"], border: undefined }).placements[0]), "…and back to its row's own with undefined");
+    assert(apply(base, { type: "setPlacementBorder", ids: ["a"], border: { widthMm: 50 } as unknown as typeof gold }) === base, "a contour with no colour is refused");
     const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
     assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
     const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });

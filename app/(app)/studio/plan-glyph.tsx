@@ -7,7 +7,9 @@ import { resolveContent, resolveFootprint, footprintBounds } from "@/lib/studio/
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { FootprintShape, productStyle } from "@/components/footprint-shape";
-import { ItemSymbol } from "@/components/item-symbol";
+import { FootprintBorder, ItemSymbol, RugPattern } from "@/components/item-symbol";
+import { borderOf } from "@/lib/catalog/border";
+import { anchorOf } from "@/lib/catalog/categories";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
@@ -67,6 +69,9 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
   const dark = !!product.appearance?.style?.fill && style.fillOpacity > 0.5 && isDark(style.fill);
   // The vase its row is made in (lib/catalog/vessel.ts), drawn with it as the plan will.
   const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf({ variantId: product.id }, (id) => (id === product.id ? product : resolve(id)?.product)) : undefined;
+  // Its contour (lib/catalog/border.ts), as it will land: a rug's bands and fringe, a cloth's bands
+  // inside its own outline (there is no table under a drag image to fall round), a runner's on it.
+  const border = borderOf(undefined, product);
 
   return (
     <svg
@@ -92,6 +97,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           drawStyle={drawStyleOf(product)}
           postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
+          border={symbol === "runner" ? border : undefined}
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
@@ -116,6 +122,8 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           <FootprintShape footprint={footprint} fill="none" stroke={style.stroke} strokeOpacity={style.strokeOpacity} strokeWidth={style.strokeWidth} vectorEffect="non-scaling-stroke" />
         </>
       )}
+      {border && !symbol && product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} border={border} />}
+      {border && !symbol && product.category !== "rugs" && anchorOf(product) === "table" && <FootprintBorder footprint={footprint} border={border} />}
       {content.mode === "name" && (
         <text x={at.x} y={at.y} textAnchor="middle" dominantBaseline="central" fill={dark ? "var(--color-canvas)" : "var(--color-ink)"} style={{ fontSize }}>
           {shown}

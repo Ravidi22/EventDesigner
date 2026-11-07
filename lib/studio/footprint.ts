@@ -984,6 +984,131 @@ function emitOutline(path: readonly Piece[]): BuiltOutline {
   return { outline, ...(edgeCurves.some(Boolean) ? { edgeCurves } : {}) };
 }
 
+/** The outline pulled in `mm` all the way round, holding its width — insetOutline with two fixes a
+ *  CONTOUR needs (a rug's or a cloth's, lib/catalog/border.ts), where the band is drawn as the
+ *  region BETWEEN two insets and a keyhole cannot be cut by a second one: a rounded corner the inset
+ *  swallows is taken as its sharp corner or its chord (squareSwallowedArcs), and a curve that is not
+ *  a true arc is offset in two halves (halveBows) — so a 12cm band is 12cm on a bow and round an R10
+ *  corner, where insetOutline drifts by a fifth. Not used for a pool's water, whose band is
+ *  buildHollow's own keyhole and must meet insetOutline exactly. `mm` ≤ 0 is the outline itself;
+ *  null when nothing is left inside (buildHollow's 2% rule) or the outline encloses nothing. */
+export function evenInset(base: BuiltOutline, mm: number): BuiltOutline | null {
+  if (base.outline.length < 3) return null;
+  if (!(mm > 0)) return base;
+  const outerArea = shoelace(piecesRing(base.outline.map((a, i) => edgePiece(i, a, base.outline[(i + 1) % base.outline.length], base.edgeCurves?.[i]))));
+  if (!(Math.abs(outerArea) > 1e-6)) return null;
+  const sgn = outerArea > 0 ? 1 : -1;
+  const squared = halveBows(squareSwallowedArcs(base, mm));
+  const segs = innerLoop(squared, squared.outline.map(() => mm), sgn);
+  if (!segs) return null;
+  const inner = loopPieces(segs);
+  if (shoelace(piecesRing(inner)) * sgn <= 0.02 * Math.abs(outerArea)) return null;
+  return emitOutline(inner);
+}
+
+/** A rounded corner whose radius is no more than the inset has nothing left of it `mm` in — its own
+ *  offset would turn inside out, and scaling its arms to nothing (offsetEdge) left a stub across the
+ *  corner that the corner-settling read wrongly: a band cut short at an R100 corner, or pushed out
+ *  through the next side by a deep inward bow. So each such CIRCULAR arc is replaced: by the sharp
+ *  corner it rounds where it runs on smoothly from both its neighbours (there the sharp corner's
+ *  inset IS the inset — every point of it is as far from the two runs as `mm` and further from the
+ *  arc), else by its CHORD (every point inside a chord is at least as far from the arc as from the
+ *  chord, so the inset is never nearer the edge than `mm` — at worst a small chamfer). */
+function squareSwallowedArcs(base: BuiltOutline, mm: number): BuiltOutline {
+  const curves = base.edgeCurves;
+  if (!curves?.some(Boolean)) return base;
+  const P = base.outline;
+  const n = P.length;
+  /** The direction an edge leaves its start and arrives at its end. */
+  const ends = (i: number): { out: Point; arrive: Point } => {
+    const a = P[i];
+    const b = P[(i + 1) % n];
+    const c = curves[i];
+    if (!c) return { out: vSub(b, a), arrive: vSub(b, a) };
+    const { c1, c2 } = absoluteControlPoints(a, b, c);
+    const out = [vSub(c1, a), vSub(c2, a), vSub(b, a)].find((v) => vLen(v) > 1e-9) ?? vSub(b, a);
+    const arrive = [vSub(b, c2), vSub(b, c1), vSub(b, a)].find((v) => vLen(v) > 1e-9) ?? vSub(b, a);
+    return { out, arrive };
+  };
+  const swallowed = curves.map((curve, i) => {
+    if (!curve) return false;
+    const a = P[i];
+    const b = P[(i + 1) % n];
+    const { c1, c2 } = absoluteControlPoints(a, b, curve);
+    const d0 = vSub(c1, a);
+    const d1 = vSub(b, c2);
+    if (!(vLen(d0) > 1e-9 && vLen(d1) > 1e-9)) return false;
+    // Circular: the normals at its two ends meet one centre, as far from both (offsetEdge's test).
+    const c = lineMeet(a, vUnit({ x: -d0.y, y: d0.x }), b, vUnit({ x: -d1.y, y: d1.x }));
+    if (!c) return false;
+    const R = Math.abs((c.t + c.u) / 2);
+    return Math.abs(Math.abs(c.t) - Math.abs(c.u)) <= 1e-3 * R && R <= mm + 1e-6;
+  });
+  if (!swallowed.some(Boolean)) return base;
+  const smooth = (u: Point, v: Point) => vCross(vUnit(u), vUnit(v)) ** 2 < 1e-4 && vDot(u, v) > 0;
+  // Squared where both joins are smooth and neither neighbour is squared too (a half-round end is
+  // two arcs meeting: those go to chords); the corner is where the arc's two end tangents meet.
+  const corner = swallowed.map((sw, i) => {
+    if (!sw || n <= 3 || swallowed[(i - 1 + n) % n] || swallowed[(i + 1) % n]) return null;
+    const arc = ends(i);
+    if (!smooth(ends((i - 1 + n) % n).arrive, arc.out) || !smooth(arc.arrive, ends((i + 1) % n).out)) return null;
+    const m = lineMeet(P[i], arc.out, P[(i + 1) % n], arc.arrive);
+    return m ? vAdd(P[i], vMul(arc.out, m.t)) : null;
+  });
+  const outline: Point[] = [];
+  const edgeCurves: (EdgeCurve | null)[] = [];
+  for (let k = 0; k < n; k++) {
+    if (corner[(k - 1 + n) % n]) continue; // the end of a squared arc: its corner stands for it
+    const x = corner[k];
+    outline.push(x ?? P[k]);
+    edgeCurves.push(x ? (curves[(k + 1) % n] ?? null) : swallowed[k] ? null : (curves[k] ?? null));
+  }
+  return { outline, edgeCurves };
+}
+
+/** Every curved edge that is not a circular arc cut in two at its middle. A symmetric bow passes
+ *  offsetEdge's arc test and is scaled about where its end normals meet as if it were one, which
+ *  moves its middle further than the inset — a 12cm band came out up to 14.5 on a side bowed by a
+ *  third; halved, each half is offset by its own bends and the band holds its width. True arcs are
+ *  offset exactly (concentric) and stay whole. */
+function halveBows(base: BuiltOutline): BuiltOutline {
+  const curves = base.edgeCurves;
+  if (!curves?.some(Boolean)) return base;
+  const n = base.outline.length;
+  const outline: Point[] = [];
+  const edgeCurves: (EdgeCurve | null)[] = [];
+  base.outline.forEach((a, i) => {
+    const b = base.outline[(i + 1) % n];
+    const curve = curves[i];
+    outline.push(a);
+    if (!curve) {
+      edgeCurves.push(null);
+      return;
+    }
+    const { c1, c2 } = absoluteControlPoints(a, b, curve);
+    const d0 = vSub(c1, a);
+    const d1 = vSub(b, c2);
+    const c = vLen(d0) > 1e-9 && vLen(d1) > 1e-9 ? lineMeet(a, vUnit({ x: -d0.y, y: d0.x }), b, vUnit({ x: -d1.y, y: d1.x })) : null;
+    const R = c ? Math.abs((c.t + c.u) / 2) : 0;
+    const cubic: Cubic = [a, c1, c2, b];
+    // A TRUE arc: its ends equidistant from where their normals meet (offsetEdge's test, which a
+    // symmetric bow passes too) and its middle as far again.
+    if (c && R > 0 && Math.abs(Math.abs(c.t) - Math.abs(c.u)) <= 1e-3 * R) {
+      const centre = vAdd(a, vMul(vUnit({ x: -d0.y, y: d0.x }), c.t));
+      if (Math.abs(vLen(vSub(bezAt(cubic, 0.5), centre)) - R) <= 2e-3 * R) {
+        edgeCurves.push(curve);
+        return;
+      }
+    }
+    const l = bezWindow(cubic, 0, 0.5);
+    const r = bezWindow(cubic, 0.5, 1);
+    edgeCurves.push({ c1: vSub(l[1], a), c2: vSub(l[2], l[3]) });
+    outline.push(l[3]);
+    edgeCurves.push({ c1: vSub(r[1], r[0]), c2: vSub(r[2], b) });
+  });
+  return { outline, edgeCurves };
+}
+
 /** The edge of a shape an entrance goes in when none was chosen: the lowest on screen (largest y at
  *  its middle) — the bottom run of a capsule, the base of a triangle. The first of a tie. */
 function lowestEdge(outer: readonly Piece[]): number {
@@ -1999,6 +2124,26 @@ if (isMain(import.meta.url)) {
     const ownBench: Product = { ...bench, resize: { stepMm: 500, width: { minMm: 1000, maxMm: 3000 } } };
     assert(eq(clampSize(ownBench, { widthMm: 6000, depthMm: 450 }), { widthMm: 3000, depthMm: 450 }), "a row's own resize wins over its category's default");
     assert(resizeAxes({ ...bench, category: "arches" }) === null, "a category with no default leaves a plain row a thing of one size");
+  }
+
+  // evenInset (2026-11-07, a rug's and a cloth's contour): a circle pulled in stays a circle, a
+  // rounded corner shallower than the inset comes out as the sharp corner, nothing left is null.
+  {
+    const ring = evenInset(footprintOutlines({ kind: "circle", diameterMm: 1000 })[0], 100)!;
+    const rp = piecesRing(ring.outline.map((a, i) => edgePiece(i, a, ring.outline[(i + 1) % ring.outline.length], ring.edgeCurves?.[i])));
+    assert(rp.every((p) => Math.abs(Math.hypot(p.x, p.y) - 400) < 1), "a ⌀1000 circle 100 in is a ⌀800 circle");
+    const K100 = 0.5522847498 * 100;
+    // A 1000×600 rectangle, its top-left corner rounded R100 (an arc from (-500,-200) to (-400,-300)).
+    const rounded: BuiltOutline = {
+      outline: [{ x: -500, y: -200 }, { x: -400, y: -300 }, { x: 500, y: -300 }, { x: 500, y: 300 }, { x: -500, y: 300 }],
+      edgeCurves: [{ c1: { x: 0, y: -K100 }, c2: { x: -K100, y: 0 } }, null, null, null, null],
+    };
+    const sharp = evenInset(rounded, 150)!;
+    const sb = sampledBounds([sharp]);
+    assert(Math.abs(sb.minX + 350) < 0.5 && Math.abs(sb.minY + 150) < 0.5 && sharp.outline.some((p) => Math.abs(p.x + 350) < 0.5 && Math.abs(p.y + 150) < 0.5), "an R100 corner 150 in is the sharp corner");
+    const soft = evenInset(rounded, 50)!;
+    assert(!!soft.edgeCurves?.some(Boolean) && sampledBounds([soft]).minX > -450.5, "…50 in it is the concentric R50");
+    assert(evenInset(rounded, 300) === null && evenInset(rounded, 0) === rounded, "nothing left 300 in a 600 deep shape; 0 in is the shape");
   }
 
   console.log("footprint self-check passed");

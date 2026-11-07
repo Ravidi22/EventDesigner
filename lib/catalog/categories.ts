@@ -35,10 +35,12 @@ import {
   Combine,
   Lamp,
   DoorOpen,
+  Minus,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
 import { Columns3 } from "lucide-react";
+import type { RailType } from "@/lib/studio/rail";
 
 export interface CategoryField {
   key: string;
@@ -156,6 +158,11 @@ export interface CategoryDef {
    *  the category already knows. The row's own `resize` wins when set — this is the default under
    *  it, read through `resizeSpecOf` (lib/studio/footprint.ts). */
   defaultResize?: ResizeSpec;
+  /** Which RAILS a row of this category may hang on (lib/studio/rail.ts — spec 2026-11-07 §1): a
+   *  curtain on a wall, on a side of a tall thing, on a free-standing rod. Absent = none. `anchor:
+   *  "wall"` still says "this hangs on a rail" to every reader that sorts drapes from objects; this
+   *  says which kinds of rail the placing offers. */
+  rails?: RailType[];
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -252,6 +259,11 @@ export const CATEGORIES: CategoryDef[] = [
   // post and slat spacing in millimetres, only gaining slats.
   { id: "pergolas", label: "פרגולות", group: "grp-chuppahs", defaultLayer: "floor", icon: Columns3, dims: "box", fields: [{ key: "postMm", label: "עובי עמוד (מ״מ)" }], defaultHeightMm: 2600, defaultResize: { stepMm: 100, width: { minMm: 1500, maxMm: 20000 }, depth: { minMm: 1500, maxMm: 20000 } } },
   { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch" },
+  { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch", rails: ["wall", "side", "rod"] },
+  // The ROD a curtain on a free-standing rod hangs from (spec 2026-11-07 §6.2), billed by the metre
+  // off the curtain itself (MeasureContext.rodOf — the studio's first row here), as a stage's skirt
+  // is off the stage: never placed on its own.
+  { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
   // A gate — two columns joined overhead by a lintel (a square entrance) or an arch (a round one),
   // set where the guests come in or at the head of the aisle. Not an arch: an arch is a dressed

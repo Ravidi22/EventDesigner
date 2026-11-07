@@ -16,6 +16,7 @@ import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { catalogVersion } from "@/lib/catalog/storage";
 import type { RugShape } from "@/lib/studio/rug-shape";
+import { sameBorder, type Border } from "@/lib/catalog/border";
 
 /** Two rug shapes (RugShape) that say the same: the same bows, the same corners. */
 function sameRugShape(a: RugShape, b: RugShape): boolean {
@@ -419,6 +420,9 @@ export function sameDrawProps<P extends object>(a: P, b: P): boolean {
     // shape (RugShape) a fresh object of the two.
     if ((k === "bows" || k === "corners") && Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])) continue;
     if (k === "shape" && x && y && sameRugShape(x as RugShape, y as RugShape)) continue;
+    // A rug's or a cloth's contour (lib/catalog/border.ts) — a placement read back from the server
+    // is a fresh object every time.
+    if (k === "border" && sameBorder(x as Border | undefined, y as Border | undefined)) continue;
     return false;
   }
   return true;

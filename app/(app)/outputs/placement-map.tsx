@@ -17,7 +17,8 @@ import type { EventPlan } from "@/lib/events/plan";
 import { featureFootprint, isDoor, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature } from "@/lib/venues/structure";
 import { WindowGlazing } from "@/components/window-glazing";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainPieces, type CurtainPiece } from "@/lib/venues/curtain";
-import { CurtainCloth, DrapePleatsAlong, polygonD } from "@/components/curtain-cloth";
+import { CurtainCloth, DrapePleatsAlong, RodMarks, polygonD } from "@/components/curtain-cloth";
+import { railBand, railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import { detectFaces, wallInteriorHint } from "@/lib/venues/faces";
 import { featureEdgeShapes } from "@/lib/venues/stage-edges";
 import { isClimb } from "@/lib/venues/climb";
@@ -30,7 +31,8 @@ import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
-import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { borderOf, darkerShade, type Border } from "@/lib/catalog/border";
+import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
@@ -69,7 +71,7 @@ import { uprightTransform } from "@/lib/design-document/mirror";
 import { darkFill, deckLabel, heightColour } from "@/lib/outputs/deck-colours";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
-import { nearestWall, resolveSpan, spanBand } from "@/lib/studio/anchor";
+import { nearestWall } from "@/lib/studio/anchor";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
@@ -408,11 +410,15 @@ export function PlacementMap({
   // The cover each table wears, for the colour mode — read off the whole document, because a sheet
   // that shows only the floor still has tables wearing cloths.
   const clothOf = new Map<string, string>();
+  // …and its contour (lib/catalog/border.ts), the hem the studio draws round it.
+  const clothBorderOf = new Map<string, Border>();
   if (colour) {
     for (const p of doc.placements) {
       if (p.layer !== "table" || !p.tableId) continue;
       const r = resolve(p.variantId);
       if (r?.anchor === "table") clothOf.set(p.tableId, r.swatch ?? "#f2eefb");
+      const hem = r?.anchor === "table" ? borderOf(p, r.product) : undefined;
+      if (hem) clothBorderOf.set(p.tableId, hem);
     }
   }
 
@@ -754,7 +760,7 @@ export function PlacementMap({
                     ))}
                   </g>
                 ) : null}
-                {sheet.tables === "ghost" ? <GhostTable t={t} /> : <TableGlyph t={t} colour={colour} mono={flat ?? false} cloth={clothOf.get(t.id)} />}
+                {sheet.tables === "ghost" ? <GhostTable t={t} /> : <TableGlyph t={t} colour={colour} mono={flat ?? false} cloth={clothOf.get(t.id)} clothBorder={clothBorderOf.get(t.id)} />}
               </Fragment>
             );
           })}
@@ -908,23 +914,31 @@ export function PlacementMap({
 
           {/* Drapes — a band along the wall they hang on. */}
           {drapes.map((p) => {
-            if (!p.span) return null;
+            const rail = railOf(p);
             // The property's own walls, not the arranged copy — nothing on this surface moves a
-            // wall, so a drape always measures itself against the real one.
-            const resolved = resolveSpan(plan.structure, p.span);
-            if (!resolved) return null;
-            // Centred on the wall's own line — round the bow on a curved wall (lib/studio/anchor.ts).
+            // wall, so a drape always measures itself against the real one; a side rail's thing
+            // where this event stood it (lib/studio/rail.ts).
+            const lines = rail ? railLines(rail, sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product)) : [];
+            if (!lines.length) return null;
+            const style = curtainStyleOf(resolve(p.variantId)?.product);
+            // On the wall's own line — round the bow on a curved wall — out on its side for a side
+            // rail, under its rod with the rod's posts for a rod.
             return (
               <g key={p.id}>
-                <path
-                  d={polygonD(spanBand(resolved.track, resolved.t0, resolved.t1, -DRAPE_MM / 2, DRAPE_MM / 2))}
-                  fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : flat ? flat.drape : "none"}
-                  stroke={INK}
-                  strokeWidth={LINE_WEIGHTS.overhead}
-                  strokeDasharray={OVERHEAD_DASH}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <DrapePleatsAlong line={resolved.path} depthMm={DRAPE_MM} ink={INK} opacity={0.6} />
+                {lines.map((line, i) => (
+                  <g key={i}>
+                    <path
+                      d={polygonD(railBand(line, DRAPE_MM))}
+                      fill={colour ? (resolve(p.variantId)?.swatch ?? "#efe9df") : flat ? flat.drape : "none"}
+                      stroke={INK}
+                      strokeWidth={LINE_WEIGHTS.overhead}
+                      strokeDasharray={OVERHEAD_DASH}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <DrapePleatsAlong line={railClothLine(line, DRAPE_MM)} depthMm={DRAPE_MM} ink={INK} opacity={0.6} style={style} />
+                    {line.posts && <RodMarks path={line.path} posts={line.posts} postMm={1.6 * den} ink={INK} />}
+                  </g>
+                ))}
               </g>
             );
           })}
@@ -1356,7 +1370,7 @@ export function StageSchedule({
   );
 }
 
-export function TableGlyph({ t, colour = false, mono = false, cloth }: { t: DesignTable; colour?: boolean; mono?: boolean | Flat; cloth?: string }) {
+export function TableGlyph({ t, colour = false, mono = false, cloth, clothBorder }: { t: DesignTable; colour?: boolean; mono?: boolean | Flat; cloth?: string; clothBorder?: Border }) {
   const fl = flatOf(mono);
   // The catalog row's look under the table's own — the studio's merge (productStyle). Colour never
   // survives to print, but a dash or a weight chosen for the row has to: on paper they are what
@@ -1373,7 +1387,7 @@ export function TableGlyph({ t, colour = false, mono = false, cloth }: { t: Desi
     const surfaced = !cloth && anySurface(product?.appearance);
     return (
       <g transform={placed(t.position, t.rotation, t.mirrored)}>
-        {cloth && <ClothDrape footprint={footprint} colour={cloth} />}
+        {cloth && <ClothDrape footprint={footprint} colour={cloth} border={clothBorder} />}
         <FootprintShape
           footprint={footprint}
           fill={cloth ?? screen.fill}
@@ -1486,7 +1500,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             ) : f.kind === "curtain" ? (
               // The venue's curtain as a hired drape prints: the band in the elements' grey, pleated,
               // in the pieces its doors leave it, round the bow on a curved wall.
-              <CurtainCloth pieces={pieces ?? []} depthMm={CURTAIN_DEPTH_MM} fill={MONO.feature} ink={INK} opacity={0.6} />
+              <CurtainCloth pieces={pieces ?? []} depthMm={CURTAIN_DEPTH_MM} fill={MONO.feature} ink={INK} opacity={0.6} style={f.curtain?.style} rodInk={INK} />
             ) : f.kind === "fountain" ? (
               // A fountain as the catalog's prints: white basin, ink lines.
               <ItemSymbol kind="fountain" footprint={fp} count={1} print ink={INK} tone="#ffffff" />
@@ -1568,6 +1582,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
               fillOpacity={f.style?.fillOpacity}
               ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : INK}
               opacity={0.5}
+              style={f.curtain?.style}
+              rodInk={INK}
             />
           ) : (
             <FootprintShape
@@ -1699,7 +1715,7 @@ export function PlacementGlyph({
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
         {!symbol && !block && (
           <g transform={lift}>
@@ -1720,7 +1736,7 @@ export function PlacementGlyph({
             <ItemSurface appearance={r?.product.appearance} footprint={footprint} color={own} seed={placement.id} />
           </g>
         )}
-        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} />}
+        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} />}
       </g>
     );
   }
@@ -1731,7 +1747,7 @@ export function PlacementGlyph({
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
@@ -1746,8 +1762,12 @@ export function PlacementGlyph({
           vectorEffect="non-scaling-stroke"
         />
       </g>
-      {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. */}
-      {rug && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} />}
+      {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. Its
+          contour (lib/catalog/border.ts) is a step darker than the rug's own grey, so a bordered rug
+          still reads as one photocopied. */}
+      {rug && patternBox && (
+        <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} />
+      )}
     </g>
   );
 }

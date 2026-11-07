@@ -5,6 +5,8 @@
 // table — design intent, serialisable, renderer-agnostic plain data — not a rendering concern.
 // resolveStyle (lib/element-style.ts) is what turns it into pixels, and it lives outside this file.
 import type { ElementStyle } from "../element-style";
+import type { Rail } from "../studio/rail";
+import type { Border } from "../catalog/border";
 
 export type Layer = "table" | "floor" | "ceiling";
 
@@ -115,8 +117,17 @@ export interface Placement {
   position: Point;
   rotation: number;
   scale: number;
-  /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. */
+  /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. LEGACY:
+   *  read into a `wall` rail by railOf (lib/studio/rail.ts); nothing new writes it. */
   span?: WallSpan;
+  /** What a curtain hangs along (lib/studio/rail.ts): a stretch of a wall, of a side of a thing with
+   *  height, a free-standing rod. When set, `position` is ignored — the rail places it. Absent on a
+   *  drape = its legacy `span`. */
+  rail?: Rail;
+  /** A curtain's DROP, mm — how far its cloth comes down from its rail. Absent = to the floor (the
+   *  user: "mostly always touch the floor"). A drawing fact for the 3D room; the quote bills the
+   *  rail's length either way. */
+  dropMm?: number;
   /** For an arrangement (lib/catalog/vessel.ts): the vase or jug it stands in, a `vases` variant id;
    *  null = none on this plan, whatever its row says; absent = its row's own (`categoryFields.vessel`).
    *  Packed and counted beside it, drawn under it. */
@@ -136,6 +147,10 @@ export interface Placement {
    *  measurement, kept when the rug is stretched; held to the rug's size when drawn). Absent = square
    *  corners. A drawing fact like `bows`. */
   corners?: [number, number, number, number];
+  /** A RUG's or a CLOTH's contour on THIS plan (lib/catalog/border.ts) — overriding its row's
+   *  (MapAppearance.border); null = none on this plan, whatever the row says; absent = the row's own.
+   *  The vessel's rule. A drawing fact like `bows`: nothing priced or packed reads it. */
+  border?: Border | null;
   /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
    *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
    *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */

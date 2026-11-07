@@ -79,6 +79,9 @@ import { NumberField } from "@/components/number-field";
 import { Segmented } from "@/components/segmented";
 import { StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
+import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
+import { curtainStyleOf } from "@/lib/catalog/symbols";
+import { pergolaPostOf } from "@/lib/venues/pergola";
 import { AppearancePreview, PlanContent } from "./appearance-preview";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { IconPicker } from "./icon-picker";
@@ -88,6 +91,10 @@ import { ItemSurface } from "@/components/surface-fill";
 import { hasSurface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
+import { FootprintBorder } from "@/components/item-symbol";
+import { BorderFields } from "@/components/border-fields";
+import { Swatch } from "@/components/swatch-field";
+import { borderOf, newBorder, takesBorder } from "@/lib/catalog/border";
 import {
   CANDLE_STYLES,
   CANDLE_STYLE_HINT,
@@ -103,7 +110,6 @@ import {
   type DrawStyle,
   type SymbolKind,
 } from "@/lib/catalog/symbols";
-import { pergolaPostOf } from "@/lib/venues/pergola";
 import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { FlowerDrawing } from "@/components/flower-symbol";
@@ -1642,6 +1648,18 @@ export function AppearanceModal({
               <div className="flex h-full flex-col items-center justify-center gap-4 p-8 pb-24">
                 <AppearancePreview product={preview} className="max-h-[70%] w-full max-w-md" />
                 <p className="text-center text-xs text-muted">{`${category?.label ?? "פריטים אלה"} נמדדים על התוכנית — הגודל נקבע כשמותחים אותם באירוע.`}</p>
+                {/* A curtain's style (SYMBOL_STYLES.curtain, spec 2026-11-07 §6.5) — the plan and the 3D
+                    only; the quote bills its length whatever it is. */}
+                {draft.category === "curtains" && (
+                  <div className="w-full max-w-md">
+                    <CurtainStyleTiles
+                      value={curtainStyleOf(preview)}
+                      tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
+                      onPick={(symbolStyle) => setAppearance({ symbolStyle })}
+                      labelClassName={fieldLabelClassName}
+                    />
+                  </div>
+                )}
               </div>
             ) : (
               <PlanCanvas
@@ -1910,9 +1928,15 @@ export function AppearanceModal({
                             drawStyle={drawStyleOf(preview)}
                             postMm={pergolaPostOf(preview)}
                             rise={climbRise(preview)}
+                            border={previewSymbol === "runner" ? borderOf(undefined, preview) : undefined}
                           />
                         ) : (
-                          <PlanContent content={resolveContent(preview)} w={drawn.w} h={drawn.h} at={labelAnchor(footprint)} />
+                          <>
+                            {/* A cloth's contour, inside the outline being drawn — on the plan it is the
+                                hem round the table the cloth falls over. */}
+                            {borderOf(undefined, preview) && <FootprintBorder footprint={footprint} border={borderOf(undefined, preview)!} />}
+                            <PlanContent content={resolveContent(preview)} w={drawn.w} h={drawn.h} at={labelAnchor(footprint)} />
+                          </>
                         )}
                       </g>
                     )}
@@ -2009,6 +2033,28 @@ export function AppearanceModal({
                             : "לחצו על צד כדי שלא יוצבו בו כסאות — שולחן ראש, שולחן צמוד לקיר."}
                           {seatCount === 0 && " (כמות הכסאות התקנית נקבעת בטופס המוצר.)"}
                         </Note>
+                      </Popover>
+                    )}
+                    {/* A rug's or a cloth's contour (lib/catalog/border.ts) — the row's; a plan may give a
+                        placement its own or none. */}
+                    {takesBorder(draft) && (
+                      <Popover
+                        label="קונטור"
+                        leading={<Swatch color={draft.appearance?.border?.colour} size={14} />}
+                        value={draft.appearance?.border ? `${Math.round(draft.appearance.border.widthMm) / 10} ס״מ` : "ללא"}
+                        panelClassName="w-80"
+                      >
+                        <div className="space-y-2">
+                          <SwitchRow
+                            checked={!!draft.appearance?.border}
+                            onChange={(on) => setAppearance({ border: on ? newBorder(draft.category) : undefined })}
+                            label="קונטור"
+                            hint={draft.category === "rugs" ? "פס צבעוני לאורך שולי השטיח, בתוך הקצה." : "פס צבעוני לאורך שולי המפה."}
+                          />
+                          {draft.appearance?.border && (
+                            <BorderFields border={draft.appearance.border} category={draft.category} onChange={(border) => setAppearance({ border })} idPrefix="a-border" />
+                          )}
+                        </div>
                       </Popover>
                     )}
                     <Popover label="מראה" icon={Paintbrush} panelClassName="w-80">

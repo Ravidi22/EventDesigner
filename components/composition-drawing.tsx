@@ -20,6 +20,7 @@ import { ClothDrape, ItemSymbol, SeatChair } from "./item-symbol";
 import { ChairBlock } from "./chair-block";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "./vessel-mark";
+import { borderOf } from "@/lib/catalog/border";
 
 // A composite catalog item (Product.composition, lib/catalog/composition.ts) drawn the way the plan
 // will draw it once placed: its tables in their cloths with their chairs round them (a block's round
@@ -95,7 +96,7 @@ export function CompositionPieces({
       ))}
       {ghost && (
         <g>
-          {ghostColour && <ClothDrape footprint={ghost} colour={ghostColour} />}
+          {ghostColour && <ClothDrape footprint={ghost} colour={ghostColour} border={ghostCloth ? borderOf(ghostCloth, resolve(ghostCloth.variantId)?.product) : undefined} />}
           <FootprintShape
             footprint={ghost}
             fill={ghostColour ?? "var(--color-surface)"}
@@ -121,7 +122,7 @@ export function CompositionPieces({
         const f = tableFootprint(t);
         return (
           <g key={t.id} transform={tableTransform(t.position, t.rotation, t.mirrored)}>
-            {clothColour && <ClothDrape footprint={f} colour={clothColour} />}
+            {clothColour && <ClothDrape footprint={f} colour={clothColour} border={cloth ? borderOf(cloth, resolve(cloth.variantId)?.product) : undefined} />}
             <FootprintShape
               footprint={f}
               fill={clothColour ?? style.fill}
@@ -191,6 +192,7 @@ function Piece({ placement: p, at, rotation, footprint, overhead }: { placement:
           postMm={pergolaPostOf(product)}
           rise={symbol === "stairs" || symbol === "ramp" ? climbRise(product, p.climb) : undefined}
           detail={false}
+          border={symbol === "runner" ? borderOf(p, product) : undefined}
         />
       ) : (
         <FootprintShape

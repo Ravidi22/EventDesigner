@@ -1185,6 +1185,7 @@ const FeatureNode = memo(function FeatureNode({
                       fillOpacity={f.style?.fillOpacity}
                       ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : "var(--color-ink)"}
                       opacity={isDark(f.style?.fill ?? CURTAIN_FILL) ? 0.45 : 0.35}
+                      style={f.curtain?.style}
                     />
                     <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={selected ? 2 : 0} strokeDasharray={selected ? "4 3" : undefined} vectorEffect="non-scaling-stroke" />
                   </>

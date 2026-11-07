@@ -41,7 +41,10 @@ export type SymbolKind =
   | "bench"
   | "lamp"
   | "gate"
-  | "pergola";
+  | "pergola"
+  /** A curtain's cloth — never a picture of its own (a drape is drawn along its rail, not in a
+   *  footprint, so no category maps here); the key its versions (SYMBOL_STYLES.curtain) hang on. */
+  | "curtain";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -204,6 +207,14 @@ export type GateStyle = "square" | "arched";
 /** A pergola's roof (lib/venues/pergola.ts PergolaRoof) — slats, a solid deck, a stretched cloth, or
  *  the beams alone. */
 export type PergolaStyle = PergolaRoof;
+/** How a curtain's cloth is gathered (spec 2026-11-07 §6.5 — the drawing and the 3D only; the quote
+ *  bills the rail's length whatever the style): waves (what every drape always drew), pinch (tight
+ *  regular pleats), sheer (a straight soft band), swag (scallops), ruffle (a dense fine wave). */
+export type CurtainStyle = "waves" | "pinch" | "sheer" | "swag" | "ruffle";
+export const CURTAIN_STYLES: readonly CurtainStyle[] = ["waves", "pinch", "sheer", "swag", "ruffle"];
+export function isCurtainStyle(s: unknown): s is CurtainStyle {
+  return typeof s === "string" && (CURTAIN_STYLES as readonly string[]).includes(s);
+}
 
 export type DrawStyle =
   | CandleStyle
@@ -217,7 +228,8 @@ export type DrawStyle =
   | ArchStyle
   | LampStyle
   | GateStyle
-  | PergolaStyle;
+  | PergolaStyle
+  | CurtainStyle;
 
 export interface SymbolStyleSet {
   /** The editor's heading over the tiles. */
@@ -419,7 +431,33 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
     hint: PERGOLA_ROOF_HINT,
     sample: () => rect(4000, 3000),
   },
+  curtain: {
+    title: "סוג הווילון",
+    styles: CURTAIN_STYLES,
+    label: {
+      waves: "גלים",
+      pinch: "קפלים צפופים",
+      sheer: "וילון שקוף",
+      swag: "קשתות",
+      ruffle: "סלסול",
+    },
+    hint: {
+      waves: "גלים רכים לאורך המסילה — הווילון הרגיל",
+      pinch: "קפלים צרים וסדורים, תפורים למעלה",
+      sheer: "בד שקוף ונופל ישר, כמעט בלי גלים",
+      swag: "קשתות של בד בין נקודות התלייה",
+      ruffle: "גל צפוף ודק לכל האורך",
+    },
+    sample: () => rect(2400, 320),
+  },
 };
+
+/** A curtain row's style (SYMBOL_STYLES.curtain), from its appearance — a drape has no footprint
+ *  picture, so drawStyleOf's category lookup never reaches it. Undefined = waves. */
+export function curtainStyleOf(product: Product | undefined): CurtainStyle | undefined {
+  const s = product?.appearance?.symbolStyle;
+  return product?.category === "curtains" && isCurtainStyle(s) && s !== "waves" ? s : undefined;
+}
 
 /** The drawing style of any picture that has versions besides a chair's (chairStyleOf): a
  *  candlestick's, or one of SYMBOL_STYLES. Undefined = the category's default picture. */

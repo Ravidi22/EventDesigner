@@ -12,13 +12,14 @@ import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { CATEGORY_BY_ID, anchorOf } from "@/lib/catalog/categories";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
-import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "@/components/vessel-mark";
 import { resolve } from "@/lib/studio/catalog-resolver";
+import { borderOf } from "@/lib/catalog/border";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
@@ -34,7 +35,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
     return (
       <svg viewBox="-1400 -700 2800 1400" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
         <rect x={-1200} y={-160} width={2400} height={320} fill={colour} stroke="currentColor" strokeOpacity={0.5} strokeWidth={1} vectorEffect="non-scaling-stroke" />
-        <DrapePleats lengthMm={2400} depthMm={320} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.5 : 0.35} />
+        <DrapePleats lengthMm={2400} depthMm={320} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.5 : 0.35} style={curtainStyleOf(product)} />
       </svg>
     );
   }
@@ -93,12 +94,13 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           drawStyle={drawStyleOf(product)}
           postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
+          border={symbol === "runner" ? borderOf(undefined, product) : undefined}
         />
         {vessel && <VesselMark variantId={vessel} pass="over" holder={f} />}
         </>
       ) : (
         <>
-          {cloth && <ClothDrape footprint={f} colour={resolved.fill} />}
+          {cloth && <ClothDrape footprint={f} colour={resolved.fill} border={borderOf(undefined, product)} />}
           {shape}
           {surfaced && (
             <>
@@ -106,7 +108,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
               <FootprintShape footprint={f} fill="none" stroke={resolved.stroke} strokeWidth={resolved.strokeWidth} vectorEffect="non-scaling-stroke" />
             </>
           )}
-          {product.category === "rugs" && f.kind === "rect" && <RugPattern w={f.widthMm} h={f.depthMm} />}
+          {product.category === "rugs" && f.kind === "rect" && <RugPattern w={f.widthMm} h={f.depthMm} border={borderOf(undefined, product)} />}
           {/* A cloth is the table's surface on the plan, never labelled there — so not here either. */}
           {!cloth && <PlanContent content={content} w={w} h={h} at={labelAnchor(f)} />}
         </>

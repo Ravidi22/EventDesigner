@@ -1,5 +1,12 @@
 import type { DesignDocumentContent, DesignGroup, DesignTable, Placement } from "../design-document/types";
+import { railMoved, type Rail } from "./rail";
 import { isMain } from "../self-check";
+
+/** A rail made of its own points — a rod, a run, a canopy — names nothing in the room. */
+function ownsItsRail(p: Pick<Placement, "rail">): boolean {
+  const t: Rail["type"] | undefined = p.rail?.type;
+  return t === "rod" || t === "run" || t === "canopy";
+}
 
 // The studio's clipboard: what Ctrl+C took, and what Ctrl+V has to do to it before it can be added
 // to a document.
@@ -65,7 +72,9 @@ export function copySelection(
   const placementIds = new Set(refs.filter((r) => r.kind === "placement").map((r) => r.id));
   const tables = doc.tables.filter((t) => tableIds.has(t.id));
   const placements = doc.placements.filter((p) => {
-    if (anchoredToWall(p.variantId)) return false;
+    // …but a curtain on a rod of its own (lib/studio/rail.ts) names no wall and no thing: it is
+    // copied, and pasted a step along like any free item.
+    if (anchoredToWall(p.variantId) && !ownsItsRail(p)) return false;
     // A stage's banquette dressing comes with the stage, as a table's dressing comes with the table —
     // and so does what hangs OVER the table (Placement.over).
     return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.over !== undefined && tableIds.has(p.over)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || placementIds.has(p.id);
@@ -170,6 +179,8 @@ export function pasteInto(
     // A table-layer item's `position` is an offset within its table, not a point on the plan, so it
     // must NOT take the paste delta — the renderer clusters those onto the table itself.
     position: p.tableId === undefined ? { x: p.position.x + opts.dx, y: p.position.y + opts.dy } : p.position,
+    // A rail of its own points (a rod) moves with the paste; one on a wall or a thing stays on it.
+    ...(p.rail ? { rail: railMoved(p.rail, opts.dx, opts.dy) } : {}),
     // Never born locked (see the tables above).
     locked: undefined,
   }));
@@ -264,6 +275,11 @@ if (isMain(import.meta.url)) {
   // A drape is never copied, even when it is what was selected.
   const drape = copySelection(doc, [{ kind: "placement", id: "p-drape" }], isDrape);
   assert(clipCount(drape) === 0, "a wall-anchored drape has no second wall and is not copied");
+  const rodDoc: DesignDocumentContent = { ...doc, placements: [{ ...free("p-rod", "curtain", 0, 0), rail: { type: "rod", points: [{ x: 0, y: 0 }, { x: 3000, y: 0 }], heightMm: 2400 } }] };
+  const rodClip = copySelection(rodDoc, [{ kind: "placement", id: "p-rod" }], isDrape);
+  const rodPasted = pasteInto(rodClip, { dx: 500, dy: 200, firstNumber: 1, newId: () => "n" });
+  const pastedRail = rodPasted.placements[0]?.rail;
+  assert(clipCount(rodClip) === 1 && pastedRail?.type === "rod" && pastedRail.points[1].x === 3500 && pastedRail.points[1].y === 200, "a curtain on its own rod is copied, and its rod pasted a step along");
 
   // Selecting a table AND one of its items copies that item once, not twice.
   const both = copySelection(doc, [{ kind: "table", id: "t1" }, { kind: "placement", id: "p-vase" }], isDrape);
