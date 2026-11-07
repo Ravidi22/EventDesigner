@@ -103,6 +103,7 @@ import {
   type DrawStyle,
   type SymbolKind,
 } from "@/lib/catalog/symbols";
+import { pergolaPostOf } from "@/lib/venues/pergola";
 import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { FlowerDrawing } from "@/components/flower-symbol";
@@ -1907,6 +1908,7 @@ export function AppearanceModal({
                             overhead={preview.layer === "ceiling"}
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
+                            postMm={pergolaPostOf(preview)}
                             rise={climbRise(preview)}
                           />
                         ) : (

@@ -19,6 +19,7 @@
 import type { Product } from "./types";
 import { isRunner } from "./categories";
 import type { Footprint } from "@/lib/studio/footprint";
+import { PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, PERGOLA_ROOFS, type PergolaRoof } from "@/lib/venues/pergola";
 
 export type SymbolKind =
   | "candlestick"
@@ -39,7 +40,8 @@ export type SymbolKind =
   | "ramp"
   | "bench"
   | "lamp"
-  | "gate";
+  | "gate"
+  | "pergola";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -63,6 +65,8 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   arches: "arch",
   // Two columns joined overhead — a straight lintel or an arch — that guests walk through.
   gates: "gate",
+  // Posts, beams and a roof across them (lib/venues/pergola.ts) — the venue's own pergola too.
+  pergolas: "pergola",
   chuppahs: "chuppah",
   bars: "bar",
   // A flight or a ramp standing on its own (lib/studio/climb-item.ts): its step edges and the line
@@ -92,6 +96,9 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   if (kind === "stairs" || kind === "ramp") return footprint.kind === "rect" ? kind : null;
   if (kind === "bench") return footprint.kind === "circle" ? null : kind;
   if (kind === "bar") return kind;
+  // A pergola is posts on its OUTLINE's corners and a roof clipped to it, so any outline will do —
+  // a hand-drawn one, bowed or rounded (lib/venues/pergola.ts).
+  if (kind === "pergola") return kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 
@@ -194,6 +201,9 @@ export type ArchStyle = "floral" | "corner" | "draped" | "bare";
 export type LampStyle = "empire" | "drum" | "mushroom" | "globe";
 /** A gate's ENTRANCE: square under a straight lintel, or round under an arch. */
 export type GateStyle = "square" | "arched";
+/** A pergola's roof (lib/venues/pergola.ts PergolaRoof) — slats, a solid deck, a stretched cloth, or
+ *  the beams alone. */
+export type PergolaStyle = PergolaRoof;
 
 export type DrawStyle =
   | CandleStyle
@@ -206,7 +216,8 @@ export type DrawStyle =
   | FountainStyle
   | ArchStyle
   | LampStyle
-  | GateStyle;
+  | GateStyle
+  | PergolaStyle;
 
 export interface SymbolStyleSet {
   /** The editor's heading over the tiles. */
@@ -399,6 +410,14 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
       arched: "שני עמודים וקשת עגולה ביניהם",
     },
     sample: () => rect(3000, 650),
+  },
+  // A pergola's roof: slats first — what a row with no style is drawn with, stored as none.
+  pergola: {
+    title: "גג הפרגולה",
+    styles: PERGOLA_ROOFS,
+    label: PERGOLA_ROOF_LABEL,
+    hint: PERGOLA_ROOF_HINT,
+    sample: () => rect(4000, 3000),
   },
 };
 

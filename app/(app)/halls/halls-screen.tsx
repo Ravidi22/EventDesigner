@@ -124,6 +124,8 @@ import { newSeatingFeature } from "@/lib/venues/seating";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { pergolaOf } from "@/lib/venues/pergola";
 import { defineColumns } from "@/lib/venues/column";
 import { curtainEndT, curtainPatch, newCurtain, syncCurtains } from "@/lib/venues/curtain";
 import {
@@ -2869,6 +2871,8 @@ const SEATING_PREVIEW_BOX = (() => {
 const COLUMN_PREVIEW = newFeature("column", { x: 0, y: 0 });
 // The fountain on its card: the catalog's own picture at a new one's size.
 const FOUNTAIN_PREVIEW = newFeature("fountain", { x: 0, y: 0 });
+// The pergola on its card: a new one (4 × 4, 15cm posts, slats) drawn as it will be placed.
+const PERGOLA_PREVIEW = newFeature("pergola", { x: 0, y: 0 });
 
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
@@ -2890,6 +2894,16 @@ function ToolPreview({ tool }: { tool: AddTool }) {
       <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
         <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-8 w-8" aria-hidden>
           <ColumnGlyph f={COLUMN_PREVIEW} fill="var(--color-surface)" stroke="var(--color-muted)" strokeWidth={1.25} />
+        </svg>
+      </span>
+    );
+  }
+  if (tool.kind === "pergola" && !tool.product) {
+    const s = PERGOLA_PREVIEW.widthMm * 1.15;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
+          <PergolaGlyph footprint={featureFootprint(PERGOLA_PREVIEW)} pergola={pergolaOf(PERGOLA_PREVIEW)} stroke="var(--color-muted)" postFill="var(--color-ink-soft)" />
         </svg>
       </span>
     );

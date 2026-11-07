@@ -36,6 +36,7 @@ import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
@@ -4401,6 +4402,7 @@ function PlacementNodeView({
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          postMm={pergolaPostOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}
           mirrored={rise ? placement.mirrored : undefined}
