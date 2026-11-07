@@ -325,10 +325,19 @@ export function rugFringe(widthMm: number, depthMm: number, shape: RugShape | un
  *  centre, like rugOutline. `roundMm` is the corner the canvas draws a plain rug's rectangle with (its
  *  rx), so the band does not poke past it; a shaped rug brings its own corners. */
 export function rugBorderBands(widthMm: number, depthMm: number, shape: RugShape | undefined, border: Border, roundMm = 0): BorderBand[] {
+  // Kept for the last few rugs asked about: a bowed, rounded rug's true insets cost a few ms, and one
+  // rug is drawn by the canvas, every printed sheet and the 3D room alike.
+  const key = `${widthMm}|${depthMm}|${roundMm}|${JSON.stringify(shape ?? null)}|${JSON.stringify(border)}`;
+  const hit = BAND_CACHE.get(key);
+  if (hit) return hit;
   const s = shape ?? (roundMm > 0 ? { corners: [roundMm, roundMm, roundMm, roundMm] as RugCorners } : undefined);
   const { outline, edgeCurves } = rugOutline(widthMm, depthMm, s);
-  return borderBands({ outline, ...(edgeCurves.some(Boolean) ? { edgeCurves } : {}) }, border);
+  const bands = borderBands({ outline, ...(edgeCurves.some(Boolean) ? { edgeCurves } : {}) }, border);
+  if (BAND_CACHE.size >= 48) BAND_CACHE.delete(BAND_CACHE.keys().next().value!);
+  BAND_CACHE.set(key, bands);
+  return bands;
 }
+const BAND_CACHE = new Map<string, BorderBand[]>();
 
 // ponytail: self-check. Run: npm run check:rug-shape
 if (isMain(import.meta.url)) {
