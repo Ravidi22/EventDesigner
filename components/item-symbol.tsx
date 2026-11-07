@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
 import { footprintOutlines, type Footprint } from "@/lib/studio/footprint";
+import { evenInset } from "@/lib/studio/footprint";
 import {
   CLOTH_DROP_MM,
   type ArchStyle,
@@ -24,6 +25,8 @@ import { benchLayoutFor, type BenchLayout } from "@/lib/design-document/bench";
 import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
+import { PergolaGlyph } from "./pergola-glyph";
+import { pergolaFromStyle } from "@/lib/venues/pergola";
 import { pleatsAlongD } from "./curtain-cloth";
 import { CeilingDrapeSymbol, SailSymbol } from "./ceiling-cloth";
 import type { CurtainStyle } from "@/lib/catalog/symbols";
@@ -83,6 +86,8 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   lamp: "#FBF6EC",
   // Cast stone, which most gates hired for an event imitate.
   gate: "#F1ECE3",
+  // Weathered timber, which most pergolas are (a white metal one says so through its shade).
+  pergola: "#B89A74",
   // Ivory voile — a drape's cloth when its shade says nothing (never drawn as a footprint picture).
   curtain: "#F3EDE2",
   // Sailcloth and the same voile overhead (components/ceiling-cloth.tsx).
@@ -130,12 +135,26 @@ export interface ItemSymbolProps {
    *  chairs along its back. `chairs: false` leaves the chairs off (a sheet that hides every chair). */
   bench?: BenchLayout;
   chairs?: boolean;
+  /** For a pergola: its post's square in mm (the row's categoryFields.postMm, pergolaPostOf — lib/
+   *  venues/pergola.ts). Absent = a new pergola's. Its roof is `drawStyle`. */
+  postMm?: number;
   /** For a runner: its contour (lib/catalog/border.ts) — bands along its edge in their colours, its
    *  tassels in the fringe's. Absent = its stitched hem, as always. */
   border?: Border;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true, border }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm }: ItemSymbolProps) {
+  // A pergola — posts on its outline's corners, its roof across them — is the venue's own drawing
+  // (components/pergola-glyph.tsx), on ANY outline: a bowed or rounded one too (symbolOf lets it
+  // through), so it is drawn before the primitive-box rule below. On paper its posts are solid ink.
+  if (kind === "pergola") {
+    const wood = print ? tone || "#ffffff" : tone || DEFAULT_TONE.pergola;
+    return (
+      <g className="pointer-events-none">
+        <PergolaGlyph footprint={footprint} pergola={pergolaFromStyle(drawStyle, postMm)} stroke={ink} strokeOpacity={print ? 1 : 0.75} postFill={print ? ink : wood} fabric={wood} />
+      </g>
+    );
+  }
   const { w, h, round } = boxOf(footprint);
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
@@ -2119,6 +2138,7 @@ function RugPatternView({
   border,
   rx = 0,
   flat,
+  footprint,
 }: {
   w: number;
   h: number;
@@ -2128,7 +2148,39 @@ function RugPatternView({
   border?: Border;
   rx?: number;
   flat?: string;
+  /** A carpet laid to an OUTLINE (Placement.outline, lib/studio/cover.ts — over a surface or a stage),
+   *  centred: the border and the weave follow it instead of the w×h rectangle. No fringe — an
+   *  arbitrary outline has no short ends a rug is woven from. */
+  footprint?: Footprint;
 }) {
+  if (footprint) {
+    if (border) {
+      return (
+        <g className="pointer-events-none">
+          <BandPaths bands={footprintBorderBands(footprint, border)} flat={flat} />
+        </g>
+      );
+    }
+    // The weave: the same two lines a rectangle's border is drawn with, the outline pulled in.
+    const m = Math.min(w, h);
+    const b1 = Math.min(m * 0.07, 160);
+    const b2 = Math.min(m * 0.12, 260);
+    const line = { fill: "none", stroke: ink, vectorEffect: "non-scaling-stroke" as const, strokeWidth: 1 };
+    return (
+      <g className="pointer-events-none" opacity={opacity}>
+        {footprintOutlines(footprint).map((o, i) => {
+          const inner = evenInset(o, b1);
+          const outer = m > b2 * 3 ? evenInset(o, b2) : null;
+          return (
+            <g key={i}>
+              {inner && <path d={outlinePathD(inner.outline, inner.edgeCurves)} {...line} strokeOpacity={0.3} />}
+              {outer && <path d={outlinePathD(outer.outline, outer.edgeCurves)} {...line} strokeOpacity={0.18} strokeDasharray="3 3" />}
+            </g>
+          );
+        })}
+      </g>
+    );
+  }
   if (border) {
     const fr = fringeOf(border, "rugs");
     const len = Math.min(70, Math.min(w, h) * 0.05);

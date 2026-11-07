@@ -106,6 +106,13 @@ import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venu
 import { SquareSquare } from "lucide-react";
 import { setWallHeight } from "@/lib/venues/structure";
 import { rimPatch, rimSpecOf, takesRim } from "@/lib/venues/rim";
+// The pergola round of 2026-11-07 (spec §5): its own panel.
+import { RotateCw } from "lucide-react";
+import { TagToggle } from "@/components/tag-toggle";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { NEW_PERGOLA, PERGOLA_ROOFS, PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, pergolaGeometry, pergolaOf, pergolaPatch, pergolaSides, type Pergola } from "@/lib/venues/pergola";
+import { featureFootprint } from "@/lib/venues/structure";
+import type { Footprint } from "@/lib/studio/footprint";
 
 // The selection bar of the hall editor — the same `Bar` of chips the sketch puts under a selected
 // table (components/inspector-bar.tsx), at the bottom centre of the canvas, each chip a small
@@ -909,6 +916,7 @@ export function SelectionBar({
     bound ? `ממלא שטח סגור · ${Math.round(polygonAreaMm2(featureWorldOutline(feature)) / 1_000_000)} מ״ר` : size,
     band !== null && feature.kind === "bar" ? `דלפק ${Math.round(band / 10)} ס״מ` : null,
     column ? `עמוד ⌀ ${cmOf(column.shaftMm)} ס״מ` : null,
+    feature.kind === "pergola" ? `${PERGOLA_ROOF_LABEL[pergolaOf(feature).roof]} · עמוד ${cmOf(pergolaOf(feature).postMm)} ס״מ` : null,
     !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null,
     feature.locked ? "נעול" : null,
   ]
@@ -1209,6 +1217,9 @@ export function SelectionBar({
         </Popover>
       )}
 
+      {/* A pergola's own panel (lib/venues/pergola.ts): its roof, its slats, its posts, its closed sides. */}
+      {feature.kind === "pergola" && <PergolaPopover feature={feature} onPatch={patch} />}
+
       {/* A pool's שפה, a surface's edging (lib/venues/rim.ts): a band INSIDE the outline — the water
           (or the surface) shrinks to make room, the size in "מידות" stays the whole thing. Its width,
           what it is laid in, how far it stands up in 3D, its tint. Width 0 takes it away. */}
@@ -1435,3 +1446,77 @@ function CurtainLookFields({ feature, onPatch }: { feature: StructureFeature; on
     </div>
   );
 }
+
+/** The pergola's panel (lib/venues/pergola.ts): what is laid across the beams — four tiles, each the
+ *  plan's own drawing of it — the slats' direction (typed, or turned a quarter) and spacing, the
+ *  posts, and which sides carry a lattice, named by where they face (hollowSides — the catalog's
+ *  open-sides chips). Every number in cm, stored in mm. */
+function PergolaPopover({ feature, onPatch }: { feature: StructureFeature; onPatch: (p: Partial<Omit<StructureFeature, "id">>) => void }) {
+  const spec = pergolaOf(feature);
+  const footprint = featureFootprint(feature);
+  const geometry = pergolaGeometry(footprint, spec);
+  const sides = pergolaSides(footprint);
+  const closed = (spec.closedSides ?? []).filter((i) => i < sides.length);
+  const set = (p: Partial<Pergola>) => onPatch(pergolaPatch(feature, p));
+  const slatDeg = Math.round(geometry?.slatDeg ?? spec.slatDirectionDeg ?? 0);
+  return (
+    <Popover label="פרגולה" icon={FEATURE_ICON.pergola} value={`${PERGOLA_ROOF_LABEL[spec.roof]} · ${cmOf(spec.postMm)} ס״מ`} panelClassName="w-80">
+      <PanelRow label="גג" stack>
+        <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="גג">
+          {PERGOLA_ROOFS.map((roof) => {
+            const on = spec.roof === roof;
+            return (
+              <button
+                key={roof}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                title={PERGOLA_ROOF_HINT[roof]}
+                onClick={() => set({ roof })}
+                className={"flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " + (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")}
+              >
+                <svg viewBox="-2200 -1700 4400 3400" className="h-9 w-full" aria-hidden>
+                  <PergolaGlyph footprint={PERGOLA_TILE} pergola={{ ...NEW_PERGOLA, roof }} stroke="var(--color-ink-soft)" postFill="var(--color-ink-soft)" fabric="var(--color-accent)" />
+                </svg>
+                <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{PERGOLA_ROOF_LABEL[roof]}</span>
+              </button>
+            );
+          })}
+        </div>
+      </PanelRow>
+      {spec.roof !== "none" && (
+        <PanelRow label={spec.roof === "slats" ? "כיוון הרפפות (°)" : "כיוון (°)"} htmlFor="pergola-dir">
+          <BarButton icon={RotateCw} label="סיבוב ב־90°" onClick={() => set({ slatDirectionDeg: (slatDeg + 90) % 180 })} />
+          <NumberField id="pergola-dir" decimals={0} min={0} max={179} step={15} commitOnBlur value={slatDeg} onChange={(deg) => set({ slatDirectionDeg: deg })} className="w-20" />
+        </PanelRow>
+      )}
+      {spec.roof === "slats" && (
+        <PanelRow label="מרווח בין רפפות (ס״מ)" htmlFor="pergola-spacing">
+          <NumberField id="pergola-spacing" decimals={0} min={5} step={5} commitOnBlur value={cmOf(geometry?.spacingMm ?? spec.slatSpacingMm ?? 300)} onChange={(cm) => set({ slatSpacingMm: cm * 10 })} className="w-20" />
+        </PanelRow>
+      )}
+      <PanelRow label="עובי עמוד (ס״מ)" htmlFor="pergola-post">
+        <NumberField id="pergola-post" decimals={0} min={5} max={60} step={1} commitOnBlur value={cmOf(spec.postMm)} onChange={(cm) => set({ postMm: cm * 10 })} className="w-20" />
+      </PanelRow>
+      {sides.length > 0 && (
+        <PanelRow label="צדדים סגורים (סבכה)" stack>
+          <div className="flex flex-wrap gap-1">
+            {sides.map((s) => (
+              <TagToggle
+                key={s.index}
+                active={closed.includes(s.index)}
+                onClick={() => set({ closedSides: closed.includes(s.index) ? closed.filter((i) => i !== s.index) : [...closed, s.index] })}
+              >
+                {s.name}
+              </TagToggle>
+            ))}
+          </div>
+        </PanelRow>
+      )}
+      <Note>העמודים עומדים בפינות הקו (ולאורך קשת — כל כ־3 מ׳), והרפפות שומרות על המרווח כשמשנים את הגודל. שולחנות עומדים מתחתיה — רק העמודים נחשבים למכשול. לצורה אחרת: ״עריכת הקווים״.</Note>
+    </Popover>
+  );
+}
+
+/** The roof tiles' drawing: a small pergola, the same for each roof. */
+const PERGOLA_TILE: Footprint = { kind: "rect", widthMm: 4000, depthMm: 3000 };

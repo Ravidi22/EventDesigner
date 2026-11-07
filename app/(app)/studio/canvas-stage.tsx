@@ -20,6 +20,7 @@ import { clothView, SAIL_MAX_TIES } from "@/lib/studio/ceiling-cloth";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
+import { carpetFootprint, carpetPathD, carpetShape } from "@/lib/studio/cover";
 import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
 import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
@@ -43,6 +44,7 @@ import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { pergolaFromStyle, pergolaGeometry, pergolaPostOf, postSquare, type Pergola } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
@@ -273,6 +275,7 @@ export function CanvasStage({
   stairPick,
   onPickStair,
   onContextMenu,
+  onContextMenuAt,
   dressingTableId,
   onFocusTable,
   onExitDressing,
@@ -434,6 +437,10 @@ export function CanvasStage({
   /** The right-click menu for a set of things: the thing under the pointer (selected first, when
    *  it was not), or the whole selection when it was one of them or the click landed on floor. */
   onContextMenu?: (refs: SelectionRef[]) => ContextMenuItem[];
+  /** Rows about WHERE the right-click landed, whatever is selected — a venue surface takes no click
+   *  in the sketch, so "a carpet on this lawn" is only reachable through the point (lib/studio/
+   *  cover.ts). Put before the selection's rows; the menu opens on bare floor too when it has any. */
+  onContextMenuAt?: (point: Point, refs: SelectionRef[]) => ContextMenuItem[];
   /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
    *  items on it free to be dragged about its top. Null = the whole plan, as usual. A table in a
    *  GROUP brings the whole block with it — framed as the one table the block is, every member and
@@ -676,6 +683,9 @@ export function CanvasStage({
     const s = new Set<string>();
     for (const t of doc.tables) if (t.locked) s.add(`table:${t.id}`);
     for (const p of doc.placements) if (p.locked) s.add(`placement:${p.id}`);
+    // A carpet laid over a surface or a stage goes where that goes (lib/studio/cover.ts): no knob, no
+    // resize, never carried by a group drag of its own.
+    for (const p of doc.placements) if (p.cover) s.add(`placement:${p.id}`);
     return s;
   }, [doc.tables, doc.placements]);
   const isLocked = (r: SelectionRef) => lockedKeys.has(`${r.kind}:${r.id}`);
@@ -1868,11 +1878,11 @@ export function CanvasStage({
       selected={[]}
       onSelect={() => onSelect(null, false)}
       contextMenuItems={
-        onContextMenu
-          ? () => {
+        onContextMenu || onContextMenuAt
+          ? (point: Point) => {
               const refs = contextRefs.current ?? selection;
               contextRefs.current = null;
-              return refs.length ? onContextMenu(refs) : [];
+              return [...(onContextMenuAt?.(point, refs) ?? []), ...(refs.length && onContextMenu ? onContextMenu(refs) : [])];
             }
           : undefined
       }
@@ -2220,9 +2230,11 @@ export function CanvasStage({
                 <CarpetNode
                   placement={p}
                   selected={isSel("placement", p.id)}
-                  locked={p.locked}
+                  // A carpet laid OVER a surface or a stage (Placement.cover) is where that is: it
+                  // selects and opens like a pinned one, and takes no drag or grip.
+                  locked={p.locked || !!p.cover}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, !p.locked)}
+                  drag={nodeProps({ kind: "placement", id: p.id }, !p.locked && !p.cover)}
                   onResize={stable.resizePlacement}
                   onBow={onBowPlacement ? stable.bowPlacement : undefined}
                   onCorner={onCornerPlacement ? stable.cornerPlacement : undefined}
@@ -3268,10 +3280,15 @@ const CarpetNode = memo(function CarpetNode({
   const halfW = size.widthMm / 2;
   const halfD = size.depthMm / 2;
   const rot = placement.rotation || 0;
+  // A carpet laid to an OUTLINE — over a surface or a stage, or let go from one (lib/studio/cover.ts):
+  // that shape, its holes cut, centred on its box; no bows or rounded corners of its own (those are a
+  // rectangle's), and while it is laid OVER something no grip at all — its caller passes `locked`.
+  const carpet = carpetShape(placement);
+  const carpetFp = carpet ? carpetFootprint(carpet) : undefined;
   // Curved sides and rounded corners (lib/studio/rug-shape.ts): the same rug, about the same centre,
   // with the outline's sides bowed and its corners cut to arcs. The surface and picture are drawn
   // through a footprint the seams recentre on its bounds, so they are carried back by `centre`.
-  const rugShape = rugShapeOf(placement);
+  const rugShape = carpet ? undefined : rugShapeOf(placement);
   const bows = rugShape?.bows;
   const corners = rugShape?.corners;
   const bowed = rugShape ? rugOutline(size.widthMm, size.depthMm, rugShape) : null;
@@ -3301,7 +3318,9 @@ const CarpetNode = memo(function CarpetNode({
 
   return (
     <g transform={rot ? `rotate(${rot} ${x} ${y})` : undefined}>
-      {bowed ? (
+      {carpet ? (
+        <path {...shape} transform={`translate(${x} ${y})`} d={carpetPathD(carpet)} fillRule="evenodd" />
+      ) : bowed ? (
         <path {...shape} transform={`translate(${x} ${y})`} d={outlinePathD(bowed.outline, bowed.edgeCurves)} />
       ) : (
         <rect {...shape} x={x - halfW} y={y - halfD} width={size.widthMm} height={size.depthMm} rx={Math.min(size.widthMm, size.depthMm) * 0.03} />
@@ -3311,7 +3330,7 @@ const CarpetNode = memo(function CarpetNode({
           border and the handles. */}
       {anySurface(r?.product.appearance) && (
         <g transform={`translate(${x + (bowed?.centre.x ?? 0)} ${y + (bowed?.centre.y ?? 0)})`} className="pointer-events-none">
-          <ItemSurface appearance={r?.product.appearance} footprint={bowed?.footprint ?? { kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
+          <ItemSurface appearance={r?.product.appearance} footprint={carpetFp ?? bowed?.footprint ?? { kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
         </g>
       )}
       {/* A rug's border and fringe — the two things that make a rectangle on the floor a rug. On a
@@ -3320,13 +3339,13 @@ const CarpetNode = memo(function CarpetNode({
         <g transform={`translate(${x} ${y})`}>
           {/* Its contour (lib/catalog/border.ts) — this plan's, else its row's — in place of the woven
               line; on a plain rug laid inside the rectangle's own rounded corners. */}
-          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} border={borderOf(placement, r?.product)} rx={Math.min(size.widthMm, size.depthMm) * 0.03} />
+          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} border={borderOf(placement, r?.product)} rx={Math.min(size.widthMm, size.depthMm) * 0.03} footprint={carpetFp} />
         </g>
       )}
       {/* The middle of each side: pull it and the side curves, like the shape canvas's diamond. A
           double-click straightens that side again. */}
       {selected && !locked &&
-        onBow &&
+        onBow && !carpet &&
         [0, 1, 2, 3].map((side) => {
           const h = bowHandle(size.widthMm, size.depthMm, rugShape, side);
           const at = { x: x + h.x, y: y + h.y };
@@ -3381,7 +3400,7 @@ const CarpetNode = memo(function CarpetNode({
           squares that corner. It rides the arc's middle, a few pixels in, clear of the resize grip
           on the corner itself. */}
       {selected && !locked &&
-        onCorner &&
+        onCorner && !carpet &&
         [0, 1, 2, 3].map((i) => {
           const inset = ctx.mm(14);
           const g = inwardOf(i);
@@ -4318,6 +4337,19 @@ function samePlacementProps<P extends object>(a: P, b: P): boolean {
 
 const PlacementNode = memo(PlacementNodeView, samePlacementProps);
 
+/** What takes the pointer on an unselected pergola: a band along its outline and its posts. */
+function PergolaHit({ footprint, pergola }: { footprint: Footprint; pergola: Pergola }) {
+  const g = pergolaGeometry(footprint, pergola);
+  return (
+    <>
+      <FootprintShape footprint={footprint} fill="none" stroke="transparent" strokeWidth={14} vectorEffect="non-scaling-stroke" style={{ pointerEvents: "stroke" }} />
+      {g?.posts.map((p, i) => (
+        <polygon key={i} points={postSquare(p, g.postMm).map((q) => `${q.x},${q.y}`).join(" ")} fill="transparent" stroke="transparent" strokeWidth={10} vectorEffect="non-scaling-stroke" />
+      ))}
+    </>
+  );
+}
+
 function PlacementNodeView({
   placement,
   x,
@@ -4522,6 +4554,7 @@ function PlacementNodeView({
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          postMm={pergolaPostOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}
           mirrored={rise ? placement.mirrored : undefined}
@@ -4531,6 +4564,11 @@ function PlacementNodeView({
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
+      {/* A PERGOLA (lib/venues/pergola.ts) has tables standing under it: until it is selected it is
+          taken by its posts and a finger-wide band along its outline alone, never by the floor
+          inside it — the chandelier's rule (`grabbable`), for the same reason. Selected, its whole
+          footprint is its handle again (the invisible fill below). */}
+      {symbol === "pergola" && !selected && product && <PergolaHit footprint={footprint} pergola={pergolaFromStyle(drawStyleOf(product), pergolaPostOf(product))} />}
       {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
         // At the band's own label point for a shaped banquette (mid-band on a crescent, not the box
         // centre in the air it curves round) — a straight strip's is (0,0).
@@ -4556,7 +4594,7 @@ function PlacementNodeView({
           overhead={overhead}
           fill="#ffffff"
           fillOpacity={0}
-          className={overhead && !grabbable ? "pointer-events-none" : undefined}
+          className={(overhead && !grabbable) || (symbol === "pergola" && !selected) ? "pointer-events-none" : undefined}
           stroke={selected ? "var(--color-accent)" : overhead ? style.stroke : "none"}
           strokeOpacity={selected ? 1 : style.strokeOpacity}
           strokeWidth={selected ? 2 : 1}

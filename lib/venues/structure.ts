@@ -35,6 +35,7 @@ import { FALLBACK_CHAIR, NEW_BLOCK, chairRowsLayout } from "../design-document/c
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import type { FeatureClimb } from "./climb";
 import type { FeatureCurtain } from "./curtain";
+import { NEW_PERGOLA, pergolaOfProduct, type Pergola } from "./pergola";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -174,7 +175,11 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 //
 // A curtain (the user, same day: "a default וילון, like אמרה has in both halls — can be removed or
 // changed in the sketch") hangs on a WALL: its span is stored, its box derived (./curtain.ts).
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain";
+//
+// A pergola (2026-11-07, spec §5): posts at its outline's corners, beams along its sides, a roof of
+// slats, a deck, a cloth or nothing across them (./pergola.ts) — the one definition a hired pergola
+// in the catalog shares. Tables stand under it, so only its posts are in anyone's way.
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola";
 
 /** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
  *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
@@ -309,6 +314,9 @@ export interface StructureFeature {
   seating?: FeatureSeating;
   /** iff `kind === "column"`: the shaft and its base (./column.ts). Absent reads as a new column's. */
   column?: FeatureColumn;
+  /** iff `kind === "pergola"`: its posts, roof, slats and lattice sides (./pergola.ts). Absent reads
+   *  as a new pergola's. */
+  pergola?: Pergola;
   /** iff `kind === "curtain"`: the wall stretch it hangs on and which side (./curtain.ts). The box
    *  is derived from it and written with it; a curtain with no span keeps the box it has. */
   curtain?: FeatureCurtain;
@@ -381,6 +389,7 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   seating: "שורות כיסאות",
   fountain: "מזרקה",
   curtain: "וילון",
+  pergola: "פרגולה",
 };
 
 export interface VenueStructure {
@@ -844,6 +853,8 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   fountain: { widthMm: 3000, depthMm: 3000, heightMm: 1500, shape: "circle" },
   // A band along its wall (./curtain.ts re-lays it); no height of its own — it hangs from the ceiling.
   curtain: { widthMm: 4000, depthMm: 220, heightMm: 0, shape: "rect" },
+  // A 4 × 4 pergola, 2.6 m to the top of its slats (./pergola.ts).
+  pergola: { widthMm: 4000, depthMm: 4000, heightMm: 2600, shape: "rect" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
@@ -870,6 +881,9 @@ export function newFeature(kind: FeatureKind, at: Point, variant?: PlantSpecies 
   }
   if (kind === "seating") return { ...base, label: FEATURE_KIND_LABEL.seating, ...FEATURE_DEFAULTS.seating, seating: { ...NEW_BLOCK } };
   if (kind === "column") return { ...base, label: FEATURE_KIND_LABEL.column, ...FEATURE_DEFAULTS.column, column: { ...NEW_COLUMN } };
+  // Fixed in every sketch, like a column (featureMovable); at /halls it is dragged and sized as
+  // drawn until somebody pins it (`locked`).
+  if (kind === "pergola") return { ...base, label: FEATURE_KIND_LABEL.pergola, ...FEATURE_DEFAULTS.pergola, pergola: { ...NEW_PERGOLA } };
   return { ...base, label: FEATURE_KIND_LABEL[kind], ...FEATURE_DEFAULTS[kind] };
 }
 
@@ -923,6 +937,8 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
     // comes across as itself — with the band and opening its two numbers cannot say. A square ח
     // brings its measured counter depth the same way (uShapeBandOf).
     ...((shape === "oval-ring" || shape === "horseshoe" || shape === "rounded-u" || shape === "u-shape") && product.appearance?.ring ? { ring: product.appearance.ring } : {}),
+    // A hired pergola set down as the venue's own: its post and roof come across (./pergola.ts).
+    ...(kind === "pergola" ? { pergola: pergolaOfProduct(product) } : {}),
   };
 }
 
@@ -1207,6 +1223,14 @@ if (isMain(import.meta.url)) {
   const roundBar = newFeatureFromProduct("bar", { ...uBar, id: "p-round", dimensions: { diameterMm: 1500, heightMm: 1100 }, appearance: undefined }, { x: 0, y: 0 });
   assert(roundBar.shape === "circle" && roundBar.widthMm === 1500 && roundBar.depthMm === 1500, "a round bar is as wide as it is across");
   assert(featureFootprint(roundBar).kind === "circle", "…and draws as a circle of that width");
+
+  // A pergola (./pergola.ts): a new one is 4 × 4 × 2.6 on 15cm posts with slats, fixed in a sketch;
+  // a hired row set down at /halls brings its post and its roof across.
+  const pergola = newFeature("pergola", { x: 0, y: 0 });
+  assert(pergola.widthMm === 4000 && pergola.depthMm === 4000 && pergola.heightMm === 2600 && pergola.pergola?.postMm === 150 && pergola.pergola.roof === "slats", "a new pergola: 4 × 4, 2.6 m, 15cm posts, slats");
+  assert(!featureMovable(pergola), "…fixed in every sketch");
+  const pergolaRow = newFeatureFromProduct("pergola", { ...uBar, id: "p-perg", category: "pergolas", categoryFields: { postMm: 120 }, appearance: { shape: "rect", content: "none", symbolStyle: "fabric" } }, { x: 0, y: 0 });
+  assert(pergolaRow.kind === "pergola" && pergolaRow.pergola?.postMm === 120 && pergolaRow.pergola.roof === "fabric", "a pergola row lands with its post and its cloth roof");
 
   // A row drawn hollow comes across as the outline it resolves to — one keyhole, baked like the
   // arc — and a band opened into two pieces as its outer shape, solid: a feature is one outline.

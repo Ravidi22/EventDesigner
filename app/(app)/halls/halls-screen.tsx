@@ -124,6 +124,9 @@ import { newSeatingFeature } from "@/lib/venues/seating";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { pergolaOf } from "@/lib/venues/pergola";
+import { roofHeightAt } from "@/lib/venues/roofs";
 import { defineColumns } from "@/lib/venues/column";
 import { curtainEndPatch, newCurtain, newRailCurtain, syncCurtains } from "@/lib/venues/curtain";
 import { defaultRailHeight, nearestSideRail, sideCandidates } from "@/lib/studio/rail";
@@ -1643,7 +1646,9 @@ export function HallsScreen() {
    *  2026-11-07 §6.2 — 2.4 m under open sky; the bar types another). */
   const finishRod = (points: Point[]) => {
     setRodFrom(null);
-    const made = newRailCurtain(structure, { type: "rod", points, heightMm: defaultRailHeight(points[0]) });
+    // Under a roof the rod starts at it — a zone's ceiling, a building's, the pergola it stands
+    // under (lib/venues/roofs.ts); under open sky, the rod's 2.4 m.
+    const made = newRailCurtain(structure, { type: "rod", points, heightMm: defaultRailHeight(points[0], roofHeightAt(structure, resolved)) });
     if (!made) return;
     const { structure: next, featureId } = addFeature(structure, made);
     editStructure(() => next);
@@ -2907,6 +2912,8 @@ const SEATING_PREVIEW_BOX = (() => {
 const COLUMN_PREVIEW = newFeature("column", { x: 0, y: 0 });
 // The fountain on its card: the catalog's own picture at a new one's size.
 const FOUNTAIN_PREVIEW = newFeature("fountain", { x: 0, y: 0 });
+// The pergola on its card: a new one (4 × 4, 15cm posts, slats) drawn as it will be placed.
+const PERGOLA_PREVIEW = newFeature("pergola", { x: 0, y: 0 });
 
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
@@ -2928,6 +2935,16 @@ function ToolPreview({ tool }: { tool: AddTool }) {
       <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
         <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-8 w-8" aria-hidden>
           <ColumnGlyph f={COLUMN_PREVIEW} fill="var(--color-surface)" stroke="var(--color-muted)" strokeWidth={1.25} />
+        </svg>
+      </span>
+    );
+  }
+  if (tool.kind === "pergola" && !tool.product) {
+    const s = PERGOLA_PREVIEW.widthMm * 1.15;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
+          <PergolaGlyph footprint={featureFootprint(PERGOLA_PREVIEW)} pergola={pergolaOf(PERGOLA_PREVIEW)} stroke="var(--color-muted)" postFill="var(--color-ink-soft)" />
         </svg>
       </span>
     );

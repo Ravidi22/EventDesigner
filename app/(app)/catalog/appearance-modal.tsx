@@ -81,6 +81,7 @@ import { StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
 import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
+import { pergolaPostOf } from "@/lib/venues/pergola";
 import { AppearancePreview, PlanContent } from "./appearance-preview";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { IconPicker } from "./icon-picker";
@@ -1925,6 +1926,7 @@ export function AppearanceModal({
                             overhead={preview.layer === "ceiling"}
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
+                            postMm={pergolaPostOf(preview)}
                             rise={climbRise(preview)}
                             border={previewSymbol === "runner" ? borderOf(undefined, preview) : undefined}
                           />
