@@ -19,6 +19,8 @@ import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "@/components/vessel-mark";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { borderOf } from "@/lib/catalog/border";
+import { isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
+import { CeilingDrapeSymbol, SailSymbol } from "@/components/ceiling-cloth";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   const f = resolveFootprint(product);
@@ -26,6 +28,17 @@ export function AppearancePreview({ product, className }: { product: Product; cl
   const cat = CATEGORY_BY_ID[product.category];
   // The colour the plan draws it in when nothing else says: its first shade.
   const swatch = product.variants.find((v) => !v.archived && v.swatch)?.swatch;
+
+  // Nor has a sail or a ceiling drape: each is drawn to the points it is tied to (lib/studio/
+  // ceiling-cloth.ts), so it previews as one of itself — a sail on four ties, a scalloped swag.
+  if (isCeilingClothCategory(product.category)) {
+    const colour = swatch ?? product.appearance?.style?.fill ?? (product.category === "sails" ? "#F4F1EA" : "#F3EDE2");
+    return (
+      <svg viewBox="-2300 -1500 4600 3000" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
+        {product.category === "sails" ? <SailSymbol w={4000} h={2600} tone={colour} ink="currentColor" /> : <CeilingDrapeSymbol L={4200} D={1400} tone={colour} ink="currentColor" />}
+      </svg>
+    );
+  }
 
   // A drape has no width of its own — it is cut to whatever wall it hangs on — so it previews as a
   // length of itself: the band, its pleats, in its shade.

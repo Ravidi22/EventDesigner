@@ -75,6 +75,11 @@ export interface RunRail {
   b: Point;
   heightMm: number;
   sagMm?: number;
+  /** A ceiling drape's cloth across the line, mm (./ceiling-cloth.ts — spec §6.4). Absent = the 1.2 m
+   *  default; an LED strip ignores it. */
+  widthMm?: number;
+  /** How many scallops the cloth makes along the line. Absent = one per 1.5 m of it. */
+  waves?: number;
 }
 
 /** An AREA of parallel runs — a draped ceiling: the runs are cut across `outline` at `directionDeg`,
@@ -86,6 +91,10 @@ export interface CanopyRail {
   directionDeg: number;
   spacingMm: number;
   sagMm?: number;
+  /** Each run's cloth across its line, mm (./ceiling-cloth.ts). Absent = the 1.2 m default. */
+  widthMm?: number;
+  /** Scallops along EACH run. Absent = one per 1.5 m of that run. */
+  waves?: number;
 }
 
 /** A SHEET stretched between three or four ties, each at its own height — a sail (מפרש). */
@@ -904,6 +913,14 @@ if (isMain(import.meta.url)) {
   // RUN — one line in the air.
   const run = resolveRail({ type: "run", a: { x: 0, y: 0 }, b: { x: 3000, y: 4000 }, heightMm: 3500, sagMm: 300 }, ctx);
   assert(run?.type === "lines" && near(run.lengthMm, 5000) && run.lines[0].sagMm === 300, "a run is its two points, at its height, sagging");
+  // A ceiling drape's own fields (spec §6.4 — ./ceiling-cloth.ts reads them): optional, the line the same.
+  const drapeRun: RunRail = { type: "run", a: { x: 0, y: 0 }, b: { x: 3000, y: 4000 }, heightMm: 3500, widthMm: 900, waves: 3 };
+  const draped = resolveRail(drapeRun, ctx);
+  assert(draped?.type === "lines" && near(draped.lengthMm, 5000), "a drape's width and scallops leave its line as it was — billed by its length");
+  const pastedRun = railMoved(drapeRun, 100, 0) as RunRail;
+  assert(pastedRun.widthMm === 900 && pastedRun.waves === 3 && pastedRun.a.x === 100, "…and travel with it when it is pasted");
+  const wideCanopy: CanopyRail = { type: "canopy", outline: [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 4000 }, { x: 0, y: 4000 }], heightMm: 3500, directionDeg: 0, spacingMm: 1000, widthMm: 1000, waves: 2 };
+  assert(railLengthMm(wideCanopy, ctx) === 24000 && (railMoved(wideCanopy, 0, 50) as CanopyRail).waves === 2, "a canopy's width and scallops change none of its runs");
 
   // CANOPY — a 6 × 4 m area of runs 1 m apart along x: four runs of 6 m that tile it.
   const rect: Point[] = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 4000 }, { x: 0, y: 4000 }];

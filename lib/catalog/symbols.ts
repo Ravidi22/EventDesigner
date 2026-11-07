@@ -42,7 +42,12 @@ export type SymbolKind =
   | "gate"
   /** A curtain's cloth — never a picture of its own (a drape is drawn along its rail, not in a
    *  footprint, so no category maps here); the key its versions (SYMBOL_STYLES.curtain) hang on. */
-  | "curtain";
+  | "curtain"
+  /** A sail (מפרש) and a ceiling drape (בד תקרה) as a CARD or a drag image draws them — a quad of
+   *  cloth on its ties, a scalloped band. On the plan each is drawn along its rail
+   *  (lib/studio/ceiling-cloth.ts), never in a footprint. */
+  | "sail"
+  | "ceiling-drape";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -75,6 +80,9 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   // A banquette standing on its own (lib/design-document/bench.ts): its top, the chairs along a
   // chairs side, the cushions of a sofa side. A stage's edge banquette is drawn by the stage itself.
   "stage-benches": "bench",
+  // Cloth in the air (spec 2026-11-07 §6.3/§6.4): its card and its drag image.
+  sails: "sail",
+  "ceiling-drapes": "ceiling-drape",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */

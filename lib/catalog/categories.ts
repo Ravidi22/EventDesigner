@@ -40,6 +40,8 @@ import {
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
 import type { RailType } from "@/lib/studio/rail";
+import type { PriceUnit } from "./types";
+import { Sailboat, Waves } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -162,6 +164,10 @@ export interface CategoryDef {
    *  "wall"` still says "this hangs on a rail" to every reader that sorts drapes from objects; this
    *  says which kinds of rail the placing offers. */
   rails?: RailType[];
+  /** What a NEW product of this category is priced per (Product.priceUnit) — a seed for the drawer,
+   *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
+   *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
+  defaultPriceUnit?: PriceUnit;
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -205,6 +211,14 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
+  // Cloth in the air (spec 2026-11-07 §6.3/§6.4, lib/studio/ceiling-cloth.ts): a SAIL tied at three or
+  // four corners — a wall, a corner of a thing, a post of its own — billed by the square metre of its
+  // polygon; a CEILING DRAPE swagged from A to B, or laid over an area as parallel swags, billed by
+  // the metre of its runs. Each hangs on its own rail kinds only (`rails`) and is drawn to fit, so
+  // `sizing: "stretch"` and no height of its own to ask — its heights are its rail's. `anchor: "wall"`
+  // is the curtains' "this hangs on a rail" to every reader that sorts drapes from objects.
+  { id: "sails", label: "מפרשים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Sailboat, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["sail"], defaultPriceUnit: "m2" },
+  { id: "ceiling-drapes", label: "בדי תקרה", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Waves, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["run", "canopy"], defaultPriceUnit: "m" },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   // Table lamps — a turned base under a linen shade, set along a knights table like candlesticks.
   // Not a candlestick: nothing burns and nothing is packed per arm, so no count-multiplier.
