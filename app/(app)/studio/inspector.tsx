@@ -124,7 +124,8 @@ import { catalogBox } from "@/lib/studio/footprint";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
 import { SwitchRow } from "@/components/toggle";
-import { resolveSpan, WHOLE_WALL } from "@/lib/studio/anchor";
+import { CANTILEVER_MAX_MM, railLengthMm, railOf, sketchRailContext, type Rail } from "@/lib/studio/rail";
+import { arrangedStructure } from "@/lib/design-document/features";
 import { ArrowDownToLine } from "lucide-react";
 import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
 import type { Selection, SpinMode } from "./canvas-stage";
@@ -366,6 +367,8 @@ export function Inspector({
   onApplyToAllTables,
   onVariant,
   onSpan,
+  onRail,
+  onDrawRod,
   onResize,
   onBows,
   onCorners,
@@ -524,6 +527,11 @@ export function Inspector({
   onApplyToAllTables: (placementId: string) => void;
   onVariant: (id: string, variantId: string) => void;
   onSpan: (id: string, span: WallSpan) => void;
+  /** A drape's RAIL retyped from its bar (lib/studio/rail.ts) — the whole side, the other side of
+   *  it, a rod's height or its ר — and its drop (null = to the floor). Absent = walls only (onSpan). */
+  onRail?: (id: string, rail: Rail, dropMm?: number | null) => void;
+  /** Draw this drape a new free-standing rod on the canvas ("וילון על מוט" — components/rod-draw-pane.tsx). */
+  onDrawRod?: (id: string) => void;
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }) => void;
   /** A rug's curved sides (Placement.bows); null straightens them all. */
   onBows?: (id: string, bows: [number, number, number, number] | null) => void;
@@ -1772,8 +1780,11 @@ export function Inspector({
     // table's focus mode, and hung over other tables in a pattern — the table-item verbs, above.
     const overTable = p.layer === "ceiling" && p.over ? doc.tables.find((t) => t.id === p.over) : undefined;
     const shades = shadesOf(p.variantId);
-    const drape = r?.anchor === "wall" ? p.span : undefined;
-    const run = drape ? resolveSpan(structure, drape) : null;
+    // A drape hangs on a RAIL (lib/studio/rail.ts) — its legacy span read as a wall rail.
+    const drape = r?.anchor === "wall" ? (railOf(p) ?? undefined) : undefined;
+    const runMm = drape ? railLengthMm(drape, sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product)) : undefined;
+    const run = runMm !== undefined ? { lengthMm: runMm } : null;
+    const onWhat = drape?.type === "side" ? "על הצד" : drape?.type === "rod" ? "על המוט" : "על הקיר";
     const stretch = r?.sizing === "stretch" && !drape;
     const size = p.sizeMm;
     const shade = shades.find((s) => s.id === p.variantId);
@@ -1810,7 +1821,7 @@ export function Inspector({
           bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
           table ? tableLabel(doc, table) : null,
           overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
-          drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ על הקיר` : "הקיר נמחק") : null,
+          drape ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ ${onWhat}` : drape.type === "side" ? "הפריט שהווילון היה תלוי עליו הוסר" : "הקיר נמחק") : null,
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -2062,21 +2073,18 @@ export function Inspector({
           <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} onHang={(mm) => onHang(p.id, mm)} />
         )}
 
-        {/* A drape covers its whole wall by default; this puts it back after it was shortened. */}
+        {/* A drape covers its whole wall (or side) by default; this puts it back after it was
+            shortened. On a rod: its height and its ר. Every rail: the drop, and a rod of its own. */}
         {drape && (
-          <Popover label="על הקיר" icon={Maximize2} value={run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳` : "—"}>
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full"
-              disabled={!run || (drape.from === 0 && drape.to === 1)}
-              onClick={() => onSpan(p.id, { ...drape, ...WHOLE_WALL })}
-            >
-              <Maximize2 className="h-3.5 w-3.5" strokeWidth={2} />
-              על כל הקיר
-            </Button>
-            <Note>לקיצור — הידיות שעל הקיר עצמו.</Note>
-          </Popover>
+          <DrapeRailPopover
+            rail={drape}
+            run={run}
+            dropMm={p.dropMm}
+            onWhat={onWhat}
+            onRail={(rail, dropMm) => (onRail ? onRail(p.id, rail, dropMm) : rail.type === "wall" && dropMm === undefined && onSpan(p.id, { wallId: rail.wallId, from: rail.from, to: rail.to }))}
+            onDrawRod={onDrawRod && !p.locked ? () => onDrawRod(p.id) : undefined}
+            editable={!!onRail}
+          />
         )}
 
         {/* Hung over a table: arranged in that table's focus mode, strung along its row, hung over
@@ -2945,6 +2953,77 @@ function RowSpreadPopover({
       <Button size="sm" className="mt-2 w-full" disabled={line.length < 2} onClick={() => onSpread({ axis, count: n, wave: waveOf(waveOn, aCm, bCm) })}>
         {`פיזור ${n} לאורך ${axis === "row" ? "השורה" : "הטור"}`}
       </Button>
+    </Popover>
+  );
+}
+
+/** A drape's rail on its bar (lib/studio/rail.ts): on a wall or a side, the whole of it again and —
+ *  on a side — the other side of it; on a rod, its height and its ר (no post under its end); on any,
+ *  how far the cloth comes down (blank = to the floor) and a rod of its own drawn on the canvas. The
+ *  stretch itself is the grips on the plan. */
+function DrapeRailPopover({
+  rail,
+  run,
+  dropMm,
+  onWhat,
+  onRail,
+  onDrawRod,
+  editable,
+}: {
+  rail: Rail;
+  run: { lengthMm: number } | null;
+  dropMm?: number;
+  onWhat: string;
+  onRail: (rail: Rail, dropMm?: number | null) => void;
+  onDrawRod?: () => void;
+  /** The host writes any rail (onRail) — otherwise only a wall's stretch is offered. */
+  editable: boolean;
+}) {
+  const whole = (rail.type === "wall" || rail.type === "side") && Math.min(rail.from, rail.to) === 0 && Math.max(rail.from, rail.to) === 1;
+  return (
+    <Popover label={onWhat} icon={rail.type === "rod" ? Minus : Maximize2} value={run ? ltr(`${(run.lengthMm / 1000).toFixed(2)} מ׳`) : "—"} panelClassName="w-80">
+      {(rail.type === "wall" || rail.type === "side") && (
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="flex-1" disabled={!run || whole} onClick={() => onRail({ ...rail, from: 0, to: 1 })}>
+            <Maximize2 className="h-3.5 w-3.5" strokeWidth={2} />
+            {rail.type === "wall" ? "על כל הקיר" : "על כל הצד"}
+          </Button>
+          {rail.type === "side" && editable && (
+            <Button size="sm" variant="outline" className="flex-1" disabled={!run} onClick={() => onRail({ ...rail, out: rail.out === 1 ? -1 : 1 })}>
+              {rail.out === 1 ? "לצד הפנימי" : "לצד החיצוני"}
+            </Button>
+          )}
+        </div>
+      )}
+      {rail.type === "rod" && editable && (
+        <>
+          <PanelRow label="גובה המוט (מ׳)" htmlFor="rod-height">
+            <NumberField id="rod-height" decimals={2} min={0.5} max={8} step={0.1} commitOnBlur value={rail.heightMm / 1000} onChange={(m) => onRail({ ...rail, heightMm: Math.round(m * 1000) })} className="w-24" />
+          </PanelRow>
+          <SwitchRow
+            checked={rail.cantilever === "end"}
+            onChange={(on) => onRail(on ? { ...rail, cantilever: "end" } : (({ cantilever: _c, ...rest }) => (void _c, rest))(rail))}
+            label="ללא עמוד בקצה (ר)"
+            hint={`הזרוע יוצאת מהעמוד האחרון בלי עמוד מתחתיה — עד ${CANTILEVER_MAX_MM / 1000} מ׳`}
+          />
+        </>
+      )}
+      {editable && (
+        <PanelRow label="אורך הבד (ס״מ)" htmlFor="drape-drop">
+          <NumberField id="drape-drop" decimals={0} min={0} max={1200} hideZero placeholder="עד הרצפה" value={dropMm ? Math.round(dropMm / 10) : 0} onChange={(v) => onRail(rail, v > 0 ? v * 10 : null)} className="w-24" />
+        </PanelRow>
+      )}
+      {onDrawRod && editable && (
+        <Button size="sm" variant="outline" className="w-full" onClick={onDrawRod}>
+          <Minus className="h-3.5 w-3.5" strokeWidth={2} />
+          {rail.type === "rod" ? "ציור המוט מחדש" : "תלייה על מוט — ציור על הקנבס"}
+        </Button>
+      )}
+      <Note>
+        {rail.type === "rod"
+          ? "לחיצה לכל עמוד, Enter או לחיצה כפולה לסיום. גוררים עמוד כדי להזיז אותו. המוט מתומחר מהשורה הראשונה בקטגוריית ״מוטות וילון״."
+          : `לקיצור — הידיות ש${onWhat} עצמו.`}
+      </Note>
     </Popover>
   );
 }

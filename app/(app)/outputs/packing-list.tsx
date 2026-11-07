@@ -105,7 +105,7 @@ export function PackingList({ doc, eventId, meeting = false }: { doc: DesignDocu
   };
 
   const chairDefault = defaultChair();
-  const groups = packingList(doc, itemLookup, measureContext(structure), (t) => chairOf(t, chairDefault));
+  const groups = packingList(doc, itemLookup, measureContext(structure, doc), (t) => chairOf(t, chairDefault));
   // Countable rows only: metres of drape and square metres of carpet are not "items", and adding
   // them into one headline number would make it mean nothing.
   const total = groups.reduce(

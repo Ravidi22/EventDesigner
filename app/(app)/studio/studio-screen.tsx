@@ -24,6 +24,8 @@ import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
 import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { curtainRail } from "@/lib/venues/curtain";
+import { defaultRailHeight, isRailed, nearestSideRail, railOf, sideCandidates, type Rail } from "@/lib/studio/rail";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
   DEFAULT_NUMBERING,
@@ -166,6 +168,9 @@ const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = 
   design: { groups: DESIGN_PASS_GROUPS, hint: "לחצו על פריט עיצוב ואז על התוכנית — או גררו. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה." },
 };
 
+/** A curtain dropped where there is no wall and no tall side to hang it on stands on a straight rod
+ *  this long, centred on the drop (spec 2026-11-07 §6.2) — redrawn post by post from its bar. */
+const ROD_DROP_MM = 3000;
 /** The catalog categories a stage may be built from (see deckTypes in the screen below). */
 const STAGE_PIECE_CATEGORIES = ["stages", "stage-decks"];
 
@@ -371,6 +376,9 @@ export function StudioScreen({
   const [showClearance, setShowClearance] = useState(true);
   // "מילוי במות": null, drawing the area, or choosing which decks fill it (see stage-fill-panel.tsx).
   const [stageFill, setStageFill] = useState<StageFillState | null>(null);
+  // "וילון על מוט": the drape whose free-standing rod is being drawn on the canvas, post by post
+  // (components/rod-draw-pane.tsx) — null when no rod is being drawn.
+  const [rodDraw, setRodDraw] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -788,16 +796,29 @@ export function StudioScreen({
     }
 
     if (cat?.anchor === "wall") {
-      const near = nearestWall(plan.structure, { x, y });
-      if (!near) {
+      // On the nearest WALL, or the nearest SIDE of a thing tall enough to hang from (a building, a
+      // tall bar or backdrop, a hired stage — lib/studio/rail.ts sideCandidates), whichever is nearer
+      // the drop; the whole of it, which is the normal case and the one worth defaulting to — the two
+      // end grips shorten it from there. With neither in the room (an open lawn), it stands on a rod
+      // of its own, 3 m along the drop at the rod's height; the bar's "תלייה על מוט" draws any drape
+      // a rod post by post (spec §6.1, §6.2).
+      // Only the rails the row's CATEGORY takes (CategoryDef.rails — absent = every one).
+      const takes = (t: Rail["type"]) => !cat.rails || cat.rails.includes(t);
+      const near = takes("wall") ? nearestWall(plan.structure, { x, y }) : null;
+      const side = takes("side") ? nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y }) : null;
+      let rail: Rail;
+      if (side && (!near || side.distanceMm < near.distanceMm)) rail = side.rail;
+      else if (near) rail = { type: "wall", wallId: near.wallId, ...WHOLE_WALL };
+      else if (!takes("rod")) {
         showHint("אין קיר לתלות עליו — שרטטו את המתחם ב״אולמות״");
         return false;
+      } else {
+        const half = ROD_DROP_MM / 2;
+        rail = { type: "rod", points: [{ x: Math.round(x - half), y: Math.round(y) }, { x: Math.round(x + half), y: Math.round(y) }], heightMm: defaultRailHeight({ x, y }) };
       }
-      // Across the whole wall, which is the normal case and the one worth defaulting to; the two
-      // end handles shorten it from there.
       act({
         type: "addPlacement",
-        placement: { ...base, position: { x, y }, span: { wallId: near.wallId, ...WHOLE_WALL } },
+        placement: { ...base, position: { x, y }, rail },
       });
     } else if (product.layer === "table") {
       const t = tableUnder(doc.tables, { x, y });
@@ -1186,7 +1207,7 @@ export function StudioScreen({
       [
         ...doc.tables.filter((t) => inside(t.position)).map((t) => ({ kind: "table" as const, id: t.id })),
         ...doc.placements
-          .filter((p) => !p.tableId && !p.span && inside(p.position))
+          .filter((p) => !p.tableId && !isRailed(p) && inside(p.position))
           .map((p) => ({ kind: "placement" as const, id: p.id })),
       ],
       false,
@@ -1738,13 +1759,18 @@ export function StudioScreen({
     (featureId: string, productId: string) => {
       const f = plan.structure.features.find((x) => x.id === featureId);
       const product = catalog.find((p) => p.id === productId);
-      if (!f || f.kind !== "curtain" || !f.curtain || !product) return;
+      // The venue curtain's own rail (lib/venues/curtain.ts curtainRail — its legacy wall fields
+      // read the same way): on a wall the drape hangs on the wall's line as every hired drape does,
+      // on a side or a rod exactly where the venue's hung.
+      const venueRail = f?.kind === "curtain" ? curtainRail(f) : null;
+      if (!f || !venueRail || !product) return;
+      const rail: Rail = venueRail.type === "wall" ? { type: "wall", wallId: venueRail.wallId, from: venueRail.from, to: venueRail.to } : venueRail;
       const id = uid();
       batch([
         { type: "removeFeatures", featureIds: [featureId] },
         {
           type: "addPlacement",
-          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, span: { wallId: f.curtain.wallId, from: f.curtain.from, to: f.curtain.to } },
+          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, rail, ...(f.curtain?.dropMm ? { dropMm: f.curtain.dropMm } : {}) },
         },
       ]);
       setSelected([{ kind: "placement", id }]);
@@ -2052,7 +2078,7 @@ export function StudioScreen({
     (r: SelectionRef) => {
       if (r.kind !== "placement") return true;
       const p = doc.placements.find((x) => x.id === r.id);
-      return !!p && !p.tableId && !p.span;
+      return !!p && !p.tableId && !isRailed(p);
     },
     [doc.placements],
   );
@@ -5134,6 +5160,7 @@ export function StudioScreen({
             onBowPlacement={(id, bows) => drag({ type: "setPlacementBows", id, bows })}
             onCornerPlacement={(id, corners) => drag({ type: "setPlacementCorners", id, corners })}
             onSpanPlacement={(id, span) => drag({ type: "setPlacementSpan", id, span })}
+            onRailPlacement={(id, rail) => drag({ type: "setPlacementRail", id, rail })}
             onDropProduct={dropProduct}
             onScale={(v) => {
               mmPerPx.current = v;
@@ -5148,6 +5175,22 @@ export function StudioScreen({
             stageFillActive={stageFill !== null}
             onStageFill={startStageFill}
             drawArea={stageFill?.phase === "draw" || stageTool?.kind === "level"}
+            rodDraw={
+              rodDraw
+                ? {
+                    onFinish: (points) => {
+                      const p = doc.placements.find((x) => x.id === rodDraw);
+                      const was = p ? railOf(p) : null;
+                      setRodDraw(null);
+                      if (!p) return;
+                      // The height a rod had stays; a new one starts where a rod does (defaultRailHeight).
+                      const heightMm = was?.type === "rod" ? was.heightMm : defaultRailHeight(points[0]);
+                      act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}) } });
+                    },
+                    onCancel: () => setRodDraw(null),
+                  }
+                : undefined
+            }
             areaShape={stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (stageFill.shape ?? "corners") : "corners"}
             onArea={stageTool?.kind === "level" ? addLevel : openStageFill}
             onCancelArea={() => {
@@ -5458,6 +5501,11 @@ export function StudioScreen({
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
+                onRail={(id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm })}
+                onDrawRod={(id) => {
+                  setRodDraw(id);
+                  showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
+                }}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
                 onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}

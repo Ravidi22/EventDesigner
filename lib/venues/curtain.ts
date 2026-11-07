@@ -21,18 +21,40 @@
 // the bow — on the plan a curved strip (the feature's footprint is then that strip as a `custom`
 // outline in the box), its pleats along the curve, its ends slid along the curve, its length the
 // arc's, and in 3D a pleated ribbon round it. On a straight wall it is the rectangle it always was.
+//
+// Since 2026-11-07 the stretch is a RAIL (lib/studio/rail.ts — spec §6.6): a wall rail as before, a
+// SIDE of a building or a tall feature (re-laid when the feature moves), or a free-standing ROD.
+// `curtainRail(f)` reads either the rail or the legacy wall fields; nothing new writes the legacy
+// fields. Door parting is a WALL rail's alone (curtainPieces). The cloth's look (`style`) and its drop
+// are the feature's too, drawing-only like a hired drape's.
 import type { Point } from "@/lib/studio/hall";
 import type { WallSpan } from "@/lib/design-document/types";
+import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { spanBand, wallTrack, type WallTrack } from "@/lib/studio/anchor";
+import { featureHosts, rodPointMoved, hostSide, railBand, railClothLine, resolveRail, type Rail, type RailContext, type RailLine, type RodRail, type SideRail } from "@/lib/studio/rail";
 import { fromLocalFrame, toLocalFrame, wallAngleDeg } from "@/lib/studio/geometry";
 import { doorsOf, newFeature, type StructureFeature, type VenueStructure } from "./structure";
 import { isMain } from "../self-check";
 
-/** Which side of its wall a curtain hangs on: +1 for the side the wall's left-hand normal points
- *  to (n = (−dy, dx) of a→b, the normal where it hangs on a bowed wall), −1 for the other — the
- *  same handedness the 3D curtain reads. */
-export interface FeatureCurtain extends WallSpan {
+/** A curtain on a WALL, read: the stretch, ordered, and which side of its wall it hangs on: +1 for
+ *  the side the wall's left-hand normal points to (n = (−dy, dx) of a→b, the normal where it hangs on
+ *  a bowed wall), −1 for the other — the same handedness the 3D curtain reads. */
+export interface WallCurtain extends WallSpan {
   side: 1 | -1;
+}
+
+/** What `StructureFeature.curtain` stores: the rail it hangs on, its look and its drop. The wall
+ *  fields are the LEGACY form (every curtain hung before rails) — read by curtainRail, never written. */
+export interface FeatureCurtain {
+  rail?: Rail;
+  /** How the cloth is gathered (SYMBOL_STYLES.curtain). Absent = waves, the pleats it always had. */
+  style?: CurtainStyle;
+  /** How far the cloth comes down, mm. Absent = to the floor. */
+  dropMm?: number;
+  wallId?: string;
+  from?: number;
+  to?: number;
+  side?: 1 | -1;
 }
 
 /** The band's depth on the plan — the sketch's own drape (canvas-stage DRAPE_MM). */
@@ -46,13 +68,55 @@ const MIN_CURTAIN_MM = 200;
  *  the curtain"). */
 export const DOOR_CLEAR_MM = 150;
 
-/** A curtain feature's span, with the fallbacks a half-saved row could need. */
-export function curtainOf(f: Pick<StructureFeature, "curtain">): FeatureCurtain | null {
+const legacyRails = new WeakMap<FeatureCurtain, Rail>();
+/** The rail a curtain hangs on — its own, or the legacy wall stretch read as a wall rail (with the
+ *  fallbacks a half-saved row could need). Null for a curtain that names nothing. Remembered per
+ *  stored field, so the rail is one object while the row is. */
+export function curtainRail(f: Pick<StructureFeature, "curtain">): Rail | null {
   const c = f.curtain;
-  if (!c || !c.wallId) return null;
+  if (!c) return null;
+  if (c.rail) return c.rail;
+  if (!c.wallId) return null;
+  const hit = legacyRails.get(c);
+  if (hit) return hit;
   const lo = Math.max(0, Math.min(1, Math.min(c.from ?? 0, c.to ?? 1)));
   const hi = Math.max(0, Math.min(1, Math.max(c.from ?? 0, c.to ?? 1)));
-  return { wallId: c.wallId, from: lo, to: hi, side: c.side === -1 ? -1 : 1 };
+  const rail: Rail = { type: "wall", wallId: c.wallId, from: lo, to: hi, side: c.side === -1 ? -1 : 1 };
+  legacyRails.set(c, rail);
+  return rail;
+}
+
+/** A curtain on a WALL, read: its stretch ordered and its side — null for a curtain on any other rail
+ *  (or none). What the wall-only rules (door parting, the wall's own band) read. */
+export function curtainOf(f: Pick<StructureFeature, "curtain">): WallCurtain | null {
+  const r = curtainRail(f);
+  if (!r || r.type !== "wall") return null;
+  const lo = Math.max(0, Math.min(1, Math.min(r.from, r.to)));
+  const hi = Math.max(0, Math.min(1, Math.max(r.from, r.to)));
+  return { wallId: r.wallId, from: lo, to: hi, side: r.side === -1 ? -1 : 1 };
+}
+
+/** What a curtain's stored field becomes when its rail is written: the rail, its look kept, the
+ *  legacy wall fields let go. */
+function withCurtainRail(f: Pick<StructureFeature, "curtain">, rail: Rail): FeatureCurtain {
+  return { rail, ...(f.curtain?.style ? { style: f.curtain.style } : {}), ...(f.curtain?.dropMm !== undefined ? { dropMm: f.curtain.dropMm } : {}) };
+}
+
+/** A curtain's rail as lines, read against the venue — its own features are what a side rail hangs
+ *  from. */
+export function curtainLines(s: VenueStructure, f: Pick<StructureFeature, "curtain">): RailLine[] {
+  const rail = curtainRail(f);
+  const r = rail ? resolveRail(rail, curtainCtx(s)) : null;
+  return r?.type === "lines" ? r.lines : [];
+}
+const ctxCache = new WeakMap<VenueStructure, RailContext>();
+function curtainCtx(s: VenueStructure): RailContext {
+  let c = ctxCache.get(s);
+  if (!c) {
+    c = { structure: s, outlineOf: featureHosts(s) };
+    ctxCache.set(s, c);
+  }
+  return c;
 }
 
 type CurtainBox = Pick<StructureFeature, "x" | "y" | "widthMm" | "depthMm" | "rotationDeg" | "shape" | "outline" | "edgeCurves">;
@@ -62,7 +126,7 @@ type CurtainBox = Pick<StructureFeature, "x" | "y" | "widthMm" | "depthMm" | "ro
  *  one: turned to the chord between the stretch's ends, the box the curved band stands in, with the
  *  band itself as the box's `custom` outline. Null when the wall is gone (the feature keeps the box
  *  it had — the property is the authority, as with a drape). */
-export function curtainBox(s: VenueStructure, c: FeatureCurtain): CurtainBox | null {
+export function curtainBox(s: VenueStructure, c: WallCurtain): CurtainBox | null {
   const tr = wallTrack(s, c.wallId);
   if (!tr) return null;
   const from = tr.at(c.from).p;
@@ -104,6 +168,51 @@ function turnOf(deg: number): number {
   return ((Math.round(deg) % 360) + 360) % 360;
 }
 
+/** The box a curtain on ANY rail stands in: a wall curtain's as before; on a side or a rod, the
+ *  band along its line — a plain rectangle on a straight one, the strip as a `custom` outline in the
+ *  box its chord turns when the line bends (a round pergola's rim, an L of a rod). Null when what it
+ *  hangs on is gone. */
+export function curtainBoxOf(s: VenueStructure, f: Pick<StructureFeature, "curtain">): CurtainBox | null {
+  const wall = curtainOf(f);
+  if (wall) return curtainBox(s, wall);
+  const line = curtainLines(s, f)[0];
+  if (!line || line.path.length < 2) return null;
+  const a = line.path[0];
+  const b = line.path[line.path.length - 1];
+  const band = railBand(line, CURTAIN_DEPTH_MM);
+  if (line.path.length === 2) {
+    const cx = band.reduce((n, q) => n + q.x, 0) / band.length;
+    const cy = band.reduce((n, q) => n + q.y, 0) / band.length;
+    return {
+      x: Math.round(cx),
+      y: Math.round(cy),
+      widthMm: Math.max(MIN_CURTAIN_MM, Math.round(line.lengthMm)),
+      depthMm: CURTAIN_DEPTH_MM,
+      rotationDeg: turnOf(wallAngleDeg(a, b)),
+      shape: "rect",
+      outline: undefined,
+      edgeCurves: undefined,
+    };
+  }
+  // The chord between the ends turns the box; a closed rim (its ends meet) turns with its first run.
+  const rotationDeg = turnOf(Math.hypot(b.x - a.x, b.y - a.y) > 1 ? wallAngleDeg(a, b) : wallAngleDeg(a, line.path[1]));
+  const local = band.map((p) => toLocalFrame(p, a, rotationDeg));
+  const xs = local.map((p) => p.x);
+  const ys = local.map((p) => p.y);
+  const mid = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  const centre = fromLocalFrame(mid, a, rotationDeg);
+  return {
+    x: Math.round(centre.x),
+    y: Math.round(centre.y),
+    widthMm: Math.max(MIN_CURTAIN_MM, Math.round(Math.max(...xs) - Math.min(...xs))),
+    depthMm: Math.max(1, Math.round(Math.max(...ys) - Math.min(...ys))),
+    rotationDeg,
+    shape: "custom",
+    outline: local.map((p) => ({ x: Math.round(p.x - mid.x), y: Math.round(p.y - mid.y) })),
+    edgeCurves: undefined,
+  };
+}
+
 /** Which side of the wall a point is on, in the handedness `FeatureCurtain.side` uses — read
  *  against the wall where it is NEAREST the point, so a click inside a bow lands on the bow's inside
  *  even where the chord would put it outside. */
@@ -118,22 +227,61 @@ export function sideOfWall(s: VenueStructure, wallId: string, p: Point): 1 | -1 
  *  wall `at` lies (the click that placed it), in the default black. Null for a wall that is gone. */
 export function newCurtain(s: VenueStructure, wallId: string, at: Point, from = 0, to = 1): Omit<StructureFeature, "id"> | null {
   if (!s.walls.some((w) => w.id === wallId)) return null;
-  const spec: FeatureCurtain = { wallId, from: Math.min(from, to), to: Math.max(from, to), side: sideOfWall(s, wallId, at) };
-  const box = curtainBox(s, spec);
-  if (!box) return null;
-  return { ...newFeature("curtain", { x: box.x, y: box.y }), ...box, curtain: spec, style: { fill: CURTAIN_FILL } };
+  return newRailCurtain(s, { type: "wall", wallId, from: Math.min(from, to), to: Math.max(from, to), side: sideOfWall(s, wallId, at) });
 }
 
-/** What changing a curtain's span writes: the span, and the box re-laid from it. */
-export function curtainPatch(s: VenueStructure, f: StructureFeature, patch: Partial<FeatureCurtain>): Partial<Omit<StructureFeature, "id">> {
-  const cur = curtainOf(f);
-  if (!cur) return {};
-  const next: FeatureCurtain = { ...cur, ...patch };
-  if (next.from > next.to) [next.from, next.to] = [next.to, next.from];
-  next.from = Math.max(0, Math.min(1, next.from));
-  next.to = Math.max(0, Math.min(1, next.to));
-  const box = curtainBox(s, next);
-  return { curtain: next, ...(box ?? {}) };
+/** A new curtain on any rail — a side of a feature (spec §6.1), a rod (§6.2) — in the default black.
+ *  Null when the rail resolves to nothing (its wall or feature is gone). */
+export function newRailCurtain(s: VenueStructure, rail: Rail): Omit<StructureFeature, "id"> | null {
+  const curtain: FeatureCurtain = { rail };
+  const box = curtainBoxOf(s, { curtain });
+  if (!box) return null;
+  return { ...newFeature("curtain", { x: box.x, y: box.y }), ...box, curtain, style: { fill: CURTAIN_FILL } };
+}
+
+/** What changing a curtain's stretch writes: the rail, and the box re-laid from it. `from`/`to` are
+ *  fractions along its wall or its side; `side` flips a wall curtain to the wall's other side and a
+ *  side curtain into or out of its thing. A rod has no stretch to type — its points are its own. */
+export function curtainPatch(s: VenueStructure, f: StructureFeature, patch: Partial<WallCurtain>): Partial<Omit<StructureFeature, "id">> {
+  const rail = curtainRail(f);
+  if (!rail) return {};
+  const order = (from: number, to: number) => ({
+    from: Math.max(0, Math.min(1, Math.min(from, to))),
+    to: Math.max(0, Math.min(1, Math.max(from, to))),
+  });
+  if (rail.type === "wall") {
+    const cur = curtainOf(f)!;
+    const next: WallCurtain = { ...cur, ...patch, ...order(patch.from ?? cur.from, patch.to ?? cur.to) };
+    const box = curtainBox(s, next);
+    return { curtain: withCurtainRail(f, { type: "wall", wallId: next.wallId, from: next.from, to: next.to, side: next.side }), ...(box ?? {}) };
+  }
+  if (rail.type === "side") {
+    const next: SideRail = { ...rail, ...order(patch.from ?? rail.from, patch.to ?? rail.to), ...(patch.side ? { out: patch.side } : {}) };
+    return curtainRailPatch(s, f, next);
+  }
+  return {};
+}
+
+/** What putting a curtain on another rail writes (a rod's points moved, a side rail retyped): the
+ *  rail, and the box re-laid from it. */
+export function curtainRailPatch(s: VenueStructure, f: Pick<StructureFeature, "curtain">, rail: Rail): Partial<Omit<StructureFeature, "id">> {
+  const curtain = withCurtainRail(f, rail);
+  const box = curtainBoxOf(s, { curtain });
+  return { curtain, ...(box ?? {}) };
+}
+
+/** The curtain's look and drop changed — nothing about where it hangs. `null` clears one. */
+export function curtainLookPatch(f: Pick<StructureFeature, "curtain">, patch: { style?: CurtainStyle | null; dropMm?: number | null }): Partial<Omit<StructureFeature, "id">> {
+  const next: FeatureCurtain = { ...(f.curtain ?? {}) };
+  if (patch.style !== undefined) {
+    if (patch.style) next.style = patch.style;
+    else delete next.style;
+  }
+  if (patch.dropMm !== undefined) {
+    if (patch.dropMm && patch.dropMm > 0) next.dropMm = Math.round(patch.dropMm);
+    else delete next.dropMm;
+  }
+  return { curtain: next };
 }
 
 /** One hung piece of a curtain. Its geometry is in the feature's OWN frame (translate to x, y and
@@ -148,6 +296,9 @@ export interface CurtainPiece {
   band: Point[];
   /** The band's middle line, node a → node b — what the pleats are drawn along. */
   line: Point[];
+  /** On a free-standing ROD: the rod itself and its posts (none under a ר's arm), in the same frame. */
+  rod?: Point[];
+  posts?: Point[];
 }
 
 /** The pieces a curtain hangs in: its stretch of the wall less every door on it MARKED to be kept
@@ -159,6 +310,19 @@ export interface CurtainPiece {
 export function curtainPieces(s: VenueStructure, f: StructureFeature): CurtainPiece[] {
   const c = curtainOf(f);
   const tr = c ? wallTrack(s, c.wallId) : null;
+  // On a side or a rod: one piece per line, nothing to part — a door is a wall's.
+  const other = !c && curtainRail(f) ? curtainLines(s, f) : [];
+  if (other.length) {
+    const local = (p: Point) => toLocalFrame(p, { x: f.x, y: f.y }, f.rotationDeg);
+    return other.map((line) => ({
+      t0: 0,
+      t1: 1,
+      lengthMm: Math.round(line.lengthMm),
+      band: railBand(line, CURTAIN_DEPTH_MM).map(local),
+      line: railClothLine(line, CURTAIN_DEPTH_MM).map(local),
+      ...(line.posts ? { rod: line.path.map(local), posts: line.posts.map(local) } : {}),
+    }));
+  }
   if (!c || !tr || tr.chordMm < 1) {
     const w = f.widthMm / 2;
     const d = f.depthMm / 2;
@@ -198,6 +362,10 @@ export function curtainPieces(s: VenueStructure, f: StructureFeature): CurtainPi
 export function curtainLengthMm(s: VenueStructure, f: StructureFeature): number {
   const c = curtainOf(f);
   const tr = c ? wallTrack(s, c.wallId) : null;
+  if (!c && curtainRail(f)) {
+    const lines = curtainLines(s, f);
+    return lines.length ? lines.reduce((n, l) => n + l.lengthMm, 0) : f.widthMm;
+  }
   return c && tr ? tr.mmAt(c.to) - tr.mmAt(c.from) : f.widthMm;
 }
 
@@ -208,6 +376,7 @@ export type CurtainEnds = Record<"from" | "to", { p: Point; out: Point }>;
 export function curtainEnds(s: VenueStructure, f: StructureFeature): CurtainEnds | null {
   const c = curtainOf(f);
   const tr = c ? wallTrack(s, c.wallId) : null;
+  if (!c && curtainRail(f)) return lineEnds(curtainLines(s, f)[0]);
   if (!c || !tr) return null;
   const end = (t: number, sign: 1 | -1) => {
     const { p, n } = tr.at(t);
@@ -227,6 +396,61 @@ export function curtainEndT(s: VenueStructure, f: StructureFeature, p: Point): n
   return c && tr ? tr.nearestT(p) : null;
 }
 
+/** The ends of a line that is not a wall: the middle of its band at each end, pointing on along it. */
+function lineEnds(line: RailLine | undefined): CurtainEnds | null {
+  if (!line || line.path.length < 2) return null;
+  const mid = railClothLine(line, CURTAIN_DEPTH_MM);
+  const n = mid.length;
+  const dir = (a: Point, b: Point) => {
+    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
+  };
+  return { from: { p: mid[0], out: dir(mid[1], mid[0]) }, to: { p: mid[n - 1], out: dir(mid[n - 2], mid[n - 1]) } };
+}
+
+/** What dragging one END of a curtain to `p` writes — on a wall or a side, that end slides along it
+ *  (round a bow, round a rim); on a rod, the end post moves to the point (a cantilevered arm held to
+ *  its reach). Empty when there is nothing to slide along. */
+export function curtainEndPatch(s: VenueStructure, f: StructureFeature, end: "from" | "to", p: Point): Partial<Omit<StructureFeature, "id">> {
+  const rail = curtainRail(f);
+  if (!rail) return {};
+  if (rail.type === "wall") {
+    const t = curtainEndT(s, f, p);
+    return t === null ? {} : curtainPatch(s, f, { [end]: t });
+  }
+  if (rail.type === "side") {
+    const t = sideFraction(s, rail, p);
+    return t === null ? {} : curtainPatch(s, f, { [end]: t });
+  }
+  if (rail.type === "rod") return curtainRailPatch(s, f, rodEndMoved(rail, end, p));
+  return {};
+}
+
+/** Where along a side rail's side a point falls, as a fraction of the side's length. */
+export function sideFraction(s: VenueStructure, rail: SideRail, p: Point): number | null {
+  const host = featureHosts(s)(rail.featureId);
+  const side = host ? hostSide(host, rail.side) : null;
+  if (!side || side.L <= 0) return null;
+  let best = { d: Infinity, at: 0 };
+  for (let k = 0; k < side.points.length - 1; k++) {
+    const a = side.points[k];
+    const b = side.points[k + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const u = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    const d = Math.hypot(p.x - (a.x + dx * u), p.y - (a.y + dy * u));
+    if (d < best.d) best = { d, at: side.cum[k] + u * Math.sqrt(l2) };
+  }
+  return best.at / side.L;
+}
+
+/** A rod with one END moved to `p`: the post goes there; a cantilevered end's arm is held to its
+ *  reach from the post before it. */
+export function rodEndMoved(rail: RodRail, end: "from" | "to", p: Point): RodRail {
+  return rodPointMoved(rail, end === "from" ? 0 : rail.points.length - 1, p);
+}
+
 /** Every curtain re-laid on its wall as it stands now — run after any edit of the walls or corners,
  *  as face surfaces are (lib/venues/face-surfaces.ts syncFaceSurfaces). Returns `s` itself when
  *  nothing moved, so an edit that touched no curtain's wall costs nothing downstream. Bending a wall
@@ -236,8 +460,8 @@ export function syncCurtains(s: VenueStructure): VenueStructure {
   let changed = false;
   const features = s.features.map((f) => {
     if (f.kind !== "curtain") return f;
-    const c = curtainOf(f);
-    const box = c && curtainBox(s, c);
+    // On a wall as before; on a side, re-laid where its feature now stands (spec §6.6).
+    const box = curtainBoxOf(s, f);
     if (!box) return f;
     if (
       f.x === box.x &&
@@ -275,17 +499,17 @@ if (isMain(import.meta.url)) {
     features: [],
   };
   const made = newCurtain(s, "w", { x: 5000, y: 300 });
-  assert(!!made && made.kind === "curtain" && made.curtain?.side === 1 && made.style?.fill === CURTAIN_FILL, "a click on the +y side hangs a black curtain on that side");
+  assert(!!made && made.kind === "curtain" && curtainOf(made!)?.side === 1 && made.style?.fill === CURTAIN_FILL, "a click on the +y side hangs a black curtain on that side");
   assert(made!.widthMm === 10000 && made!.depthMm === CURTAIN_DEPTH_MM && made!.x === 5000 && made!.y === CURTAIN_DEPTH_MM / 2 && made!.rotationDeg === 0 && made!.shape === "rect", "…the whole wall long, a band deep, its centre half a band into the room");
   const other = newCurtain(s, "w", { x: 5000, y: -300 })!;
-  assert(other.curtain?.side === -1 && other.y === -CURTAIN_DEPTH_MM / 2, "a click on the other side hangs it there");
+  assert(curtainOf(other)?.side === -1 && other.y === -CURTAIN_DEPTH_MM / 2, "a click on the other side hangs it there");
   assert(!made!.heightMm, "no height of its own: it hangs from the ceiling");
 
   const withOne: VenueStructure = { ...s, features: [{ ...made!, id: "c" }] };
   const half = curtainPatch(withOne, withOne.features[0], { from: 0.25, to: 0.75 });
-  assert(half.widthMm === 5000 && half.x === 5000 && half.curtain?.from === 0.25, "a shorter stretch re-lays the box along it");
+  assert(half.widthMm === 5000 && half.x === 5000 && curtainOf({ curtain: half.curtain })?.from === 0.25, "a shorter stretch re-lays the box along it");
   const flipped = curtainPatch(withOne, withOne.features[0], { from: 0.9, to: 0.1 });
-  assert(flipped.curtain?.from === 0.1 && flipped.curtain?.to === 0.9, "ends given backwards are put in order");
+  assert(curtainOf({ curtain: flipped.curtain })?.from === 0.1 && curtainOf({ curtain: flipped.curtain })?.to === 0.9, "ends given backwards are put in order");
 
   // The wall is dragged: the curtain follows it, the same structure back when nothing moved.
   assert(syncCurtains(withOne) === withOne, "nothing moved — the same structure back");
@@ -322,7 +546,7 @@ if (isMain(import.meta.url)) {
   const inside = newCurtain(s, "bow", { x: 9500, y: 3000 })!;
   const outside = newCurtain(s, "bow", { x: 10900, y: 3000 })!;
   assert(!!inside && inside.shape === "custom" && (inside.outline?.length ?? 0) > 8, "a bowed wall takes a curtain, its footprint a curved strip");
-  assert(inside.curtain!.side !== outside.curtain!.side, "…on the side the click fell, read against the bow, not its chord");
+  assert(curtainOf(inside)!.side !== curtainOf(outside)!.side, "…on the side the click fell, read against the bow, not its chord");
   const onBow = { ...inside, id: "cb" } as StructureFeature;
   const bowed: VenueStructure = { ...s, features: [onBow] };
   assert(Math.abs(curtainLengthMm(bowed, onBow) - bowTrack.lengthMm) < 1 && bowTrack.lengthMm > 6000, "its length is the arc's, not the 6 m chord's");
@@ -340,5 +564,49 @@ if (isMain(import.meta.url)) {
   const straightened = syncCurtains({ ...bowed, walls: bowed.walls.map((w) => (w.id === "bow" ? { ...w, curve: null } : w)) });
   assert(straightened.features[0].shape === "rect" && !straightened.features[0].outline && straightened.features[0].widthMm === 6000, "a wall straightened gives the plain band back");
   assert(syncCurtains(bowed) === bowed, "a curtain already on its bow is left as it is");
+
+  // RAILS (2026-11-07). A curtain stored the old way reads as a wall rail; a new one is written as a
+  // rail and never in the legacy fields; both read the same.
+  const legacy = { curtain: { wallId: "w", from: 0.2, to: 0.6, side: -1 as const } };
+  const rail = curtainRail(legacy);
+  assert(rail?.type === "wall" && rail.from === 0.2 && rail.side === -1 && curtainRail(legacy) === rail, "a legacy curtain is a wall rail — the same object each read");
+  assert(!!made!.curtain?.rail && made!.curtain.wallId === undefined && half.curtain?.wallId === undefined, "nothing new writes the legacy wall fields");
+  const legacyFeature = { ...made!, id: "lc", curtain: { wallId: "w", from: 0, to: 1, side: 1 as const } };
+  const railFeature = { ...made!, id: "rc" };
+  assert(
+    JSON.stringify(curtainPieces(s, legacyFeature)) === JSON.stringify(curtainPieces(s, railFeature)) && curtainLengthMm(s, legacyFeature) === curtainLengthMm(s, railFeature),
+    "a legacy curtain and its rail twin draw and measure exactly alike",
+  );
+
+  // On the SIDE of a building (§6.1): 4 × 3 m, 3.5 m high, its top side hung outside.
+  const building: StructureFeature = { id: "bld", kind: "structure", label: "מבנה", x: 3000, y: 3000, widthMm: 4000, depthMm: 3000, heightMm: 3500, shape: "rect", rotationDeg: 0 };
+  const site: VenueStructure = { ...s, features: [building] };
+  const onSide = newRailCurtain(site, { type: "side", featureId: "bld", side: 0, from: 0, to: 1, out: 1 })!;
+  assert(!!onSide && onSide.widthMm === 4000 && onSide.depthMm === CURTAIN_DEPTH_MM && onSide.x === 3000 && onSide.y === 1500 - CURTAIN_DEPTH_MM / 2, "a side curtain hangs the whole side, outside the building");
+  assert(curtainOf(onSide) === null && curtainLengthMm(site, { ...onSide, id: "sc" }) === 4000, "…it is no wall curtain, and is as long as the side");
+  const hung: VenueStructure = { ...site, features: [building, { ...onSide, id: "sc" }] };
+  assert(curtainPieces(hung, hung.features[1]).length === 1, "…in one piece — no door parts a side");
+  const shorter = curtainPatch(hung, hung.features[1], { from: 0.25, to: 0.75 });
+  assert(shorter.widthMm === 2000 && shorter.x === 3000, "the bar's stretch shortens it along the side");
+  const turnedIn = curtainPatch(hung, hung.features[1], { side: -1 });
+  assert(turnedIn.y === 1500 + CURTAIN_DEPTH_MM / 2, "…and its side flips it inside");
+  const buildingMoved = syncCurtains({ ...hung, features: [{ ...building, x: 5000 }, hung.features[1]] });
+  assert(buildingMoved.features[1].x === 5000, "a side curtain is re-laid when its feature moves");
+  const sideEnd = curtainEndPatch(hung, hung.features[1], "to", { x: 4000, y: 1200 });
+  assert(sideEnd.widthMm === 3000, "its end slides along the side");
+
+  // On a free-standing ROD (§6.2): a ר — 3 m, then a 2 m arm with no post under it.
+  const rod: RodRail = { type: "rod", points: [{ x: 0, y: 5000 }, { x: 3000, y: 5000 }, { x: 3000, y: 7000 }], heightMm: 2400, cantilever: "end" };
+  const onRod = newRailCurtain(s, rod)!;
+  assert(!!onRod && onRod.shape === "custom" && curtainLengthMm(s, { ...onRod, id: "r" }) === 5000, "a rod curtain runs the rod's whole polyline");
+  const reached = curtainEndPatch(s, { ...onRod, id: "r" }, "to", { x: 3000, y: 12000 });
+  const reachedRail = curtainRail({ curtain: reached.curtain }) as RodRail;
+  assert(reachedRail.points[2].y === 8000, "a cantilevered arm dragged out is held to its 3 m reach");
+
+  // The look and the drop.
+  const looked = curtainLookPatch(made!, { style: "sheer", dropMm: 2200 });
+  assert(looked.curtain?.style === "sheer" && looked.curtain.dropMm === 2200 && looked.curtain.rail === made!.curtain?.rail, "a style and a drop are the curtain's own, its rail untouched");
+  assert(curtainLookPatch({ curtain: looked.curtain }, { style: null, dropMm: null }).curtain?.style === undefined, "…and cleared again");
+  assert(curtainPatch(s, { ...made!, id: "x", curtain: looked.curtain }, { from: 0.5 }).curtain?.style === "sheer", "re-laying the stretch keeps the look");
   console.log("venue curtains ok");
 }

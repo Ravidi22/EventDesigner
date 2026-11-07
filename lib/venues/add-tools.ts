@@ -74,6 +74,8 @@ const PLAIN: { id: string; label: string; kind: FeatureKind | null }[] = [
   { id: "window", label: "חלון / ויטרינה", kind: null },
   // Hung on a wall too — the venue's own curtain (./curtain.ts), the whole wall at a click.
   { id: "curtain", label: FEATURE_KIND_LABEL.curtain, kind: "curtain" },
+  // …or on a free-standing rod (spec 2026-11-07 §6.2): a click for every post, Enter to end.
+  { id: "curtain-rod", label: "וילון על מוט", kind: "curtain" },
   // Where the floor changes height — beside the door, because that is where they usually are.
   { id: "stairs", label: FEATURE_KIND_LABEL.stairs, kind: "stairs" },
   { id: "ramp", label: FEATURE_KIND_LABEL.ramp, kind: "ramp" },
@@ -163,7 +165,7 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 12 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the twelve plain things — door, window, curtain, stairs, ramp, fountain, structure, column, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
+  assert(empty.length === 13 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the thirteen plain things — door, window, curtain, a curtain on a rod, stairs, ramp, fountain, structure, column, other, bar, stage, chairs in rows — a pool in each of its shapes, and the planting");
   const pools = empty.filter((t) => t.section === "pool");
   assert(pools.map((t) => t.pool).join() === "rect,ellipse,kidney,L,free" && pools.every((t) => t.kind === "pool"), "the pools come shape first: מלבן · אליפסה · כליה · ר · חופשי");
   assert(findAddTool(empty, "pool")?.pool === "ellipse", "…the oval keeping the one pool tool's id");

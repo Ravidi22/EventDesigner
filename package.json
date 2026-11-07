@@ -45,6 +45,7 @@
     "check:seats": "tsx lib/studio/seating.ts",
     "check:column": "tsx lib/venues/column.ts",
     "check:curtain": "tsx lib/venues/curtain.ts",
+    "check:rail": "tsx lib/studio/rail.ts",
     "check:groups": "tsx lib/design-document/groups.ts",
     "check:block": "tsx lib/design-document/block.ts",
     "check:features": "tsx lib/design-document/features.ts",

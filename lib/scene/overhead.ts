@@ -21,7 +21,7 @@
 //
 // Pure: no React, no three. `npx tsx lib/scene/overhead.ts` runs the self-check.
 import type { Point } from "@/lib/studio/hall";
-import type { SymbolKind } from "@/lib/catalog/symbols";
+import type { CurtainStyle, SymbolKind } from "@/lib/catalog/symbols";
 import { FORMS, type FlowerDrawSpec, isPale } from "@/lib/catalog/flower-draw";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { isMain } from "../self-check";
@@ -59,6 +59,25 @@ const DRAPE_BAND_MM = 220;
 const PLEAT_AMPLITUDE_MM = Math.round(DRAPE_BAND_MM * 0.28); // 62
 const ROD_R_MM = 15;
 const ROD_ABOVE_MM = 30;
+/** A free-standing rod's post: a 5cm square section. */
+const POST_MM = 50;
+/** Each curtain style's pleat in the room — the plan's (components/curtain-cloth.tsx STYLE_DRAW)
+ *  lifted: its pitch, and how far the cloth swings off its line (the band's share × 220). Waves is
+ *  the one every curtain always had. */
+export const CURTAIN_PLEATS: Record<CurtainStyle, { pleatMm: number; amplitudeMm: number }> = {
+  waves: { pleatMm: PLEAT_MM, amplitudeMm: PLEAT_AMPLITUDE_MM },
+  pinch: { pleatMm: 70, amplitudeMm: Math.round(DRAPE_BAND_MM * 0.2) },
+  sheer: { pleatMm: 600, amplitudeMm: Math.round(DRAPE_BAND_MM * 0.06) },
+  swag: { pleatMm: 700, amplitudeMm: Math.round(DRAPE_BAND_MM * 0.3) },
+  ruffle: { pleatMm: 55, amplitudeMm: Math.round(DRAPE_BAND_MM * 0.14) },
+};
+/** What else a curtain's body is told: how its cloth is gathered, how far it drops from the rail
+ *  (absent = to the floor), and where a free-standing rod's posts stand. */
+export interface CurtainOpts {
+  style?: CurtainStyle;
+  dropMm?: number;
+  posts?: Point[];
+}
 /** The rod's and a hung arrangement's cable: the plan's muted metal, not the designer's tone. */
 const ROD = "#b6b2c4";
 /** The foliage disc a hung arrangement is built on. */
@@ -356,12 +375,19 @@ export function overheadKindBody(kind: SymbolKind, ctx: ItemContext): ItemBuild 
  *  chord 30 above the top. Built in the room frame: every `at` is the room origin and the ribbon's
  *  path carries the room coordinates, so the caller places it at `transform(vec3(0, 0, 0), 0)`.
  *  `tag` is for instanced parts; a curtain has none today, its body wears the caller's tag. */
-export function curtainBody(path: Point[], topMm: number, colour: string, tag: NodeTag): ItemBuild {
+export function curtainBody(path: Point[], topMm: number, colour: string, tag: NodeTag, opts: CurtainOpts = {}): ItemBuild {
   void tag;
   const h = Math.max(10, topMm);
   const b = make(clothMaterial(colour));
   if (path.length < 2) return b;
-  b.parts.push({ shape: "ribbon", path, h, at: vec3(0, 0, 0), pleatMm: PLEAT_MM, amplitudeMm: PLEAT_AMPLITUDE_MM });
+  // The style's pleat (the plan's own STYLE_DRAW, lifted — components/curtain-cloth.tsx), and the
+  // drop: the cloth hangs from the rail down `dropMm`, the floor when absent or longer.
+  const pleat = CURTAIN_PLEATS[opts.style ?? "waves"] ?? CURTAIN_PLEATS.waves;
+  const drop = opts.dropMm && opts.dropMm > 0 && opts.dropMm < h ? opts.dropMm : h;
+  b.parts.push({ shape: "ribbon", path, h: drop, at: vec3(0, 0, h - drop), pleatMm: pleat.pleatMm, amplitudeMm: pleat.amplitudeMm });
+  // A free-standing rod's posts (spec 2026-11-07 §6.2): a square post from the floor to the rod at
+  // every end and bend but a cantilevered tip.
+  for (const q of opts.posts ?? []) b.parts.push({ shape: "box", w: POST_MM, d: POST_MM, h: h + ROD_ABOVE_MM + ROD_R_MM, at: vec3(q.x, q.y, 0), material: metalMaterial(ROD) });
   // The rail, one length per stretch of the path — a single rod on a straight wall, bent round the
   // bow of a curved one (a straight rod from end to end would cut through the room).
   for (let i = 1; i < path.length; i++) {
@@ -533,6 +559,14 @@ if (isMain(import.meta.url)) {
   const slanted = curtainBody([{ x: 0, y: 0 }, { x: 0, y: 3000 }], 2800, "#a98db8", { type: "item" }).parts.find((p) => p.shape === "cylinder");
   assert(!!slanted && slanted.shape === "cylinder" && near(slanted.rotDeg ?? 0, 0) && slanted.h === 3000, "a wall down the plan needs no turn: a tilted cylinder already lies along +y");
   assert(curtainBody([{ x: 0, y: 0 }], 3000, "#a98db8", { type: "item" }).parts.length === 0, "a path of one point is no curtain");
+  // 2026-11-07: a style is its pleat, a drop stops the cloth short of the floor, a rod brings posts.
+  const sheer = curtainBody([{ x: 0, y: 0 }, { x: 4000, y: 0 }], 4000, "#ffffff", { type: "item" }, { style: "sheer", dropMm: 2500 }).parts.find((p) => p.shape === "ribbon");
+  assert(!!sheer && sheer.shape === "ribbon" && sheer.pleatMm === CURTAIN_PLEATS.sheer.pleatMm && sheer.h === 2500 && sheer.at.z === 1500, "a sheer curtain's long soft pleat, its cloth 2.5 m down from a 4 m rail");
+  assert(curtainBody([{ x: 0, y: 0 }, { x: 4000, y: 0 }], 3000, "#ffffff", { type: "item" }, { dropMm: 9000 }).parts.find((p) => p.shape === "ribbon")?.h === 3000, "a drop longer than the height is to the floor");
+  const onRod = curtainBody([{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 2000 }], 2400, "#ffffff", { type: "item" }, { posts: [{ x: 0, y: 0 }, { x: 3000, y: 0 }] });
+  const posts = onRod.parts.filter((p) => p.shape === "box");
+  assert(posts.length === 2 && posts.every((p) => p.shape === "box" && p.at.z === 0 && p.h > 2400), "a rod's two posts stand from the floor past the rod, none under its arm");
+  assert(onRod.parts.filter((p) => p.shape === "cylinder").length === 2, "…and the rod bends round its corner, one length per stretch");
 
   assert(ceilingUndersideMm(4000, 600) === 2800, "under a 4 m ceiling a chandelier's underside is at 2.8 m");
   assert(ceilingUndersideMm(null, 600) === 3000, "under open sky it hangs at 3 m");

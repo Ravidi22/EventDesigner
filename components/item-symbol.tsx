@@ -24,6 +24,8 @@ import { benchLayoutFor, type BenchLayout } from "@/lib/design-document/bench";
 import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
+import { pleatsAlongD } from "./curtain-cloth";
+import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
@@ -80,6 +82,8 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   lamp: "#FBF6EC",
   // Cast stone, which most gates hired for an event imitate.
   gate: "#F1ECE3",
+  // Ivory voile — a drape's cloth when its shade says nothing (never drawn as a footprint picture).
+  curtain: "#F3EDE2",
 };
 
 export interface ItemSymbolProps {
@@ -2038,7 +2042,12 @@ function runner(L: number, D: number, c: Colours, line: Line, border?: Border) {
 
 /** The folds of a drape, in a frame where the drape runs along x, centred, `depthMm` thick: the wave
  *  of the fabric gathered on its rail, one pleat every 15cm or so. */
-function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity = 0.35 }: { lengthMm: number; depthMm: number; ink?: string; opacity?: number }) {
+function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity = 0.35, style }: { lengthMm: number; depthMm: number; ink?: string; opacity?: number; style?: CurtainStyle }) {
+  // Another curtain style (SYMBOL_STYLES.curtain) is drawn by the one walker every drape uses
+  // (components/curtain-cloth.tsx); waves stay this drawing, exactly as before.
+  if (style && style !== "waves") {
+    return <path d={pleatsAlongD([{ x: -lengthMm / 2, y: 0 }, { x: lengthMm / 2, y: 0 }], depthMm, style)} fill="none" stroke={ink} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" className="pointer-events-none" />;
+  }
   const pleat = 150;
   const n = Math.max(2, Math.round(lengthMm / pleat));
   const step = lengthMm / n;

@@ -15,7 +15,7 @@
 import { resolve, chairBlockOf } from "@/lib/studio/catalog-resolver";
 import { placementFootprint } from "@/components/footprint-shape";
 import { catalogBox, type Footprint } from "@/lib/studio/footprint";
-import { chairStyleOf, symbolOf } from "@/lib/catalog/symbols";
+import { chairStyleOf, curtainStyleOf, symbolOf } from "@/lib/catalog/symbols";
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { hangHeightOf } from "@/lib/studio/hang";
@@ -24,7 +24,8 @@ import { rugShapeOf } from "@/lib/studio/rug-shape";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
-import { CURTAIN_FILL, curtainOf, curtainPieces } from "@/lib/venues/curtain";
+import { CURTAIN_FILL, curtainLines, curtainOf, curtainPieces } from "@/lib/venues/curtain";
+import { isRailed, offsetPath, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import type { Placement } from "@/lib/design-document/types";
 import type { Point } from "@/lib/studio/hall";
 import { SceneCollector } from "./collect";
@@ -63,7 +64,7 @@ export function buildScene(input: SceneInput): Scene {
   });
   for (const p of input.doc.placements) {
     if (p.tableId || p.layer === "table") continue; // on a table: tables.ts drew it
-    if (p.span) curtain(input, out, p);
+    if (isRailed(p)) curtain(input, out, p);
     else if (p.perch) perched(input, out, p, elevation);
     else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofedMm);
     else floorPlacement(input, out, p, elevation);
@@ -145,50 +146,90 @@ function ceilingPlacement(input: SceneInput, out: SceneCollector, p: Placement, 
   out.item(p.id, tagOf(kind, p, product?.name), build, roomTransform(p, z));
 }
 
-/** A curtain along its wall stretch (resolveSpan — the canvas's own reading of a span), hung a
- *  hand off the wall's room face, from the room's ceiling (or the row's drop under open sky). */
+/** A curtain on its RAIL (lib/studio/rail.ts — the canvas's own reading), as a pleated ribbon in the
+ *  row's style and drop. On a WALL: along the wall a hand off its room face (round the bow of a curved
+ *  one), from the room's ceiling — or the wall's own typed height when lower (Wall.heightMm) — or the
+ *  row's height under open sky. On a SIDE: a hand off the thing's face on the side it hangs, from the
+ *  thing's height. On a ROD: under the rod at its height, the rod on its posts. */
 function curtain(input: SceneInput, out: SceneCollector, p: Placement): void {
-  const span = p.span ? resolveSpan(input.structure, p.span) : null;
-  if (!span) return;
+  const rail = railOf(p);
+  const line = rail ? railLines(rail, sketchRailContext(input.doc, input.structure, input.structure, (v) => resolve(v)?.product))[0] : undefined;
+  if (!rail || !line) return;
   const resolved = resolve(p.variantId);
   const product = resolved?.product;
-  // The wall at the run's middle — out on the bow of a curved wall — and its normal there.
-  const { p: mid, n } = span.track.at((span.t0 + span.t1) / 2);
-  const off = WALL_THICK_MM / 2 + CURTAIN_OFF_WALL_MM;
-  // Which side is the room: the side a zone lies on; the wall's centre line when neither does.
-  const zoneAt = (q: Point) => input.plan.all.find((z) => z.boundary.length >= 3 && pointInPolygon(q, z.boundary));
-  const plus = { x: mid.x + n.x * off, y: mid.y + n.y * off };
-  const minus = { x: mid.x - n.x * off, y: mid.y - n.y * off };
-  const zonePlus = zoneAt(plus);
-  const zoneMinus = zoneAt(minus);
-  const sign = zonePlus ? 1 : zoneMinus ? -1 : 0;
-  const zone = (zonePlus ?? zoneMinus)?.zone;
-  // Along the wall itself, a hand off its room face — round the bow on a curved one.
-  const path = span.track.path(span.t0, span.t1, off * sign);
-  const topMm = zone && zone.ceilingHeightMm > 0 ? zone.ceilingHeightMm : product?.dimensions.heightMm || 3000;
   const colour = hexOf(resolved?.swatch) ?? hexOf(product?.appearance?.style?.fill) ?? "#f3ede2";
-  out.item(p.id, { type: "item", id: p.id, label: product?.name }, curtainBody(path, topMm, colour, { type: "item", id: p.id }), transform(vec3(0, 0, 0), 0));
+  const opts = { style: curtainStyleOf(product), dropMm: p.dropMm, posts: line.posts };
+  const tag = { type: "item" as const, id: p.id };
+  if (line.wall) {
+    const track = line.wall.track;
+    // The wall at the run's middle — out on the bow of a curved wall — and its normal there.
+    const { p: mid, n } = track.at((line.wall.t0 + line.wall.t1) / 2);
+    const off = WALL_THICK_MM / 2 + CURTAIN_OFF_WALL_MM;
+    // Which side is the room: the side a zone lies on; the wall's centre line when neither does.
+    const zoneAt = (q: Point) => input.plan.all.find((z) => z.boundary.length >= 3 && pointInPolygon(q, z.boundary));
+    const plus = { x: mid.x + n.x * off, y: mid.y + n.y * off };
+    const minus = { x: mid.x - n.x * off, y: mid.y - n.y * off };
+    const zonePlus = zoneAt(plus);
+    const zoneMinus = zoneAt(minus);
+    const sign = zonePlus ? 1 : zoneMinus ? -1 : 0;
+    const zone = (zonePlus ?? zoneMinus)?.zone;
+    // Along the wall itself, a hand off its room face — round the bow on a curved one.
+    const path = track.path(line.wall.t0, line.wall.t1, off * sign);
+    const topMm = wallCurtainTop(zone?.ceilingHeightMm, wallTypedHeight(input, line.wall.wallId)) ?? (product?.dimensions.heightMm || 3000);
+    out.item(p.id, { type: "item", id: p.id, label: product?.name }, curtainBody(path, topMm, colour, tag, opts), transform(vec3(0, 0, 0), 0));
+    return;
+  }
+  // A side's cloth stands a hand off the thing's face, on the side it hangs; a rod's under it.
+  const path = line.hang ? offsetPath(line.path, CURTAIN_OFF_WALL_MM * line.hang) : line.path;
+  const topMm = line.topMm && line.topMm > 0 ? line.topMm : product?.dimensions.heightMm || 3000;
+  out.item(p.id, { type: "item", id: p.id, label: product?.name }, curtainBody(path, topMm, colour, tag, opts), transform(vec3(0, 0, 0), 0));
+}
+
+/** A WALL's own typed height (Wall.heightMm), when it has one. */
+function wallTypedHeight(input: SceneInput, wallId: string): number | undefined {
+  const h = input.structure.walls.find((w) => w.id === wallId)?.heightMm;
+  return h !== undefined && h > 0 ? h : undefined;
+}
+
+/** Where a curtain on a wall hangs from: the LOWER of the room's ceiling and the wall's own typed
+ *  height — a curtain is never taller than the wall it hangs on, nor than the room. Open sky (a
+ *  ceiling of 0) and no typed height: undefined, the caller's own fallback. */
+export function wallCurtainTop(ceilingMm: number | undefined, wallMm: number | undefined): number | undefined {
+  const tops = [ceilingMm && ceilingMm > 0 ? ceilingMm : undefined, wallMm && wallMm > 0 ? wallMm : undefined].filter((v): v is number => v !== undefined);
+  return tops.length ? Math.min(...tops) : undefined;
 }
 
 /** The venue's own curtain (a feature of kind `curtain`, lib/venues/curtain.ts): the same body a
- *  hired drape gets, along its wall stretch on the side it hangs, from the ceiling of the zone on
- *  that side (its own height under open sky, else 3 m), in its cloth. */
+ *  hired drape gets, in its cloth, style and drop. On a WALL: along its stretch on the side it hangs,
+ *  from the ceiling of the zone on that side — or the wall's own typed height when lower — its own
+ *  height under open sky, else 3 m, in the pieces its doors leave it. On a side or a rod, as a hired
+ *  drape is. */
 function venueCurtain(input: SceneInput, out: SceneCollector, f: StructureFeature): void {
+  const colour = hexOf(f.style?.fill) ?? CURTAIN_FILL;
+  const tag = { type: "feature" as const, id: f.id, label: f.label };
+  const opts = { style: f.curtain?.style, dropMm: f.curtain?.dropMm };
   const c = curtainOf(f);
-  const span = c ? resolveSpan(input.structure, c) : null;
-  if (!c || !span) return;
+  if (!c) {
+    // On a side or a rod (curtainLines reads the rail against the venue's own features).
+    curtainLines(input.structure, f).forEach((line, i) => {
+      const path = line.hang ? offsetPath(line.path, CURTAIN_OFF_WALL_MM * line.hang) : line.path;
+      const topMm = line.topMm && line.topMm > 0 ? line.topMm : f.heightMm > 0 ? f.heightMm : 3000;
+      out.item(`feature:${f.id}:${i}`, tag, curtainBody(path, topMm, colour, tag, { ...opts, posts: line.posts }), transform(vec3(0, 0, 0), 0));
+    });
+    return;
+  }
+  const span = resolveSpan(input.structure, c);
+  if (!span) return;
   const off = (WALL_THICK_MM / 2 + CURTAIN_OFF_WALL_MM) * c.side;
   const at = span.track.at((span.t0 + span.t1) / 2);
   const mid = { x: at.p.x + at.n.x * off, y: at.p.y + at.n.y * off };
   const zone = input.plan.all.find((z) => z.boundary.length >= 3 && pointInPolygon(mid, z.boundary))?.zone;
-  const topMm = zone && zone.ceilingHeightMm > 0 ? zone.ceilingHeightMm : f.heightMm > 0 ? f.heightMm : 3000;
-  const colour = hexOf(f.style?.fill) ?? CURTAIN_FILL;
-  const tag = { type: "feature" as const, id: f.id, label: f.label };
+  const topMm = wallCurtainTop(zone?.ceilingHeightMm, wallTypedHeight(input, c.wallId)) ?? (f.heightMm > 0 ? f.heightMm : 3000);
   // In the pieces its doors leave it (curtainPieces): a doorway stays bare in the room too. Each
   // piece along the wall itself, round the bow of a curved one.
   curtainPieces(input.structure, f).forEach((pc, i) => {
     const path = span.track.path(pc.t0, pc.t1, off);
-    out.item(`feature:${f.id}:${i}`, tag, curtainBody(path, topMm, colour, tag), transform(vec3(0, 0, 0), 0));
+    out.item(`feature:${f.id}:${i}`, tag, curtainBody(path, topMm, colour, tag, opts), transform(vec3(0, 0, 0), 0));
   });
 }
 
