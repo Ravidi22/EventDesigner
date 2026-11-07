@@ -38,6 +38,7 @@ import { useState } from "react";
 import { Segmented } from "@/components/segmented";
 import { VENUE_EDGE_KINDS, VENUE_EDGE_LABEL, edgeRows, edgesMatter, featureGaps, takesEdgeItems, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { BUILDING_HEIGHT_MM, featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
+import { canEditOutline } from "@/lib/venues/face-surfaces";
 import { SurfaceTiles } from "@/components/surface-tiles";
 import type { DoorOpening, WallDistance } from "@/lib/design-document/stage";
 import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
@@ -1311,14 +1312,16 @@ export function SelectionBar({
       {/* A surface that fills a closed shape follows its walls; cut loose, it is a free surface of
           the same outline. A free one is reshaped point by point, as a freehand zone is. */}
       {bound && <BarButton icon={Unlink} label="ניתוק מהקירות — המשטח נשאר בצורתו, ואפשר להזיז אותו ולשנות את קוויו" onClick={() => patch({ fillsFace: undefined })} />}
-      {surface && !bound && !feature.locked && onToggleOutline && (
+      {/* …and so, since 2026-11-07, is a pool, a building or an "אחר": its sides bowed and its
+          corners rounded there too (lib/studio/shaped-outline.ts). */}
+      {canEditOutline(feature) && onToggleOutline && (
         <BarButton
           icon={PenLine}
           active={outlineEditId === feature.id}
           label={
             outlineEditId === feature.id
               ? "סיום עריכת הקווים · Esc"
-              : "עריכת הקווים — גררו פינה, גררו נקודת אמצע כדי להוסיף פינה, לחיצה כפולה על פינה מוחקת אותה"
+              : "עריכת הקווים — גררו פינה, גררו צלע כדי להוסיף בה פינה, המעוין מעקם צלע והעיגול שבפינה מעגל אותה, לחיצה כפולה על פינה מוחקת אותה"
           }
           onClick={() => onToggleOutline(feature.id)}
         />

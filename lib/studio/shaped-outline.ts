@@ -569,6 +569,18 @@ export function cornerGrip(s: OutlineShape, i: number, insetMm = 0): { at: Point
   return { at: add(f.v, mul(f.bisector, r * k + insetMm)), dir: f.bisector };
 }
 
+/** Every corner's grip at once (cornerGrip, the frames worked out once) — what the editor draws. */
+export function cornerGrips(s: OutlineShape, insetMm = 0): ({ at: Point; dir: Point } | null)[] {
+  const frames = cornerFrames(s.outline, s.edgeCurves);
+  const { radiusMm } = fitCornerRadii(s.outline, s.edgeCurves, s.corners);
+  return frames.map((f, i) => (f.roundable ? { at: add(f.v, mul(f.bisector, radiusMm[i] * (1 / Math.sin(f.theta / 2) - 1) + insetMm)), dir: f.bisector } : null));
+}
+
+/** Side `i`'s unit normal pointing OUT of the shape — the way a + bow pushes it. */
+export function sideNormal(s: OutlineShape, i: number): Point {
+  return outwardNormal(s.outline, i);
+}
+
 /** The radius a corner grip dragged to `p` asks for — how far along the corner's bisector it is,
  *  less the standoff, read back through the arc's geometry; held between square and the most the
  *  two sides take, in whole mm. */

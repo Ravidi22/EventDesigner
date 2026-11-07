@@ -350,5 +350,32 @@ if (isMain(import.meta.url)) {
     assert(buildingInFace(room).heightMm === BUILDING_HEIGHT_MM, "a building with no height typed is one storey");
   }
 
+  // A BOWED AND ROUNDED outline round trip (2026-11-07): what the outline editor reads off a feature
+  // is the points it wrote, the bows and radii on the same sides and corners, and writing it back
+  // changes nothing — on every frame of a drag that re-reads it, the shape must not creep.
+  {
+    const pts: Point[] = [{ x: 10000, y: 5000 }, { x: 22000, y: 5000 }, { x: 22000, y: 11000 }, { x: 10000, y: 11000 }];
+    const top = { c1: { x: 4000, y: -1600 }, c2: { x: -4000, y: -1600 } };
+    let f: StructureFeature = { ...newFeature("pool", { x: 0, y: 0 }), id: "p", ...asOutline(pts, [top, null, null, null], [900, null, 1500, 600]) };
+    const read = featureEditOutline(f);
+    assert(read.outline.every((p, i) => Math.abs(p.x - pts[i].x) < 1e-6 && Math.abs(p.y - pts[i].y) < 1e-6), "the editor reads back the very points written");
+    assert(!!read.edgeCurves?.[0] && !read.edgeCurves?.[1] && read.corners?.[0] === 900 && read.corners?.[1] === null && read.corners?.[2] === 1500, "…with the bow on its side and each radius on its corner");
+    const first = JSON.stringify(asOutline(read.outline, read.edgeCurves, read.corners));
+    for (let k = 0; k < 10; k++) {
+      const r = featureEditOutline(f);
+      f = { ...f, ...asOutline(r.outline, r.edgeCurves, r.corners) };
+    }
+    assert(JSON.stringify(asOutline(featureEditOutline(f).outline, featureEditOutline(f).edgeCurves, featureEditOutline(f).corners)) === first, "ten re-reads and re-writes later, not a millimetre has crept");
+    const drawn = featureWorldOutline(f);
+    assert(Math.min(...drawn.map((p) => p.y)) < 5000 - 1100, "the bowed top is drawn out beyond the points, where it was bowed");
+    assert(!drawn.some((p) => Math.hypot(p.x - 22000, p.y - 11000) < 50), "…and the rounded corner is cut off, where it was rounded");
+    // A plain rectangle pool turned 30°: its four corners, where the drawing has them.
+    const turned: StructureFeature = { ...newFeature("pool", { x: 1000, y: 2000 }), id: "t", shape: "rect", widthMm: 4000, depthMm: 2000, rotationDeg: 30 };
+    const tr = featureEditOutline(turned);
+    const world = featureWorldOutline(turned);
+    assert(tr.outline.length === 4 && tr.outline.every((p) => world.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 1e-6)), "a turned rectangle reads as its four drawn corners");
+    assert(canEditOutline(turned) && !canEditOutline({ ...turned, locked: true }) && !canEditOutline({ ...turned, kind: "column" }), "a pool's lines are editable; a pinned one's and a column's are not");
+  }
+
   console.log("face surfaces: ok");
 }
