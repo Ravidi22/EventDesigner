@@ -68,6 +68,8 @@ export const glossMaterial = (colour: string): MaterialRef => ({ colour, kind: "
 export const foliageMaterial = (colour: string): MaterialRef => ({ colour, kind: "foliage" });
 export const waterMaterial = (): MaterialRef => ({ colour: SURFACE_BASE.water, kind: "water", texture: "water", opacity: 0.8 });
 export const emissiveMaterial = (colour: string): MaterialRef => ({ colour, kind: "emissive" });
+/** A face that lights by the mood — an LED strip, a screen (./led.ts). */
+export const glowMaterial = (colour: string): MaterialRef => ({ colour, kind: "glow" });
 
 /** The envelope's own tones: not the designer's to choose, so not tokens either. */
 export const ENVELOPE = {

@@ -831,7 +831,7 @@ export function StudioScreen({
           { x, y },
           nearestWall(plan.structure, { x, y }),
           ledSideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product),
-          defaultRailHeight({ x, y }),
+          defaultRailHeight({ x, y }, sketchRoofOf()),
           takes,
         );
         if (!led) {
@@ -5321,7 +5321,7 @@ export function StudioScreen({
                       // An LED strip drawn free is a RUN between the two ends drawn (spec §7.1) — its
                       // height kept when it was a run already.
                       if (isLedStrip(resolve(p.variantId)?.product)) {
-                        const run = ledRunRail(points, was?.type === "run" ? was.heightMm : defaultRailHeight(points[0]));
+                        const run = ledRunRail(points, was?.type === "run" ? was.heightMm : defaultRailHeight(points[0], sketchRoofOf()));
                         if (run) act({ type: "setPlacementRail", id: p.id, rail: run });
                         return;
                       }

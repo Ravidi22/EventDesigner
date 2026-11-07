@@ -47,7 +47,10 @@ export interface Transform {
 /** `leaves` is a crown's leaf cards: a sprite of a leaf cluster cut out by its own alpha, two-sided,
  *  casting no shadow of its own (the clumps under it do). `petal` is a flower's: two-sided (a petal
  *  is a thin sheet seen from both faces) and shaded by its geometry's vertex colours. */
-export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive";
+export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive" | "glow";
+// `glow` is a surface that is its own light — an LED strip's face, a screen's (spec 2026-11-07 §7):
+// emissive, its strength set by the MOOD (faint by day, full at night; the viewer's GLOW_BY_MOOD),
+// and never a point light — the viewer's light pool stays the size it is (CLAUDE.md, 2026-10-27).
 
 /** A flower head's family of petals (./flowers.ts bloomMesh): a rose's spiral, a peony's ruffled
  *  layers, a tulip's cup, a lily's star, a gerbera's ring round its disc, an orchid's five. */
