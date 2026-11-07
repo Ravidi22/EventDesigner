@@ -5500,6 +5500,7 @@ export function StudioScreen({
                 renderDesigns={renderDesigns}
                 onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
                 onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
+                roofOf={(pt) => sketchRoofOf()(pt)}
                 onCentreOver={centreHung}
                 onSpreadRow={spreadAlongRow}
                 onHangOverDressing={hangOverDressing}

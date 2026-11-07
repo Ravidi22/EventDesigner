@@ -1224,6 +1224,14 @@ if (isMain(import.meta.url)) {
   assert(roundBar.shape === "circle" && roundBar.widthMm === 1500 && roundBar.depthMm === 1500, "a round bar is as wide as it is across");
   assert(featureFootprint(roundBar).kind === "circle", "…and draws as a circle of that width");
 
+  // A pergola (./pergola.ts): a new one is 4 × 4 × 2.6 on 15cm posts with slats, fixed in a sketch;
+  // a hired row set down at /halls brings its post and its roof across.
+  const pergola = newFeature("pergola", { x: 0, y: 0 });
+  assert(pergola.widthMm === 4000 && pergola.depthMm === 4000 && pergola.heightMm === 2600 && pergola.pergola?.postMm === 150 && pergola.pergola.roof === "slats", "a new pergola: 4 × 4, 2.6 m, 15cm posts, slats");
+  assert(!featureMovable(pergola), "…fixed in every sketch");
+  const pergolaRow = newFeatureFromProduct("pergola", { ...uBar, id: "p-perg", category: "pergolas", categoryFields: { postMm: 120 }, appearance: { shape: "rect", content: "none", symbolStyle: "fabric" } }, { x: 0, y: 0 });
+  assert(pergolaRow.kind === "pergola" && pergolaRow.pergola?.postMm === 120 && pergolaRow.pergola.roof === "fabric", "a pergola row lands with its post and its cloth roof");
+
   // A row drawn hollow comes across as the outline it resolves to — one keyhole, baked like the
   // arc — and a band opened into two pieces as its outer shape, solid: a feature is one outline.
   {
