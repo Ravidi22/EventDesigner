@@ -55,6 +55,9 @@ import {
   Rows3,
   Pencil,
   PackagePlus,
+  Lock,
+  LockOpen,
+  RotateCcw,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
@@ -198,9 +201,10 @@ export interface BenchSideRow extends BenchSideLayout {
   set: boolean;
 }
 
-/** What the bar may change about one side of a banquette: what it is, and how many sit there
- *  (`seats: null` = back to one per 60cm). */
-export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null };
+/** What the bar may change about one side of a banquette: what it is, how many sit there
+ *  (`seats: null` = back to one per 60cm), and — a sofa — its run along the banquette and its seat
+ *  depth (`null` = the whole length / the half strip). */
+export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null };
 
 /** What the bar shows for a STANDALONE banquette (Placement.bench): how it is laid, what the
  *  designer set, and whether it currently carries a number. */
@@ -251,6 +255,9 @@ export interface StagePanel {
   /** Null = the studio's railing rule is off (settings → במות). */
   railingMm: number | null;
   railingAboveMm: number | null;
+  /** The step this stage's flights are built in (StageBuild.riserMm / treadMm, stairStepOf) — and
+   *  whether the stage carries its own, or climbs by the defaults. */
+  stairStep: { riserMm: number; treadMm: number; own: boolean };
   /** Whether the catalog has a row to count stairs and skirt as on the quote. */
   stairsCounted: boolean;
   skirtCounted: boolean;
@@ -357,6 +364,7 @@ export function Inspector({
   onSpan,
   onResize,
   onBows,
+  onCorners,
   onRenumber,
   onStyleTable,
   onDuplicate,
@@ -371,6 +379,7 @@ export function Inspector({
   canDistribute,
   onDistribute,
   align,
+  lock,
   dressCandidateCount,
   onCopyDressing,
   onMirror,
@@ -383,6 +392,7 @@ export function Inspector({
   onEditStage,
   onExplodeStage,
   onStageHeight,
+  onStairStep,
   onStageSize,
   onAddStagePieces,
   onUseStagePieces,
@@ -510,6 +520,8 @@ export function Inspector({
   onResize: (id: string, sizeMm: { widthMm: number; depthMm: number }) => void;
   /** A rug's curved sides (Placement.bows); null straightens them all. */
   onBows?: (id: string, bows: [number, number, number, number] | null) => void;
+  /** A rug's rounded corners (Placement.corners), radius mm each; null squares them all. */
+  onCorners?: (id: string, corners: [number, number, number, number] | null) => void;
   onRenumber: (id: string, number: number) => void;
   onStyleTable: (id: string, style: ElementStyle | undefined) => void;
   /** Copy + paste in one press — offered by every bar, because "another one of these" is the same
@@ -542,6 +554,9 @@ export function Inspector({
   onDistribute: () => void;
   /** יישור by one of the selected (align-menu.tsx) — null when the selection cannot be aligned. */
   align: AlignPanel | null;
+  /** Pin the selection where it stands, or free it (DesignTable.locked / Placement.locked) — the
+   *  "…" row on every bar, Ctrl+Shift+L on the canvas. Null when nothing selected can be locked. */
+  lock: LockPanel | null;
   /** How many of the currently selected tables a copied table's dressing would actually land on
    *  (the source table itself, if it happens to be among them, is excluded) — 0 hides the control
    *  and is also the reducer's own no-op case, so this only ever offers something that does
@@ -567,6 +582,8 @@ export function Inspector({
   /** Replace the stage with its decks as loose items, grouped. One way: the plan then holds decks. */
   onExplodeStage: () => void;
   onStageHeight: (heightMm: number) => void;
+  /** The step the stage's flights are built in; null on a field = back to the default. */
+  onStairStep: (step: { riserMm?: number | null; treadMm?: number | null }) => void;
   /** A rectangular stage set to an exact size, its back edge held where it stands. */
   onStageSize: (size: { widthMm: number; depthMm: number }) => void;
   /** The stage's missing rim pieces made catalog rows and chosen for it; or catalog pieces it was not
@@ -828,6 +845,7 @@ export function Inspector({
               ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
             ],
             [{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup }],
+            lockItems(lock),
           ]}
         />
         <Actions
@@ -1067,6 +1085,7 @@ export function Inspector({
             mirrorItems(onMirror),
             [stageGroup.grouped ? { label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup } : { label: "קיבוץ · Ctrl+G", icon: Group, onSelect: onGroup }],
             sg.whole && onGroupExplode ? [{ label: "פירוק כל הבמות לפלטות נפרדות", icon: Blocks, onSelect: onGroupExplode }] : [],
+            lockItems(lock),
           ]}
         />
         <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הבמות" onDelete={onDelete} deleteLabel="מחיקת הבמות" />
@@ -1179,6 +1198,7 @@ export function Inspector({
               { label: "ידית הסיבוב: סביב מרכז משותף", icon: spin === "together" ? Check : Orbit, onSelect: () => onSpin("together") },
               { label: "ידית הסיבוב: כל אחד סביב עצמו", icon: spin === "each" ? Check : Orbit, onSelect: () => onSpin("each") },
             ],
+            lockItems(lock),
           ]}
         />
         <Actions
@@ -1547,6 +1567,34 @@ export function Inspector({
               />
               <span className="text-xs text-muted">ס״מ</span>
             </PanelRow>
+            {/* THE STEP its flights climb in — the crew's stair module (StageBuild.riserMm/treadMm):
+                no riser taller than this, each tread this deep. A new stage takes the studio's
+                (settings → במות); this is where one stage is built in another. */}
+            <PanelRow label="גובה מדרגה" htmlFor="stage-riser">
+              <NumberField
+                id="stage-riser"
+                decimals={0}
+                min={8}
+                max={30}
+                value={cmOf(sp.stairStep.riserMm)}
+                onChange={(cm) => onStairStep({ riserMm: cm * 10 })}
+                className="w-20"
+              />
+              <span className="text-xs text-muted">ס״מ · לכל היותר</span>
+            </PanelRow>
+            <PanelRow label="עומק מדרגה" htmlFor="stage-tread">
+              <NumberField
+                id="stage-tread"
+                decimals={0}
+                min={15}
+                max={60}
+                value={cmOf(sp.stairStep.treadMm)}
+                onChange={(cm) => onStairStep({ treadMm: cm * 10 })}
+                className="w-20"
+              />
+              <span className="text-xs text-muted">ס״מ</span>
+              {sp.stairStep.own && <BarButton icon={RotateCcw} label="חזרה למדרגה הרגילה" onClick={() => onStairStep({ riserMm: null, treadMm: null })} />}
+            </PanelRow>
             {sp.levels.map((l, i) => (
               <PanelRow key={l.id} label={`מפלס ${i + 1}`} htmlFor={`level-${l.id}`}>
                 <NumberField
@@ -1691,7 +1739,7 @@ export function Inspector({
               beside "עריכת הבמה" a slip away from it. */}
           <MoreMenu
             label="עוד פעולות לבמה"
-            sections={[mirrorItems(onMirror), stackItems(canRestack, onRestack), [{ label: "פירוק לפלטות נפרדות", icon: Blocks, onSelect: onExplodeStage }]]}
+            sections={[mirrorItems(onMirror), stackItems(canRestack, onRestack), [{ label: "פירוק לפלטות נפרדות", icon: Blocks, onSelect: onExplodeStage }], lockItems(lock)]}
           />
           <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הבמה" onDelete={onDelete} deleteLabel="מחיקת הבמה" />
         </Bar>
@@ -1774,6 +1822,25 @@ export function Inspector({
             </Note>
           </Popover>
         )}
+        {/* ITS HEIGHT, as a chip of its own (2026-10-31, the user: "need to be able to define his
+            height in the inspector"): the top — table height for the chairs beside it — always,
+            and a sofa side's seat when it has one. It used to hide inside "ישיבה", and only once a
+            chairs side was chosen. */}
+        {bench && benchPanel && (
+          <Popover label="גובה" icon={MoveVertical} value={`${Math.round(bench.heightMm / 10)} ס״מ`} panelClassName="w-80">
+            <PanelRow label="גובה המשטח" htmlFor="bench-h">
+              <NumberField id="bench-h" decimals={0} min={20} max={150} commitOnBlur value={Math.round(bench.heightMm / 10)} onChange={(cm) => onBench(p.id, { heightMm: cm * 10 })} className="w-20" />
+              <span className="text-xs text-muted">ס״מ מהרצפה</span>
+            </PanelRow>
+            {(bench.back.kind === "sofa" || bench.front.kind === "sofa") && (
+              <PanelRow label="גובה מושב הספה" htmlFor="bench-sh">
+                <NumberField id="bench-sh" decimals={0} min={30} max={70} commitOnBlur value={Math.round(bench.sofaHeightMm / 10)} onChange={(cm) => onBench(p.id, { sofaHeightMm: cm * 10 })} className="w-20" />
+                <span className="text-xs text-muted">ס״מ מהרצפה</span>
+              </PanelRow>
+            )}
+            <Note>המשטח הוא השולחן של הכיסאות שלצידו — 75 ס״מ כברירת מחדל. ספה נמוכה ממנו, והיושבים עליה פונים החוצה.</Note>
+          </Popover>
+        )}
         {bench && benchPanel && (
           <Popover label="ישיבה" icon={Armchair} value={bench.seats > 0 ? ltr(`${benchPanel.spec?.seated ?? 0}/${bench.seats}`) : "—"} panelClassName="w-[22rem]">
             <BenchSidesFields
@@ -1786,6 +1853,9 @@ export function Inspector({
               heightMm={bench.heightMm}
               sofaHeightMm={bench.sofaHeightMm}
               heightNote="מהרצפה — שולחן לכיסאות שלצידו"
+              heights={false}
+              lengthMm={bench.widthMm}
+              depthMm={bench.depthMm}
               onSide={(side, patch) => onBench(p.id, { [side]: patch })}
               onHeight={(mm) => onBench(p.id, { heightMm: mm })}
               onSofaHeight={(mm) => onBench(p.id, { sofaHeightMm: mm })}
@@ -1867,13 +1937,72 @@ export function Inspector({
                 className="w-20"
               />
             </PanelRow>
+            {/* Rounded corners, as the stage's "פינות": one radius for all four, and each corner on its
+                own — a rug may be rounded on two corners only (2026-10-31). The four fields stand
+                where their corners are on the rug (left to right whatever the page direction), as the
+                points on the plan do. */}
+            {onCorners && (
+              <>
+                <PanelRow label="כל הפינות (ס״מ)" htmlFor="rug-corners">
+                  <NumberField
+                    id="rug-corners"
+                    decimals={0}
+                    min={0}
+                    max={Math.round(Math.min(size?.widthMm ?? 0, size?.depthMm ?? 0) / 20)}
+                    step={5}
+                    value={Math.round(Math.max(0, ...(p.corners ?? [0])) / 10)}
+                    onChange={(v) => onCorners(p.id, v > 0 ? [v * 10, v * 10, v * 10, v * 10] : null)}
+                    className="w-20"
+                  />
+                </PanelRow>
+                <PanelRow label="כל פינה בנפרד" stack>
+                  <div dir="ltr" className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-sm border border-border p-2">
+                    {(["פינה שמאלית עליונה", "פינה ימנית עליונה", "פינה שמאלית תחתונה", "פינה ימנית תחתונה"] as const).map((label, k) => {
+                      // Grid order is left-top, right-top, left-bottom, right-bottom; RugCorners is
+                      // top-left, top-right, bottom-right, bottom-left.
+                      const i = [0, 1, 3, 2][k];
+                      const radii: [number, number, number, number] = p.corners ? [...p.corners] : [0, 0, 0, 0];
+                      return (
+                        <div key={i} className={k % 2 ? "justify-self-end" : "justify-self-start"}>
+                          <NumberField
+                            aria-label={`${label} (ס״מ)`}
+                            decimals={0}
+                            min={0}
+                            max={Math.round(Math.min(size?.widthMm ?? 0, size?.depthMm ?? 0) / 20)}
+                            step={5}
+                            value={Math.round(radii[i] / 10)}
+                            onChange={(v) => {
+                              radii[i] = Math.max(0, v) * 10;
+                              onCorners(p.id, radii.some((x) => x > 0) ? radii : null);
+                            }}
+                            className="w-16"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </PanelRow>
+              </>
+            )}
             {onBows && (
               <>
-                <Note>גרירת הריבוע באמצע כל צד מעקמת אותו; לחיצה כפולה עליו מיישרת אותו.</Note>
-                {p.bows && (
-                  <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onBows(p.id, null)}>
-                    יישור כל הצדדים
-                  </Button>
+                <Note>
+                  גרירת הריבוע באמצע כל צד מעקמת אותו; לחיצה כפולה עליו מיישרת אותו.
+                  {onCorners ? " הנקודה שבתוך כל פינה מעגלת את הפינה הזו (Alt — את כל הפינות יחד); לחיצה כפולה עליה מיישרת." : ""}
+                </Note>
+                {(p.bows || (p.corners && onCorners)) && (
+                  <div className="mt-3 flex gap-2">
+                    {p.bows && (
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => onBows(p.id, null)}>
+                        יישור כל הצדדים
+                      </Button>
+                    )}
+                    {p.corners && onCorners && (
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => onCorners(p.id, null)}>
+                        פינות ישרות
+                      </Button>
+                    )}
+                  </div>
                 )}
               </>
             )}
@@ -1970,6 +2099,7 @@ export function Inspector({
               ...(onSaveComposite && (table || overTable) ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
             ],
             onMakeStage ? [{ label: "הפיכה לבמה — מדרגות, גובה ומפלסים", icon: Grid2x2, onSelect: onMakeStage }] : [],
+            lockItems(lock),
           ]}
         />
         <Actions
@@ -2212,6 +2342,7 @@ export function Inspector({
             ...(onEditProduct && t.variantId && resolve(t.variantId) ? [{ label: "עריכת סוג השולחן בקטלוג", icon: Pencil, onSelect: () => onEditProduct(t.variantId!) }] : []),
             ...(onSaveComposite ? [{ label: "שמירת השולחן עם העיצוב כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
           ],
+          lockItems(lock),
         ]}
       />
 
@@ -2248,6 +2379,9 @@ function BenchSidesFields({
   heightMm,
   sofaHeightMm,
   heightNote,
+  heights,
+  lengthMm,
+  depthMm,
   onSide,
   onHeight,
   onSofaHeight,
@@ -2262,6 +2396,13 @@ function BenchSidesFields({
   sofaHeightMm: number;
   /** What the top height is measured from, in words. */
   heightNote: string;
+  /** Whether the two height rows are drawn here — the standalone bar shows them in its own
+   *  "גובה" chip, the stage's edge bar in this panel. Default on. */
+  heights?: boolean;
+  /** The strip's length and depth, for a sofa's run and seat-depth fields (what "the whole
+   *  length" and "the half strip" are). */
+  lengthMm?: number;
+  depthMm?: number;
   onSide: (side: "back" | "front", patch: BenchSidePatch) => void;
   onHeight: (mm: number) => void;
   onSofaHeight: (mm: number) => void;
@@ -2276,10 +2417,25 @@ function BenchSidesFields({
           <NumberField id={`${idPrefix}-${key}-seats`} decimals={0} min={0} max={60} value={row.seats} onChange={(n) => onSide(key, { seats: n })} className="w-20" />
         </PanelRow>
       )}
+      {/* A sofa's own size: how long a run of the banquette it takes (centred), and how deep its
+          seat is from the edge in — BenchSide.widthMm / depthMm. Blank = the whole length / the
+          half strip, which is what every sofa side was. */}
+      {row.kind === "sofa" && (
+        <>
+          <PanelRow label="רוחב הספה (ס״מ)" htmlFor={`${idPrefix}-${key}-sw`}>
+            {row.widthMm !== undefined && lengthMm !== undefined && row.widthMm < lengthMm && <BarButton icon={Undo2} label={`לכל האורך (${cmOf(lengthMm)})`} onClick={() => onSide(key, { widthMm: null })} />}
+            <NumberField id={`${idPrefix}-${key}-sw`} decimals={0} min={60} max={1200} commitOnBlur value={cmOf(row.widthMm ?? lengthMm ?? 0)} onChange={(cm) => onSide(key, { widthMm: cm * 10 })} className="w-20" />
+          </PanelRow>
+          <PanelRow label="עומק המושב (ס״מ)" htmlFor={`${idPrefix}-${key}-sd`}>
+            <NumberField id={`${idPrefix}-${key}-sd`} decimals={0} min={20} max={150} commitOnBlur value={cmOf(row.depthMm ?? 0)} onChange={(cm) => onSide(key, { depthMm: cm * 10 })} className="w-20" />
+            <span className="text-xs text-muted">{depthMm !== undefined ? `מתוך ${cmOf(depthMm)} של הבנקט` : "מהקצה פנימה"}</span>
+          </PanelRow>
+        </>
+      )}
     </div>
   );
-  const hasChairs = back.kind === "chairs" || front.kind === "chairs";
-  const hasSofa = back.kind === "sofa" || front.kind === "sofa";
+  const hasChairs = heights !== false && (back.kind === "chairs" || front.kind === "chairs");
+  const hasSofa = heights !== false && (back.kind === "sofa" || front.kind === "sofa");
   return (
     <div className="space-y-2">
       {side("back", back, backLabel)}
@@ -2450,6 +2606,22 @@ function MoreMenu({ label, sections }: { label: string; sections: MenuItem[][] }
   return <Menu label={label} side="top" items={items} />;
 }
 
+/** What the "…" says about pinning the selection in place: one row, worded by what it would do. */
+export interface LockPanel {
+  /** Every selected table and item is already locked. */
+  locked: boolean;
+  onToggle: () => void;
+}
+
+/** "נעילה במקום" / "שחרור הנעילה" — the last section of every bar's "…" (lib/design-document/
+ *  types.ts DesignTable.locked). Empty when nothing selected can be locked. */
+function lockItems(lock: LockPanel | null): MenuItem[] {
+  if (!lock) return [];
+  return lock.locked
+    ? [{ label: "שחרור הנעילה · Ctrl+Shift+L", icon: LockOpen, onSelect: lock.onToggle }]
+    : [{ label: "נעילה במקום — בלי גרירה, ידיות או מחיקה · Ctrl+Shift+L", icon: Lock, onSelect: lock.onToggle }];
+}
+
 /** Turn the selection over, side to side or top to bottom. Empty where nothing selected can be. */
 function mirrorItems(onMirror?: (axis: MirrorAxis) => void): MenuItem[] {
   if (!onMirror) return [];
@@ -2513,7 +2685,7 @@ function SizePopover({ panel, onSize }: { panel: SizePanel; onSize: (size: { wid
             decimals={0}
             min={cm(spec.depth.minMm)}
             max={cm(spec.depth.maxMm)}
-            step={cm(step)}
+            step={cm(spec.depth.stepMm || step)}
             commitOnBlur
             value={cm(size.depthMm)}
             onChange={(v) => onSize({ widthMm: size.widthMm, depthMm: v * 10 })}

@@ -230,7 +230,9 @@ export const CATEGORIES: CategoryDef[] = [
     dims: "box",
     fields: [],
     defaultHeightMm: 750,
-    defaultResize: { stepMm: 100, width: { minMm: 600, maxMm: 12000 } },
+    // …and its depth in 5cm: seat-deep (45) on its own, table-deep (60) once chairs sit at it
+    // (lib/design-document/bench.ts BENCH_TABLE_DEPTH_MM), or whatever the crew's modules make.
+    defaultResize: { stepMm: 100, width: { minMm: 600, maxMm: 12000 }, depth: { minMm: 300, maxMm: 1500, stepMm: 50 } },
   },
   { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [] },
   // A wall standing on a stage edge (a flower wall, a draped frame) by the metre; a ramp by the ramp;
@@ -299,6 +301,28 @@ export function anchorOf(p: { category: string; name: string; dimensions: { widt
 // Composites are in both: a dressed head table is the hall pass's table and the design pass's
 // dressing at once, and placing one never leaves a composite row on the plan to be filtered by pass.
 export const HALL_PASS_GROUPS: CategoryGroupId[] = ["grp-seating", "grp-stages", "grp-bars", "grp-composites"];
+/** Categories that belong to the HALL pass though their department does not: a rug is laid under
+ *  the tables when the room is set out, not when it is dressed (2026-10-31, the user: "a rug is not
+ *  a design — it's related to the table sketch"). Offered in the hall pass's rail, drawn on its
+ *  canvas, and taken off the design pass's rail. */
+export const HALL_PASS_CATEGORIES: string[] = ["rugs"];
+
+/** Is a row of this category one of `pass`'s — in its rail, on its canvas? An unknown category is
+ *  shown rather than guessed away. */
+export function categoryInPass(category: string | undefined, pass: "hall" | "design"): boolean {
+  const def = category ? CATEGORY_BY_ID[category] : undefined;
+  if (!def) return true;
+  const listed = HALL_PASS_CATEGORIES.includes(def.id);
+  return pass === "hall" ? listed || HALL_PASS_GROUPS.includes(def.group) : !listed && DESIGN_PASS_GROUPS.includes(def.group);
+}
+
+/** The departments a pass's rail lets the designer narrow to: the pass's own, and — for the hall —
+ *  the department each of its extra categories is filed under. */
+export function passGroups(pass: "hall" | "design"): CategoryGroupId[] {
+  if (pass === "design") return DESIGN_PASS_GROUPS;
+  const extra = HALL_PASS_CATEGORIES.map((id) => CATEGORY_BY_ID[id]?.group).filter((g): g is CategoryGroupId => !!g);
+  return [...HALL_PASS_GROUPS, ...extra.filter((g) => !HALL_PASS_GROUPS.includes(g))];
+}
 export const DESIGN_PASS_GROUPS: CategoryGroupId[] = [
   "grp-table-design",
   "grp-ceiling-design",

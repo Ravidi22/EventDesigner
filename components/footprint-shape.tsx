@@ -15,6 +15,13 @@ import { isRunner } from "@/lib/catalog/categories";
 import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { catalogVersion } from "@/lib/catalog/storage";
+import type { RugShape } from "@/lib/studio/rug-shape";
+
+/** Two rug shapes (RugShape) that say the same: the same bows, the same corners. */
+function sameRugShape(a: RugShape, b: RugShape): boolean {
+  const same4 = (x?: readonly number[], y?: readonly number[]) => (!x && !y) || (!!x && !!y && x.length === y.length && x.every((v, i) => v === y[i]));
+  return same4(a.bows, b.bows) && same4(a.corners, b.corners);
+}
 
 // The one place a catalog footprint turns into SVG. Three surfaces draw the same shapes — the
 // studio canvas, the drag image that leaves the rail, and the placement map the crew is handed on
@@ -398,8 +405,10 @@ export function sameDrawProps<P extends object>(a: P, b: P): boolean {
     const y = b[k];
     if (Object.is(x, y)) continue;
     if (k === "footprint" && x && y && sameFootprint(x as unknown as Footprint, y as unknown as Footprint)) continue;
-    // A rug's curves (Placement.bows) are a fresh four-number array on every read.
-    if (k === "bows" && Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])) continue;
+    // A rug's curves (Placement.bows) and corners are a fresh four-number array on every read; its
+    // shape (RugShape) a fresh object of the two.
+    if ((k === "bows" || k === "corners") && Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i])) continue;
+    if (k === "shape" && x && y && sameRugShape(x as RugShape, y as RugShape)) continue;
     return false;
   }
   return true;

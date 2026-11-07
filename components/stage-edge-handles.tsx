@@ -6,6 +6,7 @@ import {
   MIN_EDGE_ITEM_MM,
   edgeGaps,
   edgeItemShape,
+  edgeItemStrokes,
   freeStretch,
   itemAlong,
   itemEdge,
@@ -85,14 +86,20 @@ export function EdgeItemsDrawing({
           // Outside the stage's outline, so its own hit area: a click on the stairs is a click on the
           // stage (select it, drag it) — not on the floor behind.
           <g key={st.id} style={{ pointerEvents: "visiblePainted" }}>
-            <polygon
-              points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")}
-              fill={fill}
-              fillOpacity={1}
-              stroke={on ? "var(--color-accent)" : "var(--color-border)"}
-              strokeWidth={on ? 2.5 : 1.5}
-              vectorEffect="non-scaling-stroke"
-            />
+            {/* Filled, then outlined without the end lines where it runs on into another item of the
+                stage — flush, or mitred round an inside corner (edgeItemStrokes) — so two read as one run. */}
+            <polygon points={shape.polygon.map((q) => `${q.x},${q.y}`).join(" ")} fill={fill} fillOpacity={1} stroke="none" />
+            {edgeItemStrokes(shape).map((l, k) => (
+              <polyline
+                key={`o${k}`}
+                points={l.map((q) => `${q.x},${q.y}`).join(" ")}
+                fill="none"
+                stroke={on ? "var(--color-accent)" : "var(--color-border)"}
+                strokeWidth={on ? 2.5 : 1.5}
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
             {shape.treads.map(([u, v], k) => (
               <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke="var(--color-ink-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             ))}

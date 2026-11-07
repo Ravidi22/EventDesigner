@@ -83,6 +83,11 @@ export interface DesignTable {
    *  Absent = laid out automatically every time it is drawn (lib/design-document/dressing.ts), which
    *  is every table dressed before this existed and every one dressed by "apply to all tables". */
   arranged?: boolean;
+  /** Pinned where it stands on THIS plan — /halls' `StructureFeature.locked` for the sketch: it
+   *  still selects (so it can be unlocked, dressed, renumbered, its chairs changed), but takes no
+   *  drag, no nudge, no handle, no turn, no flip, no יישור, and Delete passes over it. A copy is
+   *  never born locked (lib/studio/clipboard.ts). Absent = free, which is everything ever drawn. */
+  locked?: boolean;
 }
 
 /** A drape's run along one wall of the venue, as fractions of that wall's length (0 = the wall's
@@ -126,6 +131,11 @@ export interface Placement {
    *  scales its curves with it. Absent = the plain rectangle. A drawing fact like `scale`: the quote,
    *  the packing list and orders still count the rug by its box. */
   bows?: [number, number, number, number];
+  /** A RUG with rounded corners (lib/studio/rug-shape.ts): top-left, top-right, bottom-right,
+   *  bottom-left — each corner's radius in mm, as a stage's rounded corners are (a radius is a
+   *  measurement, kept when the rug is stretched; held to the rug's size when drawn). Absent = square
+   *  corners. A drawing fact like `bows`. */
+  corners?: [number, number, number, number];
   /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
    *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
    *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */
@@ -178,6 +188,8 @@ export interface Placement {
    *  row by the action that writes it (setChairRows), so it is counted as the chairs it is. Absent =
    *  one chair. */
   rows?: ChairRows;
+  /** Pinned where it stands on THIS plan — see DesignTable.locked, which this means exactly. */
+  locked?: boolean;
 }
 
 /** See Placement.rows — what the designer chose; everything else about the block is derived. */
@@ -206,6 +218,11 @@ export type BenchSideKind = "chairs" | "sofa" | "none";
 export interface BenchSide {
   kind: BenchSideKind;
   seats?: number;
+  /** A SOFA side's run along the banquette, mm, centred on it — absent = the whole length; and how
+   *  deep its seat is from the edge in, mm — absent = that side's half of the strip less the backrest
+   *  band. Read only on a sofa side (lib/design-document/bench.ts). */
+  widthMm?: number;
+  depthMm?: number;
 }
 
 /** What a banquette is, beyond its length: each long side, and its two heights.
@@ -263,6 +280,14 @@ export interface StageBuild {
   /** The deck surface above the floor, mm. Absent = the tallest chosen deck's own height. The same
    *  decks stand at 20cm or 80cm on their adjustable legs, so this is the stage's, not the deck's. */
   heightMm?: number;
+  /** THE STEP this stage's flights are built in — the crew's own stair module: no riser taller than
+   *  `riserMm` (so a 60cm stage with 20cm modules climbs in three), each tread `treadMm` deep. Seeded
+   *  from the studio's rule (settings → במות, studio_settings.stage_stair_*) when the stage is made
+   *  and kept on the stage from then on, so a plan already issued does not change when the studio
+   *  buys other stairs. Absent = the comfortable defaults (RISER_MAX_MM 18cm, TREAD_MM 28cm), which
+   *  is every stage drawn before this existed. A flight's own typed `risers` still wins. */
+  riserMm?: number;
+  treadMm?: number;
   /** Raised parts of the stage — a drum riser, a DJ booth — each laid with its own decks at its own
    *  height. They PARTITION the floor with the base rather than stacking on it, which is how a crew
    *  builds one: the riser's decks stand on longer legs where the base's would have been. */
@@ -323,6 +348,11 @@ export interface StagePiece {
   centre: Point;
   rotation: number;
   mirrored?: boolean;
+  /** A piece of NOTHING: this spot — the box of `variantId`'s deck, where it stands — is left bare.
+   *  No deck is laid there, none counted, the platform is open there (a column standing up
+   *  through the stage, a trap, a cable well). Made in the fill tool from a deck put by hand
+   *  (2026-10-31). */
+  hole?: true;
 }
 
 /** A stage saved to be used again — its shape, levels, edges, height, decks and finishes, and what
@@ -358,11 +388,16 @@ export interface TableDesign {
   items: { variantId: string; quantity: number; position: Point; rotation: number; scale: number; sizeMm?: { widthMm: number; depthMm: number }; mirrored?: boolean; vessel?: string | null }[];
 }
 
-/** A raised part of a stage, in the stage's own frame. */
+/** A raised part of a stage, in the stage's own frame. A stage merged with another standing at a
+ *  different height keeps the higher one as a level of its own outline (lib/design-document/stage.ts
+ *  mergeStages, 2026-10-31) — so a level may be a curve too (`smooth`, as StageBuild.smooth: the
+ *  corners the curve runs through, one side each) and may stand on the stage's own edge, where its
+ *  sides look out at the room and are finished from the floor (levelEdgeOuter). */
 export interface StageLevel {
   id: string;
   outline: Point[];
   heightMm: number;
+  smooth?: number[];
 }
 
 /** What one stretch of an edge is finished with. STAIRS climb onto the stage from outside it; a

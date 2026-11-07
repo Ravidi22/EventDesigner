@@ -158,8 +158,12 @@ if (isMain(import.meta.url)) {
       shape: {
         kind,
         inner,
+        outer: false,
+        floorMm: 0,
         polygon: [at(0, 0), at(w, 0), at(w, depth), at(0, depth)],
         treads,
+        lines: [[at(0, 0), at(w, 0)], ...treads.map(([p, q]) => [p, q]), [at(0, depth), at(w, depth)]],
+        ends: ["free", "free"],
         base: at(w / 2, 0),
         foot: at(w / 2, depth),
         farLine: [at(0, depth), at(w, depth)],

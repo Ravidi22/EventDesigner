@@ -22,14 +22,16 @@ export type Plane = "tables" | Layer;
  *  around them, then what hangs above. Not the catalog's LAYERS order — this row is read as a
  *  section through the room.
  *
- *  שולחנות is the tables; שולחן is what is laid ON one, which is the catalog's own word for that
- *  layer everywhere else in the app and stays that word here. They are one letter apart, and they
- *  are adjacent for exactly that reason: read as a pair, in this order, the plural/singular does
- *  the work — the tables, then the table. Split across the row they would be two chips a designer
- *  has to stop and tell apart. */
+ *  שולחנות is the tables; עיצוב שולחן is what is laid ON one — the catalog group those items come
+ *  from ("עיצוב שולחן": cloths, centrepieces, candlesticks, vases). It was "שולחן", the catalog's
+ *  word for the LAYER (the product drawer's "על התוכנית": on a table / on the floor / from the
+ *  ceiling), on the theory that read as a pair the plural and the singular would do the work — the
+ *  tables, then the table. They did not: one letter apart, they were two chips a designer stopped
+ *  to tell apart every time (2026-10-31, the user). The catalog keeps its word, because there it
+ *  answers a different question — where an item GOES, not what a plane IS. */
 export const PLANES: { id: Plane; label: string }[] = [
   { id: "tables", label: "שולחנות" },
-  { id: "table", label: "שולחן" },
+  { id: "table", label: "עיצוב שולחן" },
   { id: "floor", label: "רצפה" },
   { id: "ceiling", label: "תקרה" },
 ];

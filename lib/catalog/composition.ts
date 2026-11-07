@@ -60,15 +60,18 @@ export function fromSelection(clip: Clip, box: Box): Composition {
   const placementIds = new Set(clip.placements.map((p) => p.id));
   const cx = Math.round((box.minX + box.maxX) / 2);
   const cy = Math.round((box.minY + box.maxY) / 2);
-  const tables: DesignTable[] = clip.tables.map(({ seated: _s, order: _o, ...t }) => {
+  // `locked` is a fact about one plan ("this table stays here"), not about the item — dropped too.
+  const tables: DesignTable[] = clip.tables.map(({ seated: _s, order: _o, locked: _l, ...t }) => {
     void _s;
     void _o;
+    void _l;
     return { ...t, position: { x: t.position.x - cx, y: t.position.y - cy } };
   });
   const placements: Placement[] = clip.placements
     .filter((p) => (p.tableId === undefined || tableIds.has(p.tableId)) && (p.perch === undefined || placementIds.has(p.perch.stageId)))
-    .map(({ order: _o, over, ...p }) => {
+    .map(({ order: _o, over, locked: _l, ...p }) => {
       void _o;
+      void _l;
       return {
         ...p,
         ...(over !== undefined && tableIds.has(over) ? { over } : {}),

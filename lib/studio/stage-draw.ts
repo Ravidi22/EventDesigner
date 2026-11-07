@@ -5,9 +5,11 @@
 // that precise, and a side 2° off square is not a cosmetic problem here — the fill lays its rows from
 // the front edge, so a skewed side leaves a sliver of stage no deck fits and a ragged build. So:
 //
-//   • while drawing, each new side is held to 45° steps from the FIRST side (not from the page — a
-//     stage along an angled wall is square to that wall), and its length to whole 10cm (Alt frees
-//     both, for the stage that really is odd);
+//   • while drawing, each side is held to the room's own 45° grid — the first side also along or
+//     square to a wall that genuinely stands at an angle beside it (firstSideAngles), every later
+//     side also along or square to the FIRST side (laterSideAngles) — so a stage laid along an
+//     angled wall turns square to the wall or straight down the room, whichever the pointer says;
+//     and its length to whole 10cm (Alt frees both, for the stage that really is odd);
 //   • when the outline closes, a shape whose sides are all within a few degrees of square is made
 //     exactly square (squareUp) — which is what fixes the closing side, the one side the designer
 //     does not draw;
@@ -24,17 +26,83 @@ import { isMain } from "../self-check";
 
 export const DRAW_ANGLE_STEP_DEG = 45;
 export const DRAW_LENGTH_STEP_MM = 100;
+/** How far off square a wall may stand and still be read as SQUARE. A surveyed wall is seldom exactly
+ *  on the room's axes, and a stage drawn against one 3° off is still meant square to the room — the
+ *  fill, the decks and every other stage in the hall are. Past this the wall is architecture (a
+ *  chamfer, a wing) and a stage may follow it. squareUp's tolerance, for the same reason. */
+export const WALL_SQUARE_TOL_DEG = 6;
 
 const deg = (r: number) => (r * 180) / Math.PI;
 const rad = (d: number) => (d * Math.PI) / 180;
 
+/** A set of directions a side may be held to: every `stepDeg` from `refDeg`. */
+export interface DrawAngles {
+  refDeg: number;
+  stepDeg: number;
+}
+
+/** The frame a wall standing at `wallDeg` lends a stage drawn beside it: its own line folded into a
+ *  quarter turn (a wall at 120° lends 30°) — or nothing (null) when there is no wall, or the wall is
+ *  within WALL_SQUARE_TOL_DEG of square, in which case the room's own frame is the one meant. */
+export function wallFrameDeg(wallDeg: number | null): number | null {
+  if (wallDeg === null) return null;
+  const w = ((wallDeg % 90) + 90) % 90;
+  return Math.min(w, 90 - w) <= WALL_SQUARE_TOL_DEG ? null : w;
+}
+
+/** The directions the FIRST side of a stage may take, clicked beside a wall at `wallDeg` (null = no
+ *  wall near): always the room's own 45° grid; and, when the wall genuinely stands at an angle, ALONG
+ *  that wall or square to it as well — the pointer picks, nearest wins. Only the wall's line and its
+ *  square, not its diagonals: a stage against an angled wall is square to it, and the room's grid
+ *  already has every diagonal a designer means. The first version held the first side to the nearest
+ *  wall ALONE, so a click near a 30° wall could draw nothing but 30/75/120° sides, and a wall 3° off
+ *  square tilted the whole stage 3° (2026-10-31, the user: an angled or near-angled wall "forces me to
+ *  go on weird angles"). A wall within the tolerance adds nothing — offering 0° and 3° side by side
+ *  cuts the pointer's band into slivers — and the odd stage that really should hug it is Alt's. */
+export function firstSideAngles(wallDeg: number | null): DrawAngles[] {
+  const room: DrawAngles = { refDeg: 0, stepDeg: DRAW_ANGLE_STEP_DEG };
+  const w = wallFrameDeg(wallDeg);
+  return w === null ? [room] : [room, { refDeg: w, stepDeg: 90 }];
+}
+
+/** The directions every side AFTER the first may take, the first side standing at `firstDeg`: the
+ *  room's 45° grid, and along or square to the first side — so a stage laid along an angled wall
+ *  turns square to the wall OR straight down the room, as the pointer says (the trapezoid against
+ *  an angled wall: along the wall, then down the room's own wall). The first version held every
+ *  later side to 45° steps from the first side ALONE, so along a 60° wall "straight down" could only
+ *  be 105° (2026-10-31, the user: "it blocks me from doing a straight line — it forces me by its
+ *  angle"). A first side on the room's grid adds nothing new. */
+export function laterSideAngles(firstDeg: number): DrawAngles[] {
+  return [
+    { refDeg: 0, stepDeg: DRAW_ANGLE_STEP_DEG },
+    { refDeg: firstDeg, stepDeg: 90 },
+  ];
+}
+
+/** `a` (degrees) held to the nearest direction any of `angles` offers; an exact tie goes to the
+ *  earlier set — the room's grid before a wall's. */
+export function lockAngle(a: number, angles: readonly DrawAngles[]): number {
+  let best = a;
+  let bestErr = Infinity;
+  for (const { refDeg, stepDeg } of angles) {
+    const cand = refDeg + Math.round((a - refDeg) / stepDeg) * stepDeg;
+    const err = Math.abs(cand - a);
+    if (err < bestErr - 1e-9) {
+      best = cand;
+      bestErr = err;
+    }
+  }
+  return best;
+}
+
 /** The next corner of an outline being drawn: from `anchor` towards `raw`, its direction held to
- *  45° steps from `refDeg` and its length to whole DRAW_LENGTH_STEP_MM. `typedMm` replaces the
- *  length (a length typed in). Free when `free` (Alt). */
+ *  45° steps from `ref` (a number — a side already drawn, a level's stage) or to the nearest of the
+ *  direction sets given (the first side's, from firstSideAngles), and its length to whole
+ *  DRAW_LENGTH_STEP_MM. `typedMm` replaces the length (a length typed in). Free when `free` (Alt). */
 export function constrainNext(
   anchor: Point,
   raw: Point,
-  refDeg: number,
+  ref: number | readonly DrawAngles[],
   opts: { free?: boolean; typedMm?: number; snapLength?: (mm: number) => number } = {},
 ): Point {
   const dx = raw.x - anchor.x;
@@ -43,7 +111,7 @@ export function constrainNext(
   if (opts.free && !opts.typedMm) return { x: Math.round(raw.x), y: Math.round(raw.y) };
   if (dist < 1e-6 && !opts.typedMm) return { ...anchor };
   let a = deg(Math.atan2(dy, dx));
-  if (!opts.free) a = refDeg + Math.round((a - refDeg) / DRAW_ANGLE_STEP_DEG) * DRAW_ANGLE_STEP_DEG;
+  if (!opts.free) a = lockAngle(a, typeof ref === "number" ? [{ refDeg: ref, stepDeg: DRAW_ANGLE_STEP_DEG }] : ref);
   const len =
     opts.typedMm ??
     (opts.free
@@ -1001,6 +1069,36 @@ if (isMain(import.meta.url)) {
   const turned = constrainNext(o, { x: 0, y: 2000 }, 30);
   const a = (Math.atan2(turned.y, turned.x) * 180) / Math.PI;
   assert(Math.abs(a - 120) < 0.1 || Math.abs(a - 75) < 0.1, "…held to 45° steps from the first side, not the page");
+
+  // The FIRST side, clicked beside a wall. A wall a few degrees off square is read as square: the
+  // room's grid alone, so the stage is not tilted 3° with it.
+  assert(firstSideAngles(null).length === 1 && firstSideAngles(3).length === 1 && firstSideAngles(93).length === 1 && firstSideAngles(-4).length === 1, "no wall, or a wall within 6° of square, offers only the room's 45° grid");
+  assert(wallFrameDeg(3) === null && wallFrameDeg(120) === 30 && wallFrameDeg(-30) === 60, "a wall's frame is its line folded into a quarter turn, none when it is square");
+  const beside30 = firstSideAngles(30);
+  assert(beside30.length === 2 && beside30[1].refDeg === 30 && beside30[1].stepDeg === 90, "a 30° wall adds its own line and its square, nothing else");
+  const headed = (d: number) => {
+    const p = constrainNext(o, { x: 4000 * Math.cos(rad(d)), y: 4000 * Math.sin(rad(d)) }, beside30);
+    return ((deg(Math.atan2(p.y, p.x)) % 360) + 360) % 360;
+  };
+  assert(Math.abs(headed(28) - 30) < 0.1, "pointed nearly along the wall, the side runs along the wall");
+  assert(Math.abs(headed(1) - 0) < 0.1 && Math.abs(headed(40) - 45) < 0.1, "…pointed along the room's axes or its diagonal, it takes the room's");
+  assert(Math.abs(headed(70) - 90) < 0.1, "…and 45° off the wall is nobody's: 70° goes to the room's vertical, not the wall's 75°");
+  assert(Math.abs(headed(118) - 120) < 0.1, "…pointed square to the wall, it is square to the wall");
+  const beside3 = constrainNext(o, { x: 4000 * Math.cos(rad(2)), y: 4000 * Math.sin(rad(2)) }, firstSideAngles(3));
+  assert(beside3.y === 0 && beside3.x === 4000, "beside a wall 3° off square, a side drawn nearly flat is flat");
+  assert(lockAngle(22.5, [{ refDeg: 0, stepDeg: 45 }, { refDeg: 22.5, stepDeg: 90 }]) === 22.5 && lockAngle(22.5, [{ refDeg: 0, stepDeg: 45 }]) === 45, "a direction a wall offers exactly is taken; the room's own grid rounds up on its tie");
+  // The LATER sides, the first side laid along a 60° wall: straight down the room is 90°, square to
+  // the wall is 150°, and the wall's own diagonals are nobody's.
+  const after60 = laterSideAngles(60);
+  const then = (d: number) => {
+    const p = constrainNext(o, { x: 4000 * Math.cos(rad(d)), y: 4000 * Math.sin(rad(d)) }, after60);
+    return ((deg(Math.atan2(p.y, p.x)) % 360) + 360) % 360;
+  };
+  assert(Math.abs(then(88) - 90) < 0.1 && Math.abs(then(100) - 90) < 0.1, "after a side along a 60° wall, a side pointed nearly straight down IS straight down");
+  assert(Math.abs(then(147) - 150) < 0.1, "…pointed square to the wall, it is square to the wall");
+  assert(Math.abs(then(70) - 60) < 0.1 && Math.abs(then(178) - 180) < 0.1, "…along the wall, or the room's horizontal, as pointed");
+  const after0 = laterSideAngles(0);
+  assert(Math.abs(((deg(Math.atan2(constrainNext(o, { x: 1480, y: 1530 }, after0).y, constrainNext(o, { x: 1480, y: 1530 }, after0).x)) % 360) + 360) % 360 - 45) < 0.1, "after a side on the room's grid, the room's 45° grid is all there is — as before");
 
   const skew = [
     { x: 0, y: 0 },

@@ -382,6 +382,12 @@ export const studioSettings = pgTable("studio_settings", {
    *  to state — it differs by country, venue and insurer — and an app that guessed one would be
    *  either nagging or wrong. The stage's front is never railed whatever this says. */
   stageRailingAboveMm: integer("stage_railing_above_mm"),
+  /** The crew's STAIR MODULE: the height of one step and the depth of one tread, mm — what every new
+   *  stage's flights are built in (StageBuild.riserMm / treadMm; lib/design-document/stage.ts
+   *  stairStepOf). NULL = the comfortable defaults (≤18cm risers, 28cm treads). A stage keeps the
+   *  step it was made with, so changing these never redraws a plan already issued. */
+  stageStairRiserMm: integer("stage_stair_riser_mm"),
+  stageStairTreadMm: integer("stage_stair_tread_mm"),
   /** The studio's saved stages (StageTemplate[], lib/design-document/types.ts) — a shape, its
    *  levels and edges, its finishes, placed again from the stage tool. jsonb for the reason
    *  checkpointOffsets is: a short list rewritten whole and never queried into. Null = none saved. */

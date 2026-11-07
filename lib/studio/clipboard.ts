@@ -148,6 +148,9 @@ export function pasteInto(
     // cloth and its chairs; it starts empty. (`seated: undefined` rather than a deleted key, so
     // the object stays a plain DesignTable and nothing downstream has to test for the difference.)
     seated: undefined,
+    // A copy is never born locked — the lock pins THAT table where it stands; the copy is about to
+    // be put somewhere else (the same rule as /halls' copiedFeature).
+    locked: undefined,
   }));
 
   const placements = clip.placements.map((p) => ({
@@ -167,6 +170,8 @@ export function pasteInto(
     // A table-layer item's `position` is an offset within its table, not a point on the plan, so it
     // must NOT take the paste delta — the renderer clusters those onto the table itself.
     position: p.tableId === undefined ? { x: p.position.x + opts.dx, y: p.position.y + opts.dy } : p.position,
+    // Never born locked (see the tables above).
+    locked: undefined,
   }));
 
   // The block's number is the lowest its own new tables were given, so the copy reads in the room's

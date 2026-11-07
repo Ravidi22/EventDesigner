@@ -32,6 +32,8 @@
     "check:add-tools": "tsx lib/venues/add-tools.ts",
     "check:measure": "tsx lib/design-document/measure.ts",
     "check:anchor": "tsx lib/studio/anchor.ts",
+    "check:wall-clip": "tsx lib/studio/wall-clip.ts",
+    "check:deck-move": "tsx lib/studio/deck-move.ts",
     "check:clipboard": "tsx lib/studio/clipboard.ts",
     "check:sketches": "tsx lib/studio/sketches.ts",
     "check:seating": "tsx lib/venues/seating.ts",

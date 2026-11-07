@@ -14,7 +14,7 @@ import { catalogVersion } from "@/lib/catalog/storage";
 import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
 import { resolveSpan } from "@/lib/studio/anchor";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
-import { bowsOf, rugPolygon } from "@/lib/studio/rug-shape";
+import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
@@ -180,7 +180,7 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
         return shape && shape.kind !== "barrier" && shape.kind !== "backdrop" ? [shape.polygon.map((q) => toRoom({ position: c, rotation: p.rotation, mirrored: p.mirrored }, q))] : [];
       });
     // A rug with curved sides is measured along its curves; the rectangle it was is only its box.
-    const bows = bowsOf(p);
+    const bows = rugShapeOf(p);
     const polysAt =
       r?.sizing === "stretch"
         ? bows

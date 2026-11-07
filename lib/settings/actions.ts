@@ -281,36 +281,49 @@ export async function resetCheckpointOffsets(): Promise<CheckpointOffsets> {
  *  default and means no railing is ever asked for. */
 export interface StageRules {
   railingAboveMm: number | null;
+  /** THE STAIR MODULE the crew builds flights from — the height of one step and the depth of one
+   *  tread, mm (StageBuild.riserMm / treadMm). Null = the comfortable defaults (≤18cm, 28cm). Seeds
+   *  every new stage; a stage already drawn keeps the step it was built in. */
+  stairRiserMm: number | null;
+  stairTreadMm: number | null;
 }
 
-/** Its own read, like the checkpoint schedule: one column off the settings row, asked for by the
- *  studio (which draws the railing), the stage plan (which prints it) and the settings screen. */
+/** Its own read, like the checkpoint schedule: three columns off the settings row, asked for by the
+ *  studio (which draws the railing and seeds new stages), the stage plan (which prints the railing)
+ *  and the settings screen. */
 export async function fetchStageRules(): Promise<StageRules> {
   const organizationId = await currentOrg();
   const [row] = await db()
-    .select({ railingAboveMm: studioSettings.stageRailingAboveMm })
+    .select({
+      railingAboveMm: studioSettings.stageRailingAboveMm,
+      stairRiserMm: studioSettings.stageStairRiserMm,
+      stairTreadMm: studioSettings.stageStairTreadMm,
+    })
     .from(studioSettings)
     .where(eq(studioSettings.organizationId, organizationId))
     .limit(1);
-  return { railingAboveMm: row?.railingAboveMm ?? null };
+  return { railingAboveMm: row?.railingAboveMm ?? null, stairRiserMm: row?.stairRiserMm ?? null, stairTreadMm: row?.stairTreadMm ?? null };
 }
 
-/** Null turns the rule off. A number is clamped to 10cm–3m and whole millimetres — anything else is
- *  a typo, not a rule. */
+/** Null turns a rule off (the railing) or falls back to the default (the stair step). A number is
+ *  clamped to its sane range and whole millimetres — anything else is a typo, not a rule. */
 export async function saveStageRules(input: unknown): Promise<StageRules> {
   const organizationId = await currentOrg();
-  const raw = input && typeof input === "object" ? (input as { railingAboveMm?: unknown }).railingAboveMm : null;
-  const railingAboveMm =
-    typeof raw === "number" && Number.isFinite(raw) ? Math.round(Math.min(3000, Math.max(100, raw))) : null;
+  const o = input && typeof input === "object" ? (input as { railingAboveMm?: unknown; stairRiserMm?: unknown; stairTreadMm?: unknown }) : {};
+  const mm = (raw: unknown, min: number, max: number) => (typeof raw === "number" && Number.isFinite(raw) ? Math.round(Math.min(max, Math.max(min, raw))) : null);
+  const railingAboveMm = mm(o.railingAboveMm, 100, 3000);
+  // A step from 8 to 30cm, a tread from 15 to 60 — outside that nobody climbs it.
+  const stairRiserMm = mm(o.stairRiserMm, 80, 300);
+  const stairTreadMm = mm(o.stairTreadMm, 150, 600);
   await db()
     .insert(studioSettings)
-    .values({ organizationId, stageRailingAboveMm: railingAboveMm, updatedAt: new Date() })
+    .values({ organizationId, stageRailingAboveMm: railingAboveMm, stageStairRiserMm: stairRiserMm, stageStairTreadMm: stairTreadMm, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: studioSettings.organizationId,
-      set: { stageRailingAboveMm: railingAboveMm, updatedAt: new Date() },
+      set: { stageRailingAboveMm: railingAboveMm, stageStairRiserMm: stairRiserMm, stageStairTreadMm: stairTreadMm, updatedAt: new Date() },
     });
   revalidateSettings();
-  return { railingAboveMm };
+  return { railingAboveMm, stairRiserMm, stairTreadMm };
 }
 
 // ── Stage templates ──────────────────────────────────────────────────────────────────────────────

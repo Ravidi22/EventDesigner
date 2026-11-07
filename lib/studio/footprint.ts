@@ -1389,9 +1389,10 @@ export function clampSize(product: Product, size: { widthMm: number; depthMm: nu
   const axes = resizeAxes(product);
   const spec = resizeSpecOf(product);
   if (!axes || !spec) return base;
-  const step = Math.max(1, spec.stepMm || RESIZE_DEFAULT_STEP_MM);
-  const fit = (v: number, range: { minMm: number; maxMm: number } | undefined, fallback: number) => {
+  const fit = (v: number, range: { minMm: number; maxMm: number; stepMm?: number } | undefined, fallback: number) => {
     if (!range) return fallback;
+    // The side's own module when it has one (ResizeRange.stepMm), else the spec's.
+    const step = Math.max(1, range.stepMm || spec.stepMm || RESIZE_DEFAULT_STEP_MM);
     const lo = Math.min(range.minMm, range.maxMm);
     const hi = Math.max(range.minMm, range.maxMm);
     const snapped = Math.round(v / step) * step;
@@ -1956,8 +1957,9 @@ if (isMain(import.meta.url)) {
       variants: [],
       appearance: { shape: "rect", content: "none" },
     };
-    assert(eq(resizeAxes(bench), { width: true, depth: false, uniform: false }), "a banquette row with no resize of its own stretches along its length by default");
-    assert(eq(clampSize(bench, { widthMm: 6040, depthMm: 900 }), { widthMm: 6000, depthMm: 450 }), "…in 10cm steps, its depth the catalog's");
+    assert(eq(resizeAxes(bench), { width: true, depth: true, uniform: false }), "a banquette row with no resize of its own stretches along its length by default, and its depth is set too");
+    assert(eq(clampSize(bench, { widthMm: 6040, depthMm: 930 }), { widthMm: 6000, depthMm: 950 }), "…the length in 10cm steps, the depth in its own 5cm (ResizeRange.stepMm)");
+    assert(eq(clampSize(bench, { widthMm: 6000, depthMm: 450 }), { widthMm: 6000, depthMm: 450 }), "…so a 45 stays 45 when only the length is pulled");
     assert(eq(clampSize(bench, { widthMm: 100, depthMm: 450 }), { widthMm: 600, depthMm: 450 }), "…never shorter than one seat");
     assert(eq(sizedFootprint(bench, { widthMm: 6000, depthMm: 450 }), { kind: "rect", widthMm: 6000, depthMm: 450 }), "…and draws at the stretched length");
     const ownBench: Product = { ...bench, resize: { stepMm: 500, width: { minMm: 1000, maxMm: 3000 } } };

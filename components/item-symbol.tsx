@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import type { Footprint } from "@/lib/studio/footprint";
+import { footprintOutlines, type Footprint } from "@/lib/studio/footprint";
 import {
   CLOTH_DROP_MM,
   type ArchStyle,
@@ -20,7 +20,7 @@ import {
 export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
 import type { PlacementClimb, Point } from "@/lib/design-document/types";
-import { benchLayout, type BenchLayout } from "@/lib/design-document/bench";
+import { benchLayoutFor, type BenchLayout } from "@/lib/design-document/bench";
 import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
@@ -29,7 +29,7 @@ import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
 import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
 import { outlinePathD } from "@/lib/studio/geometry";
-import { rugFringe, rugInset, type RugBows } from "@/lib/studio/rug-shape";
+import { rugFringe, rugInset, type RugShape } from "@/lib/studio/rug-shape";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -126,7 +126,8 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
   const { w, h, round } = boxOf(footprint);
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
-  const shaped = kind === "bar" && (footprint.kind === "custom" || footprint.kind === "multi");
+  // …and a banquette too: laid along its band (lib/design-document/bench.ts benchLayoutFor).
+  const shaped = (kind === "bar" || kind === "bench") && (footprint.kind === "custom" || footprint.kind === "multi");
   if (!shaped && (w <= 0 || h <= 0)) return null;
   const t = print ? tone || "#ffffff" : tone || DEFAULT_TONE[kind];
   const c: Colours = {
@@ -223,7 +224,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       );
       break;
     case "bench":
-      body = benchSymbol(w, h, bench ?? benchLayout(w, h), chairs, c, line);
+      body = benchSymbol(footprint, bench ?? benchLayoutFor(footprint), chairs, c, line);
       break;
   }
   return <g className="pointer-events-none">{body}</g>;
@@ -233,15 +234,23 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
  *  its top; along a chairs side the same chairs a table has, pushed in against it; along a sofa side
  *  the cushions inside the strip and the backrest line toward the other half. A stage's edge
  *  banquette is drawn by the stage (its chairs with the stage's Chair) and borrows SofaCushions. */
-function benchSymbol(w: number, h: number, lay: BenchLayout, chairs: boolean, c: Colours, line: Line) {
+function benchSymbol(footprint: Footprint, lay: BenchLayout, chairs: boolean, c: Colours, line: Line) {
   // A table's chair — the very drawing SeatChair is (chair(), turned so +x faces what it is pulled
   // up to), in the chair's own quiet tone, so a banquette's chairs match the tables' round the room.
   const seatTone = c.print ? "#ffffff" : "#F4F2F9";
   const seat: Colours = { ...c, tone: seatTone, inkOpacity: c.print ? 1 : 0.75, shade: c.print ? "#ffffff" : isDark(seatTone) ? "#ffffff" : c.ink };
   const seatLine = { ...line, strokeOpacity: seat.inkOpacity };
+  // The top: a straight strip as the rounded rectangle it always was; any other band (a crescent, a
+  // ח, an oval) as its own outline, with the chairs and cushions laid along it (benchLayoutFor).
+  const top =
+    footprint.kind === "rect" ? (
+      <rect x={-footprint.widthMm / 2} y={-footprint.depthMm / 2} width={footprint.widthMm} height={footprint.depthMm} rx={Math.min(40, Math.min(footprint.widthMm, footprint.depthMm) * 0.1)} fill={c.tone} {...line} />
+    ) : (
+      footprintOutlines(footprint).map((o, i) => <path key={`top-${i}`} d={outlinePathD(o.outline, o.edgeCurves)} fill={c.tone} {...line} strokeLinejoin="round" />)
+    );
   return (
     <>
-      <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={Math.min(40, h * 0.1)} fill={c.tone} {...line} />
+      {top}
       {chairs &&
         lay.chairs.map((s, i) => (
           <g key={`chair-${i}`} transform={`translate(${s.x} ${s.y}) rotate(${s.facingDeg}) rotate(-90)`}>
@@ -2003,19 +2012,19 @@ function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity 
 }
 
 /** A rug, centred, `w`×`h`: the woven border inside its edge and the fringe off its two short ends. */
-function RugPatternView({ w, h, ink = "var(--color-ink)", opacity = 1, bows }: { w: number; h: number; ink?: string; opacity?: number; bows?: RugBows }) {
+function RugPatternView({ w, h, ink = "var(--color-ink)", opacity = 1, shape }: { w: number; h: number; ink?: string; opacity?: number; shape?: RugShape }) {
   const m = Math.min(w, h);
   const b1 = Math.min(m * 0.07, 160);
   const b2 = Math.min(m * 0.12, 260);
   const fringe = Math.min(70, m * 0.05);
   const gap = 45;
   const line = { fill: "none", stroke: ink, vectorEffect: "non-scaling-stroke" as const, strokeWidth: 1 };
-  if (bows) {
-    // Curved sides: the border follows the outline (the same bows on the smaller rectangle) and the
-    // fringe leaves the short ends along the curve's normal.
-    const inner = rugInset(w, h, bows, b1);
-    const outer = m > b2 * 3 ? rugInset(w, h, bows, b2) : null;
-    const strands = rugFringe(w, h, bows, gap).map((t) => `M ${t.x} ${t.y} l ${t.nx * fringe} ${t.ny * fringe}`).join(" ");
+  if (shape) {
+    // Curved sides, rounded corners: the border follows the outline (the same bows and concentric
+    // arcs on the smaller rectangle) and the fringe leaves the short ends' runs along their normal.
+    const inner = rugInset(w, h, shape, b1);
+    const outer = m > b2 * 3 ? rugInset(w, h, shape, b2) : null;
+    const strands = rugFringe(w, h, shape, gap).map((t) => `M ${t.x} ${t.y} l ${t.nx * fringe} ${t.ny * fringe}`).join(" ");
     return (
       <g className="pointer-events-none" opacity={opacity}>
         {inner && <path d={outlinePathD(inner.outline, inner.edgeCurves)} {...line} strokeOpacity={0.3} />}

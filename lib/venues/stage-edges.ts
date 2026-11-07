@@ -13,6 +13,7 @@ import type { Point } from "../studio/hall";
 import type { StageEdgeKind, StageStair } from "../design-document/types";
 import {
   autoRisers,
+  stairStepOf,
   defaultEdgeItems,
   edgeGaps,
   edgeItemInRoom,
@@ -27,6 +28,7 @@ import {
   stairFits,
   MIN_EDGE_ITEM_MM,
   type DeckLookup,
+  type DoorOpening,
   type EdgeItemShape,
   type EdgeRun,
   type WallDistance,
@@ -109,7 +111,7 @@ export interface VenueEdgeRow {
   depthMm: number;
 }
 
-export function edgeRows(f: StructureFeature, wallDistance?: WallDistance): VenueEdgeRow[] {
+export function edgeRows(f: StructureFeature, wallDistance?: WallDistance, doors?: readonly DoorOpening[]): VenueEdgeRow[] {
   const p = featurePlacement(f);
   const stage = p.stage;
   const front = stage.outline[stage.front];
@@ -134,14 +136,14 @@ export function edgeRows(f: StructureFeature, wallDistance?: WallDistance): Venu
         id: st.id,
         kind: k,
         inner: shape.inner,
-        outerFits: sinkable ? stairFits(p, { ...st, inner: undefined }, NO_DECKS, wallDistance).ok : true,
-        innerFits: sinkable ? stairFits(p, { ...st, inner: true }, NO_DECKS, wallDistance).ok : false,
+        outerFits: sinkable ? stairFits(p, { ...st, inner: undefined }, NO_DECKS, wallDistance, doors).ok : true,
+        innerFits: sinkable ? stairFits(p, { ...st, inner: true }, NO_DECKS, wallDistance, doors).ok : false,
         side: stageSide(stage, undefined, st.edge)?.curved ? "על הקשת" : side(st.edge),
         widthMm: shape.widthMm,
         full: !!st.full,
         risers: shape.risers,
         riserMm: shape.riserMm,
-        autoRisers: autoRisers(shape.riseMm),
+        autoRisers: autoRisers(shape.riseMm, stairStepOf(stage).riserMm),
         manual: !!st.risers,
         depthMm: shape.depthMm,
       },
@@ -166,11 +168,12 @@ export function addEdgeItemAt(
   edge: number,
   t: number,
   wallDistance?: WallDistance,
+  doors?: readonly DoorOpening[],
 ): { ok: true; structure: VenueStructure; item: StageStair } | { ok: false; reason: EdgeRefusal } {
   const f = s.features.find((x) => x.id === featureId);
   if (!f) return { ok: false, reason: "flat" };
   const p = featurePlacement(f);
-  const placed = placeEdgeItem(p, itemAt(p, NO_DECKS, kind, undefined, edge, t, newEdgeId(), wallDistance), NO_DECKS, wallDistance);
+  const placed = placeEdgeItem(p, itemAt(p, NO_DECKS, kind, undefined, edge, t, newEdgeId(), wallDistance), NO_DECKS, wallDistance, doors);
   if (!placed.ok) return placed;
   const next = { ...p.stage, stairs: [...(p.stage.stairs ?? []), placed.item] };
   return { ok: true, structure: setEdgeItems(s, featureId, shareSide(next, placed.item.id)), item: placed.item };
@@ -185,6 +188,7 @@ export function changeEdgeItem(
   itemId: string,
   patch: { kind?: VenueEdgeKind; widthMm?: number; risers?: number | null; full?: boolean; inner?: boolean },
   wallDistance?: WallDistance,
+  doors?: readonly DoorOpening[],
 ): { ok: true; structure: VenueStructure } | { ok: false; reason: EdgeRefusal } {
   const f = s.features.find((x) => x.id === featureId);
   if (!f) return { ok: false, reason: "flat" };
@@ -192,7 +196,7 @@ export function changeEdgeItem(
   const st = p.stage.stairs?.find((x) => x.id === itemId);
   if (!st) return { ok: true, structure: s };
   if (patch.inner !== undefined) {
-    const fits = stairFits(p, { ...st, inner: patch.inner || undefined }, NO_DECKS, wallDistance);
+    const fits = stairFits(p, { ...st, inner: patch.inner || undefined }, NO_DECKS, wallDistance, doors);
     if (!fits.ok) return fits;
   }
   const items = (p.stage.stairs ?? []).map((x) => {
@@ -222,11 +226,11 @@ export function removeEdgeItem(s: VenueStructure, featureId: string, itemId: str
 
 /** Every bare stretch finished with `kind` — the one-click "finish the edges". A round stage's open
  *  rim too, asked for outright. A flight set into the stage where a wall leaves it no floor. */
-export function fillFeatureEdges(s: VenueStructure, featureId: string, kind: VenueEdgeKind, wallDistance?: WallDistance): VenueStructure {
+export function fillFeatureEdges(s: VenueStructure, featureId: string, kind: VenueEdgeKind, wallDistance?: WallDistance, doors?: readonly DoorOpening[]): VenueStructure {
   const f = s.features.find((x) => x.id === featureId);
   if (!f) return s;
   const p = featurePlacement(f);
-  const add = settleEdgeItems(p, fillGaps(p, NO_DECKS, kind, newEdgeId, wallDistance, { rims: true }), NO_DECKS, newEdgeId, wallDistance, { inner: true, otherwise: "keep" });
+  const add = settleEdgeItems(p, fillGaps(p, NO_DECKS, kind, newEdgeId, wallDistance, { rims: true }), NO_DECKS, newEdgeId, wallDistance, { inner: true, otherwise: "keep", doors });
   return add.length ? setEdgeItems(s, featureId, [...(p.stage.stairs ?? []), ...add]) : s;
 }
 

@@ -9,7 +9,7 @@ import type { ChairStyle, DrawStyle } from "@/lib/catalog/symbols";
 import type { FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import type { ChairRows, PlacementClimb } from "@/lib/design-document/types";
 import type { BenchLayout } from "@/lib/design-document/bench";
-import type { RugBows } from "@/lib/studio/rug-shape";
+import type { RugShape } from "@/lib/studio/rug-shape";
 import type { ItemBuild } from "./collect";
 import { type MaterialRef, type NodeTag, type Part, vec3 } from "./types";
 
@@ -39,8 +39,9 @@ export interface ItemContext {
   tag?: NodeTag;
   /** A block of chairs in rows (Placement.rows): the chair kind lays every chair of the block. */
   rows?: ChairRows;
-  /** A rug with curved sides (Placement.bows): the slab, border and fringe follow them. */
-  bows?: RugBows;
+  /** A rug with curved sides or rounded corners (Placement.bows / corners): the slab, border and
+   *  fringe follow them. */
+  rug?: RugShape;
   /** A ceiling item: how far above the item's TOP the ceiling is (a chain that long rises from
    *  it); absent = open sky, no chain. */
   chainMm?: number;
