@@ -2142,7 +2142,7 @@ if (isMain(import.meta.url)) {
     const sb = sampledBounds([sharp]);
     assert(Math.abs(sb.minX + 350) < 0.5 && Math.abs(sb.minY + 150) < 0.5 && sharp.outline.some((p) => Math.abs(p.x + 350) < 0.5 && Math.abs(p.y + 150) < 0.5), "an R100 corner 150 in is the sharp corner");
     const soft = evenInset(rounded, 50)!;
-    assert(soft.edgeCurves?.some(Boolean) && sampledBounds([soft]).minX > -450.5, "…50 in it is the concentric R50");
+    assert(!!soft.edgeCurves?.some(Boolean) && sampledBounds([soft]).minX > -450.5, "…50 in it is the concentric R50");
     assert(evenInset(rounded, 300) === null && evenInset(rounded, 0) === rounded, "nothing left 300 in a 600 deep shape; 0 in is the shape");
   }
 
