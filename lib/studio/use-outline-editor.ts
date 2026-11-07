@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isTypingTarget } from "@/lib/keyboard";
+import { isShortcut, isTypingTarget } from "@/lib/keyboard";
 import type { EdgeCurve, Entrance, Fixture, Point } from "./hall";
 import {
   bulgeToCurve,
@@ -607,12 +607,13 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || isTypingTarget()) return; // a field owns its own Ctrl+Z
-      const key = e.key.toLowerCase();
-      if (key === "z") {
+      // By the physical key, as use-history: on a Hebrew layout Ctrl+Z arrives as "ז", and undo
+      // while drawing a shape silently did nothing.
+      if (isShortcut(e, "z")) {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
-      } else if (key === "y") {
+      } else if (isShortcut(e, "y")) {
         e.preventDefault();
         redo();
       }

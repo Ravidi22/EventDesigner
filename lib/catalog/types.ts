@@ -36,6 +36,7 @@ export type MapShape =
   | "octagon"
   | "u-shape"
   | "rounded-u"
+  | "line"
   | "custom";
 
 /** The order the drawer offers them in: the three a catalog is mostly made of, then the curved
@@ -60,6 +61,7 @@ export const MAP_SHAPES: MapShape[] = [
   "octagon",
   "u-shape",
   "rounded-u",
+  "line",
   "custom",
 ];
 
@@ -79,7 +81,7 @@ export const PICKER_SHAPES: MapShape[] = MAP_SHAPES.filter((s) => s !== "arc" &&
  *  arc, the oval ring, the horseshoe and both ח are a band already — a band of a band is not a thing
  *  anybody builds, and their own numbers (RingSpec, ArcSpec) already say how deep it is. */
 export const canHollow = (shape: MapShape): boolean =>
-  shape !== "crescent" && shape !== "arc" && shape !== "oval-ring" && shape !== "horseshoe" && shape !== "u-shape" && shape !== "rounded-u";
+  shape !== "crescent" && shape !== "arc" && shape !== "oval-ring" && shape !== "horseshoe" && shape !== "u-shape" && shape !== "rounded-u" && shape !== "line";
 
 export const SHAPE_LABEL: Record<MapShape, string> = {
   rect: "מלבן",
@@ -99,6 +101,7 @@ export const SHAPE_LABEL: Record<MapShape, string> = {
   octagon: "מתומן",
   "u-shape": "צורת ח",
   "rounded-u": "צורת ח מעוגלת",
+  line: "קו",
   custom: "מותאם",
 };
 
@@ -208,6 +211,11 @@ export interface ShapePart {
    *  shape's own, and recentred on its box (its centre is `x`/`y`, like any part's). */
   outline?: Point[];
   edgeCurves?: (EdgeCurve | null)[];
+  /** LINES ONLY (2026-11-01, the user, of the free draw: "can be also not closed shape" → lines only):
+   *  the side from the last point back to the first is not drawn and nothing is filled. Only read on
+   *  a hand-drawn (`custom`) outline. Everything that MEASURES the shape — its box, the pointer, the
+   *  clearance — still reads the closed outline; only the drawing leaves the side and the fill out. */
+  open?: boolean;
   widthMm?: number;
   depthMm?: number;
   diameterMm?: number;
@@ -235,6 +243,8 @@ export interface MapAppearance {
   shape: MapShape;
   outline?: Point[]; // required iff shape === "custom"
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
+  /** Lines only — see ShapePart.open. */
+  open?: boolean;
   content: "icon" | "name" | "none";
   icon?: string; // Lucide name, iff content === "icon"
   /** Drawn as its CATEGORY's picture (lib/catalog/symbols.ts — a candelabrum, a bunch of flowers, a

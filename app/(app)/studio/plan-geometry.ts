@@ -16,6 +16,7 @@ import { resolveSpan } from "@/lib/studio/anchor";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { obstacleFootprint } from "@/lib/venues/rim";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
 import { bandPolygon, footprintPolygons, polysBox, type CentredBox, type ClearanceSubject, type Poly } from "@/lib/studio/proximity";
@@ -135,7 +136,9 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
     const f = featureOf(structure, ref.id);
     if (!f) return null;
     return remembered(f, [], () => {
-      const fp = featureFootprint(f);
+      // A pool with a rim is its WATER: the rim is floor people stand on, so a table keeps clear of
+      // the water's edge and the tape measures to it (lib/venues/rim.ts).
+      const fp = f.kind === "pool" ? obstacleFootprint(f) : featureFootprint(f);
       const polysAt = (c: Point) => footprintPolygons(fp, c, f.rotationDeg ?? 0);
       const centre = { x: f.x, y: f.y };
       return {

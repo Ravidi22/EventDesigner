@@ -40,6 +40,8 @@ import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/stu
 import { ChairBlock, SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
 import { seatingOf } from "@/lib/venues/seating";
+import { rimOf } from "@/lib/venues/rim";
+import { RimFill } from "@/components/rim-fill";
 import {
   benchInRoom,
   edgeGaps,
@@ -1423,6 +1425,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
   // The stage's flights and ramps — the sketch's own edge items, in the room (lib/venues/stage-edges.ts).
   const edges = featureEdgeShapes(f);
   const style = resolveStyle(f.style, "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.feature });
+  // A pool's שפה or a surface's edging (lib/venues/rim.ts): the band and what lies inside it.
+  const rim = rimOf(f);
   if (mono) {
     const fp = featureFootprint(f);
     const round = fp.kind === "circle" || fp.kind === "ellipse";
@@ -1440,7 +1444,22 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
         ))}
         <g transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}>
           <g transform={`translate(${f.x} ${f.y})`}>
-            {f.kind === "surface" ? (
+            {rim ? (
+              // The band in the ground's pale tone (it is floor); inside it a pool's water hatched as
+              // the key says, a surface's own ground the same pale tone.
+              <>
+                <FootprintShape footprint={rim.band} fill={MONO.ground} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+                {rim.inside && (
+                  <FootprintShape
+                    footprint={rim.inside}
+                    fill={f.kind === "pool" ? "url(#hatch-cross)" : MONO.ground}
+                    stroke={MUTED}
+                    strokeWidth={f.kind === "pool" ? style.strokeWidth : LINE_WEIGHTS.annotation}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+              </>
+            ) : f.kind === "surface" ? (
               <FootprintShape footprint={fp} fill={MONO.ground} stroke={MUTED} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
             ) : isClimb(f.kind) ? (
               <ClimbGlyph
@@ -1511,7 +1530,10 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
       ))}
       <g transform={f.rotationDeg ? `rotate(${f.rotationDeg} ${f.x} ${f.y})` : undefined}>
         <g transform={`translate(${f.x} ${f.y})`}>
-          {f.kind === "surface" || f.kind === "pool" ? (
+          {rim ? (
+            // The band in its own material, the water (or the surface's own) inside — as the screen.
+            <RimFill f={f} seed={`q-${f.id}`} />
+          ) : f.kind === "surface" || f.kind === "pool" ? (
             // The pool is water (the same texture the screen draws it in); the booklet's mono look
             // above hatches it instead, as its key says.
             <SurfaceFill material={f.kind === "pool" ? "water" : surfaceMaterial(f)} footprint={featureFootprint(f)} w={f.widthMm} d={f.depthMm} id={`q-${f.id}`} color={f.style?.fill} opacity={f.style?.fillOpacity} />

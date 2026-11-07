@@ -1,6 +1,6 @@
 import type { BuiltOutline, Footprint } from "./footprint";
 import { flattenEdge, footprintOutlines } from "./footprint";
-import { absoluteControlPoints } from "./geometry";
+import { absoluteControlPoints, polygonAreaMm2 } from "./geometry";
 import type { EdgeCurve, Point } from "./hall";
 import { isMain } from "../self-check";
 import { buildArcOutline } from "./footprint";
@@ -183,6 +183,9 @@ function pointOnSide(side: SeatSide, along: number): { on: Point; nx: number; ny
 /** How far out from a side to look for another shape of the same item. */
 const SEAM_PROBE_MM = 60;
 
+/** The narrowest piece anybody sits at (twice its area over its perimeter) — under it, a line. */
+const SEAT_MIN_BAND_MM = 150;
+
 /** The footprint's sides, in its own centred frame — each walked from its own start so the chairs on
  *  it can be centred on it. The INDEX of a side in this list is what MapAppearance.blockedSides and
  *  DesignTable.blockedSides store.
@@ -228,14 +231,22 @@ function measureSide(pts: Point[], orient: number, covered = false): SeatSide {
 
 /** The sides of a shape built from outlines — and, for each, which outline it belongs to, with
  *  every outline's polygon: what the seam test needs. */
-function compositeSides(f: Footprint): { sides: SeatSide[]; part: number[]; polygons: Point[][] } {
-  const parts = footprintOutlines(f).map(outlineSides);
+function compositeSides(f: Footprint): { sides: SeatSide[]; part: number[]; polygons: Point[][]; bare: boolean[] } {
+  const outlines = footprintOutlines(f);
+  const parts = outlines.map(outlineSides);
+  // Nobody sits at a line: a lines-only drawing, or a piece thinner than SEAT_MIN_BAND_MM (a "line"
+  // shape — a rope, a rail) takes no chairs, wherever it stands in the item.
+  const bare = outlines.map((o, i) => {
+    const poly = parts[i].polygon;
+    const perimeter = poly.reduce((s, p, k) => s + dist(p, poly[(k + 1) % poly.length]), 0);
+    return !!o.open || (perimeter > 0 && (2 * Math.abs(polygonAreaMm2(poly))) / perimeter < SEAT_MIN_BAND_MM);
+  });
   const sides: SeatSide[] = [];
   const part: number[] = [];
   parts.forEach((p, pi) => {
     for (const pts of p.sides) {
-      const side = measureSide(pts, p.orient);
-      if (parts.length > 1 && side.len > 0) {
+      const side = measureSide(pts, p.orient, bare[pi]);
+      if (!side.covered && parts.length > 1 && side.len > 0) {
         const { on, nx, ny } = pointOnSide(side, side.len / 2);
         const probe = { x: on.x + nx * SEAM_PROBE_MM, y: on.y + ny * SEAM_PROBE_MM };
         side.covered = parts.some((other, oi) => oi !== pi && inside(probe, other.polygon));
@@ -244,7 +255,7 @@ function compositeSides(f: Footprint): { sides: SeatSide[]; part: number[]; poly
       part.push(pi);
     }
   });
-  return { sides, part, polygons: parts.map((p) => p.polygon) };
+  return { sides, part, polygons: parts.map((p) => p.polygon), bare };
 }
 
 /** A side, or the piece of one a chair could stand along, remembering which side it came from. */
@@ -265,11 +276,11 @@ const SEAM_STEP_MM = 100;
  *  stretch too short for one chair is covered too. A loop's two ends are one stretch when both are
  *  open, so the ring stays even across where the loop happened to start. */
 function splitAtSeams(f: Footprint, offsetMm: number): Stretch[] {
-  const { sides, part, polygons } = compositeSides(f);
+  const { sides, part, polygons, bare } = compositeSides(f);
   if (polygons.length < 2) return sides.map((s, i) => ({ ...s, of: i }));
   const out: Stretch[] = [];
   sides.forEach((side, i) => {
-    if (side.len <= 0) {
+    if (side.len <= 0 || bare[part[i]]) {
       out.push({ ...side, of: i });
       return;
     }
@@ -694,6 +705,16 @@ if (isMain(import.meta.url)) {
     comboSeats.every((s) => !(Math.abs(s.x - 750) < 200 && Math.abs(s.y) < 300)),
     "…and nobody sits in the seam between its two shapes",
   );
+
+  // A table with a line drawn beside it (a rope, a rail): the line takes no chairs, the table all.
+  const withLine = { kind: "multi" as const, parts: [
+    { outline: [{ x: -1000, y: -400 }, { x: 1000, y: -400 }, { x: 1000, y: 400 }, { x: -1000, y: 400 }] },
+    { outline: [{ x: -1000, y: -1210 }, { x: 1000, y: -1210 }, { x: 1000, y: -1190 }, { x: -1000, y: -1190 }] },
+  ] };
+  const lineSeats = seatsAround(withLine, 8, 300);
+  assert(lineSeats.length === 8 && lineSeats.every((s) => s.y > -1000), "a line in the item seats nobody — the table seats them all");
+  const linesOnly = { kind: "custom" as const, open: true, outline: [{ x: 0, y: 0 }, { x: 0, y: 1000 }, { x: 2000, y: 1000 }, { x: 2000, y: 0 }] };
+  assert(seatSides(linesOnly).every((s) => s.covered), "a lines-only drawing has no side to sit at");
 
   // Two rounds pushed together: each is one loop, buried only at the pinch — the chairs go round
   // both and none stands where the rims meet.
