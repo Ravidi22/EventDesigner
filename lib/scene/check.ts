@@ -106,6 +106,10 @@ if (isMain(import.meta.url)) {
   const rings = rug.parts.filter((q): q is Extract<typeof q, { shape: "extrude" }> => q.shape === "extrude" && near(q.at.z, 12));
   assert(rings.length === 2 && rings.every((q) => (q.holes?.length ?? 0) === 1), "the rug's contour is two rings on its top");
   assert(rings[0].material?.colour === "#c9a24a" && rings[1].material?.colour === "#f5efe0", "…in the contour's colours, the edge band first");
+  // A carpet laid OVER the stage (lib/studio/cover.ts): its outline extruded, on the 600 deck.
+  const onStage = ofId("p-stage-rug")[0];
+  const slab = onStage?.parts[0];
+  assert(!!onStage && slab?.shape === "extrude" && slab.outline.outline.length === 4 && near(onStage.instances[0].at.z, 600), "the carpet over the stage is its outline, lying on the deck");
   // The cloth's hem: the bottom 80 of its fall, gold, over the same folds.
   const hem = bodies.find((b) => b.id.startsWith("cloth-hem:p-cloth"));
   const hemFall = hem?.parts[0];

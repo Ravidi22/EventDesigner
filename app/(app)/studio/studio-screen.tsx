@@ -119,6 +119,9 @@ import { TablePatternPicker, type PatternGroup } from "./table-pattern-picker";
 import { carriedDressing, coverOf, isBlock, landOn, memberAt, patternUnits, tableFrame, unitOf, unitsOf, type DressUnit } from "./dressing-units";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
 import { adoptHung, hangCentreOf, hangPointOf, hangTargetsOf, positionHungAt, tableUnderHang } from "./hang-targets";
+import { COVERABLE_FEATURES, adoptCovers, featureName, layCover, primeCovers } from "@/lib/studio/cover";
+import { featureFootprint, type StructureFeature } from "@/lib/venues/structure";
+import { Frame as RugIcon, Plus } from "lucide-react";
 import { centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, landOnTop, restackTo, type StackBox, type StackEntry, type StackKind, type StackRef } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
@@ -448,7 +451,9 @@ export function StudioScreen({
       // drawing (hang-targets.ts adoptHung) — the one edit made on open. `persisted` stays the
       // server's copy, so an adopted link is saved once, and a document with nothing to adopt is
       // the same object and is not written back at all.
-      setHistory(initHistory(adoptHung(saved, arrangedStructure(plan.structure, saved))));
+      // …and every carpet laid over a surface or a stage is laid again over it (lib/studio/cover.ts
+      // adoptCovers): a lawn reshaped at /halls since reshapes its carpet now.
+      setHistory(initHistory(adoptCovers(adoptHung(saved, arrangedStructure(plan.structure, saved)), plan.structure, deckOf)));
       // What is already on the server, so the first render after a restore doesn't write it
       // straight back. Against localStorage that redundant save was free; it is a round trip now.
       persisted.current = saved;
@@ -464,6 +469,12 @@ export function StudioScreen({
     primeEventShades(workspace?.event?.shades);
     return () => primeEventShades(undefined);
   }, [workspace]);
+  // The venue a carpet laid over one of its surfaces is read against, by the reducer's settle
+  // (lib/studio/cover.ts) — primed the same way, and cleared on the way out.
+  useEffect(() => {
+    primeCovers({ structure: plan.structure, deckOf });
+    return () => primeCovers({});
+  }, [plan.structure]);
 
   // A CLIENT'S PROPOSAL waiting on this event (lib/proposals/, the client side): read when the event
   // resolves and whenever the window comes back into focus — the bell tells the designer, this is
@@ -5031,6 +5042,99 @@ export function StudioScreen({
     [docRefs, stackRefs, doc],
   );
 
+  // --- a carpet laid over a surface or a stage (lib/studio/cover.ts) -------------------------------
+  // A venue surface takes no click in the sketch (it is the room), so the verb is where a POINT is
+  // known: the right-click menu over a surface or a stage, and the stage bar's "…". Each lays one of
+  // the studio's `rugs` rows over it, or opens the drawer on a fresh one ("שטיח מותאם…") — a one-off
+  // unpriced row (spec DECIDE 6), laid over the same thing when it is saved.
+  /** What a carpet would be laid over: the link it gets, what to call it, and a first size and place
+   *  for a carpet the settle cannot lay yet. */
+  type CoverAim = { cover: { stageId?: string; featureId?: string }; kind: "stage" | "surface"; name: string; at: DocPoint; box: { widthMm: number; depthMm: number } };
+  const rugRows = useMemo(() => catalog.filter((p) => p.category === "rugs" && !p.archived), [catalog]);
+  /** The carpet that "שטיח מותאם…" is making a row for — laid over this when the drawer saves. */
+  const coverPending = useRef<CoverAim | null>(null);
+  const layCarpet = useCallback(
+    (aim: CoverAim, variantId: string) => {
+      const id = uid();
+      const fresh: Placement = { id, variantId, layer: "floor", quantity: 1, position: aim.at, rotation: 0, scale: 1, sizeMm: aim.box, cover: aim.cover };
+      act({ type: "addPlacement", placement: layCover(fresh, doc, { structure: plan.structure, deckOf }) });
+      landNew([{ kind: "placement", id }]);
+      setSelected([{ kind: "placement", id }]);
+    },
+    [act, doc, plan.structure, landNew],
+  );
+  const customCarpet = useCallback(
+    (aim: CoverAim) => {
+      const rugs = CATEGORY_BY_ID.rugs;
+      if (!rugs) return;
+      const blank = blankProduct(rugs);
+      coverPending.current = aim;
+      setDrawer({
+        product: {
+          ...blank,
+          name: `שטיח ${aim.kind === "stage" ? "לבמה" : `ל${aim.name}`}`,
+          // Its size is the thing's; its colour the designer's to change; no price (DECIDE 6 — the
+          // quote line stays partial until it is priced), by the square metre when it is.
+          dimensions: { ...blank.dimensions, widthMm: Math.round(aim.box.widthMm), depthMm: Math.round(aim.box.depthMm) },
+          appearance: { ...blank.appearance, shape: "rect", content: "none", style: { fill: "#c8b49a" } },
+          priceUnit: "m2",
+        },
+        mode: "new",
+      });
+    },
+    [],
+  );
+  const coverLatest = useRef({ layCarpet, customCarpet });
+  coverLatest.current = { layCarpet, customCarpet };
+  /** The verb's rows for one thing: each rug row, then "שטיח מותאם…". `flat` = for the stage bar's
+   *  "…", which has no submenus — the thing named on each row. */
+  const coverItems = useCallback(
+    (aim: CoverAim, flat = false): ContextMenuItem[] => {
+      const on = aim.kind === "stage" ? "על הבמה" : "על המשטח";
+      const rows: ContextMenuItem[] = [
+        ...rugRows.map((product) => ({
+          label: flat ? `שטיח ${on}: ${product.name}` : product.name,
+          icon: RugIcon,
+          onSelect: () => coverLatest.current.layCarpet(aim, defaultVariantId(product)),
+        })),
+        { label: flat ? `שטיח מותאם ${on}…` : "שטיח מותאם…", icon: Plus, onSelect: () => coverLatest.current.customCarpet(aim) },
+      ];
+      return flat ? rows : [{ label: `שטיח ${on}…`, icon: RugIcon, onSelect: () => {}, children: rows }];
+    },
+    [rugRows],
+  );
+  /** A stage as something to lay a carpet over. */
+  const stageAim = useCallback((s: StagePlacement): CoverAim => {
+    const b = footprintBounds({ kind: "custom", outline: s.stage.outline });
+    return { cover: { stageId: s.id }, kind: "stage", name: "הבמה", at: s.position, box: { widthMm: b.w, depthMm: b.h } };
+  }, []);
+  /** Right-click rows about the point: the stage the menu was opened on (or under the pointer), and
+   *  the smallest venue surface under the pointer — a bed inside a lawn is the bed. */
+  const coverMenuAt = useCallback(
+    (point: Point, refs: SelectionRef[]): ContextMenuItem[] => {
+      const out: ContextMenuItem[] = [];
+      const own = refs.length === 1 && refs[0].kind === "placement" ? doc.placements.find((x) => x.id === refs[0].id) : undefined;
+      const stage = (own?.stage ? own : [...doc.placements].reverse().find((x) => x.stage && pointInPolygon(point, stageOutlineInRoom(x as StagePlacement)))) as StagePlacement | undefined;
+      if (stage?.stage) out.push(...coverItems(stageAim(stage)));
+      const arranged = arrangedStructure(plan.structure, doc);
+      let best: { f: StructureFeature; area: number } | null = null;
+      for (const f of arranged.features) {
+        if (!COVERABLE_FEATURES.includes(f.kind)) continue;
+        for (const poly of footprintPolygons(featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0)) {
+          if (!pointInPolygon(point, poly)) continue;
+          const b = footprintBounds(featureFootprint(f));
+          if (!best || b.w * b.h < best.area) best = { f, area: b.w * b.h };
+        }
+      }
+      if (best) {
+        const f = best.f;
+        out.push(...coverItems({ cover: { featureId: f.id }, kind: f.kind === "stage" ? "stage" : "surface", name: featureName(f), at: { x: f.x, y: f.y }, box: { widthMm: f.widthMm, depthMm: f.depthMm } }));
+      }
+      return out;
+    },
+    [doc, plan.structure, coverItems, stageAim],
+  );
+
   // What the eye offers: the zones this event occupies, or — for an event still being booked into
   // one — everything on the property, so the picker is never an empty list next to a drawn plan.
   const zoneOptions = useMemo(() => {
@@ -5139,6 +5243,7 @@ export function StudioScreen({
             alignKeyBox={alignSet ? alignSet[alignKey].box : null}
             alignGuide={alignGuideLine}
             onContextMenu={contextItems}
+            onContextMenuAt={coverMenuAt}
             onResizePlacement={(id, sizeMm, position) => {
               // A stage's handles stretch its OUTLINE — the decks follow on their own. A round one is
               // scaled whole (scaleStage): it stays the curve it is.
@@ -5518,6 +5623,12 @@ export function StudioScreen({
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
                 onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}
+                onCoverInset={(id, insetMm) => {
+                  const cover = doc.placements.find((x) => x.id === id)?.cover;
+                  if (cover) act({ type: "setPlacementCover", id, cover: { ...cover, insetMm } });
+                }}
+                onDetachCover={(id) => act({ type: "setPlacementCover", id, cover: null })}
+                stageCoverItems={soleStage ? coverItems(stageAim(soleStage), true) : undefined}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicate={duplicate}
@@ -5729,7 +5840,11 @@ export function StudioScreen({
         categories={drawerCategories}
         onSave={(p) => void (drawer?.mode === "new" ? addProduct(p) : drawer?.mode === "composite" ? addComposite(p) : updateProduct(p))}
         // No onDelete: the drawer shows no delete from the studio (see `drawer`).
-        onClose={() => setDrawer(null)}
+        onClose={() => {
+          setDrawer(null);
+          // A "שטיח מותאם…" let go unsaved lays nothing (a save has already taken it — addProduct).
+          coverPending.current = null;
+        }}
       />
     </div>
   );
@@ -5752,6 +5867,20 @@ export function StudioScreen({
   }
 
   async function addProduct(p: Product) {
+    // "שטיח מותאם…" (lib/studio/cover.ts): the new rug was made for a surface or a stage, and is laid
+    // over it once saved — not armed. Read before the save: the drawer's close clears it.
+    const aim = coverPending.current;
+    coverPending.current = null;
+    if (aim) {
+      if (await saveProduct(p)) {
+        setAddedIds((ids) => [p.id, ...ids]);
+        layCarpet(aim, defaultVariantId(p));
+        showHint(`${p.name} נוסף לקטלוג והונח ${aim.kind === "stage" ? "על הבמה" : `על ${aim.name}`} — המחיר נקבע בקטלוג`);
+      } else {
+        showHint("ההוספה לקטלוג נכשלה — נסו שוב");
+      }
+      return;
+    }
     if (await saveProduct(p)) {
       setAddedIds((ids) => [p.id, ...ids]);
       // Armed straight away: the reason it was made, mid-meeting, is to put it on the plan.

@@ -29,6 +29,8 @@ import type { Point } from "@/lib/studio/hall";
 import { rugFringe, rugInset, rugOutline } from "@/lib/studio/rug-shape";
 import { rugBorderBands } from "@/lib/studio/rug-shape";
 import { fringeOf, type Border } from "@/lib/catalog/border";
+import { borderBands } from "@/lib/catalog/border";
+import { evenInset } from "@/lib/studio/footprint";
 import { hexOf } from "./materials";
 import { flatRing, signedDistance } from "@/lib/studio/label-anchor";
 import type { Product } from "@/lib/catalog/types";
@@ -855,6 +857,7 @@ export function rugBody(ctx: ItemContext): ItemBuild {
   const b1 = Math.min(m * 0.07, 160);
   const b2 = Math.min(m * 0.12, 260);
   const band = b2 - b1;
+  if (ctx.carpet) return outlineRugBody(ctx, b, weave, { m, b1, b2 });
   if (ctx.border) return borderedRugBody(ctx, b, fabric, ctx.border);
   if (ctx.rug) return curvedRugBody(ctx, b, weave, { m, b1, b2 });
   b.parts.push(box(w, d, RUG_MM, vec3(0, 0, 0), fabric));
@@ -903,6 +906,35 @@ function curvedRugBody(ctx: ItemContext, b: ItemBuild, weave: MaterialRef, k: { 
     // A box turned about its own centre: put the centre half a strand out along the normal.
     b.parts.push(box(fringe, RUG_FRINGE_W_MM, RUG_FRINGE_W_MM, vec3(t.x + (t.nx * fringe) / 2, t.y + (t.ny * fringe) / 2, 0), weave, deg));
   }
+  return b;
+}
+
+/** A carpet laid to an OUTLINE (Placement.outline — over a surface or a stage, lib/studio/cover.ts):
+ *  the slab is that outline extruded with its holes cut out (a stage's trap, a column through it),
+ *  and on top either the contour's bands in their colours (borderBands along the outline) or the
+ *  weave's band — the ring between the plan's two border lines, the outline pulled in evenly. No
+ *  fringe: an arbitrary outline has no short ends a rug is woven from, and the plan draws none. */
+function outlineRugBody(ctx: ItemContext, b: ItemBuild, weave: MaterialRef, k: { m: number; b1: number; b2: number }): ItemBuild {
+  const carpet = ctx.carpet;
+  if (!carpet) return b;
+  const base: BuiltOutline = { outline: carpet.outline, ...(carpet.edgeCurves ? { edgeCurves: carpet.edgeCurves } : {}) };
+  b.parts.push({ shape: "extrude", outline: base, ...(carpet.holes.length ? { holes: carpet.holes.map((h) => ({ outline: h })) } : {}), h: RUG_MM, at: vec3(0, 0, 0) });
+  if (ctx.border) {
+    for (const band of borderBands(base, ctx.border)) {
+      b.parts.push({
+        shape: "extrude",
+        outline: band.outer,
+        ...(band.inner ? { holes: [band.inner] } : {}),
+        h: RUG_BAND_MM,
+        at: vec3(0, 0, RUG_MM),
+        material: clothMaterial(hexOf(band.colour) ?? darkened(ctx.tone, 0.2)),
+      });
+    }
+    return b;
+  }
+  const inner = evenInset(base, k.b1);
+  const outer = k.m > k.b2 * 3 ? evenInset(base, k.b2) : null;
+  if (inner && outer && k.b2 - k.b1 > 2) b.parts.push({ shape: "extrude", outline: inner, holes: [outer], h: RUG_BAND_MM, at: vec3(0, 0, RUG_MM), material: weave });
   return b;
 }
 
@@ -1215,6 +1247,15 @@ if (isMain(import.meta.url)) {
   assert(boxes(rugBody(ctxOf({ kind: "rect", widthMm: 3000, depthMm: 2000 }, 12, "#4b3a6e", { border: { ...gold, fringe: false } }))).filter((p) => p.h === 3).length === 0, "bordered rug: no fringe when it says so");
   const bentBordered = rugBody(ctxOf({ kind: "rect", widthMm: 3000, depthMm: 2000 }, 12, "#4b3a6e", { rug: { bows: [0, 0.2, 0, 0], corners: [300, 300, 0, 0] }, border: gold }));
   assert(bentBordered.parts[0].shape === "extrude" && bentBordered.parts.filter((p) => p.shape === "extrude" && p.at.z === 12).length === 2, "bordered curved rug: its bands follow the bowed, rounded slab");
+  // A carpet laid to an OUTLINE (lib/studio/cover.ts): an L over a stage with a trap cut in it.
+  const lOutline = [{ x: -3000, y: -2000 }, { x: 3000, y: -2000 }, { x: 3000, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 2000 }, { x: -3000, y: 2000 }];
+  const trap = [{ x: -2000, y: -1000 }, { x: -1000, y: -1000 }, { x: -1000, y: -500 }, { x: -2000, y: -500 }];
+  const laidRug = rugBody(ctxOf({ kind: "rect", widthMm: 6000, depthMm: 4000 }, 12, "#4b3a6e", { carpet: { outline: lOutline, holes: [trap], widthMm: 6000, depthMm: 4000 } }));
+  const lSlab = laidRug.parts[0];
+  assert(lSlab.shape === "extrude" && lSlab.outline.outline.length === 6 && lSlab.holes?.length === 1, "outline carpet: the slab is the L, its trap cut out");
+  assert(laidRug.parts.filter((p) => p.shape === "extrude" && p.at.z === 12).length === 1 && !boxes(laidRug).length, "…one weave ring on top along it, and no fringe");
+  const laidBordered = rugBody(ctxOf({ kind: "rect", widthMm: 6000, depthMm: 4000 }, 12, "#4b3a6e", { carpet: { outline: lOutline, holes: [], widthMm: 6000, depthMm: 4000 }, border: gold }));
+  assert(laidBordered.parts.filter((p) => p.shape === "extrude" && p.at.z === 12).length === 2 && !boxes(laidBordered).length, "…with a contour: its two bands along the L, still no fringe");
 
   // Chairs in rows 3×4: twelve instances, all facing +y.
   const rows = chairRowsBody(ctxOf({ kind: "rect", widthMm: 1950, depthMm: 2400 }, 900, DEFAULT_TONE.chair, { rows: { rows: 3, perRow: 4 } }));

@@ -203,6 +203,25 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-sofa", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 2000, y: 10000 }, rotation: 90, scale: 1 },
     // A contour of its own on this plan (lib/catalog/border.ts): a gold band, a second one inside it.
     { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 }, border: { widthMm: 120, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 60, colour: "#f5efe0" } } },
+    // A carpet laid OVER the stage, 20cm in from its edge (lib/studio/cover.ts) — stored as the settle
+    // writes it: the stage's 6×4 outline pulled in to 5.6×3.6, on the stage's middle.
+    {
+      id: "p-stage-rug",
+      variantId: "v-rug-plum",
+      layer: "floor",
+      quantity: 1,
+      position: { x: 10000, y: 9500 },
+      rotation: 0,
+      scale: 1,
+      sizeMm: { widthMm: 5600, depthMm: 3600 },
+      cover: { stageId: "p-stage", insetMm: 200 },
+      outline: [
+        { x: -2800, y: -1800 },
+        { x: 2800, y: -1800 },
+        { x: 2800, y: 1800 },
+        { x: -2800, y: 1800 },
+      ],
+    },
     { id: "p-rows", variantId: "v-chair-ivory", layer: "floor", quantity: 10, position: { x: 25000, y: 9500 }, rotation: 0, scale: 1, rows: { rows: 2, perRow: 5 } },
     { id: "p-chuppah", variantId: "v-chuppah-cream", layer: "floor", quantity: 1, position: { x: 25000, y: 6000 }, rotation: 0, scale: 1 },
     { id: "p-chandelier", variantId: "v-chand-gold", layer: "ceiling", quantity: 1, position: { x: 5000, y: 5000 }, rotation: 0, scale: 1, over: "t1" },

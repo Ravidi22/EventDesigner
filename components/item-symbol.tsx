@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
 import { footprintOutlines, type Footprint } from "@/lib/studio/footprint";
+import { evenInset } from "@/lib/studio/footprint";
 import {
   CLOTH_DROP_MM,
   type ArchStyle,
@@ -2126,6 +2127,7 @@ function RugPatternView({
   border,
   rx = 0,
   flat,
+  footprint,
 }: {
   w: number;
   h: number;
@@ -2135,7 +2137,39 @@ function RugPatternView({
   border?: Border;
   rx?: number;
   flat?: string;
+  /** A carpet laid to an OUTLINE (Placement.outline, lib/studio/cover.ts — over a surface or a stage),
+   *  centred: the border and the weave follow it instead of the w×h rectangle. No fringe — an
+   *  arbitrary outline has no short ends a rug is woven from. */
+  footprint?: Footprint;
 }) {
+  if (footprint) {
+    if (border) {
+      return (
+        <g className="pointer-events-none">
+          <BandPaths bands={footprintBorderBands(footprint, border)} flat={flat} />
+        </g>
+      );
+    }
+    // The weave: the same two lines a rectangle's border is drawn with, the outline pulled in.
+    const m = Math.min(w, h);
+    const b1 = Math.min(m * 0.07, 160);
+    const b2 = Math.min(m * 0.12, 260);
+    const line = { fill: "none", stroke: ink, vectorEffect: "non-scaling-stroke" as const, strokeWidth: 1 };
+    return (
+      <g className="pointer-events-none" opacity={opacity}>
+        {footprintOutlines(footprint).map((o, i) => {
+          const inner = evenInset(o, b1);
+          const outer = m > b2 * 3 ? evenInset(o, b2) : null;
+          return (
+            <g key={i}>
+              {inner && <path d={outlinePathD(inner.outline, inner.edgeCurves)} {...line} strokeOpacity={0.3} />}
+              {outer && <path d={outlinePathD(outer.outline, outer.edgeCurves)} {...line} strokeOpacity={0.18} strokeDasharray="3 3" />}
+            </g>
+          );
+        })}
+      </g>
+    );
+  }
   if (border) {
     const fr = fringeOf(border, "rugs");
     const len = Math.min(70, Math.min(w, h) * 0.05);

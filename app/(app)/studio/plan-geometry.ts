@@ -15,6 +15,7 @@ import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
 import { railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetPolygon, carpetShape } from "@/lib/studio/cover";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import { obstacleFootprint } from "@/lib/venues/rim";
 import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostsInRoom } from "@/lib/venues/pergola";
@@ -193,8 +194,12 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
       });
     // A rug with curved sides is measured along its curves; the rectangle it was is only its box.
     const bows = rugShapeOf(p);
+    // A carpet laid to an outline (lib/studio/cover.ts) is measured, hit and stacked by that outline.
+    const carpet = carpetShape(p);
     const polysAt =
-      r?.sizing === "stretch"
+      carpet
+        ? (c: Point): Poly[] => [carpetPolygon(carpet).map((q) => toRoom({ position: c, rotation: p.rotation }, q))]
+        : r?.sizing === "stretch"
         ? bows
           ? (c: Point): Poly[] => {
               const s = stretchSize(p);
@@ -211,7 +216,9 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
       clearanceMm,
       groupId: p.groupId,
       solid: r?.solid,
-      movable: true,
+      // A carpet laid over a surface or a stage goes where that goes — never aligned, spaced or
+      // spread on its own.
+      movable: !p.cover,
     };
   });
 }

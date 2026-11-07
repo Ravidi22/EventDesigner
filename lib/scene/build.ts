@@ -21,6 +21,7 @@ import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { hangHeightOf } from "@/lib/studio/hang";
 import { resolveSpan } from "@/lib/studio/anchor";
 import { rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetFootprint, carpetShape } from "@/lib/studio/cover";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
@@ -124,9 +125,12 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
   }
   const { product, kind, ctx, footprint } = contextOf(input, p);
   if (product?.category === "rugs") {
-    // The rug's own top is what floorZ reads under it; its base is a rug lower.
-    const z = elevation.floorZ(p.position) - RUG_MM;
-    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody({ ...ctx, rug: rugShapeOf(p) }), roomTransform(p, Math.max(0, z)));
+    // The rug's own top is what floorZ reads under it; its base is a rug lower. A carpet laid to an
+    // outline (over a stage, a lawn — lib/studio/cover.ts) is read by its whole footprint, as anything
+    // standing on a platform is: its middle may be over a hole, or in a ring's hollow.
+    const carpet = carpetShape(p);
+    const z = (carpet ? elevation.floorUnder(footprintPolygons(carpetFootprint(carpet), p.position, p.rotation ?? 0), p.id) : elevation.floorZ(p.position)) - RUG_MM;
+    out.item(p.id, { type: "item", id: p.id, label: product.name }, rugBody({ ...ctx, rug: rugShapeOf(p), ...(carpet ? { carpet } : {}) }), roomTransform(p, Math.max(0, z)));
     return;
   }
   out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, floorOf(footprint)));
