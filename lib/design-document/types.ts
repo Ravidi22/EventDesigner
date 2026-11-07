@@ -5,6 +5,7 @@
 // table — design intent, serialisable, renderer-agnostic plain data — not a rendering concern.
 // resolveStyle (lib/element-style.ts) is what turns it into pixels, and it lives outside this file.
 import type { ElementStyle } from "../element-style";
+import type { Border } from "../catalog/border";
 
 export type Layer = "table" | "floor" | "ceiling";
 
@@ -136,6 +137,10 @@ export interface Placement {
    *  measurement, kept when the rug is stretched; held to the rug's size when drawn). Absent = square
    *  corners. A drawing fact like `bows`. */
   corners?: [number, number, number, number];
+  /** A RUG's or a CLOTH's contour on THIS plan (lib/catalog/border.ts) — overriding its row's
+   *  (MapAppearance.border); null = none on this plan, whatever the row says; absent = the row's own.
+   *  The vessel's rule. A drawing fact like `bows`: nothing priced or packed reads it. */
+  border?: Border | null;
   /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
    *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
    *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */

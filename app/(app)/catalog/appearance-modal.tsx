@@ -88,6 +88,10 @@ import { ItemSurface } from "@/components/surface-fill";
 import { hasSurface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
+import { FootprintBorder } from "@/components/item-symbol";
+import { BorderFields } from "@/components/border-fields";
+import { Swatch } from "@/components/swatch-field";
+import { borderOf, newBorder, takesBorder } from "@/lib/catalog/border";
 import {
   CANDLE_STYLES,
   CANDLE_STYLE_HINT,
@@ -1908,9 +1912,15 @@ export function AppearanceModal({
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
                             rise={climbRise(preview)}
+                            border={previewSymbol === "runner" ? borderOf(undefined, preview) : undefined}
                           />
                         ) : (
-                          <PlanContent content={resolveContent(preview)} w={drawn.w} h={drawn.h} at={labelAnchor(footprint)} />
+                          <>
+                            {/* A cloth's contour, inside the outline being drawn — on the plan it is the
+                                hem round the table the cloth falls over. */}
+                            {borderOf(undefined, preview) && <FootprintBorder footprint={footprint} border={borderOf(undefined, preview)!} />}
+                            <PlanContent content={resolveContent(preview)} w={drawn.w} h={drawn.h} at={labelAnchor(footprint)} />
+                          </>
                         )}
                       </g>
                     )}
@@ -2007,6 +2017,28 @@ export function AppearanceModal({
                             : "לחצו על צד כדי שלא יוצבו בו כסאות — שולחן ראש, שולחן צמוד לקיר."}
                           {seatCount === 0 && " (כמות הכסאות התקנית נקבעת בטופס המוצר.)"}
                         </Note>
+                      </Popover>
+                    )}
+                    {/* A rug's or a cloth's contour (lib/catalog/border.ts) — the row's; a plan may give a
+                        placement its own or none. */}
+                    {takesBorder(draft) && (
+                      <Popover
+                        label="קונטור"
+                        leading={<Swatch color={draft.appearance?.border?.colour} size={14} />}
+                        value={draft.appearance?.border ? `${Math.round(draft.appearance.border.widthMm) / 10} ס״מ` : "ללא"}
+                        panelClassName="w-80"
+                      >
+                        <div className="space-y-2">
+                          <SwitchRow
+                            checked={!!draft.appearance?.border}
+                            onChange={(on) => setAppearance({ border: on ? newBorder(draft.category) : undefined })}
+                            label="קונטור"
+                            hint={draft.category === "rugs" ? "פס צבעוני לאורך שולי השטיח, בתוך הקצה." : "פס צבעוני לאורך שולי המפה."}
+                          />
+                          {draft.appearance?.border && (
+                            <BorderFields border={draft.appearance.border} category={draft.category} onChange={(border) => setAppearance({ border })} idPrefix="a-border" />
+                          )}
+                        </div>
                       </Popover>
                     )}
                     <Popover label="מראה" icon={Paintbrush} panelClassName="w-80">

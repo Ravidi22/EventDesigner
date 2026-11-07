@@ -30,6 +30,7 @@ import { ItemSurface, SurfaceFill, ZoneSurface } from "@/components/surface-fill
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, tableBlock, tableBlockedSides, tableFootprint, tableLabelPoint, placementFootprint, productStyle, OVERHEAD_DASH } from "@/components/footprint-shape";
 import { blockSeats } from "@/lib/design-document/block";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { borderOf, darkerShade, type Border } from "@/lib/catalog/border";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
@@ -407,11 +408,15 @@ export function PlacementMap({
   // The cover each table wears, for the colour mode — read off the whole document, because a sheet
   // that shows only the floor still has tables wearing cloths.
   const clothOf = new Map<string, string>();
+  // …and its contour (lib/catalog/border.ts), the hem the studio draws round it.
+  const clothBorderOf = new Map<string, Border>();
   if (colour) {
     for (const p of doc.placements) {
       if (p.layer !== "table" || !p.tableId) continue;
       const r = resolve(p.variantId);
       if (r?.anchor === "table") clothOf.set(p.tableId, r.swatch ?? "#f2eefb");
+      const hem = r?.anchor === "table" ? borderOf(p, r.product) : undefined;
+      if (hem) clothBorderOf.set(p.tableId, hem);
     }
   }
 
@@ -753,7 +758,7 @@ export function PlacementMap({
                     ))}
                   </g>
                 ) : null}
-                {sheet.tables === "ghost" ? <GhostTable t={t} /> : <TableGlyph t={t} colour={colour} mono={flat ?? false} cloth={clothOf.get(t.id)} />}
+                {sheet.tables === "ghost" ? <GhostTable t={t} /> : <TableGlyph t={t} colour={colour} mono={flat ?? false} cloth={clothOf.get(t.id)} clothBorder={clothBorderOf.get(t.id)} />}
               </Fragment>
             );
           })}
@@ -1355,7 +1360,7 @@ export function StageSchedule({
   );
 }
 
-export function TableGlyph({ t, colour = false, mono = false, cloth }: { t: DesignTable; colour?: boolean; mono?: boolean | Flat; cloth?: string }) {
+export function TableGlyph({ t, colour = false, mono = false, cloth, clothBorder }: { t: DesignTable; colour?: boolean; mono?: boolean | Flat; cloth?: string; clothBorder?: Border }) {
   const fl = flatOf(mono);
   // The catalog row's look under the table's own — the studio's merge (productStyle). Colour never
   // survives to print, but a dash or a weight chosen for the row has to: on paper they are what
@@ -1372,7 +1377,7 @@ export function TableGlyph({ t, colour = false, mono = false, cloth }: { t: Desi
     const surfaced = !cloth && anySurface(product?.appearance);
     return (
       <g transform={placed(t.position, t.rotation, t.mirrored)}>
-        {cloth && <ClothDrape footprint={footprint} colour={cloth} />}
+        {cloth && <ClothDrape footprint={footprint} colour={cloth} border={clothBorder} />}
         <FootprintShape
           footprint={footprint}
           fill={cloth ?? screen.fill}
@@ -1698,7 +1703,7 @@ export function PlacementGlyph({
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
         {!symbol && !block && (
           <g transform={lift}>
@@ -1719,7 +1724,7 @@ export function PlacementGlyph({
             <ItemSurface appearance={r?.product.appearance} footprint={footprint} color={own} seed={placement.id} />
           </g>
         )}
-        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} />}
+        {r?.product.category === "rugs" && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={dark ? "#ffffff" : INK} opacity={0.5} border={borderOf(placement, r.product)} />}
       </g>
     );
   }
@@ -1730,7 +1735,7 @@ export function PlacementGlyph({
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} />}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}
@@ -1745,8 +1750,12 @@ export function PlacementGlyph({
           vectorEffect="non-scaling-stroke"
         />
       </g>
-      {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. */}
-      {rug && patternBox && <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} />}
+      {/* Over the fill — drawn before it, the rug's own white covered its border and fringe. Its
+          contour (lib/catalog/border.ts) is a step darker than the rug's own grey, so a bordered rug
+          still reads as one photocopied. */}
+      {rug && patternBox && (
+        <RugPattern w={patternBox.w} h={patternBox.h} shape={rugShape} ink={INK} opacity={0.8} border={borderOf(placement, r?.product)} flat={darkerShade(flat ?? "#ffffff", 0.18)} />
+      )}
     </g>
   );
 }

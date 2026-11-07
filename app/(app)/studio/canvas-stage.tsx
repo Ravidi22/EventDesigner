@@ -30,6 +30,7 @@ import { VesselMark } from "@/components/vessel-mark";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { borderOf } from "@/lib/catalog/border";
 import { DrapePleatsAlong } from "@/components/curtain-cloth";
 import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { EdgeItemHandles } from "@/components/stage-edge-handles";
@@ -3199,7 +3200,9 @@ const CarpetNode = memo(function CarpetNode({
           rug with curved sides they follow the curves. */}
       {r?.product.category === "rugs" && (
         <g transform={`translate(${x} ${y})`}>
-          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} />
+          {/* Its contour (lib/catalog/border.ts) — this plan's, else its row's — in place of the woven
+              line; on a plain rug laid inside the rectangle's own rounded corners. */}
+          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} border={borderOf(placement, r?.product)} rx={Math.min(size.widthMm, size.depthMm) * 0.03} />
         </g>
       )}
       {/* The middle of each side: pull it and the side curves, like the shape canvas's diamond. A
@@ -3641,7 +3644,7 @@ const TableNode = memo(function TableNode({
         e.preventDefault();
       }}
     >
-      {clothColour && !overflow && <ClothDrape footprint={footprint} colour={clothColour} />}
+      {clothColour && !overflow && <ClothDrape footprint={footprint} colour={clothColour} border={cloth ? borderOf(cloth, resolve(cloth.variantId)?.product) : undefined} />}
       <FootprintShape footprint={footprint} {...shape} />
       {/* Bare (no cloth, no overflow warning) a table shows what it is made of — a farm table's
           planks, a marble top, each of its shapes in its own — over its fill, and its edge drawn
@@ -4406,6 +4409,7 @@ function PlacementNodeView({
           mirrored={rise ? placement.mirrored : undefined}
           textMm={rise ? ctx.mm(11) : undefined}
           bench={bench ?? undefined}
+          border={symbol === "runner" ? borderOf(placement, product) : undefined}
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}

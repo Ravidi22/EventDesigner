@@ -93,7 +93,20 @@ export type Part =
   /** A cloth hanging from a closed RIM (`outline`, the cloth's edge where it leaves the table, a
    *  flattened polygon about `at`) down `h` to the floor: folds every `foldPitchMm` that deepen to
    *  `foldDepthMm` at the hem, the hem flaring `flareMm` out. Smooth-shaded — fabric, not facets. */
-  | { shape: "drape"; outline: Point[]; h: number; at: Vec3; foldPitchMm?: number; foldDepthMm?: number; flareMm?: number; material?: MaterialRef }
+  | {
+      shape: "drape";
+      outline: Point[];
+      h: number;
+      at: Vec3;
+      foldPitchMm?: number;
+      foldDepthMm?: number;
+      flareMm?: number;
+      /** Only the stretch of the fall between these heights above its foot (mm), laid a hair proud
+       *  of the whole fall's surface — a cloth's coloured hem band (lib/catalog/border.ts) over the
+       *  same folds. Absent = the whole fall. */
+      band?: [number, number];
+      material?: MaterialRef;
+    }
   /** An organic mass — a canopy's clump, a shrub, a hydrangea's mophead: a ball `r` across its
    *  middle whose surface seeded lumps push in and out (`lumps` round its girth, `rough` of r deep,
    *  ./organic.ts lumpField), `squash` its height over its width. `at` is its CENTRE, as a sphere's;

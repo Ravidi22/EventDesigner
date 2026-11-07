@@ -78,6 +78,10 @@ if (isMain(import.meta.url)) {
   }
   assert(!("unitPrice" in (safe.variants as Record<string, unknown>[])[0]), "a variant's price does not reach a client");
   assert((safe.categoryFields as { seats: number }).seats === 12 && (safe.variants as Variant[])[0].swatch === "#fff", "what the plan draws with does");
+  // A rug's or a cloth's contour (MapAppearance.border, lib/catalog/border.ts) is drawn on the
+  // client's sketch too — it rides the appearance, which carries no price.
+  const rug = clientProduct({ ...studio, category: "rugs", appearance: { shape: "rect", content: "none", border: { widthMm: 100, colour: "#c9a24a" } } } as Product);
+  assert(rug.appearance?.border?.colour === "#c9a24a", "a row's contour reaches the client's sketch");
   const json = JSON.stringify(safe);
   assert(!json.includes("350") && !json.includes("120") && !json.includes("400"), "no price survives anywhere in it");
   console.log("client-product: all checks passed");
