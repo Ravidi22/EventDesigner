@@ -625,7 +625,8 @@ export function PlacementMap({
             .map((r) => (
               <g key={r.zone.id}>
                 <path
-                  d={outlinePathD(r.boundary)}
+                  // A region drawn with bowed sides or rounded corners prints its true curves.
+                  d={r.shape ? outlinePathD(r.shape.outline, r.shape.edgeCurves) : outlinePathD(r.boundary)}
                   fill={
                     r.zone.surface && mono
                       ? MONO.ground
