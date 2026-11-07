@@ -8,6 +8,7 @@
 // this file, so the sketch and the sheet can never disagree about what a chandelier is over.
 import type { DesignDocumentContent, DesignTable, Placement, Point } from "@/lib/design-document/types";
 import { resolve } from "@/lib/studio/catalog-resolver";
+import { isRailed } from "@/lib/studio/rail";
 import { anchorOffset, blockTarget, centreOver, hangTarget, targetUnder, type HangTarget } from "@/lib/studio/hang";
 import { footprintPolygons, insidePolys } from "@/lib/studio/proximity";
 import { featureFootprint, type VenueStructure } from "@/lib/venues/structure";
@@ -115,7 +116,7 @@ export function tableUnderHang(doc: DesignDocumentContent, targets: readonly Han
  *  one on top of it (which is how one event came to have two chandeliers from one point). The
  *  document itself when there is nothing to adopt. */
 export function adoptHung(doc: DesignDocumentContent, structure: VenueStructure): DesignDocumentContent {
-  const free = doc.placements.filter((p) => p.layer === "ceiling" && !p.over && !p.span && resolve(p.variantId)?.anchor !== "wall");
+  const free = doc.placements.filter((p) => p.layer === "ceiling" && !p.over && !isRailed(p) && resolve(p.variantId)?.anchor !== "wall");
   if (free.length === 0 || doc.tables.length === 0) return doc;
   const targets = hangTargetsOf(doc, structure);
   const link = new Map<string, string>();

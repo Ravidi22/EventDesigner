@@ -194,7 +194,7 @@ export function Quote({
     const fallback = defaultChair();
     return quoteSections(doc, {
       lookup: priceLookup,
-      ctx: measureContext(plan.structure),
+      ctx: measureContext(plan.structure, doc),
       zones,
       chairOf: (t) => chairOf(t, fallback),
     });

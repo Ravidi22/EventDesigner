@@ -12,7 +12,7 @@ import type { Plane } from "@/lib/studio/planes";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
-import { resolveSpan } from "@/lib/studio/anchor";
+import { railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
@@ -159,13 +159,21 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
   const r = resolve(p.variantId);
 
   if (r?.anchor === "wall") {
-    const run = p.span ? resolveSpan(property, p.span) : null;
+    // Its RAIL (lib/studio/rail.ts) — a wall's stretch as always, a side of a thing, a rod — read
+    // against the property's walls and, for a side, the thing where this event stood it.
+    const rail = railOf(p);
+    const lines = rail ? railLines(rail, sketchRailContext(doc, property, structure, (v) => resolve(v)?.product)) : [];
+    const run = lines[0];
     if (!run) return null;
-    return remembered(p, [catalogVersion, property], () => {
+    return remembered(p, [catalogVersion, property, run], () => {
       // One band per stretch of the run, so a drape round a bowed wall is the curved strip it is
-      // (each piece convex), not a rectangle across the bow.
-      const band = run.path.slice(1).map((q, i) => bandPolygon(run.path[i], q, DRAPE_BAND_MM));
-      const centre = run.path.length > 2 ? run.path[Math.floor(run.path.length / 2)] : { x: (run.from.x + run.to.x) / 2, y: (run.from.y + run.to.y) / 2 };
+      // (each piece convex), not a rectangle across the bow — on its hang side when it has one.
+      const band = lines.flatMap((l) => {
+        const mid = railClothLine(l, DRAPE_BAND_MM);
+        return mid.slice(1).map((q, i) => bandPolygon(mid[i], q, DRAPE_BAND_MM));
+      });
+      const path = railClothLine(run, DRAPE_BAND_MM);
+      const centre = path.length > 2 ? path[Math.floor(path.length / 2)] : { x: (path[0].x + path[path.length - 1].x) / 2, y: (path[0].y + path[path.length - 1].y) / 2 };
       return { ref, label: r.product.name, centre, polysAt: () => band, box: boxOf(band), clearanceMm: r.product.clearanceMm ?? 0, groupId: p.groupId, movable: false };
     });
   }
