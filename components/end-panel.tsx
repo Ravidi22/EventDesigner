@@ -32,12 +32,30 @@ export interface PanelGroup {
   body: ReactNode;
 }
 
+const OPEN_EVENT = "eve:end-panel-open";
+
+/** Bring a screen's end panel back if it was put away — the document menu's "תוכנית רקע…" and the
+ *  like, which open a group in it. */
+export function openEndPanel(screen: string) {
+  window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: screen }));
+}
+
 export function EndPanel({ screen, collapsible = false, children }: { screen: "studio" | "halls" | "editor"; collapsible?: boolean; children: ReactNode }) {
   // Null until the device's preference is read — open, so the server render and the first client
   // render agree and a stored "closed" folds it a frame later rather than flashing it open.
   const [stored, setStored] = useState<boolean | null>(null);
   useEffect(() => {
     if (collapsible) setStored(loadEndPanelOpen(screen));
+  }, [collapsible, screen]);
+  useEffect(() => {
+    if (!collapsible) return;
+    const on = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== screen) return;
+      setStored(true);
+      saveEndPanelOpen(screen, true);
+    };
+    window.addEventListener(OPEN_EVENT, on);
+    return () => window.removeEventListener(OPEN_EVENT, on);
   }, [collapsible, screen]);
   const open = !collapsible || stored !== false;
   const toggle = () => {

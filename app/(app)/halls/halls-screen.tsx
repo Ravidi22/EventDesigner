@@ -42,6 +42,7 @@ import { doorOpenings } from "@/lib/studio/anchor";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
+  setActiveVenueId,
   type Venue,
   type VenueStructure,
   type Zone,
@@ -143,7 +144,12 @@ import {
 } from "@/components/venue-plan";
 import { VenueDims } from "@/components/venue-dims";
 import { UnderlayCropModal } from "@/components/underlay-crop-modal";
-import { AddElementFlyout } from "@/components/add-element-flyout";
+import { HallsRail } from "./halls-rail";
+import { WallDrawBar } from "./wall-draw-bar";
+import { DocumentMenu, HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
+import { EndPanel, openEndPanel } from "@/components/end-panel";
+import { Menu, type MenuItem } from "@/components/menu";
+import { groupMemory } from "@/lib/studio/panel-groups";
 import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { IconButton } from "@/components/icon-button";
 import { ProductImage } from "../catalog/product-image";
@@ -168,7 +174,6 @@ import {
   type SelectionBox,
 } from "@/lib/venues/selection";
 import { PlanCanvas, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode } from "@/components/plan-canvas";
-import { SidePanel } from "@/components/side-panel";
 import { useHistory } from "@/lib/studio/use-history";
 import { isAdditiveClick, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import type { Point } from "@/lib/studio/hall";
@@ -227,21 +232,6 @@ function blockedZoneNote(b: BlockedZone): string {
 }
 
 type Mode = "select" | "walls" | "zones";
-
-// A pastel swatch per element the designer DRAWS rather than picks off a shelf, so the picker's
-// cards read as a little gallery of colours instead of identical grey tiles. The ones that come out
-// of the catalog get something better than a colour — their own footprint, at their own proportions
-// (see ToolPreview) — so they aren't in here.
-const ADD_TOOL_PREVIEW: Record<string, string> = {
-  entrance: "#f3c6d6",
-  window: "#d6e6f3",
-  curtain: "#dcd8e4",
-  pool: "#bcdcf5",
-  stage: "#f6df9b",
-  bar: "#f3c99b",
-  structure: "#d9d1f2",
-  other: "#c7e8cf",
-};
 
 // A solid dot per zone kind, for the sidebar list — a saturated sibling to venue-plan.tsx's own
 // ZONE_FILL, which is deliberately pale (it tints a whole room on the plan, not a 12px legend dot
@@ -336,6 +326,8 @@ export function HallsScreen() {
   const selection = readOnly ? NO_SELECTION : pickedSelection;
   const [wallKind, setWallKind] = useState<WallKind>("wall");
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
+  // The rail's "שרטוט קירות", for the W key — the handler is defined below the effect that reads it.
+  const startWallsRef = useRef<() => void>(() => {});
   const [region, setRegion] = useState<Point[] | null>(null); // freehand zone boundary in progress
   // The hand: a plain drag moves the view instead of selecting, over anything on the plan. A toggle
   // beside the modes rather than a mode of its own, so turning it off lands back where you were.
@@ -369,7 +361,6 @@ export function HallsScreen() {
   const armedTool = findAddTool(tools, armedToolId) ?? null;
   // The add-element flyout — closed by picking a row (which arms it), by Escape, or by a click
   // anywhere else (see the backdrop next to it).
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
   // The zone whose edit dialog is open (the ✎ on its row in the list) — zone-dialog.tsx.
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
   // Which property's plan has been read. Before the open one's arrives nothing is written back.
@@ -378,13 +369,11 @@ export function HallsScreen() {
   // The zone-definition / background-plan panel, collapsible exactly like the app's own sidebar
   // (components/app-shell.tsx) — a designer mid-drawing wants the canvas at full width without
   // losing the panel entirely, the same tradeoff the main nav's own collapse toggle makes.
-  const [panelCollapsed, setPanelCollapsed] = useState(false);
   // Position, inside the canvas, of the floating instruction tooltip that follows the cursor while a
   // drawing tool is armed — null (and so unrendered) the instant the pointer leaves the canvas or the
   // tool goes back to "select", rather than lingering at its last spot. `w` is the canvas's own
   // measured width, so the tooltip can flip to the cursor's other side near the edge instead of
   // running past it and getting clipped by the canvas's own overflow-hidden.
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number; w: number } | null>(null);
   // Hover state for the region tool's closing target — the first vertex, once the boundary has
   // enough points to close. Purely cosmetic (a bigger, brighter dot), so a plain boolean is enough.
   const [hoverCloseRegionRaw, setHoverCloseRegion] = useState(false);
@@ -1043,7 +1032,6 @@ export function HallsScreen() {
         else if (outlineEditId) setOutlineEditId(null);
         else if (edgePick) setEdgePick(null);
         else if (activeEdge) setActiveEdge(null);
-        else if (addMenuOpen) setAddMenuOpen(false);
         else if (armedToolId) setArmedToolId(null);
         else if (region) setRegion(null);
         else if (runNodeId) setRunNodeId(null);
@@ -1071,6 +1059,10 @@ export function HallsScreen() {
       } else if ((e.key === "Delete" || e.key === "Backspace") && selection.length > 0) {
         e.preventDefault();
         deleteSelection();
+      } else if (isShortcut(e, "w") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // The rail's first tool. Physical key, so W on a Hebrew layout draws walls too.
+        e.preventDefault();
+        startWallsRef.current();
       } else if (e.code === "KeyH" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // e.code: on a Hebrew layout H types "י". The same key every design tool gives its hand.
         setHandTool((v) => !v);
@@ -1133,7 +1125,7 @@ export function HallsScreen() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [readOnly, mode, runNodeId, region, selection, structure, addMenuOpen, armedToolId, draftZone, handTool, activeEdge, edgePick, outlineEditId, removeEdge, deleteSelection, duplicateSelection, restackSelection, finishRegion, setLocked, copySelection, cutSelection, pasteClip, editStructure]);
+  }, [readOnly, mode, runNodeId, region, selection, structure, armedToolId, draftZone, handTool, activeEdge, edgePick, outlineEditId, removeEdge, deleteSelection, duplicateSelection, restackSelection, finishRegion, setLocked, copySelection, cutSelection, pasteClip, editStructure]);
 
   // PlanCanvas reports an already-snapped point — its own zoom-adaptive grid step plus alignment
   // against every existing corner — so this only decides what a click *means* in the current mode.
@@ -1741,251 +1733,92 @@ export function HallsScreen() {
     setUnderlayChip(onLockedPlan);
   };
 
+  // The rail's two drawing buttons (app/(app)/halls/halls-rail.tsx) — what the toolbar's "שרטוט"
+  // and the zone panel's "שרטוט אזור חדש" did. Pressed again, drawing walls goes back to selecting.
+  const startWalls = () => {
+    if (mode === "walls") {
+      setMode("select");
+      setRunNodeId(null);
+      return;
+    }
+    setMode("walls");
+    setRunNodeId(null);
+    setRegion(null);
+    setDraftZone(null);
+    setArmedToolId(null);
+    setSelection([]);
+  };
+  startWallsRef.current = startWalls;
+  const startNewZone = () => {
+    setMode("zones");
+    setRegionFor("zone");
+    setSelection([]);
+    setDraftZone(null);
+    setRegion([]);
+  };
+  // A rail tile: the flyout's own contract — the free surface and the free pool start tracing now,
+  // anything else is armed (pressed again, disarmed).
+  const pickRailTool = (toolId: string) => {
+    if (toolId === DRAW_SURFACE_ID) {
+      startSurfaceDraw();
+      return;
+    }
+    if (findAddTool(tools, toolId)?.pool === "free") {
+      startPoolDraw();
+      return;
+    }
+    setArmedToolId((id) => (id === toolId ? null : toolId));
+  };
+  // What the armed tool is waiting for — one pill under the canvas's corners (it used to follow the
+  // cursor, a re-render on every pointer move).
+  const canvasHint = armedTool
+    ? `לחצו על התוכנית כדי להניח ${armedTool.label} · Esc לביטול`
+    : region !== null
+      ? regionFor === "water"
+        ? "הקיפו את הבריכה בנקודות · Enter לסגירה · Esc לביטול"
+        : regionFor === "surface"
+          ? "הקיפו את המשטח בנקודות · Enter לסגירה · Esc לביטול"
+          : "הקיפו בנקודות · Enter לסגירה · Esc לביטול"
+      : mode !== "select"
+        ? activeMode.hint
+        : null;
+  // The canvas strip's ⋯ (components/canvas-chrome.tsx): paste, and the underlay — whose answer is
+  // a set of fields, so it opens that group in the end panel rather than a panel of its own.
+  const docMenu: MenuItem[] = [
+    ...(clip.length > 0 ? [{ label: "הדבקה · Ctrl+V", icon: ClipboardPaste, onSelect: pasteClip }] : []),
+    {
+      label: "תוכנית רקע…",
+      icon: ImageIcon,
+      onSelect: () => {
+        setSelection([]);
+        openEndPanel("halls");
+        groupMemory.open("halls:none", "underlay");
+        requestAnimationFrame(() => document.querySelector('[data-group="underlay"]')?.scrollIntoView({ block: "nearest" }));
+      },
+    },
+  ];
+
   return (
     <div className="flex h-full flex-col p-4">
-      {/* A real two-column layout: the zone-definition list is a dedicated sidebar next to the
-          canvas, not a layer floating on top of it (see the SidePanel at the end). No header row above
-          either of them any more — "הגדרת אזורים" isn't a mode you switch into any more (see
-          onSelectModeCanvasClick above: naming an enclosed room now works straight from select
-          mode) and its "סימון שטח פתוח" companion is fully covered by the sidebar's own "+ שרטוט
-          אזור חדש", which already both arms the region tool and starts drawing in one click. With
-          nothing above them, the canvas and the sidebar's tops align for free — no shared grid row
-          needed just to keep them level.
-          min-h-0 flex-1 on the grid (rather than a guessed vh height) is what makes the canvas fill
-          every bit of vertical space this page has — a fixed vh number always either overshoots
-          (forcing the page itself to scroll under a supposedly-fixed layout) or leaves a gap under
-          the fold, depending on the viewport's actual height once the chrome above it is accounted
-          for. min-h-0 is load-bearing: without it a grid row won't shrink below its content's
-          natural size, and the canvas's own min-h-96 would then win a fight with "fill exactly what
-          remains" instead of losing to it gracefully once space is tight.
-          The explicit row (lg:grid-rows-[minmax(0,1fr)]) is load-bearing too: an implicit grid row
-          is `auto`, which grows to its tallest item's content — and the zone panel's content is
-          the whole zone list, scroller or not. A long list stretched the row past the page, the
-          canvas stretched with it (lg:h-full), and the bottom dock went below the fold. */}
-      <div className="grid min-h-0 flex-1 gap-x-4 gap-y-3 lg:grid-cols-[1fr_auto] lg:grid-rows-[minmax(0,1fr)]">
-        {/* The sketch's canvas card (app/meeting/meeting-screen.tsx CanvasCard, app/(app)/studio/
-            toolbar.tsx): a white card with a toolbar along its top, the canvas filling the rest,
-            PlanCanvas's own tool strip in the top corner and the selection's bar at the bottom
-            centre. It was a lavender plane with a bottom dock and a side panel; the user asked for
-            the two canvases to be one canvas (2026-10-16). */}
-        <section className="relative flex min-h-96 flex-col overflow-hidden rounded-md bg-surface shadow-floating lg:h-full lg:min-h-0">
-          <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
-            {/* A viewer gets no tools: nothing here would do anything but look like it might. */}
-            {!readOnly && (
-              <>
-            <div className="flex items-center gap-0.5">
-              <IconButton label="בטל · Ctrl+Z" size="md" onClick={hist.undo} disabled={!hist.canUndo}>
-                <Undo2 className="h-4 w-4" strokeWidth={2} />
-              </IconButton>
-              <IconButton label="בצע שוב · Ctrl+Shift+Z" size="md" onClick={hist.redo} disabled={!hist.canRedo}>
-                <Redo2 className="h-4 w-4" strokeWidth={2} />
-              </IconButton>
-            </div>
-            <div className="mx-1 h-6 w-px bg-border" />
-            {/* The clipboard, with a face, beside undo/redo as on the sketch: what just happened to
-                the plan, rather than what is true of the selection. */}
-            <div className="flex items-center gap-0.5">
-              <IconButton label="העתקה · Ctrl+C" size="md" onClick={copySelection} disabled={featureSelection.length === 0}>
-                <Copy className="h-4 w-4" strokeWidth={2} />
-              </IconButton>
-              <IconButton label="גזירה · Ctrl+X" size="md" onClick={cutSelection} disabled={featureSelection.length === 0}>
-                <Scissors className="h-4 w-4" strokeWidth={2} />
-              </IconButton>
-              <IconButton label="הדבקה · Ctrl+V" size="md" onClick={pasteClip} disabled={clip.length === 0}>
-                <ClipboardPaste className="h-4 w-4" strokeWidth={2} />
-              </IconButton>
-            </div>
-            <div className="mx-1 h-6 w-px bg-border" />
-            {/* The tools: draw walls (with the wall/boundary choice beside it while drawing), the
-                add-element flyout, the pointer and the hand. */}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                title="שרטוט קירות"
-                onClick={() => {
-                  setMode("walls");
-                  setRunNodeId(null);
-                  setRegion(null);
-                  setDraftZone(null);
-                  setArmedToolId(null);
-                  setAddMenuOpen(false);
-                  setSelection([]);
-                }}
-                aria-pressed={mode === "walls"}
-                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                  mode === "walls" ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
-                }`}
-              >
-                <PenLine className="h-[18px] w-[18px]" strokeWidth={1.4} />
-                שרטוט
-              </button>
-              {mode === "walls" && (
-                <>
-                  <div className="mx-0.5 h-5 w-px bg-border" />
-                  {(["wall", "edge"] as WallKind[]).map((k) => (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => setWallKind(k)}
-                      aria-pressed={wallKind === k}
-                      className={`rounded-sm px-3 py-1.5 text-sm transition-colors ${
-                        wallKind === k ? "bg-accent-tint font-bold text-accent" : "font-semibold text-muted hover:bg-inset"
-                      }`}
-                    >
-                      {k === "wall" ? "קיר" : "גבול שטח"}
-                    </button>
-                  ))}
-                </>
-              )}
-              <div className="mx-0.5 h-5 w-px bg-border" />
-              {isSelectMode && (
-                <>
-                  {/* A bar and a stage come off the studio's own catalog (lib/venues/add-tools.ts),
-                      carrying that row's shape and size. Opens DOWN, out of this toolbar. */}
-                  <AddElementFlyout
-                    open={addMenuOpen}
-                    onOpenChange={setAddMenuOpen}
-                    side="bottom"
-                    items={tools.flatMap((tool, i) => {
-                      const item = {
-                        id: tool.id,
-                        label: tool.label,
-                        section: tool.section,
-                        title: tool.surface
-                          ? `${tool.label} — לחיצה בשטח סגור ממלאת אותו מקיר לקיר; בשטח פתוח מניחה משטח לשינוי גודל`
-                          : tool.pool
-                          ? tool.pool === "free"
-                            ? "בריכה בציור חופשי — לחיצה לכל פינה, Enter לסגירה; הקווים מתעקמים ומתעגלים אחר כך"
-                            : `בריכה · ${tool.label} — הקווים מתעקמים והפינות מתעגלות ב״עריכת הקווים״`
-                          : tool.kind === "seating"
-                            ? `${tool.label} — חמש שורות של חמישה${tool.chair ? ` · ${tool.chair.name}` : ""}; השורות, הרווחים ומעבר באמצע בסרגל`
-                            : tool.product
-                            ? `${tool.label} · ${formatDimensions(tool.product.dimensions)}`
-                            : tool.label,
-                        disabled: (tool.id === "entrance" || tool.id === "window" || tool.id === "curtain") && !structure.walls.some((w) => w.kind === "wall"),
-                        preview: <ToolPreview tool={tool} />,
-                      };
-                      const firstGround = tool.section === "ground" && tools[i - 1]?.section !== "ground";
-                      return firstGround
-                        ? [
-                            {
-                              id: DRAW_SURFACE_ID,
-                              label: "ציור חופשי",
-                              section: "ground",
-                              title: "ציור משטח בכל צורה — לחיצה לכל פינה, Enter לסגירה, ואז בחירת החומר",
-                              preview: <DrawSurfacePreview />,
-                            },
-                            item,
-                          ]
-                        : [item];
-                    })}
-                    sections={ADD_TOOL_SECTIONS.map((id) => ({ id, label: ADD_TOOL_SECTION_LABEL[id] }))}
-                    armedId={armedTool?.id ?? null}
-                    triggerIcon={armedTool ? ADD_TOOL_ICON[addToolIconKey(armedTool)] : undefined}
-                    onPick={(toolId) => {
-                      setAddMenuOpen(false);
-                      if (toolId === DRAW_SURFACE_ID) {
-                        startSurfaceDraw();
-                        return;
-                      }
-                      // A pool traced by hand starts tracing now, like "ציור חופשי" — nothing to arm.
-                      if (findAddTool(tools, toolId)?.pool === "free") {
-                        startPoolDraw();
-                        return;
-                      }
-                      setArmedToolId((id) => (id === toolId ? null : toolId));
-                    }}
-                  />
-                  <div className="mx-0.5 h-5 w-px bg-border" />
-                </>
-              )}
-              <button
-                type="button"
-                title="מצב בחירה"
-                aria-pressed={isSelectMode && !armedTool && !handTool}
-                onClick={() => {
-                  if (!isSelectMode) {
-                    setMode("select");
-                    setRunNodeId(null);
-                    setRegion(null);
-                    setDraftZone(null);
-                  }
-                  setHandTool(false);
-                  setArmedToolId(null);
-                  setAddMenuOpen(false);
-                }}
-                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                  isSelectMode && !armedTool && !handTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
-                }`}
-              >
-                <MousePointer2 className="h-[18px] w-[18px]" strokeWidth={1.6} />
-                בחירה
-              </button>
-              <button
-                type="button"
-                title="הזזת התצוגה (H) · גם: רווח + גרירה, או גלגלת עם שתי אצבעות"
-                aria-pressed={handTool}
-                onClick={() => {
-                  setHandTool((v) => !v);
-                  setArmedToolId(null);
-                  setAddMenuOpen(false);
-                }}
-                className={`inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                  handTool ? "bg-accent-tint text-accent" : "text-muted hover:bg-inset"
-                }`}
-              >
-                <Hand className="h-[18px] w-[18px]" strokeWidth={1.6} />
-                הזזה
-              </button>
-            </div>
-              </>
-            )}
-            {/* Which property, and whether it is written down — at the toolbar's end, where the
-                sketch keeps its own save state. There is no save button on this screen and never
-                was: a write that fails has to say so itself. */}
-            <div className="ms-auto flex min-w-0 items-center gap-3">
-              <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-bold text-accent-deep">
-                <Building2 className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
-                <span className="truncate">{venue?.name ?? "מקום"}</span>
-              </span>
-              <div className="flex shrink-0 items-center gap-1.5 text-xs" aria-live="polite">
-                {readOnly ? (
-                  <span className="inline-flex items-center gap-1.5 text-muted">
-                    <Eye className="h-3.5 w-3.5" strokeWidth={2} />
-                    צפייה בלבד
-                  </span>
-                ) : saveState === "saving" ? (
-                  <span className="inline-flex items-center gap-1.5 text-muted">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
-                    שומר…
-                  </span>
-                ) : saveState === "error" ? (
-                  <button
-                    type="button"
-                    onClick={retrySave}
-                    className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-medium text-warn-ink transition-colors hover:bg-warn-tint"
-                  >
-                    <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
-                    לא נשמר · נסו שוב
-                  </button>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-muted">
-                    <Check className="h-3.5 w-3.5 text-accent" strokeWidth={2.5} />
-                    נשמר
-                  </span>
-                )}
-              </div>
-            </div>
-          </header>
-
+      {/* ONE card, three columns (2026-11-09, the user's "Studio + Halls" board): the draw + add
+          rail at the start, the canvas, the end panel — hairlines between them and no header above:
+          the canvas's own strip holds history, zoom and the document menu; the venue, the hints and
+          the save state float over the plan (components/canvas-chrome.tsx). */}
+      <section className="relative flex min-h-96 flex-1 overflow-hidden rounded-md bg-surface shadow-floating lg:min-h-0">
+        {!readOnly && (
+          <HallsRail
+            tools={tools}
+            structure={structure}
+            armedId={armedTool?.id ?? null}
+            drawingWalls={mode === "walls"}
+            drawingSurface={region !== null && regionFor === "surface"}
+            onDrawWalls={startWalls}
+            onNewZone={startNewZone}
+            onPick={pickRailTool}
+          />
+        )}
           <div
-          className="relative min-h-0 flex-1"
-          onPointerMove={(e) => {
-            if (mode === "select") return;
-            const r = e.currentTarget.getBoundingClientRect();
-            setCursorPos({ x: e.clientX - r.left, y: e.clientY - r.top, w: r.width });
-          }}
-          onPointerLeave={() => setCursorPos(null)}
+          className="relative min-h-0 min-w-0 flex-1"
           // Any press outside the locked-plan chip dismisses it; a click that lands on the plan again
           // re-opens it at the new spot (onSelectModeCanvasClick).
           onPointerDownCapture={(e) => {
@@ -2034,27 +1867,6 @@ export function HallsScreen() {
               </button>
             </div>
           )}
-          {/* A zone the save refused to delete because events stand on it. Not an error — the rest
-              of the plan was written — so it reads as a note on the canvas rather than turning the
-              toolbar's indicator red. */}
-          {/* A property this business may look at but not draw on — everybody sees the same venue,
-              and the one who created it decides who edits (settings → שיתוף מתחם). */}
-          {readOnly && ready && (
-            <div className="pointer-events-none absolute right-4 top-4 z-10 max-w-md">
-              <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs font-medium leading-relaxed text-ink-soft shadow-floating">
-                צפייה בלבד
-                {venue?.ownerName ? ` — המתחם של ${venue.ownerName}` : ""}. רק מי שמנהל את המתחם יכול לאפשר עריכה.
-              </p>
-            </div>
-          )}
-          {planNote && (
-            <div className="pointer-events-none absolute right-4 top-4 z-10 max-w-md">
-              <p className="rounded-md border border-border bg-warn-tint px-3 py-2 text-xs font-medium leading-relaxed text-warn-ink shadow-floating">
-                {planNote}
-              </p>
-            </div>
-          )}
-
           {/* A refusal or a note — the sketch's own toast, for the moment it is read. */}
           {hint && (
             <div className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center">
@@ -2066,6 +1878,11 @@ export function HallsScreen() {
                 the wall graph itself; this screen supplies only the zone tints beneath, the doors
                 above, and what a click means in the current mode. */}
           <PlanCanvas
+            onUndo={readOnly ? undefined : hist.undo}
+            onRedo={readOnly ? undefined : hist.redo}
+            canUndo={hist.canUndo}
+            canRedo={hist.canRedo}
+            toolbarExtras={readOnly ? undefined : <DocumentMenu items={docMenu} />}
             mode={isSelectMode ? "edit" : "draw"}
             panTool={handTool || readOnly}
             outline={[]}
@@ -2319,35 +2136,12 @@ export function HallsScreen() {
             )}
           />
 
-          {/* A short instruction that follows the cursor while a drawing tool is armed — reading it
-              never means looking away from the shape you're mid-way through drawing. Flips to the
-              cursor's other side once it's within its own width of the canvas edge, so it can never
-              run past the canvas's own overflow-hidden and get clipped mid-word. */}
-          {mode !== "select" && cursorPos && (
-            <div
-              className="pointer-events-none absolute z-20 whitespace-nowrap rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-canvas shadow-lifted"
-              style={
-                cursorPos.x > cursorPos.w - 260
-                  ? { right: cursorPos.w - cursorPos.x + 16, top: cursorPos.y + 18 }
-                  : { left: cursorPos.x + 16, top: cursorPos.y + 18 }
-              }
-            >
-              {region !== null
-                ? regionFor === "water"
-                  ? "הקיפו את הבריכה בנקודות · Enter לסגירה · Esc לביטול"
-                  : regionFor === "surface"
-                  ? "הקיפו את המשטח בנקודות · Enter לסגירה · Esc לביטול"
-                  : "הקיפו בנקודות · Enter לסגירה · Esc לביטול"
-                : activeMode.hint}
-            </div>
-          )}
-
           {/* An outline out for editing — a freehand zone's, or a feature's "עריכת הקווים" — takes
               the bar's place: the picked side's bow, the picked corner's radius, every corner, and
               "החלקה" (app/(app)/halls/outline-bar.tsx). Its ✕ ends the editing: a feature goes back
               to its own bar, a zone is let go. */}
           {!draftZone && outlineEdit && outlineShapeNow && (
-            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center">
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
               <div className="pointer-events-auto flex min-w-0 justify-center">
                 <OutlineBar
                   title={editableRegion ? `עריכת הקווים · ${editableRegion.name || "אזור"}` : "עריכת הקווים"}
@@ -2366,7 +2160,7 @@ export function HallsScreen() {
               studio-screen.tsx), built from the same Bar and chips. A lone zone is the one selection
               with nothing to show here: its fields live in its edit dialog (the ✎ on its row). */}
           {(draftZone || (!soleZoneId && selection.length > 0)) && !(outlineEdit && outlineShapeNow && !draftZone) && (
-            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center">
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
               <div className="pointer-events-auto flex min-w-0 justify-center">
                 <SelectionBar
                   selection={selection}
@@ -2405,78 +2199,50 @@ export function HallsScreen() {
               </div>
             </div>
           )}
-          </div>
-        </section>
-
-        {/* The zone-definition list — a dedicated sidebar column next to the canvas, not a layer
-            floating on top of it (that was tried and explicitly walked back).
-            It is the SAME card as the app's navigation, not a cousin of it: the shell, its white
-            surface and shadow, the collapse puck and the width transition are all SidePanel's
-            (components/side-panel.tsx), and this screen passes only size, padding and placement.
-            It used to wrap its contents in a bg-bg shell around a lighter inner card — the shell
-            vanished into the app plane, the card stood 16px short of the canvas at both ends, and
-            the puck hung in the gap beside it. Full height (lg:h-full, the canvas's own lg:h-full
-            next to it), so the two cards start and end on the same lines. A list too long for
-            that height scrolls inside the panel (`scrolls`) instead of growing the page. Inside,
-            the two sections are the nav's own inner-panel recipe: a hairline `bg-inset` well,
-            like its profile card. */}
-        <SidePanel
-          collapsed={panelCollapsed}
-          onToggle={() => setPanelCollapsed((c) => !c)}
-          label="לוח האזורים"
-          // The puck straddles the panel's inline-start — the edge bordering the canvas — rather
-          // than its inline-end, since this panel is the one being tucked away, not the thing
-          // everything else collapses toward.
-          edge="start"
-          desktopOnly
-          scrolls
-          // True 50% of this panel's own box does NOT line up with the main sidebar's puck
-          // (components/app-shell.tsx) — that one sits in a box with equal chrome above and below
-          // (p-3 both sides), while this panel sits below the shared header (p-3 + h-16 header +
-          // gap-3 ≈ 104px of chrome above it) but only p-3 + this page's own p-4 (≈28px) below it.
-          // 50% would land 38px lower than the sidebar's puck; shifting up by that half-difference
-          // puts both on the same screen line.
-          toggleClassName="top-[calc(50%-38px)]"
-          // The padding is unconditional: below lg the toggle is gone, so a collapsed state entered
-          // on a wide viewport must not survive into a layout with no way to undo it.
-          className="p-4 lg:col-start-2 lg:h-full"
-          expandedClassName="lg:w-[300px]"
-          // The nav's own collapsed geometry (components/app-shell.tsx: w-[96px] px-2).
-          collapsedClassName="lg:w-[96px] lg:px-2"
-          // Two rows standing in for the two sections below, so the panel still reads as
-          // "תוכנית רקע" + "אזורים (n)" even shrunk to a strip. They are the nav's own collapsed
-          // rows (NavRow in components/app-shell.tsx: rounded-md, py-[11px], an 18px icon at 1.4,
-          // muted, accent-tint on hover, gap-[3px] between), so the two collapsed panels match.
-          // Either row re-expands the panel.
-          rail={
-            <div className="flex flex-col gap-[3px]">
-              <button
-                type="button"
-                onClick={() => setPanelCollapsed(false)}
-                title="תוכנית רקע"
-                className="flex items-center justify-center rounded-md py-[11px] text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
-              >
-                <ImageIcon className="h-[18px] w-[18px]" strokeWidth={1.4} />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPanelCollapsed(false)}
-                title="הגדרת אזורים"
-                className="flex items-center justify-center rounded-md py-[11px] text-muted transition-colors hover:bg-accent-tint hover:text-accent-hover"
-              >
-                <span className="relative">
-                  <Shapes className="h-[18px] w-[18px]" strokeWidth={1.4} />
-                  <span
-                    className="nums absolute -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-canvas"
-                    style={{ insetInlineEnd: "-10px" }}
-                  >
-                    {zones.length}
-                  </span>
-                </span>
-              </button>
+          <ViewCluster>
+            <Menu
+              trigger="chip"
+              align="start"
+              icon={Building2}
+              label="בחירת מתחם"
+              triggerText={venue?.name ?? "מקום"}
+              items={venues.map((v) => ({ label: v.name, onSelect: () => setActiveVenueId(v.id) }))}
+            />
+          </ViewCluster>
+          <HintRow>
+            {readOnly && ready && (
+              <HintPill tone="quiet">
+                צפייה בלבד
+                {venue?.ownerName ? ` — המתחם של ${venue.ownerName}` : ""}. רק מי שמנהל את המתחם יכול לאפשר עריכה.
+              </HintPill>
+            )}
+            {planNote && <HintPill tone="warn">{planNote}</HintPill>}
+            {canvasHint && <HintPill>{canvasHint}</HintPill>}
+          </HintRow>
+          <SavePill state={readOnly ? "readonly" : saveState} onRetry={retrySave} />
+          {/* Drawing walls: the quick bar is the drawing bar — קיר / גבול שטח, ביטול, סיום. */}
+          {mode === "walls" && !readOnly && !draftZone && (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
+              <div className="pointer-events-auto flex min-w-0 justify-center">
+                <WallDrawBar
+                  kind={wallKind}
+                  onKind={setWallKind}
+                  running={!!runNodeId}
+                  onCancel={() => setRunNodeId(null)}
+                  onFinish={() => {
+                    setRunNodeId(null);
+                    setMode("select");
+                  }}
+                />
+              </div>
             </div>
-          }
-        >
+          )}
+          </div>
+
+        {/* The end panel (components/end-panel.tsx): the zones, and with nothing selected the traced
+            plan; the selection's groups below them. */}
+        <EndPanel screen="halls" collapsible>
+          <div className="flex flex-col gap-3 p-4">
           {/* No card of its own any more: the panel IS the card (SidePanel's white surface), so the
               two sections sit straight on it. */}
           <div className="flex flex-col gap-3">
@@ -2827,8 +2593,9 @@ export function HallsScreen() {
                 )}
           </div>
           </div>
-        </SidePanel>
-      </div>
+          </div>
+        </EndPanel>
+      </section>
 
       <ZoneDialog
         zone={editingZone?.zone ?? null}
@@ -2890,178 +2657,3 @@ export function HallsScreen() {
     </div>
   );
 }
-
-/** "ציור חופשי": a lawn of no particular shape, its corners marked as the trace marks them. */
-const DRAW_PREVIEW_OUTLINE = [
-  { x: -620, y: -520 },
-  { x: 380, y: -660 },
-  { x: 660, y: 120 },
-  { x: 120, y: 640 },
-  { x: -660, y: 300 },
-];
-/** A pool shape's card: the shape at its own proportions in the water material, outlined — the
- *  freehand one the trace's dotted outline (DrawSurfacePreview's) in water. */
-function PoolPreview({ preset }: { preset: NonNullable<AddTool["pool"]> }) {
-  if (preset === "free") {
-    const s = 1600;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md bg-inset">
-        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-11 w-11" aria-hidden>
-          <SurfaceFill material="water" footprint={{ kind: "custom", outline: DRAW_PREVIEW_OUTLINE }} w={1320} d={1300} id="draw-pool" />
-          <polygon points={DRAW_PREVIEW_OUTLINE.map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke="var(--color-accent)" strokeWidth={40} strokeDasharray="90 70" />
-        </svg>
-      </span>
-    );
-  }
-  const { widthMm: w, depthMm: d } = POOL_PRESET_SIZE[preset];
-  const fp = featureFootprint({ ...poolOutline(preset, w, d), arc: undefined, ring: undefined });
-  const pad = Math.max(w, d) * 0.08;
-  return (
-    <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-      <svg viewBox={`${-w / 2 - pad} ${-d / 2 - pad} ${w + pad * 2} ${d + pad * 2}`} className="h-10 w-10" aria-hidden>
-        <SurfaceFill material="water" footprint={fp} w={w} d={d} id={`pool-${preset}`} />
-        <FootprintShape footprint={fp} fill="none" stroke="var(--color-ink-soft)" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
-      </svg>
-    </span>
-  );
-}
-
-function DrawSurfacePreview() {
-  const s = 1600;
-  return (
-    <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md bg-inset">
-      <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-11 w-11" aria-hidden>
-        <SurfaceFill material="grass" footprint={{ kind: "custom", outline: DRAW_PREVIEW_OUTLINE }} w={1320} d={1300} id="draw-surface" />
-        <polygon points={DRAW_PREVIEW_OUTLINE.map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke="var(--color-accent)" strokeWidth={40} strokeDasharray="90 70" />
-        {DRAW_PREVIEW_OUTLINE.map((q, i) => (
-          <circle key={i} cx={q.x} cy={q.y} r={70} fill="var(--color-accent)" />
-        ))}
-      </svg>
-    </span>
-  );
-}
-
-/** The picture on a card. A catalog-backed tool draws its OWN footprint, at its own proportions —
- *  the ח that makes a ח bar worth picking is visible before it is placed, and two bars that differ
- *  only in size read as two sizes. The drawn elements have no such picture, so they keep the pastel
- *  swatch and icon that were standing in for one. */
-// The rows on the add-element card: three rows of four with an aisle, which says "ceremony" where
-// five by five at that size would be a grey square. A dining chair — the card is not the studio's.
-const SEATING_PREVIEW = { rows: 3, perRow: 4, aisleMm: 600 };
-const SEATING_PREVIEW_BOX = (() => {
-  const l = chairRowsLayout(SEATING_PREVIEW, FALLBACK_CHAIR);
-  return { w: l.widthMm, d: l.depthMm, pad: Math.max(l.widthMm, l.depthMm) * 0.1 };
-})();
-
-// The column on its card: a new one (a 60cm plinth, a ⌀50 base, a ⌀40 shaft) drawn as it will be.
-const COLUMN_PREVIEW = newFeature("column", { x: 0, y: 0 });
-// The fountain on its card: the catalog's own picture at a new one's size.
-const FOUNTAIN_PREVIEW = newFeature("fountain", { x: 0, y: 0 });
-// The pergola on its card: a new one (4 × 4, 15cm posts, slats) drawn as it will be placed.
-const PERGOLA_PREVIEW = newFeature("pergola", { x: 0, y: 0 });
-
-function ToolPreview({ tool }: { tool: AddTool }) {
-  const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
-  // A pool's card is its shape, in water — the kidney and the ר say what they are before placing.
-  if (tool.pool) return <PoolPreview preset={tool.pool} />;
-  if (tool.kind === "fountain") {
-    const s = FOUNTAIN_PREVIEW.widthMm * 1.15;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
-          <ItemSymbol kind="fountain" footprint={{ kind: "circle", diameterMm: FOUNTAIN_PREVIEW.widthMm }} count={1} />
-        </svg>
-      </span>
-    );
-  }
-  if (tool.kind === "column") {
-    const s = COLUMN_PREVIEW.widthMm * 1.3;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-8 w-8" aria-hidden>
-          <ColumnGlyph f={COLUMN_PREVIEW} fill="var(--color-surface)" stroke="var(--color-muted)" strokeWidth={1.25} />
-        </svg>
-      </span>
-    );
-  }
-  if (tool.kind === "pergola" && !tool.product) {
-    const s = PERGOLA_PREVIEW.widthMm * 1.15;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
-          <PergolaGlyph footprint={featureFootprint(PERGOLA_PREVIEW)} pergola={pergolaOf(PERGOLA_PREVIEW)} stroke="var(--color-muted)" postFill="var(--color-ink-soft)" />
-        </svg>
-      </span>
-    );
-  }
-  // The venue's LED (spec 2026-11-07 §7.3): a strip's glowing line, a screen's dark bar — the drawing
-  // each lands as.
-  if (tool.kind === "led" || tool.kind === "screen") {
-    return (
-      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-        <svg viewBox="-2300 -2300 4600 4600" className="h-9 w-9" aria-hidden>
-          {tool.kind === "led" ? (
-            <ItemSymbol kind="led" footprint={{ kind: "rect", widthMm: 4000, depthMm: 1400 }} count={1} />
-          ) : (
-            <ItemSymbol kind="screen" footprint={{ kind: "rect", widthMm: 4000, depthMm: 500 }} count={1} />
-          )}
-        </svg>
-      </span>
-    );
-  }
-  if (tool.kind === "seating") {
-    const { w, d, pad } = SEATING_PREVIEW_BOX;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-        <svg viewBox={`${-w / 2 - pad} ${-d / 2 - pad} ${w + pad * 2} ${d + pad * 2}`} className="h-10 w-10" aria-hidden>
-          <SeatingGlyph spec={SEATING_PREVIEW} />
-        </svg>
-      </span>
-    );
-  }
-  if (tool.surface) {
-    // A swatch of the material itself, at its real scale — a 1.6m square: four slabs across, a
-    // dozen deck boards, enough lawn to see the grain.
-    const s = 1600;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md">
-        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-11 w-11" aria-hidden>
-          <SurfaceFill material={tool.surface} footprint={{ kind: "rect", widthMm: s, depthMm: s }} w={s} d={s} id={tool.id} />
-        </svg>
-      </span>
-    );
-  }
-  if (tool.plant) {
-    // The planting shows the very drawing it will place, at its own proportions — the section is a
-    // little garden to pick from, which an icon of a leaf six times over is not.
-    const { widthMm: w, depthMm: d } = PLANT_DEFAULTS[tool.plant];
-    const pad = Math.max(w, d) * 0.1;
-    return (
-      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-success-tint">
-        <svg viewBox={`${-w / 2 - pad} ${-d / 2 - pad} ${w + pad * 2} ${d + pad * 2}`} className="h-9 w-9" aria-hidden>
-          <PlantGlyph species={tool.plant} w={w} d={d} id={tool.id} />
-        </svg>
-      </span>
-    );
-  }
-  if (!tool.product) {
-    return (
-      <span
-        className="flex h-11 w-11 items-center justify-center rounded-md"
-        style={{ backgroundColor: ADD_TOOL_PREVIEW[tool.id] ?? "var(--color-inset)" }}
-      >
-        <Icon className="h-4 w-4 text-ink/70" strokeWidth={1.75} />
-      </span>
-    );
-  }
-  // The row's own picture, exactly as the sketch's catalog rail shows it (app/(app)/studio/
-  // catalog-rail.tsx): its photo, or the plan drawing itself on a dotted tile — a bar in its
-  // texture, a stage as a stage. A bare accent outline, which this was, told a ח from a box and
-  // nothing else.
-  return (
-    <span className="block h-14 w-14 overflow-hidden rounded-md border border-border">
-      <ProductImage product={tool.product} />
-    </span>
-  );
-}
-
