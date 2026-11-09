@@ -14,6 +14,8 @@
     "check:actions": "tsx lib/design-document/actions.ts",
     "check:footprint": "tsx lib/studio/footprint.ts",
     "check:panel-groups": "tsx lib/studio/panel-groups.ts",
+    "check:plan-list": "tsx lib/studio/plan-list.ts",
+    "check:plan-checks": "tsx lib/studio/plan-checks.ts",
     "check:element": "tsx lib/element/geometry.ts",
     "check:revolve": "tsx lib/element/revolve.ts",
     "check:chandelier": "tsx lib/catalog/chandelier.ts",
