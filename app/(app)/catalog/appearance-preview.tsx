@@ -77,6 +77,11 @@ export function AppearancePreview({ product, className }: { product: Product; cl
 
 /** The categories whose picture is not drawn from a footprint at all — an LED strip, a sail or a
  *  ceiling drape, a curtain: each previews as a length of itself in a frame of its own. */
+// Math.sin/cos differ in their last digit between Node and the browser, so a seat's raw coordinates
+// rendered on the server never matched the client's: the transform string is rounded to a thousandth
+// of a mm (or degree) so both sides print the same text — a hydration mismatch otherwise.
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
 const ownFrame = (product: Product) =>
   isLedStrip(product) || isCeilingClothCategory(product.category) || CATEGORY_BY_ID[product.category]?.anchor === "wall";
 
@@ -122,7 +127,7 @@ function planArt(product: Product): { art: ReactNode; w: number; h: number; reac
   const art = (
     <>
       {ring.map((seat, i) => (
-        <g key={i} transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
+        <g key={i} transform={`translate(${r3(seat.x)} ${r3(seat.y)}) rotate(${r3(seat.facingDeg)})`}>
           <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
         </g>
       ))}
