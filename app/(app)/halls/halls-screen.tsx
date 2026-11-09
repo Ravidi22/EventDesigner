@@ -147,7 +147,9 @@ import { UnderlayCropModal } from "@/components/underlay-crop-modal";
 import { HallsRail } from "./halls-rail";
 import { WallDrawBar } from "./wall-draw-bar";
 import { DocumentMenu, HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
-import { EndPanel, openEndPanel } from "@/components/end-panel";
+import { EndPanel, PanelGroups, PanelList, PanelListFolded, PanelListRow, openEndPanel } from "@/components/end-panel";
+import { UnderlayGroupBody, underlaySummary } from "./underlay-group";
+import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
 import { Menu, type MenuItem } from "@/components/menu";
 import { groupMemory } from "@/lib/studio/panel-groups";
 import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
@@ -1749,6 +1751,10 @@ export function HallsScreen() {
     setSelection([]);
   };
   startWallsRef.current = startWalls;
+  // The zones list folds to one line while a NON-zone thing is selected; its folded row unfolds
+  // it for THAT selection (a new pick folds it again).
+  const [unfoldedFor, setUnfoldedFor] = useState<PlanSelection[] | null>(null);
+  const listOpen = !selection.some((s) => s.kind !== "zone") || unfoldedFor === selection;
   const startNewZone = () => {
     setMode("zones");
     setRegionFor("zone");
@@ -2242,358 +2248,102 @@ export function HallsScreen() {
         {/* The end panel (components/end-panel.tsx): the zones, and with nothing selected the traced
             plan; the selection's groups below them. */}
         <EndPanel screen="halls" collapsible>
-          <div className="flex flex-col gap-3 p-4">
-          {/* No card of its own any more: the panel IS the card (SidePanel's white surface), so the
-              two sections sit straight on it. */}
-          <div className="flex flex-col gap-3">
-          {/* The traced-over plan is the editor's tool — a viewer has nothing to upload or move. */}
-          {!readOnly && (
-          <>
-          {/* Tracing panel (F-3.5 + F-3.4) — its own section, sibling to the zone-definition one
-              below: a background plan you place/calibrate isn't part of "defining zones", so it
-              keeps that section focused on just that instead of growing a second concern into it. */}
-          <div className="rounded-md border border-border bg-inset p-3.5">
-            <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-ink">
-              <ImageIcon className="h-[18px] w-[18px] text-muted" strokeWidth={1.4} />
-              תוכנית רקע
-            </h3>
-
-            {!underlay?.url ? (
-              <>
-                <p className="mb-2.5 text-xs leading-relaxed text-ink-soft">
-                  העלו תצלום או סריקה של תוכנית המקום, כיילו אותה לפי מידה ידועה, וציירו את הקירות
-                  מעליה.
+          {/* THE LIST: the venue's zones, folded to one line while something that is not a zone is
+              selected (its groups below need the room). A zone selected keeps it open, its row lit. */}
+          {listOpen ? (
+            <PanelList title="אזורים" count={resolved.length}>
+              {mode === "zones" && !draftZone && unnamed > 0 && (
+                <p className="mx-1 mb-1 rounded-sm bg-accent-tint px-2.5 py-2 text-xs leading-relaxed text-accent-deep">
+                  זוהו {faces.length} שטחים סגורים במבנה, {unnamed} מהם עדיין ללא שם. לחצו בתוך שטח כדי להגדיר אותו כאזור.
                 </p>
-
-                {pickerOpen ? (
-                  <div className="rounded-sm border border-border bg-canvas p-2">
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-ink">בחירה מתוכנית קיימת</span>
-                      <button
-                        type="button"
-                        onClick={() => setPickerOpen(false)}
-                        aria-label="סגירת הרשימה"
-                        className="rounded-full p-0.5 text-muted hover:bg-inset hover:text-ink"
-                      >
-                        <X className="h-3.5 w-3.5" strokeWidth={2} />
-                      </button>
-                    </div>
-                    <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto">
-                      {reusableUnderlays.map((v) => (
-                        <li key={v.id}>
-                          <button
-                            type="button"
-                            disabled={underlayBusy}
-                            onClick={() => void reuseUnderlay(v)}
-                            className="flex w-full items-center gap-2 rounded-sm px-1.5 py-1.5 text-start hover:bg-inset disabled:opacity-50"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx */}
-                            <img
-                              src={v.plan.underlay!.url}
-                              alt=""
-                              className="h-10 w-10 shrink-0 rounded-sm object-cover"
-                            />
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
-                              <span className="block truncate text-xs text-muted">{v.plan.underlay!.fileName}</span>
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset">
-                      <Upload className="h-4 w-4" strokeWidth={1.4} />
-                      {underlayBusy ? "מעלה…" : "העלאת תוכנית"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        disabled={underlayBusy}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          // Cleared so choosing the SAME file again still fires a change event — the
-                          // obvious thing to do after a failed upload (or a cancelled crop).
-                          e.target.value = "";
-                          if (f) setCropFile(f);
-                        }}
-                      />
-                    </label>
-                    {reusableUnderlays.length > 0 && (
-                      <button
-                        type="button"
-                        disabled={underlayBusy}
-                        onClick={() => setPickerOpen(true)}
-                        className="inline-flex items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset disabled:opacity-50"
-                      >
-                        <Images className="h-4 w-4" strokeWidth={1.4} />
-                        בחירה מתוכנית קיימת
-                      </button>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex flex-col gap-2.5">
-                <p className="truncate text-xs text-ink-soft" title={underlay.fileName}>
-                  {underlay.fileName}
-                </p>
-
-                {/* Calibration — the one control that makes traced walls mean anything. */}
-                {calib ? (
-                  <div className="rounded-sm border border-accent-line bg-accent-tint p-2.5">
-                    {!calib.to ? (
-                      <p className="text-xs leading-relaxed text-accent-deep">
-                        {calib.from
-                          ? "סמנו את הקצה השני של אותו קטע."
-                          : "סמנו על התוכנית קצה אחד של קטע שאורכו ידוע לכם."}
-                      </p>
-                    ) : (
-                      <>
-                        <label className="mb-1.5 block text-xs font-semibold text-accent-deep">
-                          מה האורך האמיתי של הקטע? (מטרים)
-                        </label>
-                        <div className="flex gap-1.5">
-                          <input
-                            autoFocus
-                            inputMode="decimal"
-                            value={calibAnswer}
-                            onChange={(e) => setCalibAnswer(e.target.value)}
-                            onKeyDown={(e) =>
-                              e.key === "Enter" &&
-                              calib.from &&
-                              calib.to &&
-                              finishCalibration(calib.from, calib.to, calibAnswer)
-                            }
-                            placeholder="12.5"
-                            dir="ltr"
-                            className="w-24 rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus-visible:border-accent focus-visible:outline-none"
-                          />
-                          <button
-                            onClick={() =>
-                              calib.from && calib.to && finishCalibration(calib.from, calib.to, calibAnswer)
-                            }
-                            className="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-deep"
-                          >
-                            כיול
-                          </button>
-                        </div>
-                      </>
-                    )}
-                    <button
-                      onClick={() => {
-                        setCalib(null);
-                        setUnderlayNote(null);
-                      }}
-                      className="mt-2 text-xs font-semibold text-muted hover:text-ink"
-                    >
-                      ביטול
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setCalib({ from: null, to: null });
-                      setCalibAnswer("");
-                      setUnderlayNote(null);
-                    }}
-                    className="inline-flex items-center gap-2 rounded-sm border border-border bg-canvas px-3 py-1.5 text-sm font-semibold text-ink hover:bg-inset"
-                  >
-                    <Ruler className="h-4 w-4" strokeWidth={1.4} />
-                    כיול לפי מידה ידועה
-                  </button>
-                )}
-
-                <label className="flex items-center gap-2 text-xs text-ink-soft">
-                  <span className="w-14 shrink-0">שקיפות</span>
-                  <input
-                    type="range"
-                    min={5}
-                    max={100}
-                    value={Math.round(clampOpacity(underlay.opacity) * 100)}
-                    onChange={(e) => patchUnderlay({ opacity: Number(e.target.value) / 100 })}
-                    onPointerUp={() => void persistUnderlay(underlay)}
-                    className="flex-1 accent-[var(--color-accent)]"
+              )}
+              {resolved.map((r) => (
+                <div key={r.zone.id}>
+                  <PanelListRow
+                    glyph={<span aria-hidden className="h-3 w-3 rounded-full" style={{ backgroundColor: ZONE_DOT_COLOR[r.zone.kind] }} />}
+                    label={r.zone.name || "ללא שם"}
+                    meta={`${ZONE_KIND_LABEL[r.zone.kind]} · ${Math.round(zoneAreaM2(r))} מ״ר`}
+                    selected={selectedZoneIds.includes(r.zone.id)}
+                    onClick={(e) => pick({ kind: "zone", id: r.zone.id }, isAdditiveClick(e))}
+                    trailing={
+                      !readOnly && (
+                        <IconButton label={`עריכת האזור ${r.zone.name || "ללא שם"}`} onClick={() => editZone(r.zone.id)} className="shrink-0">
+                          <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        </IconButton>
+                      )
+                    }
                   />
-                </label>
-
-                <label className="flex items-center gap-2 text-xs text-ink-soft">
-                  <span className="w-14 shrink-0">סיבוב</span>
-                  <input
-                    type="number"
-                    step={0.5}
-                    value={underlay.rotationDeg}
-                    dir="ltr"
-                    onChange={(e) => patchUnderlay({ rotationDeg: Number(e.target.value) || 0 })}
-                    onBlur={() => void persistUnderlay(underlay)}
-                    className="w-20 rounded-sm border border-border bg-canvas px-2 py-1 text-sm text-ink focus-visible:border-accent focus-visible:outline-none"
-                  />
-                  <span className="text-muted">°</span>
-                </label>
-
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    onClick={() => setUnderlayUnlocked((v) => !v)}
-                    className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-xs font-semibold ${
-                      underlayUnlocked
-                        ? "border-accent-line bg-accent-tint text-accent"
-                        : "border-border bg-canvas text-ink hover:bg-inset"
-                    }`}
-                  >
-                    {underlayUnlocked ? (
-                      <Unlock className="h-3.5 w-3.5" strokeWidth={1.6} />
-                    ) : (
-                      <Lock className="h-3.5 w-3.5" strokeWidth={1.6} />
-                    )}
-                    {underlayUnlocked ? "נעילת מיקום" : "שחרור להזזה"}
-                  </button>
-                  <button
-                    onClick={() => void removeUnderlay()}
-                    className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-xs font-semibold text-alert hover:bg-inset"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" strokeWidth={1.6} />
-                    הסרה
-                  </button>
+                  {r.detached && <p className="px-2 pb-1 text-xs text-alert">{detachedNote(r.zone)}</p>}
                 </div>
-
-                {underlayUnlocked && (
-                  <p className="text-xs leading-relaxed text-alert">
-                    התוכנית פתוחה להזזה. הזזתה אחרי שציירתם קירות מעליה תסיט אותם ממנה.
-                  </p>
-                )}
-              </div>
-            )}
-
-            {underlayNote && <p className="mt-2 text-xs leading-relaxed text-accent-deep">{underlayNote}</p>}
-          </div>
-
-          </>
-          )}
-          {/* A hairline well like the section above, and no shadow of its own: it sits INSIDE a
-              floating card now, and a second lift inside the first reads as a card stacked on a
-              card. The zone rows in it are white (bg-canvas) against the well. */}
-          <div className="flex flex-col gap-2.5 rounded-md border border-border bg-inset p-3.5">
-                <div>
-                  {/* Title and badge share this one row (and nothing else), so items-center has
-                      only their own single-line heights to centre against — sharing a row with the
-                      two-line description too (as this used to) centres the badge against that
-                      *combined* block instead, landing it between the two lines rather than level
-                      with the title. */}
-                  <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-sm font-bold text-ink">הגדרת אזורים</h2>
-                    <span className="nums flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border border-border bg-canvas px-1.5 text-xs font-semibold text-muted">
-                      {zones.length}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs leading-relaxed text-muted">
-                    חלקו את המתחם לאזורים תפקודיים — לכל אחד שם, צבע ושטח.
-                  </p>
-                </div>
-
-                {/* Naming happens on the selection bar under the canvas (SelectionBar's draft-zone
-                    form) — the same place every other selection's fields live — not here; a
-                    picked-but-unnamed area is still shown as "picked" via the unnamed-count line
-                    right below, not by a second copy of the form in two places at once. */}
-                {mode === "zones" && !draftZone && unnamed > 0 && (
-                  <p className="rounded-md border border-dashed border-accent-line bg-accent-tint/60 p-3 text-xs leading-relaxed text-accent-deep">
-                    זוהו {faces.length} שטחים סגורים במבנה, {unnamed} מהם עדיין ללא שם. לחצו בתוך שטח כדי להגדיר אותו כאזור.
-                  </p>
-                )}
-
-                {resolved.map((r) => {
-                  const active = selectedZoneIds.includes(r.zone.id);
-                  return (
-                    <div
-                      key={r.zone.id}
-                      className={`rounded-md border bg-canvas transition-colors ${
-                        active ? "border-accent" : "border-border hover:border-accent-line"
-                      }`}
-                    >
-                      <div className="flex items-start">
-                        <button
-                          type="button"
-                          // Selects, and nothing else — no framing, no fields opening under the row
-                          // (the ✎ beside it is the way in to those, see ZoneDialog).
-                          onClick={(e) => pick({ kind: "zone", id: r.zone.id }, isAdditiveClick(e))}
-                          className="flex min-w-0 flex-1 flex-col gap-1.5 py-2.5 ps-3 text-start"
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className="nums shrink-0 text-xs text-muted">{Math.round(zoneAreaM2(r))} מ״ר</span>
-                            <span className={`min-w-0 flex-1 truncate text-sm font-bold ${active ? "text-accent-deep" : "text-ink"}`}>
-                              {r.zone.name || "ללא שם"}
-                            </span>
-                            <span
-                              aria-hidden
-                              className="h-3 w-3 shrink-0 rounded-full"
-                              style={{ backgroundColor: ZONE_DOT_COLOR[r.zone.kind] }}
-                            />
-                          </div>
-                          {!r.detached && (
-                            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-soft">
-                              {r.zone.capacity?.seated ? (
-                                <span className="inline-flex items-center gap-1">
-                                  <Users className="h-3.5 w-3.5" strokeWidth={1.4} />
-                                  <span className="nums">{r.zone.capacity.seated}</span> מושבים
-                                </span>
-                              ) : null}
-                              <span className="inline-flex items-center gap-1">
-                                <Layers className="h-3.5 w-3.5" strokeWidth={1.4} />
-                                {isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${(r.zone.ceilingHeightMm / 1000).toFixed(1)} מ׳`}
-                              </span>
-                              {r.zone.surface && <span>{SURFACE_MATERIAL_LABEL[r.zone.surface]}</span>}
-                            </div>
-                          )}
-                        </button>
-                        {/* Always there, at muted weight, level with the name — never a hover reveal
-                            (CLAUDE.md: card actions). The margin centres the 28px puck on the title
-                            line's own centre (py-2.5 + half of text-sm's 20px line). */}
-                        {!readOnly && (
-                          <IconButton
-                            label={`עריכת האזור ${r.zone.name || "ללא שם"}`}
-                            onClick={() => editZone(r.zone.id)}
-                            className="m-1.5 shrink-0"
-                          >
-                            <Pencil className="h-4 w-4" strokeWidth={1.75} />
-                          </IconButton>
-                        )}
-                      </div>
-                      {r.detached && (
-                        <p className="px-3 pb-2.5 text-xs text-alert">{detachedNote(r.zone)}</p>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {/* The dashed "draw a new zone" shortcut the reference card carries at the bottom
-                    of its list — jumps straight to the region tool rather than just switching
-                    modes, since that's the tool a zone with no walls to detect actually needs. */}
-                {!readOnly && <button
+              ))}
+              {!readOnly && (
+                <button
                   type="button"
-                  onClick={() => {
-                    setMode("zones");
-                    setRegionFor("zone");
-                    setSelection([]);
-                    setDraftZone(null);
-                    setRegion([]);
-                  }}
-                  className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-accent-line bg-accent-tint px-3 py-2.5 text-sm font-bold text-accent transition-colors hover:border-solid hover:bg-indigo-100"
+                  onClick={startNewZone}
+                  className="flex h-8 items-center gap-1.5 rounded-sm px-2 text-xs font-semibold text-accent transition-colors hover:bg-accent-tint"
                 >
-                  <Plus className="h-4 w-4 shrink-0" strokeWidth={2.25} />
-                  שרטוט אזור חדש
-                </button>}
-
-                {zones.length === 0 && !draftZone && (
-                  <p className="rounded-md border border-dashed border-accent-line bg-accent-tint p-4 text-sm text-accent-deep">
-                    {structure.walls.length === 0
-                      ? "המקום עדיין ריק. שרטטו את קירות המקום, ואז עברו ל״הגדרת אזורים״ כדי לתת שם לכל שטח."
-                      : "אין עדיין אזורים. עברו ל״הגדרת אזורים״ ולחצו בתוך שטח סגור."}
-                  </p>
-                )}
-          </div>
-          </div>
-          </div>
+                  <Plus className="h-3.5 w-3.5" strokeWidth={2.25} />
+                  אזור חדש
+                </button>
+              )}
+              {zones.length === 0 && !draftZone && (
+                <p className="mx-1 mt-1 text-xs leading-relaxed text-muted">
+                  {structure.walls.length === 0
+                    ? "המקום עדיין ריק. שרטטו את הקירות, ואז לחצו בתוך שטח סגור כדי לתת לו שם."
+                    : "אין עדיין אזורים. לחצו בתוך שטח סגור, או ״אזור חדש״ להקפת שטח פתוח."}
+                </p>
+              )}
+            </PanelList>
+          ) : (
+            <PanelListFolded
+              icon={SquareDashed}
+              title="אזורים"
+              count={resolved.length}
+              crumb={venue?.name}
+              onOpen={() => setUnfoldedFor(selection)}
+            />
+          )}
+          {/* Nothing selected: the venue's own group — the traced plan. A viewer has nothing to
+              upload, calibrate or move. */}
+          {selection.length === 0 && !draftZone && mode === "select" && !readOnly && (
+            <PanelGroups
+              kind="halls:none"
+              title="המקום"
+              sub={venue?.name}
+              defaultOpen={["underlay"]}
+              groups={[
+                {
+                  key: "underlay",
+                  icon: ImageIcon,
+                  title: "תוכנית רקע",
+                  summary: underlaySummary(underlay),
+                  body: (
+                    <UnderlayGroupBody
+                      underlay={underlay}
+                      busy={underlayBusy}
+                      note={underlayNote}
+                      setNote={setUnderlayNote}
+                      pickerOpen={pickerOpen}
+                      setPickerOpen={setPickerOpen}
+                      reusable={reusableUnderlays}
+                      onReuse={reuseUnderlay}
+                      onFile={setCropFile}
+                      calib={calib}
+                      setCalib={setCalib}
+                      calibAnswer={calibAnswer}
+                      setCalibAnswer={setCalibAnswer}
+                      onCalibrate={finishCalibration}
+                      patch={patchUnderlay}
+                      persist={persistUnderlay}
+                      unlocked={underlayUnlocked}
+                      setUnlocked={setUnderlayUnlocked}
+                      onRemove={removeUnderlay}
+                    />
+                  ),
+                },
+              ]}
+            />
+          )}
         </EndPanel>
       </section>
 
