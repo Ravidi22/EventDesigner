@@ -192,3 +192,7 @@ Installations — fabric funnels with fringes (1), fluted trumpets with wavy rim
 - **Hebrew in opentype.js**: no shaping engine; Hebrew needs none beyond order (final letters are their own code points), so a reversed run is exact; niqqud would need positioning and is out.
 - **Font weight on the page**: ~16 TTF files, 50–300 KB each, fetched only when a text shape uses one.
 - **A text shape's outline is many points** (a script monogram, thousands): kept as one SVG path on the plan and one extrude in the room, never walked by clearance (its box is its footprint).
+
+## 13. Status
+- **S1 (the elevation views) - built** on `feat/2026-11-09-backdrops`: the shape editor's תוכנית · חזית · צד switch, shapes as boxes over the item's real 3D in an orthographic room, dragged up/down, and a round shape's גוף shaped by handles on the full-size חזית. Seen headlessly on a bar draft and a chandelier draft on 2026-11-10.
+- **S2-S6 - not started.**
