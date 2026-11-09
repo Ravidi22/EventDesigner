@@ -211,6 +211,27 @@ export function QuickLead({ icon: Icon, label }: { icon: LucideIcon; label: stri
   );
 }
 
+/** Which way it faces, typed in the bar: a quarter turn either side of the angle. Blank on a mixed
+ *  selection (several things at several angles have no one facing); typing one squares them all. */
+export function QuickTurn({ value, onChange, label = "זווית במעלות" }: { value: number | null; onChange: (deg: number) => void; label?: string }) {
+  const turn = (by: number) => onChange(((((value ?? 0) + by) % 360) + 360) % 360);
+  return (
+    <>
+      <BarButton icon={RotateCcw} label="רבע סיבוב שמאלה" onClick={() => turn(-90)} />
+      <QuickNumber
+        label={label}
+        narrow
+        value={value === null ? 0 : Math.round(value) % 360}
+        hideZero={value === null}
+        placeholder={value === null ? "—" : undefined}
+        onChange={(v) => onChange(((v % 360) + 360) % 360)}
+      />
+      <QuickUnit>°</QuickUnit>
+      <BarButton icon={RotateCw} label="רבע סיבוב ימינה" onClick={() => turn(90)} />
+    </>
+  );
+}
+
 /** The selection's ONE mode verb — הלבשה, עריכת הקווים, עריכת האזור — as an outline pill, the
  *  product form's "עריכת המראה" look. `active` while the mode it enters is on. */
 export function ModeVerb({ icon: Icon, label, onClick, active }: { icon: LucideIcon; label: string; onClick: () => void; active?: boolean }) {

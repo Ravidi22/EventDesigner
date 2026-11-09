@@ -18,11 +18,14 @@ import { Button } from "@/components/button";
  *  chair on the floor is a row of one, so typing 5 rows makes it a block and "כיסא בודד" puts it
  *  back; a venue block is always a block. */
 export function ChairRowsPopover({
+  bare = false,
   rows,
   chair,
   onChange,
   single = false,
 }: {
+  /** The fields alone, for an end-panel group (components/end-panel.tsx), with no popover round them. */
+  bare?: boolean;
   /** Absent = a single chair (only with `single`). */
   rows: ChairRows | undefined;
   /** One chair's box. */
@@ -40,8 +43,8 @@ export function ChairRowsPopover({
     onChange(next);
   };
   const cm = (mm: number) => Math.round(mm / 10);
-  return (
-    <Popover label="שורות" icon={Rows3} value={rows ? ltr(`${spec.rows}×${spec.perRow}`) : "כיסא בודד"} panelClassName="w-80">
+  const body = (
+    <>
       <PanelRow label="שורות" htmlFor="rows-n">
         <NumberField id="rows-n" decimals={0} min={1} max={MAX_ROWS} value={spec.rows} onChange={(n) => set({ rows: n })} className="w-20" />
       </PanelRow>
@@ -79,6 +82,12 @@ export function ChairRowsPopover({
         </>
       )}
       {!rows && <Note>כיסא בודד הוא שורה אחת של כיסא אחד. כמה שורות או כמה כיסאות בשורה — והוא נעשה בלוק של שורות, כמו מול החופה.</Note>}
+    </>
+  );
+  if (bare) return body;
+  return (
+    <Popover label="שורות" icon={Rows3} value={rows ? ltr(`${spec.rows}×${spec.perRow}`) : "כיסא בודד"} panelClassName="w-80">
+      {body}
     </Popover>
   );
 }

@@ -109,7 +109,7 @@ import { POOL_PRESET_SIZE, newPoolFeature, poolOutline } from "@/lib/venues/pool
 import { OutlineBar } from "./outline-bar";
 import type { OutlinePart } from "@/components/venue-plan";
 import { FootprintShape } from "@/components/footprint-shape";
-import { featureFootprint } from "@/lib/venues/structure";
+import { featureFootprint, setWallHeight } from "@/lib/venues/structure";
 import { detectFaces, faceAt, pointInPolygon, type Face } from "@/lib/venues/faces";
 import {
   detachedNote,
@@ -144,6 +144,8 @@ import {
 } from "@/components/venue-plan";
 import { VenueDims } from "@/components/venue-dims";
 import { UnderlayCropModal } from "@/components/underlay-crop-modal";
+import { Note, PanelRow } from "@/components/inspector-bar";
+import { NumberField } from "@/components/number-field";
 import { HallsRail } from "./halls-rail";
 import { WallDrawBar } from "./wall-draw-bar";
 import { DocumentMenu, HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
@@ -156,7 +158,7 @@ import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { IconButton } from "@/components/icon-button";
 import { ProductImage } from "../catalog/product-image";
 import { ZoneDialog } from "./zone-dialog";
-import { SelectionBar } from "./selection-bar";
+import { HallsSelection, type HallsSelectionProps, type ZoneQuick } from "./halls-selection";
 import { addEdgeItemAt, changeEdgeItem, fillFeatureEdges, removeEdgeItem, setEdgeItems, wallDistanceOf, type EdgeRefusal, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { shareSide } from "@/lib/design-document/stage";
 import type { StageStair } from "@/lib/design-document/types";
@@ -327,6 +329,8 @@ export function HallsScreen() {
   const [pickedSelection, setSelection] = useState<PlanSelection[]>([]);
   const selection = readOnly ? NO_SELECTION : pickedSelection;
   const [wallKind, setWallKind] = useState<WallKind>("wall");
+  // The height each wall drawn from now on takes (the drawing's "קיר חדש" group); null = the room's.
+  const [newWallHeightMm, setNewWallHeightMm] = useState<number | null>(null);
   const [runNodeId, setRunNodeId] = useState<string | null>(null); // last corner of the wall run in progress
   // The rail's "שרטוט קירות", for the W key — the handler is defined below the effect that reads it.
   const startWallsRef = useRef<() => void>(() => {});
@@ -1159,7 +1163,10 @@ export function HallsScreen() {
       // Clicking an existing corner reuses it rather than stacking a new one on top — this is how
       // walls come to share endpoints, and therefore how enclosed areas ever get detected.
       const { structure: withNode, nodeId } = addNode(structure, p);
-      const nextStructure = runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode;
+      const walled = runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode;
+      // The drawing's "קיר חדש" height, written onto the wall just drawn (blank = the room's).
+      const fresh = walled.walls.length > withNode.walls.length ? walled.walls[walled.walls.length - 1] : null;
+      const nextStructure = fresh && newWallHeightMm ? setWallHeight(walled, fresh.id, newWallHeightMm) : walled;
       editStructure(() => nextStructure);
       setRunNodeId(nodeId);
 
@@ -1751,6 +1758,70 @@ export function HallsScreen() {
     setSelection([]);
   };
   startWallsRef.current = startWalls;
+  // A lone zone selected: what its quick bar says about it.
+  const zoneQuick: ZoneQuick | null = (() => {
+    if (!soleZoneId) return null;
+    const r = resolved.find((z) => z.zone.id === soleZoneId);
+    if (!r) return null;
+    const facts = [
+      ZONE_KIND_LABEL[r.zone.kind],
+      `${Math.round(zoneAreaM2(r))} מ״ר`,
+      isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${(r.zone.ceilingHeightMm / 1000).toFixed(1)} מ׳`,
+      r.zone.capacity?.seated ? `${r.zone.capacity.seated} מושבים` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return { id: r.zone.id, name: r.zone.name, kind: r.zone.kind, facts, freehand: r.zone.source.type === "region" };
+  })();
+  // "בחירת הפריטים באזור": a features zone's own members, any other zone the elements standing in it.
+  const selectZoneMembers = (id: string) => {
+    const r = resolved.find((z) => z.zone.id === id);
+    if (!r) return;
+    const ids = r.zone.source.type === "features" ? r.zone.source.featureIds : structure.features.filter((f) => pointInPolygon({ x: f.x, y: f.y }, r.boundary)).map((f) => f.id);
+    setSelection(ids.map((fid) => ({ kind: "feature" as const, id: fid })));
+  };
+  // An outline out for editing takes the quick bar's place once a side or a corner is picked on it —
+  // or at once for an element's "עריכת הקווים". A freehand zone shows its grips as soon as it is
+  // selected, and keeps its own quick bar until a part of its outline is picked.
+  const outlineBarShown = !draftZone && !!outlineEdit && !!outlineShapeNow && (!editableRegion || !!outlinePart);
+  const selectionProps: Omit<HallsSelectionProps, "part"> = {
+    selection,
+    structure,
+    apply: editStructure,
+    onDelete: deleteSelection,
+    onDuplicate: featureSelection.length > 0 ? duplicateSelection : undefined,
+    onClose: () => setSelection([]),
+    onRestack: (how) => restackSelection(how),
+    canRestack: (how) => canRestack(structure, featureSelection, how),
+    onAlign: alignFeatures,
+    onAlignPreview: setAlignPreview,
+    onLock: (locked) => setLocked(featureSelection, locked),
+    activeEdge,
+    edgePick,
+    wallDistance,
+    doors,
+    onSelectEdge: selectEdgeItem,
+    onEdgeChange: changeEdge,
+    onRemoveEdge: removeEdge,
+    onFillEdges: fillEdges,
+    onStartEdge: startEdge,
+    draftZone,
+    onDraftZoneChange: (patch) => draftZone && setDraftZone({ ...draftZone, ...patch }),
+    featureZones,
+    onFeatureZone: startFeatureZone,
+    onSetZoneFeatures: setZoneFeatures,
+    onSaveDraftZone: saveDraftZone,
+    onDraftSurface: saveDraftSurface,
+    onDraftBuilding: saveDraftBuilding,
+    onCancelDraftZone: () => setDraftZone(null),
+    outlineEditId: outlineSurface?.id ?? null,
+    onToggleOutline: (id) => setOutlineEditId((cur) => (cur === id ? null : id)),
+    onDefineColumns: defineAsColumns,
+    onSelectOpening: (id) => setSelection([{ kind: "door", id }]),
+    zone: zoneQuick,
+    onEditZone: readOnly ? undefined : editZone,
+    onSelectZoneMembers: selectZoneMembers,
+  };
   // The zones list folds to one line while a NON-zone thing is selected; its folded row unfolds
   // it for THAT selection (a new pick folds it again).
   const [unfoldedFor, setUnfoldedFor] = useState<PlanSelection[] | null>(null);
@@ -2146,7 +2217,7 @@ export function HallsScreen() {
               the bar's place: the picked side's bow, the picked corner's radius, every corner, and
               "החלקה" (app/(app)/halls/outline-bar.tsx). Its ✕ ends the editing: a feature goes back
               to its own bar, a zone is let go. */}
-          {!draftZone && outlineEdit && outlineShapeNow && (
+          {outlineBarShown && outlineShapeNow && (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
               <div className="pointer-events-auto flex min-w-0 justify-center">
                 <OutlineBar
@@ -2165,43 +2236,10 @@ export function HallsScreen() {
           {/* The selection's bar, bottom centre — the sketch's own place for it (app/(app)/studio/
               studio-screen.tsx), built from the same Bar and chips. A lone zone is the one selection
               with nothing to show here: its fields live in its edit dialog (the ✎ on its row). */}
-          {(draftZone || (!soleZoneId && selection.length > 0)) && !(outlineEdit && outlineShapeNow && !draftZone) && (
+          {(draftZone || selection.length > 0) && !outlineBarShown && !readOnly && (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
               <div className="pointer-events-auto flex min-w-0 justify-center">
-                <SelectionBar
-                  selection={selection}
-                  structure={structure}
-                  apply={editStructure}
-                  onDelete={deleteSelection}
-                  onDuplicate={featureSelection.length > 0 ? duplicateSelection : undefined}
-                  onClose={() => setSelection([])}
-                  onRestack={(how) => restackSelection(how)}
-                  canRestack={(how) => canRestack(structure, featureSelection, how)}
-                  onAlign={alignFeatures}
-                  onAlignPreview={setAlignPreview}
-                  onLock={(locked) => setLocked(featureSelection, locked)}
-                  activeEdge={activeEdge}
-                  edgePick={edgePick}
-                  wallDistance={wallDistance}
-                  doors={doors}
-                  onSelectEdge={selectEdgeItem}
-                  onEdgeChange={changeEdge}
-                  onRemoveEdge={removeEdge}
-                  onFillEdges={fillEdges}
-                  onStartEdge={startEdge}
-                  draftZone={draftZone}
-                  onDraftZoneChange={(patch) => draftZone && setDraftZone({ ...draftZone, ...patch })}
-                  featureZones={featureZones}
-                  onFeatureZone={startFeatureZone}
-                  onSetZoneFeatures={setZoneFeatures}
-                  onSaveDraftZone={saveDraftZone}
-                  onDraftSurface={saveDraftSurface}
-                  onDraftBuilding={saveDraftBuilding}
-                  onCancelDraftZone={() => setDraftZone(null)}
-                  outlineEditId={outlineSurface?.id ?? null}
-                  onToggleOutline={(id) => setOutlineEditId((cur) => (cur === id ? null : id))}
-                  onDefineColumns={defineAsColumns}
-                />
+                <HallsSelection part="bar" {...selectionProps} />
               </div>
             </div>
           )}
@@ -2303,6 +2341,33 @@ export function HallsScreen() {
               onOpen={() => setUnfoldedFor(selection)}
             />
           )}
+          {/* Drawing walls: what the next walls are drawn as. */}
+          {mode === "walls" && !readOnly && !draftZone && (
+            <PanelGroups
+              kind="halls:draw"
+              title="קיר חדש"
+              sub="הגדרות השרטוט"
+              defaultOpen={["new"]}
+              groups={[
+                {
+                  key: "new",
+                  icon: Ruler,
+                  title: "קיר חדש",
+                  summary: newWallHeightMm ? `גובה ${Math.round(newWallHeightMm / 10)} ס״מ` : "לפי החדר",
+                  body: (
+                    <>
+                      <PanelRow label="גובה (ס״מ)" htmlFor="new-wall-height">
+                        <NumberField id="new-wall-height" decimals={0} min={0} step={10} commitOnBlur hideZero placeholder="לפי החדר" value={newWallHeightMm ? Math.round(newWallHeightMm / 10) : 0} onChange={(cm) => setNewWallHeightMm(cm > 0 ? cm * 10 : null)} className="w-20" />
+                      </PanelRow>
+                      <Note>הקיר נצמד לפינות קיימות. הגובה חל על הקירות שמשרטטים מעכשיו; ריק — לפי החדר.</Note>
+                    </>
+                  ),
+                },
+              ]}
+            />
+          )}
+          {/* The selection's groups — every field it has, under the list. */}
+          {(draftZone || selection.length > 0) && !readOnly && <HallsSelection part="groups" {...selectionProps} />}
           {/* Nothing selected: the venue's own group — the traced plan. A viewer has nothing to
               upload, calibrate or move. */}
           {selection.length === 0 && !draftZone && mode === "select" && !readOnly && (

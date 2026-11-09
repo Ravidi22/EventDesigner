@@ -82,6 +82,7 @@ import { IconButton } from "@/components/icon-button";
 import { FoldRow } from "@/components/fold-row";
 import { EndPanel, PanelGroupsHeader, PanelList, PanelListRow } from "@/components/end-panel";
 import { ToolGrid, ToolTile, toolTileClass } from "@/components/tool-tile";
+import { ShapeGrid, ShapeIcon } from "@/components/shape-grid";
 import { ElevationView } from "./elevation-view";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
@@ -494,16 +495,6 @@ function HollowFields({
 // (lib/catalog/shape-list.ts).
 
 /** A shape's picture, at a neutral proportion — the drawer's tiles and the shape picker's. */
-function ShapeIcon({ shape, className = "h-[30px] w-[30px]" }: { shape: Exclude<MapShape, "custom">; className?: string }) {
-  const f = shapeFootprint(shape, { widthMm: 1600, depthMm: shape === "line" ? 60 : 1000, diameterMm: 1600 });
-  const b = footprintBounds(f);
-  const pad = Math.max(b.w, b.h) * 0.08;
-  return (
-    <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className={`shrink-0 ${className}`} aria-hidden>
-      <FootprintShape footprint={f} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
 
 /** A shape tile — the drawer's and the shape picker's, one look. */
 
@@ -748,24 +739,6 @@ function restacked(list: readonly ShapePart[], ids: readonly string[], how: "fro
  *  of cards rather than a Select — the bar sits on the bottom edge of the canvas, and a list that
  *  opens downward from there opens off it. The three hollow shapes a solid one now draws
  *  (PICKER_SHAPES) show a card only on a shape that already is one, so the grid still says what it is. */
-function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShape) => void }) {
-  return (
-    <div className="grid grid-cols-4 gap-1" role="group" aria-label="צורה">
-      {MAP_SHAPES.filter((s) => PICKER_SHAPES.includes(s) || s === value).map((s) => (
-        <button key={s} type="button" aria-pressed={value === s} title={SHAPE_LABEL[s]} onClick={() => onPick(s)} className={`${toolTileClass(value === s)} h-auto min-h-[64px]`}>
-          {s === "custom" ? (
-            <span className="flex h-[30px] w-[30px] items-center justify-center">
-              <PenLine className="h-4 w-4 text-accent" strokeWidth={1.75} />
-            </span>
-          ) : (
-            <ShapeIcon shape={s} />
-          )}
-          <span className="line-clamp-2 w-full text-center">{SHAPE_LABEL[s]}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /** The versions of a category's picture (SYMBOL_STYLES) as tiles, each drawn at a typical size of
  *  that version in THIS row's shade and count, so the designer picks by looking. The first tile is

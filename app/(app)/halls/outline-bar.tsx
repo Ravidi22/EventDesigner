@@ -92,6 +92,12 @@ export function OutlineBar({
         החלקה
       </Button>
       {selected === null && <Note>עיקום: גררו את המעוין שבאמצע צלע · רדיוס: גררו את העיגול שבתוך פינה (Alt — כולן)</Note>}
+      {/* The drawing bar's last word (the board: options · סיום) — what its ✕ does. */}
+      <div className="ms-auto ps-2">
+        <Button size="sm" onClick={onClose}>
+          סיום
+        </Button>
+      </div>
     </Bar>
   );
 }
