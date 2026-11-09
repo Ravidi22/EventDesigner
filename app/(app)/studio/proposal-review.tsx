@@ -122,8 +122,6 @@ export function ProposalReview({
           showClearance={false}
           onToggleClearance={NOOP}
           onResizeTable={NOOP}
-          stageFillActive={false}
-          onStageFill={NOOP}
           drawArea={false}
           onArea={NOOP}
           onCancelArea={NOOP}

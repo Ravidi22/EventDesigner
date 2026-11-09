@@ -48,8 +48,6 @@ export function HallSketchView({ sketch }: { sketch: HallSketch }) {
         showClearance={false}
         onToggleClearance={NOOP}
         onResizeTable={NOOP}
-        stageFillActive={false}
-        onStageFill={NOOP}
         drawArea={false}
         onArea={NOOP}
         onCancelArea={NOOP}

@@ -5354,6 +5354,7 @@ export function StudioScreen({
           products={catalog}
           groups={RAIL[mode].groups}
           pass={mode === "hall" || mode === "design" ? mode : undefined}
+          passLabel={mode === "hall" ? "סקיצת אולם" : mode === "design" ? "סקיצה עיצובית" : undefined}
           hint={RAIL[mode].hint}
           mmPerPx={mmPerPx}
           onAddProduct={() => setDrawer({ product: blankProduct(railCategories[0]), mode: "new" })}
@@ -5362,6 +5363,8 @@ export function StudioScreen({
           addedIds={addedIds}
           armedId={armed ? armedId : null}
           onArm={arm}
+          onStageFill={startStageFill}
+          stageFillActive={stageFill !== null}
         />
         {/* `relative`: the 3D pane's corner layout is positioned against this column, so it sits in
             the canvas's corner whatever the rail and the end panel are doing, and its split layout
@@ -5450,8 +5453,6 @@ export function StudioScreen({
               drag({ type: "resizeTable", id, sizeMm });
               drag({ type: "moveTable", id, position });
             }}
-            stageFillActive={stageFill !== null}
-            onStageFill={startStageFill}
             drawArea={stageFill?.phase === "draw" || stageTool?.kind === "level"}
             rodDraw={
               rodDraw

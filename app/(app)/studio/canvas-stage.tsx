@@ -55,7 +55,7 @@ import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
-import { Grid2x2Plus, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
 import { clipToWalls, crossesWalls, wallPolylines } from "@/lib/studio/wall-clip";
 import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
@@ -248,8 +248,6 @@ export function CanvasStage({
   showClearance,
   onToggleClearance,
   onResizeTable,
-  stageFillActive,
-  onStageFill,
   drawArea,
   rodDraw,
   clothDraw,
@@ -361,9 +359,6 @@ export function CanvasStage({
   /** A resizable table stretched by a handle: its new size, and the centre that keeps the edge
    *  opposite the handle where it was. */
   onResizeTable: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
-  /** The "מילוי במות" tool: whether it is open at all (lights its button), and the button itself. */
-  stageFillActive: boolean;
-  onStageFill: () => void;
   /** Drawing the area: every click on the plan is a corner, whatever is under it. */
   drawArea: boolean;
   /** Drawing a drape's free-standing ROD ("וילון על מוט", components/rod-draw-pane.tsx): every click
@@ -1941,13 +1936,6 @@ export function CanvasStage({
             className={!showClearance && clearance.issues.length ? "text-warn-ink" : undefined}
           >
             <ShieldAlert className="h-4 w-4" strokeWidth={2} />
-          </IconButton>
-          <IconButton
-            label={stageFillActive ? "סגירת מילוי הבמות · Esc" : "מילוי אזור בבמות — סימון האזור על התוכנית"}
-            onClick={onStageFill}
-            pressed={stageFillActive}
-          >
-            <Grid2x2Plus className="h-4 w-4" strokeWidth={2} />
           </IconButton>
         </>
       }
