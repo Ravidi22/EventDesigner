@@ -91,6 +91,34 @@ export function saveScenePreview(prefs: ScenePreviewPrefs): void {
   }
 }
 
+// --- the end panel (components/end-panel.tsx) ------------------------------------------------------
+//
+// Whether a screen's end panel is open — per device, like the 3D pane: a laptop that closes it for
+// room to draw gets it closed again, the big screen keeps it. Keyed by screen (studio, halls), so
+// closing it in one does not close it in the other.
+
+const endPanelKey = (screen: string) => storageKey(`shell.end-panel.${screen}`);
+
+/** Null when nothing is stored yet (or storage is unavailable) — the caller's default stands. */
+export function loadEndPanelOpen(screen: string): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(endPanelKey(screen));
+    return raw === "1" ? true : raw === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveEndPanelOpen(screen: string, open: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(endPanelKey(screen), open ? "1" : "0");
+  } catch {
+    // A blocked or full store loses a UI preference, nothing more.
+  }
+}
+
 // There is no clearScratch(). Nothing called the old clearDoc() either, and the one place that
 // wants this gone — "ניקוי נתוני המכשיר" in settings — drops every `eve.*` key at once
 // (lib/settings/data.ts). A second way to delete the same thing is a second thing to keep correct.

@@ -80,6 +80,7 @@ import { Bar, BarButton, Note, PanelRow, QuickNumber, QuickSep, QuickTail, Quick
 import { Popover } from "@/components/popover";
 import { IconButton } from "@/components/icon-button";
 import { FoldRow } from "@/components/fold-row";
+import { EndPanel, PanelGroupsHeader, PanelList, PanelListRow } from "@/components/end-panel";
 import { ElevationView } from "./elevation-view";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
@@ -2342,63 +2343,43 @@ export function AppearanceModal({
     </>
   );
   const panel = (
-    <aside className="flex min-h-0 w-[296px] shrink-0 flex-col border-s border-border bg-surface">
-      <div className="scroll-slim min-h-0 flex-1 overflow-y-auto">
+    <EndPanel screen="editor">
         {!stretch && (
           <>
-            <div className="px-3 pb-2.5 pt-3">
-              <div className="flex items-center gap-1.5 px-1 pb-1.5">
-                <span className="text-xs font-semibold text-muted">צורות בפריט</span>
-                <span className="nums text-xs text-quiet">{shapes.length}</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {shapes.map((s, i) => {
-                  const on = selected.includes(s.id);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={(e) => {
-                        if (drawingPart) return;
-                        setArmedShape(null);
-                        setSel((cur) => (e.shiftKey || e.ctrlKey || e.metaKey ? (cur.includes(s.id) ? cur.filter((x) => x !== s.id) : [...cur, s.id]) : [s.id]));
-                      }}
-                      aria-pressed={on}
-                      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-start transition-colors ${on ? "bg-accent-tint text-accent-hover" : "text-ink hover:bg-inset"}`}
-                    >
-                      <PartGlyph part={s} />
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{shapeName(s).replace(/ \d+$/, "")}</span>
-                      {i === 0 && <span className="shrink-0 rounded-pill bg-accent-wash px-2 py-px text-[11px] font-semibold text-accent-hover">בסיס</span>}
-                      {i > 0 && s.repeat && (
-                        <span className="shrink-0 rounded-pill border border-accent-line px-[7px] text-[11px] font-semibold text-accent-hover">{REPEAT_SHORT[s.repeat.along]}</span>
-                      )}
-                      <span dir="ltr" className="nums shrink-0 text-xs text-muted">
-                        {sizeLabel(s)}
+            <PanelList title="צורות בפריט" count={shapes.length}>
+                {shapes.map((s, i) => (
+                  <PanelListRow
+                    key={s.id}
+                    glyph={<PartGlyph part={s} />}
+                    label={shapeName(s).replace(/ \d+$/, "")}
+                    badge={i > 0 && s.repeat ? REPEAT_SHORT[s.repeat.along] : undefined}
+                    meta={
+                      <span className="flex items-center gap-1.5">
+                        {i === 0 && <span className="rounded-pill bg-accent-wash px-2 py-px text-[11px] font-semibold text-accent-hover">בסיס</span>}
+                        <span dir="ltr">{sizeLabel(s)}</span>
                       </span>
-                    </button>
-                  );
-                })}
-              </div>
+                    }
+                    selected={selected.includes(s.id)}
+                    onClick={(e) => {
+                      if (drawingPart) return;
+                      setArmedShape(null);
+                      setSel((cur) => (e.shiftKey || e.ctrlKey || e.metaKey ? (cur.includes(s.id) ? cur.filter((x) => x !== s.id) : [...cur, s.id]) : [s.id]));
+                    }}
+                  />
+                ))}
               <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">
                 {shapes.length <= 1
                   ? "הוסיפו צורות מהמגירה כדי לבנות פריט מכמה חלקים — עמודים, מדף, במה."
                   : "הצורה הראשונה היא בסיס הפריט: היא קובעת את מידותיו ואת גובהו."}
               </p>
-            </div>
+            </PanelList>
             <div className="h-px bg-border" />
           </>
         )}
-        <div className="px-4 pb-1.5 pt-3">
-          <span className="text-xs font-semibold text-muted">
-            {drawingPart
-              ? "ציור צורה"
-              : one
-                ? `מתקדם · ${shapeName(one).replace(/ \d+$/, "")}`
-                : selShapes.length > 1
-                  ? `${selShapes.length} צורות נבחרו`
-                  : `הפריט · ${draft.name.trim() || category?.label || ""}`}
-          </span>
-        </div>
+        <PanelGroupsHeader
+          title={drawingPart ? "ציור צורה" : one ? shapeName(one).replace(/ \d+$/, "") : selShapes.length > 1 ? `${selShapes.length} צורות נבחרו` : "הפריט"}
+          sub={drawingPart || selShapes.length > 1 ? undefined : one ? "מתקדם" : draft.name.trim() || category?.label || undefined}
+        />
         {drawingPart ? (
           <p className="px-4 pb-4 text-xs leading-relaxed text-muted">לחצו על הקנבס נקודה אחר נקודה. לחיצה על הנקודה הראשונה או Enter — סגירת הצורה; ״סיום כקווים״ — בלי לסגור.</p>
         ) : one ? (
@@ -2432,8 +2413,7 @@ export function AppearanceModal({
         ) : (
           itemGroups
         )}
-      </div>
-    </aside>
+    </EndPanel>
   );
 
   return (
