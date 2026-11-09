@@ -365,9 +365,8 @@ export function StudioScreen({
   // across a corner of the hall is how you get hold of them. One selected thing is the ordinary
   // case and still the only one the inspector has fields for.
   const [selected, setSelected] = useState<SelectionRef[]>([]);
-  // The 3D pane beside the sketch (./scene-preview.tsx) — whether it is up, in a corner or a half,
-  // how wide: this DEVICE's preference (lib/studio/storage.ts), read once the screen is on the
-  // client (null until then, so the default is never written over what was stored). `sceneMounted`
+  // The 3D card on the sketch (./scene-preview.tsx) — whether it is up and how wide: this DEVICE's
+  // preference (lib/studio/storage.ts), read once the screen is on the client (null until then, so the default is never written over what was stored). `sceneMounted`
   // is a one-way latch: from its first opening the pane stays mounted and closing only hides it,
   // because its viewer's shaders compile once per GL context (see the pane's header).
   const [scenePrefs, setScenePrefs] = useState<ScenePreviewPrefs | null>(null);
@@ -5366,10 +5365,8 @@ export function StudioScreen({
           onStageFill={startStageFill}
           stageFillActive={stageFill !== null}
         />
-        {/* `relative`: the 3D pane's corner layout is positioned against this column, so it sits in
-            the canvas's corner whatever the rail and the end panel are doing, and its split layout
-            is this column's second half. */}
-        <div className="relative flex min-w-0 flex-1">
+        {/* `relative`: the 3D card is positioned against this column (under the view cluster), so
+            it sits in the canvas's top-start corner whatever the rail and the end panel are doing. */}
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={canvasDoc}
@@ -6011,27 +6008,24 @@ export function StudioScreen({
               <span className="rounded-md bg-ink px-3 py-1.5 text-sm text-canvas shadow-dialog">{hint}</span>
             )}
           </div>
-        </div>
-        {/* The room in 3D beside the sketch, off the LIVE document (not the pass's filtered canvasDoc —
-            the room is the whole design), following the selection. Mounted from its first opening
-            and kept; closed = hidden (see scene-preview.tsx). */}
-        {sceneMounted && (
-          <ScenePreview
-            doc={doc}
-            plan={plan}
-            products={catalog}
-            selection={selected}
-            eventId={workspace?.event?.id ?? null}
-            author={mode === "full"}
-            railingAboveMm={railingAboveMm}
-            open={scenePane.open}
-            layout={scenePane.layout}
-            widthPx={scenePane.widthPx}
-            onClose={() => patchScene({ open: false })}
-            onLayout={(layout) => patchScene({ layout })}
-            onWidth={(widthPx) => patchScene({ widthPx })}
-          />
-        )}
+          {/* The room in 3D on the sketch, off the LIVE document (not the pass's filtered canvasDoc —
+              the room is the whole design), following the selection. Mounted from its first opening
+              and kept; closed = hidden (see scene-preview.tsx). */}
+          {sceneMounted && (
+            <ScenePreview
+              doc={doc}
+              plan={plan}
+              products={catalog}
+              selection={selected}
+              eventId={workspace?.event?.id ?? null}
+              author={mode === "full"}
+              railingAboveMm={railingAboveMm}
+              open={scenePane.open}
+              widthPx={scenePane.widthPx}
+              onClose={() => patchScene({ open: false })}
+              onWidth={(widthPx) => patchScene({ widthPx })}
+            />
+          )}
         </div>
         {/* The end panel (components/end-panel.tsx): what is on the plan, plane by plane, and with
             nothing selected the sketch's own groups under it. */}

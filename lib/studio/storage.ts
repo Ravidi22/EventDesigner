@@ -47,22 +47,21 @@ export function saveScratch(content: DesignDocumentContent): boolean {
 
 // --- the 3D pane beside the sketch -----------------------------------------------------------------
 //
-// Whether the studio's 3D pane (app/(app)/studio/scene-preview.tsx) is open, in which layout and how
-// wide. Per-DEVICE UI position like the active event, not studio data: a designer who works with the
+// Whether the studio's 3D card (app/(app)/studio/scene-preview.tsx) is open and how wide. Per-DEVICE UI position like the active event, not studio data: a designer who works with the
 // room beside the plan on the big screen and without it on the laptop gets each back as they left
 // it. Through this module like every other localStorage read in the app.
 
-export type ScenePreviewLayout = "corner" | "split";
+// There is no layout any more (the split is gone, 2026-11-09): a stored "split" is simply read as
+// the card — `loadScenePreview` takes `open` and the width and ignores the rest.
 export interface ScenePreviewPrefs {
   open: boolean;
-  layout: ScenePreviewLayout;
-  /** The corner pane's width; its height follows (the pane's aspect). */
+  /** The card's width; its picture's height follows (the card's aspect). */
   widthPx: number;
 }
-/** What the corner pane's grip may drag its width between. */
+/** What the card's grip may drag its width between. */
 export const SCENE_PREVIEW_MIN_PX = 260;
 export const SCENE_PREVIEW_MAX_PX = 760;
-export const DEFAULT_SCENE_PREVIEW: ScenePreviewPrefs = { open: false, layout: "corner", widthPx: 400 };
+export const DEFAULT_SCENE_PREVIEW: ScenePreviewPrefs = { open: false, widthPx: 300 };
 const SCENE_PREVIEW_KEY = storageKey("studio.scene-preview");
 
 export function loadScenePreview(): ScenePreviewPrefs {
@@ -74,7 +73,6 @@ export function loadScenePreview(): ScenePreviewPrefs {
     const width = typeof p.widthPx === "number" && Number.isFinite(p.widthPx) ? p.widthPx : DEFAULT_SCENE_PREVIEW.widthPx;
     return {
       open: p.open === true,
-      layout: p.layout === "split" ? "split" : "corner",
       widthPx: Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(width))),
     };
   } catch {

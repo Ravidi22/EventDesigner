@@ -1,8 +1,9 @@
 "use client";
-// The 3D pane beside the sketch — the תלת-ממד tab's picture, built from the drawing AS IT IS BEING
-// EDITED (the studio's in-memory document, before any autosave), floating in a corner of the canvas
-// or taking half of it, so the room rises while it is laid instead of after a trip to the tab
-// (Ravid, 2026-10-30: "see the prototype during my creation").
+// The 3D card on the sketch — the תלת-ממד tab's picture, built from the drawing AS IT IS BEING
+// EDITED (the studio's in-memory document, before any autosave), floating as a card in the canvas
+// column's top-start corner under the view cluster (2026-11-09, the studio shell: no split layout),
+// so the room rises while it is laid instead of after a trip to the tab (Ravid, 2026-10-30: "see the
+// prototype during my creation").
 //
 // WHAT IT IS NOT: a second viewer or a second builder. It is lib/scene/build.ts's `buildScene` over
 // the same `LazySceneViewer` the tab mounts, in the designer's free camera, and it saves nothing —
@@ -26,7 +27,7 @@
 //     orbited away by hand is left alone until the selection changes. Nothing selected: the camera
 //     stays, and orbit, wheel, double-click and WASD all work as on the tab.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Box } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { arrangedStructure } from "@/lib/design-document/features";
@@ -36,12 +37,11 @@ import { focusViewpoint } from "@/lib/scene/focus";
 import { DEFAULT_SETTINGS, type Scene, type Vec3, type Viewpoint } from "@/lib/scene/types";
 import { sightOf } from "@/lib/scene/viewpoints";
 import { startPointerGesture } from "@/lib/studio/gesture";
-import { SCENE_PREVIEW_MAX_PX, SCENE_PREVIEW_MIN_PX, type ScenePreviewLayout } from "@/lib/studio/storage";
+import { SCENE_PREVIEW_MAX_PX, SCENE_PREVIEW_MIN_PX } from "@/lib/studio/storage";
 import { LazySceneViewer } from "@/components/scene/lazy";
 import type { SceneViewerProps } from "@/components/scene/scene-viewer";
 import { detectDevice } from "@/components/scene/device";
 import { CloseButton } from "@/components/close-button";
-import { IconButton } from "@/components/icon-button";
 import { useSceneSettings } from "../scene/use-scene-settings";
 import type { SelectionRef } from "./canvas-stage";
 
@@ -49,7 +49,7 @@ import type { SelectionRef } from "./canvas-stage";
 export const SETTLE_MS = 500;
 /** The selected thing moved this far (its look point) and the camera flies after it. */
 export const FOLLOW_MM = 300;
-/** The corner pane's proportions — a landscape still, like the viewpoints the tab frames. */
+/** The picture's proportions inside the card — a landscape still, like the viewpoints the tab frames. */
 export const ASPECT = 10 / 16;
 
 export interface ScenePreviewProps {
@@ -67,10 +67,8 @@ export interface ScenePreviewProps {
   /** The studio's stage railing rule, as the studio already holds it. */
   railingAboveMm: number | null;
   open: boolean;
-  layout: ScenePreviewLayout;
   widthPx: number;
   onClose: () => void;
-  onLayout: (layout: ScenePreviewLayout) => void;
   onWidth: (px: number) => void;
 }
 
@@ -89,7 +87,7 @@ const PaneViewer = memo(function PaneViewer(props: SceneViewerProps) {
   return <LazySceneViewer {...props} />;
 });
 
-export function ScenePreview({ doc, plan, products, selection, eventId, author, railingAboveMm, open, layout, widthPx, onClose, onLayout, onWidth }: ScenePreviewProps) {
+export function ScenePreview({ doc, plan, products, selection, eventId, author, railingAboveMm, open, widthPx, onClose, onWidth }: ScenePreviewProps) {
   // --- rule 1: the settled document ---------------------------------------------------------------
   const latest = useRef<Settled>({ doc, plan, products });
   const [settled, setSettled] = useState<Settled | null>(null);
@@ -185,7 +183,7 @@ export function ScenePreview({ doc, plan, products, selection, eventId, author, 
     flown.current = { id: focus.id, look: focus.look };
   }, [focus, leftId]);
 
-  // --- the grip: the corner pane's size -----------------------------------------------------------
+  // --- the grip: the card's size ------------------------------------------------------------------
   const box = useRef<HTMLDivElement>(null);
   const resize = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
@@ -198,8 +196,9 @@ export function ScenePreview({ doc, plan, products, selection, eventId, author, 
       const cap = Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(room * 0.6)));
       startPointerGesture(e, {
         onMove: (m) => {
-          // The grip is on the pane's START edge; pulled toward the start (right in RTL) it grows.
-          const dx = (m.clientX - x0) * (rtl ? 1 : -1);
+          // The card hangs from the canvas's start corner and its grip is on the END edge; pulled
+          // toward the end (left in RTL) it grows.
+          const dx = (m.clientX - x0) * (rtl ? -1 : 1);
           onWidth(Math.min(cap, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(start + dx))));
         },
       });
@@ -207,67 +206,60 @@ export function ScenePreview({ doc, plan, products, selection, eventId, author, 
     [widthPx, onWidth],
   );
 
-  const corner = layout === "corner" || !open;
-  const split = layout === "split";
-  const shell = corner
-    ? "absolute bottom-16 end-3 z-30 rounded-md border border-border bg-surface shadow-floating"
-    : "relative min-w-0 flex-1 border-s border-border bg-surface";
   return (
     <div
       ref={box}
-      className={shell + " overflow-hidden " + (open ? "" : "invisible pointer-events-none")}
-      style={corner ? { width: widthPx, height: Math.round(widthPx * ASPECT) } : undefined}
+      className={
+        "absolute start-4 top-16 z-30 flex flex-col overflow-hidden rounded-md border border-border bg-surface shadow-floating " +
+        (open ? "" : "invisible pointer-events-none")
+      }
+      style={{ width: widthPx }}
       aria-hidden={!open}
-      data-scene-preview={open ? layout : "hidden"}
+      data-scene-preview={open ? "card" : "hidden"}
     >
-      {scene ? (
-        <PaneViewer
-          scene={scene}
-          settings={settings}
-          mode="author"
-          author={author}
-          device={device}
-          viewpoints={viewpoints}
-          zones={plan.all}
-          activeId={activeId}
-          recentre={recentre}
-          tour={null}
-          playing={false}
-          onLeave={onLeave}
-          hidden={!open}
-          compact={!split}
-          className="h-full w-full"
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center bg-inset px-4 text-center text-caption text-muted">
-          {empty ? "אין עדיין מה להציג — הניחו שולחן או פריט על התוכנית" : "בונה את החלל…"}
-        </div>
-      )}
-      {/* The pane's own chrome, over the picture: the way out, and the one size question. */}
-      <div className="absolute top-2 end-2 flex items-center gap-1 rounded-pill bg-surface/90 p-0.5 shadow-lifted">
-        <IconButton
-          label={split ? "חזרה לפינת הסקיצה" : "הרחבה לחצי מהסקיצה"}
-          onClick={() => onLayout(split ? "corner" : "split")}
-          tabIndex={open ? 0 : -1}
-        >
-          {split ? <Minimize2 className="h-4 w-4" strokeWidth={2} /> : <Maximize2 className="h-4 w-4" strokeWidth={2} />}
-        </IconButton>
+      {/* The card's header: what it is, and the way out (every popup's ✕). */}
+      <div className="flex items-center gap-2 border-b border-border-soft py-1.5 ps-3 pe-1.5">
+        <Box className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.6} aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">תלת־ממד</span>
         <CloseButton label="סגירת התלת-ממד" onClick={onClose} tabIndex={open ? 0 : -1} />
       </div>
-      {corner && (
+      <div className="relative" style={{ height: Math.round(widthPx * ASPECT) }}>
+        {scene ? (
+          <PaneViewer
+            scene={scene}
+            settings={settings}
+            mode="author"
+            author={author}
+            device={device}
+            viewpoints={viewpoints}
+            zones={plan.all}
+            activeId={activeId}
+            recentre={recentre}
+            tour={null}
+            playing={false}
+            onLeave={onLeave}
+            hidden={!open}
+            compact
+            className="h-full w-full"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-inset px-4 text-center text-caption text-muted">
+            {empty ? "אין עדיין מה להציג — הניחו שולחן או פריט על התוכנית" : "בונה את החלל…"}
+          </div>
+        )}
         <button
           type="button"
           aria-label="שינוי גודל התלת-ממד"
           title="גרירה משנה את הגודל"
           onPointerDown={resize}
           tabIndex={-1}
-          className="absolute start-0 top-0 h-5 w-5 cursor-nesw-resize touch-none text-muted/70 hover:text-accent"
+          className="absolute bottom-0 end-0 h-5 w-5 cursor-nwse-resize touch-none text-muted/70 hover:text-accent rtl:cursor-nesw-resize"
         >
-          <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden>
-            <path d="M3 9 L9 3 M3 15 L15 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+          <svg viewBox="0 0 20 20" className="h-5 w-5 rtl:-scale-x-100" aria-hidden>
+            <path d="M17 11 L11 17 M17 5 L5 17" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
           </svg>
         </button>
-      )}
+      </div>
     </div>
   );
 }
