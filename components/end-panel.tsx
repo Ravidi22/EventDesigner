@@ -3,6 +3,7 @@
 import { useEffect, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
 import { ChevronDown, ChevronsLeft, Eye, EyeOff, type LucideIcon } from "lucide-react";
 import { FoldRow } from "@/components/fold-row";
+import { Popover } from "@/components/popover";
 import { groupMemory, orderGroups } from "@/lib/studio/panel-groups";
 import { loadEndPanelOpen, saveEndPanelOpen } from "@/lib/studio/storage";
 
@@ -201,6 +202,42 @@ export function PanelListFolded({
         <span className="min-w-0 flex-1 truncate text-end text-xs text-muted">{crumb}</span>
         <ChevronDown className="h-3 w-3 shrink-0 text-faint" strokeWidth={2} />
       </button>
+    </div>
+  );
+}
+
+/** What a group has chosen — a cloth, a table type, a shape — as one row, and the way to choose
+ *  again: "החלפה" opens a PICKER beside the panel (the board's B.pick). The picker's body gets
+ *  `close`, so a pick applies and the picker goes. */
+export function PickRow({
+  swatch,
+  glyph,
+  name,
+  meta,
+  pickerLabel,
+  pickerIcon,
+  children,
+}: {
+  swatch?: string;
+  glyph?: ReactNode;
+  name: string;
+  meta?: string;
+  /** The picker's title — "בחירת מפה", "צורה". */
+  pickerLabel: string;
+  pickerIcon?: LucideIcon;
+  children: ReactNode | ((close: () => void) => ReactNode);
+}) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-md border border-inset-border bg-inset p-2">
+      {swatch && <span className="h-10 w-10 shrink-0 rounded-sm border border-border" style={{ background: swatch }} aria-hidden />}
+      {glyph && <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm border border-border bg-surface">{glyph}</span>}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-semibold text-ink">{name}</span>
+        {meta && <span className="block truncate text-xs text-muted">{meta}</span>}
+      </span>
+      <Popover label={pickerLabel} icon={pickerIcon} variant="picker" trigger="pill" triggerText="החלפה" side="beside">
+        {children}
+      </Popover>
     </div>
   );
 }

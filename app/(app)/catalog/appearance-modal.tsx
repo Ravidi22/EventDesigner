@@ -81,6 +81,7 @@ import { Popover } from "@/components/popover";
 import { IconButton } from "@/components/icon-button";
 import { FoldRow } from "@/components/fold-row";
 import { EndPanel, PanelGroupsHeader, PanelList, PanelListRow } from "@/components/end-panel";
+import { ToolGrid, ToolTile, toolTileClass } from "@/components/tool-tile";
 import { ElevationView } from "./elevation-view";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
@@ -505,9 +506,6 @@ function ShapeIcon({ shape, className = "h-[30px] w-[30px]" }: { shape: Exclude<
 }
 
 /** A shape tile — the drawer's and the shape picker's, one look. */
-const shapeTileClass = (on: boolean) =>
-  "flex h-[58px] min-w-0 flex-col items-center justify-center gap-0.5 rounded-sm border px-1 pb-[5px] pt-1 text-[11px] font-semibold leading-tight transition-colors " +
-  (on ? "border-accent bg-accent-tint text-accent" : "border-transparent bg-inset text-ink-soft hover:border-accent-line");
 
 /** The drawer's names where the full one does not fit a tile; the full one is its tooltip. */
 const SHAPE_SHORT: Partial<Record<MapShape, string>> = {
@@ -541,30 +539,19 @@ function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null;
           <PenLine className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
           ציור חופשי
         </button>
-        <div className="flex flex-col gap-1.5">
-          <span className="ps-0.5 text-xs font-semibold text-muted">צורות</span>
-          <div className="grid grid-cols-3 gap-1">
-            {RAIL_SHAPES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                draggable
-                aria-pressed={armed === s}
-                aria-label={SHAPE_LABEL[s]}
-                title={SHAPE_LABEL[s]}
-                onClick={() => onArm(armed === s ? null : s)}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("text/plain", s);
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
-                className={shapeTileClass(armed === s)}
-              >
-                <ShapeIcon shape={s} />
-                <span className="block w-full truncate text-center">{SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <ToolGrid label="צורות">
+          {RAIL_SHAPES.map((s) => (
+            <ToolTile
+              key={s}
+              glyph={<ShapeIcon shape={s} />}
+              label={SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}
+              title={SHAPE_LABEL[s]}
+              armed={armed === s}
+              onClick={() => onArm(armed === s ? null : s)}
+              dragId={s}
+            />
+          ))}
+        </ToolGrid>
       </div>
     </aside>
   );
@@ -765,7 +752,7 @@ function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShap
   return (
     <div className="grid grid-cols-4 gap-1" role="group" aria-label="צורה">
       {MAP_SHAPES.filter((s) => PICKER_SHAPES.includes(s) || s === value).map((s) => (
-        <button key={s} type="button" aria-pressed={value === s} title={SHAPE_LABEL[s]} onClick={() => onPick(s)} className={`${shapeTileClass(value === s)} h-auto min-h-[64px]`}>
+        <button key={s} type="button" aria-pressed={value === s} title={SHAPE_LABEL[s]} onClick={() => onPick(s)} className={`${toolTileClass(value === s)} h-auto min-h-[64px]`}>
           {s === "custom" ? (
             <span className="flex h-[30px] w-[30px] items-center justify-center">
               <PenLine className="h-4 w-4 text-accent" strokeWidth={1.75} />
@@ -1276,8 +1263,16 @@ function ShapeQuickBar({
       facts={base ? "מידות הפריט וגובהו" : part.repeat ? `חוזרת ${REPEAT_SHORT[part.repeat.along]}` : undefined}
       onClose={onClose}
     >
-      <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} panelClassName="w-80">
-        <ShapeGrid value={part.shape} onPick={onReshape} />
+      <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} variant="picker">
+        {(close) => (
+          <ShapeGrid
+            value={part.shape}
+            onPick={(s) => {
+              onReshape(s);
+              close();
+            }}
+          />
+        )}
       </Popover>
       <QuickSep />
       <span title="מידות" className="inline-flex text-muted">

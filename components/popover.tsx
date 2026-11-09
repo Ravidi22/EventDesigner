@@ -45,7 +45,9 @@ export function Popover({
   disabled,
   chevron = true,
   trigger: triggerKind = "chip",
-  panelClassName = "w-72",
+  triggerText,
+  variant = "panel",
+  panelClassName: panelClassNameProp,
   side = "top",
   badge,
   onOpenChange,
@@ -68,13 +70,21 @@ export function Popover({
   chevron?: boolean;
   /** "chip" — the inspector bars' icon + value + chevron. "icon" — a round icon-only button, the
    *  studio toolbar's own shape (IconButton, md). */
-  trigger?: "chip" | "icon";
+  trigger?: "chip" | "icon" | "pill";
+  /** The words on a `pill` trigger — "החלפה" on a pick row — when they are not the panel's title. */
+  triggerText?: string;
+  /** "picker" — a panel for CHOOSING one of many (a product, a cloth, a shape): the board's 336px
+   *  picker, which applies a pick at once and closes (the body calls `close`). "panel" — anything
+   *  else. Fields belong in an end-panel group, not here (2026-11-09, the "Studio + Halls" board). */
+  variant?: "panel" | "picker";
   /** The panel's width, mostly — content decides its height. A fixed width and not a max: a panel
    *  that resizes as its own fields change value is a panel that moves under the cursor. */
   panelClassName?: string;
   /** Which way the panel opens. Upwards by default — these chips live in bars along the BOTTOM of
-   *  a canvas; "bottom" is for a bar along its top. */
-  side?: "top" | "bottom";
+   *  a canvas; "bottom" is for a bar along its top. "beside" is for a trigger INSIDE the end panel
+   *  (components/end-panel.tsx): the panel opens next to it, into the canvas, level with the
+   *  trigger — never over the panel's own fields. Outside an end panel it falls back to "top". */
+  side?: "top" | "bottom" | "beside";
   /** A count on the icon trigger — the bell's unread. Nothing is drawn for 0 or absent. */
   badge?: number;
   /** Told when the panel opens or closes — the bell reads its feed on open. */
@@ -97,7 +107,8 @@ export function Popover({
   }, [open]);
   // Where the clamp put it: a horizontal nudge from centred, and a height cap when the room above
   // (or below) the trigger is shorter than the panel. Reset on every open.
-  const [place, setPlace] = useState<{ dx: number; maxH?: number }>({ dx: 0 });
+  const [place, setPlace] = useState<{ dx: number; maxH?: number; fixed?: { left: number; top: number } }>({ dx: 0 });
+  const panelClassName = panelClassNameProp ?? (variant === "picker" ? "w-[336px]" : "w-72");
   const root = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -152,6 +163,30 @@ export function Popover({
       if (!el || !t || !root.current) return;
       const b = clipBounds(root.current);
       const M = 12;
+      // BESIDE THE END PANEL: fixed to the screen (the panel scrolls, and an absolutely placed box
+      // inside a scroller is clipped by it), its inline-end edge 8px short of the panel's
+      // inline-start edge — out over the canvas — and level with the trigger, then held inside the
+      // window (or the dialog it opened in) top to bottom.
+      const host = side === "beside" ? t.closest<HTMLElement>("[data-end-panel]") : null;
+      if (host) {
+        const hr = host.getBoundingClientRect();
+        const tr = t.getBoundingClientRect();
+        const outer = clipBounds(host);
+        const w = el.offsetWidth;
+        const rtl = getComputedStyle(host).direction === "rtl";
+        let left = rtl ? hr.right + 8 : hr.left - 8 - w;
+        left = Math.min(Math.max(left, outer.left + M), outer.right - M - w);
+        const head = el.firstElementChild as HTMLElement | null;
+        const body = el.lastElementChild as HTMLElement | null;
+        const natural = (head?.offsetHeight ?? 0) + (body?.scrollHeight ?? 0) + 2;
+        const roomAll = outer.bottom - outer.top - 2 * M;
+        const height = Math.min(natural, roomAll);
+        const top = Math.max(outer.top + M, Math.min(tr.top, outer.bottom - M - height));
+        const maxH = natural > roomAll ? Math.max(160, Math.floor(roomAll)) : undefined;
+        placed.current = 0;
+        setPlace((p) => (p.fixed && p.fixed.left === left && p.fixed.top === top && p.maxH === maxH ? p : { dx: 0, maxH, fixed: { left, top } }));
+        return;
+      }
       const r = el.getBoundingClientRect();
       const left = r.left - placed.current;
       const right = r.right - placed.current;
@@ -159,7 +194,7 @@ export function Popover({
       if (left < b.left + M) dx = b.left + M - left;
       else if (right > b.right - M) dx = b.right - M - right;
       const tr = t.getBoundingClientRect();
-      const room = side === "top" ? tr.top - 8 - (b.top + M) : b.bottom - M - (tr.bottom + 8);
+      const room = side !== "bottom" ? tr.top - 8 - (b.top + M) : b.bottom - M - (tr.bottom + 8);
       // Header + the body's whole content (scrollHeight, so a body already capped still reports
       // what it would need) + the two hairlines.
       const head = el.firstElementChild as HTMLElement | null;
@@ -194,7 +229,29 @@ export function Popover({
 
   return (
     <div ref={root} className="relative">
-      {triggerKind === "icon" ? (
+      {triggerKind === "pill" ? (
+        // The pick row's "החלפה" and a quick bar's menu-like verb: the outline pill of ModeVerb
+        // (components/inspector-bar.tsx), its own words on it, the panel's title as its name.
+        <button
+          ref={triggerRef}
+          id={triggerId}
+          type="button"
+          disabled={disabled}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? id : undefined}
+          aria-label={label}
+          title={label}
+          onClick={toggle}
+          className={
+            "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border-[1.5px] border-accent-line px-3 text-xs font-bold text-accent transition-colors hover:bg-accent-tint disabled:cursor-not-allowed disabled:opacity-40 " +
+            (open ? "bg-accent-wash" : "bg-surface")
+          }
+        >
+          {Icon && !triggerText && <Icon className="h-3.5 w-3.5" strokeWidth={2} />}
+          {triggerText ?? value ?? label}
+        </button>
+      ) : triggerKind === "icon" ? (
         <button
           ref={triggerRef}
           id={triggerId}
@@ -257,10 +314,14 @@ export function Popover({
           role="dialog"
           aria-labelledby={titleId}
           tabIndex={-1}
-          style={{ transform: `translateX(calc(-50% + ${place.dx}px))`, maxHeight: place.maxH }}
+          style={
+            place.fixed
+              ? { position: "fixed", left: place.fixed.left, top: place.fixed.top, maxHeight: place.maxH }
+              : { transform: `translateX(calc(-50% + ${place.dx}px))`, maxHeight: place.maxH }
+          }
           className={
-            (side === "bottom" ? "top-[calc(100%+8px)] " : "bottom-[calc(100%+8px)] ") +
-            "absolute left-1/2 z-40 flex max-w-[calc(100vw-24px)] flex-col rounded-md border border-border bg-surface text-start shadow-lifted focus-visible:outline-none " +
+            (place.fixed ? "" : (side === "bottom" ? "top-[calc(100%+8px)] " : "bottom-[calc(100%+8px)] ") + "absolute left-1/2 ") +
+            "z-40 flex max-w-[calc(100vw-24px)] flex-col rounded-md border border-border bg-surface text-start shadow-lifted focus-visible:outline-none " +
             panelClassName
           }
         >
