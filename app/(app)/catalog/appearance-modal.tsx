@@ -2274,7 +2274,9 @@ export function AppearanceModal({
         : missing
           ? "גררו צורה מהמגירה אל הקנבס, או ״ציור חופשי״"
           : side && !selected.length
-            ? "גררו צורה למעלה או למטה כדי לשנות את גובהה מהרצפה"
+            ? preview.layer === "ceiling"
+              ? "גררו צורה למעלה או למטה כדי לשנות את גובהה בפריט"
+              : "גררו צורה למעלה או למטה כדי לשנות את גובהה מהרצפה"
             : seeded && !hist.canUndo && !selected.length
             ? `גודל התחלתי ל${category?.label ?? "פריט"} — הקלידו את המידות האמיתיות בסרגל למטה`
             : null);
@@ -2869,6 +2871,7 @@ export function AppearanceModal({
                     room={shapes.length ? { subject: { key: itemSceneKey(preview), build: () => itemScene(preview) }, itemAt, baseZMm: itemBaseZ(preview) } : null}
                     roomShown={roomShown}
                     hidden={!side}
+                    envelopeIds={shapes[0] && (previewSymbol === "chandelier" || previewSymbol === "flowers" || previewSymbol === "centerpiece" || previewSymbol === "chuppah") ? [shapes[0].id] : undefined}
                     frame={PRODUCT_FRAME}
                   />
                 </div>
@@ -2911,6 +2914,7 @@ export function AppearanceModal({
                   <ElevationQuickBar
                     part={one}
                     base={shapes[0]?.id === one.id}
+                    hung={preview.layer === "ceiling"}
                     title={shapeName(one).replace(/ \d+$/, "")}
                     itemHeightMm={draft.dimensions.heightMm ?? 0}
                     onChange={(p) => patchShape(one.id, p)}

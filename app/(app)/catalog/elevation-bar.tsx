@@ -16,6 +16,7 @@ const mmOf = (cmValue: number) => Math.round(cmValue * 10);
 export function ElevationQuickBar({
   part,
   base,
+  hung = false,
   title,
   itemHeightMm,
   onChange,
@@ -27,6 +28,8 @@ export function ElevationQuickBar({
 }: {
   part: ShapePart;
   base: boolean;
+  /** A ceiling row: its z 0 is its UNDERSIDE, not the floor. */
+  hung?: boolean;
   title: string;
   itemHeightMm: number;
   onChange: (p: Partial<ShapePart>) => void;
@@ -37,7 +40,7 @@ export function ElevationQuickBar({
   onClose: () => void;
 }) {
   return (
-    <Bar icon={Shapes} title={title} badge={base ? "בסיס" : undefined} facts={base ? "עומד על הרצפה · גובהו הוא גובה הפריט" : undefined} onClose={onClose}>
+    <Bar icon={Shapes} title={title} badge={base ? "בסיס" : undefined} facts={base ? (hung ? "תלוי · גובהו הוא גובה הפריט" : "עומד על הרצפה · גובהו הוא גובה הפריט") : undefined} onClose={onClose}>
       {base ? (
         <>
           <QuickLead icon={ArrowUpFromLine} label="גובה הפריט" />
@@ -46,8 +49,8 @@ export function ElevationQuickBar({
         </>
       ) : (
         <>
-          <QuickLead icon={MoveVertical} label="גובה מהרצפה" />
-          <QuickNumber label="גובה מהרצפה (ס״מ)" min={0} value={cm(part.zMm ?? 0)} onChange={(v) => onChange({ zMm: Math.max(0, mmOf(v)) })} />
+          <QuickLead icon={MoveVertical} label={hung ? "גובה מתחתית הפריט" : "גובה מהרצפה"} />
+          <QuickNumber label={hung ? "גובה מתחתית הפריט (ס״מ)" : "גובה מהרצפה (ס״מ)"} min={0} value={cm(part.zMm ?? 0)} onChange={(v) => onChange({ zMm: Math.max(0, mmOf(v)) })} />
           <QuickUnit>ס״מ</QuickUnit>
           <QuickSep />
           <QuickLead icon={ArrowUpFromLine} label="גובה" />

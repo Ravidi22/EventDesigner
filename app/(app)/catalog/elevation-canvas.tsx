@@ -16,13 +16,13 @@
 // let settle — useSettledScene), drawn by an orthographic camera at exactly the canvas's settled
 // view (components/scene/ortho-underlay.tsx through PlanCanvas's `underlay`, carried through a pan
 // by CSS). Kept mounted once shown — hidden, never unmounted, so its shaders compile once.
-import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { RevolvePoint, ShapePart } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
-import { boxGripSpots, boxRect, elevationBoxes, orthoFrame, profileHandles, profilePoint, rectEdit, runsClearOf, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
-import { addedPoint, movedPoint, removedPoint, revolveSilhouette } from "@/lib/element/revolve";
+import { ELEVATION_MIN_H_MM, boxGripSpots, boxRect, elevationBoxes, elevationFrame, orthoFrame, profileHandles, profilePoint, rectEdit, runsClearOf, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
+import { addedPoint, movedPoint, normalisedRevolve, removedPoint, revolveSilhouette } from "@/lib/element/revolve";
 import { startPointerGesture } from "@/lib/studio/gesture";
-import { PlanCanvas, type CanvasLayerContext, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
+import { PlanCanvas, type CanvasFocus, type CanvasLayerContext, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
 import { StructureFeatures } from "@/components/venue-plan";
 import { Dim } from "@/components/venue-dims";
 import { emptyStructure, type StructureFeature } from "@/lib/venues/structure";
@@ -53,11 +53,15 @@ export interface ElevationCanvasProps {
   roomShown: boolean;
   /** The view is the plan: this canvas is kept mounted, its room held. */
   hidden?: boolean;
+  /** The shapes whose body profile is an ENVELOPE (a chandelier's, an arrangement's, a chuppah's roof
+   *  - lib/scene/items.ts PROFILE_IS_PICTURE): the room reads it as shares of its widest ring, so a
+   *  profile gesture ends by rescaling it until that ring is 1 (normalisedRevolve). */
+  envelopeIds?: readonly string[];
   /** The editor's canvas frame (padding, the least extent, the grid) — the plan's own. */
   frame: { padMm: number; minExtentMm: { w: number; h: number }; gridMm: number };
 }
 
-export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selected, onSelect, onEdit, onCommit, history, room, roomShown, hidden = false, frame }: ElevationCanvasProps) {
+export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selected, onSelect, onEdit, onCommit, history, room, roomShown, hidden = false, envelopeIds, frame }: ElevationCanvasProps) {
   const boxes = useMemo(() => elevationBoxes(shapes, itemHeightMm, view), [shapes, itemHeightMm, view]);
   const rects = useMemo(() => boxes.map(boxRect), [boxes]);
   const showRoom = !!room && roomShown;
@@ -127,14 +131,17 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
   };
 
   const one = selected.length === 1 ? boxes.find((b) => b.id === selected[0]) : undefined;
+  // The opening frame: every shape, the floor line, and room under it for the quick bar. The same
+  // box is the first fit (framePoints) and - once per switch of view - a focus, because PlanCanvas
+  // fits only once and a front frame is the wrong frame for the side.
+  const viewBox = elevationFrame(boxes, frame.minExtentMm);
   const framePoints = [
-    { x: -frame.minExtentMm.w / 2, y: 0 },
-    { x: frame.minExtentMm.w / 2, y: -frame.minExtentMm.h },
-    ...rects.flatMap((r) => [
-      { x: r.x - r.widthMm / 2, y: r.y - r.depthMm / 2 },
-      { x: r.x + r.widthMm / 2, y: r.y + r.depthMm / 2 },
-    ]),
+    { x: viewBox.minX, y: viewBox.minY },
+    { x: viewBox.maxX, y: viewBox.maxY },
   ];
+  const [focusAt, setFocusAt] = useState<{ view: ElevationView; nonce: number }>({ view, nonce: 1 });
+  if (focusAt.view !== view) setFocusAt({ view, nonce: focusAt.nonce + 1 });
+  const focus: CanvasFocus = { minX: viewBox.minX - frame.padMm, minY: viewBox.minY - frame.padMm, maxX: viewBox.maxX + frame.padMm, maxY: viewBox.maxY + frame.padMm, nonce: focusAt.nonce, immediate: true };
 
   return (
     <PlanCanvas
@@ -157,13 +164,14 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
       onUndo={history.onUndo}
       onRedo={history.onRedo}
       framePoints={framePoints}
+      focus={focus}
       defaultDims
       padMm={frame.padMm}
       minExtentMm={frame.minExtentMm}
       gridMm={frame.gridMm}
       underlay={room ? underlay : undefined}
       backdrop={<line className="pointer-events-none" x1={-FLOOR_REACH_MM} x2={FLOOR_REACH_MM} y1={0} y2={0} stroke="var(--color-ink-soft)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
-      topmost={(ctx) => (one?.revolve ? <ProfileHandles box={one} ctx={ctx} onEdit={onEdit} onCommit={onCommit} /> : null)}
+      topmost={(ctx) => (one?.revolve ? <ProfileHandles box={one} ctx={ctx} onEdit={onEdit} onCommit={onCommit} envelope={!!envelopeIds?.includes(one.id)} /> : null)}
       overlay={(ctx) => (
         <>
           {/* Bodies of revolution, as their silhouettes, under their (clear) boxes. */}
@@ -187,6 +195,7 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
             structure={{ ...emptyStructure(), features }}
             mm={ctx.mm}
             clientToMm={ctx.clientToMm}
+            minSizeMm={ELEVATION_MIN_H_MM}
             selectedIds={[...selected]}
             onSelect={(id, additive) => onSelect(additive ? (selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]) : selected.includes(id) ? [...selected] : [id])}
             onMove={(id, p) => {
@@ -249,10 +258,13 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
  *  `topmost` layer so nothing covers them; the press stops here, so the box under never starts to
  *  move. A drag is one undo entry (live `onEdit`, `onCommit` at the release); an add or a removal
  *  is its own. */
-function ProfileHandles({ box, ctx, onEdit, onCommit }: { box: ElevationBox; ctx: CanvasLayerContext; onEdit: ElevationCanvasProps["onEdit"]; onCommit: () => void }) {
+function ProfileHandles({ box, ctx, onEdit, onCommit, envelope }: { box: ElevationBox; ctx: CanvasLayerContext; onEdit: ElevationCanvasProps["onEdit"]; onCommit: () => void; envelope: boolean }) {
   const points = box.revolve!;
   const handles = profileHandles(box);
   const set = (revolve: RevolvePoint[]) => onEdit((list) => list.map((s) => (s.id === box.id ? { ...s, revolve } : s)));
+  // An envelope is stored as the room reads it - its widest ring is 1 (review F3). Shown raw while a
+  // handle is dragged; settled in the same undo entry when the gesture, add or removal ends.
+  const settle = (revolve: RevolvePoint[]) => set(envelope ? normalisedRevolve(revolve) : revolve);
   const sil = revolveSilhouette(points, (box.a0 + box.a1) / 2, (box.a1 - box.a0) / 2, box.z, box.h);
   const side = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" ");
   // The two sides of the body alone — the foot and the top are not the profile.
@@ -271,13 +283,17 @@ function ProfileHandles({ box, ctx, onEdit, onCommit }: { box: ElevationBox; ctx
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    let latest = points;
     startPointerGesture(e, {
       onMove: (m) => {
         const q = profilePoint(box, ctx.clientToMm(m.clientX, m.clientY));
-        set(movedPoint(points, i, q.r, q.z));
+        latest = movedPoint(points, i, q.r, q.z);
+        set(latest);
       },
       onEnd: (_e, moved) => {
-        if (moved) onCommit();
+        if (!moved) return;
+        if (envelope) settle(latest);
+        onCommit();
       },
     });
   };
@@ -301,7 +317,7 @@ function ProfileHandles({ box, ctx, onEdit, onCommit }: { box: ElevationBox; ctx
             e.stopPropagation();
             if (e.detail > 1) return;
             const q = profilePoint(box, ctx.clientToMm(e.clientX, e.clientY));
-            set(addedPoint(points, q.r, q.z));
+            settle(addedPoint(points, q.r, q.z));
             onCommit();
           }}
         />
@@ -323,7 +339,7 @@ function ProfileHandles({ box, ctx, onEdit, onCommit }: { box: ElevationBox; ctx
               e.preventDefault();
               e.stopPropagation();
               if (end) return;
-              set(removedPoint(points, i));
+              settle(removedPoint(points, i));
               onCommit();
             }}
             onClick={(e) => e.stopPropagation()}

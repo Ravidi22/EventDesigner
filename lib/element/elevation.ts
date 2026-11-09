@@ -112,11 +112,22 @@ export function rectEdit(shape: ShapePart, b: ElevationBox, rect: ElevationRect,
       else patch.diameterMm = w;
     }
   }
-  const h = Math.max(ELEVATION_MIN_H_MM, Math.round(rect.depthMm));
-  if (b.index === 0) return Math.abs(h - b.h) > 0.5 ? { patch, itemHeightMm: h } : { patch };
-  const z = Math.max(0, Math.round(-rect.y - rect.depthMm / 2));
+  // The rect's edges, as heights above the floor: a bottom grip moves only the bottom, a top grip
+  // only the top, a move both (its rise unchanged).
+  const top = -(rect.y - rect.depthMm / 2);
+  const bottom = -(rect.y + rect.depthMm / 2);
+  const moved = Math.abs(rect.depthMm - b.h) <= 0.5;
+  if (b.index === 0) {
+    // The base never leaves the floor: only its TOP edge says anything, and a pure move says nothing.
+    if (moved || Math.abs(top - b.h) <= 0.5) return { patch };
+    return { patch, itemHeightMm: Math.max(ELEVATION_MIN_H_MM, Math.round(top)) };
+  }
+  const z = Math.max(0, Math.round(bottom));
   if (Math.abs(z - b.z) > 0.5) patch.zMm = z;
-  if (Math.abs(h - b.h) > 0.5) patch.heightMm = h;
+  if (!moved) {
+    const h = Math.max(ELEVATION_MIN_H_MM, Math.round(top - z));
+    if (Math.abs(h - b.h) > 0.5) patch.heightMm = h;
+  }
   return { patch };
 }
 
@@ -185,6 +196,24 @@ export function runsClearOf(line: readonly { x: number; y: number }[], spots: re
   return runs;
 }
 
+/** The least room kept under the floor line, mm — the quick bar stands over the canvas's foot, and the
+ *  floor, the base's bottom grips and the floor figure open above it, not under it. */
+export const FLOOR_CLEARANCE_MM = 600;
+
+/** The box the elevation canvas opens on, in its world (across, −z): every shape, the least extent
+ *  (centred on the shapes, not on the origin), the floor line, and clearance below the floor for the
+ *  bar (a quarter of the frame's height, at least `FLOOR_CLEARANCE_MM`). Y grows down: the top is
+ *  negative, the clearance below y = 0 positive. */
+export function elevationFrame(boxes: readonly ElevationBox[], minExtentMm: { w: number; h: number }): { minX: number; maxX: number; minY: number; maxY: number } {
+  const a0 = boxes.length ? Math.min(...boxes.map((b) => b.a0)) : 0;
+  const a1 = boxes.length ? Math.max(...boxes.map((b) => b.a1)) : 0;
+  const mid = (a0 + a1) / 2;
+  const half = Math.max(minExtentMm.w, a1 - a0) / 2;
+  const up = Math.max(minExtentMm.h, ...boxes.map((b) => b.z + b.h));
+  const below = Math.max(FLOOR_CLEARANCE_MM, up * 0.25);
+  return { minX: mid - half, maxX: mid + half, minY: -up, maxY: below };
+}
+
 /** The orthographic camera that draws the item's room under the view, in three's world metres
  *  (lib/scene/frame.ts: plan (x, y, z) mm → (x, z, y) m). */
 export interface OrthoFrame {
@@ -249,6 +278,19 @@ if (isMain(import.meta.url)) {
   assert(sunk.patch.zMm === 0, "nothing goes under the floor");
   const thin = rectEdit(bar[2], fb[2], { ...boxRect(fb[2]), depthMm: 2 }, "front");
   assert(thin.patch.heightMm === ELEVATION_MIN_H_MM, "a height never goes under 10 mm");
+  // A bottom-edge resize keeps the top where it was (review F1).
+  const sr = boxRect(fb[2]);
+  const underFloor = rectEdit(bar[2], fb[2], { ...sr, y: -470, depthMm: 1140 }, "front");
+  assert(underFloor.patch.zMm === 0 && underFloor.patch.heightMm === 1040, "a shelf's bottom pulled under the floor stops at 0 and keeps its top");
+  const bottomUp = rectEdit(bar[2], fb[2], { ...sr, y: -1030, depthMm: 20 }, "front");
+  assert(bottomUp.patch.zMm === 1020 && bottomUp.patch.heightMm === 20, "a shelf's bottom pulled up 20 mm raises it and shortens it from below");
+  const bottomDown = rectEdit(bar[0], fb[0], { ...r0, y: -450, depthMm: 1300 }, "front");
+  assert(bottomDown.itemHeightMm === undefined && bottomDown.patch.zMm === undefined, "the base's bottom grip pulled down changes no height");
+  const bottomUpBase = rectEdit(bar[0], fb[0], { ...r0, y: -700, depthMm: 800 }, "front");
+  assert(bottomUpBase.itemHeightMm === undefined && bottomUpBase.patch.zMm === undefined, "…nor pulled up");
+  const topMoved = rectEdit(bar[0], fb[0], { ...r0, y: -700, depthMm: 1400 }, "front");
+  assert(topMoved.itemHeightMm === 1400, "the base's top edge moved is the item's new height");
+  assert(sunk.patch.heightMm === undefined, "a shelf carried under the floor is not shortened");
   const turned = { ...bar[1], rotation: 45 };
   const tb = elevationBoxes([bar[0], turned], 1100, "front")[1];
   assert(tb.across === null && rectEdit(turned, tb, { ...boxRect(tb), widthMm: boxRect(tb).widthMm + 400 }, "front").patch.widthMm === undefined, "a turned shape's width is not rewritten across");
@@ -294,5 +336,12 @@ if (isMain(import.meta.url)) {
   assert(near(hung.top, 5.3), "a hung item's floor is its underside");
   const side = orthoFrame("side", { minX: -2000, minY: -2500, w: 4000, h: 3000 }, { x: 0, y: 300 }, 0);
   assert(side.rotationY === -Math.PI / 2 && side.position[0] < 0 && near(side.left, (-2000 - 300) / 1000), "the side camera looks along +x from the item's −x end");
+  // The opening frame keeps the floor above the bar and is centred on the shapes (review F4).
+  const offCentre = elevationBoxes([{ id: "p", shape: "rect", widthMm: 600, depthMm: 600, x: 3000, y: 0, rotation: 0 }], 750, "front");
+  const fr = elevationFrame(offCentre, { w: 2000, h: 2000 });
+  assert(fr.minX === 2000 && fr.maxX === 4000 && fr.minY === -2000, "the frame is centred on the shapes' across extent, not on the origin");
+  assert(fr.maxY >= FLOOR_CLEARANCE_MM && fr.maxY >= (fr.maxY - fr.minY) * 0.2, "room is kept under the floor line for the bar");
+  const wide = elevationFrame(fb, { w: 2000, h: 2000 });
+  assert(wide.minX === -1500 && wide.maxX === 1500 && wide.maxY === 600, "a wide item is framed to its own extent");
   console.log("elevation self-check passed");
 }
