@@ -76,7 +76,7 @@ import { Select } from "@/components/select";
 import { CHAIR_D_MM, seatSides, seatsAround } from "@/lib/studio/seating";
 import { FootprintShape, OutlinePath } from "@/components/footprint-shape";
 import { SeatChairs, SeatSidesPicker } from "@/components/seat-sides-picker";
-import { Actions, Bar, BarButton, Note, PanelRow, ltr } from "@/components/inspector-bar";
+import { Bar, BarButton, Note, PanelRow, QuickNumber, QuickSep, QuickTail, QuickUnit, ltr } from "@/components/inspector-bar";
 import { Popover } from "@/components/popover";
 import { IconButton } from "@/components/icon-button";
 import { FoldRow } from "@/components/fold-row";
@@ -1234,11 +1234,6 @@ function sizeLabel(part: ShapePart): string {
 }
 
 /** The small number box the quick bar types sizes into — the sketch bar's h-7, 56px wide. */
-function BarNumber({ label, value, onChange, decimals = 0, min = 0, className = "w-14" }: { label: string; value: number; onChange: (v: number) => void; decimals?: number; min?: number; className?: string }) {
-  return <NumberField size="sm" aria-label={label} decimals={decimals} min={min} commitOnBlur value={value} onChange={onChange} className={className} />;
-}
-const BarSep = () => <div className="mx-0.5 h-6 w-px bg-border" aria-hidden />;
-const BarUnit = ({ children }: { children: ReactNode }) => <span className="text-xs text-muted">{children}</span>;
 
 /** A selected shape's QUICK bar, at the canvas's foot — the edits made most: which shape, its size,
  *  its turn, and the verbs (redraw, flip/order, duplicate, delete). Everything else about the shape is
@@ -1283,35 +1278,35 @@ function ShapeQuickBar({
       <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} panelClassName="w-80">
         <ShapeGrid value={part.shape} onPick={onReshape} />
       </Popover>
-      <BarSep />
+      <QuickSep />
       <span title="מידות" className="inline-flex text-muted">
         <Ruler className="h-4 w-4" strokeWidth={1.75} />
       </span>
       {round ? (
         <>
-          <BarUnit>{field.label === "רדיוס" ? "R" : "⌀"}</BarUnit>
-          <BarNumber label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
+          <QuickUnit>{field.label === "רדיוס" ? "R" : "⌀"}</QuickUnit>
+          <QuickNumber min={0} label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
         </>
       ) : (
         <>
           {/* Committed on blur: a size typed digit by digit rescaled the shape at "1", then "12", then
               "120" — a hand-drawn one through rescaleCustomPart each time. */}
-          <BarNumber label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
-          <BarUnit>×</BarUnit>
+          <QuickNumber min={0} label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
+          <QuickUnit>×</QuickUnit>
           {part.shape === "line" ? (
-            <BarNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
+            <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
           ) : (
-            <BarNumber label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
+            <QuickNumber min={0} label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
           )}
         </>
       )}
-      <BarUnit>ס״מ</BarUnit>
-      <BarSep />
+      <QuickUnit>ס״מ</QuickUnit>
+      <QuickSep />
       <BarButton icon={RotateCcw} label="רבע סיבוב שמאלה" onClick={() => turn(-90)} />
       <NumberField size="sm" aria-label="זווית במעלות" decimals={0} value={deg} onChange={(v) => onChange({ rotation: ((v % 360) + 360) % 360 })} className="w-12" />
-      <BarUnit>°</BarUnit>
+      <QuickUnit>°</QuickUnit>
       <BarButton icon={RotateCw} label="רבע סיבוב ימינה" onClick={() => turn(90)} />
-      <BarSep />
+      <QuickSep />
       <BarButton icon={PenLine} label="עריכת הקווים · לחיצה כפולה" onClick={onRedraw} />
       {/* Lines only: the side back to the first point and the fill left out. A band or a surface has
           no inside to go on, so they go with it. */}
@@ -1323,8 +1318,7 @@ function ShapeQuickBar({
           onClick={() => onChange(part.open ? { open: undefined } : { open: true, hollow: undefined, texture: undefined, textureImage: undefined })}
         />
       )}
-      <Menu label="עוד פעולות לצורה" side="top" items={more} />
-      <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הצורה · Ctrl+D" onDelete={onRemove} deleteLabel="מחיקת הצורה · Delete" />
+      <QuickTail onCopy={onDuplicate} copyLabel="שכפול הצורה · Ctrl+D" onDelete={onRemove} deleteLabel="מחיקת הצורה" more={more} moreLabel="עוד פעולות לצורה" />
     </Bar>
   );
 }
@@ -2877,15 +2871,17 @@ export function AppearanceModal({
                 ) : selShapes.length > 1 ? (
                   <Bar icon={Layers} title={`${selShapes.length} צורות`} onClose={() => setSel([])}>
                     <AlignMenu align={alignPanel} />
-                    <Menu
-                      label="עוד פעולות לנבחרות"
-                      side="top"
-                      items={moreItems(
+                    <QuickTail
+                      onCopy={() => duplicate(selected)}
+                      copyLabel="שכפול הצורות · Ctrl+D"
+                      onDelete={() => removeShapes(selected)}
+                      deleteLabel="מחיקת הצורות"
+                      more={moreItems(
                         (axis) => flip(selected, axis),
                         (how) => restack(selected, how),
                       )}
+                      moreLabel="עוד פעולות לנבחרות"
                     />
-                    <Actions onDuplicate={() => duplicate(selected)} duplicateLabel="שכפול הצורות · Ctrl+D" onDelete={() => removeShapes(selected)} deleteLabel="מחיקת הצורות · Delete" />
                   </Bar>
                 ) : (
                   <Bar
@@ -2900,8 +2896,8 @@ export function AppearanceModal({
                         </span>
                         {baseRound ? (
                           <>
-                            <BarUnit>{baseField.label === "רדיוס" ? "R" : "⌀"}</BarUnit>
-                            <BarNumber
+                            <QuickUnit>{baseField.label === "רדיוס" ? "R" : "⌀"}</QuickUnit>
+                            <QuickNumber min={0}
                               label={`${baseField.label} (ס״מ)`}
                               value={(roundSizeMm(base.shape, base) ?? 0) / baseField.factor / 10}
                               onChange={(v) => setBase({ diameterMm: Math.round(v * 10 * baseField.factor) })}
@@ -2909,24 +2905,24 @@ export function AppearanceModal({
                           </>
                         ) : (
                           <>
-                            <BarNumber label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
-                            <BarUnit>×</BarUnit>
+                            <QuickNumber min={0} label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
+                            <QuickUnit>×</QuickUnit>
                             {base.shape === "line" ? (
-                              <BarNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
+                              <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
                             ) : (
-                              <BarNumber label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
+                              <QuickNumber min={0} label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
                             )}
                           </>
                         )}
-                        <BarUnit>ס״מ</BarUnit>
-                        <BarSep />
+                        <QuickUnit>ס״מ</QuickUnit>
+                        <QuickSep />
                       </>
                     )}
                     <span title="גובה הפריט" className="inline-flex text-muted">
                       <ArrowUpFromLine className="h-4 w-4" strokeWidth={1.75} />
                     </span>
                     <NumberField size="sm" aria-label="גובה הפריט (ס״מ)" decimals={0} min={0} hideZero placeholder="—" commitOnBlur value={heightCm} onChange={(v) => setItemHeight(Math.max(0, Math.round(v * 10)))} className="w-14" />
-                    <BarUnit>ס״מ</BarUnit>
+                    <QuickUnit>ס״מ</QuickUnit>
                   </Bar>
                 )}
               </div>

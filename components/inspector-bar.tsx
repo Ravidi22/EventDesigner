@@ -5,6 +5,7 @@ import { Copy, RotateCcw, RotateCw, Trash2, X, type LucideIcon } from "lucide-re
 import { InspectorDivider, InspectorHeader } from "@/components/plan-canvas";
 import { NumberField } from "@/components/number-field";
 import { Popover } from "@/components/popover";
+import { Menu, type MenuItem } from "@/components/menu";
 import { fieldLabelClassName } from "@/components/control";
 
 // The floating selection bar the studio sketch puts under a selected thing — a title row, then a row
@@ -138,6 +139,123 @@ export function Actions({
       <InspectorDivider />
       <BarButton icon={Copy} label={`${duplicateLabel} · Ctrl+C · Ctrl+V`} onClick={onDuplicate} />
       <BarButton icon={Trash2} label={`${deleteLabel} · Delete`} onClick={onDelete} tone="danger" />
+    </div>
+  );
+}
+
+// ── The QUICK BAR's second row (2026-11-09, the user's "Studio + Halls" board) ────────────────────
+// Every selection's bar reads in one order: at most three numbers typed in place → one mode verb
+// (an outline pill) → copy · delete · ⋯, always last. Everything else about the selection is a
+// group in the end panel (components/end-panel.tsx). Lifted out of the shape editor's quick bar,
+// which was the board's reference.
+
+/** A number typed in the bar itself — the board's 56×28 field (44 when `narrow`). Committed on
+ *  blur: a size typed digit by digit would otherwise resize the thing at "1", then "12"… */
+export function QuickNumber({
+  label,
+  value,
+  onChange,
+  decimals = 0,
+  min,
+  max,
+  narrow,
+  placeholder,
+  hideZero,
+  disabled,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  decimals?: number;
+  min?: number;
+  max?: number;
+  narrow?: boolean;
+  placeholder?: string;
+  hideZero?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <NumberField
+      size="sm"
+      aria-label={label}
+      decimals={decimals}
+      min={min}
+      max={max}
+      commitOnBlur
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      hideZero={hideZero}
+      disabled={disabled}
+      className={narrow ? "w-11" : "w-14"}
+    />
+  );
+}
+
+/** A unit or a sign between numbers — "×", "ס״מ", "°". */
+export function QuickUnit({ children }: { children: ReactNode }) {
+  return <span className="text-xs text-muted">{children}</span>;
+}
+
+/** The hairline between the bar's subjects. */
+export function QuickSep() {
+  return <div className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />;
+}
+
+/** The muted icon in front of a number, saying what the number is (its tooltip says it in words). */
+export function QuickLead({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span title={label} className="inline-flex shrink-0 text-muted">
+      <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+    </span>
+  );
+}
+
+/** The selection's ONE mode verb — הלבשה, עריכת הקווים, עריכת האזור — as an outline pill, the
+ *  product form's "עריכת המראה" look. `active` while the mode it enters is on. */
+export function ModeVerb({ icon: Icon, label, onClick, active }: { icon: LucideIcon; label: string; onClick: () => void; active?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={
+        "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border-[1.5px] border-accent-line px-3 text-[13px] font-bold text-accent transition-colors hover:bg-accent-tint " +
+        (active ? "bg-accent-wash" : "bg-surface")
+      }
+    >
+      <Icon className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+      {label}
+    </button>
+  );
+}
+
+/** The bar's last word: copy · delete · ⋯, in that order and always last, behind a hairline. A
+ *  wall has no copy; a venue feature in a sketch has no delete; the ⋯ holds the rare verbs (cut,
+ *  select similar, stacking, lock, mirror, save as composite) in the sections the caller gives. */
+export function QuickTail({
+  onCopy,
+  copyLabel = "שכפול · Ctrl+D",
+  onDelete,
+  deleteLabel = "מחיקה",
+  deleteDisabled,
+  more,
+  moreLabel = "עוד פעולות",
+}: {
+  onCopy?: () => void;
+  copyLabel?: string;
+  onDelete?: () => void;
+  deleteLabel?: string;
+  deleteDisabled?: boolean;
+  more?: MenuItem[];
+  moreLabel?: string;
+}) {
+  return (
+    <div className="ms-auto flex items-center gap-1">
+      <InspectorDivider />
+      {onCopy && <BarButton icon={Copy} label={copyLabel} onClick={onCopy} />}
+      {onDelete && <BarButton icon={Trash2} label={`${deleteLabel} · Delete`} onClick={onDelete} tone="danger" disabled={deleteDisabled} />}
+      {more && more.length > 0 && <Menu label={moreLabel} side="top" items={more} />}
     </div>
   );
 }
