@@ -129,12 +129,14 @@ import { centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, landOnTop, restackTo, type StackBox, type StackEntry, type StackKind, type StackRef } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
 import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
-import { Toolbar } from "./toolbar";
 import { CatalogRail } from "./catalog-rail";
+import { HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
+import { IconButton } from "@/components/icon-button";
+import { Menu } from "@/components/menu";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
 import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
-import { AlignCenterVertical, BringToFront, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
+import { AlignCenterVertical, Box, BringToFront, ClipboardPaste, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, ScanEye, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
 import { ProposalReview } from "./proposal-review";
 import { fetchSubmittedProposal, resolveProposal, type SubmittedProposal } from "@/lib/proposals/actions";
@@ -194,7 +196,7 @@ const PASTE_STEP_PX = 34;
  *
  *  The passes are a RAIL filter now and nothing else. They used to also switch the toolbar's table
  *  buttons off during the design pass, so that a table could not be dropped in while the tables were
- *  being dressed; those buttons are gone (see toolbar.tsx) and the rail already enforces the same
+ *  being dressed; those buttons are gone (and the toolbar with them) and the rail enforces the same
  *  thing better — seating is not in DESIGN_PASS_GROUPS, so there is no table on screen to drag. */
 export type StudioMode = "full" | "hall" | "design";
 
@@ -293,7 +295,7 @@ export function StudioScreen({
    *  and where the hook falls back to fetching for itself. */
   initialProducts?: Product[];
   /** The autosave's state, reported up as it changes. The meeting's footer asks before leaving a
-   *  stage whose last edit failed to save — it cannot see this screen's toolbar from outside. */
+   *  stage whose last edit failed to save — it cannot see this screen's save pill from outside. */
   onSaveState?: (state: "saving" | "saved" | "error") => void;
 }) {
   // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
@@ -1413,7 +1415,7 @@ export function StudioScreen({
     }
     // The venue's own features go out of THIS event's room only (FeaturePlacement.removed) — and
     // only the ones the venue lets a sketch move, which are the only ones a sketch can select. The
-    // property keeps them; the toolbar's "פריטי מתחם שהוסרו" brings them back.
+    // property keeps them; the end panel's "פריטי מתחם שהוסרו" brings them back.
     const venueOut = featureRefs(selected)
       .map((r) => plan.structure.features.find((f) => f.id === r.id))
       .filter((f): f is NonNullable<typeof f> => !!f && featureMovable(f))
@@ -5147,8 +5149,16 @@ export function StudioScreen({
   // button goes down, before React has re-rendered with whatever the canvas just selected under it
   // — so each row reaches for the LATEST handlers through a ref rather than closing over this
   // render's, which would act on the selection as it was a click ago.
-  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel });
-  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel };
+  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel, paste });
+  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel, paste };
+  /** A right-click on nothing of the sketch's: paste, while the clip holds something. There is no
+   *  header any more and no document ⋯ (the user's note 1) — so besides Ctrl+V this is where a paste
+   *  lives: it happens with nothing selected, so it cannot be a verb on any selection's bar. The clip
+   *  is a module variable, read the instant the menu opens. */
+  const floorMenu = useCallback(
+    (): ContextMenuItem[] => (clipCount(heldClip()) > 0 ? [{ label: "הדבקה · Ctrl+V", icon: ClipboardPaste, onSelect: () => latest.current.paste() }] : []),
+    [],
+  );
   const contextItems = useCallback(
     (refs: SelectionRef[]): ContextMenuItem[] => {
       const own = docRefs(refs);
@@ -5325,55 +5335,20 @@ export function StudioScreen({
   // held: fall back to the whole property rather than framing a box that no longer exists.
   const focusZoneId = zoneOptions.some((z) => z.id === zoneFocus) ? zoneFocus : null;
 
-  // Not memoised, on purpose: `heldClip()` is the same module variable `canPaste` below reads
-  // straight off at render, and the render that follows a copy (its only writer) already happens
-  // because copy() also sets the hint. What the inspector's dressing button needs beyond `canPaste`
-  // is whether the one held table actually brought dressing along, and how many of the currently
-  // selected tables that dressing would land on.
+  // Not memoised, on purpose: `heldClip()` is a module variable read straight off at render, and the
+  // render that follows a copy (its only writer) already happens because copy() also sets the hint.
+  // What the inspector's dressing button needs is whether the one held table actually brought
+  // dressing along, and how many of the currently selected tables that dressing would land on.
   const dressCandidateCount = copyTargets.length;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <Toolbar
-        canUndo={history.past.length > 0}
-        canRedo={history.future.length > 0}
-        onUndo={() => setHistory(undo)}
-        onRedo={() => setHistory(redo)}
-        canCopy={selected.length > 0}
-        onCopy={copy}
-        onCut={cut}
-        // ponytail: read at render rather than mirrored into state. The clip is a module variable,
-        // and its only writer is copy()/cut() — both of which set the hint, so the render that
-        // enables the button is already happening.
-        canPaste={clipCount(heldClip()) > 0}
-        onPaste={paste}
-        layerVisible={layerVisible}
-        onToggleLayer={(l) => setLayerVisible((v) => ({ ...v, [l]: !v[l] }))}
-        activeLayer={activeLayer}
-        onActivateLayer={(l) => setActiveLayer((cur) => (cur === l ? null : l))}
-        zones={zoneOptions}
-        focusZoneId={focusZoneId}
-        onFocusZone={setZoneFocus}
-        canRenumber={renumbering.length > 0}
-        onRenumber={renumberAll}
-        numbering={numbering}
-        onNumbering={setNumbering}
-        renumberCount={renumbering.length}
-        sketches={sketches}
-        sketchEmpty={doc.tables.length + doc.placements.length === 0}
-        onSaveSketch={(name) => void saveSketch(name)}
-        onLoadSketch={(id, mode) => void loadSketch(id, mode)}
-        onDeleteSketch={(id) => void deleteSketch(id)}
-        onSketchPhoto={(id, file) => void sketchPhoto(id, file)}
-        saveState={saveState}
-        onRetrySave={retrySave}
-        removedFeatures={removedVenueFeatures}
-        onRestoreFeatures={restoreFeatures}
-        sceneOn={scenePane.open}
-        onToggleScene={toggleScene}
-      />
-      {/* The canvas card's three columns: the catalog rail | the canvas (and the 3D pane beside it) |
-          the end panel. */}
+      {/* No header (the "Studio + Halls" board, 1b — everything floats): history is on the canvas
+          strip, the view (zone, 3D) in the top-start cluster, the save state a pill in the
+          bottom-start corner, the clipboard on the keys and the right-click menu, and the document's
+          own questions — numbering, saved sketches, removed venue features — are end-panel groups.
+          The canvas card's three columns: the catalog rail | the canvas (and the 3D pane beside it)
+          | the end panel. */}
       <div className="relative flex min-h-0 flex-1">
         <CatalogRail
           products={catalog}
@@ -5428,6 +5403,12 @@ export function StudioScreen({
             alignGuide={alignGuideLine}
             onContextMenu={contextItems}
             onContextMenuAt={coverMenuAt}
+            onFloorMenu={floorMenu}
+            // The strip's own undo/redo pair — the keyboard's Ctrl+Z / Ctrl+Y stay this screen's.
+            onUndo={() => setHistory(undo)}
+            onRedo={() => setHistory(redo)}
+            canUndo={history.past.length > 0}
+            canRedo={history.future.length > 0}
             onResizePlacement={(id, sizeMm, position) => {
               // A stage's handles stretch its OUTLINE — the decks follow on their own. A round one is
               // scaled whole (scaleStage): it stays the curve it is.
@@ -5594,23 +5575,8 @@ export function StudioScreen({
             onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
             onArrangeBlock={(positions) => drag({ type: "arrangeOnTables", positions })}
           />
-          {/* A client sent changes: the line that says so, and the review over the canvas. */}
-          {proposal && !reviewing && !dressingTable && (
-            <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-center">
-              <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-accent-line bg-surface py-1.5 ps-4 pe-1.5 shadow-floating">
-                <span className="text-[13px] text-ink">
-                  <span className="font-bold">{proposal.submittedBy}</span> הציע/ה {diffDocuments(proposal.base, proposal.content).length} שינויים בסקיצה
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setReviewing(true)}
-                  className="rounded-pill bg-accent px-4 py-1.5 text-[13px] font-bold text-canvas transition-colors hover:bg-accent-hover"
-                >
-                  לסקירה
-                </button>
-              </div>
-            </div>
-          )}
+          {/* A client sent changes: the review over the canvas (the line that says so is in the hint
+              row, below). */}
           {proposal && reviewing && (
             <ProposalReview
               proposal={proposal}
@@ -5684,46 +5650,13 @@ export function StudioScreen({
               </div>
             </div>
           )}
-          {/* What the area tool is waiting for, where the tape says what IT is waiting for. */}
-          {stageFill?.phase === "draw" && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {stageFill.shape === "circle"
-                  ? "לחצו על מרכז הבמה ואז על השפה · הקלדת מספר ו־Enter קובעת קוטר בס״מ · Alt בלי עיגול ל־10 ס״מ · Esc ליציאה"
-                  : stageFill.shape === "ellipse"
-                    ? "לחצו על פינה אחת ואז על הפינה שמולה · Shift לעיגול · Alt בלי עיגול ל־10 ס״מ · Esc ליציאה"
-                    : stageFill.shape === "half"
-                      ? "סמנו את שני קצות הקוטר (מספר ו־Enter קובע אורך בס״מ), ואז לחצו בצד שאליו הקשת פונה · Esc ליציאה"
-                      : "סמנו את פינות האזור · הקלדת מספר ו־Enter קובעת אורך בס״מ · Alt לקו חופשי · לחיצה כפולה או Enter לסגירה · Esc ליציאה"}
-              </span>
-            </div>
-          )}
-          {stageFill?.phase === "pick" && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {stageFill.smooth?.length
-                  ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — ״מידות״ בסרגל הבמה או הידיות"
-                  : stageShape?.shapedOutline
-                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בסרגל; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
-                    : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · גררו פלטה למקומה, לחצו עליה להחלפה או סיבוב · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
-              </span>
-            </div>
-          )}
-          {stageTool && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {stageTool.kind === "level"
-                  ? "סמנו את פינות המפלס על הבמה · הקלדת מספר ו־Enter קובעת אורך בס״מ · לחיצה כפולה או Enter לסגירה · Esc ליציאה"
-                  : `לחצו על צד של הבמה או של מפלס — שם ${stageTool.edgeKind === "bench" ? "יעמוד הבנקט" : stageTool.edgeKind === "barrier" ? "יעמוד המחסום" : "יעמדו המדרגות"} · לחיצה על קטע פתוח ממלאת את כולו · Esc ליציאה`}
-              </span>
-            </div>
-          )}
           {/* The inspector is a BAR along the bottom of the canvas now, centred — the shape the
               venue plan's inspector already has, and the shape that keeps a selection's controls
               from eating a column of the plan. It is centred rather than tucked into a corner
               because its own popovers open upwards and centred on their chip: from a corner, half
-              of them would open past the edge of the plane. */}
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
+              of them would open past the edge of the plane. The dock is /halls' (`ps-[124px]`
+              keeps the bar clear of the save pill in the bottom-start corner). */}
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
             <div className="pointer-events-auto flex min-w-0 justify-center">
               {stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (
                 <StageDrawBar
@@ -5923,78 +5856,154 @@ export function StudioScreen({
               )}
             </div>
           </div>
-          {/* The event is booked into a property this designer was never granted. The canvas stays
-              usable — items can still be placed and the meeting can go on — but the blank ground
-              under them gets a reason instead of being mistaken for an undrawn hall. */}
-          {/* What the next click will do, said where the eye is. It is the one part of this state
-              with a button in it, so it takes the pointer — the ✕ is the way out for a designer
-              who has never heard of Escape, and the one a tablet has. */}
-          {armed && !placing && (
-            <div className={"pointer-events-none absolute inset-x-0 flex justify-center " + (dressingTable ? "top-28" : "top-4")}>
-              <div
-                role="status"
-                className="pointer-events-auto flex items-center gap-2 rounded-full border border-accent-line bg-surface/95 py-1 ps-3 pe-1 text-xs text-ink-soft shadow-floating"
-              >
-                <span>
-                  {"מניחים: "}
-                  <span className="font-semibold text-accent">{armedRows ? `שורות כיסאות · ${armed.name}` : armed.name}</span>
-                </span>
-                <span className="text-muted">·</span>
-                <span>
-                  {placesOnce(CATEGORY_BY_ID[armed.category])
-                    ? "לחיצה על התוכנית מניחה אחד (Shift — עוד)"
-                    : armed.layer === "table"
-                      ? "לחיצה על שולחן מניחה עליו"
-                      : "כל לחיצה על התוכנית מניחה עוד אחד"}
-                </span>
-                {armedCount > 0 && (
-                  <>
-                    <span className="text-muted">·</span>
-                    <span className="nums">{`הונחו ${armedCount}`}</span>
-                  </>
-                )}
-                <span className="text-muted">·</span>
-                <span>Esc לסיום</span>
-                <button
-                  type="button"
-                  onClick={() => arm(null)}
-                  aria-label="סיום ההנחה"
-                  title="סיום ההנחה"
-                  className="rounded-full p-1 text-muted transition-colors hover:bg-accent-tint hover:text-accent"
-                >
-                  <X className="h-3.5 w-3.5" strokeWidth={2} />
-                </button>
-              </div>
-            </div>
-          )}
-          {placing && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}
-              </span>
-            </div>
-          )}
-          {plan.access === "denied" && (
-            <div className="pointer-events-none absolute inset-inline-start-4 top-4">
+          {/* The view: which zone to work in, and the room in 3D beside the sketch. Top-start, the
+              canvas strip's twin across the top line. No venue chip (the user's note 2: the venue is
+              the event's, chosen in its details). */}
+          <ViewCluster>
+            {/* Which part of the property to work in. It FRAMES rather than filters: the rest of the
+                plan stays drawn and reachable, held back so the חופה reads as the thing being
+                designed while the hall it opens onto is still visible behind it. A property with
+                one zone has nothing to choose between, so the control isn't drawn at all. */}
+            {zoneOptions.length > 1 && (
+              <>
+                {/* The board's "zone ▾": the chip the view cluster is made for (components/menu.tsx),
+                    the toolbar's height — a bordered form field here stood taller than the strip
+                    across the line. The chip names the zone being worked in. */}
+                <Menu
+                  trigger="chip"
+                  align="start"
+                  icon={ScanEye}
+                  label="התמקדות באזור"
+                  triggerText={focusZoneId ? zoneOptions.find((z) => z.id === focusZoneId)?.name || "אזור ללא שם" : "כל המתחם"}
+                  items={[
+                    { label: "כל המתחם", onSelect: () => setZoneFocus(null) },
+                    ...zoneOptions.map((z) => ({ label: z.name || "אזור ללא שם", onSelect: () => setZoneFocus(z.id) })),
+                  ]}
+                />
+                <div className="mx-0.5 h-5 w-px bg-border" />
+              </>
+            )}
+            {/* The room in 3D beside the sketch — the תלת-ממד tab's picture, live, following what is
+                selected (./scene-preview.tsx). A toggle: the pressed field while the pane is up. */}
+            <IconButton label={scenePane.open ? "סגירת התלת-ממד שלצד הסקיצה" : "תלת-ממד לצד הסקיצה"} onClick={toggleScene} pressed={scenePane.open}>
+              <Box className="h-4 w-4" strokeWidth={2} />
+            </IconButton>
+          </ViewCluster>
+          {/* Everything that is not a tool and not the selection, in ONE row under the corners'
+              line: the standing notices first, then what the armed tool waits for. */}
+          <HintRow>
+            {/* While a table is dressed its bar stands at the top (DressingBar, above); the row
+                steps down under it. */}
+            {dressingTable && <div aria-hidden className="h-11 shrink-0" />}
+            {/* The event is booked into a property this designer was never granted. The canvas stays
+                usable — items can still be placed and the meeting can go on — but the blank ground
+                under them gets a reason instead of being mistaken for an undrawn hall. The notice is
+                a card of its own (a heading and a paragraph — the same words on the placement map
+                and the quote), so it stands in the row as it is rather than squeezed into a pill. */}
+            {plan.access === "denied" && (
               <div className="pointer-events-auto">
                 <VenueAccessNotice />
               </div>
-            </div>
-          )}
-          {/* The other blank plane: an event with no property chosen yet. Common on a first meeting
-              (the event is opened before anyone has decided where the wedding is) and, until this
-              said so, indistinguishable from a hall nobody had drawn. */}
-          {venueUnset && (
-            <div className="pointer-events-none absolute inset-inline-start-4 top-4">
+            )}
+            {/* The other blank plane: an event with no property chosen yet. Common on a first meeting
+                (the event is opened before anyone has decided where the wedding is) and, until this
+                said so, indistinguishable from a hall nobody had drawn. */}
+            {venueUnset && (
               <div className="pointer-events-auto">
                 <VenueUnsetNotice />
               </div>
-            </div>
-          )}
+            )}
+            {/* A client sent changes: the line that says so; the review opens over the canvas. */}
+            {proposal && !reviewing && !dressingTable && (
+              <HintPill tone="quiet" interactive>
+                <span className="flex items-center gap-3">
+                  <span className="min-w-0">
+                    <span className="font-bold text-ink">{proposal.submittedBy}</span> הציע/ה {diffDocuments(proposal.base, proposal.content).length} שינויים בסקיצה
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewing(true)}
+                    className="-my-1 -me-2.5 shrink-0 rounded-pill bg-accent px-3.5 py-1 text-[13px] font-bold text-canvas transition-colors hover:bg-accent-hover"
+                  >
+                    לסקירה
+                  </button>
+                </span>
+              </HintPill>
+            )}
+            {/* What the area tool is waiting for. */}
+            {stageFill?.phase === "draw" && (
+              <HintPill>
+                {stageFill.shape === "circle"
+                  ? "לחצו על מרכז הבמה ואז על השפה · הקלדת מספר ו־Enter קובעת קוטר בס״מ · Alt בלי עיגול ל־10 ס״מ · Esc ליציאה"
+                  : stageFill.shape === "ellipse"
+                    ? "לחצו על פינה אחת ואז על הפינה שמולה · Shift לעיגול · Alt בלי עיגול ל־10 ס״מ · Esc ליציאה"
+                    : stageFill.shape === "half"
+                      ? "סמנו את שני קצות הקוטר (מספר ו־Enter קובע אורך בס״מ), ואז לחצו בצד שאליו הקשת פונה · Esc ליציאה"
+                      : "סמנו את פינות האזור · הקלדת מספר ו־Enter קובעת אורך בס״מ · Alt לקו חופשי · לחיצה כפולה או Enter לסגירה · Esc ליציאה"}
+              </HintPill>
+            )}
+            {stageFill?.phase === "pick" && (
+              <HintPill>
+                {stageFill.smooth?.length
+                  ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — ״מידות״ בסרגל הבמה או הידיות"
+                  : stageShape?.shapedOutline
+                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בסרגל; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
+                    : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · גררו פלטה למקומה, לחצו עליה להחלפה או סיבוב · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
+              </HintPill>
+            )}
+            {stageTool && (
+              <HintPill>
+                {stageTool.kind === "level"
+                  ? "סמנו את פינות המפלס על הבמה · הקלדת מספר ו־Enter קובעת אורך בס״מ · לחיצה כפולה או Enter לסגירה · Esc ליציאה"
+                  : `לחצו על צד של הבמה או של מפלס — שם ${stageTool.edgeKind === "bench" ? "יעמוד הבנקט" : stageTool.edgeKind === "barrier" ? "יעמוד המחסום" : "יעמדו המדרגות"} · לחיצה על קטע פתוח ממלאת את כולו · Esc ליציאה`}
+              </HintPill>
+            )}
+            {placing && <HintPill>{`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}</HintPill>}
+            {/* What the next click will do, said where the eye is. The one pill with a button in it,
+                so it takes the pointer — the ✕ is the way out for a designer who has never heard of
+                Escape, and the one a tablet has. */}
+            {armed && !placing && (
+              <HintPill interactive>
+                {/* The words wrap as one line of text on a narrow canvas; the ✕ stays at its end. */}
+                <span role="status" className="flex items-center gap-2">
+                  <span className="min-w-0">
+                    {"מניחים: "}
+                    <span className="font-semibold">{armedRows ? `שורות כיסאות · ${armed.name}` : armed.name}</span>
+                    <span className="opacity-60">{" · "}</span>
+                    {placesOnce(CATEGORY_BY_ID[armed.category])
+                      ? "לחיצה על התוכנית מניחה אחד (Shift — עוד)"
+                      : armed.layer === "table"
+                        ? "לחיצה על שולחן מניחה עליו"
+                        : "כל לחיצה על התוכנית מניחה עוד אחד"}
+                    {armedCount > 0 && (
+                      <>
+                        <span className="opacity-60">{" · "}</span>
+                        <span className="nums">{`הונחו ${armedCount}`}</span>
+                      </>
+                    )}
+                    <span className="opacity-60">{" · "}</span>
+                    {"Esc לסיום"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => arm(null)}
+                    aria-label="סיום ההנחה"
+                    title="סיום ההנחה"
+                    className="-my-1 -me-2 shrink-0 rounded-pill p-1 text-canvas/70 transition-colors hover:bg-canvas/15 hover:text-canvas"
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
+                </span>
+              </HintPill>
+            )}
+          </HintRow>
+          {/* Whether the drawing is written down — the header's old indicator, in the corner. */}
+          <SavePill state={saveState} onRetry={retrySave} />
           {/* Stable live region so the drop hint / smart-apply confirmation is announced, not just shown. */}
-          {/* Above the inspector bar, not under it: both are centred along the bottom edge. */}
+          {/* Above the inspector bar, not under it: both are centred along the bottom edge (z-20 —
+              the dock under it is z-10). */}
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center"
+            className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center"
             aria-live="polite"
           >
             {hint && (

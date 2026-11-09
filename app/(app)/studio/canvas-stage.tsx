@@ -281,6 +281,11 @@ export function CanvasStage({
   onPickStair,
   onContextMenu,
   onContextMenuAt,
+  onFloorMenu,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   dressingTableId,
   onFocusTable,
   onExitDressing,
@@ -298,7 +303,7 @@ export function CanvasStage({
   spin: SpinMode;
   /** The layer being worked in, or null for "all of them" — see the note on `isLive` below. */
   activeLayer: Plane | null;
-  /** The zone the designer asked to be shown (the toolbar's eye). Frames it and holds everything
+  /** The zone the designer asked to be shown (the view cluster's zone chip). Frames it and holds everything
    *  else back; null = the whole event, which is what the surface opens on. */
   focusZoneId: string | null;
   /** A plain click replaces the selection (null clears it); `additive` is shift/ctrl, which toggles. */
@@ -447,6 +452,16 @@ export function CanvasStage({
    *  in the sketch, so "a carpet on this lawn" is only reachable through the point (lib/studio/
    *  cover.ts). Put before the selection's rows; the menu opens on bare floor too when it has any. */
   onContextMenuAt?: (point: Point, refs: SelectionRef[]) => ContextMenuItem[];
+  /** Rows for a right-click that landed on nothing of the sketch's own — bare floor, a venue surface
+   *  — whatever is selected: the document's verbs (paste). Put first; the menu opens with nothing
+   *  selected too when it has any. */
+  onFloorMenu?: (point: Point) => ContextMenuItem[];
+  /** The history, on the canvas strip's own undo/redo pair (PlanCanvas draws it only when both
+   *  handlers are given). The keyboard's Ctrl+Z / Ctrl+Y are the host's, as before. */
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
    *  items on it free to be dragged about its top. Null = the whole plan, as usual. A table in a
    *  GROUP brings the whole block with it — framed as the one table the block is, every member and
@@ -469,13 +484,13 @@ export function CanvasStage({
    *  the delta of a client's proposal (components/sketch-delta.tsx), for its two hosts. */
   extraOverlay?: (ctx: CanvasLayerContext) => ReactNode;
 }) {
-  // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
+  // THE PLANES FOLLOW THE HAND. With no plane chosen (the end panel's list), the one being worked in is read
   // off the gesture: dragging a table (or a stage, a rug — anything standing on the floor) holds
   // back the ceiling and what is laid on tables; carrying a centrepiece holds back the floor and the
   // ceiling, since only a table can take it; placing a chandelier holds back everything below it;
   // drawing a stage, placing stairs or a saved stage are floor work. The planes that cannot be the
-  // gesture's target dim and stop taking the pointer, exactly as choosing one on the toolbar does —
-  // and come back the moment the pointer lifts. A plane chosen on the toolbar still wins: that is
+  // gesture's target dim and stop taking the pointer, exactly as choosing one in the list does —
+  // and come back the moment the pointer lifts. A plane chosen in the list still wins: that is
   // the designer saying so, this is the canvas guessing well.
   const [gesturePlane, setGesturePlane] = useState<Plane | null>(null);
   /** What a drag is carrying, keyed `kind:id` — PAINTED LAST in the floor pass, over everything it
@@ -1886,14 +1901,25 @@ export function CanvasStage({
       selected={[]}
       onSelect={() => onSelect(null, false)}
       contextMenuItems={
-        onContextMenu || onContextMenuAt
+        onContextMenu || onContextMenuAt || onFloorMenu
           ? (point: Point) => {
-              const refs = contextRefs.current ?? selection;
+              // A node's own contextmenu (contextFor) runs first on the same event and names what it
+              // is about; nothing named = the press landed on no thing of the sketch's.
+              const hit = contextRefs.current;
+              const refs = hit ?? selection;
               contextRefs.current = null;
-              return [...(onContextMenuAt?.(point, refs) ?? []), ...(refs.length && onContextMenu ? onContextMenu(refs) : [])];
+              return [
+                ...(hit ? [] : (onFloorMenu?.(point) ?? [])),
+                ...(onContextMenuAt?.(point, refs) ?? []),
+                ...(refs.length && onContextMenu ? onContextMenu(refs) : []),
+              ];
             }
           : undefined
       }
+      onUndo={onUndo}
+      onRedo={onRedo}
+      canUndo={canUndo}
+      canRedo={canRedo}
       onAddVertex={() => {}}
       onCloseOutline={() => {}}
       onMoveVertex={() => {}}

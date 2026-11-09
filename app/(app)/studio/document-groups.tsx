@@ -18,8 +18,8 @@ import { fieldLabelClassName } from "@/components/control";
 // end panel's groups when nothing is selected (2026-11-09, the user's "Studio + Halls" board: no
 // document ⋯ pointing at them — they are simply there, under the list, while nothing is picked).
 //
-// Bare: no Popover, no header, no `close`. Until the toolbar goes (plan 2, task 3) its three menus
-// wrap these same bodies in their Popovers, so the two places cannot drift.
+// Bare: no Popover, no header, no `close` — the panel's group is their frame. (The studio's header
+// toolbar wrapped them in Popovers until it was deleted, plan 2 task 3.)
 
 /** The four questions behind renumbering — from which corner, along rows or down columns, starting
  *  at what number, whether alternate rows double back — and the button that does it. None of it is
@@ -42,7 +42,7 @@ export function NumberingFields({
   canRenumber: boolean;
 }) {
   const set = (patch: NumberingOptions) => onChange({ ...options, ...patch });
-  // Its own id: until the toolbar goes, the toolbar's popover and the panel's group may both be open.
+  // Its own id, so the field's label never collides with another instance on the page.
   const startId = useId();
   return (
     <>

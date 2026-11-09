@@ -574,7 +574,7 @@ export function Inspector({
   // Bulk is a selection problem: these three build the list, and every operation above already
   // knows how to run over one — see the note beside selectSimilar/selectInZone/selectLayer in
   // studio-screen.tsx.
-  /** Whether the toolbar's zone eye is currently focused on one — "בחר הכל באזור" has nothing to
+  /** Whether the view cluster's zone chip is currently focused on one — "בחר הכל באזור" has nothing to
    *  select against otherwise. */
   zoneFocused: boolean;
   onSelectInZone: () => void;
@@ -1278,8 +1278,8 @@ export function Inspector({
     );
   }
 
-  // Nothing is selected, but there is still something to select FROM — the toolbar's zone eye or
-  // its active layer. Without this the commands would be reachable only after something was already
+  // Nothing is selected, but there is still something to select FROM — the view cluster's zone chip or
+  // the active plane. Without this the commands would be reachable only after something was already
   // picked, which defeats the one that is meant to start a selection from a bare canvas.
   //
   // It stays up for exactly as long as the zone eye or the active layer is on — both are toolbar

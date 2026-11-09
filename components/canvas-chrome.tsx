@@ -56,15 +56,19 @@ export function HintRow({ children }: { children: ReactNode }) {
   return <div className="pointer-events-none absolute inset-x-4 top-[68px] z-10 flex flex-col items-center gap-1.5">{children}</div>;
 }
 
-/** One hint: what the armed tool waits for, or a standing notice (a viewer's, a refused delete's). */
-export function HintPill({ tone = "ink", children }: { tone?: "ink" | "warn" | "quiet"; children: ReactNode }) {
+/** One hint: what the armed tool waits for, or a standing notice (a viewer's, a refused delete's).
+ *  `interactive`: the pill has a button in it, so the whole pill takes the pointer — a click on its
+ *  words must not fall through to the plan under it (with a tool armed, that click would place). */
+export function HintPill({ tone = "ink", interactive = false, children }: { tone?: "ink" | "warn" | "quiet"; interactive?: boolean; children: ReactNode }) {
   const look =
     tone === "warn"
       ? "border border-warn/40 bg-warn-tint text-warn-ink"
       : tone === "quiet"
         ? "border border-border bg-surface text-ink-soft"
         : "bg-ink/85 text-canvas";
-  return <div className={"max-w-[70%] rounded-pill px-4 py-2 text-center text-[13px] leading-snug shadow-floating " + look}>{children}</div>;
+  return (
+    <div className={"max-w-[70%] rounded-pill px-4 py-2 text-center text-[13px] leading-snug shadow-floating " + look + (interactive ? " pointer-events-auto" : "")}>{children}</div>
+  );
 }
 
 /** The document's own verbs (paste, numbering, saved sketches, the underlay), in the canvas strip's
