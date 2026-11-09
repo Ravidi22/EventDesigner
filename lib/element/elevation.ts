@@ -147,6 +147,44 @@ export function profilePoint(b: ElevationBox, p: { x: number; y: number }): Revo
   return { r: Math.abs(p.x - cx) / R, z: (-p.y - b.z) / Math.max(1e-9, b.h) };
 }
 
+/** Where a box's own grips stand, in canvas world: its four corners and four edge midpoints. */
+export function boxGripSpots(b: ElevationBox): { x: number; y: number }[] {
+  const mx = (b.a0 + b.a1) / 2;
+  const lo = -b.z;
+  const hi = -(b.z + b.h);
+  const mid = -(b.z + b.h / 2);
+  return [
+    { x: b.a0, y: lo }, { x: b.a1, y: lo }, { x: b.a0, y: hi }, { x: b.a1, y: hi },
+    { x: mx, y: lo }, { x: mx, y: hi }, { x: b.a0, y: mid }, { x: b.a1, y: mid },
+  ];
+};
+
+/** A polyline (canvas world) cut into the runs that stand farther than `radius` from every spot —
+ *  what a click-to-add band may cover without taking a press from a grip. Sampled finely (every
+ *  half radius, so a straight side crossing a grip is cut, not skipped whole). */
+export function runsClearOf(line: readonly { x: number; y: number }[], spots: readonly { x: number; y: number }[], radius: number): { x: number; y: number }[][] {
+  const step = Math.max(1e-6, radius / 2);
+  const samples: { x: number; y: number }[] = [];
+  for (let i = 0; i < line.length; i++) {
+    samples.push(line[i]);
+    if (i === line.length - 1) break;
+    const a = line[i];
+    const b = line[i + 1];
+    const n = Math.min(400, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step));
+    for (let k = 1; k < n; k++) samples.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+  }
+  const runs: { x: number; y: number }[][] = [];
+  let run: { x: number; y: number }[] = [];
+  for (const q of samples) {
+    if (spots.some((g) => Math.hypot(q.x - g.x, q.y - g.y) < radius)) {
+      if (run.length > 1) runs.push(run);
+      run = [];
+    } else run.push(q);
+  }
+  if (run.length > 1) runs.push(run);
+  return runs;
+}
+
 /** The orthographic camera that draws the item's room under the view, in three's world metres
  *  (lib/scene/frame.ts: plan (x, y, z) mm → (x, z, y) m). */
 export interface OrthoFrame {
@@ -229,6 +267,19 @@ if (isMain(import.meta.url)) {
   const got = profilePoint(vb, handles[3]);
   assert(handles.length === REVOLVE_PRESETS.vase.length &&Math.abs(got.r - want.r) < 1e-3 && Math.abs(got.z - want.z) < 1e-3, "a profile handle reads back to its point");
   assert(profilePoint(vb, { x: -handles[3].x, y: handles[3].y }).r === got.r, "the left half reads the same radius");
+
+  // The click-to-add band is cut round the box's own grips: a basin's right side runs along the
+  // box's edge (r = 1), through its edge-midpoint grip and up to the top-right corner.
+  const basin = elevationBoxes([{ ...vase, revolve: REVOLVE_PRESETS.basin }], 900, "front")[0];
+  const rim = profileHandles(basin);
+  const gripRadius = 12;
+  const cutRuns = runsClearOf(rim, boxGripSpots(basin), gripRadius);
+  const mid = { x: basin.a1, y: -(basin.z + basin.h / 2) };
+  const corner = { x: basin.a1, y: -(basin.z + basin.h) };
+  const covered = (q: { x: number; y: number }) => cutRuns.some((r) => r.some((m) => Math.hypot(m.x - q.x, m.y - q.y) < 1e-6));
+  const nearGrip = cutRuns.flat().some((m) => Math.hypot(m.x - mid.x, m.y - mid.y) < gripRadius || Math.hypot(m.x - corner.x, m.y - corner.y) < gripRadius);
+  assert(cutRuns.length >= 2 && !nearGrip && !covered(mid) && !covered(corner), "a basin's right side is cut at the edge-midpoint grip and the top-right corner");
+  assert(runsClearOf(rim, [], gripRadius).length === 1, "with no grips near, the side is one run");
 
   const n = elevationNudge(bar[2], 2, "front", 10, 50);
   assert(n.x === 10 && n.zMm === 1050 && n.y === undefined, "nudged across and up");

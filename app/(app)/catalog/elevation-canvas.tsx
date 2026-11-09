@@ -19,7 +19,7 @@
 import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import type { RevolvePoint, ShapePart } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
-import { boxRect, elevationBoxes, orthoFrame, profileHandles, profilePoint, rectEdit, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
+import { boxGripSpots, boxRect, elevationBoxes, orthoFrame, profileHandles, profilePoint, rectEdit, runsClearOf, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
 import { addedPoint, movedPoint, removedPoint, revolveSilhouette } from "@/lib/element/revolve";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { PlanCanvas, type CanvasLayerContext, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
@@ -254,9 +254,18 @@ function ProfileHandles({ box, ctx, onEdit, onCommit }: { box: ElevationBox; ctx
   const handles = profileHandles(box);
   const set = (revolve: RevolvePoint[]) => onEdit((list) => list.map((s) => (s.id === box.id ? { ...s, revolve } : s)));
   const sil = revolveSilhouette(points, (box.a0 + box.a1) / 2, (box.a1 - box.a0) / 2, box.z, box.h);
-  const side = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i ? "L" : "M"}${p.x},${-p.y}`).join(" ");
+  const side = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" ");
   // The two sides of the body alone — the foot and the top are not the profile.
-  const outline = [sil.slice(0, points.length), sil.slice(points.length).reverse()];
+  // …and only where it stays off the box's own grips (its corners and edge midpoints, which a body
+  // as wide as its box — a basin, a ball's widest ring — would otherwise sit under).
+  const spots = boxGripSpots(box);
+  const outline = [sil.slice(0, points.length), sil.slice(points.length).reverse()].flatMap((pts) =>
+    runsClearOf(
+      pts.map((p) => ({ x: p.x, y: -p.y })),
+      spots,
+      ctx.mm(12),
+    ),
+  );
 
   const drag = (e: ReactPointerEvent<SVGElement>, i: number) => {
     if (e.button !== 0) return;
