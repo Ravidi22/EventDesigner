@@ -1443,6 +1443,10 @@ export function PlanCanvas({
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isTypingTarget()) return; // the value box owns its own keys — Backspace there must not eat a vertex
+      // A canvas its host keeps mounted but hidden (the shape editor's plan while a side view shows,
+      // and the side view while the plan does) takes no keys: + would zoom it unseen, M arm its tape.
+      const svg = svgRef.current;
+      if (svg && typeof svg.checkVisibility === "function" && !svg.checkVisibility({ visibilityProperty: true })) return;
       if (e.code === "Space") { e.preventDefault(); setSpaceHeld(true); return; }
       // Alt is tracked in both modes — it releases the angle lock while drawing and the 5°
       // rotation lock while editing. preventDefault keeps Chrome's menu bar out of it.
