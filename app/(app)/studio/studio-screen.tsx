@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate, setSketchPhoto } from "@/lib/studio/sketch-actions";
 import { uploadFile } from "@/lib/files/upload";
@@ -145,6 +145,35 @@ import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } fro
 import type { ContextMenuItem, MarqueeMode } from "@/components/plan-canvas";
 import { VenueAccessNotice, VenueUnsetNotice } from "@/components/venue-access-notice";
 import { ScenePreview } from "./scene-preview";
+import { EndPanel, PanelGroups, PanelList, PanelListFolded, PanelListHeading, PanelListRow, type PanelGroup } from "@/components/end-panel";
+import { Note } from "@/components/inspector-bar";
+import { listCrumb, planListRows, type PlanListRow } from "@/lib/studio/plan-list";
+import { clearanceRows, missingRows, type CheckRow } from "@/lib/studio/plan-checks";
+import { missingByShape } from "@/lib/design-document/stage";
+import { pieceName } from "@/lib/studio/stage-rim";
+import { NumberingFields, RemovedFeaturesList, SketchList } from "./document-groups";
+import { ArchiveRestore, Armchair, ArrowLeftRight, Circle, Flower2, Lamp, Layers, LayoutTemplate, ListOrdered, Puzzle, ShieldAlert, TriangleAlert, type LucideIcon } from "lucide-react";
+
+/** The end panel's list: a small glyph per plane for a row with no shade of its own. */
+const PLANE_ICON: Record<Plane, LucideIcon> = { tables: Circle, table: Flower2, floor: Square, ceiling: Lamp };
+
+/** A row's figure at its end: how many, and what else the list knows about them — "3 · 48 מושבים"
+ *  for lone tables of one type. A block's "2 שולחנות", a stage's size and a quantity's "×4" already
+ *  say how many, so they stand alone. */
+function rowFigure(row: PlanListRow): string | number {
+  if (!row.meta) return row.count;
+  return row.plane === "tables" && !row.key.startsWith("block:") ? `${row.count} · ${row.meta}` : row.meta;
+}
+
+/** A read-only figure in an end-panel group: what it is, and how many. */
+function FactRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex min-h-8 items-center justify-between gap-3 text-[13px]">
+      <span className="text-ink-soft">{label}</span>
+      <span className="nums font-semibold text-ink">{value}</span>
+    </div>
+  );
+}
 
 const uid = () => crypto.randomUUID();
 
@@ -3615,11 +3644,19 @@ export function StudioScreen({
    *  banquettes — the stages' and the standalone ones, chairs and sofa seats alike. */
   const seating = useMemo(() => {
     let tables = 0;
+    // …and how many of the tables' places are spoken for — a block's as the one table it is.
+    let seated = 0;
     for (const u of numberedUnits(doc)) {
-      if (u.kind === "group") tables += groupSeats(doc, u.id);
-      else if (u.kind === "table") tables += doc.tables.find((t) => t.id === u.tableIds[0])?.seats ?? 0;
+      if (u.kind === "group") {
+        tables += groupSeats(doc, u.id);
+        seated += groupSeated(doc, u.id);
+      } else if (u.kind === "table") {
+        const t = doc.tables.find((x) => x.id === u.tableIds[0]);
+        tables += t?.seats ?? 0;
+        seated += t?.seated ?? 0;
+      }
     }
-    return { tables, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
+    return { tables, seated, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
   }, [doc]);
 
   /** Every bare stretch of open edge covered with `kind` — a flight or a banquette where there is
@@ -4203,6 +4240,56 @@ export function StudioScreen({
     );
     showHint(`${renumbering.length} שולחנות מוספרו מחדש`);
   }, [renumbering, batch, doc.placements]);
+
+  // ── The end panel (components/end-panel.tsx) ─────────────────────────────────────────────────
+  // What is on the plan, per plane (lib/studio/plan-list.ts), read off the drawing as it SETTLES
+  // (./use-settled.ts): a drag moves things without changing what is on the plan, and the
+  // missing-piece check lays every stage's decks — which never runs on the live value (the fill
+  // tool's rule). The pass's drawing, not the document: the hall pass lists what it draws.
+  const listDoc = useSettled(canvasDoc, STAGE_SETTLE_MS);
+  const planRows = useMemo(
+    () =>
+      planListRows(listDoc, {
+        resolve,
+        // The venue's furniture this sketch may move and has not taken out — the only venue things
+        // it can select (as Ctrl+A).
+        venueFeatures: plan.structure.features
+          .filter((f) => featureMovable(f) && !isFeatureRemoved(listDoc, f))
+          .map((f) => ({ id: f.id, label: f.label || FEATURE_KIND_LABEL[f.kind] })),
+      }),
+    // The catalog: resolve() reads the cache it primes, so a list read before it landed reads again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listDoc, plan.structure, catalog],
+  );
+  const planTotal = useMemo(() => PLANES.reduce((n, { id }) => n + planRows[id].reduce((m, r) => m + r.count, 0), 0), [planRows]);
+  // The stages' pieces the catalog lacks (layStage `missing`, worded by shape).
+  const missingChecks = useMemo(
+    () =>
+      missingRows(
+        listDoc.placements.flatMap((p) =>
+          p.stage ? [{ id: p.id, label: "במה", missing: missingByShape(layStage(p.stage, deckOf).missing).map((m) => ({ name: pieceName(m.info), count: m.count })) }] : [],
+        ),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listDoc, catalog],
+  );
+  // בדיקות: every breach of a safety distance, then every stage with a piece missing — each a row
+  // that selects what it describes. A venue feature's own label may be empty; its kind names it.
+  const checkRows = useMemo<CheckRow[]>(() => {
+    const labels = new Map(clearance.subjects.map((s) => [s.key, s.label]));
+    const labelOf = (key: string) => {
+      const label = labels.get(key);
+      if (label) return label;
+      const feature = key.startsWith("feature:") ? plan.structure.features.find((f) => `feature:${f.id}` === key) : undefined;
+      return feature ? FEATURE_KIND_LABEL[feature.kind] : undefined;
+    };
+    return [...clearanceRows(clearance.issues, labelOf), ...missingChecks];
+  }, [clearance, missingChecks, plan.structure]);
+  // The list folds to one line while something is selected (the selection's groups go under it);
+  // its folded row unfolds it for THAT selection, and a new pick folds it again (halls' pattern).
+  const [unfoldedFor, setUnfoldedFor] = useState<SelectionRef[] | null>(null);
+  const listOpen = selected.length === 0 || unfoldedFor === selected;
+  const selectedKeys = useMemo(() => new Set(selected.map((r) => `${r.kind}:${r.id}`)), [selected]);
 
   const changeQuantity = (id: string, delta: number) => {
     const p = doc.placements.find((x) => x.id === id);
@@ -5285,8 +5372,8 @@ export function StudioScreen({
         sceneOn={scenePane.open}
         onToggleScene={toggleScene}
       />
-      {/* `relative`: the 3D pane's corner layout is positioned against this row, so it sits in the
-          canvas's corner whatever the rail is doing, and its split layout is the row's last column. */}
+      {/* The canvas card's three columns: the catalog rail | the canvas (and the 3D pane beside it) |
+          the end panel. */}
       <div className="relative flex min-h-0 flex-1">
         <CatalogRail
           products={catalog}
@@ -5301,6 +5388,10 @@ export function StudioScreen({
           armedId={armed ? armedId : null}
           onArm={arm}
         />
+        {/* `relative`: the 3D pane's corner layout is positioned against this column, so it sits in
+            the canvas's corner whatever the rail and the end panel are doing, and its split layout
+            is this column's second half. */}
+        <div className="relative flex min-w-0 flex-1">
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={canvasDoc}
@@ -5835,15 +5926,6 @@ export function StudioScreen({
           {/* The event is booked into a property this designer was never granted. The canvas stays
               usable — items can still be placed and the meeting can go on — but the blank ground
               under them gets a reason instead of being mistaken for an undrawn hall. */}
-          {/* Everyone the plan seats — tables and banquettes. Only once there is someone to seat. */}
-          {seating.tables + seating.benches > 0 && (
-            <div className={"pointer-events-none absolute inset-inline-start-4 " + (plan.access === "denied" || venueUnset ? "top-20" : "top-4")}>
-              <span className="nums rounded-md border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {`${seating.tables + seating.benches} מקומות ישיבה`}
-                {seating.benches > 0 ? ` · ${seating.benches} על בנקטים` : ""}
-              </span>
-            </div>
-          )}
           {/* What the next click will do, said where the eye is. It is the one part of this state
               with a button in it, so it takes the pointer — the ✕ is the way out for a designer
               who has never heard of Escape, and the one a tablet has. */}
@@ -5940,6 +6022,163 @@ export function StudioScreen({
             onWidth={(widthPx) => patchScene({ widthPx })}
           />
         )}
+        </div>
+        {/* The end panel (components/end-panel.tsx): what is on the plan, plane by plane, and with
+            nothing selected the sketch's own groups under it. */}
+        <EndPanel screen="studio" collapsible>
+          {listOpen ? (
+            <PanelList title="בתוכנית" count={planTotal}>
+              {PLANES.map(({ id, label }) => {
+                const rows = planRows[id];
+                // A hidden plane is listed but not picked from: nothing hidden enters a selection
+                // (pickMany). What stands on a table goes with the tables.
+                const shown = layerVisible[id] && (id !== "table" || layerVisible.tables);
+                const Icon = PLANE_ICON[id];
+                return (
+                  <div key={id}>
+                    <PanelListHeading
+                      label={label}
+                      count={rows.reduce((n, r) => n + r.count, 0)}
+                      active={activeLayer === id}
+                      visible={layerVisible[id]}
+                      onActivate={() => setActiveLayer((cur) => (cur === id ? null : id))}
+                      onToggleVisible={() => setLayerVisible((v) => ({ ...v, [id]: !v[id] }))}
+                    />
+                    {/* Working in one plane lists that plane alone (the board's "פעילה"). */}
+                    {(activeLayer === null || activeLayer === id) && rows.length > 0 && (
+                      <div className={shown ? undefined : "opacity-50"}>
+                        {rows.map((row) => (
+                          <PanelListRow
+                            key={row.key}
+                            glyph={
+                              row.swatch ? (
+                                <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: row.swatch }} />
+                              ) : (
+                                <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+                              )
+                            }
+                            label={row.label}
+                            meta={rowFigure(row)}
+                            badge={row.venue ? "של המקום" : undefined}
+                            selected={row.refs.every((r) => selectedKeys.has(`${r.kind}:${r.id}`))}
+                            // Every one of them (D11) — a block as the one table it is.
+                            onClick={shown ? () => pickMany(row.refs, false) : undefined}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {planTotal === 0 && <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">התוכנית עדיין ריקה — בוחרים פריט בקטלוג ולוחצים על התוכנית, או גוררים אותו.</p>}
+            </PanelList>
+          ) : (
+            <PanelListFolded
+              icon={Layers}
+              title="בתוכנית"
+              count={planTotal}
+              crumb={listCrumb(planRows, selected)}
+              badge={
+                checkRows.length > 0 ? (
+                  <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
+                    <TriangleAlert aria-hidden className="h-3 w-3" strokeWidth={2} />
+                    {checkRows.length}
+                  </span>
+                ) : undefined
+              }
+              onOpen={() => setUnfoldedFor(selected)}
+            />
+          )}
+          {/* Nothing selected: the sketch's own groups — who it seats, what is wrong with it, how its
+              tables are numbered, the saved sketches, and what this event took out of the venue. The
+              selection's groups (they arrive with the quick bar) take this place otherwise. */}
+          {selected.length === 0 && (
+            <PanelGroups
+              kind="studio:none"
+              title="הסקיצה"
+              sub={plan.zones.map((z) => z.zone.name).filter(Boolean).join(" · ") || undefined}
+              defaultOpen={["seating", "checks"]}
+              groups={[
+                {
+                  key: "seating",
+                  icon: Armchair,
+                  title: "ישיבה",
+                  summary: `${seating.seated}/${seating.tables + seating.benches} מושבים`,
+                  body: (
+                    <>
+                      <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches} />
+                      {seating.benches > 0 && <FactRow label="מהם על בנקטים" value={seating.benches} />}
+                      <FactRow label="שולחנות" value={doc.tables.length} />
+                    </>
+                  ),
+                },
+                {
+                  key: "checks",
+                  icon: checkRows.length > 0 ? TriangleAlert : ShieldAlert,
+                  title: "בדיקות",
+                  warn: checkRows.length > 0,
+                  summary: checkRows.length === 0 ? "הכול תקין" : checkRows.length === 1 ? "בעיה אחת" : `${checkRows.length} בעיות`,
+                  body:
+                    checkRows.length === 0 ? (
+                      <Note>אין חריגה ממרחק ביטחון, ולכל במה יש בקטלוג כל הפלטות.</Note>
+                    ) : (
+                      <div className="-mx-1.5 flex flex-col gap-px">
+                        {checkRows.map((row) => {
+                          const RowIcon = row.kind === "clearance" ? ArrowLeftRight : Puzzle;
+                          return (
+                            // A row selects what it describes — both sides of a breach, the stage.
+                            <button
+                              key={row.key}
+                              type="button"
+                              onClick={() => pickMany(row.refs, false)}
+                              className="flex w-full items-start gap-2 rounded-sm px-1.5 py-1.5 text-start text-[13px] leading-snug text-ink transition-colors hover:bg-inset"
+                            >
+                              <RowIcon aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn-ink" strokeWidth={1.75} />
+                              <span className="min-w-0 flex-1">{row.text}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ),
+                },
+                {
+                  key: "numbering",
+                  icon: ListOrdered,
+                  title: "מספור",
+                  summary: renumbering.length > 0 ? `${renumbering.length} לא לפי הסדר` : doc.tables.length > 0 ? "לפי הסדר" : "אין שולחנות",
+                  body: <NumberingFields options={numbering} onChange={setNumbering} onRenumber={renumberAll} count={renumbering.length} canRenumber={renumbering.length > 0} />,
+                },
+                {
+                  key: "sketches",
+                  icon: LayoutTemplate,
+                  title: "סקיצות שמורות",
+                  summary: sketches.length > 0 ? `${sketches.length} שמורות` : "אין עדיין",
+                  body: (
+                    <SketchList
+                      sketches={sketches}
+                      sketchEmpty={doc.tables.length + doc.placements.length === 0}
+                      onSave={(name) => void saveSketch(name)}
+                      onLoad={(id, how) => void loadSketch(id, how)}
+                      onDelete={(id) => void deleteSketch(id)}
+                      onPhoto={(id, file) => void sketchPhoto(id, file)}
+                    />
+                  ),
+                },
+                ...(removedVenueFeatures.length > 0
+                  ? [
+                      {
+                        key: "removed",
+                        icon: ArchiveRestore,
+                        title: "פריטי מתחם שהוסרו",
+                        summary: removedVenueFeatures.length === 1 ? removedVenueFeatures[0].label : `${removedVenueFeatures.length} פריטים`,
+                        body: <RemovedFeaturesList features={removedVenueFeatures} onRestore={restoreFeatures} />,
+                      } satisfies PanelGroup,
+                    ]
+                  : []),
+              ]}
+            />
+          )}
+        </EndPanel>
       </div>
       <ProductDrawer
         product={drawer?.product ?? null}

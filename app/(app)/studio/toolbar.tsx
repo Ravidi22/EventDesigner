@@ -1,20 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, Layers, ListOrdered, LayoutTemplate, Trash2, ArchiveRestore, Box, Camera, ImageOff } from "lucide-react";
-import type { NumberingCorner, NumberingOptions } from "@/lib/design-document/groups";
+import { Undo2, Redo2, Copy, Scissors, ClipboardPaste, Check, Loader2, Eye, EyeOff, TriangleAlert, ScanEye, Layers, ListOrdered, LayoutTemplate, ArchiveRestore, Box } from "lucide-react";
+import type { NumberingOptions } from "@/lib/design-document/groups";
 import { PLANES, type Plane } from "@/lib/studio/planes";
-import { Button } from "@/components/button";
 import { IconButton } from "@/components/icon-button";
-import { NumberField } from "@/components/number-field";
 import { Select } from "@/components/select";
-import { TextField } from "@/components/text-field";
-import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Popover } from "@/components/popover";
-import { BarButton, Note } from "@/components/inspector-bar";
-import { SwitchRow } from "@/components/toggle";
-import { fieldLabelClassName } from "@/components/control";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
+import { NumberingFields, RemovedFeaturesList, SketchList } from "./document-groups";
 
 // Slim studio sub-toolbar — sits under the app-shell topbar (which carries the title + event
 // context). Tools only: undo/redo, which zone to work in, layer visibility, and the honest save
@@ -314,301 +307,40 @@ function PlaneRail({
   );
 }
 
-/** The venue features this event took out of its room, each with its own way back, and all at once. */
+/** The venue features this event took out of its room — the end panel's group, in a popover until
+ *  this toolbar goes (./document-groups.tsx holds the body). */
 function RemovedFeaturesMenu({ features, onRestore }: { features: { id: string; label: string }[]; onRestore: (ids: string[]) => void }) {
   return (
     <Popover label={`פריטי מתחם שהוסרו (${features.length})`} icon={ArchiveRestore} trigger="icon" side="bottom" badge={features.length} panelClassName="w-72">
-      <ul className="space-y-1">
-        {features.map((f) => (
-          <li key={f.id} className="flex items-center justify-between gap-2 text-sm">
-            <span className="min-w-0 truncate text-ink">{f.label}</span>
-            <Button size="sm" variant="outline" onClick={() => onRestore([f.id])}>
-              החזרה
-            </Button>
-          </li>
-        ))}
-      </ul>
-      {features.length > 1 && (
-        <Button size="sm" className="mt-3 w-full" onClick={() => onRestore(features.map((f) => f.id))}>
-          החזרת כולם
-        </Button>
-      )}
-      <Note>הוסרו מהסקיצה של האירוע הזה בלבד — בתוכנית המתחם ובאירועים האחרים הם במקומם.</Note>
+      <RemovedFeaturesList features={features} onRestore={onRestore} />
     </Popover>
   );
 }
 
-/** The renumber button and the four questions behind it: from which corner, along rows or down
- *  columns, starting at what number, and whether alternate rows double back.
- *
- *  A panel rather than four toolbar controls, because none of it is touched on most plans — the
- *  default is right for most rooms — and a toolbar that permanently carries four numbering controls
- *  is a toolbar about numbering. It opens on the button that does the work, and the button is still
- *  the only thing that has to be pressed.
- */
-function NumberingMenu({
-  options,
-  onChange,
-  onRenumber,
-  count,
-  canRenumber,
-}: {
-  options: NumberingOptions;
-  onChange: (n: NumberingOptions) => void;
-  onRenumber: () => void;
-  count: number;
-  canRenumber: boolean;
-}) {
-  const set = (patch: NumberingOptions) => onChange({ ...options, ...patch });
-
-  // The shared panel (components/popover.tsx) — its header, ✕, Escape and clamping — rather than the
-  // hand-rolled box this used to be.
+/** The renumber button and the four questions behind it (./document-groups.tsx), off one toolbar
+ *  icon; the panel closes once the plan is renumbered. */
+function NumberingMenu(props: Parameters<typeof NumberingFields>[0]) {
   return (
     <Popover label="מספור שולחנות" icon={ListOrdered} trigger="icon" side="bottom" panelClassName="w-72">
       {(close) => (
-        <>
-          <p className="mb-3 text-caption leading-relaxed text-muted">
-            הצוות מוצא שולחן לפי המספר שלו. כאן נקבע מאיפה הספירה מתחילה ולאיזה כיוון היא רצה.
-          </p>
-
-          {/* The corner, drawn AS a corner. Four radio buttons in a 2×2 grid is the same shape as
-              the room they describe, so "start from the bottom-left" is pointed at rather than
-              read. The grid is laid out in physical order (dir="ltr") on purpose: these are
-              positions on a plan, not words in a sentence, and mirroring them under RTL would put
-              "top-left" on the right. */}
-          <span className={fieldLabelClassName}>שולחן 1 מתחיל מ־</span>
-          <div className="grid grid-cols-2 gap-1" dir="ltr">
-            {(
-              [
-                ["top-left", "↖"],
-                ["top-right", "↗"],
-                ["bottom-left", "↙"],
-                ["bottom-right", "↘"],
-              ] as [NumberingCorner, string][]
-            ).map(([corner, glyph]) => {
-              const on = (options.corner ?? "top-right") === corner;
-              return (
-                <button
-                  key={corner}
-                  type="button"
-                  onClick={() => set({ corner })}
-                  aria-pressed={on}
-                  aria-label={CORNER_LABEL[corner]}
-                  title={CORNER_LABEL[corner]}
-                  className={
-                    "flex items-center justify-center rounded-sm border py-1.5 text-base transition-colors " +
-                    (on ? "border-accent bg-accent-tint text-accent" : "border-border text-ink-soft hover:bg-accent-tint hover:text-accent")
-                  }
-                >
-                  {glyph}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3 flex min-h-10 items-center gap-3">
-            <span className="min-w-0 flex-1 text-sm text-ink-soft">כיוון</span>
-            <Select
-              value={options.axis ?? "rows"}
-              onChange={(v) => set({ axis: v as "rows" | "columns" })}
-              aria-label="כיוון המספור"
-              options={[
-                { value: "rows", label: "לפי שורות" },
-                { value: "columns", label: "לפי טורים" },
-              ]}
-              className="w-36 shrink-0"
-            />
-          </div>
-
-          <div className="mt-2 flex min-h-10 items-center gap-3">
-            <label htmlFor="numbering-start" className="min-w-0 flex-1 text-sm text-ink-soft">
-              מתחיל במספר
-            </label>
-            <NumberField
-              id="numbering-start"
-              decimals={0}
-              min={1}
-              value={options.start ?? 1}
-              onChange={(v) => set({ start: v })}
-              className="w-20"
-            />
-          </div>
-
-          {/* Boustrophedon. Named for what it does to the walk, not for what it does to the maths —
-              nobody laying place cards thinks "serpentine". The app's own switch row, not a native
-              checkbox. */}
-          <div className="mt-3">
-            <SwitchRow
-              checked={options.serpentine ?? false}
-              onChange={(serpentine) => set({ serpentine })}
-              label="שורה הלוך ושורה חזור"
-              hint="כמו שמסתובבים באולם — בלי לחצות את הרצפה בתחילת כל שורה."
-            />
-          </div>
-
-          <Button
-            size="sm"
-            className="mt-4 w-full"
-            disabled={!canRenumber}
-            onClick={() => {
-              onRenumber();
-              close();
-            }}
-          >
-            {canRenumber ? `מספור מחדש · ${count} שולחנות` : "המספור כבר לפי הסדר"}
-          </Button>
-        </>
+        <NumberingFields
+          {...props}
+          onRenumber={() => {
+            props.onRenumber();
+            close();
+          }}
+        />
       )}
     </Popover>
   );
 }
 
-/** Save the drawing under a name; load a saved one, in place of this drawing or on top of it; let
- *  one go. A panel off one button, like the numbering menu, and for the same reason: it is used at
- *  the start and the end of a sketch and never in between.
- *
- *  Loading IN PLACE asks first when there is something to lose, and says Ctrl+Z brings it back —
- *  which is true (loadDocument is one history entry) and is what makes the confirmation a
- *  courtesy rather than a gate. Adding never asks: it only ever puts more on the plan. */
-function SketchMenu({
-  sketches,
-  sketchEmpty,
-  onSave,
-  onLoad,
-  onDelete,
-  onPhoto,
-}: {
-  sketches: SketchTemplateSummary[];
-  sketchEmpty: boolean;
-  onSave: (name: string) => void;
-  onLoad: (id: string, mode: "replace" | "add") => void;
-  onDelete: (id: string) => void;
-  onPhoto: (id: string, file: File | null) => void;
-}) {
-  const [name, setName] = useState("");
-  const [confirm, setConfirm] = useState<{ kind: "replace" | "delete"; id: string; name: string } | null>(null);
-  // One hidden picker for every row; `photoFor` says whose photo it is picking.
-  const picker = useRef<HTMLInputElement>(null);
-  const photoFor = useRef<string | null>(null);
-
-  // The confirmation is a native <dialog> inside the panel: the panel leaves Escape to it, and a
-  // press inside it is a press inside the panel, so answering it never closes the list behind it.
+/** Saved sketches (./document-groups.tsx), off one toolbar icon: used at the start and the end of a
+ *  sketch and never in between. */
+function SketchMenu(props: Parameters<typeof SketchList>[0]) {
   return (
     <Popover label="סקיצות שמורות" icon={LayoutTemplate} trigger="icon" side="bottom" panelClassName="w-80">
-      <p className="mb-3 text-caption leading-relaxed text-muted">
-        סקיצה שמורה היא נקודת התחלה: פותחים ממנה אירוע חדש, או טוענים אותה לכל סקיצה — במקום מה
-        שמצויר או בנוסף לו.
-      </p>
-
-      <div className="flex items-end gap-2">
-        <TextField
-          label="שמירת הסקיצה הנוכחית"
-          value={name}
-          onChange={setName}
-          placeholder="חתונה 300 באולם הגדול"
-          wrapperClassName="min-w-0 flex-1"
-        />
-        <Button
-          size="sm"
-          className="mb-0.5 shrink-0"
-          disabled={!name.trim() || sketchEmpty}
-          onClick={() => {
-            onSave(name.trim());
-            setName("");
-          }}
-        >
-          שמירה
-        </Button>
-      </div>
-      {sketchEmpty && <p className="mt-1.5 text-caption text-muted">הסקיצה ריקה — אין עדיין מה לשמור.</p>}
-
-      <div className="mt-4 border-t border-border-soft pt-3">
-        {sketches.length === 0 ? (
-          <p className="text-caption text-muted">עדיין אין סקיצות שמורות.</p>
-        ) : (
-          <ul className="scroll-slim -mx-1 max-h-64 space-y-0.5 overflow-y-auto px-1">
-            {sketches.map((sk) => (
-              <li key={sk.id} className="flex items-center gap-1 rounded-sm px-1.5 py-1 hover:bg-inset">
-                {sk.photoUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element -- see components/photo.tsx
-                  <img src={sk.photoUrl} alt="" className="h-8 w-8 shrink-0 rounded-sm object-cover" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-ink" title={sk.name}>
-                    {sk.name}
-                  </div>
-                  <div className="nums text-caption text-muted">{`${sk.tables} שולחנות · ${sk.items} פריטים`}</div>
-                </div>
-                <button
-                  type="button"
-                  title="במקום מה שמצויר עכשיו"
-                  onClick={() => (sketchEmpty ? onLoad(sk.id, "replace") : setConfirm({ kind: "replace", id: sk.id, name: sk.name }))}
-                  className="shrink-0 rounded-sm px-2 py-1.5 text-caption font-semibold text-accent transition-colors hover:bg-accent-tint hover:text-accent-hover"
-                >
-                  טעינה
-                </button>
-                <button
-                  type="button"
-                  title="בנוסף למה שמצויר עכשיו"
-                  onClick={() => onLoad(sk.id, "add")}
-                  className="shrink-0 rounded-sm px-2 py-1.5 text-caption font-semibold text-accent transition-colors hover:bg-accent-tint hover:text-accent-hover"
-                >
-                  הוספה
-                </button>
-                {/* The card's cover in the meeting's סקיצת פתיחה; without one the card draws the plan. */}
-                <BarButton
-                  icon={Camera}
-                  label={sk.photoUrl ? "החלפת תמונת האירוע" : "הוספת תמונה מהאירוע"}
-                  onClick={() => {
-                    photoFor.current = sk.id;
-                    picker.current?.click();
-                  }}
-                />
-                {sk.photoUrl && <BarButton icon={ImageOff} tone="danger" label="הסרת התמונה" onClick={() => onPhoto(sk.id, null)} />}
-                <BarButton
-                  icon={Trash2}
-                  tone="danger"
-                  label={`מחיקת הסקיצה ״${sk.name}״`}
-                  onClick={() => setConfirm({ kind: "delete", id: sk.id, name: sk.name })}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <input
-        ref={picker}
-        type="file"
-        accept="image/*"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = "";
-          if (file && photoFor.current) onPhoto(photoFor.current, file);
-        }}
-      />
-
-      <ConfirmDialog
-        open={confirm !== null}
-        title={confirm?.kind === "delete" ? `למחוק את הסקיצה ״${confirm.name}״?` : `להחליף את מה שמצויר ב״${confirm?.name ?? ""}״?`}
-        body={confirm?.kind === "replace" ? "מה שמצויר עכשיו יוחלף בסקיצה השמורה. Ctrl+Z מחזיר אותו." : undefined}
-        confirmLabel={confirm?.kind === "delete" ? "מחיקה" : "החלפה"}
-        onConfirm={() => {
-          if (confirm) {
-            if (confirm.kind === "delete") onDelete(confirm.id);
-            else onLoad(confirm.id, "replace");
-          }
-          setConfirm(null);
-        }}
-        onClose={() => setConfirm(null)}
-      />
+      <SketchList {...props} />
     </Popover>
   );
 }
-
-const CORNER_LABEL: Record<NumberingCorner, string> = {
-  "top-right": "מלמעלה מימין",
-  "top-left": "מלמעלה משמאל",
-  "bottom-right": "מלמטה מימין",
-  "bottom-left": "מלמטה משמאל",
-};
