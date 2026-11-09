@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "./button";
-import { CloseButton } from "./close-button";
+import { Crop } from "lucide-react";
+import { MODAL_CLASS, ModalFooter, ModalHeader } from "./modal-frame";
 
 // Crop a photo/scan before it ever reaches lib/files/ — free-form (no fixed ratio), so a designer
 // can trim a phone photo's margins or a scanned sheet's borders however the shot actually needs it.
@@ -161,16 +162,15 @@ export function UnderlayCropModal({
           confirm();
         }
       }}
-      className="modal m-auto max-h-none rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
+      className={MODAL_CLASS}
     >
       <div className="flex max-w-[95vw] flex-col">
-        <header className="flex items-center gap-3 border-b border-border px-5 py-3">
-          <span className="text-sm font-semibold text-ink">חיתוך התוכנית</span>
-          <span className="hidden text-xs text-muted md:inline">
-            גררו את הפינות או הצלעות לחיתוך חופשי · גררו בתוך המסגרת להזזה · Enter לסיום
-          </span>
-          <CloseButton className="ms-auto" onClick={onCancel} />
-        </header>
+        <ModalHeader
+          tile={<Crop className="h-[18px] w-[18px]" strokeWidth={1.75} />}
+          title="חיתוך התוכנית"
+          facts="גררו את הפינות או הצלעות לחיתוך חופשי · גררו בתוך המסגרת להזזה · Enter לסיום"
+          onClose={onCancel}
+        />
 
         <div className="flex items-center justify-center bg-canvas p-5">
           {objectUrl && (
@@ -233,14 +233,14 @@ export function UnderlayCropModal({
           )}
         </div>
 
-        <div className="flex items-center gap-2 border-t border-border px-5 py-3">
+        <ModalFooter>
+          <Button size="sm" variant="primary" disabled={!rect} onClick={confirm}>
+            סיום
+          </Button>
           <Button size="sm" variant="ghost" onClick={onCancel}>
             ביטול
           </Button>
-          <Button size="sm" variant="primary" className="ms-auto" disabled={!rect} onClick={confirm}>
-            סיום
-          </Button>
-        </div>
+        </ModalFooter>
       </div>
     </dialog>
   );
