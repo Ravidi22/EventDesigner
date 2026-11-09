@@ -108,7 +108,7 @@ export function Rotation({ value, onChange }: { value: number | null; onChange: 
             onClick={() => onChange(deg)}
             className={
               "nums rounded-sm py-1 text-xs font-semibold transition-colors " +
-              (value === deg ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
+              (value === deg ? "bg-accent-wash text-accent-deep" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
             }
           >
             {ltr(`${deg}°`)}

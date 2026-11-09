@@ -1214,10 +1214,12 @@ const FeatureNode = memo(function FeatureNode({
                 ) : f.kind === "fountain" ? (
                   // A fountain: the catalog's own picture (components/item-symbol.tsx) — the basin
                   // in the pool's water, the bowl and the spout — tinted by the feature's fill, with
-                  // the same dashed selection outline a plant gets and no name.
+                  // the same dashed selection outline a plant gets and no name. The picture takes no
+                  // pointer (ItemSymbol is pointer-events-none), so the footprint under it is the
+                  // hit area — without it a fountain answered only a band (2026-11-09, the user).
                   <>
                     <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={selected ? "var(--color-accent)" : undefined} />
-                    {selected && <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                   </>
                 ) : f.kind === "pergola" ? (
                   // A pergola (lib/venues/pergola.ts): its posts, its roof across them and any

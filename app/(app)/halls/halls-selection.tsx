@@ -536,7 +536,7 @@ export function HallsSelection({
                   return k === "edge" ? { ...next, entrances: next.entrances.filter((e) => !wallIds.includes(e.wallId)) } : next;
                 })
               }
-              ariaLabel="סוג הקירות"
+              ariaLabel="סוג הקירות" fill
             />,
           ),
         features.length > 0 && styleGroup(features[0].style, (style) => apply((s) => features.reduce((acc, f) => updateFeature(acc, f.id, { style }), s))),
@@ -704,7 +704,7 @@ export function HallsSelection({
                   return k === "edge" ? { ...next, entrances: next.entrances.filter((e) => e.wallId !== wall.id) } : next;
                 })
               }
-              ariaLabel="סוג הקיר"
+              ariaLabel="סוג הקיר" fill
             />
             <Note>קיר יכול לשאת דלתות וחלונות; גבול שטח הוא קו שרואים ולא נכנסים בו — מעבר אליו מוריד את הפתחים שבקיר.</Note>
           </>,
@@ -906,7 +906,7 @@ export function HallsSelection({
                     { value: true, label: "כנף כפולה" },
                   ]}
                   onChange={(doubleDoor) => apply((s) => updateEntrance(s, door.id, { doubleDoor }))}
-                  ariaLabel="מספר כנפיים"
+                  ariaLabel="מספר כנפיים" fill
                 />
                 <SegmentedToggle
                   value={door.swingInward}
@@ -915,7 +915,7 @@ export function HallsSelection({
                     { value: false, label: "החוצה" },
                   ]}
                   onChange={(swingInward) => apply((s) => updateEntrance(s, door.id, { swingInward }))}
-                  ariaLabel="כיוון פתיחה"
+                  ariaLabel="כיוון פתיחה" fill
                 />
               </div>,
             ),
@@ -943,7 +943,7 @@ export function HallsSelection({
                 { value: true, label: "הווילון נפתח מול הדלת" },
               ]}
               onChange={(clear) => apply((s) => updateEntrance(s, door.id, { curtainClear: clear ? true : undefined }))}
-              ariaLabel="הווילון מול הדלת"
+              ariaLabel="הווילון מול הדלת" fill
             />,
           ),
       ], { defaultOpen: ["position", "swing", "glass"] });

@@ -177,7 +177,7 @@ export function ClimbFields({
             { value: "arc", label: "מעוגלות" },
           ]}
           onChange={(v) => patch(v === "arc" ? patchToCurved(feature) : patchToStraight(feature))}
-          ariaLabel="צורת המדרגות"
+          ariaLabel="צורת המדרגות" fill
         />
       )}
       <InspectorGroup>

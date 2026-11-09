@@ -1,48 +1,32 @@
 "use client";
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   AlignCenterVertical,
   ArrowUp,
   BringToFront,
-  Building2,
-  Check,
-  Eye,
   ClipboardPaste,
   Copy,
   // `Image` is the DOM constructor here (imageSize uses it), so the icon takes the alias.
   Image as ImageIcon,
-  Hand,
-  Images,
-  Layers,
-  Loader2,
   Lock,
   LockOpen,
   MousePointer2,
   Pencil,
   PenLine,
   Plus,
-  Redo2,
   Ruler,
-  Scissors,
   SendToBack,
   Shapes,
   SquareDashed,
   Trash2,
-  TriangleAlert,
-  Undo2,
   Unlock,
-  Upload,
-  Users,
-  X,
 } from "lucide-react";
 import { polygonCentroid } from "@/lib/studio/geometry";
 import { doorOpenings } from "@/lib/studio/anchor";
 import {
   loadActiveVenueId,
   onActiveVenueChange,
-  setActiveVenueId,
   type Venue,
   type VenueStructure,
   type Zone,
@@ -52,7 +36,6 @@ import { canEditPlan, type VenueRole } from "@/lib/venues/access";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import {
   calibrateUnderlay,
-  clampOpacity,
   placeUnderlay,
   underlayCorners,
   type CalibrationResult,
@@ -81,7 +64,6 @@ import {
   updateEntrance,
   updateFeature,
   type WallKind,
-  PLANT_DEFAULTS,
   SURFACE_MATERIAL_LABEL,
   type StructureFeature,
   type SurfaceMaterial,
@@ -91,7 +73,6 @@ import {
   surfaceMaterialPatch,
 } from "@/lib/venues/structure";
 import { addSurfaceUnder, asOutline, buildingFilling, buildingFromBoundary, buildingInFace, featureWorldOutline, followsWalls, surfaceFilling, surfaceFromBoundary, surfaceInFace, syncFaceSurfaces } from "@/lib/venues/face-surfaces";
-import { ItemSymbol } from "@/components/item-symbol";
 import { tidyRegion } from "@/lib/venues/region-edit";
 import {
   bowShapeSide,
@@ -105,11 +86,10 @@ import {
 } from "@/lib/studio/shaped-outline";
 import { canEditOutline, featureEditOutline } from "@/lib/venues/face-surfaces";
 import { regionShape, regionSource } from "@/lib/venues/zone";
-import { POOL_PRESET_SIZE, newPoolFeature, poolOutline } from "@/lib/venues/pool";
+import { newPoolFeature } from "@/lib/venues/pool";
 import { OutlineBar } from "./outline-bar";
 import type { OutlinePart } from "@/components/venue-plan";
-import { FootprintShape } from "@/components/footprint-shape";
-import { featureFootprint, setWallHeight } from "@/lib/venues/structure";
+import { setWallHeight } from "@/lib/venues/structure";
 import { detectFaces, faceAt, pointInPolygon, type Face } from "@/lib/venues/faces";
 import {
   detachedNote,
@@ -122,11 +102,6 @@ import {
 } from "@/lib/venues/zone";
 import { ZONE_MARGIN_MM, featuresBoundary, presentFeatureIds } from "@/lib/venues/feature-zones";
 import { newSeatingFeature } from "@/lib/venues/seating";
-import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
-import { SeatingGlyph } from "@/components/chair-block";
-import { ColumnGlyph } from "@/components/column-glyph";
-import { PergolaGlyph } from "@/components/pergola-glyph";
-import { pergolaOf } from "@/lib/venues/pergola";
 import { roofHeightAt } from "@/lib/venues/roofs";
 import { defineColumns } from "@/lib/venues/column";
 import { curtainEndPatch, newCurtain, newRailCurtain, syncCurtains } from "@/lib/venues/curtain";
@@ -148,15 +123,11 @@ import { Note, PanelRow } from "@/components/inspector-bar";
 import { NumberField } from "@/components/number-field";
 import { HallsRail } from "./halls-rail";
 import { WallDrawBar } from "./wall-draw-bar";
-import { DocumentMenu, HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
-import { EndPanel, PanelGroups, PanelList, PanelListFolded, PanelListRow, openEndPanel } from "@/components/end-panel";
+import { HintPill, HintRow, SavePill } from "@/components/canvas-chrome";
+import { EndPanel, PanelGroups, PanelList, PanelListFolded, PanelListRow } from "@/components/end-panel";
 import { UnderlayGroupBody, underlaySummary } from "./underlay-group";
 import { ZONE_KIND_LABEL } from "@/lib/venues/zone";
-import { Menu, type MenuItem } from "@/components/menu";
-import { groupMemory } from "@/lib/studio/panel-groups";
-import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { IconButton } from "@/components/icon-button";
-import { ProductImage } from "../catalog/product-image";
 import { ZoneDialog } from "./zone-dialog";
 import { HallsSelection, type HallsSelectionProps, type ZoneQuick } from "./halls-selection";
 import { addEdgeItemAt, changeEdgeItem, fillFeatureEdges, removeEdgeItem, setEdgeItems, wallDistanceOf, type EdgeRefusal, type VenueEdgeKind } from "@/lib/venues/stage-edges";
@@ -164,11 +135,8 @@ import { shareSide } from "@/lib/design-document/stage";
 import type { StageStair } from "@/lib/design-document/types";
 import { ALIGN_LABEL, alignedCentres, alignGuide, needsThree, type AlignOp } from "@/lib/studio/align";
 import type { SnapBox } from "@/lib/studio/snap";
-import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, DRAW_SURFACE_ID, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
+import { DRAW_SURFACE_ID, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
-import { formatDimensions } from "@/lib/catalog/format";
-import { PlantGlyph } from "@/components/plant-glyph";
-import { SurfaceFill } from "@/components/surface-fill";
 import {
   hitsInBox,
   isSelected,
@@ -758,7 +726,10 @@ export function HallsScreen() {
     // the sketch — so the menu is reachable without having to land on a small thing.
     const selected = selection.filter((r) => r.kind === "feature").map((r) => r.id);
     const ids = hit ? (selected.includes(hit) ? selected : [hit]) : selected;
-    if (ids.length === 0) return [];
+    // Paste lives here and on Ctrl+V — the canvas strip has no document ⋯ on /halls (2026-11-09,
+    // the user: it held nothing else). Offered on empty canvas whenever the clipboard holds features.
+    const paste: ContextMenuItem[] = !hit && clip.length > 0 ? [{ label: "הדבקה · Ctrl+V", icon: ClipboardPaste, onSelect: pasteClip }] : [];
+    if (ids.length === 0) return paste;
     if (hit && !selected.includes(hit)) setSelection([{ kind: "feature", id: hit }]);
     const unlocked = ids.filter((id) => !structure.features.find((f) => f.id === id)?.locked).length;
     const item = (label: string, icon: ContextMenuItem["icon"], how: Restack): ContextMenuItem => ({
@@ -812,6 +783,7 @@ export function HallsScreen() {
           editStructure((st) => ids.reduce((acc, id) => removeFeature(acc, id), st));
         },
       },
+      ...paste,
     ];
   };
 
@@ -1879,22 +1851,6 @@ export function HallsScreen() {
       : mode !== "select"
         ? activeMode.hint
         : null;
-  // The canvas strip's ⋯ (components/canvas-chrome.tsx): paste, and the underlay — whose answer is
-  // a set of fields, so it opens that group in the end panel rather than a panel of its own.
-  const docMenu: MenuItem[] = [
-    ...(clip.length > 0 ? [{ label: "הדבקה · Ctrl+V", icon: ClipboardPaste, onSelect: pasteClip }] : []),
-    {
-      label: "תוכנית רקע…",
-      icon: ImageIcon,
-      onSelect: () => {
-        setSelection([]);
-        openEndPanel("halls");
-        groupMemory.open("halls:none", "underlay");
-        requestAnimationFrame(() => document.querySelector('[data-group="underlay"]')?.scrollIntoView({ block: "nearest" }));
-      },
-    },
-  ];
-
   return (
     <div className="flex h-full flex-col p-4">
       {/* ONE card, three columns (2026-11-09, the user's "Studio + Halls" board): the draw + add
@@ -1979,7 +1935,6 @@ export function HallsScreen() {
             onRedo={readOnly ? undefined : hist.redo}
             canUndo={hist.canUndo}
             canRedo={hist.canRedo}
-            toolbarExtras={readOnly ? undefined : <DocumentMenu items={docMenu} />}
             mode={isSelectMode ? "edit" : "draw"}
             panTool={handTool || readOnly}
             outline={[]}
@@ -2069,7 +2024,10 @@ export function HallsScreen() {
                   <ZoneRegions
                     zones={resolved}
                     selectedIds={selectedZoneIds}
-                    onSelect={acts ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
+                    // Not while a tool is armed: a zone's click stops at the zone, so the canvas never
+                    // heard it and nothing could be laid inside a zone (2026-11-09, found placing a
+                    // fountain) — as features take no pointer then either (`interactive={NEVER}`).
+                    onSelect={acts && !placing ? (id, additive) => pick({ kind: "zone", id }, additive) : undefined}
                     mm={mm}
                   />
                   {draftBoundary && draftBoundary.length >= 3 && (
@@ -2263,16 +2221,6 @@ export function HallsScreen() {
               </div>
             </div>
           )}
-          <ViewCluster>
-            <Menu
-              trigger="chip"
-              align="start"
-              icon={Building2}
-              label="בחירת מתחם"
-              triggerText={venue?.name ?? "מקום"}
-              items={venues.map((v) => ({ label: v.name, onSelect: () => setActiveVenueId(v.id) }))}
-            />
-          </ViewCluster>
           <HintRow>
             {readOnly && ready && (
               <HintPill tone="quiet">

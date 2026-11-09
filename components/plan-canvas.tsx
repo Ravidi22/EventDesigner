@@ -27,6 +27,7 @@ import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { cancelAllGestures, startPointerGesture, swallowNextClick } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
+import { segmentClass, segmentFrameClass } from "@/components/segmented";
 import type { SelectedKind, SelectedRef } from "@/lib/studio/use-outline-editor";
 
 export type StructureDragType = "entrance" | "stage" | "bar";
@@ -3528,24 +3529,20 @@ export function SegmentedToggle<T extends string | number | boolean>({
   options,
   onChange,
   ariaLabel,
+  fill = false,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
   ariaLabel?: string;
+  /** In a panel group: the full width, every option the same width. Otherwise the quick bar's
+   *  compact row. Both wear components/segmented.tsx's look. */
+  fill?: boolean;
 }) {
   return (
-    <div role="group" aria-label={ariaLabel} className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
+    <div role="group" aria-label={ariaLabel} className={segmentFrameClass(!fill)}>
       {options.map((o) => (
-        <button
-          key={String(o.value)}
-          type="button"
-          aria-pressed={o.value === value}
-          onClick={() => onChange(o.value)}
-          className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${
-            o.value === value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"
-          }`}
-        >
+        <button key={String(o.value)} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)} className={segmentClass(o.value === value, !fill)}>
           {o.label}
         </button>
       ))}

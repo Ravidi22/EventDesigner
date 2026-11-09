@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
-import { ChevronDown, ChevronsLeft, Eye, EyeOff, type LucideIcon } from "lucide-react";
+import { useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
+import { ChevronDown, ChevronsLeft, Eye, EyeOff, PanelLeftOpen, type LucideIcon } from "lucide-react";
 import { FoldRow } from "@/components/fold-row";
 import { Popover } from "@/components/popover";
 import { groupMemory, orderGroups } from "@/lib/studio/panel-groups";
@@ -32,55 +32,79 @@ export interface PanelGroup {
   body: ReactNode;
 }
 
-const OPEN_EVENT = "eve:end-panel-open";
+const CHANGE_EVENT = "eve:end-panel-change";
 
-/** Bring a screen's end panel back if it was put away — the document menu's "תוכנית רקע…" and the
- *  like, which open a group in it. */
+/** The device's open/closed preference as an external store: read straight from storage, told of a
+ *  change by this tab's event or another tab's `storage` (no effect copying it into state). */
+function subscribePanel(onChange: () => void) {
+  window.addEventListener(CHANGE_EVENT, onChange);
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener(CHANGE_EVENT, onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
+
+function setPanelOpen(screen: string, open: boolean) {
+  saveEndPanelOpen(screen, open);
+  window.dispatchEvent(new Event(CHANGE_EVENT));
+}
+
+/** Bring a screen's end panel back if it was put away — for a verb elsewhere that opens a group in
+ *  it. */
 export function openEndPanel(screen: string) {
-  window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: screen }));
+  setPanelOpen(screen, true);
 }
 
 export function EndPanel({ screen, collapsible = false, children }: { screen: "studio" | "halls" | "editor"; collapsible?: boolean; children: ReactNode }) {
-  // Null until the device's preference is read — open, so the server render and the first client
-  // render agree and a stored "closed" folds it a frame later rather than flashing it open.
-  const [stored, setStored] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (collapsible) setStored(loadEndPanelOpen(screen));
-  }, [collapsible, screen]);
-  useEffect(() => {
-    if (!collapsible) return;
-    const on = (e: Event) => {
-      if ((e as CustomEvent<string>).detail !== screen) return;
-      setStored(true);
-      saveEndPanelOpen(screen, true);
-    };
-    window.addEventListener(OPEN_EVENT, on);
-    return () => window.removeEventListener(OPEN_EVENT, on);
-  }, [collapsible, screen]);
+  // Open on the server and on the hydrating render (the server snapshot), so the two agree and a
+  // stored "closed" folds it a frame later rather than flashing it open.
+  const stored = useSyncExternalStore(
+    subscribePanel,
+    () => (collapsible ? loadEndPanelOpen(screen) : true),
+    () => true,
+  );
   const open = !collapsible || stored !== false;
-  const toggle = () => {
-    const next = !open;
-    setStored(next);
-    saveEndPanelOpen(screen, next);
-  };
+  const toggle = () => setPanelOpen(screen, !open);
+  // Put away, it is a 48px column with a full-size button at its top (2026-11-09, the user: folded
+  // to nothing it was a sliver with half a puck — "the compact is too much"). The column is the
+  // button's well, so the canvas never loses the panel's edge.
   return (
     <aside
       data-end-panel
-      className={"group/panel relative flex min-h-0 shrink-0 flex-col border-s border-border bg-surface transition-[width] duration-200 ease-fluid " + (open ? "w-[296px]" : "w-0")}
+      className={
+        "group/panel relative flex min-h-0 shrink-0 flex-col border-s border-border bg-surface transition-[width] duration-200 ease-fluid " +
+        (open ? "w-[296px]" : "w-12 overflow-hidden")
+      }
     >
-      {collapsible && (
+      {collapsible && open && (
         <button
           type="button"
           onClick={toggle}
-          aria-label={open ? "כיווץ הלוח" : "הרחבת הלוח"}
-          aria-expanded={open}
+          aria-label="כיווץ הלוח"
+          aria-expanded
+          title="כיווץ הלוח"
           style={{ insetInlineStart: "-14px" }}
           className="absolute top-1/2 z-30 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-white/60 bg-white/70 text-ink-soft opacity-60 shadow-puck backdrop-blur-md transition-all duration-150 hover:bg-white hover:text-accent hover:opacity-100 focus-visible:opacity-100 group-hover/panel:opacity-100"
         >
-          <ChevronsLeft className={"h-4 w-4 transition-transform duration-200 " + (open ? "" : "rotate-180")} strokeWidth={2} />
+          <ChevronsLeft className="h-4 w-4" strokeWidth={2} />
         </button>
       )}
-      <div className={"scroll-slim min-h-0 flex-1 overflow-y-auto " + (open ? "" : "invisible")}>{children}</div>
+      {collapsible && !open && (
+        <div className="flex flex-col items-center pt-3">
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label="הרחבת הלוח"
+            aria-expanded={false}
+            title="הרחבת הלוח"
+            className="flex h-9 w-9 items-center justify-center rounded-sm text-muted transition-colors hover:bg-accent-tint hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <PanelLeftOpen className="h-[18px] w-[18px]" strokeWidth={1.6} />
+          </button>
+        </div>
+      )}
+      <div className={"scroll-slim min-h-0 flex-1 overflow-y-auto " + (open ? "" : "hidden")}>{children}</div>
     </aside>
   );
 }
