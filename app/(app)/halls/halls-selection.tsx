@@ -11,6 +11,8 @@ import {
   BringToFront,
   Building2,
   CircleDot,
+  Copy,
+  Scissors,
   Cylinder,
   DoorOpen,
   Footprints,
@@ -243,6 +245,9 @@ export interface HallsSelectionProps {
   onToggleOutline?: (featureId: string) => void;
   /** "הגדרה כעמודים": the picked stacks of drawn footprints become columns (lib/venues/column.ts). */
   onDefineColumns?: (featureIds: string[]) => void;
+  /** The clipboard (Ctrl+C / Ctrl+X) — offered in the ⋯ of anything with features in it. */
+  onCopy?: () => void;
+  onCut?: () => void;
   /** A wall's opening picked from its פתחים group. */
   onSelectOpening?: (id: string) => void;
   /** The lone selected zone, resolved by the screen. */
@@ -305,6 +310,8 @@ export function HallsSelection({
   outlineEditId,
   onToggleOutline,
   onDefineColumns,
+  onCopy,
+  onCut,
   onSelectOpening,
   zone,
   onEditZone,
@@ -433,9 +440,15 @@ export function HallsSelection({
     if (features.length === 0) return [];
     const ids = features.map((f) => f.id);
     const items: MenuItem[] = [];
+    // The clipboard first — the header's העתקה / גזירה went, Ctrl+C / Ctrl+X stay; the quick bar's
+    // copy button is a duplicate, not the clipboard (a copy can be pasted into another venue).
+    if (onCopy) items.push({ label: "העתקה · Ctrl+C", icon: Copy, onSelect: onCopy });
+    if (onCut) items.push({ label: "גזירה · Ctrl+X", icon: Scissors, onSelect: onCut });
+    const sectionStart = items.length;
     if (onFeatureZone && !ownZone) items.push({ label: ids.length === 1 ? "הגדרת האלמנט כאזור" : `הגדרת ${ids.length} האלמנטים כאזור`, icon: SquareDashed, onSelect: () => onFeatureZone(ids) });
     if (onDefineColumns && canDefineColumns(features))
       items.push({ label: features.length === 1 ? "הגדרה כעמוד" : "הגדרה כעמודים", icon: Cylinder, onSelect: () => onDefineColumns(ids) });
+    if (sectionStart > 0 && items.length > sectionStart) items[sectionStart] = { ...items[sectionStart], separated: true };
     items.push({ label: allLocked ? "שחרור הנעילה · Ctrl+Shift+L" : "נעילה במקום · Ctrl+Shift+L", icon: allLocked ? LockOpen : Lock, onSelect: () => onLock(!allLocked), separated: items.length > 0 });
     RESTACK.filter((r) => canRestack(r.how)).forEach((r, i) => items.push({ label: r.label, icon: r.icon, onSelect: () => onRestack(r.how), separated: i === 0 }));
     return items;
@@ -1140,6 +1153,14 @@ export function HallsSelection({
           <>
             {(sized || seating) && <QuickSep />}
             <QuickTurn value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />
+          </>
+        )}
+        {/* A surface or a building laid wall to wall in a closed shape follows its walls; cut loose,
+            it is a free one of the same outline (and then "עריכת הקווים" reshapes it). */}
+        {bound && (
+          <>
+            <QuickSep />
+            <BarButton icon={Unlink} label="ניתוק מהקירות — נשאר בצורתו, ואפשר להזיז אותו ולשנות את קוויו" onClick={() => patch({ fillsFace: undefined })} />
           </>
         )}
         {canEditOutline(feature) && onToggleOutline && (

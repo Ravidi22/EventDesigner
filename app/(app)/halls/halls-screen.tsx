@@ -1032,6 +1032,16 @@ export function HallsScreen() {
       // and Escape would clear the selection as well as closing the dialog.
       if (document.querySelector("dialog[open]")) return;
       if (e.key === "Escape") {
+        // A FIELD's own Escape comes first (the shape editor's order: field → canvas → selection).
+        // The fields are in the end panel and the quick bar now, no longer inside a popover that
+        // swallowed the key: a Select whose open list this closed has said so (defaultPrevented),
+        // and a field being typed in only lets go of the caret — the selection, and the group it
+        // is typed in, stay where they are.
+        if (e.defaultPrevented) return;
+        if (isTypingTarget()) {
+          (document.activeElement as HTMLElement | null)?.blur();
+          return;
+        }
         // One step back per press, innermost first — the sketch's cascade. One Escape used to drop
         // everything at once: the tool in hand, the half-drawn room and the selection together.
         if (outlineKeys.current.part) setOutlinePart(null);
@@ -1817,6 +1827,8 @@ export function HallsScreen() {
     outlineEditId: outlineSurface?.id ?? null,
     onToggleOutline: (id) => setOutlineEditId((cur) => (cur === id ? null : id)),
     onDefineColumns: defineAsColumns,
+    onCopy: copySelection,
+    onCut: cutSelection,
     onSelectOpening: (id) => setSelection([{ kind: "door", id }]),
     zone: zoneQuick,
     onEditZone: readOnly ? undefined : editZone,
@@ -1827,6 +1839,7 @@ export function HallsScreen() {
   const [unfoldedFor, setUnfoldedFor] = useState<PlanSelection[] | null>(null);
   const listOpen = !selection.some((s) => s.kind !== "zone") || unfoldedFor === selection;
   const startNewZone = () => {
+    setArmedToolId(null);
     setMode("zones");
     setRegionFor("zone");
     setSelection([]);
@@ -1843,6 +1856,13 @@ export function HallsScreen() {
     if (findAddTool(tools, toolId)?.pool === "free") {
       startPoolDraw();
       return;
+    }
+    // The rail is always in view, so a tile can be pressed mid-drawing: drawing ends first — a
+    // tool armed while walls are being drawn showed "click to place" while the click drew a wall.
+    if (mode !== "select") {
+      setMode("select");
+      setRunNodeId(null);
+      setRegion(null);
     }
     setArmedToolId((id) => (id === toolId ? null : toolId));
   };
@@ -2370,7 +2390,7 @@ export function HallsScreen() {
           {(draftZone || selection.length > 0) && !readOnly && <HallsSelection part="groups" {...selectionProps} />}
           {/* Nothing selected: the venue's own group — the traced plan. A viewer has nothing to
               upload, calibrate or move. */}
-          {selection.length === 0 && !draftZone && mode === "select" && !readOnly && (
+          {selection.length === 0 && !readOnly && (
             <PanelGroups
               kind="halls:none"
               title="המקום"
