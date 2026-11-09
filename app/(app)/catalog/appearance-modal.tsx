@@ -875,6 +875,7 @@ function PictureFields({
   symbol,
   onChange,
   onProfile,
+  onEditInView,
 }: {
   product: Product;
   preview: Product;
@@ -883,6 +884,8 @@ function PictureFields({
   /** Sets the FIRST shape's body (its `revolve`) — a chandelier's silhouette. Absent when the first
    *  shape cannot have one (not round). */
   onProfile?: (revolve: RevolvePoint[] | undefined) => void;
+  /** Goes to the חזית view with the first shape selected, where its body is dragged at full size. */
+  onEditInView?: () => void;
 }) {
   const category = CATEGORY_BY_ID[product.category];
   const tone = preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill;
@@ -1019,7 +1022,7 @@ function PictureFields({
           return (
             <div className="space-y-2">
               {profiled && (
-                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} />
+                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} onEditInView={onEditInView} />
               )}
               {/* GLASS PENDANTS: the glass is the shade (גוונים וצבעים — ענבר, עשן, שקוף, כרום), so here
                   only the metal, whether every globe takes its own shade, and their sizes. */}
@@ -1122,7 +1125,7 @@ function PictureFields({
           const flowered = built.flowers !== "none" || built.roof === "flowers" || built.meadow;
           return (
             <div className="space-y-2">
-              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} />}
+              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} onEditInView={onEditInView} />}
               <PanelRow label="עמודים" htmlFor="chuppah-posts">
                 <NumberField id="chuppah-posts" decimals={0} min={0} max={12} commitOnBlur value={built.posts ?? ownPosts} onChange={(v) => set({ posts: Math.round(v) === ownPosts ? undefined : Math.round(v) })} className="w-20" />
               </PanelRow>
@@ -1159,7 +1162,7 @@ function PictureFields({
           const chosen = preview.appearance?.symbolStyle;
           const form = isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
           if (form === "runner" || form === "bud" || form === "single") return null;
-          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} />;
+          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} onEditInView={onEditInView} />;
         })()}
     </div>
   );
@@ -1365,7 +1368,11 @@ function ShapePanel({
   onChange,
   groups,
   bodyTiles,
+  onOpenElevation,
 }: {
+  /** Goes to the חזית view with this shape kept selected — the height drawn at full size, and the
+   *  body dragged on it. */
+  onOpenElevation?: () => void;
   /** The tiles the "גוף" group offers instead of the vessels' — a chandelier's silhouettes. */
   bodyTiles?: RevolveTiles;
   part: ShapePart;
@@ -1417,6 +1424,11 @@ function ShapePanel({
       >
         <div className="space-y-1.5">
           <ElevationView shapes={shapes} itemHeightMm={itemHeightMm} selectedId={part.id} />
+          {onOpenElevation && (
+            <Button type="button" variant="outline" size="sm" className="w-full" onClick={onOpenElevation}>
+              פתיחה בחזית
+            </Button>
+          )}
           {base ? (
             <>
               <PanelRow label="גובה הפריט (ס״מ)" htmlFor={`${id}-height`}>
@@ -1466,7 +1478,7 @@ function ShapePanel({
           a slice, which have no body of revolution. */}
       {(part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
         <FoldRow {...group(groups, "body")} icon={Cylinder} title={bodyTiles ? bodyTiles.title.split(" — ")[0] : "גוף"} summary={bodyValue(part, bodyTiles)}>
-          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} />
+          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} onEditInView={onOpenElevation} />
         </FoldRow>
       )}
       {/* PIN (Stage 3): how this shape follows a resize of the item on the sketch — against the first
@@ -2279,6 +2291,10 @@ export function AppearanceModal({
             preview={preview}
             symbol={previewSymbol}
             onChange={setAppearance}
+            onEditInView={() => {
+              if (shapes[0]) setSel([shapes[0].id]);
+              showView("front");
+            }}
             onProfile={
               shapes[0] && (shapes[0].shape === "circle" || shapes[0].shape === "ellipse") && !shapes[0].hollow
                 ? (revolve) => editShapes((list) => list.map((s, i) => (i === 0 ? { ...s, revolve } : s)))
@@ -2417,6 +2433,7 @@ export function AppearanceModal({
             onItemHeight={setItemHeight}
             onChange={(p) => patchShape(one.id, p)}
             groups={groups}
+            onOpenElevation={() => showView("front")}
             bodyTiles={(() => {
               if (shapes[0]?.id !== one.id) return undefined;
               if (previewSymbol === "flowers" || previewSymbol === "centerpiece") return FLOWER_ENVELOPES;

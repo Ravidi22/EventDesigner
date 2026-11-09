@@ -16,12 +16,13 @@
 // let settle — useSettledScene), drawn by an orthographic camera at exactly the canvas's settled
 // view (components/scene/ortho-underlay.tsx through PlanCanvas's `underlay`, carried through a pan
 // by CSS). Kept mounted once shown — hidden, never unmounted, so its shaders compile once.
-import { useCallback, useMemo, useRef } from "react";
-import type { ShapePart } from "@/lib/catalog/types";
+import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import type { RevolvePoint, ShapePart } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
-import { boxRect, elevationBoxes, orthoFrame, rectEdit, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
-import { revolveSilhouette } from "@/lib/element/revolve";
-import { PlanCanvas, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
+import { boxRect, elevationBoxes, orthoFrame, profileHandles, profilePoint, rectEdit, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
+import { addedPoint, movedPoint, removedPoint, revolveSilhouette } from "@/lib/element/revolve";
+import { startPointerGesture } from "@/lib/studio/gesture";
+import { PlanCanvas, type CanvasLayerContext, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
 import { StructureFeatures } from "@/components/venue-plan";
 import { Dim } from "@/components/venue-dims";
 import { emptyStructure, type StructureFeature } from "@/lib/venues/structure";
@@ -162,6 +163,7 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
       gridMm={frame.gridMm}
       underlay={room ? underlay : undefined}
       backdrop={<line className="pointer-events-none" x1={-FLOOR_REACH_MM} x2={FLOOR_REACH_MM} y1={0} y2={0} stroke="var(--color-ink-soft)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
+      topmost={(ctx) => (one?.revolve ? <ProfileHandles box={one} ctx={ctx} onEdit={onEdit} onCommit={onCommit} /> : null)}
       overlay={(ctx) => (
         <>
           {/* Bodies of revolution, as their silhouettes, under their (clear) boxes. */}
@@ -238,6 +240,88 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
         </>
       )}
     />
+  );
+}
+
+/** THE GOF SHAPED ON THE VIEW — the selected box's profile as handles on its silhouette's right
+ *  half: dragged (the first and last slide sideways only — movedPoint holds their height), a click on
+ *  the outline adds a point, a double-click on a middle one takes it out. Painted in PlanCanvas's
+ *  `topmost` layer so nothing covers them; the press stops here, so the box under never starts to
+ *  move. A drag is one undo entry (live `onEdit`, `onCommit` at the release); an add or a removal
+ *  is its own. */
+function ProfileHandles({ box, ctx, onEdit, onCommit }: { box: ElevationBox; ctx: CanvasLayerContext; onEdit: ElevationCanvasProps["onEdit"]; onCommit: () => void }) {
+  const points = box.revolve!;
+  const handles = profileHandles(box);
+  const set = (revolve: RevolvePoint[]) => onEdit((list) => list.map((s) => (s.id === box.id ? { ...s, revolve } : s)));
+  const sil = revolveSilhouette(points, (box.a0 + box.a1) / 2, (box.a1 - box.a0) / 2, box.z, box.h);
+  const side = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i ? "L" : "M"}${p.x},${-p.y}`).join(" ");
+  // The two sides of the body alone — the foot and the top are not the profile.
+  const outline = [sil.slice(0, points.length), sil.slice(points.length).reverse()];
+
+  const drag = (e: ReactPointerEvent<SVGElement>, i: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startPointerGesture(e, {
+      onMove: (m) => {
+        const q = profilePoint(box, ctx.clientToMm(m.clientX, m.clientY));
+        set(movedPoint(points, i, q.r, q.z));
+      },
+      onEnd: (_e, moved) => {
+        if (moved) onCommit();
+      },
+    });
+  };
+
+  return (
+    <g>
+      {outline.map((pts, k) => (
+        <path
+          key={k}
+          d={side(pts)}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={ctx.mm(8)}
+          strokeLinejoin="round"
+          pointerEvents="stroke"
+          style={{ cursor: "copy" }}
+          onPointerDown={(e) => {
+            if (e.button === 0) e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (e.detail > 1) return;
+            const q = profilePoint(box, ctx.clientToMm(e.clientX, e.clientY));
+            set(addedPoint(points, q.r, q.z));
+            onCommit();
+          }}
+        />
+      ))}
+      {handles.map((h, i) => {
+        const end = i === 0 || i === handles.length - 1;
+        return (
+          <circle
+            key={i}
+            cx={h.x}
+            cy={h.y}
+            r={ctx.mm(5)}
+            className="fill-surface stroke-accent hover:fill-accent-wash"
+            strokeWidth={1.5}
+            vectorEffect="non-scaling-stroke"
+            style={{ cursor: end ? "ew-resize" : "move" }}
+            onPointerDown={(e) => drag(e, i)}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (end) return;
+              set(removedPoint(points, i));
+              onCommit();
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        );
+      })}
+    </g>
   );
 }
 
