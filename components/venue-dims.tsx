@@ -29,9 +29,10 @@ import { asRound, curveSides } from "@/lib/outputs/measurements";
 import { rimMeasure, rimOf } from "@/lib/venues/rim";
 
 type Mm = (px: number) => number;
-type Tone = "accent" | "ink" | "muted";
+export type DimTone = "accent" | "ink" | "muted" | "alert";
+type Tone = DimTone;
 
-const TONE_CLASS: Record<Tone, string> = { accent: "text-accent", ink: "text-ink-soft", muted: "text-muted" };
+const TONE_CLASS: Record<Tone, string> = { accent: "text-accent", ink: "text-ink-soft", muted: "text-muted", alert: "text-alert-ink" };
 /** A side shorter than this on screen is not given a figure: the number would be wider than it. */
 const MIN_SIDE_PX = 36;
 /** How far past the nearest wall a gap is still worth a figure. */
@@ -40,8 +41,29 @@ const MAX_GAP_MM = 30000;
 const metres = (mm: number) => (mm / 1000).toFixed(2);
 
 /** One dimension: the line, a tick across each end, and the figure on it — in a halo of the surface,
- *  upright whichever way the line runs, beside the line when it is too short to carry it. */
-function Dim({ a, b, text, mm, tone = "ink", bold = false, avoid }: { a: Point; b: Point; text: string; mm: Mm; tone?: Tone; bold?: boolean; avoid?: Point | null }) {
+ *  upright whichever way the line runs, beside the line when it is too short to carry it. Exported
+ *  for the catalog's shape editor and the product drawer's preview, which figure an item the same way. */
+export function Dim({
+  a,
+  b,
+  text,
+  mm,
+  tone = "ink",
+  bold = false,
+  avoid,
+  rtl = false,
+}: {
+  a: Point;
+  b: Point;
+  text: string;
+  mm: Mm;
+  tone?: Tone;
+  bold?: boolean;
+  avoid?: Point | null;
+  /** The figure carries a Hebrew unit ("240 ס״מ") and reads right to left — laid out LTR, the unit
+   *  came out before the number. A ⌀ sign goes inside an LRI…PDI isolate in the text itself. */
+  rtl?: boolean;
+}) {
   const L = Math.hypot(b.x - a.x, b.y - a.y);
   if (L < 1) return null;
   const u = { x: (b.x - a.x) / L, y: (b.y - a.y) / L };
@@ -74,7 +96,7 @@ function Dim({ a, b, text, mm, tone = "ink", bold = false, avoid }: { a: Point; 
         dominantBaseline="central"
         fill="currentColor"
         className="nums"
-        style={{ fontSize: font, fontWeight: bold ? 700 : 600, direction: "ltr", paintOrder: "stroke", stroke: "var(--color-surface)", strokeWidth: mm(3), strokeLinejoin: "round" }}
+        style={{ fontSize: font, fontWeight: bold ? 700 : 600, direction: rtl ? "rtl" : "ltr", paintOrder: "stroke", stroke: "var(--color-surface)", strokeWidth: mm(3), strokeLinejoin: "round" }}
       >
         {text}
       </text>

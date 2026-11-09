@@ -90,7 +90,7 @@ export function buildScene(input: SceneInput): Scene {
     if (isRailed(p)) curtain(input, out, p);
     else if (p.perch) perched(input, out, p, elevation);
     else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofOf(p.position));
-    else floorPlacement(input, out, p, elevation);
+    else floorPlacement(input, out, p, elevation, roofOf(p.position));
   }
   return { nodes: out.nodes(), bounds: input.plan.bounds, roofedMm, stats: out.stats() };
 }
@@ -117,7 +117,7 @@ function tagOf(kind: string | null, p: Placement, label: string | undefined) {
   return { type: kind === "flowers" ? ("flowers" as const) : ("item" as const), id: p.id, label };
 }
 
-function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, elevation: Elevation): void {
+function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, elevation: Elevation, roofedMm: number | null = null): void {
   if (p.stage) {
     // A stage stands on the venue floor: its own outline is not a platform under itself.
     stageNodes(p as StagePlacement, out, stageOpts(input));
@@ -152,7 +152,10 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
     out.item(p.id, { type: "item", id: p.id, label: product.name }, product.category === "dance-floors" ? danceFloorBody(laid) : rugBody(laid), roomTransform(p, Math.max(0, z)));
     return;
   }
-  out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, floorOf(footprint)));
+  const z = floorOf(footprint);
+  // A chuppah hung with no posts rides on cables to the ceiling over it (lib/venues/roofs.ts).
+  if (kind === "chuppah" && roofedMm && roofedMm > z + ctx.heightMm) ctx.chainMm = roofedMm - z - ctx.heightMm;
+  out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, z));
 }
 
 /** A design item standing on a banquette: where the plan spreads it along the strip, on its top. */

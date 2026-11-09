@@ -13,6 +13,7 @@ import { Popover } from "@/components/popover";
 import { Note, PanelRow, ltr } from "@/components/inspector-bar";
 import { NumberField } from "@/components/number-field";
 import { Button } from "@/components/button";
+import { SwitchRow } from "@/components/toggle";
 import { LayoutGrid, PenLine, Sailboat, Waves } from "lucide-react";
 
 const cm = (mm: number) => Math.round(mm / 10);
@@ -119,6 +120,18 @@ function DrapePanel({ rail, onRail, onRedraw }: { rail: RunRail | CanopyRail; on
       <PanelRow label={canopy ? "גלים בכל רצועה" : "גלים לאורך"} htmlFor="drape-waves">
         <NumberField id="drape-waves" decimals={0} min={0} max={40} hideZero placeholder={`${autoWaves}`} value={rail.waves ?? 0} onChange={(v) => onRail(own(rail, "waves", v))} className="w-20" />
       </PanelRow>
+      {/* Fairy lights woven in (RunRail.lights — the user's photograph of אמרה's dance floor): a
+          drawing fact for the plan and the room, never counted. */}
+      <SwitchRow
+        checked={rail.lights === true}
+        onChange={(on) => {
+          const { lights: _off, ...rest } = rail;
+          void _off;
+          onRail(on ? { ...rail, lights: true } : (rest as Rail));
+        }}
+        label="אורות שזורים בבד"
+        hint="נקודות אור קטנות לאורך כל רצועה, על התוכנית ובחדר. ציור בלבד — לא נספר ולא מתומחר."
+      />
       {onRedraw && (
         <div className="mt-2 flex gap-2">
           <Button size="sm" variant="outline" className="flex-1" onClick={() => onRedraw("run")}>

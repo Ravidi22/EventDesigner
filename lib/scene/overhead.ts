@@ -24,15 +24,20 @@ import type { Point } from "@/lib/studio/hall";
 import type { CurtainStyle, SymbolKind } from "@/lib/catalog/symbols";
 import { FORMS, type FlowerDrawSpec, isPale } from "@/lib/catalog/flower-draw";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
+import { CASCADE, CHANDELIER_PROFILES, EMPIRE, FITTING_COLOUR, PENDANT_GLASS, SPIRAL, type CrystalBead, chandelierOf, chandelierTiers, crystalBeads, empireCrownR, equalGlobes, glassFinishOf, globeRise, profileAt, ringGlobe, ringPoint } from "@/lib/catalog/chandelier";
+import type { PendantFitting } from "@/lib/catalog/types";
+import { revolveProfileMm } from "@/lib/element/revolve";
+import { darkerShade } from "@/lib/catalog/border";
+import { packCircles } from "@/components/item-symbol";
 import { isMain } from "../self-check";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { applyTransform } from "./frame";
-import { ENVELOPE, clothMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
+import { ENVELOPE, clothMaterial, crystalMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
 import { frondSpan } from "./organic";
-import { runDrop, runHalfWidth, type ClothRun } from "@/lib/studio/ceiling-cloth";
+import { runDrop, runHalfWidth, runLights, type ClothRun } from "@/lib/studio/ceiling-cloth";
 
 // ── the constants ───────────────────────────────────────────────────────────────────────────────
 
@@ -51,8 +56,6 @@ const CABLE_R_MM = 4;
 const CABLES_FROM_MM = 3000;
 /** types.ts EmitterNode: "a chandelier bulb ~0.7". */
 const BULB = 0.7;
-/** Glass drops under the ring. */
-const DROPS = 12;
 /** DrapePleats (item-symbol.tsx:1276, :1279): a pleat every 150 mm, amplitude 0.28 of the band —
  *  the band the canvas draws 220 mm thick (canvas-stage.tsx:2775 DRAPE_MM). */
 const PLEAT_MM = 150;
@@ -147,38 +150,541 @@ function chainParts(top: number, chainMm: number | undefined, spread: number, ma
 
 // ── the chandelier (item-symbol.tsx:923 chandelier) ─────────────────────────────────────────────
 
-/** A chandelier standing on its underside: the ring at 0.74 R and the arms out to it at 0.2 h, a
- *  bulb at every arm's end (lit), the hub up to 0.5 h, the crystal ring at 0.48 R lower down and
- *  twelve drops hanging under the ring to z 0, a crown at the top, and the chain above it. */
+/** The blush the floral hoop's flowers are, when the row's tone is its metal. */
+const FLORAL_BLOOM = "#f1c2cf";
+/** A chandelier's candle at its REAL size, whatever the plan draws (the plan's bulbs are fat enough
+ *  to find at 1:100 — in the room they read as snowballs; seen headless, 2026-11-08): a sleeve 2–3 cm
+ *  across in its drip pan, a flame bulb on top. */
+const CANDLE_SLEEVE = "#f4efe4";
+/** A lamp at its real size: a bulb is a few centimetres across, never the plan's dot. */
+const LAMP_MAX_R_MM = 22;
+/** Cut glass (types.ts `crystal`): beads, drops, rods, a finial. */
+const CRYSTAL = crystalMaterial();
+/** A floating ring's GLOBE: amber glass lit from within, in a cut deep enough to stay amber lit. */
+const GLOBE = "#d9a650";
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** A glass pendant's glass, by its shade (lib/catalog/chandelier.ts glassFinishOf): clear barely
+ *  there; tinted half-clear in its colour (amber, smoke); mirrored as a silvered metal the lamp
+ *  shows faintly through; frosted a milky gloss. */
+function pendantGlass(name: string, swatch: string): MaterialRef {
+  switch (glassFinishOf(name, swatch)) {
+    case "clear":
+      return { colour: "#eef3f6", kind: "glass", opacity: 0.2 };
+    case "mirror":
+      return { colour: swatch || "#a9afb6", kind: "metal", opacity: 0.86 };
+    case "frosted":
+      return { colour: swatch || "#f4f2ee", kind: "gloss", opacity: 0.9 };
+    default:
+      return { colour: swatch, kind: "glass", opacity: 0.4 };
+  }
+}
+
+/** A glass's profile made smooth for the lathe: every span cut in `steps` along a Catmull-Rom curve
+ *  through the points (a globe of seven points turned in 32 segments read as a faceted ball). */
+function smoothProfile(pts: { r: number; z: number }[], steps = 5): { r: number; z: number }[] {
+  if (pts.length < 3) return pts;
+  const out: { r: number; z: number }[] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const cr = (a: number, b: number, c: number, d: number) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+      out.push({ r: Math.max(0.5, cr(p0.r, p1.r, p2.r, p3.r)), z: cr(p0.z, p1.z, p2.z, p3.z) });
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  // Never fold back on itself in height.
+  return out.filter((q, i) => i === 0 || q.z > out[i - 1].z);
+}
+/** A pendant's cap, socket, cord and canopy in its metal (white is enamel, not metal). */
+const fittingMaterial = (f: PendantFitting): MaterialRef => (f === "white" ? { colour: FITTING_COLOUR.white, kind: "gloss" } : metalMaterial(FITTING_COLOUR[f]));
+/** An Edison bulb (an ST64 teardrop), bottom to top as fractions of its radius and height; its glass,
+ *  its filament. */
+const EDISON = [
+  { r: 0.05, z: 0 },
+  { r: 0.7, z: 0.1 },
+  { r: 1, z: 0.35 },
+  { r: 0.85, z: 0.6 },
+  { r: 0.42, z: 0.85 },
+  { r: 0.36, z: 1 },
+];
+const BULB_GLASS: MaterialRef = { colour: "#f6ead2", kind: "glass", opacity: 0.3 };
+const FILAMENT: MaterialRef = { colour: "#ffb347", kind: "emissive" };
+/** A pendant's cord: a few millimetres, never a chandelier's chain. */
+const CORD_R_MM = 2.5;
+
+/** A round bar from `a` to `c` (body frame): a cylinder standing on `a`, turned toward `c` on the
+ *  plan and leaned to reach it (types.ts tiltDeg: the top toward its own +y after rotDeg — the
+ *  sputnik's rods use the same turn). */
+function rod(a: Vec3, c: Vec3, r: number, material: MaterialRef, segments = 6): Part {
+  const dx = c.x - a.x;
+  const dy = c.y - a.y;
+  const dz = c.z - a.z;
+  const len = Math.max(1, Math.hypot(dx, dy, dz));
+  const across = Math.hypot(dx, dy);
+  const p: Part = { shape: "cylinder", rTop: r, rBottom: r, h: len, at: a, segments, material };
+  if (across > 1e-6) {
+    p.rotDeg = deg(Math.atan2(dy, dx)) - 90;
+    p.tiltDeg = deg(Math.atan2(across, dz));
+  } else if (dz < 0) p.tiltDeg = 180;
+  return p;
+}
+
+/** A turned profile (bottom to top, body frame) standing at `at`. */
+const lathe = (profile: { r: number; z: number }[], at: Vec3, material?: MaterialRef, segments = 16): Part => (material ? { shape: "lathe", profile, at, segments, material } : { shape: "lathe", profile, at, segments });
+
+/** A bead of cut crystal where the layout hangs it (fractions of R and h): a round bead, or — the
+ *  big ones, the PEARS under an arm, the balls of a spiral — a teardrop, its point up. */
+function crystalPart(b: ItemBuild, bd: CrystalBead, R: number, h: number, round = false) {
+  const r = Math.max(5, bd.r * R);
+  const at = vec3(bd.x * R, bd.y * R, bd.z * h);
+  if (!round && bd.r >= 0.028 * 1.4) {
+    b.parts.push(sphere(r, at, CRYSTAL, 6));
+    b.parts.push({ shape: "cylinder", rTop: r * 0.12, rBottom: r * 0.9, h: r * 1.6, at: vec3(at.x, at.y, at.z + r * 0.15), segments: 6, material: CRYSTAL });
+  } else b.parts.push(sphere(r, at, CRYSTAL, 6));
+}
+
+/** Every strand's beads linked into one chain of crystal, bead to bead in hanging order: from the
+ *  floor a strand of octagons touching reads as a line of light, never as a row of dots. */
+function chains(b: ItemBuild, beads: readonly CrystalBead[], R: number, h: number) {
+  const last = new Map<number, CrystalBead>();
+  for (const bd of beads) {
+    if (bd.strand === undefined) continue;
+    const prev = last.get(bd.strand);
+    last.set(bd.strand, bd);
+    if (!prev) continue;
+    b.parts.push(rod(vec3(prev.x * R, prev.y * R, prev.z * h), vec3(bd.x * R, bd.y * R, bd.z * h), Math.max(1.5, Math.min(prev.r, bd.r) * R * 0.32), CRYSTAL, 4));
+  }
+}
+
+/** The column a chandelier's arms come out of, turned like a baluster stack: a bulb at the foot, a
+ *  collar under every tier where its arms join, a vase between tiers, a neck up to the crown —
+ *  `r` its narrowest radius, `tierZs` the tiers' heights (mm, ascending), from `z0` to `z1`. */
+function columnProfile(r: number, z0: number, z1: number, tierZs: number[], h: number): { r: number; z: number }[] {
+  const pts: { r: number; z: number }[] = [
+    { r: r * 0.4, z: z0 },
+    { r: r * 1.5, z: z0 + h * 0.035 },
+    { r: r * 0.7, z: z0 + h * 0.07 },
+  ];
+  let last = z0 + h * 0.07;
+  tierZs.forEach((zt, k) => {
+    const mid = k === 0 ? (last + zt) / 2 : (tierZs[k - 1] + zt) / 2;
+    if (mid - h * 0.02 > last) pts.push({ r: r * 1.3, z: mid });
+    const ring = [
+      { r: r * 0.75, z: zt - h * 0.045 },
+      { r: r * 1.9, z: zt - h * 0.03 },
+      { r: r * 1.9, z: zt - h * 0.012 },
+      { r: r * 0.8, z: zt + h * 0.005 },
+    ];
+    for (const p of ring) if (p.z > pts[pts.length - 1].z + 1) pts.push(p);
+    last = zt + h * 0.005;
+  });
+  if (z1 - h * 0.04 > last) pts.push({ r: r * 1.15, z: (last + z1) / 2 });
+  pts.push({ r: r * 0.7, z: z1 });
+  return pts.filter((p, i) => i === 0 || p.z > pts[i - 1].z);
+}
+
+/** A chandelier standing on its underside, in its STYLE (the plan's — lib/catalog/symbols.ts
+ *  ChandelierStyle) and its build (MapAppearance.chandelier, and the base's body as its SILHOUETTE
+ *  → lib/catalog/chandelier.ts: tiers of lights and the crystal that hangs from them — the same
+ *  layout the plan draws, so a bead seen from above hangs here as a bead of cut crystal). Every
+ *  piece is held by something: the column, a spoke, a cable, the crown — nothing floats.
+ *    arms      — a turned column; every tier's arms curve down out of a collar and up to a candle in
+ *                its drip pan, its flame lit; a garland of crystal round the arms' dip (the plan's
+ *                dashed circle at 0.48 R), the crystal as the spec says (drops by default), a crystal
+ *                finial under the column, the crown, the chain.
+ *    crystal   — the same column; straight arms out to a ring at every tier (0.84 R), candles, strands.
+ *    hoop      — rings of light (a metal hoop, an LED strip in it), cables from the crown to each.
+ *    sputnik   — a sphere and rods to every side, up, level and down, a lamp on each.
+ *    pendants  — glass globes of different sizes on cables from one canopy plate, a lamp in each.
+ *    linear    — a bar with its lamps in a row under it, two cables; crystal under the bar if asked.
+ *    floral    — a hoop wound with foliage, clusters of blooms on it, lights between them.
+ *    drums     — stacked drum shades, the widest on top (CASCADE): lit drums of the row's cloth
+ *                with metal rims, lamps inside, a rod down to the tail (the user's photographs).
+ *    prisms    — a cascade of crystal rods: a frame ring on every band held by spokes off the rod,
+ *                a faceted rod and its bead per rod, a crystal tail to a point under the lowest.
+ *    empire    — baskets: crown, every ring held by spokes, strands of beads — the lowest sweeping in
+ *                to a small ring, every upper ring's a curtain down to the ring under it.
+ *    spiral    — a plate with its downlights; strands of beads from it, a ball at every end, the
+ *                balls winding down in a helix.
+ *    rings     — floating rings, each leaned its own way, an LED strip in it and an amber globe
+ *                inside, hung by cables from the crown. */
 function chandelierBody(ctx: ItemContext): ItemBuild {
   const R = Math.max(50, Math.min(ctx.widthMm, ctx.depthMm) / 2); // item-symbol.tsx:924
   const h = ctx.heightMm > 0 ? ctx.heightMm : CHANDELIER_H_MM;
-  const count = Math.max(3, Math.round(ctx.count) || 8); // :925, symbolCount's default of 8
+  const built = chandelierOf(ctx.drawStyle, ctx.chandelier);
+  const tiers = chandelierTiers(built, ctx.count);
   const frame = frameMaterial(ctx.tone);
   const b = make(frame);
-  const ringR = R * 0.74; // :926
-  const ringZ = h * 0.2;
-  const bulb = Math.min(R * 0.1, ((Math.PI * ringR) / count) * 0.35); // :927
   const bulbM = emissiveMaterial(ENVELOPE.bulb);
+  const light = (p: Point, z: number, r: number) => {
+    b.parts.push(sphere(r, vec3(p.x, p.y, z), bulbM, 8));
+    b.emitters.push({ at: vec3(p.x, p.y, z), radiusMm: r * 2, colour: ENVELOPE.bulb, strength: BULB });
+  };
+  /** A lamp you do not see as a bulb — an LED in a hoop, a downlight in a plate: its glow only. */
+  const glowAt = (p: Point, z: number, r: number) => b.emitters.push({ at: vec3(p.x, p.y, z), radiusMm: r * 2, colour: ENVELOPE.bulb, strength: BULB });
+  const lampR = (pitch: number) => Math.min(LAMP_MAX_R_MM, pitch);
+  const beads = () => {
+    const all = crystalBeads(built, tiers);
+    for (const bd of all) crystalPart(b, bd, R, h);
+    chains(b, all, R, h);
+  };
+  /** The crown on top, from the body's highest joint up to h: a turned cup the chain rises from. */
+  const crown = (r: number, from = h * 0.9) =>
+    b.parts.push(lathe([{ r: r * 0.45, z: 0 }, { r: r, z: (h - from) * 0.45 }, { r: r * 0.9, z: (h - from) * 0.8 }, { r: r * 0.35, z: h - from }], vec3(0, 0, from), frame));
+  /** A candle on an arm's end at `p`, its drip pan at `z`: sleeve, flame, its glow. */
+  const candle = (p: Point, z: number) => {
+    const cr = clamp(R * 0.02, 8, 14);
+    const ch = clamp(h * 0.085, 40, 120);
+    b.parts.push(cyl(cr * 2.6, Math.max(4, cr * 0.4), vec3(p.x, p.y, z), frame, 12));
+    b.parts.push(cyl(cr, ch, vec3(p.x, p.y, z + cr * 0.4), { colour: CANDLE_SLEEVE, kind: "matte" }, 10));
+    const fz = z + cr * 0.4 + ch + cr * 0.9;
+    b.parts.push(sphere(cr * 0.9, vec3(p.x, p.y, fz), bulbM, 8));
+    b.emitters.push({ at: vec3(p.x, p.y, fz), radiusMm: cr * 2, colour: ENVELOPE.bulb, strength: BULB });
+  };
+  /** Cables from the crown's rim down to points of a ring (body frame). */
+  const cables = (to: Vec3[], fromR: number) => {
+    for (const q of to) {
+      const a = Math.atan2(q.y, q.x);
+      b.parts.push(rod(vec3(q.x, q.y, q.z), vec3(Math.cos(a) * fromR, Math.sin(a) * fromR, h * 0.97), CABLE_R_MM * 0.5, frame, 4));
+    }
+  };
+  /** Spokes from the column at `z` out to a ring of radius `r`. */
+  const spokes = (r: number, z: number, from: number, n = 4, turn = 45) => {
+    for (let i = 0; i < n; i++) {
+      const p = polar(r, turn + (i * 360) / n);
+      b.parts.push(rod(vec3(Math.cos(rad(turn + (i * 360) / n)) * from, Math.sin(rad(turn + (i * 360) / n)) * from, z), vec3(p.x, p.y, z), Math.max(3, R * 0.006), frame, 5));
+    }
+  };
 
-  b.parts.push(torus(ringR, Math.max(8, R * 0.03), vec3(0, 0, ringZ), frame));
-  b.parts.push(cyl(R * 0.13, h * 0.5, vec3(0, 0, 0), frame)); // :942 the hub
-  b.parts.push(torus(R * 0.48, Math.max(4, R * 0.02), vec3(0, 0, h * 0.1), GLASS)); // :934 the crystal ring
-  const drop = Math.max(6, R * 0.03);
-  for (let i = 0; i < DROPS; i++) {
-    const p = polar(ringR, -90 + (i + 0.5) * (360 / DROPS));
-    b.parts.push(sphere(drop, vec3(p.x, p.y, drop), GLASS, 6));
+  switch (built.style) {
+    case "sputnik": {
+      // A sphere at half height; rods out at the golden angle, each its own length (the plan's
+      // :sputnik), a third pointing down, a third level, a third up; a lamp on every end. The rod is
+      // a cylinder standing on the core, leaned (90° − its elevation) from vertical toward its own
+      // +y, turned so that +y faces its bearing (types.ts: tiltDeg after rotDeg).
+      const m = Math.max(12, Math.round(ctx.count) || 8);
+      const core = h * 0.5;
+      b.parts.push(sphere(R * 0.17, vec3(0, 0, core), frame, 12));
+      for (let i = 0; i < m; i++) {
+        const len = R * (0.6 + 0.36 * (((i * 7) % 5) / 4));
+        const bearing = i * 137.508;
+        const elev = ((i % 3) - 1) * 30;
+        b.parts.push({ shape: "cylinder", rTop: ARM_MM / 2, rBottom: ARM_MM / 2, h: len, at: vec3(0, 0, core), rotDeg: bearing - 90, tiltDeg: 90 - elev, segments: 6, material: frame });
+        light(polar(len * Math.cos(rad(elev)), bearing), core + len * Math.sin(rad(elev)), R * 0.05);
+      }
+      b.parts.push(cyl(CHAIN_R_MM, h - core, vec3(0, 0, core), frame, 8));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    case "pendants": {
+      // Glass pendants — one globe or a group (lib/catalog/chandelier.ts): every globe where the plan
+      // puts it (packed in sizes, or all one size), at its own drop, the lowest at the underside; its
+      // glass in the shade's finish (amber, smoke, clear, chrome — or the next of the row's shades
+      // per globe) and the base's shape; a cap and socket in the fitting's metal, an Edison bulb
+      // round its lit filament, and its own cord up to the canopy — at the ceiling when there is one.
+      const n = Math.max(1, Math.round(ctx.count) || 8);
+      const fit = fittingMaterial(built.fitting);
+      const shape = built.profile ?? PENDANT_GLASS.globe;
+      const palette = built.glassMix ? ctx.chandelier?.palette : undefined;
+      const shades = palette?.length ? palette : [{ name: ctx.resolved?.variant?.name ?? "", swatch: ctx.tone }];
+      const globes = built.equal ? equalGlobes(n) : packCircles(n);
+      const top = h + (ctx.chainMm && ctx.chainMm > 0 ? ctx.chainMm : 0);
+      const canopyH = 25;
+      b.parts.push(cyl(n === 1 ? clamp(R * 0.35, 40, 70) : Math.max(60, R * 0.3), canopyH, vec3(0, 0, top - canopyH), fit, 24));
+      globes.forEach((g, i) => {
+        const x = n === 1 ? 0 : (g.x * ctx.widthMm) / 2;
+        const y = n === 1 ? 0 : (g.y * ctx.depthMm) / 2;
+        const gr = Math.max(40, (n === 1 ? 0.98 : g.r * 0.94) * R);
+        const capH = clamp(gr * 0.3, 30, 70);
+        const capR = clamp(gr * 0.24, 16, 45);
+        const gh = Math.max(gr, Math.min(gr * 2, h - capH));
+        const zb = Math.max(0, h - gh - capH) * globeRise(i, n);
+        const shade = shades[i % shades.length];
+        b.parts.push(lathe(smoothProfile(revolveProfileMm(shape, gr, gh)), vec3(x, y, zb), pendantGlass(shade.name, shade.swatch), 40));
+        const capZ = zb + gh - capH * 0.35;
+        b.parts.push(cyl(capR, capH, vec3(x, y, capZ), fit, 16));
+        // The socket under the cap and the Edison bulb hanging from it: a clear teardrop round its
+        // glowing filament, inside the glass.
+        const br = clamp(gr * 0.26, 16, 34);
+        const sockH = clamp(br * 1.2, 22, 45);
+        b.parts.push(cyl(Math.max(9, br * 0.45), sockH, vec3(x, y, capZ - sockH), fit, 12));
+        const bulbTop = capZ - sockH;
+        const bulbH = Math.max(br, Math.min(br * 2.6, (bulbTop - zb) * 0.9));
+        b.parts.push(lathe(EDISON.map((q) => ({ r: q.r * br, z: q.z * bulbH })), vec3(x, y, bulbTop - bulbH), BULB_GLASS, 16));
+        b.parts.push(cyl(2.5, bulbH * 0.45, vec3(x, y, bulbTop - bulbH * 0.72), FILAMENT, 6));
+        b.emitters.push({ at: vec3(x, y, bulbTop - bulbH * 0.5), radiusMm: br * 1.5, colour: ENVELOPE.bulb, strength: BULB });
+        // A short rod over the cap, as the photographs' pendants have, then the cord.
+        const cordFrom = capZ + capH;
+        const rod = Math.min(clamp(gr * 1.1, 60, 200), Math.max(0, top - canopyH - cordFrom));
+        if (rod > 0) b.parts.push(cyl(clamp(capR * 0.28, 5, 9), rod, vec3(x, y, cordFrom), fit, 10));
+        b.parts.push(cyl(CORD_R_MM, Math.max(1, top - canopyH - cordFrom - rod), vec3(x, y, cordFrom + rod), fit, 6));
+      });
+      return b;
+    }
+    case "linear": {
+      // A bar along the long side at 0.7 h, its lamps hung under it in a row, cables near each end,
+      // crystal drops under the bar between the lamps when asked.
+      const L = Math.max(ctx.widthMm, ctx.depthMm);
+      const D = Math.max(60, Math.min(ctx.widthMm, ctx.depthMm));
+      const alongX = ctx.widthMm >= ctx.depthMm;
+      const at = (s: number): Point => (alongX ? { x: s, y: 0 } : { x: 0, y: s });
+      const barZ = h * 0.7;
+      const barH = D * 0.14;
+      b.parts.push(box(L * 0.94, barH, barH, vec3(0, 0, barZ), frame, alongX ? 0 : 90));
+      const m = Math.max(2, Math.round(ctx.count) || 2);
+      const r = Math.min(D * 0.34, (L * 0.9) / (m * 3.2)) * 0.6;
+      const span = L * 0.9 - r * 2;
+      const drop = D * 0.25;
+      for (let i = 0; i < m; i++) {
+        const p = at(-span / 2 + (i * span) / (m - 1));
+        light(p, barZ - drop, r);
+        b.parts.push(cyl(3, Math.max(1, drop - r), vec3(p.x, p.y, barZ - drop + r), frame, 6));
+        if (built.crystals !== "none" && i < m - 1) {
+          const q = at(-span / 2 + ((i + 0.5) * span) / (m - 1));
+          b.parts.push(sphere(Math.max(6, R * 0.028), vec3(q.x, q.y, barZ - D * 0.1), CRYSTAL, 6), sphere(Math.max(6, R * 0.04), vec3(q.x, q.y, barZ - D * 0.2), CRYSTAL, 6));
+        }
+      }
+      for (const s of [-1, 1]) {
+        const p = at(s * L * 0.32);
+        b.parts.push(cyl(CABLE_R_MM, Math.max(1, h - (barZ + barH)), vec3(p.x, p.y, barZ + barH), frame, 6));
+      }
+      b.parts.push(...chainParts(h, ctx.chainMm, L * 0.32, frame));
+      return b;
+    }
+    case "floral": {
+      // The plan's hoop at 0.8 R wound with greenery (eighteen clumps in and out of the line), five
+      // clusters of blooms on it, a light between each pair, three cables up.
+      const ringR = R * 0.8;
+      const z = h * 0.5;
+      b.parts.push(torus(ringR, Math.max(8, R * 0.03), vec3(0, 0, z), frame));
+      const leaf = foliageMaterial(LEAF);
+      for (let i = 0; i < 18; i++) {
+        const p = polar(R * (i % 2 ? 0.86 : 0.74), i * 20);
+        b.parts.push({ shape: "blob", r: Math.max(20, R * 0.09), at: vec3(p.x, p.y, z), seed: i + 1, squash: 0.55, material: leaf });
+      }
+      const petal: MaterialRef = { colour: FLORAL_BLOOM, kind: "petal" };
+      for (let k = 0; k < 5; k++) {
+        const a = -72 + k * 72;
+        const c = polar(ringR, a);
+        for (let j = 0; j < 5; j++) {
+          const o = polar(R * 0.08 * (j ? 1 : 0), j * 72 + k * 13);
+          b.parts.push({ shape: "bloom", form: j % 2 ? "rose" : "peony", r: Math.max(12, R * 0.065), at: vec3(c.x + o.x, c.y + o.y, z + R * (0.04 + (j % 2) * 0.03)), seed: k * 5 + j + 1, material: petal });
+        }
+        light(polar(ringR, a + 36), z + R * 0.05, Math.max(8, Math.min(LAMP_MAX_R_MM, R * 0.04)));
+      }
+      cables([-60, 60, 180].map((a) => ({ ...polar(ringR, a), z: z + Math.max(8, R * 0.03) })).map((p) => vec3(p.x, p.y, p.z)), R * 0.15);
+      b.parts.push(cyl(R * 0.15, h * 0.03, vec3(0, 0, h * 0.97), frame));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    case "drums": {
+      // Stacked drum shades, the widest on top (lib/catalog/chandelier.ts CASCADE): every band a lit
+      // drum of the row's cloth — its own light (emissive, in a darker cut of the tone so it reads
+      // as the tone lit, never white), a metal rim top and bottom, its lamps inside — the rod down
+      // the middle from the tail to the canopy plate, the chain.
+      const rim = metalMaterial(pale(ctx.tone) ? "#c9a24a" : ctx.tone);
+      const cloth: MaterialRef = { colour: darkerShade(ctx.tone, 0.45), kind: "emissive" };
+      for (const t of tiers) {
+        const r = R * t.r;
+        const z = h * t.z;
+        const hh = h * (t.h ?? 0.2);
+        b.parts.push(cyl(r, hh, vec3(0, 0, z), cloth, 40));
+        const tube = Math.max(4, R * 0.012);
+        b.parts.push(torus(r, tube, vec3(0, 0, z), rim), torus(r, tube, vec3(0, 0, z + hh), rim));
+        const lr = Math.min(R * 0.05, ((Math.PI * r * CASCADE.lightR) / t.count) * 0.3);
+        for (const a of t.angles) light(polar(r * CASCADE.lightR, a), z + hh * 0.5, lr);
+      }
+      const last = tiers[tiers.length - 1];
+      const rodFrom = tiers.length > 1 ? 0 : h * (last.z + (last.h ?? 0));
+      b.parts.push(cyl(Math.max(6, R * 0.04), Math.max(1, h * 0.97 - rodFrom), vec3(0, 0, rodFrom), rim, 8));
+      b.parts.push(cyl(R * 0.15, h * 0.03, vec3(0, 0, h * 0.97), rim));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, rim));
+      return b;
+    }
+    case "prisms": {
+      // A cascade of crystal rods (CASCADE): a frame ring at the top of every band held by spokes off
+      // the rod, every rod the plan's dot as a faceted bar of cut crystal the band tall with a bead
+      // at its foot, the lamps inside each band, the rod down the middle — through every band to a
+      // crystal tail under the lowest, or, a single drum of crystal, only down to its ring — the
+      // canopy, the chain.
+      const rodR = Math.max(6, R * 0.03);
+      const tube = clamp(R * 0.016, 5, 16);
+      for (const t of tiers) {
+        const r = R * t.r;
+        const z = h * t.z;
+        const hh = h * (t.h ?? 0.2);
+        b.parts.push(torus(r, tube, vec3(0, 0, z + hh), frame));
+        spokes(r, z + hh + tube, rodR, 4);
+        const lr = lampR(Math.min(R * 0.05, ((Math.PI * r * CASCADE.lightR) / t.count) * 0.3));
+        for (const a of t.angles) light(polar(r * CASCADE.lightR, a), z + hh * 0.5, lr);
+      }
+      for (const bd of crystalBeads(built, tiers)) {
+        const w = Math.max(5, bd.r * R * 0.9);
+        const len = Math.max(1, (bd.h ?? 0) * h);
+        b.parts.push({ shape: "cylinder", rTop: w, rBottom: w, h: len, at: vec3(bd.x * R, bd.y * R, bd.z * h), segments: 6, material: CRYSTAL });
+        b.parts.push(sphere(w * 1.35, vec3(bd.x * R, bd.y * R, bd.z * h), CRYSTAL, 6));
+      }
+      const lowest = tiers[0];
+      if (tiers.length > 1) {
+        // The tail: beads down the middle from the lowest band to a drop at the point.
+        const from = h * lowest.z;
+        const tip = Math.max(h * 0.03, from - h * 0.12);
+        b.parts.push(cyl(rodR, h * 0.97 - from, vec3(0, 0, from), frame, 8));
+        for (let z = from - h * 0.03; z > tip; z -= Math.max(20, h * 0.03)) b.parts.push(sphere(Math.max(6, R * 0.03), vec3(0, 0, z), CRYSTAL, 6));
+        crystalPart(b, { x: 0, y: 0, z: tip / h, r: 0.06 }, R, h);
+      } else {
+        const top = h * (lowest.z + (lowest.h ?? 0));
+        b.parts.push(cyl(rodR, Math.max(1, h * 0.97 - top), vec3(0, 0, top), frame, 8));
+      }
+      b.parts.push(cyl(R * 0.15, h * 0.03, vec3(0, 0, h * 0.97), frame));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    case "empire": {
+      // Crystal baskets (EMPIRE): the crown ring up top, every ring held by spokes off the rod, the
+      // small ring the lowest bag sweeps in to; every bead where the layout hangs it — the bag, the
+      // curtains between rings, the tent to the crown, the fringes, the drop cluster; the lamps in
+      // the bag and inside every ring over it; a rod from the finial to the crown; the chain.
+      const rodR = Math.max(5, R * 0.025);
+      const crownR = empireCrownR(tiers);
+      b.parts.push(torus(R * crownR, Math.max(5, R * 0.015), vec3(0, 0, h * EMPIRE.crownZ), frame));
+      tiers.forEach((t) => {
+        b.parts.push(torus(R * t.r, Math.max(6, R * 0.02), vec3(0, 0, h * t.z), frame));
+        spokes(R * t.r, h * t.z, rodR, 4);
+      });
+      b.parts.push(torus(R * EMPIRE.bottomR, Math.max(4, R * 0.012), vec3(0, 0, h * EMPIRE.bottomZ), frame));
+      spokes(R * EMPIRE.bottomR, h * EMPIRE.bottomZ, rodR, 3, 90);
+      tiers.forEach((t, k) => {
+        const below = k === 0 ? EMPIRE.bottomZ : tiers[k - 1].z;
+        const lz = k === 0 && tiers.length === 1 ? EMPIRE.lightZ : (below + t.z) / 2;
+        const lightR = EMPIRE.lightR * t.r;
+        const lr = lampR(Math.min(R * 0.06, ((Math.PI * R * lightR) / t.count) * 0.3));
+        for (const a of t.angles) light(polar(R * lightR, a), h * lz, lr);
+      });
+      beads();
+      const finial = Math.max(10, R * 0.06);
+      b.parts.push(sphere(finial, vec3(0, 0, finial), CRYSTAL, 10));
+      b.parts.push(cyl(rodR, Math.max(1, h * EMPIRE.crownZ - finial * 2), vec3(0, 0, finial * 2), frame, 8));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    case "spiral": {
+      // A plate the size of the piece at the top, its downlights; a strand from it to every ball —
+      // a thread with its beads, the ball at its end where the helix passes.
+      const plate = tiers[0];
+      b.parts.push(cyl(R * 0.98, h * (1 - SPIRAL.plateZ), vec3(0, 0, h * SPIRAL.plateZ), frame, 40));
+      for (const a of plate.angles) {
+        const p = polar(R * plate.r, a);
+        b.parts.push(cyl(R * 0.045, 4, vec3(p.x, p.y, h * SPIRAL.plateZ - 4), bulbM, 10));
+        glowAt(p, h * SPIRAL.plateZ - 10, R * 0.05);
+      }
+      const all = crystalBeads(built, tiers);
+      const ends = all.filter((bd) => bd.r > 0.03);
+      for (const e of ends) b.parts.push(cyl(1.2, Math.max(1, h * SPIRAL.plateZ - e.z * h), vec3(e.x * R, e.y * R, e.z * h), { colour: "#e9eef3", kind: "glass", opacity: 0.5 }, 3));
+      for (const bd of all) crystalPart(b, bd, R, h, true);
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    case "rings": {
+      // Floating rings: each a leaned metal hoop with an LED strip inside it, hung from the crown by
+      // two cables to its highest and lowest points; an amber globe in each, lit, on its own cable.
+      const tube = clamp(R * 0.018, 5, 18);
+      const led = emissiveMaterial(ENVELOPE.bulb);
+      const aspect = R / h;
+      const crownR = R * 0.3;
+      tiers.forEach((t, k) => {
+        const at = vec3(0, 0, h * t.z);
+        const lean = { rotDeg: t.turnDeg ?? 0, tiltDeg: t.tiltDeg ?? 0 };
+        b.parts.push({ shape: "torus", r: R * t.r, tube, at, segments: 64, ...lean, material: frame });
+        b.parts.push({ shape: "torus", r: R * t.r - tube * 1.1, tube: tube * 0.45, at, segments: 64, ...lean, material: led });
+        const tops = [90, 270].map((a) => ringPoint(t, (t.turnDeg ?? 0) + a, aspect));
+        cables(tops.map((q) => vec3(q.x * R, q.y * R, q.z * h + tube)), crownR);
+        for (const a of [0, 120, 240]) {
+          const q = ringPoint(t, (t.turnDeg ?? 0) + a, aspect);
+          glowAt({ x: q.x * R, y: q.y * R }, q.z * h, tube * 2);
+        }
+        const g = ringGlobe(t, k);
+        const gr = g.r * R;
+        const gc = vec3(g.x * R, g.y * R, g.z * h);
+        // A lit globe: amber light through its glass — it is the piece's lamp, seen by day too.
+        b.parts.push(sphere(gr, gc, { colour: GLOBE, kind: "emissive" }, 16));
+        b.emitters.push({ at: gc, radiusMm: gr * 2, colour: ENVELOPE.bulb, strength: BULB });
+        b.parts.push(cyl(CABLE_R_MM * 0.5, Math.max(1, h * 0.97 - (gc.z + gr)), vec3(gc.x, gc.y, gc.z + gr), frame, 4));
+      });
+      b.parts.push(cyl(crownR, h * 0.03, vec3(0, 0, h * 0.97), frame, 32));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    case "hoop": {
+      // Rings of light: each tier's metal hoop with an LED strip along its inside, glowing where the
+      // plan puts its lamps; crystal if asked; cables from the crown down to every hoop.
+      const tube = clamp(R * 0.025, 6, 22);
+      const led = emissiveMaterial(ENVELOPE.bulb);
+      for (const t of tiers) {
+        const ringR = R * t.r;
+        const z = h * t.z;
+        b.parts.push(torus(ringR, tube, vec3(0, 0, z), frame));
+        b.parts.push(torus(ringR - tube * 1.1, tube * 0.45, vec3(0, 0, z), led));
+        for (const a of t.angles) glowAt(polar(ringR, a), z + tube, tube * 2);
+        cables([-60, 60, 180].map((a) => polar(ringR, a)).map((p) => vec3(p.x, p.y, z + tube * 2)), R * 0.12);
+      }
+      beads();
+      b.parts.push(cyl(R * 0.12, h * 0.03, vec3(0, 0, h * 0.97), frame));
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
+    default: {
+      // Arms and crystal: a turned column from the finial to the crown; every tier's arms out of a
+      // collar to a candle — an ARMS piece's curving down and up again in three runs, with a garland
+      // of crystal draped round the lowest dip (the plan's dashed 0.48 R); a CRYSTAL piece's straight
+      // out to a thin ring that carries its strands. The crystal as laid, the crown, the chain.
+      const hubR = clamp(R * 0.05, 12, 50);
+      const armR = clamp(R * 0.008, 4, 9);
+      const arms = built.style === "arms";
+      const tierZs = tiers.map((t) => h * t.z);
+      const topZ = h * 0.9;
+      const finial = clamp(R * 0.05, 10, 40);
+      b.parts.push(lathe(columnProfile(hubR, finial * 1.6, topZ, tierZs, h), vec3(0, 0, 0), frame));
+      crystalPart(b, { x: 0, y: 0, z: finial / h, r: finial / R }, R, h);
+      for (const t of tiers) {
+        const ringR = R * t.r;
+        const z = h * t.z;
+        for (const a of t.angles) {
+          const d = polar(1, a);
+          const at = (r: number, zz: number) => vec3(d.x * r, d.y * r, zz);
+          if (arms) {
+            const path = [at(hubR * 1.6, z - h * 0.02), at(ringR * 0.5, z - h * 0.075), at(ringR * 0.88, z - h * 0.06), at(ringR, z - h * 0.012)];
+            for (let i = 1; i < path.length; i++) b.parts.push(rod(path[i - 1], path[i], armR, frame));
+          } else {
+            b.parts.push(rod(at(hubR * 1.6, z - h * 0.02), at(ringR, z - h * 0.012), armR, frame));
+          }
+          candle(polar(ringR, a), z - h * 0.012);
+        }
+        if (!arms) b.parts.push(torus(ringR * 1.05, clamp(R * 0.008, 3, 8), vec3(0, 0, z - h * 0.02), frame));
+      }
+      if (arms) {
+        // The garland round the lowest dip: a necklace of beads at 0.48 R.
+        const z = h * tiers[0].z - h * 0.075;
+        const n = Math.max(16, Math.round((Math.PI * 2 * R * 0.48) / Math.max(20, R * 0.06)));
+        for (let i = 0; i < n; i++) {
+          const p = polar(R * 0.48, (i * 360) / n);
+          b.parts.push(sphere(Math.max(5, R * 0.016), vec3(p.x, p.y, Math.max(0, z)), CRYSTAL, 6));
+        }
+      }
+      beads();
+      crown(clamp(R * 0.14, 25, 160), topZ);
+      b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
+      return b;
+    }
   }
-  for (let i = 0; i < count; i++) {
-    const p = polar(ringR, -90 + (i * 360) / count); // :926 the plan's angles
-    arm(b, p, ringZ, frame);
-    const z = ringZ + h * 0.1;
-    b.parts.push(sphere(bulb, vec3(p.x, p.y, z), bulbM, 8));
-    b.emitters.push({ at: vec3(p.x, p.y, z), radiusMm: bulb * 2, colour: ENVELOPE.bulb, strength: BULB });
-  }
-  b.parts.push(cyl(R * 0.2, h * 0.1, vec3(0, 0, h * 0.9), frame)); // the crown
-  b.parts.push(...chainParts(h, ctx.chainMm, R * 0.2, frame));
-  return b;
 }
 
 // ── a hung arrangement (./flowers.ts upside down) ───────────────────────────────────────────────
@@ -504,10 +1010,26 @@ export function swagGrid(run: ClothRun): Vec3[][] {
   return rows;
 }
 
-/** A CEILING DRAPE — a run, or a canopy's runs: one swag each, two-sided, in its cloth. Room frame. */
+/** A fairy light's bulb on a lit run: a warm point, and the halo the room gives every emitter — too
+ *  faint for the light pool, which lamps and candles fill first. */
+const FAIRY_R_MM = 9;
+const FAIRY = "#fff1cf";
+const FAIRY_STRENGTH = 0.12;
+
+/** A CEILING DRAPE — a run, or a canopy's runs: one swag each, two-sided, in its cloth; a run with
+ *  lights woven in (ClothRun.lights — ceiling-cloth.ts runLights lays them) carries a warm point at
+ *  every one, a hair under the cloth where it hangs there. Room frame. */
 export function ceilingDrapeBody(runs: readonly ClothRun[], colour: string): ItemBuild {
   const b = make(clothMaterial(colour));
-  for (const run of runs) b.parts.push({ shape: "sheet", rows: swagGrid(run), at: vec3(0, 0, 0) });
+  const bulb = emissiveMaterial(FAIRY);
+  for (const run of runs) {
+    b.parts.push({ shape: "sheet", rows: swagGrid(run), at: vec3(0, 0, 0) });
+    for (const q of runLights(run)) {
+      const at = vec3(q.x, q.y, run.heightMm - q.dropMm - FAIRY_R_MM * 2);
+      b.parts.push(sphere(FAIRY_R_MM, at, bulb, 6));
+      b.emitters.push({ at, radiusMm: FAIRY_R_MM * 5, colour: FAIRY, strength: FAIRY_STRENGTH });
+    }
+  }
   return b;
 }
 
@@ -541,21 +1063,29 @@ if (isMain(import.meta.url)) {
     ...extra,
   });
   const top = (p: Part) => partSpan(p)[1];
-  const arms = (b: ItemBuild) => b.parts.filter((p) => p.shape === "box" && p.d === ARM_MM && p.h === ARM_MM);
+  const cylinders = (b: ItemBuild) => b.parts.filter((p): p is Extract<Part, { shape: "cylinder" }> => p.shape === "cylinder");
+  const crystals = (b: ItemBuild) => b.parts.filter((p) => p.material?.kind === "crystal");
+  const sleeves = (b: ItemBuild) => cylinders(b).filter((p) => p.material?.colour === CANDLE_SLEEVE);
+  /** An arm's runs: the frame's leaned rods, as thin as an arm. */
+  const armRods = (b: ItemBuild) => cylinders(b).filter((p) => p.tiltDeg !== undefined && p.material === b.material && p.rBottom <= 9);
 
-  // A ⌀1200 chandelier, 600 high, eight arms: the ring at 0.74 R, eight arms, eight lit bulbs.
+  // A ⌀1200 chandelier, 600 high, eight arms: a turned column, eight arms curving out of its collar
+  // to eight candles at 0.74 R — no ring at the arms (a real one has none) — each lit.
   const eight = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8 }));
-  const rings = eight.parts.filter((p) => p.shape === "torus" && near(p.r, 444));
-  assert(rings.length === 1 && rings[0].shape === "torus" && near(rings[0].at.z, 120), `one ring at 0.74 R = 444, at 0.2 h (${rings.length})`);
-  assert(arms(eight).length === 8, `eight arms (${arms(eight).length})`);
-  assert(eight.emitters.length === 8 && eight.emitters.every((e) => near(e.at.z, 180) && e.strength === BULB && e.colour === ENVELOPE.bulb), "eight bulbs glow at 0.3 h, at 0.7");
-  const bulbR = Math.min(60, ((Math.PI * 444) / 8) * 0.35);
-  assert(eight.parts.filter((p) => p.shape === "sphere" && p.material?.kind === "emissive" && near(p.r, bulbR)).length === 8, "a bulb is the plan's radius, emissive");
-  assert(eight.emitters.every((e) => near(e.radiusMm, bulbR * 2) && near(Math.hypot(e.at.x, e.at.y), 444)), "…its glow twice that, on the ring");
-  assert(eight.parts.some((p) => p.shape === "torus" && near(p.r, 288) && p.material?.kind === "glass" && near(p.at.z, 60)), "the crystal ring at 0.48 R, glass, at 0.1 h");
-  assert(eight.parts.filter((p) => p.shape === "sphere" && p.material?.kind === "glass").length === DROPS && eight.parts.filter((p) => p.shape === "sphere" && p.material?.kind === "glass").every((p) => near(partSpan(p)[0], 0)), "twelve drops hang to the underside");
-  assert(eight.parts.some((p) => p.shape === "cylinder" && near(p.rBottom, 78) && near(p.at.z, 0) && near(p.h, 300)), "the hub 0.13 R from the underside to 0.5 h");
-  assert(Math.max(...eight.parts.map(top)) === 600 && eight.parts.every((p) => partSpan(p)[0] >= -1e-9), "open sky: nothing above h and nothing under the underside");
+  assert(!eight.parts.some((p) => p.shape === "torus" && near(p.r, 444)), "no ring where the arms end");
+  assert(armRods(eight).length === 8 * 3, `eight arms, three runs each (${armRods(eight).length})`);
+  assert(sleeves(eight).length === 8 && sleeves(eight).every((p) => near(Math.hypot(p.at.x, p.at.y), 444) && p.rBottom <= 14), "eight candles at 0.74 R, at their real size");
+  assert(eight.emitters.length === 8 && eight.emitters.every((e) => e.strength === BULB && e.colour === ENVELOPE.bulb && e.at.z > 120 && near(Math.hypot(e.at.x, e.at.y), 444)), "eight flames glow over the arms' tier");
+  assert(eight.parts.filter((p) => p.shape === "sphere" && p.material?.kind === "emissive").every((p) => p.shape === "sphere" && p.r <= LAMP_MAX_R_MM), "a flame is a flame's size, never the plan's dot");
+  const column = eight.parts.find((p): p is Extract<Part, { shape: "lathe" }> => p.shape === "lathe" && p.material === eight.material && p.at.z === 0);
+  assert(!!column && Math.max(...column.profile.map((q) => q.z)) === 540 && Math.max(...column.profile.map((q) => q.r)) < 1200 * 0.1, "a turned column from the finial up to the crown at 0.9 h, slender");
+  const crownCup = eight.parts.find((p): p is Extract<Part, { shape: "lathe" }> => p.shape === "lathe" && near(p.at.z, 540));
+  assert(!!crownCup && near(crownCup.at.z + Math.max(...crownCup.profile.map((q) => q.z)), 600), "the crown joins the column to the top — nothing floats");
+  // The arms style's crystal is DROPS (lib/catalog/chandelier.ts): a bead and a pear under every
+  // candle; a garland of beads round the arms' dip at 0.48 R; a crystal finial.
+  assert(crystals(eight).length > 16 + 16 && crystals(eight).every((p) => partSpan(p)[0] >= -1e-9), `drops, a garland and a finial, all cut crystal, none under the underside (${crystals(eight).length})`);
+  assert(crystals(eight).filter((p) => p.shape === "sphere" && near(Math.hypot(p.at.x, p.at.y), 288)).length >= 16, "…the garland at 0.48 R");
+  assert(Math.max(...eight.parts.map(top)) <= 600 + 1e-6 && eight.parts.every((p) => partSpan(p)[0] >= -1e-9), "open sky: nothing above h and nothing under the underside");
   assert(eight.material.kind === "metal" && eight.material.colour === "#c9a24a", "a gold chandelier's frame is its metal");
   assert(overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8, tone: "#f7f6fc" })).material.kind === "glass", "a crystal one's frame is faint glass");
 
@@ -566,10 +1096,95 @@ if (isMain(import.meta.url)) {
   const cabled = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8, chainMm: 4000 }));
   const cables = cabled.parts.filter((p) => p.shape === "cylinder" && p.at.z === 600);
   assert(cables.length === 3 && cables.every((p) => p.shape === "cylinder" && p.rBottom === CABLE_R_MM && near(top(p), 4600)), "a 4 m drop is three cables, each to the ceiling");
-  assert(arms(overheadKindBody("chandelier", ctxOf(800, 500, { count: 3 }))).length === 3, "three arms");
-  assert(arms(overheadKindBody("chandelier", ctxOf(800, 500, { count: 1 }))).length === 3, "never fewer than three (item-symbol.tsx:925)");
-  assert(arms(overheadKindBody("chandelier", ctxOf(800, 500, { count: 0 }))).length === 8, "no count: the plan's eight");
-  assert(Math.max(...overheadKindBody("chandelier", ctxOf(800, 0, { count: 5 })).parts.map(top)) === CHANDELIER_H_MM, "no height: 600");
+  assert(sleeves(overheadKindBody("chandelier", ctxOf(800, 500, { count: 3 }))).length === 3, "three arms");
+  assert(sleeves(overheadKindBody("chandelier", ctxOf(800, 500, { count: 1 }))).length === 3, "never fewer than three (item-symbol.tsx:925)");
+  assert(sleeves(overheadKindBody("chandelier", ctxOf(800, 500, { count: 0 }))).length === 8, "no count: the plan's eight");
+  assert(Math.max(...overheadKindBody("chandelier", ctxOf(800, 0, { count: 5 })).parts.map(top)) <= CHANDELIER_H_MM + 1e-6, "no height: 600");
+
+  // The styles and the build (lib/catalog/chandelier.ts): a crystal piece is two tiers of strands,
+  // a three-tier one three tiers of arms; a hoop no arms and cables to every ring; a sputnik rods;
+  // pendants globes on cables; a linear piece a bar; a floral one foliage and blooms on a hoop.
+  const tori = (b: ItemBuild) => b.parts.filter((p): p is Extract<Part, { shape: "torus" }> => p.shape === "torus" && p.material?.kind !== "crystal" && p.material?.kind !== "emissive");
+  const crystal = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8, drawStyle: "crystal" }));
+  assert(tori(crystal).length === 2 && near(tori(crystal)[0].r, 600 * 0.84 * 1.05) && tori(crystal)[0].at.z < tori(crystal)[1].at.z, "a crystal piece: two thin rings that carry its strands, the lower at 0.84 R");
+  assert(crystal.emitters.length === 8 + 6, `…eight candles below, six above (${crystal.emitters.length})`);
+  assert(crystals(crystal).length > 60 && crystals(crystal).every((p) => partSpan(p)[0] >= -1e-9), `…strands of cut crystal, none under the underside (${crystals(crystal).length})`);
+  const threeTier = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 12, drawStyle: "arms", chandelier: { tiers: 3, crystals: "garlands" } }));
+  assert(sleeves(threeTier).length === 12 + 10 + 8 && armRods(threeTier).length === 3 * 30, `three tiers: thirty arms, thirty candles (${sleeves(threeTier).length})`);
+  assert(crystals(threeTier).filter((p) => p.shape === "sphere" && Math.abs(p.r - Math.max(5, 0.028 * 600)) < 1e-6).length >= 7 * 30, "…garlands of seven beads between every pair of arms");
+  assert(crystals(overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8, chandelier: { crystals: "none" } }))).length === crystals(eight).length - 8 - 8 * 2, "no drops when asked for none — eight beads and eight two-part pears go; the garland and the finial stay");
+  const hoop = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8, drawStyle: "hoop" }));
+  assert(armRods(hoop).length === 3 && tori(hoop).length === 1 && near(tori(hoop)[0].r, 540) && hoop.emitters.length === 8 && sleeves(hoop).length === 0, "a hoop: one ring at 0.9 R, eight lamps along its LED strip, no arms, three cables");
+  assert(hoop.parts.some((p) => p.shape === "torus" && p.material?.kind === "emissive"), "…the strip lit inside it");
+  // The photographs' three (2026-11-08): drum shades are lit drums, top-widest, with a tail; a cascade
+  // of rods a faceted crystal bar per rod; a basket three rings and its hundreds of beads.
+  const drums = overheadKindBody("chandelier", ctxOf(1000, 700, { count: 8, drawStyle: "drums" }));
+  const drumBands = drums.parts.filter((p): p is Extract<Part, { shape: "cylinder" }> => p.shape === "cylinder" && p.material?.kind === "emissive");
+  assert(drumBands.length === 3 && drumBands[2].rBottom > drumBands[0].rBottom && near(drumBands[2].rBottom, 500) && drumBands[0].at.z < drumBands[2].at.z, `drum shades: three lit drums, the top the full radius (${drumBands.map((p) => p.rBottom).join(",")})`);
+  assert(tori(drums).length === 6 && drums.emitters.length === chandelierTiers(chandelierOf("drums", undefined), 8).reduce((n, t) => n + t.count, 0), "…a rim top and bottom of each, its lamps inside");
+  assert(drums.parts.some((p) => p.shape === "cylinder" && near(p.at.z, 0) && p.material?.kind === "metal") && drumBands[0].material?.colour === darkerShade("#c9a24a", 0.45), "…the rod down to the tail; the cloth a darker cut of the tone, lit");
+  const prisms = overheadKindBody("chandelier", ctxOf(1200, 1500, { count: 10, drawStyle: "prisms" }));
+  const rodsOf = cylinders(prisms).filter((p) => p.material?.kind === "crystal" && p.segments === 6 && p.rTop === p.rBottom);
+  const rodTiers = chandelierTiers(chandelierOf("prisms", undefined), 10);
+  assert(rodsOf.length === rodTiers.reduce((n, t) => n + t.count * 6, 0) && rodsOf.every((p) => near(p.h, 1500 * (rodTiers[0].h ?? 0))), `a cascade of rods: a faceted crystal bar per rod, each a band tall (${rodsOf.length})`);
+  assert(tori(prisms).length === 5 && prisms.emitters.length === rodTiers.reduce((n, t) => n + t.count, 0), "…a frame ring on every band, the lamps inside");
+  assert(armRods(prisms).length === 5 * 4, "…every ring held by four spokes off the rod");
+  assert(crystals(prisms).some((p) => p.at.z < 1500 * CASCADE.bottom && Math.hypot(p.at.x, p.at.y) < 1), "…a crystal tail under the lowest band, not a bare pole");
+  const drumOfRods = overheadKindBody("chandelier", ctxOf(600, 300, { count: 8, drawStyle: "prisms", chandelier: { tiers: 1 } }));
+  assert(cylinders(drumOfRods).every((p) => p.material?.kind === "crystal" || p.at.z >= 300 * (CASCADE.top - (CASCADE.top - CASCADE.bottom) * (1 - CASCADE.band)) - 1 || Math.hypot(p.at.x, p.at.y) > 1), "a single drum of crystal: no rod through the middle of it");
+  const empireB = overheadKindBody("chandelier", ctxOf(1100, 1100, { count: 8, drawStyle: "empire" }));
+  assert(tori(empireB).length === 3 && near(tori(empireB)[1].r, 550) && near(tori(empireB)[1].at.z, 1100 * EMPIRE.ringZ), "a basket: crown, wide ring at the full radius, small ring");
+  assert(crystals(empireB).length > 400 && crystals(empireB).every((p) => partSpan(p)[0] >= -1e-9 && Math.hypot(p.at.x, p.at.y) <= 550 * 1.03 + 1e-6) && empireB.emitters.length === 8, `…hundreds of beads, none outside the ring or under the underside, eight lamps in the bag (${crystals(empireB).length})`);
+  const empire3 = overheadKindBody("chandelier", ctxOf(1000, 1800, { count: 8, drawStyle: "empire", chandelier: { tiers: 3 } }));
+  assert(tori(empire3).length === 5 && empire3.emitters.length > 8, "three baskets: crown, three rings, the small ring; lamps in every basket");
+  const spiralB = overheadKindBody("chandelier", ctxOf(500, 1800, { count: 8, drawStyle: "spiral" }));
+  const balls = crystals(spiralB).filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere" && p.r > 0.03 * 250);
+  assert(balls.length === SPIRAL.strands && cylinders(spiralB).filter((p) => p.rBottom === 1.2).length === SPIRAL.strands, `a spiral: a ball at the end of each of ${SPIRAL.strands} threads (${balls.length})`);
+  assert(spiralB.emitters.length >= 3 && spiralB.parts.some((p) => p.shape === "cylinder" && near(p.rBottom, 245) && near(p.at.z, 1800 * SPIRAL.plateZ)), "…hung from a plate the size of the piece, its downlights glowing");
+  const ringsB = overheadKindBody("chandelier", ctxOf(1000, 1500, { count: 8, drawStyle: "rings", chandelier: { tiers: 7 } }));
+  const leaned = ringsB.parts.filter((p): p is Extract<Part, { shape: "torus" }> => p.shape === "torus" && p.material === ringsB.material);
+  assert(leaned.length === 7 && leaned.every((p) => Math.abs(p.tiltDeg ?? 0) > 5) && leaned[6].r > leaned[0].r, "floating rings: seven, each leaned, the widest on top");
+  assert(ringsB.parts.filter((p) => p.shape === "sphere" && p.material?.colour === GLOBE).length === 7 && armRods(ringsB).length === 7 * 2, "…a lit amber globe in each, two cables to every ring");
+  const sputnik = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 8, drawStyle: "sputnik" }));
+  const rods = sputnik.parts.filter((p): p is Extract<Part, { shape: "cylinder" }> => p.shape === "cylinder" && p.tiltDeg !== undefined);
+  assert(rods.length === 12 && sputnik.emitters.length === 12 && rods.every((p) => near(p.at.z, 300)), "a sputnik: twelve rods from the core at half height, a lamp on each");
+  assert(rods.some((p) => p.tiltDeg! > 90) && rods.some((p) => p.tiltDeg! < 90) && rods.some((p) => near(p.tiltDeg!, 90)), "…some down, some up, some level");
+  // Glass pendants (2026-11-08): every globe a glass lathe in its shade, a cap, an Edison bulb round a
+  // lit filament, its own cord to the canopy; a single globe IS the underside; a mixed group's globes
+  // take the row's shades in turn; under a ceiling every cord runs to it.
+  type Lathe = Extract<Part, { shape: "lathe" }>;
+  const globesOf = (b: ItemBuild) => b.parts.filter((p): p is Lathe => p.shape === "lathe" && Math.max(...p.profile.map((q) => q.r)) >= 40 && p.material?.colour !== "#f6ead2");
+  const cords = (b: ItemBuild) => cylinders(b).filter((p) => p.rBottom === 2.5 && p.material?.kind !== "emissive");
+  const pendants = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 6, drawStyle: "pendants" }));
+  assert(globesOf(pendants).length === 6 && pendants.emitters.length === 6 && cylinders(pendants).filter((p) => p.material?.kind === "emissive").length === 6, "pendants: six glass globes, an Edison filament glowing in each");
+  assert(cords(pendants).length === 6 && pendants.parts.every((p) => partSpan(p)[1] <= 600 + 1e-9) && Math.min(...globesOf(pendants).map((p) => p.at.z)) === 0, "…each on its own cord, nothing above the top, the lowest at the underside");
+  const single = overheadKindBody("chandelier", ctxOf(250, 320, { count: 1, drawStyle: "pendants", tone: "#C8862A", chainMm: 2000 }));
+  const globe = globesOf(single);
+  assert(globe.length === 1 && globe[0].at.z === 0 && near(Math.max(...globe[0].profile.map((q) => q.r)), 125 * 0.98) && globe[0].material?.kind === "glass" && globe[0].material.colour === "#C8862A", "a single amber globe: the plan's circle, at the underside, in amber glass");
+  assert(cords(single).length === 1 && near(top(cords(single)[0]), 320 + 2000 - 25) && !single.parts.some((p) => p.shape === "cylinder" && p.rBottom === CHAIN_R_MM), "…its cord up to the canopy at the ceiling — a cord, never a chandelier's chain");
+  const group = overheadKindBody("chandelier", {
+    ...ctxOf(1000, 900, { count: 5, drawStyle: "pendants" }),
+    chandelier: { glassMix: true, equal: true, fitting: "brass", palette: [{ name: "ענבר", swatch: "#C8862A" }, { name: "עשן", swatch: "#6E6F73" }, { name: "שקוף", swatch: "#E8F0F5" }, { name: "כרום", swatch: "#C9CDD3" }] },
+  });
+  const gl = globesOf(group);
+  assert(gl.length === 5 && new Set(gl.map((p) => Math.round(Math.max(...p.profile.map((q) => q.r))))).size === 1, "a group of five, all one size");
+  assert(gl[0].material?.colour === "#C8862A" && gl[1].material?.colour === "#6E6F73" && gl[2].material?.opacity === 0.2 && gl[3].material?.kind === "metal" && gl[4].material?.colour === "#C8862A", "…amber, smoke, clear, chrome, amber again");
+  assert(new Set(gl.map((p) => p.at.z)).size === 5 && cords(group).every((p) => p.material?.colour === FITTING_COLOUR.brass), "…every one at its own drop, on a brass cord");
+  const bell = overheadKindBody("chandelier", { ...ctxOf(400, 400, { count: 1, drawStyle: "pendants" }), chandelier: { profile: PENDANT_GLASS.bell } });
+  assert(globesOf(bell)[0].profile[0].r > 150, "a bell's glass is open underneath, its rim the plan's circle");
+  const linear = overheadKindBody("chandelier", ctxOf(2400, 600, { count: 5, drawStyle: "linear" }));
+  const bar = linear.parts.find((p): p is Extract<Part, { shape: "box" }> => p.shape === "box" && p.w > 2000);
+  assert(!!bar && near(bar.at.z, 420) && !bar.rotDeg && linear.emitters.length === 5, "a linear piece: a bar along its length at 0.7 h, five lamps under it");
+  assert(!!overheadKindBody("chandelier", ctxOf(600, 600, { count: 5, drawStyle: "linear" })).parts.find((p) => p.shape === "box" && p.rotDeg === 90) === false, "…a square one lies along x");
+  const floral = overheadKindBody("chandelier", ctxOf(1200, 600, { count: 5, drawStyle: "floral" }));
+  assert(floral.parts.filter((p) => p.shape === "blob").length === 18 && floral.parts.filter((p) => p.shape === "bloom").length === 25 && floral.emitters.length === 5, "a floral hoop: eighteen clumps, twenty-five blooms, five lights");
+
+  // THE SILHOUETTE: the base's body shapes the tiers — a cone of arms narrows upward, a spindle of
+  // rods widens and narrows — and never stands in the room as a solid of its own.
+  const cone = overheadKindBody("chandelier", ctxOf(1500, 1300, { count: 16, chandelier: { tiers: 4, profile: CHANDELIER_PROFILES.cone } }));
+  const coneR = [...new Set(sleeves(cone).map((p) => Math.round(Math.hypot(p.at.x, p.at.y))))].sort((a, b) => b - a);
+  assert(coneR.length === 4 && near(coneR[0], 750 * 0.74 * profileAt(CHANDELIER_PROFILES.cone, 0.12), 1), `a cone of arms: four tiers of candles, the lowest widest (${coneR.join(",")})`);
+  assert(!cone.parts.some((p) => p.shape === "lathe" && Math.max(...p.profile.map((q) => q.r)) > 750 * 0.5), "…and no solid the size of the piece");
 
   // A hung dome: the same heads as on a table, upside down.
   const product = {
@@ -697,10 +1312,15 @@ if (isMain(import.meta.url)) {
   assert(near(centroid.x, 1500) && near(centroid.y, 1000) && near(centroid.z, 3200 - 300), "a triangle sags at its centroid, under its ties' mean");
   assert(partSpan(sheet)[1] === 3200 && flipPart(sheet, 4000).shape === "sheet", "a sheet's span is its grid's");
   // A SWAG — a 6 m run at 3.5 m, four scallops, 30 cm of sag, 1.2 m wide.
-  const run: ClothRun = { a: { x: 0, y: 0 }, b: { x: 6000, y: 0 }, heightMm: 3500, sagMm: 300, widthMm: 1200, waves: 4, lengthMm: 6000 };
+  const run: ClothRun = { a: { x: 0, y: 0 }, b: { x: 6000, y: 0 }, heightMm: 3500, sagMm: 300, widthMm: 1200, waves: 4, lengthMm: 6000, lights: false };
   const swag = ceilingDrapeBody([run, { ...run, a: { x: 0, y: 1500 }, b: { x: 6000, y: 1500 } }], "#f3ede2");
   const strips = swag.parts.filter((p): p is Extract<Part, { shape: "sheet" }> => p.shape === "sheet");
-  assert(strips.length === 2, "a canopy's runs are a swag each");
+  assert(strips.length === 2 && swag.emitters.length === 0 && swag.parts.length === 2, "a canopy's runs are a swag each, and nothing else without lights");
+  // …with fairy lights woven in: a warm point and a faint emitter at every light, under the cloth.
+  const lit = ceilingDrapeBody([{ ...run, lights: true }], "#f3ede2");
+  const fairy = lit.parts.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere");
+  assert(fairy.length === 24 && lit.emitters.length === 24 && fairy.every((p) => p.material?.kind === "emissive" && p.at.z < 3500 && p.at.z > 3500 - 300 - 45 - FAIRY_R_MM * 2 - 1e-6), `a lit run: twenty-four fairy lights under its cloth (${fairy.length})`);
+  assert(lit.emitters.every((e) => e.strength < 0.4), "…each too faint to be taken for a candle");
   const mid = strips[0].rows[SWAG_ACROSS / 2];
   const atS = (s: number) => mid[Math.round(s * (mid.length - 1))];
   assert(near(atS(0).z, 3500) && near(atS(1 / 4).z, 3500) && near(atS(1 / 8).z, 3500 - 300 - 45), "it hangs from its height where gathered and sags in every scallop");

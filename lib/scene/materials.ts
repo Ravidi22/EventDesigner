@@ -64,6 +64,8 @@ export const fabricMaterial = clothMaterial;
 /** Clear glass: barely there, its edges and reflections doing the work (0.35 read as frosted). */
 export const glassMaterial = (colour = "#e8f0f5"): MaterialRef => ({ colour, kind: "glass", opacity: 0.22 });
 export const metalMaterial = (colour: string): MaterialRef => ({ colour, kind: "metal" });
+/** Cut crystal — a chandelier's beads, drops and rods (types.ts MaterialKind `crystal`). */
+export const crystalMaterial = (colour = "#f4f8fc"): MaterialRef => ({ colour, kind: "crystal", opacity: 0.78 });
 export const glossMaterial = (colour: string): MaterialRef => ({ colour, kind: "gloss" });
 export const foliageMaterial = (colour: string): MaterialRef => ({ colour, kind: "foliage" });
 export const waterMaterial = (): MaterialRef => ({ colour: SURFACE_BASE.water, kind: "water", texture: "water", opacity: 0.8 });

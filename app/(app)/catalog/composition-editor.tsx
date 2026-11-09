@@ -17,7 +17,7 @@
 // Saved, the whole drawing is the item (fromSelection), centred on the box its pieces stand in — and
 // the list it may have been laid out from is let go: the arrangement is the item now.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Copy, Group, Package, PaintRoller, Redo2, Table2, Trash2, Undo2, Ungroup } from "lucide-react";
+import { ArrowDownToLine, Box, Copy, Group, Package, PaintRoller, Redo2, Table2, Trash2, Undo2, Ungroup } from "lucide-react";
 import type { Composition, Product } from "@/lib/catalog/types";
 import type { DesignDocumentContent, DesignTable, Placement, Point } from "@/lib/design-document/types";
 import { amend, apply as applyAction, dispatch, initHistory, redo, undo, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
@@ -31,19 +31,22 @@ import { coverOn, defaultVariantId, resolve } from "@/lib/studio/catalog-resolve
 import { clipCount, copySelection, pasteInto, type Clip } from "@/lib/studio/clipboard";
 import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { catalogBox } from "@/lib/studio/footprint";
-import { centreOver } from "@/lib/studio/hang";
+import { HANG_MAX_MM, centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { ALL_PLANES_VISIBLE } from "@/lib/studio/planes";
 import { isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { EMPTY_PLAN, type EventPlan } from "@/lib/events/plan";
 import { dressBlockOf, dressingSpots, tableBlock, tableBox, tableUnder } from "@/components/footprint-shape";
 import { compositionBox } from "@/components/composition-drawing";
 import type { ContextMenuItem, MarqueeMode } from "@/components/plan-canvas";
-import { Bar, BarButton, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
+import { Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
 import { Popover } from "@/components/popover";
 import { NumberField } from "@/components/number-field";
 import { Button } from "@/components/button";
 import { CloseButton } from "@/components/close-button";
+import { IconButton } from "@/components/icon-button";
+import { compositionScene, compositionSceneKey } from "@/lib/scene/item-scene";
 import { formatPrice } from "@/lib/catalog/format";
+import { ScenePane } from "./scene-pane";
 import { CanvasStage, type SelectionRef } from "../studio/canvas-stage";
 import { CatalogRail } from "../studio/catalog-rail";
 import { hangPointOf, hangTargetsOf, positionHungAt, tableUnderHang } from "../studio/hang-targets";
@@ -131,6 +134,15 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
   const [armedId, setArmedId] = useState<string | null>(null);
   const [dressing, setDressing] = useState<string | null>(null);
   const mmPerPx = useRef(20);
+  // The 3D pane (./scene-pane.tsx): the arrangement in a room of its own. Mounted on its first
+  // opening and kept — closing hides it, so its shaders compile once for this editing session.
+  const [scene3d, setScene3d] = useState(false);
+  const [sceneMounted, setSceneMounted] = useState(false);
+  const toggleScene = () => {
+    setSceneMounted(true);
+    setScene3d((v) => !v);
+  };
+  const sceneSubject = useMemo(() => (doc.tables.length + doc.placements.length === 0 ? null : { key: compositionSceneKey(doc), build: () => compositionScene(doc) }), [doc]);
 
   // A transient line over the canvas — why a drop was refused, and the like. The studio's own.
   const [hint, setHint] = useState<string | null>(null);
@@ -551,6 +563,15 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
   const selPlacements = refsNow.filter((r) => r.kind === "placement").map((r) => doc.placements.find((p) => p.id === r.id)).filter((p): p is Placement => !!p);
   const soleTable = refsNow.length === 1 && selTables.length === 1 ? selTables[0] : null;
   const solePlacement = refsNow.length === 1 && selPlacements.length === 1 ? selPlacements[0] : null;
+  // A sole CEILING item's hang height (Placement.hangHeightMm, the studio's HangPopover): its own,
+  // else its row's. What lets two ceiling items share one point, one under the other — a drum shade
+  // with a crystal cascade below it (the user's photograph, 2026-11-08).
+  const soleHang = (() => {
+    if (solePlacement?.layer !== "ceiling") return null;
+    const own = solePlacement.hangHeightMm;
+    const fallback = hangHeightOf({}, resolve(solePlacement.variantId)?.product);
+    return { own, fallback, shown: own ?? fallback };
+  })();
   const blockTables = group ? doc.tables.filter((t) => t.groupId === group) : [];
 
   // ── the item as it stands, and saving it ───────────────────────────────────────────────────
@@ -600,7 +621,10 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
           <span className="hidden text-xs text-muted lg:inline">
             גררו פריטים מהקטלוג אל הקנבס, או לחצו על פריט ואז על הקנבס · פריטי שולחן — על שולחן · לחיצה כפולה על שולחן — סידור מה שעליו
           </span>
-          <CloseButton className="ms-auto" onClick={onClose} />
+          <IconButton label={scene3d ? "סגירת התלת-ממד" : "תלת-ממד — הסידור בחדר"} pressed={scene3d} className="ms-auto" onClick={toggleScene}>
+            <Box className="h-[18px] w-[18px]" strokeWidth={1.4} />
+          </IconButton>
+          <CloseButton onClick={onClose} />
         </header>
 
         <div className="flex min-h-0 flex-1">
@@ -682,6 +706,10 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
               ) : null}
             </div>
 
+            {/* The arrangement in a room of its own, in the canvas's corner — above the bar's band, under
+                its popovers. Hidden, never unmounted, once opened. */}
+            {sceneMounted && <ScenePane subject={sceneSubject} open={scene3d} onClose={() => setScene3d(false)} emptyText="אין עדיין פריטים להציג" />}
+
             {/* The selection's bar, bottom centre — the studio's inspector bar, the few verbs that apply. */}
             {refsNow.length > 0 && (
               <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
@@ -709,6 +737,24 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
                     >
                       {resolve(solePlacement.variantId)?.anchor !== "table" && (
                         <Rotation value={solePlacement.rotation} onChange={(deg) => act({ type: "rotatePlacement", id: solePlacement.id, rotation: deg })} />
+                      )}
+                      {soleHang && (
+                        <Popover label="גובה תלייה" icon={ArrowDownToLine} value={soleHang.shown ? ltr(`${(soleHang.shown / 1000).toFixed(2)} מ׳`) : "לא צוין"}>
+                          <PanelRow label="תחתית הפריט מהרצפה (ס״מ)" htmlFor="ce-hang">
+                            <NumberField
+                              id="ce-hang"
+                              decimals={0}
+                              min={0}
+                              max={HANG_MAX_MM / 10}
+                              hideZero
+                              placeholder={soleHang.fallback ? String(Math.round(soleHang.fallback / 10)) : "—"}
+                              value={soleHang.own ? Math.round(soleHang.own / 10) : 0}
+                              onChange={(v) => act({ type: "setPlacementHang", id: solePlacement.id, heightMm: v > 0 ? v * 10 : null })}
+                              className="w-20"
+                            />
+                          </PanelRow>
+                          <Note>שני פריטי תקרה באותה נקודה, זה מתחת לזה — למשל אהיל תוף ומפל קריסטל תחתיו — נבדלים בגובה התלייה. ריק = הגובה מהקטלוג.</Note>
+                        </Popover>
                       )}
                       <div className="ms-auto flex items-center gap-1">
                         <BarButton icon={Copy} label="שכפול · Ctrl+D" onClick={duplicate} />

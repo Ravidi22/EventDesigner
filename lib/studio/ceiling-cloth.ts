@@ -103,6 +103,8 @@ export interface ClothRun {
   widthMm: number;
   waves: number;
   lengthMm: number;
+  /** Fairy lights woven into the cloth (RunRail.lights / CanopyRail.lights). */
+  lights: boolean;
 }
 
 const runsCache = new WeakMap<RunRail | CanopyRail, ClothRun[]>();
@@ -117,7 +119,7 @@ export function clothRuns(rail: RunRail | CanopyRail): ClothRun[] {
   const out = lines
     .map((r) => {
       const lengthMm = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
-      return { a: r.a, b: r.b, heightMm: r.heightMm, sagMm: Math.max(0, rail.sagMm ?? RUN_SAG_MM), widthMm, waves: wavesFor(lengthMm, rail.waves), lengthMm };
+      return { a: r.a, b: r.b, heightMm: r.heightMm, sagMm: Math.max(0, rail.sagMm ?? RUN_SAG_MM), widthMm, waves: wavesFor(lengthMm, rail.waves), lengthMm, lights: rail.lights === true };
     })
     .filter((r) => r.lengthMm >= 1);
   runsCache.set(rail, out);
@@ -173,6 +175,36 @@ export function runGatherTicks(run: ClothRun): [Point, Point][] {
     { x: c.x + n.x * h, y: c.y + n.y * h },
     { x: c.x - n.x * h, y: c.y - n.y * h },
   ]);
+}
+
+/** One fairy light on a run: where it is on the plan, and how far under the run's height the cloth
+ *  hangs there (the room hangs it on the swag). */
+export interface ClothLight {
+  x: number;
+  y: number;
+  dropMm: number;
+}
+/** One light every this much along a lit run. */
+export const LIGHT_PITCH_MM = 250;
+
+/** Fairy lights woven into a run (ClothRun.lights — the user's photograph of אמרה's dance floor,
+ *  2026-11-08: sheer runs crossing the room with lights in them): one every LIGHT_PITCH_MM along it,
+ *  in from both ends, wandering across the cloth a third of its half-width either side of the line
+ *  so they read as woven, never as a strip, each with the cloth's drop under it. Nothing for a run
+ *  without lights. A drawing fact: the quote, the packing list and the orders never read it. */
+export function runLights(run: ClothRun): ClothLight[] {
+  if (!run.lights || run.lengthMm < LIGHT_PITCH_MM) return [];
+  const u = { x: (run.b.x - run.a.x) / run.lengthMm, y: (run.b.y - run.a.y) / run.lengthMm };
+  const n = { x: -u.y, y: u.x };
+  const count = Math.floor(run.lengthMm / LIGHT_PITCH_MM);
+  const out: ClothLight[] = [];
+  for (let i = 0; i < count; i++) {
+    const d = (i + 0.5) * (run.lengthMm / count);
+    const s = d / run.lengthMm;
+    const across = ((i % 3) - 1) * 0.35 * runHalfWidth(run, s);
+    out.push({ x: run.a.x + u.x * d + n.x * across, y: run.a.y + u.y * d + n.y * across, dropMm: runDrop(run, s) });
+  }
+  return out;
 }
 
 // ── Making and editing them ─────────────────────────────────────────────────────────────────────
@@ -445,6 +477,14 @@ if (isMain(import.meta.url)) {
   assert(near(runHalfWidth(r6, 1 / 8), 600) && near(runHalfWidth(r6, 0), 600 * GATHER), "…full width mid-scallop, gathered at the ends");
   const outline = runOutline(r6);
   assert(outline.length === 2 * (4 * 8 + 1) && outline.every((q) => Math.abs(q.y) <= 600 + 1e-6), "the band's outline: both edges, inside the cloth's width");
+
+  // Fairy lights: none unless the rail says; one every 25 cm along a lit run, inside its cloth, with
+  // the cloth's drop under each.
+  assert(!r6.lights && runLights(r6).length === 0, "a run has no lights unless asked");
+  const lit = clothRuns({ ...run, lights: true })[0];
+  const lights = runLights(lit);
+  assert(lit.lights && lights.length === 24 && lights.every((q) => q.x > 0 && q.x < 6000 && Math.abs(q.y) <= runHalfWidth(lit, q.x / 6000) + 1e-6), `a lit 6 m run: twenty-four lights along it, inside the cloth (${lights.length})`);
+  assert(lights.some((q) => q.y > 1) && lights.some((q) => q.y < -1) && near(lights[0].dropMm, runDrop(lit, lights[0].x / 6000)), "…wandering across the cloth, each with the cloth's drop under it");
   assert(runGatherTicks(r6).length === 5 && runGathers(r6)[2].x === 3000, "five gathers on four scallops — the ends and three between");
   assert(wavesFor(700) === 1 && wavesFor(10000, 3) === 3, "never fewer than one scallop");
 

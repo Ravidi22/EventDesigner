@@ -412,6 +412,7 @@ export function PlanCanvas({
   measureTargetById,
   centerGuides,
   toolbarExtras,
+  defaultDims,
 }: {
   mode: "draw" | "edit";
   outline: Point[];
@@ -572,6 +573,9 @@ export function PlanCanvas({
   /** A host's own view toggles, sitting in the canvas's tool strip beside the ruler and the tape —
    *  one strip of view controls, rather than a second one floating somewhere else. */
   toolbarExtras?: ReactNode;
+  /** Whether "הצגת מידות" starts ON in edit mode (it always does while drawing). The catalog's shape
+   *  editor figures the selection's size from the first moment (2026-11-09, the user's redesign). */
+  defaultDims?: boolean;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   // THE CAMERA. Everything on the plan is drawn in world millimetres inside one <g> (worldRef) whose
@@ -684,7 +688,7 @@ export function PlanCanvas({
   // group rotation is a clean shared turn rather than each fixture landing on its own nearest step.
   const groupRotate = useRef<{ pivot: Point; handleY: number; startDeg: number; snapshot: { id: string; origin: Point; rotationDeg: number }[] } | null>(null);
 
-  const showDims = dimsOverride ?? mode === "draw";
+  const showDims = dimsOverride ?? (defaultDims || mode === "draw");
   // Every length this canvas shows or takes goes through these, in the host's unit (lengthUnit): a
   // hall in metres to the centimetre, a catalog footprint in centimetres — metres again from 10m up,
   // where "1,240 ס״מ" stops being a number anyone reads.

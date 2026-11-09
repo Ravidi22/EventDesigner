@@ -22,7 +22,7 @@ import { installStandardCatalog } from "./standard/install";
 import { standardProductId, uuidV5 } from "./standard/id";
 import { compositeShell, fromTableDesign } from "./composition";
 import { markBuiltIns, builtInKeyOf } from "./standard/built-ins";
-import { BUILT_IN_DELETE_REFUSAL, isBuiltInCategory } from "./built-in";
+import { BUILT_IN_DELETE_REFUSAL, isBuiltInCategory, isSupplierCategory } from "./built-in";
 
 // ── Input guards ───────────────────────────────────────────────────────────────────────────────
 //
@@ -182,8 +182,10 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   if (builtInKeyOf(organizationId, product.id)) {
     if (existing) row.category = existing.category;
     row.archived = false;
-  } else if (!existing && isBuiltInCategory(row.category) && (await currentActor()).organizationKind !== "supplier") {
-    throw new Error("a built-in category takes no new row");
+  } else if (!existing && (isBuiltInCategory(row.category) || isSupplierCategory(row.category)) && (await currentActor()).organizationKind !== "supplier") {
+    // …and a supplier's category (a cut stem) takes no studio row at all — a studio's flowers are
+    // its arrangements, and a stem reaches it as a spec line.
+    throw new Error("a built-in or supplier category takes no new studio row");
   }
 
   await db().transaction(async (tx) => {
@@ -403,8 +405,8 @@ export async function importProducts(list: Product[]): Promise<Product[]> {
   const { organizationId, organizationKind } = await currentActor();
   // The import screen refuses these rows by name (lib/catalog/csv.ts parseCsvImport); this is a
   // request that skipped it.
-  if (organizationKind !== "supplier" && list.some((p) => isBuiltInCategory(p.category))) {
-    throw new Error("a built-in category takes no imported row");
+  if (organizationKind !== "supplier" && list.some((p) => isBuiltInCategory(p.category) || isSupplierCategory(p.category))) {
+    throw new Error("a built-in or supplier category takes no imported studio row");
   }
 
   await db().transaction(async (tx) => {

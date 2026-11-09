@@ -1,0 +1,243 @@
+// A ROOM OF ITS OWN — the scenes the catalog's editors' 3D pane shows (app/(app)/catalog/
+// scene-pane.tsx; the element model, spec 2026-11-07-element-model §7 Stage 2): ONE ITEM for the
+// shape editor (`itemScene`), a whole ARRANGEMENT for the composite editor (`compositionScene`). The
+// studio's own picture: `buildScene` over a small document on an empty plan whose floor is the
+// subject and a margin, framed as the /scene tab frames a table (./focus.ts). The shape editor's
+// row may be UNSAVED — a draft being drawn — so the builder's resolves see it through
+// `withResolved`, over the catalog, for the span of the build and no longer; a composite's parts
+// are catalog rows already.
+//
+// Pure. Run: npm run check:item-scene
+import type { Product } from "@/lib/catalog/types";
+import { emptyDocument, type DesignDocumentContent, type DesignTable, type Placement } from "@/lib/design-document/types";
+import { EMPTY_PLAN, type EventPlan } from "@/lib/events/plan";
+import { defaultVariantId, resolve, withResolved } from "@/lib/studio/catalog-resolver";
+import { footprintBounds, resolveFootprint, type Footprint } from "@/lib/studio/footprint";
+import type { Point } from "@/lib/studio/hall";
+import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
+import { isMain } from "../self-check";
+import { buildScene } from "./build";
+import { focusViewpoint, type FocusRef } from "./focus";
+import { DEFAULT_SETTINGS, type BodyNode, type Scene, type SceneSettings, type Viewpoint } from "./types";
+
+/** Floor round the item, each side. */
+export const ITEM_ROOM_MARGIN_MM = 1500;
+export const ITEM_ID = "shape-editor-item";
+/** Daylight: a shape is judged by its form, not by its candles. */
+export const ITEM_SCENE_SETTINGS: SceneSettings = { ...DEFAULT_SETTINGS, mood: "day" };
+
+/** The one-item drawing. A table row is a table (its seats round it, as the room seats every
+ *  table); a ceiling row hangs at its row's hang height under open sky; anything else — a table
+ *  item too, whose own shape is what is being judged — stands on the floor at the origin. */
+export function itemDocument(product: Product): DesignDocumentContent {
+  const doc = emptyDocument();
+  if (product.category === "tables") {
+    const d = product.dimensions;
+    const seats = Number(product.categoryFields?.seats);
+    const table: DesignTable = {
+      id: ITEM_ID,
+      type: product.name,
+      number: 1,
+      position: { x: 0, y: 0 },
+      rotation: 0,
+      variantId: defaultVariantId(product),
+      ...(d.diameterMm ? { diameterMm: d.diameterMm } : { widthMm: d.widthMm ?? 0, depthMm: d.depthMm ?? 0 }),
+      ...(seats > 0 ? { seats } : {}),
+    };
+    doc.tables.push(table);
+    return doc;
+  }
+  const p: Placement = {
+    id: ITEM_ID,
+    variantId: defaultVariantId(product),
+    layer: product.layer === "ceiling" ? "ceiling" : "floor",
+    quantity: 1,
+    position: { x: 0, y: 0 },
+    rotation: 0,
+    scale: 1,
+  };
+  doc.placements.push(p);
+  return doc;
+}
+
+/** An empty plan whose floor is the item and a margin round it. */
+export function itemPlan(product: Product): EventPlan {
+  const b = footprintBounds(resolveFootprint(product));
+  const hw = b.w / 2 + ITEM_ROOM_MARGIN_MM;
+  const hh = b.h / 2 + ITEM_ROOM_MARGIN_MM;
+  return { ...EMPTY_PLAN, bounds: { minX: -hw, minY: -hh, maxX: hw, maxY: hh, widthMm: 2 * hw, heightMm: 2 * hh } };
+}
+
+/** What the one-item room is built from — a change to anything else (a selection, a hover) builds
+ *  nothing. */
+export function itemSceneKey(p: Product): string {
+  return JSON.stringify([p.name, p.category, p.layer, p.dimensions, p.appearance, p.categoryFields, p.imageUrl, p.variants.map((v) => [v.id, v.swatch, v.archived])]);
+}
+
+/** The room and the place to look at it from, for `product` as it stands. */
+export function itemScene(product: Product): { scene: Scene; focus: Viewpoint | null } {
+  const doc = itemDocument(product);
+  const plan = itemPlan(product);
+  return withResolved([product], () => {
+    const scene = buildScene({ doc, plan, structure: plan.structure, settings: ITEM_SCENE_SETTINGS, author: true, railingAboveMm: null });
+    const focus = focusViewpoint({
+      doc,
+      structure: plan.structure,
+      zones: [],
+      bounds: scene.bounds,
+      selection: [{ kind: product.category === "tables" ? "table" : "placement", id: ITEM_ID }],
+    });
+    return { scene, focus };
+  });
+}
+
+// ── a composite's arrangement ─────────────────────────────────────────────────────────────────────
+
+/** The box round everything on the floor of `doc` — each table's and each floor placement's
+ *  footprint where it stands, turned (a thing on a table is inside its table's). */
+function floorBox(doc: DesignDocumentContent): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  const take = (at: Point, f: Footprint, rotation: number) => {
+    const b = footprintBounds(f);
+    const t = (rotation * Math.PI) / 180;
+    const w = Math.abs(b.w * Math.cos(t)) + Math.abs(b.h * Math.sin(t));
+    const h = Math.abs(b.w * Math.sin(t)) + Math.abs(b.h * Math.cos(t));
+    box.minX = Math.min(box.minX, at.x - w / 2);
+    box.maxX = Math.max(box.maxX, at.x + w / 2);
+    box.minY = Math.min(box.minY, at.y - h / 2);
+    box.maxY = Math.max(box.maxY, at.y + h / 2);
+  };
+  for (const t of doc.tables) take(t.position, tableFootprint(t), t.rotation);
+  for (const p of doc.placements) if (!p.tableId && p.layer !== "table") take(p.position, placementFootprint(p), p.rotation);
+  return Number.isFinite(box.minX) ? box : null;
+}
+
+/** What a composite's room is built from: its pieces, where they stand. */
+export function compositionSceneKey(doc: DesignDocumentContent): string {
+  return JSON.stringify([doc.tables, doc.placements, doc.groups ?? []]);
+}
+
+/** A composite's arrangement in a room of its own: every piece where the editor stands it, on a
+ *  floor the size of the lot plus the margin, looked at from a place that frames them all. Null for
+ *  an empty arrangement. */
+export function compositionScene(doc: DesignDocumentContent): { scene: Scene; focus: Viewpoint | null } | null {
+  const b = floorBox(doc);
+  if (!b) return null;
+  const hw = (b.maxX - b.minX) / 2 + ITEM_ROOM_MARGIN_MM;
+  const hh = (b.maxY - b.minY) / 2 + ITEM_ROOM_MARGIN_MM;
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  const plan: EventPlan = { ...EMPTY_PLAN, bounds: { minX: cx - hw, minY: cy - hh, maxX: cx + hw, maxY: cy + hh, widthMm: 2 * hw, heightMm: 2 * hh } };
+  const scene = buildScene({ doc, plan, structure: plan.structure, settings: ITEM_SCENE_SETTINGS, author: true, railingAboveMm: null });
+  const selection: FocusRef[] = [
+    ...doc.tables.map((t): FocusRef => ({ kind: "table", id: t.id })),
+    ...doc.placements.filter((p) => !p.tableId && p.layer !== "table").map((p): FocusRef => ({ kind: "placement", id: p.id })),
+  ];
+  const focus = focusViewpoint({ doc, structure: plan.structure, zones: [], bounds: scene.bounds, selection });
+  return { scene, focus };
+}
+
+if (isMain(import.meta.url)) {
+  const assert = (ok: boolean, what: string) => {
+    if (!ok) throw new Error("FAIL: " + what);
+    console.log(`  ok   ${what}`);
+  };
+  const row = (over: Partial<Product>): Product => ({ id: "draft", name: "בר עם גב", category: "other", layer: "floor", dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, categoryFields: {}, styleTags: [], variants: [], ...over });
+
+  // The bar of the spec's first proving item, unsaved: a counter, a back-bar 2 m high, a shelf a
+  // metre up it — drawn through the element model's fallback, found by the builder though it is in
+  // no catalog.
+  const bar = row({
+    appearance: {
+      shape: "rect",
+      content: "none",
+      parts: [
+        { id: "back", shape: "rect", widthMm: 3000, depthMm: 400, x: 0, y: -900, rotation: 0, heightMm: 2000 },
+        { id: "shelf", shape: "rect", widthMm: 3000, depthMm: 250, x: 0, y: -800, rotation: 0, zMm: 1000, heightMm: 40 },
+      ],
+    },
+  });
+  const { scene, focus } = itemScene(bar);
+  const bodies = scene.nodes.filter((n): n is BodyNode => n.kind === "body");
+  const item = bodies.filter((b) => b.tag.id === ITEM_ID);
+  assert(item.length === 1 && item[0].parts.length === 3, `the unsaved bar is in the room as one body of three parts (${item.length} bodies, ${item[0]?.parts.length} parts)`);
+  const tops = item[0].parts.map((q) => q.at.z + ("h" in q ? q.h : 0));
+  assert(tops.includes(1100) && tops.includes(2000) && tops.includes(1040), `…the counter 1.1 m, the back-bar 2 m, the shelf's top at 1.04 m (${tops})`);
+  assert(bodies.some((b) => b.tag.type === "ground"), "a ground to stand on");
+  assert(scene.bounds.widthMm === 3000 + 2 * ITEM_ROOM_MARGIN_MM && scene.bounds.heightMm === 1400 + 2 * ITEM_ROOM_MARGIN_MM, "the floor is the item plus the margin");
+  assert(!!focus && focus.look.z > 0 && focus.eye.z > focus.look.z, "a place to look at it from, above it");
+
+  // A table row seats its chairs round it.
+  const table = row({ id: "tbl", name: "עגול 180", category: "tables", dimensions: { diameterMm: 1800, heightMm: 750 }, categoryFields: { seats: 10 } });
+  const t = itemScene(table);
+  const tb = t.scene.nodes.filter((n): n is BodyNode => n.kind === "body");
+  assert(tb.some((b) => b.tag.type === "table"), "a table row is a table");
+  assert(tb.filter((b) => b.tag.type === "chair").reduce((n, b) => n + b.instances.length, 0) === 10, "…with its ten chairs");
+
+  // A composite's arrangement: two tables apart, framed together, on a floor round both.
+  const two = emptyDocument();
+  two.tables.push({ id: "a", type: "עגול 180", number: 1, position: { x: 0, y: 0 }, rotation: 0, diameterMm: 1800, seats: 10 });
+  two.tables.push({ id: "b", type: "עגול 180", number: 2, position: { x: 4000, y: 0 }, rotation: 0, diameterMm: 1800, seats: 10 });
+  const c = compositionScene(two)!;
+  assert(c !== null && c.scene.nodes.filter((n): n is BodyNode => n.kind === "body" && n.tag.type === "table").length === 2, "a composite of two tables stands both in the room");
+  assert(c.scene.bounds.widthMm === 4000 + 1800 + 2 * ITEM_ROOM_MARGIN_MM && Math.abs((c.scene.bounds.minX + c.scene.bounds.maxX) / 2 - 2000) < 1e-6, "…on a floor round the lot, centred on it");
+  assert(!!c.focus && Math.abs(c.focus.look.x - 2000) < 600, `…looked at about the middle of the two (${c.focus?.look.x})`);
+  assert(compositionScene(emptyDocument()) === null, "an empty arrangement is no room");
+  assert(compositionSceneKey(two) !== compositionSceneKey(emptyDocument()), "the key names the pieces");
+
+  // A composite of two CEILING items on one point — a drum shade with a crystal cascade under it (the
+  // user's photograph, 2026-11-08: "a combination of a couple of products") — hangs each at its own
+  // height: this placement's hang height, else its row's, so one stands under the other.
+  const drum = row({ id: "drum", name: "אהיל תוף 120", category: "chandeliers", layer: "ceiling", dimensions: { diameterMm: 1200, heightMm: 300 }, categoryFields: { arms: 6, hangHeightMm: 3000 }, appearance: { shape: "circle", content: "none", symbolStyle: "drums", chandelier: { tiers: 1 } } });
+  const cascade = row({ id: "cascade", name: "מפל קריסטל 90", category: "chandeliers", layer: "ceiling", dimensions: { diameterMm: 900, heightMm: 900 }, categoryFields: { arms: 8 }, appearance: { shape: "circle", content: "none", symbolStyle: "prisms" } });
+  const stacked = emptyDocument();
+  stacked.placements.push({ id: "p-drum", variantId: "drum", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 });
+  stacked.placements.push({ id: "p-cascade", variantId: "cascade", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, hangHeightMm: 2100 });
+  const pair = withResolved([drum, cascade], () => compositionScene(stacked))!;
+  const hung = (id: string) => pair.scene.nodes.find((n): n is BodyNode => n.kind === "body" && n.tag.id === id)!;
+  assert(!!hung("p-drum") && !!hung("p-cascade"), "a composite of two ceiling items on one point builds both");
+  assert(hung("p-drum").instances[0].at.z === 3000 && hung("p-cascade").instances[0].at.z === 2100, `…the drum at its row's 3 m, the cascade at this placement's 2.1 m under it (${hung("p-drum").instances[0].at.z}, ${hung("p-cascade").instances[0].at.z})`);
+  assert(hung("p-drum").parts.some((q) => q.shape === "cylinder" && q.material?.kind === "emissive") && hung("p-cascade").parts.some((q) => q.shape === "cylinder" && q.material?.kind === "crystal"), "…each in its own style: a lit drum, rods of cut crystal");
+
+  // A chandelier whose first shape has a BODY (the "גוף" chip, an urn): the body is its silhouette —
+  // its tiers follow it — and never a solid. Before 2026-11-08 the room built an opaque urn the size
+  // of the whole piece and the arms, the candles and the crystal vanished inside it.
+  const urn = [{ r: 0.45, z: 0 }, { r: 0.4, z: 0.08 }, { r: 0.95, z: 0.4 }, { r: 1, z: 0.6 }, { r: 0.75, z: 0.9 }, { r: 0.85, z: 1 }];
+  const bodied = row({ id: "urn-ch", name: "שנדליר עם גוף", category: "chandeliers", layer: "ceiling", dimensions: { diameterMm: 1000, heightMm: 900 }, categoryFields: { arms: 8 }, appearance: { shape: "circle", content: "none", revolve: urn, chandelier: { tiers: 3 } } });
+  const ub = itemScene(bodied).scene.nodes.find((n): n is BodyNode => n.kind === "body" && n.tag.id === ITEM_ID)!;
+  assert(!!ub && !ub.parts.some((q) => q.shape === "lathe" && Math.max(...q.profile.map((p) => p.r)) > 500 * 0.5), "a chandelier's body is no solid in the room");
+  const candles = ub.parts.filter((q) => q.shape === "cylinder" && q.material?.colour === "#f4efe4");
+  assert(candles.length > 8 && new Set(candles.map((q) => Math.round(Math.hypot(q.at.x, q.at.y)))).size === 3, `…its three tiers of candles stand, each at the silhouette's width (${candles.length})`);
+
+  // The same for a flower arrangement and a chuppah (2026-11-09): the body is the arrangement's
+  // envelope, the chuppah's roof — never an opaque lathe the size of the piece with the flowers, the
+  // posts and the cloth inside it.
+  const solidOf = (b: BodyNode, R: number) => b.parts.some((q) => q.shape === "lathe" && Math.max(...q.profile.map((p) => p.r)) > R * 0.5);
+  const bodyOf = (p: Product) => itemScene(p).scene.nodes.filter((n): n is BodyNode => n.kind === "body" && n.tag.id === ITEM_ID);
+  const arrangement = row({ id: "urn-fl", name: "סידור עם גוף", category: "flower-arrangements", layer: "table", dimensions: { diameterMm: 600, heightMm: 700 }, categoryFields: {}, appearance: { shape: "circle", content: "none", revolve: urn } });
+  const fb = bodyOf(arrangement);
+  assert(fb.length > 0 && !fb.some((b) => solidOf(b, 300)), "an arrangement's body is its envelope, never a solid");
+  const chuppahRow = row({ id: "urn-chp", name: "חופה עם גוף", category: "chuppahs", layer: "floor", dimensions: { diameterMm: 3000, heightMm: 2800 }, categoryFields: {}, appearance: { shape: "circle", content: "none", revolve: urn } });
+  const cb = bodyOf(chuppahRow);
+  assert(cb.length > 0 && !cb.some((b) => solidOf(b, 1500)) && cb.some((b) => b.parts.some((q) => q.shape === "sheet")), "a chuppah's body is its roof's section — a cloth sheet over the posts, never a solid");
+
+  // A table row with a shape that has a height of its own: the top is the recipe's, the raised
+  // shape the element model's, beside it — in the same body, at its own z.
+  const shelfTable = row({
+    id: "tbl2",
+    name: "שולחן עם מדף",
+    category: "tables",
+    dimensions: { widthMm: 1800, depthMm: 800, heightMm: 750 },
+    categoryFields: { seats: 6 },
+    appearance: { shape: "rect", content: "none", parts: [{ id: "shelf", shape: "rect", widthMm: 1800, depthMm: 300, x: 0, y: -700, rotation: 0, zMm: 1200, heightMm: 40 }] },
+  });
+  const st = itemScene(shelfTable);
+  const tableBody = st.scene.nodes.find((n): n is BodyNode => n.kind === "body" && n.tag.type === "table")!;
+  const shelf = tableBody.parts.find((q) => q.at.z === 1200);
+  assert(!!shelf && shelf.shape === "extrude" && (shelf as { h: number }).h === 40, "a table's raised shape stands at its own height in the table's body");
+  assert(tableBody.parts.filter((q) => q.shape === "extrude" && q.at.z === 750 - 30).length === 1, "…and the top is the table's own shape alone, not the shelf's too");
+
+  // Nothing of the draft is left in the resolver afterwards.
+  assert(resolve("draft") === undefined && resolve("tbl") === undefined, "the draft resolves only for the span of the build");
+  console.log("item scene self-check passed");
+}

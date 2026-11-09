@@ -630,7 +630,8 @@ export function partGeometry(part: Part): BufferGeometry {
     case "drape":
       return drapeGeometry(part.outline, part.h, part.foldPitchMm ?? 230, part.foldDepthMm ?? 20, part.flareMm ?? 40, part.band);
     case "torus":
-      return torusGeometry(part.r, part.tube, part.segments ?? DEFAULT_TORUS_TUBULAR);
+      // Built about its centre, so the lean turns it about its own middle.
+      return tilted(torusGeometry(part.r, part.tube, part.segments ?? DEFAULT_TORUS_TUBULAR), part.tiltDeg);
     case "plane":
       return planeGeometry(part.outline, part.side ?? "up", part.holes);
     case "ribbon":
@@ -813,6 +814,8 @@ export function geometrySignature(body: BodyNode): string {
         num(p.r);
         num(p.tube);
         num(p.segments ?? 0);
+        num(p.rotDeg ?? 0);
+        num(p.tiltDeg ?? 0);
         break;
       case "bloom":
         str(p.form);

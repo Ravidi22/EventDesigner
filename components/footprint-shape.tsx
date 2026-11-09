@@ -428,6 +428,8 @@ export function sameDrawProps<P extends object>(a: P, b: P): boolean {
     // A rug's or a cloth's contour (lib/catalog/border.ts) — a placement read back from the server
     // is a fresh object every time.
     if (k === "border" && sameBorder(x as Border | undefined, y as Border | undefined)) continue;
+    // A chandelier's tiers and crystal (MapAppearance.chandelier): three small fields, by value.
+    if ((k === "chandelier" || k === "chuppah") && JSON.stringify(x ?? null) === JSON.stringify(y ?? null)) continue;
     return false;
   }
   return true;

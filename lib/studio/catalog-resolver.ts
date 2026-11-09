@@ -126,36 +126,62 @@ function footprint(product: Product): number {
 let index = new Map<string, Resolved>();
 let builtVersion = -1;
 
-function ensureIndex(): Map<string, Resolved> {
-  if (builtVersion === catalogVersion && index.size > 0) return index;
-  index = new Map();
-  for (const product of loadProducts()) {
-    const cat = CATEGORY_BY_ID[product.category];
-    const base = {
-      product,
-      category: product.category,
-      footprintMm2: footprint(product),
-      anchor: anchorOf(product), // a runner is an item on the table, not its cloth (isRunner)
-      sizing: cat?.sizing ?? ("fixed" as Sizing),
-      solid: solidKind(product),
-    };
-    index.set(product.id, { ...base, label: product.name, price: product.unitPrice });
-    for (const variant of product.variants) {
-      index.set(variant.id, {
+/** A product's entries in the index: its own id (the implicit default), then every variant. */
+function entriesOf(product: Product): [string, Resolved][] {
+  const cat = CATEGORY_BY_ID[product.category];
+  const base = {
+    product,
+    category: product.category,
+    footprintMm2: footprint(product),
+    anchor: anchorOf(product), // a runner is an item on the table, not its cloth (isRunner)
+    sizing: cat?.sizing ?? ("fixed" as Sizing),
+    solid: solidKind(product),
+  };
+  return [
+    [product.id, { ...base, label: product.name, price: product.unitPrice }],
+    ...product.variants.map((variant): [string, Resolved] => [
+      variant.id,
+      {
         ...base,
         variant,
         label: `${product.name} · ${variant.name}`,
         price: variantPrice(product, variant),
         swatch: variant.swatch,
-      });
-    }
-  }
+      },
+    ]),
+  ];
+}
+
+function ensureIndex(): Map<string, Resolved> {
+  if (builtVersion === catalogVersion && index.size > 0) return index;
+  index = new Map();
+  for (const product of loadProducts()) for (const [id, r] of entriesOf(product)) index.set(id, r);
   builtVersion = catalogVersion;
   return index;
 }
 
+// Rows resolving OVER the catalog for the span of one synchronous call (withResolved): a draft the
+// shape editor is previewing in 3D before it is saved. Never written into the cache — priming it
+// would bump catalogVersion and empty every canvas cache keyed on it, for a row nobody has saved.
+let overlay: Map<string, Resolved> | null = null;
+
+/** `fn` with `products` resolving as if they were in the catalog, over the real rows (a draft of a
+ *  saved row wins over the saved row). Synchronous on purpose: the overlay is lifted before this
+ *  returns, so nothing rendered later can see a row that was never saved. */
+export function withResolved<T>(products: readonly Product[], fn: () => T): T {
+  const prev = overlay;
+  const next = new Map(prev ?? []);
+  for (const product of products) for (const [id, r] of entriesOf(product)) next.set(id, r);
+  overlay = next;
+  try {
+    return fn();
+  } finally {
+    overlay = prev;
+  }
+}
+
 export function resolve(variantId: string): Resolved | undefined {
-  return ensureIndex().get(variantId);
+  return overlay?.get(variantId) ?? ensureIndex().get(variantId);
 }
 
 /** The cover a table is wearing — one per table by definition, since a cover IS the table's

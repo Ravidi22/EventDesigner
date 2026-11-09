@@ -33,6 +33,8 @@ import type { BenchLayout } from "@/lib/design-document/bench";
 import { isMain } from "../self-check";
 import { type InstanceRequest, type ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
+import { hasOwnBody } from "@/lib/element/adapter";
+import { ownBodyParts } from "./element-body";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { floorKindBody } from "./floor-kinds";
 import { overheadKindBody } from "./overhead";
@@ -224,8 +226,43 @@ function arm(b: ItemBuild, p: Point, z: number, material: MaterialRef) {
 
 const tagOf = (ctx: ItemContext, type: NodeTag["type"]): NodeTag => ctx.tag ?? (ctx.product ? { type, label: ctx.product.name } : { type });
 
-/** The body of one placed item of `kind` (null = no picture: the fallback). */
+/** The pictures a DRAWN BODY replaces rather than joins: the recipe's whole mass is a guess the
+ *  designer's own profile stands in for — a vessel's form read off its name, a column's shaft, a
+ *  fountain's tiers, a lamp's shade. Everywhere else the picture stays and the body is added to it
+ *  (the user, 2026-11-07: a chandelier's body "doesn't combine the shape with the drawing"). */
+const BODY_REPLACES_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["vase", "column", "fountain", "lamp"]);
+/** The pictures that READ the base's body as their own shape rather than standing beside a solid of
+ *  it: a chandelier's silhouette shapes its tiers and crystal (lib/catalog/chandelier.ts). Built as a
+ *  solid as well, the profile was an opaque gold urn the size of the piece with the arms, the bulbs
+ *  and the crystal inside it (the user, 2026-11-08: "it doesn't look good in the 3D"). */
+const PROFILE_IS_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["chandelier", "flowers", "centerpiece", "chuppah"]);
+
+/** The material the shapes' own bodies are built in: the item's tone, flat. */
+const ownMaterial = (ctx: ItemContext): MaterialRef => ({ colour: ctx.tone, kind: "matte" });
+
+/** The body of one placed item of `kind` (null = no picture: the fallback). A row whose shapes carry
+ *  their own bodies (lib/element hasOwnBody — a part at its own height, a round shape with a
+ *  profile, an outline-only shape) COMBINES them with its category's picture: the recipe draws the
+ *  picture on the footprint, and what the shapes said about themselves is built beside it by the
+ *  element model (element-body.ts ownBodyParts — a shelf a metre up, a raised tier on a stand). For
+ *  the kinds in BODY_REPLACES_PICTURE the body IS the thing; for PROFILE_IS_PICTURE the base's body
+ *  is the picture's own outline and nothing is added for it. The bar keeps its recipe, which honours a back piece's own height itself
+ *  (floor-kinds shapedBar). */
 export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
+  if (kind !== "bar" && ctx.product && hasOwnBody(ctx.product)) {
+    if (kind === null || BODY_REPLACES_PICTURE.has(kind)) return fallbackBody(ctx);
+    const profileIsPicture = PROFILE_IS_PICTURE.has(kind);
+    const own = ownBodyParts(ctx.product, ctx.footprint, ownMaterial(ctx), { baseProfileIsPicture: profileIsPicture });
+    if (!own) return profileIsPicture ? pictureBody(kind, ctx) : fallbackBody(ctx);
+    const picture = pictureBody(kind, { ...ctx, footprint: own.rest });
+    picture.parts.push(...own.parts);
+    return picture;
+  }
+  return pictureBody(kind, ctx);
+}
+
+/** The category's picture, as it was always built. */
+function pictureBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
   switch (kind) {
     case "candlestick":
       return candlestickBody(ctx);
@@ -953,5 +990,14 @@ if (isMain(import.meta.url)) {
   assert(vesselForm("צילינדר זכוכית מפוספס 50", 60, 60, 500) === "cylinder", "a cylinder is straight");
   assert(vesselForm("קערה אובלית על רגל 60", 600, 300, 200) === "pedestal" && vesselForm("קערה שטוחה", 400, 400, 120) === "bowl", "a bowl on a foot has a pedestal; a bowl does not");
   assert(vesselForm(undefined, 200, 200, 300) === "urn" && vesselForm(undefined, 60, 60, 500) === "cylinder" && vesselForm(undefined, 400, 400, 150) === "bowl", "…and nameless ones go by their proportions");
+  // A row whose shapes carry their own body is built from them, whatever its category: a vase whose
+  // designer drew a bowl's profile is a lathe of that profile, not the vase recipe's guess from its
+  // name; the same row without a profile is the recipe's.
+  const drawnVase: Product = { id: "v", name: "אגרטל", category: "vases", layer: "table", dimensions: { diameterMm: 300, heightMm: 400 }, categoryFields: {}, styleTags: [], variants: [], appearance: { shape: "circle", content: "none", revolve: [{ r: 0.3, z: 0 }, { r: 1, z: 0.7 }, { r: 0.6, z: 1 }] } };
+  const own = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { product: drawnVase }));
+  assert(own.parts.length === 1 && own.parts[0].shape === "lathe" && Math.abs(Math.max(...(own.parts[0] as { profile: { r: number }[] }).profile.map((q) => q.r)) - 150) < 1e-6 && top(own.parts[0]) === 400, "a vase with a drawn profile is that profile, turned");
+  const { appearance: _a, ...plainVase } = drawnVase;
+  const recipe = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { product: { ...plainVase, appearance: { shape: "circle", content: "none" } } }));
+  assert(recipe.parts.length !== own.parts.length || recipe.parts[0].shape !== "lathe" || JSON.stringify(recipe.parts[0]) !== JSON.stringify(own.parts[0]), "…and without one it is the recipe's vase");
   console.log("scene items ok");
 }

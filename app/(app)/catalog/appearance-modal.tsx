@@ -1,26 +1,35 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlignCenterVertical,
   Armchair,
+  ArrowUpFromLine,
+  Box,
+  BrickWall,
   BringToFront,
   ChartPie,
   Check,
   Copy,
   CopyPlus,
+  Cylinder,
   Donut,
   DraftingCompass,
   FlipHorizontal2,
   FlipVertical2,
+  Frame,
   Layers,
   Lock,
   LockOpen,
+  Magnet,
   Move,
   Paintbrush,
   PenLine,
   Plus,
   Rainbow,
+  Repeat as RepeatIcon,
+  RotateCcw,
+  RotateCw,
   Route,
   Ruler,
   SendToBack,
@@ -31,10 +40,12 @@ import {
   Type,
   X,
 } from "lucide-react";
-import type { ArcSpec, HollowSpec, MapAppearance, MapShape, Product, RingSpec, ShapePart } from "@/lib/catalog/types";
+import type { ArcSpec, ChandelierCrystals, ChandelierSpec, ChuppahFinish, ChuppahFlowers, ChuppahRoof, ChuppahSpec, HollowSpec, MapAppearance, MapShape, PendantFitting, Pin, PinMode, Product, Repeat, RepeatAlong, RevolvePoint, RingSpec, ShapePart } from "@/lib/catalog/types";
+import { CHANDELIER_CRYSTALS, CHANDELIER_PROFILES, FITTING_LABEL, PENDANT_FITTINGS, PENDANT_GLASS, PENDANT_GLASS_FORMS, PENDANT_GLASS_LABEL, CHANDELIER_PROFILE_FORMS, CHANDELIER_PROFILE_LABEL, CHANDELIER_TIERS_MAX, CRYSTALS_LABEL, CRYSTAL_STYLES, PROFILED_STYLES, TIERED_STYLES, asksStrands, chandelierDrawOf, chandelierHint, chandelierOf, chandelierPatch, strandsLabel } from "@/lib/catalog/chandelier";
+import { CHUPPAH_FINISHES, CHUPPAH_FINISH_LABEL, CHUPPAH_FLOWERS_LABEL, CHUPPAH_FLOWER_SPOTS, CHUPPAH_PROFILES, CHUPPAH_PROFILE_FORMS, CHUPPAH_PROFILE_LABEL, CHUPPAH_ROOFS, CHUPPAH_ROOF_LABEL, chuppahDrawOf, chuppahLayout, chuppahOf, chuppahPatch } from "@/lib/catalog/chuppah";
 import { ARC_SWEEP, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
-import { drawnBounds, flipShapes, lookOf, shapesOf, type FlipAxis } from "@/lib/catalog/shape-list";
+import { drawnBounds, drawnPieces, flipShapes, lookOf, rescaleOutline, shapesOf, type FlipAxis } from "@/lib/catalog/shape-list";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import {
   arcSpecOf,
@@ -62,14 +73,21 @@ import { alignedCentres, alignGuide, needsThree, type AlignOp } from "@/lib/stud
 import { useHistory } from "@/lib/studio/use-history";
 import { hitsInBox, mergeSelection } from "@/lib/venues/selection";
 import { Select } from "@/components/select";
-import { TagToggle } from "@/components/tag-toggle";
-import { seatSides, seatsAround } from "@/lib/studio/seating";
+import { CHAIR_D_MM, seatSides, seatsAround } from "@/lib/studio/seating";
 import { FootprintShape, OutlinePath } from "@/components/footprint-shape";
 import { SeatChairs, SeatSidesPicker } from "@/components/seat-sides-picker";
-import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
+import { Actions, Bar, BarButton, Note, PanelRow, ltr } from "@/components/inspector-bar";
 import { Popover } from "@/components/popover";
+import { IconButton } from "@/components/icon-button";
+import { FoldRow } from "@/components/fold-row";
+import { ElevationView } from "./elevation-view";
+import { RevolveFields, type RevolveTiles } from "./revolve-editor";
+import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
+import { ScenePane } from "./scene-pane";
+import { itemScene, itemSceneKey } from "@/lib/scene/item-scene";
 import { Menu, type MenuItem } from "@/components/menu";
 import { StructureFeatures } from "@/components/venue-plan";
+import { Dim } from "@/components/venue-dims";
 import { emptyStructure, type StructureFeature } from "@/lib/venues/structure";
 import { PlanCanvas, type ContextMenuItem, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
 import { closeRefusal, useOutlineEditor, type SelectedRef } from "@/lib/studio/use-outline-editor";
@@ -93,7 +111,7 @@ import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
 import { FootprintBorder } from "@/components/item-symbol";
 import { BorderFields } from "@/components/border-fields";
-import { Swatch } from "@/components/swatch-field";
+import { Swatch, SwatchField } from "@/components/swatch-field";
 import { borderOf, newBorder, takesBorder } from "@/lib/catalog/border";
 import {
   CANDLE_STYLES,
@@ -110,7 +128,7 @@ import {
   type DrawStyle,
   type SymbolKind,
 } from "@/lib/catalog/symbols";
-import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
+import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, FLOWER_PROFILES, FLOWER_PROFILE_FORMS, FLOWER_PROFILE_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
 import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { FlowerDrawing } from "@/components/flower-symbol";
 import { climbRise } from "@/lib/studio/climb-item";
@@ -172,33 +190,37 @@ function ArcFields({
 }) {
   const spec = arcSpecOf(diameterMm || DEFAULT_PRESET_MM.w, arc);
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       <Segmented
         label="כמה מהעיגול"
         value={String(spec.sweepDeg)}
         options={SWEEP_PRESETS}
         onChange={(v) => onChange({ ...spec, sweepDeg: Number(v) })}
       />
-      <div className="grid grid-cols-2 gap-2">
-        <NumberField
-          id={`${idPrefix}-sweep`}
-          label="זווית (°)"
-          decimals={0}
-          min={ARC_SWEEP.min}
-          max={ARC_SWEEP.max}
-          commitOnBlur
-          value={spec.sweepDeg}
-          onChange={(v) => onChange({ ...spec, sweepDeg: v })}
-        />
-        <NumberField
-          id={`${idPrefix}-band`}
-          label="רוחב הרצועה (ס״מ)"
-          decimals={0}
-          min={5}
-          commitOnBlur
-          value={mmToCm(spec.bandMm)}
-          onChange={(v) => onChange({ ...spec, bandMm: Math.round(v * 10) })}
-        />
+      <div>
+        <PanelRow label="זווית (°)" htmlFor={`${idPrefix}-sweep`}>
+          <NumberField
+            id={`${idPrefix}-sweep`}
+            decimals={0}
+            min={ARC_SWEEP.min}
+            max={ARC_SWEEP.max}
+            commitOnBlur
+            value={spec.sweepDeg}
+            onChange={(v) => onChange({ ...spec, sweepDeg: v })}
+            className="w-20"
+          />
+        </PanelRow>
+        <PanelRow label="רוחב הרצועה (ס״מ)" htmlFor={`${idPrefix}-band`}>
+          <NumberField
+            id={`${idPrefix}-band`}
+            decimals={0}
+            min={5}
+            commitOnBlur
+            value={mmToCm(spec.bandMm)}
+            onChange={(v) => onChange({ ...spec, bandMm: Math.round(v * 10) })}
+            className="w-20"
+          />
+        </PanelRow>
       </div>
     </div>
   );
@@ -211,7 +233,7 @@ const CIRCLE_SWEEPS = [["360", "מלא"], ...SWEEP_PRESETS] as const;
  *  its two radii opened make the old קשת חלולה. */
 function CircleSweepFields({ idPrefix, sweepDeg, onChange }: { idPrefix: string; sweepDeg: number; onChange: (sweepDeg: number) => void }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       <Segmented label="כמה מהעיגול" value={String(sweepDeg)} options={CIRCLE_SWEEPS} onChange={(v) => onChange(Number(v))} />
       <PanelRow label="זווית (°)" htmlFor={`${idPrefix}-sweep`}>
         <NumberField id={`${idPrefix}-sweep`} decimals={0} min={ARC_SWEEP.min} max={360} commitOnBlur value={sweepDeg} onChange={onChange} className="w-20" />
@@ -268,27 +290,31 @@ function RingFields({
   // A rounded ח has no opening to set: its sides are the arcs, and its modules cannot be shortened.
   const opens = shape !== "rounded-u";
   return (
-    <div className="space-y-2">
-      <div className={opens ? "grid grid-cols-2 gap-2" : undefined}>
-        <NumberField
-          id={`${idPrefix}-band`}
-          label="רוחב הרצועה (ס״מ)"
-          decimals={0}
-          min={5}
-          commitOnBlur
-          value={mmToCm(spec.bandMm)}
-          onChange={(v) => onChange({ ...spec, bandMm: Math.round(v * 10) })}
-        />
-        {opens && (
+    <div className="space-y-2.5">
+      <div>
+        <PanelRow label="רוחב הרצועה (ס״מ)" htmlFor={`${idPrefix}-band`}>
           <NumberField
-            id={`${idPrefix}-gap`}
-            label={oval ? "פתח (ס״מ)" : "פתח ליד הקיר (ס״מ)"}
+            id={`${idPrefix}-band`}
             decimals={0}
-            min={0}
+            min={5}
             commitOnBlur
-            value={mmToCm(spec.gapMm)}
-            onChange={(v) => onChange({ ...spec, gapMm: Math.round(v * 10) })}
+            value={mmToCm(spec.bandMm)}
+            onChange={(v) => onChange({ ...spec, bandMm: Math.round(v * 10) })}
+            className="w-20"
           />
+        </PanelRow>
+        {opens && (
+          <PanelRow label={oval ? "פתח (ס״מ)" : "פתח ליד הקיר (ס״מ)"} htmlFor={`${idPrefix}-gap`}>
+            <NumberField
+              id={`${idPrefix}-gap`}
+              decimals={0}
+              min={0}
+              commitOnBlur
+              value={mmToCm(spec.gapMm)}
+              onChange={(v) => onChange({ ...spec, gapMm: Math.round(v * 10) })}
+              className="w-20"
+            />
+          </PanelRow>
         )}
       </div>
       {oval && <Segmented label="מיקום הפתח" value={spec.gapAt} options={GAP_AT} onChange={(gapAt) => onChange({ ...spec, gapAt })} />}
@@ -369,14 +395,15 @@ function HollowFields({
   const open = (hollow?.openSides ?? []).filter((i) => i < names.length);
   const gap = hollow?.gapMm ?? 0;
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       <Segmented
         label="מילוי"
+        hideLabel
         value={hollow ? "hollow" : "solid"}
         options={FILL_OPTIONS}
         onChange={(v) => onChange(v === "hollow" ? (hollow ?? { bandMm: defaultBand }) : undefined)}
       />
-      {hollow && (
+      {hollow ? (
         <>
           <PanelRow label="עומק הרצועה (ס״מ)" htmlFor={`${idPrefix}-band`}>
             <NumberField
@@ -391,27 +418,35 @@ function HollowFields({
               className="w-20"
             />
           </PanelRow>
-          <PanelRow label="צדדים פתוחים" stack>
-            <div className="flex flex-wrap gap-1">
-              {names.map((name, i) => (
-                <TagToggle
-                  key={i}
-                  active={open.includes(i)}
-                  onClick={() => {
-                    const next = open.includes(i) ? open.filter((x) => x !== i) : [...open, i].sort((a, b) => a - b);
-                    onChange({ ...hollow, openSides: next.length ? next : undefined });
-                  }}
-                >
-                  {name}
-                </TagToggle>
-              ))}
+          <div>
+            <span className={fieldLabelClassName}>צדדים פתוחים</span>
+            <div className="grid grid-cols-2 gap-1" role="group" aria-label="צדדים פתוחים">
+              {names.map((name, i) => {
+                const on = open.includes(i);
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      const next = on ? open.filter((x) => x !== i) : [...open, i].sort((a, b) => a - b);
+                      onChange({ ...hollow, openSides: next.length ? next : undefined });
+                    }}
+                    className={`h-8 min-w-0 truncate rounded-sm border px-2 text-xs transition-colors ${
+                      on ? "border-accent bg-accent-tint font-semibold text-accent" : "border-border text-ink-soft hover:border-accent-line"
+                    }`}
+                  >
+                    {name}
+                  </button>
+                );
+              })}
             </div>
-          </PanelRow>
+          </div>
           {/* An entrance only makes sense in a band that runs all the way round — with a side open,
               that side IS the way in. */}
           {open.length === 0 && (
-            <>
-              <PanelRow label="כניסה (ס״מ, 0 = סגורה)" htmlFor={`${idPrefix}-gap`}>
+            <div>
+              <PanelRow label="כניסה (ס״מ)" htmlFor={`${idPrefix}-gap`}>
                 <NumberField
                   id={`${idPrefix}-gap`}
                   decimals={0}
@@ -423,7 +458,7 @@ function HollowFields({
                 />
               </PanelRow>
               {gap > 0 && (
-                <>
+                <div className="mt-1.5 space-y-2.5">
                   <PanelRow label="בצד" stack>
                     <Select
                       value={String(hollowGapSide(outer, hollow))}
@@ -434,12 +469,14 @@ function HollowFields({
                     />
                   </PanelRow>
                   <Segmented label="מיקום הכניסה בצד" value={hollow.gapAt ?? "center"} options={GAP_ALONG} onChange={(gapAt) => onChange({ ...hollow, gapAt })} />
-                </>
+                </div>
               )}
-            </>
+            </div>
           )}
-          <Note>צד פתוח — הרצועה מגיעה עד קו הצד ונעצרת בו, כמו ח׳. כניסה — פתח ברצועה סגורה.</Note>
+          <Note>{open.length ? "צד פתוח — הרצועה מגיעה עד קו הצד ונעצרת בו, כמו ח׳." : "צד פתוח — הרצועה מגיעה עד קו הצד ונעצרת בו, כמו ח׳. כניסה — פתח ברצועה הסגורה; 0 — בלי פתח."}</Note>
         </>
+      ) : (
+        <Note>חלול — רצועה לאורך קו הצורה: בר ח׳, אליפסה חלולה, מזנון סביב.</Note>
       )}
     </div>
   );
@@ -454,19 +491,31 @@ function HollowFields({
 // same handles, not a look-alike), and the row stores the first of them as its base
 // (lib/catalog/shape-list.ts).
 
-/** A card's picture: the shape itself, at a neutral proportion. */
-function ShapeCard({ shape }: { shape: Exclude<MapShape, "custom"> }) {
+/** A shape's picture, at a neutral proportion — the drawer's tiles and the shape picker's. */
+function ShapeIcon({ shape, className = "h-[30px] w-[30px]" }: { shape: Exclude<MapShape, "custom">; className?: string }) {
   const f = shapeFootprint(shape, { widthMm: 1600, depthMm: shape === "line" ? 60 : 1000, diameterMm: 1600 });
   const b = footprintBounds(f);
   const pad = Math.max(b.w, b.h) * 0.08;
   return (
-    <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
-      <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-9 w-9" aria-hidden>
-        <FootprintShape footprint={f} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-      </svg>
-    </span>
+    <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className={`shrink-0 ${className}`} aria-hidden>
+      <FootprintShape footprint={f} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }
+
+/** A shape tile — the drawer's and the shape picker's, one look. */
+const shapeTileClass = (on: boolean) =>
+  "flex h-[58px] min-w-0 flex-col items-center justify-center gap-0.5 rounded-sm border px-1 pb-[5px] pt-1 text-[11px] font-semibold leading-tight transition-colors " +
+  (on ? "border-accent bg-accent-tint text-accent" : "border-transparent bg-inset text-ink-soft hover:border-accent-line");
+
+/** The drawer's names where the full one does not fit a tile; the full one is its tooltip. */
+const SHAPE_SHORT: Partial<Record<MapShape, string>> = {
+  stadium: "קפסולה",
+  crescent: "סהר",
+  "rounded-u": "צורת ח",
+  "quarter-circle": "רבע עיגול",
+  "half-circle": "חצי עיגול",
+};
 
 // The picker's shapes (PICKER_SHAPES): a קשת חלולה, a צורת ח and an אליפסה חלולה are a half circle,
 // a rectangle and a capsule made hollow on the shape's bar.
@@ -477,53 +526,45 @@ const isRailShape = (id: string): id is RailShape => (RAIL_SHAPES as readonly st
 function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null; drawing: boolean; onArm: (s: RailShape | null) => void; onDraw: () => void }) {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-e border-border bg-surface">
-      <div className="scroll-slim flex-1 overflow-y-auto p-3">
+      <div className="scroll-slim flex flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
         <button
           type="button"
           onClick={onDraw}
           aria-pressed={drawing}
+          title="ציור חופשי — נקודה אחר נקודה"
           className={
-            "flex w-full items-center gap-3 rounded-md border p-2 text-start transition-colors " +
-            (drawing ? "border-accent bg-accent-tint" : "border-border hover:border-accent-line hover:bg-inset")
+            "flex h-9 w-full items-center justify-center gap-2 rounded-sm border px-2.5 text-[13px] font-semibold transition-colors " +
+            (drawing ? "border-accent bg-accent-tint text-accent" : "border-border bg-surface text-ink hover:border-accent-line hover:bg-inset")
           }
         >
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-inset">
-            <PenLine className="h-4 w-4 text-accent" strokeWidth={1.75} />
-          </span>
-          <span className="min-w-0">
-            <span className="block text-sm font-semibold text-ink">ציור חופשי</span>
-            <span className="block text-xs text-muted">נקודה אחר נקודה</span>
-          </span>
+          <PenLine className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
+          ציור חופשי
         </button>
-        <p className="mb-1.5 mt-4 text-xs font-semibold text-muted">צורות</p>
-        <div className="grid grid-cols-3 gap-1.5">
-          {RAIL_SHAPES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              draggable
-              aria-pressed={armed === s}
-              title={SHAPE_LABEL[s]}
-              onClick={() => onArm(armed === s ? null : s)}
-              onDragStart={(e) => {
-                e.dataTransfer.setData("text/plain", s);
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              className={`flex flex-col items-center gap-1 rounded-md border p-1.5 text-center text-[10px] font-semibold leading-tight transition-colors ${
-                armed === s ? "border-accent bg-accent-tint text-accent" : "border-border text-ink hover:border-accent-line hover:bg-inset"
-              }`}
-            >
-              <ShapeCard shape={s} />
-              <span className="line-clamp-2 w-full">{SHAPE_LABEL[s]}</span>
-            </button>
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <span className="ps-0.5 text-xs font-semibold text-muted">צורות</span>
+          <div className="grid grid-cols-3 gap-1">
+            {RAIL_SHAPES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                draggable
+                aria-pressed={armed === s}
+                aria-label={SHAPE_LABEL[s]}
+                title={SHAPE_LABEL[s]}
+                onClick={() => onArm(armed === s ? null : s)}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", s);
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+                className={shapeTileClass(armed === s)}
+              >
+                <ShapeIcon shape={s} />
+                <span className="block w-full truncate text-center">{SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
-      <p className="border-t border-border px-3 py-2 text-xs leading-relaxed text-muted">
-        {armed
-          ? `לחצו על הקנבס כדי להניח ${SHAPE_LABEL[armed]} · Esc לביטול`
-          : "גררו צורה אל הקנבס, או לחצו עליה ואז על הקנבס. לחיצה כפולה על צורה — עריכת הקווים שלה."}
-      </p>
     </aside>
   );
 }
@@ -531,16 +572,7 @@ function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null;
 /** A hand-drawn shape's outline stretched to a new box about its own centre — what its resize handles
  *  and its size fields do. Curves are offsets from their endpoints, so they scale by the same two. */
 function rescaleCustomPart(part: ShapePart, widthMm: number, depthMm: number): Pick<ShapePart, "outline" | "edgeCurves" | "widthMm" | "depthMm"> {
-  const outline = part.outline ?? [];
-  const b = customShapeBounds(outline, part.edgeCurves);
-  const sx = b.w > 0 ? Math.max(100, widthMm) / b.w : 1;
-  const sy = b.h > 0 ? Math.max(100, depthMm) / b.h : 1;
-  return {
-    outline: outline.map((v) => ({ x: Math.round(b.cx + (v.x - b.cx) * sx), y: Math.round(b.cy + (v.y - b.cy) * sy) })),
-    edgeCurves: part.edgeCurves?.map((c) => (c ? { c1: { x: c.c1.x * sx, y: c.c1.y * sy }, c2: { x: c.c2.x * sx, y: c.c2.y * sy } } : c)),
-    widthMm: Math.round(b.w * sx),
-    depthMm: Math.round(b.h * sy),
-  };
+  return rescaleOutline(part.outline ?? [], part.edgeCurves, widthMm, depthMm);
 }
 
 /** A shape as the patch would leave it: a hand-drawn one whose size is changed is RESCALED, since its
@@ -571,8 +603,79 @@ function reshaped(part: ShapePart, next: RailShape): ShapePart {
     arc: undefined,
     ring: undefined,
     hollow: hollowAcross(part.hollow, next),
+    // A body of revolution is a round shape's; a bowl reshaped to a square is a block.
+    revolve: next === "circle" || next === "ellipse" ? part.revolve : undefined,
     open: undefined,
   };
+}
+
+/** What the "גוף" chip reads: a cylinder, a preset's name, or a profile of the designer's own. */
+function bodyValue(part: ShapePart, tiles?: RevolveTiles): string {
+  if (!part.revolve) return tiles?.none ?? "גליל";
+  const same = (a: readonly RevolvePoint[], b: readonly RevolvePoint[]) => a.length === b.length && a.every((q, i) => Math.abs(q.r - b[i].r) < 1e-6 && Math.abs(q.z - b[i].z) < 1e-6);
+  if (tiles) return tiles.forms.find((f) => same(f.points, part.revolve!))?.label.split(" — ")[0] ?? "מותאם";
+  const form = revolveFormOf(part.revolve);
+  return form ? REVOLVE_LABEL[form] : "מותאם";
+}
+
+// ── Pins and repeats (the element model, Stage 3) ────────────────────────────────────────────────
+// How a shape follows a resize of the item (ShapePart.pin — Figma's constraints, against the first
+// shape's box) and whether it is laid in copies against the first shape (ShapePart.repeat — posts in
+// the corners, a beam along every side, slats at a spacing). Both are read by the one footprint
+// engine (lib/studio/footprint.ts sizedShapes / repeatCopies), so the canvas's faint copies, the
+// plan and the room agree.
+
+const PIN_X: { value: PinMode; label: string }[] = [
+  { value: "scale", label: "יחסי — זז וגדל עם הפריט" },
+  { value: "start", label: "צמוד לשמאל" },
+  { value: "end", label: "צמוד לימין" },
+  { value: "center", label: "ממורכז — במרחק קבוע מהאמצע" },
+  { value: "stretch", label: "נמתח — צמוד לשני הצדדים" },
+];
+const PIN_Y: { value: PinMode; label: string }[] = [
+  { value: "scale", label: "יחסי — זז וגדל עם הפריט" },
+  { value: "start", label: "צמוד למעלה" },
+  { value: "end", label: "צמוד למטה" },
+  { value: "center", label: "ממורכז — במרחק קבוע מהאמצע" },
+  { value: "stretch", label: "נמתח — צמוד לשני הצדדים" },
+];
+const PIN_SHORT: Record<PinMode, string> = { scale: "יחסי", start: "התחלה", end: "סוף", center: "מרכז", stretch: "נמתח" };
+
+function pinValue(pin: Pin | undefined): string {
+  const x = pin?.x ?? "scale";
+  const y = pin?.y ?? "scale";
+  if (x === "scale" && y === "scale") return "יחסי";
+  return `${PIN_SHORT[x]} · ${PIN_SHORT[y]}`;
+}
+
+/** The pin with one axis set; "scale" is the default and is not stored; none left = no pin. */
+function withPin(pin: Pin | undefined, axis: "x" | "y", mode: PinMode): Pin | undefined {
+  const next: Pin = { ...pin };
+  if (mode === "scale") delete next[axis];
+  else next[axis] = mode;
+  return next.x || next.y ? next : undefined;
+}
+
+const REPEAT_LABEL: Record<RepeatAlong, string> = { corners: "בפינות", edges: "לאורך הצלעות", row: "בשורה", grid: "ברשת" };
+const REPEAT_OPTIONS: { value: RepeatAlong | ""; label: string }[] = [
+  { value: "", label: "ללא — הצורה הזו בלבד" },
+  { value: "corners", label: "בפינות הצורה הראשונה" },
+  { value: "edges", label: "לאורך כל צלע של הצורה הראשונה" },
+  { value: "row", label: "בשורה — לרוחב הצורה הראשונה, במרווח" },
+  { value: "grid", label: "ברשת — בתוך הצורה הראשונה" },
+];
+const REPEAT_HINT: Record<RepeatAlong, string> = {
+  corners: "עותק אחד בתוך כל פינה של הצורה הראשונה, פניו על שני הקווים — עמודי פרגולה.",
+  edges: "עותק לאורך כל צלע, באורך הצלע ובעומק הצורה הזו, פניו החיצוניים על הקו — קורה, מעקה, אבן שפה.",
+  row: "עותקים במרווח קבוע, מהאמצע החוצה, כל אחד חוצה את הצורה הראשונה מצד לצד — רפפות, קורות תקרה.",
+  grid: "עותקים בגודל הצורה הזו על רשת, רק אלה שמרכזם בתוך הצורה הראשונה — באלוסטרים, עמודים.",
+};
+const DEFAULT_SPACING_MM = 300;
+
+function repeatValue(r: Repeat | undefined): string {
+  if (!r) return "ללא";
+  const s = r.along === "row" || r.along === "grid" ? ` ${Math.round((r.spacingMm ?? DEFAULT_SPACING_MM) / 10)}` : "";
+  return `${REPEAT_LABEL[r.along]}${s}`;
 }
 
 /** A line's thickness when nothing says otherwise — a rope, a cable, a rail. */
@@ -659,25 +762,17 @@ function restacked(list: readonly ShapePart[], ids: readonly string[], how: "fro
  *  (PICKER_SHAPES) show a card only on a shape that already is one, so the grid still says what it is. */
 function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShape) => void }) {
   return (
-    <div className="grid grid-cols-4 gap-1.5" role="group" aria-label="צורה">
+    <div className="grid grid-cols-4 gap-1" role="group" aria-label="צורה">
       {MAP_SHAPES.filter((s) => PICKER_SHAPES.includes(s) || s === value).map((s) => (
-        <button
-          key={s}
-          type="button"
-          aria-pressed={value === s}
-          onClick={() => onPick(s)}
-          className={`flex flex-col items-center gap-1 rounded-md border p-1.5 text-center text-[10px] font-semibold leading-tight transition-colors ${
-            value === s ? "border-accent bg-accent-tint text-accent" : "border-border text-ink hover:border-accent-line hover:bg-inset"
-          }`}
-        >
+        <button key={s} type="button" aria-pressed={value === s} title={SHAPE_LABEL[s]} onClick={() => onPick(s)} className={`${shapeTileClass(value === s)} h-auto min-h-[64px]`}>
           {s === "custom" ? (
-            <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+            <span className="flex h-[30px] w-[30px] items-center justify-center">
               <PenLine className="h-4 w-4 text-accent" strokeWidth={1.75} />
             </span>
           ) : (
-            <ShapeCard shape={s} />
+            <ShapeIcon shape={s} />
           )}
-          <span className="line-clamp-2 w-full">{SHAPE_LABEL[s]}</span>
+          <span className="line-clamp-2 w-full text-center">{SHAPE_LABEL[s]}</span>
         </button>
       ))}
     </div>
@@ -688,23 +783,53 @@ function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShap
  *  that version in THIS row's shade and count, so the designer picks by looking. The first tile is
  *  what the category always drew, and picking it stores no style at all. A sofa drawn round is a
  *  pouf whatever its style, so a round one is offered none. */
-function StyleTiles({ kind, product, onPick }: { kind: SymbolKind; product: Product; onPick: (style: DrawStyle | undefined) => void }) {
+/** Whether the category's picture has a grid of versions of its own here (StyleTiles, or the chairs',
+ *  candlesticks' or arrangements' own tiles) — the grid the "ללא" tile leads. */
+function hasStyleTiles(kind: SymbolKind, product: Product): boolean {
+  if (product.category === "chairs" || product.category === "candlesticks" || product.category === "flower-arrangements" || product.category === "centerpieces") return true;
+  if (!SYMBOL_STYLES[kind]) return false;
+  return !(kind === "sofa" && resolveFootprint(product).kind !== "rect");
+}
+
+const tileClass = (on: boolean) =>
+  "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " + (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line");
+
+/** "ללא" — the first tile of the picture's versions (2026-11-09, the user: in place of the "ציור כ…"
+ *  switch, "just add an option of ללא"): the item drawn as its plain shape, with its name or icon
+ *  (MapAppearance.symbol false); any other tile turns the picture back on. Drawn as the item's own
+ *  outline, empty and dashed. */
+function NoneTile({ on, footprint, onPick }: { on: boolean; footprint: Footprint; onPick: () => void }) {
+  const b = footprintBounds(footprint);
+  const pad = Math.max(b.w, b.h) * 0.12;
+  return (
+    <button type="button" role="radio" aria-checked={on} title="ללא ציור — הפריט מצויר כצורה, עם שם או אייקון" onClick={onPick} className={tileClass(on)}>
+      <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-10 w-full" aria-hidden>
+        <FootprintShape footprint={footprint} fill="var(--color-surface)" stroke="var(--color-faint)" strokeWidth={1.25} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">ללא</span>
+    </button>
+  );
+}
+
+function StyleTiles({ kind, product, onPick, off, lead }: { kind: SymbolKind; product: Product; onPick: (style: DrawStyle | undefined) => void; off?: boolean; lead?: ReactNode }) {
   const set = SYMBOL_STYLES[kind];
   if (!set) return null;
   if (kind === "sofa" && resolveFootprint(product).kind !== "rect") return null;
   const chosen = drawStyleOf(product) ?? set.styles[0];
   const tone = product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill;
   const count = symbolCount(product, kind);
-  const cols = set.styles.length <= 2 ? "grid-cols-2" : set.styles.length === 3 ? "grid-cols-3" : "grid-cols-4";
+  const n = set.styles.length + (lead ? 1 : 0);
+  const cols = n <= 2 ? "grid-cols-2" : n === 3 ? "grid-cols-3" : "grid-cols-4";
   return (
     <div>
       <span className={fieldLabelClassName}>{set.title}</span>
       <div className={`grid ${cols} gap-1`} role="radiogroup" aria-label={set.title}>
+        {lead}
         {set.styles.map((st, i) => {
           const f = set.sample(st);
           const b = footprintBounds(f);
           const pad = Math.max(b.w, b.h) * 0.06;
-          const on = chosen === st;
+          const on = !off && chosen === st;
           return (
             <button
               key={st}
@@ -713,13 +838,10 @@ function StyleTiles({ kind, product, onPick }: { kind: SymbolKind; product: Prod
               aria-checked={on}
               title={set.hint?.[st] ?? set.label[st]}
               onClick={() => onPick(i === 0 ? undefined : st)}
-              className={
-                "flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " +
-                (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")
-              }
+              className={tileClass(on)}
             >
               <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-10 w-full" aria-hidden>
-                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} />
+                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} />
               </svg>
               <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{set.label[st]}</span>
             </button>
@@ -733,41 +855,100 @@ function StyleTiles({ kind, product, onPick }: { kind: SymbolKind; product: Prod
 /** The item drawn as its category's picture, and which version of it — the "ציור" panel on the item's
  *  bar. A chair's style, a candle piece's, an arrangement's form, and every other picture's versions
  *  (SYMBOL_STYLES). */
+/** A chandelier's body is its SILHOUETTE (lib/catalog/chandelier.ts): its own outlines as the tiles,
+ *  on the chandelier panel and on its first shape's "גוף". */
+const CHANDELIER_SILHOUETTES: RevolveTiles = {
+  title: "צללית — צורת השנדליר מהצד",
+  none: "לפי הסוג",
+  forms: CHANDELIER_PROFILE_FORMS.map((f) => ({ key: f, label: CHANDELIER_PROFILE_LABEL[f], points: CHANDELIER_PROFILES[f] })),
+  note: "הקומות, המוטות והמחרוזות נפרשים בתוך הצללית — כל קומה ברוחב הצללית בגובה שלה; לא גוף מלא. הרוחב הגדול ביותר הוא הקוטר על התוכנית.",
+};
+
+/** A glass pendant's body is its GLASS'S shape (lib/catalog/chandelier.ts PENDANT_GLASS). */
+const PENDANT_GLASS_TILES: RevolveTiles = {
+  title: "צורת הזכוכית",
+  none: "כדור",
+  nonePoints: PENDANT_GLASS.globe,
+  forms: PENDANT_GLASS_FORMS.filter((f) => f !== "globe").map((f) => ({ key: f, label: PENDANT_GLASS_LABEL[f], points: PENDANT_GLASS[f] })),
+  note: "כל גלובוס בקבוצה באותה צורה; הקוטר על התוכנית הוא הרוחב שלו.",
+};
+
+/** A round chuppah's body is its ROOF'S section (lib/catalog/chuppah.ts CHUPPAH_PROFILES): a flat
+ *  cloth when none is picked. */
+const CHUPPAH_ROOF_TILES: RevolveTiles = {
+  title: "צורת הגג — חופה עגולה",
+  none: "שטוח",
+  forms: CHUPPAH_PROFILE_FORMS.map((f) => ({ key: f, label: CHUPPAH_PROFILE_LABEL[f], points: CHUPPAH_PROFILES[f] })),
+  note: "העמודים עולים עד המקום שבו הצללית מתחילה להתקמר, ומשם הגג — בד, שיפון, ענן פרחים או צלעות — בצורת הצללית. לא גוף מלא.",
+};
+
+/** A flower arrangement's body is its ENVELOPE (lib/catalog/flower-draw.ts FLOWER_PROFILES): the
+ *  form's own dome when none is picked. */
+const FLOWER_ENVELOPES: RevolveTiles = {
+  title: "צללית — צורת הסידור מהצד",
+  none: "כיפה",
+  forms: FLOWER_PROFILE_FORMS.map((f) => ({ key: f, label: FLOWER_PROFILE_LABEL[f], points: FLOWER_PROFILES[f] })),
+  note: "הפרחים נפרשים על הצללית — מלמעלה ומהצדדים — והירק ממלא אותה; לא גוף מלא. הרוחב הגדול ביותר הוא הקוטר על התוכנית; חלק צר מדי לפרחים (גזע) הוא צרור גבעולים.",
+};
+
 function PictureFields({
   product,
   preview,
   symbol,
   onChange,
+  onProfile,
 }: {
   product: Product;
   preview: Product;
   symbol: SymbolKind | null;
   onChange: (p: Partial<MapAppearance>) => void;
+  /** Sets the FIRST shape's body (its `revolve`) — a chandelier's silhouette. Absent when the first
+   *  shape cannot have one (not round). */
+  onProfile?: (revolve: RevolvePoint[] | undefined) => void;
 }) {
   const category = CATEGORY_BY_ID[product.category];
   const tone = preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill;
+  // Drawn as its plain shape ("ללא"): `symbol` is then null, so the picture it WOULD be — what the
+  // tiles offer to go back to — is asked of the row with the picture on.
+  const off = product.appearance?.symbol === false;
+  const footprint = resolveFootprint(preview);
+  const kind = symbol ?? symbolOf({ ...preview, appearance: preview.appearance && { ...preview.appearance, symbol: undefined } }, footprint);
+  // Any version picked turns the picture back on.
+  const pick = (p: Partial<MapAppearance>) => onChange({ symbol: undefined, ...p });
+  const none = <NoneTile on={off} footprint={footprint} onPick={() => onChange({ symbol: false })} />;
+  if (!kind) return <Note>הציור חל על צורה אחת — עיגול, אליפסה או מלבן. לצורה הזו מוצג תוכן במקומו.</Note>;
   return (
     <div className="space-y-3">
-      <SwitchRow
-        checked={product.appearance?.symbol !== false}
-        onChange={(on) => onChange({ symbol: on ? undefined : false })}
-        label={`ציור כ${category?.label ?? "פריט"}`}
-        hint={
-          product.appearance?.symbol === false
-            ? "כבוי — הפריט מצויר כצורה עם שם או אייקון."
-            : symbol
-              ? "הפריט מצויר על התוכנית לפי הקטגוריה שלו, במידות ובגוון שלו."
-              : "הציור חל על צורה אחת — עיגול, אליפסה או מלבן. לצורה הזו מוצג תוכן במקומו."
-        }
-      />
+      {/* A picture with no versions of its own: itself, or ללא. */}
+      {!hasStyleTiles(kind, preview) && (
+        <div>
+          <span className={fieldLabelClassName}>ציור</span>
+          <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="ציור">
+            {none}
+            {(() => {
+              const b = footprintBounds(footprint);
+              const pad = Math.max(b.w, b.h) * 0.08;
+              return (
+                <button type="button" role="radio" aria-checked={!off} title="הפריט מצויר על התוכנית לפי הקטגוריה שלו, במידות ובגוון שלו" onClick={() => pick({})} className={tileClass(!off)}>
+                  <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-10 w-full" aria-hidden>
+                    <ItemSymbol kind={kind} footprint={footprint} count={symbolCount(preview, kind)} tone={tone} drawStyle={drawStyleOf(preview)} />
+                  </svg>
+                  <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{category?.label ?? "ציור"}</span>
+                </button>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* Which chair it is — a Chiavari and a ghost chair are both "a chair" to the category. */}
-      {product.category === "chairs" && symbol && (
+      {product.category === "chairs" && (
         <div>
           <span className={fieldLabelClassName}>סוג הכיסא</span>
           <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="סוג הכיסא">
+            {none}
             {CHAIR_STYLES.map((st) => {
-              const on = (chairStyleOf(preview) ?? "dining") === st;
+              const on = !off && (chairStyleOf(preview) ?? "dining") === st;
               return (
                 <button
                   key={st}
@@ -775,8 +956,8 @@ function PictureFields({
                   role="radio"
                   aria-checked={on}
                   title={CHAIR_STYLE_LABEL[st]}
-                  onClick={() => onChange({ symbolStyle: st === "dining" ? undefined : st })}
-                  className={"flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " + (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")}
+                  onClick={() => pick({ symbolStyle: st === "dining" ? undefined : st })}
+                  className={tileClass(on)}
                 >
                   <svg viewBox="-330 -330 660 660" className="h-9 w-9" aria-hidden>
                     <ItemSymbol
@@ -797,12 +978,13 @@ function PictureFields({
       {/* Which candle piece it is — a ring of arms, a planar row, crystal tiers, a solitaire cluster,
           floating candles, a fire trough… (CandleStyle). Each tile draws THIS row's count of candles in
           that style; "אוטומטי" is what it drew before there was a choice. */}
-      {product.category === "candlesticks" && symbol && (
+      {product.category === "candlesticks" && (
         <div>
           <span className={fieldLabelClassName}>סוג הפמוט</span>
           <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="סוג הפמוט">
+            {none}
             {[undefined, ...CANDLE_STYLES].map((st) => {
-              const on = st === drawStyleOf(preview);
+              const on = !off && st === drawStyleOf(preview);
               const n = symbolCount(preview, "candlestick");
               const f: Footprint =
                 st === undefined
@@ -821,8 +1003,8 @@ function PictureFields({
                   role="radio"
                   aria-checked={on}
                   title={st ? CANDLE_STYLE_HINT[st] : "לפי הצורה: פריט ארוך — נרות בשורה, אחרת קנים במעגל"}
-                  onClick={() => onChange({ symbolStyle: st })}
-                  className={"flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " + (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")}
+                  onClick={() => pick({ symbolStyle: st })}
+                  className={tileClass(on)}
                 >
                   <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-9 w-full" aria-hidden>
                     <ItemSymbol kind="candlestick" footprint={f} count={st === "tiered" ? Math.max(n, 13) : st === "lantern" ? 1 : n} tone={tone} drawStyle={st} />
@@ -837,18 +1019,89 @@ function PictureFields({
 
       {/* Which version of the picture — a chuppah's colonnade, a chandelier's crystal tiers, a corner
           sofa, a palm, a gate's round entrance… (SYMBOL_STYLES). */}
-      {symbol && SYMBOL_STYLES[symbol] && <StyleTiles kind={symbol} product={preview} onPick={(symbolStyle) => onChange({ symbolStyle })} />}
+      {SYMBOL_STYLES[kind] && <StyleTiles kind={kind} product={preview} off={off} lead={none} onPick={(symbolStyle) => pick({ symbolStyle })} />}
+
+      {/* A chandelier's build beyond its style (lib/catalog/chandelier.ts): how many TIERS of lights
+          stand one above the other and what CRYSTAL hangs from them — the plan and the room read one
+          layout. The style's own answers are not stored (chandelierPatch), so a row follows its
+          style until it says otherwise. */}
+      {symbol === "chandelier" &&
+        (() => {
+          const style = drawStyleOf(preview);
+          const built = chandelierOf(style, chandelierDrawOf(preview.appearance));
+          const set = (patch: ChandelierSpec) => onChange({ chandelier: chandelierPatch(style, preview.appearance?.chandelier, patch) });
+          const tiered = TIERED_STYLES.includes(built.style);
+          const crystalled = CRYSTAL_STYLES.includes(built.style);
+          const stranded = asksStrands(built);
+          // THE SILHOUETTE is the base shape's body (the shape bar's "גוף"), offered here too with a
+          // chandelier's own outlines, since this is where a chandelier is built.
+          const profiled = PROFILED_STYLES.includes(built.style) && !!onProfile;
+          const pendants = built.style === "pendants";
+          if (!tiered && !crystalled && !stranded && !profiled && !pendants) return null;
+          return (
+            <div className="space-y-2">
+              {profiled && (
+                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} />
+              )}
+              {/* GLASS PENDANTS: the glass is the shade (גוונים וצבעים — ענבר, עשן, שקוף, כרום), so here
+                  only the metal, whether every globe takes its own shade, and their sizes. */}
+              {pendants && (
+                <>
+                  <PanelRow label="מתכת — כובע וכבל" stack>
+                    <Select
+                      aria-label="מתכת"
+                      value={built.fitting}
+                      onChange={(v) => set({ fitting: v as PendantFitting })}
+                      options={PENDANT_FITTINGS.map((f) => ({ value: f, label: FITTING_LABEL[f] }))}
+                      className="w-full"
+                    />
+                  </PanelRow>
+                  <SwitchRow
+                    checked={built.glassMix}
+                    onChange={(on) => set({ glassMix: on })}
+                    label="כל גלובוס בגוון אחר"
+                    hint={(preview.variants.filter((v) => !v.archived && v.swatch).length || 0) > 1 ? "הגלובוסים מתחלפים לפי הגוונים של הפריט, לפי הסדר." : "הוסיפו לפריט כמה גוונים (ענבר, עשן, שקוף, כרום) — וכל גלובוס יקבל את הבא."}
+                  />
+                  <SwitchRow checked={built.equal} onChange={(on) => set({ equal: on })} label="כל הגלובוסים באותו גודל" hint={built.equal ? "גלובוסים זהים סביב המרכז." : "בגדלים שונים, צפופים זה ליד זה."} />
+                </>
+              )}
+              {tiered && (
+                <PanelRow label="קומות" htmlFor="chandelier-tiers">
+                  <NumberField id="chandelier-tiers" decimals={0} min={1} max={CHANDELIER_TIERS_MAX} commitOnBlur value={built.tiers} onChange={(v) => set({ tiers: Math.round(v) })} className="w-20" />
+                </PanelRow>
+              )}
+              {crystalled && (
+                <PanelRow label="קריסטל" stack>
+                  <Select
+                    aria-label="קריסטל"
+                    value={built.crystals}
+                    onChange={(v) => set({ crystals: v as ChandelierCrystals })}
+                    options={CHANDELIER_CRYSTALS.map((k) => ({ value: k, label: CRYSTALS_LABEL[k] }))}
+                    className="w-full"
+                  />
+                </PanelRow>
+              )}
+              {stranded && (
+                <PanelRow label={strandsLabel(built.style)} htmlFor="chandelier-strands">
+                  <NumberField id="chandelier-strands" decimals={0} min={0} commitOnBlur value={built.strands} onChange={(v) => set({ strands: Math.round(v) })} className="w-20" />
+                </PanelRow>
+              )}
+              <Note>{chandelierHint(built)}</Note>
+            </div>
+          );
+        })()}
 
       {/* Which form an arrangement takes — a dome, a low cushion, a wild garden, a cascade, a runner,
           bud vases (lib/catalog/flower-draw.ts). Absent = by its height. The flowers in each tile are
           the row's own spec in its first shade, so the tiles show THIS arrangement six ways. */}
-      {(product.category === "flower-arrangements" || product.category === "centerpieces") && symbol && (
+      {(product.category === "flower-arrangements" || product.category === "centerpieces") && (
         <div>
           <span className={fieldLabelClassName}>צורת הסידור</span>
           <div className="grid grid-cols-3 gap-1" role="radiogroup" aria-label="צורת הסידור">
+            {none}
             {[undefined, ...FLOWER_FORMS].map((form) => {
               const chosen = preview.appearance?.symbolStyle;
-              const on = form === undefined ? !isFlowerForm(chosen) : chosen === form;
+              const on = !off && (form === undefined ? !isFlowerForm(chosen) : chosen === form);
               const b = footprintBounds(resolveFootprint(preview));
               const shown = form ?? defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
               const wide = shown === "runner";
@@ -860,8 +1113,8 @@ function PictureFields({
                   role="radio"
                   aria-checked={on}
                   title={form ? FLOWER_FORM_HINT[form] : "לפי גובה הסידור"}
-                  onClick={() => onChange({ symbolStyle: form })}
-                  className={"flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " + (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")}
+                  onClick={() => pick({ symbolStyle: form })}
+                  className={tileClass(on)}
                 >
                   <svg viewBox={wide ? "-840 -340 1680 680" : "-340 -340 680 680"} className="h-10 w-full" aria-hidden>
                     <FlowerDrawing spec={spec} />
@@ -873,6 +1126,63 @@ function PictureFields({
           </div>
         </div>
       )}
+
+      {/* A chuppah's build beyond its style (lib/catalog/chuppah.ts): its posts, their finish, its roof
+          — on a round one the roof's section is the base's body — where its flowers are and in what
+          colour, a meadow at the posts' feet, sheer drapes. The plan and the room read one layout; a
+          plain chuppah stores nothing (chuppahPatch). The rotunda is its own build. */}
+      {symbol === "chuppah" &&
+        drawStyleOf(preview) !== "rotunda" &&
+        (() => {
+          const built = chuppahOf(chuppahDrawOf(preview.appearance));
+          const set = (patch: ChuppahSpec) => onChange({ chuppah: chuppahPatch(preview.appearance?.chuppah, patch) });
+          const fp = resolveFootprint(preview);
+          const round = fp.kind === "circle" || fp.kind === "ellipse";
+          // What the posts are when the row says nothing: four, or a drawn outline's corners.
+          const fpBox = footprintBounds(fp);
+          const ownPosts = chuppahLayout(fpBox.w, fpBox.h, round, { ...built, posts: null }, fp.kind === "custom" ? fp.outline : undefined).posts.length;
+          const flowered = built.flowers !== "none" || built.roof === "flowers" || built.meadow;
+          return (
+            <div className="space-y-2">
+              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} />}
+              <PanelRow label="עמודים" htmlFor="chuppah-posts">
+                <NumberField id="chuppah-posts" decimals={0} min={0} max={12} commitOnBlur value={built.posts ?? ownPosts} onChange={(v) => set({ posts: Math.round(v) === ownPosts ? undefined : Math.round(v) })} className="w-20" />
+              </PanelRow>
+              <Note>{built.posts === 0 ? "בלי עמודים — החופה תלויה מהתקרה בכבלים." : round ? "העמודים מסביב, והחזית פתוחה." : "בפינות הצורה; יותר מארבעה — גם לאורך הצלעות הארוכות. 0 = תלויה מהתקרה."}</Note>
+              {built.posts !== 0 && (
+                <PanelRow label="חומר העמודים" stack>
+                  <Select aria-label="חומר העמודים" value={built.finish} onChange={(v) => set({ finish: v as ChuppahFinish })} options={CHUPPAH_FINISHES.map((f) => ({ value: f, label: CHUPPAH_FINISH_LABEL[f] }))} className="w-full" />
+                </PanelRow>
+              )}
+              <PanelRow label="גג" stack>
+                <Select aria-label="גג החופה" value={built.roof} onChange={(v) => set({ roof: v as ChuppahRoof })} options={CHUPPAH_ROOFS.map((f) => ({ value: f, label: CHUPPAH_ROOF_LABEL[f] }))} className="w-full" />
+              </PanelRow>
+              <PanelRow label="פרחים" stack>
+                <Select aria-label="פרחי החופה" value={built.flowers} onChange={(v) => set({ flowers: v as ChuppahFlowers })} options={CHUPPAH_FLOWER_SPOTS.map((f) => ({ value: f, label: CHUPPAH_FLOWERS_LABEL[f] }))} className="w-full" />
+              </PanelRow>
+              {flowered && (
+                <PanelRow label="צבע הפרחים">
+                  <SwatchField value={built.bloom} onChange={(bloom) => onChange({ chuppah: chuppahPatch({ ...preview.appearance?.chuppah, bloom: undefined }, bloom ? { bloom } : {}) })} label="צבע הפרחים" />
+                </PanelRow>
+              )}
+              <SwitchRow checked={built.meadow} onChange={(on) => set({ meadow: on })} label="פרחים על הרצפה סביב העמודים" />
+              {built.posts !== 0 && <SwitchRow checked={built.drapes} onChange={(on) => set({ drapes: on })} label="וילון שיפון בכל עמוד" hint="בד שקוף אסוף בכל עמוד, ומלמעלה ביניהם." />}
+            </div>
+          );
+        })()}
+
+      {/* THE ENVELOPE is the base shape's body (the shape bar's "צללית"), offered here too with an
+          arrangement's own outlines: the room lays the heads on it and fills it (lib/scene/flowers.ts).
+          A runner and bud vases have none. */}
+      {(symbol === "flowers" || symbol === "centerpiece") &&
+        onProfile &&
+        (() => {
+          const b = footprintBounds(resolveFootprint(preview));
+          const chosen = preview.appearance?.symbolStyle;
+          const form = isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
+          if (form === "runner" || form === "bud" || form === "single") return null;
+          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} />;
+        })()}
     </div>
   );
 }
@@ -888,14 +1198,54 @@ function moreItems(onFlip: (axis: FlipAxis) => void, onRestack: (how: "front" | 
   ];
 }
 
-/** A selected shape's bar — the studio sketch's own selection bar (components/inspector-bar.tsx): a
- *  title row, then one chip per subject, each opening its fields in a small panel. The same bar for
- *  every shape of the item. */
-function ShapeBar({
+/** The editor's side-panel groups (2026-11-09, the user's redesign): one folding section per subject,
+ *  each reading back its value on its end. Which are open is kept across selections — a designer
+ *  working down a row of posts keeps "חזרה" open from one to the next. */
+type GroupKey = "picture" | "content" | "seats" | "border" | "look" | "pos" | "height" | "body" | "pin" | "rep" | "arc" | "sweep" | "ring" | "fill" | "texture";
+const GROUPS_OPEN: Record<GroupKey, boolean> = {
+  picture: true,
+  content: false,
+  seats: false,
+  border: false,
+  look: false,
+  pos: false,
+  height: true,
+  body: false,
+  pin: false,
+  rep: true,
+  arc: true,
+  sweep: false,
+  ring: false,
+  fill: false,
+  texture: false,
+};
+type Groups = { open: Record<GroupKey, boolean>; toggle: (k: GroupKey) => void };
+const group = (g: Groups, k: GroupKey) => ({ open: g.open[k], onToggle: () => g.toggle(k), variant: "panel" as const });
+
+const cmOf = (mm?: number) => Math.round((mm ?? 0) / 10);
+
+/** A shape's size as the quick bar and the shapes list read it: ⌀ / R for a round one, W×D else. */
+function sizeLabel(part: ShapePart): string {
+  if (usesDiameter(part.shape)) {
+    const field = ROUND_FIELD[part.shape] ?? { label: "קוטר", factor: 1 };
+    return `${field.label === "רדיוס" ? "R" : "⌀"}${cmOf((roundSizeMm(part.shape, part) ?? 0) / field.factor)}`;
+  }
+  return `${cmOf(part.widthMm)}×${cmOf(part.depthMm)}`;
+}
+
+/** The small number box the quick bar types sizes into — the sketch bar's h-7, 56px wide. */
+function BarNumber({ label, value, onChange, decimals = 0, min = 0, className = "w-14" }: { label: string; value: number; onChange: (v: number) => void; decimals?: number; min?: number; className?: string }) {
+  return <NumberField size="sm" aria-label={label} decimals={decimals} min={min} commitOnBlur value={value} onChange={onChange} className={className} />;
+}
+const BarSep = () => <div className="mx-0.5 h-6 w-px bg-border" aria-hidden />;
+const BarUnit = ({ children }: { children: ReactNode }) => <span className="text-xs text-muted">{children}</span>;
+
+/** A selected shape's QUICK bar, at the canvas's foot — the edits made most: which shape, its size,
+ *  its turn, and the verbs (redraw, flip/order, duplicate, delete). Everything else about the shape is
+ *  a group in the side panel (ShapePanel). */
+function ShapeQuickBar({
   part,
-  others,
-  textured,
-  color,
+  base,
   onReshape,
   onChange,
   onRedraw,
@@ -905,140 +1255,63 @@ function ShapeBar({
   onClose,
 }: {
   part: ShapePart;
-  /** The centre of the box the item's OTHER shapes stand in — what "מיקום" is measured from — or
-   *  null when this is the only shape. */
-  others: { x: number; y: number } | null;
-  /** Whether the item's shapes take a surface here (not where it is drawn as its picture). */
-  textured: boolean;
-  /** The item's fill, for the texture tiles. */
-  color?: string;
+  /** Whether this is the FIRST shape — the item's box and height. */
+  base: boolean;
   onReshape: (shape: MapShape) => void;
   onChange: (p: Partial<ShapePart>) => void;
-  /** Its outline handed to the canvas's own outline editor, point by point. */
   onRedraw: () => void;
   onDuplicate: () => void;
   onRemove: () => void;
-  /** The "…": flip, order. */
   more: MenuItem[];
   onClose: () => void;
 }) {
-  const id = `shape-${part.id}`;
-  const cm = (mm?: number) => Math.round((mm ?? 0) / 10);
   const round = usesDiameter(part.shape);
   const drawn = part.shape === "custom";
   const field = ROUND_FIELD[part.shape] ?? { label: "קוטר", factor: 1 };
   const D = roundSizeMm(part.shape, part);
-  const size = round ? `${field.label === "רדיוס" ? "R" : "⌀"}${cm((D ?? 0) / field.factor)}` : `${cm(part.widthMm)}×${cm(part.depthMm)}`;
-  const spec = part.shape === "arc" ? arcSpecOf(D || DEFAULT_PRESET_MM.w, part.arc) : null;
-  const ringShape = ringShapeOf(part.shape);
-  const ringSpec = ringShape ? ringSpecOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring, ringShape) : null;
+  const deg = Math.round(part.rotation || 0) % 360;
+  const turn = (by: number) => onChange({ rotation: ((((part.rotation || 0) + by) % 360) + 360) % 360 });
+  const title = drawn ? (part.open ? "קווים" : "צורה חופשית") : SHAPE_LABEL[part.shape];
   return (
-    <Bar icon={drawn ? (part.open ? Route : PenLine) : Shapes} title={drawn ? (part.open ? "קווים" : "צורה חופשית") : SHAPE_LABEL[part.shape]} onClose={onClose}>
+    <Bar
+      icon={drawn ? (part.open ? Route : PenLine) : Shapes}
+      title={title}
+      badge={base ? "בסיס" : undefined}
+      facts={base ? "מידות הפריט וגובהו" : part.repeat ? `חוזרת ${REPEAT_SHORT[part.repeat.along]}` : undefined}
+      onClose={onClose}
+    >
       <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} panelClassName="w-80">
         <ShapeGrid value={part.shape} onPick={onReshape} />
       </Popover>
-      <Popover label="מידות" icon={Ruler} value={ltr(size)}>
-        {round ? (
-          <PanelRow label={`${field.label} (ס״מ)`} htmlFor={`${id}-d`}>
-            <NumberField
-              id={`${id}-d`}
-              decimals={0}
-              min={0}
-              commitOnBlur
-              value={(D ?? 0) / field.factor / 10}
-              onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })}
-              className="w-20"
-            />
-          </PanelRow>
-        ) : (
-          <>
-            {/* commitOnBlur: a size typed digit by digit rescaled the shape at "1", then "12", then
-                "120" — a hand-drawn one through rescaleCustomPart each time. */}
-            <PanelRow label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} htmlFor={`${id}-w`}>
-              <NumberField id={`${id}-w`} decimals={0} min={0} commitOnBlur value={cm(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} className="w-20" />
-            </PanelRow>
-            {part.shape === "line" ? (
-              <PanelRow label="עובי (ס״מ)" htmlFor={`${id}-h`}>
-                <NumberField id={`${id}-h`} decimals={1} min={0.1} commitOnBlur value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} className="w-20" />
-              </PanelRow>
-            ) : (
-              <PanelRow label="עומק (ס״מ)" htmlFor={`${id}-h`}>
-                <NumberField id={`${id}-h`} decimals={0} min={0} commitOnBlur value={cm(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} className="w-20" />
-              </PanelRow>
-            )}
-          </>
-        )}
-      </Popover>
-      {others && (
-        <Popover label="מיקום" icon={Move} value={ltr(`${cm(part.x - others.x)}, ${cm(part.y - others.y)}`)}>
-          <PanelRow label="אופקי (ס״מ)" htmlFor={`${id}-x`}>
-            <NumberField id={`${id}-x`} decimals={0} commitOnBlur value={cm(part.x - others.x)} onChange={(v) => onChange({ x: Math.round(v * 10 + others.x) })} className="w-20" />
-          </PanelRow>
-          <PanelRow label="אנכי (ס״מ)" htmlFor={`${id}-y`}>
-            <NumberField id={`${id}-y`} decimals={0} commitOnBlur value={cm(part.y - others.y)} onChange={(v) => onChange({ y: Math.round(v * 10 + others.y) })} className="w-20" />
-          </PanelRow>
-          <Note>מרכז הצורה, ביחס למרכז שאר הצורות.</Note>
-        </Popover>
+      <BarSep />
+      <span title="מידות" className="inline-flex text-muted">
+        <Ruler className="h-4 w-4" strokeWidth={1.75} />
+      </span>
+      {round ? (
+        <>
+          <BarUnit>{field.label === "רדיוס" ? "R" : "⌀"}</BarUnit>
+          <BarNumber label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
+        </>
+      ) : (
+        <>
+          {/* Committed on blur: a size typed digit by digit rescaled the shape at "1", then "12", then
+              "120" — a hand-drawn one through rescaleCustomPart each time. */}
+          <BarNumber label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
+          <BarUnit>×</BarUnit>
+          {part.shape === "line" ? (
+            <BarNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
+          ) : (
+            <BarNumber label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
+          )}
+        </>
       )}
-      <Rotation value={part.rotation || 0} onChange={(deg) => onChange({ rotation: deg })} />
-      {spec && (
-        <Popover label="קשת" icon={Rainbow} value={ltr(`${spec.sweepDeg}°`)} panelClassName="w-72">
-          <ArcFields idPrefix={id} diameterMm={D ?? 0} arc={part.arc} onChange={(arc) => onChange({ arc })} />
-        </Popover>
-      )}
-      {part.shape === "circle" && (
-        <Popover label="חלק מהעיגול" icon={ChartPie} value={sweepValue(part.arc)} panelClassName="w-72">
-          <CircleSweepFields
-            idPrefix={id}
-            sweepDeg={part.arc?.sweepDeg ?? 360}
-            onChange={(deg) => {
-              const arc = sweepPatch(deg);
-              const hollow = hollowAcross(part.hollow, "circle");
-              const radii = hollow && sliceRadii(D, arc);
-              onChange({ arc, hollow: radii ? { ...hollow, openSides: radii } : hollow });
-            }}
-          />
-        </Popover>
-      )}
-      {ringShape && ringSpec && (
-        <Popover label={RING_LABEL[ringShape]} icon={Donut} value={`רצועה ${cm(ringSpec.bandMm)}`} panelClassName="w-72">
-          <RingFields idPrefix={id} shape={ringShape} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
-        </Popover>
-      )}
-      {part.shape === "u-shape" && (
-        <Popover label="ח" icon={Donut} value={`דלפק ${cm(uShapeBandOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring))}`} panelClassName="w-72">
-          <CounterFields idPrefix={id} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
-        </Popover>
-      )}
-      {canHollow(part.shape) && !part.open && (
-        <Popover label="מילוי" icon={Donut} value={hollowValue(part.hollow)} panelClassName="w-80">
-          {/* The shape's sides named as it stands on the canvas, turn included. */}
-          <HollowFields
-            idPrefix={`${id}-hollow`}
-            outer={placedPartOutline(part)}
-            hollow={part.hollow}
-            defaultBand={(() => {
-              const b = sampledBounds([hollowOuter(part.shape, part)]);
-              return defaultHollowBand(b.w, b.h);
-            })()}
-            onChange={(hollow) => {
-              const radii = hollow && !part.hollow && part.shape === "circle" && sliceRadii(D, part.arc);
-              onChange({ hollow: radii ? { ...hollow, openSides: radii } : hollow });
-            }}
-          />
-        </Popover>
-      )}
-      {/* This shape's own surface — a layer of its own, whatever the other shapes wear. */}
-      {textured && !part.open && (
-        <Popover label="טקסטורה" icon={Paintbrush} value={surfaceLabel(part)} panelClassName="w-80">
-          <SurfacePicker
-            idPrefix={id}
-            value={{ texture: part.texture, textureImage: part.textureImage }}
-            color={color}
-            onChange={(sf) => onChange({ texture: sf.texture, textureImage: sf.textureImage })}
-          />
-        </Popover>
-      )}
+      <BarUnit>ס״מ</BarUnit>
+      <BarSep />
+      <BarButton icon={RotateCcw} label="רבע סיבוב שמאלה" onClick={() => turn(-90)} />
+      <NumberField size="sm" aria-label="זווית במעלות" decimals={0} value={deg} onChange={(v) => onChange({ rotation: ((v % 360) + 360) % 360 })} className="w-12" />
+      <BarUnit>°</BarUnit>
+      <BarButton icon={RotateCw} label="רבע סיבוב ימינה" onClick={() => turn(90)} />
+      <BarSep />
       <BarButton icon={PenLine} label="עריכת הקווים · לחיצה כפולה" onClick={onRedraw} />
       {/* Lines only: the side back to the first point and the fill left out. A band or a surface has
           no inside to go on, so they go with it. */}
@@ -1053,6 +1326,325 @@ function ShapeBar({
       <Menu label="עוד פעולות לצורה" side="top" items={more} />
       <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הצורה · Ctrl+D" onDelete={onRemove} deleteLabel="מחיקת הצורה · Delete" />
     </Bar>
+  );
+}
+
+const REPEAT_SHORT: Record<RepeatAlong, string> = { corners: "בפינות", edges: "לאורך הצלעות", row: "בשורה", grid: "ברשת" };
+
+/** What a "מראה" group reads back: the fill's swatch and the line's, or that it follows the item. */
+function PaintSummary({ style, empty = "כמו הפריט" }: { style: ShapePart["style"]; empty?: string }) {
+  if (!style?.fill && !style?.stroke) return <span>{empty}</span>;
+  return (
+    <>
+      {style.fill && <Swatch color={style.fill} size={14} />}
+      {style.stroke && <span aria-hidden className="inline-block h-3.5 w-3.5 shrink-0 rounded-sm border-2 bg-surface" style={{ borderColor: style.stroke }} />}
+    </>
+  );
+}
+
+/** A shape's own outline, small — the glyph on its row in the side panel's "צורות בפריט". */
+function PartGlyph({ part }: { part: ShapePart }) {
+  const f = shapeFootprint(part.shape, part);
+  const b = footprintBounds(f);
+  // A line's thickness is a sliver at this size; it is drawn at least a twentieth of its length.
+  const w = Math.max(b.w, 1);
+  const h = Math.max(b.h, w * 0.06);
+  const pad = Math.max(w, h) * 0.1;
+  return (
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-inset">
+      <svg viewBox={`${-w / 2 - pad} ${-h / 2 - pad} ${w + pad * 2} ${h + pad * 2}`} className="h-[22px] w-[22px]" aria-hidden>
+        <FootprintShape footprint={f} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      </svg>
+    </span>
+  );
+}
+
+/** What the "ציור" group reads back: the picture's version as it is set (its style's label), or
+ *  nothing to say when the category has a single drawing. */
+function pictureLabel(p: Product, symbol: SymbolKind | null): string | null {
+  if (!symbol) return null;
+  if (symbol === "chair") return CHAIR_STYLE_LABEL[chairStyleOf(p) ?? "dining"];
+  const style = drawStyleOf(p);
+  if (symbol === "candlestick") return style ? (CANDLE_STYLE_LABEL[style as keyof typeof CANDLE_STYLE_LABEL] ?? null) : null;
+  const set = SYMBOL_STYLES[symbol];
+  return set?.label[style ?? set.styles[0]] ?? null;
+}
+
+/** A selected shape's side-panel groups — what its quick bar leaves out, one folding section each:
+ *  מיקום, גובה, גוף, עיגון, חזרה, the round shapes' own (קשת, חלק מהעיגול, רצועה / ח), מילוי,
+ *  טקסטורה. The same for every shape of the item. */
+function ShapePanel({
+  part,
+  others,
+  textured,
+  color,
+  base,
+  shapes,
+  itemHeightMm,
+  onItemHeight,
+  onChange,
+  groups,
+  bodyTiles,
+}: {
+  /** The tiles the "גוף" group offers instead of the vessels' — a chandelier's silhouettes. */
+  bodyTiles?: RevolveTiles;
+  part: ShapePart;
+  /** The centre of the box the item's OTHER shapes stand in — what "מיקום" is measured from — or
+   *  null when this is the only shape. */
+  others: { x: number; y: number } | null;
+  /** Whether this is the FIRST shape — the one stored as the row's base, which stands on the floor
+   *  and is the item's height (the element model: a part's own z and height are the others'). */
+  base: boolean;
+  /** Every shape, for the חזית view. */
+  shapes: readonly ShapePart[];
+  itemHeightMm: number;
+  onItemHeight: (mm: number) => void;
+  /** Whether the item's shapes take a surface here (not where it is drawn as its picture). */
+  textured: boolean;
+  /** The item's fill, for the texture tiles. */
+  color?: string;
+  onChange: (p: Partial<ShapePart>) => void;
+  groups: Groups;
+}) {
+  const id = `shape-${part.id}`;
+  const cm = cmOf;
+  const D = roundSizeMm(part.shape, part);
+  const spec = part.shape === "arc" ? arcSpecOf(D || DEFAULT_PRESET_MM.w, part.arc) : null;
+  const ringShape = ringShapeOf(part.shape);
+  const ringSpec = ringShape ? ringSpecOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring, ringShape) : null;
+  return (
+    <>
+      {others && (
+        <FoldRow {...group(groups, "pos")} icon={Move} title="מיקום" summary={ltr(`${cm(part.x - others.x)}, ${cm(part.y - others.y)}`)}>
+          <PanelRow label="אופקי (ס״מ)" htmlFor={`${id}-x`}>
+            <NumberField id={`${id}-x`} decimals={0} commitOnBlur value={cm(part.x - others.x)} onChange={(v) => onChange({ x: Math.round(v * 10 + others.x) })} className="w-20" />
+          </PanelRow>
+          <PanelRow label="אנכי (ס״מ)" htmlFor={`${id}-y`}>
+            <NumberField id={`${id}-y`} decimals={0} commitOnBlur value={cm(part.y - others.y)} onChange={(v) => onChange({ y: Math.round(v * 10 + others.y) })} className="w-20" />
+          </PanelRow>
+          <Note>מרכז הצורה, ביחס למרכז שאר הצורות.</Note>
+        </FoldRow>
+      )}
+      {/* HEIGHT (the element model, Stage 2): the first shape is the item's height from the floor;
+          any other may stand at a z of its own, as tall as it says — a shelf a metre up a back-bar,
+          a basin's upper tier — which the 3D room builds and the חזית view shows. The plan is
+          unchanged: a raised shape is drawn over the shapes under it. */}
+      <FoldRow
+        {...group(groups, "height")}
+        icon={ArrowUpFromLine}
+        title="גובה"
+        summary={ltr(base ? `${cm(itemHeightMm) || "—"}` : part.zMm ? `${cm(part.heightMm ?? itemHeightMm)} ↑${cm(part.zMm)}` : `${cm(part.heightMm ?? itemHeightMm) || "—"}`)}
+      >
+        <div className="space-y-1.5">
+          <ElevationView shapes={shapes} itemHeightMm={itemHeightMm} selectedId={part.id} />
+          {base ? (
+            <>
+              <PanelRow label="גובה הפריט (ס״מ)" htmlFor={`${id}-height`}>
+                <NumberField id={`${id}-height`} decimals={0} min={0} commitOnBlur value={cm(itemHeightMm)} onChange={(v) => onItemHeight(Math.max(0, Math.round(v * 10)))} className="w-20" />
+              </PanelRow>
+              {/* OUTLINE ONLY (ShapePart.body "none", the element model, Stage 3): the first shape is
+                  the item's reach on the plan and builds nothing in the room — the other shapes are the
+                  body (a pergola: its posts, beams and slats under the roof's line). */}
+              <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onChange({ body: part.body === "none" ? undefined : "none" })}>
+                {part.body === "none" ? "עם גוף — מלאה בגובה הפריט" : "מתאר בלבד — בלי גוף בתלת־ממד"}
+              </Button>
+              <Note>
+                {part.body === "none"
+                  ? "הצורה הראשונה היא קו המתאר של הפריט בלבד; הגוף בחדר הוא שאר הצורות — בפרגולה: העמודים, הקורות והרפפות."
+                  : "הצורה הראשונה עומדת על הרצפה בגובה הפריט — אותו גובה שבטופס."}
+              </Note>
+            </>
+          ) : (
+            <>
+              <PanelRow label="גובה הצורה (ס״מ)" htmlFor={`${id}-height`}>
+                <NumberField
+                  id={`${id}-height`}
+                  decimals={0}
+                  min={1}
+                  commitOnBlur
+                  value={cm(part.heightMm ?? itemHeightMm)}
+                  onChange={(v) => onChange({ heightMm: Math.max(10, Math.round(v * 10)) })}
+                  className="w-20"
+                />
+              </PanelRow>
+              <PanelRow label="גובה מהרצפה (ס״מ)" htmlFor={`${id}-z`}>
+                <NumberField id={`${id}-z`} decimals={0} min={0} commitOnBlur value={cm(part.zMm ?? 0)} onChange={(v) => onChange({ zMm: Math.max(0, Math.round(v * 10)) })} className="w-20" />
+              </PanelRow>
+              {(part.zMm !== undefined || part.heightMm !== undefined) && (
+                <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onChange({ zMm: undefined, heightMm: undefined })}>
+                  כמו הפריט — על הרצפה, בגובה הפריט
+                </Button>
+              )}
+              <Note>בתוכנית הצורה מצוירת כרגיל; בחדר התלת-ממדי היא עומדת בגובה הזה.</Note>
+            </>
+          )}
+        </div>
+      </FoldRow>
+      {/* THE BODY of a round shape (the element model, lib/element/revolve.ts): a cylinder, or a body
+          turned from a side profile — a bowl, a vase, a basin's tier — for the 3D room and the חזית
+          view; the plan still draws the circle, which is the body's widest ring. Not for a band or
+          a slice, which have no body of revolution. */}
+      {(part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
+        <FoldRow {...group(groups, "body")} icon={Cylinder} title={bodyTiles ? bodyTiles.title.split(" — ")[0] : "גוף"} summary={bodyValue(part, bodyTiles)}>
+          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} />
+        </FoldRow>
+      )}
+      {/* PIN (Stage 3): how this shape follows a resize of the item on the sketch — against the first
+          shape's box. Absent = scaled with the whole, as every part was. Not for the first shape,
+          which IS the box, nor for a repeated one, whose copies are laid afresh at every size. */}
+      {!base && !part.repeat && (
+        <FoldRow {...group(groups, "pin")} icon={Magnet} title="עיגון" summary={pinValue(part.pin)}>
+          <PanelRow label="אופקי" stack>
+            <Select aria-label="עיגון אופקי" value={part.pin?.x ?? "scale"} onChange={(v) => onChange({ pin: withPin(part.pin, "x", v as PinMode) })} options={PIN_X} className="w-full" />
+          </PanelRow>
+          <PanelRow label="אנכי" stack>
+            <Select aria-label="עיגון אנכי" value={part.pin?.y ?? "scale"} onChange={(v) => onChange({ pin: withPin(part.pin, "y", v as PinMode) })} options={PIN_Y} className="w-full" />
+          </PanelRow>
+          <Note>מה קורה לצורה הזו כשהפריט נמתח על הסקיצה: נמדד מול הצורה הראשונה. מדף צמוד לימין נשאר במרחקו מהקצה הימני ובגודלו; נמתח — גדל עם הפריט.</Note>
+        </FoldRow>
+      )}
+      {/* REPEAT (Stage 3): this shape laid in copies against the first shape. The copies are drawn
+          faint on the canvas; the shape itself is the prototype — its size is the copies' section. */}
+      {!base && (
+        <FoldRow {...group(groups, "rep")} icon={RepeatIcon} title="חזרה" summary={repeatValue(part.repeat)}>
+          <PanelRow label="פריסה" stack>
+            <Select
+              aria-label="פריסה"
+              value={part.repeat?.along ?? ""}
+              onChange={(v) => {
+                if (!v) return onChange({ repeat: undefined });
+                const along = v as RepeatAlong;
+                const spacing = along === "row" || along === "grid" ? { spacingMm: part.repeat?.spacingMm ?? DEFAULT_SPACING_MM } : {};
+                onChange({ repeat: { ...part.repeat, ...spacing, along }, pin: undefined });
+              }}
+              options={REPEAT_OPTIONS}
+              className="w-full"
+            />
+          </PanelRow>
+          {part.repeat && (part.repeat.along === "row" || part.repeat.along === "grid") && (
+            <PanelRow label={part.repeat.along === "grid" ? "מרווח אופקי (ס״מ)" : "מרווח (ס״מ)"} htmlFor={`${id}-rep-s`}>
+              <NumberField
+                id={`${id}-rep-s`}
+                decimals={0}
+                min={1}
+                commitOnBlur
+                value={cm(part.repeat.spacingMm ?? DEFAULT_SPACING_MM)}
+                onChange={(v) => onChange({ repeat: { ...part.repeat!, spacingMm: Math.max(10, Math.round(v * 10)) } })}
+                className="w-20"
+              />
+            </PanelRow>
+          )}
+          {part.repeat?.along === "grid" && (
+            <PanelRow label="מרווח אנכי (ס״מ)" htmlFor={`${id}-rep-sy`}>
+              <NumberField
+                id={`${id}-rep-sy`}
+                decimals={0}
+                min={1}
+                commitOnBlur
+                value={cm(part.repeat.spacingYMm ?? part.repeat.spacingMm ?? DEFAULT_SPACING_MM)}
+                onChange={(v) => onChange({ repeat: { ...part.repeat!, spacingYMm: Math.max(10, Math.round(v * 10)) } })}
+                className="w-20"
+              />
+            </PanelRow>
+          )}
+          {part.repeat?.along === "row" && (
+            <PanelRow label="כיוון" stack>
+              <Select
+                aria-label="כיוון השורה"
+                value={part.repeat.axis ?? ""}
+                onChange={(v) => onChange({ repeat: { ...part.repeat!, axis: v ? (v as "x" | "y") : undefined } })}
+                options={[
+                  { value: "", label: "לאורך הצד הארוך" },
+                  { value: "x", label: "לרוחב — העותקים זה לצד זה" },
+                  { value: "y", label: "לעומק — העותקים זה מעל זה" },
+                ]}
+                className="w-full"
+              />
+            </PanelRow>
+          )}
+          {part.repeat && (part.repeat.along === "row" || part.repeat.along === "edges" || part.repeat.along === "grid") && (
+            <PanelRow label="שוליים (ס״מ)" htmlFor={`${id}-rep-m`}>
+              <NumberField
+                id={`${id}-rep-m`}
+                decimals={0}
+                min={0}
+                commitOnBlur
+                value={cm(part.repeat.marginMm ?? 0)}
+                onChange={(v) => onChange({ repeat: { ...part.repeat!, marginMm: Math.max(0, Math.round(v * 10)) } })}
+                className="w-20"
+              />
+            </PanelRow>
+          )}
+          <Note>{part.repeat ? REPEAT_HINT[part.repeat.along] : "הצורה הזו תונח בעותקים מול הצורה הראשונה — והעותקים ייפרסו מחדש בכל גודל שהפריט יימתח אליו על הסקיצה."}</Note>
+        </FoldRow>
+      )}
+      {spec && (
+        <FoldRow {...group(groups, "arc")} icon={Rainbow} title="קשת" summary={ltr(`${spec.sweepDeg}°`)}>
+          <ArcFields idPrefix={id} diameterMm={D ?? 0} arc={part.arc} onChange={(arc) => onChange({ arc })} />
+        </FoldRow>
+      )}
+      {part.shape === "circle" && (
+        <FoldRow {...group(groups, "sweep")} icon={ChartPie} title="חלק מהעיגול" summary={sweepValue(part.arc)}>
+          <CircleSweepFields
+            idPrefix={id}
+            sweepDeg={part.arc?.sweepDeg ?? 360}
+            onChange={(deg) => {
+              const arc = sweepPatch(deg);
+              const hollow = hollowAcross(part.hollow, "circle");
+              const radii = hollow && sliceRadii(D, arc);
+              onChange({ arc, hollow: radii ? { ...hollow, openSides: radii } : hollow });
+            }}
+          />
+        </FoldRow>
+      )}
+      {ringShape && ringSpec && (
+        <FoldRow {...group(groups, "ring")} icon={Donut} title={RING_LABEL[ringShape]} summary={`רצועה ${cm(ringSpec.bandMm)}`}>
+          <RingFields idPrefix={id} shape={ringShape} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
+        </FoldRow>
+      )}
+      {part.shape === "u-shape" && (
+        <FoldRow {...group(groups, "ring")} icon={Donut} title="ח" summary={`דלפק ${cm(uShapeBandOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring))}`}>
+          <CounterFields idPrefix={id} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
+        </FoldRow>
+      )}
+      {canHollow(part.shape) && !part.open && !part.revolve && (
+        <FoldRow {...group(groups, "fill")} icon={Donut} title="מילוי" summary={hollowValue(part.hollow)}>
+          {/* The shape's sides named as it stands on the canvas, turn included. */}
+          <HollowFields
+            idPrefix={`${id}-hollow`}
+            outer={placedPartOutline(part)}
+            hollow={part.hollow}
+            defaultBand={(() => {
+              const b = sampledBounds([hollowOuter(part.shape, part)]);
+              return defaultHollowBand(b.w, b.h);
+            })()}
+            onChange={(hollow) => {
+              const radii = hollow && !part.hollow && part.shape === "circle" && sliceRadii(D, part.arc);
+              onChange({ hollow: radii ? { ...hollow, openSides: radii } : hollow });
+            }}
+          />
+        </FoldRow>
+      )}
+      {/* This shape's OWN colours (ShapePart.style): laid over the item's look and kept in every
+          shade, a black counter on a white bar. Empty = the item's, as every shape was. */}
+      {textured && (
+        <FoldRow {...group(groups, "look")} icon={Paintbrush} title="מראה" summary={<PaintSummary style={part.style} />}>
+          <StyleFields style={part.style} onChange={(style) => onChange({ style })} strokeWidthDefault={1.5} lineOnly={!!part.open} emptyLabel="כמו הפריט" />
+          <Note>{part.open ? "צבע משלה לקווים של הצורה הזו. ריק — כמו הפריט." : "צבעים משלה לצורה הזו בלבד — נשארים כך בכל גוון של הפריט. ריק — כמו הפריט."}</Note>
+        </FoldRow>
+      )}
+      {/* This shape's own surface — a layer of its own, whatever the other shapes wear. */}
+      {textured && !part.open && (
+        <FoldRow {...group(groups, "texture")} icon={BrickWall} title="טקסטורה" summary={surfaceLabel(part)}>
+          <SurfacePicker
+            idPrefix={id}
+            value={{ texture: part.texture, textureImage: part.textureImage }}
+            color={color}
+            onChange={(sf) => onChange({ texture: sf.texture, textureImage: sf.textureImage })}
+          />
+        </FoldRow>
+      )}
+    </>
   );
 }
 
@@ -1213,6 +1805,19 @@ export function AppearanceModal({
   const [sel, setSel] = useState<string[]>([]);
   const [armedShape, setArmedShape] = useState<RailShape | null>(null);
   const [pickingIcon, setPickingIcon] = useState(false);
+  // Which side-panel groups are open — kept across selections, for the whole editing session.
+  const [groupsOpen, setGroupsOpen] = useState<Record<GroupKey, boolean>>(GROUPS_OPEN);
+  // Opened on a row with no size yet, the editor drew it at a starting size (withSizeFor) — said over
+  // the canvas until the first edit, so a stand-in size is never mistaken for a measured one.
+  const [seeded] = useState(() => !stretch && withSizeFor(product) !== product);
+  // The 3D pane (./shape-scene.tsx): mounted on its first opening and kept — closing hides it, so
+  // its shaders compile once for this editing session.
+  const [scene3d, setScene3d] = useState(false);
+  const [sceneMounted, setSceneMounted] = useState(false);
+  const toggleScene = () => {
+    setSceneMounted(true);
+    setScene3d((v) => !v);
+  };
   const [alignPreview, setAlignPreview] = useState<AlignOp | null>(null);
   const [alignKey, setAlignKey] = useState(0);
   // The shape a right-click landed on — reported by the feature layer just before the canvas asks
@@ -1258,6 +1863,9 @@ export function AppearanceModal({
   // The item's footprint is centred on the box of everything drawn; on the canvas that box is here.
   const drawn = shapes.length ? drawnBounds(shapes) : null;
   const itemAt = drawn ? { x: drawn.cx, y: drawn.cy } : { x: 0, y: 0 };
+  // The copies every repeated shape lays against the first shape (lib/studio/footprint.ts
+  // repeatCopies) — drawn faint on the canvas, and what the plan and the room draw of it.
+  const copies = shapes.some((s, i) => i > 0 && s.repeat) ? drawnPieces(shapes.filter((s, i) => i === 0 || s.repeat)).slice(1) : [];
   // What a copy is kept relative to: the first shape stands still while copies are pasted beside it.
   const anchor = shapes[0] ? { x: shapes[0].x, y: shapes[0].y } : { x: 0, y: 0 };
   const chairs = seated && footprint && seatCount > 0 ? seatsAround(footprint, seatCount, undefined, blocked) : null;
@@ -1486,7 +2094,8 @@ export function AppearanceModal({
       // band: the feature here is the shape's outside.
       style: {
         ...draft.appearance?.style,
-        dash: draft.appearance?.style?.dash ?? "solid",
+        ...p.style,
+        dash: p.style?.dash ?? draft.appearance?.style?.dash ?? "solid",
         ...(hasSurface(p) || (p.hollow && canHollow(p.shape)) ? { fillOpacity: 0 } : {}),
         ...(p.open && p.shape === "custom" ? { fillOpacity: 0, strokeOpacity: 0 } : {}),
       },
@@ -1611,8 +2220,227 @@ export function AppearanceModal({
     onClose();
   };
 
-  const box = footprint ? footprintBounds(footprint) : null;
-  const itemFacts = box ? `${mmToCm(box.w)}×${mmToCm(box.h)} ס״מ${shapes.length > 1 ? ` · ${shapes.length} צורות` : ""}` : undefined;
+  // THE FIRST SHAPE'S NUMBERS — the item's box and height, the very ones the drawer's form types under
+  // its preview (2026-11-09: "the form and the editor edit the same numbers"). The header names them,
+  // the item's quick bar edits them, the footer says they go back to the form.
+  const base = shapes[0] ?? null;
+  const baseRound = !!base && usesDiameter(base.shape);
+  const baseField = (base && ROUND_FIELD[base.shape]) ?? { label: "קוטר", factor: 1 };
+  const heightCm = mmToCm(draft.dimensions.heightMm ?? 0);
+  const boxText = base
+    ? baseRound
+      ? `${baseField.label === "רדיוס" ? "R" : "⌀"}${mmToCm((roundSizeMm(base.shape, base) ?? 0) / baseField.factor)}`
+      : `${mmToCm(base.widthMm ?? 0)}×${mmToCm(base.depthMm ?? 0)}`
+    : null;
+  // The figures go in an LRI…PDI isolate: in a Hebrew line "240×120×75" is a run of numbers joined by
+  // neutrals, and the bidi algorithm prints it backwards (75×120×240).
+  const iso = (t: string) => `⁦${t}⁩`;
+  const sizeText = boxText ? (baseRound ? `${iso(boxText)} ס״מ${heightCm ? ` · גובה ${heightCm}` : ""}` : `${iso(`${boxText}${heightCm ? `×${heightCm}` : ""}`)} ס״מ`) : stretch && heightCm ? `גובה ${heightCm} ס״מ` : null;
+  const headLine = [draft.name.trim() || "מוצר ללא שם", category?.label, sizeText].filter(Boolean).join(" · ");
+  const setBase = (p: Partial<ShapePart>) => editShapes((l) => l.map((s, i) => (i === 0 ? patchedPart(s, p) : s)));
+  const setItemHeight = (mm: number) => hist.set((d) => ({ ...d, look: { ...d.look, dimensions: { ...d.look.dimensions, heightMm: mm } } }));
+  const CategoryIcon = category?.icon ?? Shapes;
+  // What to do next, over the canvas — a refusal first, then the armed shape, then the empty canvas,
+  // then the size a new row was opened at (withSizeFor), until the first edit says it was seen.
+  const canvasHint =
+    hint ??
+    (drawingPart
+      ? null
+      : armedShape
+        ? `לחצו על הקנבס כדי להניח ${SHAPE_LABEL[armedShape]} · Esc לביטול`
+        : missing
+          ? "גררו צורה מהמגירה אל הקנבס, או ״ציור חופשי״"
+          : seeded && !hist.canUndo && !selected.length
+            ? `גודל התחלתי ל${category?.label ?? "פריט"} — הקלידו את המידות האמיתיות בסרגל למטה`
+            : null);
+
+  // ── The side panel: the item's shapes, then the selection's (or the item's) groups ─────────────
+  const groups: Groups = { open: groupsOpen, toggle: (k) => setGroupsOpen((g) => ({ ...g, [k]: !g[k] })) };
+  const g = (k: GroupKey) => group(groups, k);
+  const itemGroups = (
+    <>
+      {categoryHasSymbol(draft.category) && (
+        <FoldRow {...g("picture")} icon={Sparkles} title="ציור" summary={draft.appearance?.symbol === false ? "ללא" : (pictureLabel(preview, previewSymbol) ?? "לפי הקטגוריה")}>
+          <PictureFields
+            product={draft}
+            preview={preview}
+            symbol={previewSymbol}
+            onChange={setAppearance}
+            onProfile={
+              shapes[0] && (shapes[0].shape === "circle" || shapes[0].shape === "ellipse") && !shapes[0].hollow
+                ? (revolve) => editShapes((list) => list.map((s, i) => (i === 0 ? { ...s, revolve } : s)))
+                : undefined
+            }
+          />
+        </FoldRow>
+      )}
+      {!previewSymbol && !stretch && (
+        <FoldRow {...g("content")} icon={Type} title="תוכן" summary={CONTENT_OPTIONS.find(([v]) => v === content)?.[1] ?? ""}>
+          <div className="space-y-3">
+            <Segmented
+              label="מה כתוב בתוך הצורה"
+              value={content}
+              options={CONTENT_OPTIONS}
+              onChange={(c) => {
+                setAppearance({ content: c });
+                setPickingIcon(c === "icon");
+              }}
+            />
+            {content === "icon" &&
+              (pickingIcon || !draft.appearance?.icon ? (
+                <IconPicker
+                  value={draft.appearance?.icon}
+                  onPick={(icon) => {
+                    setAppearance({ content: "icon", icon });
+                    setPickingIcon(false);
+                  }}
+                />
+              ) : (
+                <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => setPickingIcon(true)}>
+                  החלפת אייקון
+                </Button>
+              ))}
+          </div>
+        </FoldRow>
+      )}
+      {/* Which sides are laid with chairs — a drawing of the table to click on. The chairs are on the
+          canvas too, where the effect of a click shows at full size. */}
+      {seated && footprint && (
+        <FoldRow {...g("seats")} icon={Armchair} title="צדדים לישיבה" summary={blocked.length ? `${blocked.length} חסומים` : "הכול"}>
+          <SeatSidesPicker footprint={footprint} seats={seatCount} blocked={blocked} onToggle={toggleSide} className="h-44 w-full rounded-md bg-canvas" />
+          <Note>
+            {blocked.length
+              ? "הצדדים המקווקווים חסומים — הכסאות עוברים לצדדים הפתוחים. לחיצה על צד פותחת אותו שוב."
+              : "לחצו על צד כדי שלא יוצבו בו כסאות — שולחן ראש, שולחן צמוד לקיר."}
+            {seatCount === 0 && " (כמות הכסאות התקנית נקבעת בטופס, תחת ״על התוכנית״.)"}
+          </Note>
+        </FoldRow>
+      )}
+      {/* A rug's or a cloth's contour (lib/catalog/border.ts) — the row's; a plan may give a placement
+          its own or none. */}
+      {takesBorder(draft) && (
+        <FoldRow
+          {...g("border")}
+          icon={Frame}
+          title="קונטור"
+          summary={
+            <>
+              {draft.appearance?.border && <Swatch color={draft.appearance.border.colour} size={12} />}
+              <span>{draft.appearance?.border ? `${Math.round(draft.appearance.border.widthMm) / 10} ס״מ` : "ללא"}</span>
+            </>
+          }
+        >
+          <div className="space-y-2">
+            <SwitchRow
+              checked={!!draft.appearance?.border}
+              onChange={(on) => setAppearance({ border: on ? newBorder(draft.category) : undefined })}
+              label="קונטור"
+              hint={draft.category === "rugs" ? "פס צבעוני לאורך שולי השטיח, בתוך הקצה." : "פס צבעוני לאורך שולי המפה."}
+            />
+            {draft.appearance?.border && <BorderFields border={draft.appearance.border} category={draft.category} onChange={(border) => setAppearance({ border })} idPrefix="a-border" />}
+          </div>
+        </FoldRow>
+      )}
+      <FoldRow {...g("look")} icon={Paintbrush} title="מראה" summary={<PaintSummary style={draft.appearance?.style} empty="ברירת מחדל" />}>
+        <StyleFields style={draft.appearance?.style} onChange={(style) => setAppearance({ style })} strokeWidthDefault={2} />
+        <Note>הגוון הראשון בטופס צובע את הפריט על התוכנית; המילוי כאן משמש כשאין גוונים. צבע לצורה אחת בלבד — בחרו אותה ב״צורות בפריט״.</Note>
+      </FoldRow>
+    </>
+  );
+  const panel = (
+    <aside className="flex min-h-0 w-[296px] shrink-0 flex-col border-s border-border bg-surface">
+      <div className="scroll-slim min-h-0 flex-1 overflow-y-auto">
+        {!stretch && (
+          <>
+            <div className="px-3 pb-2.5 pt-3">
+              <div className="flex items-center gap-1.5 px-1 pb-1.5">
+                <span className="text-xs font-semibold text-muted">צורות בפריט</span>
+                <span className="nums text-xs text-quiet">{shapes.length}</span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {shapes.map((s, i) => {
+                  const on = selected.includes(s.id);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={(e) => {
+                        if (drawingPart) return;
+                        setArmedShape(null);
+                        setSel((cur) => (e.shiftKey || e.ctrlKey || e.metaKey ? (cur.includes(s.id) ? cur.filter((x) => x !== s.id) : [...cur, s.id]) : [s.id]));
+                      }}
+                      aria-pressed={on}
+                      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-start transition-colors ${on ? "bg-accent-tint text-accent-hover" : "text-ink hover:bg-inset"}`}
+                    >
+                      <PartGlyph part={s} />
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{shapeName(s).replace(/ \d+$/, "")}</span>
+                      {i === 0 && <span className="shrink-0 rounded-pill bg-accent-wash px-2 py-px text-[11px] font-semibold text-accent-hover">בסיס</span>}
+                      {i > 0 && s.repeat && (
+                        <span className="shrink-0 rounded-pill border border-accent-line px-[7px] text-[11px] font-semibold text-accent-hover">{REPEAT_SHORT[s.repeat.along]}</span>
+                      )}
+                      <span dir="ltr" className="nums shrink-0 text-xs text-muted">
+                        {sizeLabel(s)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">
+                {shapes.length <= 1
+                  ? "הוסיפו צורות מהמגירה כדי לבנות פריט מכמה חלקים — עמודים, מדף, במה."
+                  : "הצורה הראשונה היא בסיס הפריט: היא קובעת את מידותיו ואת גובהו."}
+              </p>
+            </div>
+            <div className="h-px bg-border" />
+          </>
+        )}
+        <div className="px-4 pb-1.5 pt-3">
+          <span className="text-xs font-semibold text-muted">
+            {drawingPart
+              ? "ציור צורה"
+              : one
+                ? `מתקדם · ${shapeName(one).replace(/ \d+$/, "")}`
+                : selShapes.length > 1
+                  ? `${selShapes.length} צורות נבחרו`
+                  : `הפריט · ${draft.name.trim() || category?.label || ""}`}
+          </span>
+        </div>
+        {drawingPart ? (
+          <p className="px-4 pb-4 text-xs leading-relaxed text-muted">לחצו על הקנבס נקודה אחר נקודה. לחיצה על הנקודה הראשונה או Enter — סגירת הצורה; ״סיום כקווים״ — בלי לסגור.</p>
+        ) : one ? (
+          <ShapePanel
+            part={one}
+            others={(() => {
+              const rest = shapes.filter((s) => s.id !== one.id);
+              if (!rest.length) return null;
+              const b = drawnBounds(rest);
+              return { x: b.cx, y: b.cy };
+            })()}
+            textured={textured}
+            color={itemColor}
+            base={shapes[0]?.id === one.id}
+            shapes={shapes}
+            itemHeightMm={draft.dimensions.heightMm ?? 0}
+            onItemHeight={setItemHeight}
+            onChange={(p) => patchShape(one.id, p)}
+            groups={groups}
+            bodyTiles={(() => {
+              if (shapes[0]?.id !== one.id) return undefined;
+              if (previewSymbol === "flowers" || previewSymbol === "centerpiece") return FLOWER_ENVELOPES;
+              if (previewSymbol === "chuppah") return drawStyleOf(preview) === "rotunda" ? undefined : CHUPPAH_ROOF_TILES;
+              if (previewSymbol !== "chandelier") return undefined;
+              const st = chandelierOf(drawStyleOf(preview), undefined).style;
+              return st === "pendants" ? PENDANT_GLASS_TILES : PROFILED_STYLES.includes(st) ? CHANDELIER_SILHOUETTES : undefined;
+            })()}
+          />
+        ) : selShapes.length > 1 ? (
+          <p className="px-4 pb-4 text-xs leading-relaxed text-muted">בחרו צורה אחת כדי לערוך את המאפיינים שלה. יישור, היפוך, שכפול ומחיקה — בסרגל שבתחתית הקנבס.</p>
+        ) : (
+          itemGroups
+        )}
+      </div>
+    </aside>
+  );
 
   return (
     // `close`/`cancel` don't bubble in the DOM, but React dispatches them up the FIBER tree anyway —
@@ -1621,14 +2449,23 @@ export function AppearanceModal({
     // away, shape and all.
     <dialog ref={ref} onClose={stopThenClose} onCancel={refuseCancel} className="modal m-auto max-h-none rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog">
       <div className="flex h-[86vh] w-[94vw] max-w-7xl flex-col">
-        <header className="flex shrink-0 items-center gap-3 border-b border-border px-5 py-3">
-          <span className="text-sm font-semibold text-ink">מראה על התוכנית</span>
-          {!stretch && !drawingPart && (
-            <span className="hidden text-xs text-muted lg:inline">
-              גררו צורות מהמגירה · לחיצה כפולה על צורה — עריכת הקווים · Shift / גרירת מלבן — כמה צורות · קליק ימני לעוד פעולות
-            </span>
+        {/* What is being drawn, named: the category's icon, then the product and the numbers the
+            form will get back — so moving between the two never loses which item this is. */}
+        <header className="flex shrink-0 items-center gap-3 border-b border-border px-5 py-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent">
+            <CategoryIcon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-ink">מראה על התוכנית</div>
+            <div className="nums truncate text-xs text-muted">{headLine}</div>
+          </div>
+          <div className="flex-1" />
+          {!stretch && (
+            <IconButton label={scene3d ? "סגירת התלת-ממד" : "תלת-ממד — הפריט בחדר"} pressed={scene3d} onClick={toggleScene}>
+              <Box className="h-[18px] w-[18px]" strokeWidth={1.4} />
+            </IconButton>
           )}
-          <CloseButton className="ms-auto" onClick={onClose} />
+          <CloseButton onClick={onClose} />
         </header>
 
         <div className="flex min-h-0 flex-1">
@@ -1637,12 +2474,8 @@ export function AppearanceModal({
           <div className="relative min-w-0 flex-1 bg-canvas">
             {/* Why something was refused (an outline that crosses itself), for a moment, over the
                 canvas — the studio's own hint line — or what to do on an empty canvas. */}
-            <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center" aria-live="polite">
-              {hint ? (
-                <span className="rounded-md bg-ink px-3 py-1.5 text-sm text-canvas shadow-dialog">{hint}</span>
-              ) : missing && !drawingPart && !armedShape ? (
-                <span className="rounded-pill bg-ink/85 px-4 py-2 text-[13px] text-canvas">גררו צורה מהמגירה אל הקנבס, או ״ציור חופשי״</span>
-              ) : null}
+            <div className="pointer-events-none absolute inset-x-0 top-[68px] z-10 flex justify-center" aria-live="polite">
+              {canvasHint && <span className="max-w-[70%] rounded-pill bg-ink/85 px-4 py-2 text-center text-[13px] text-canvas">{canvasHint}</span>}
             </div>
             {stretch ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 p-8 pb-24">
@@ -1731,7 +2564,16 @@ export function AppearanceModal({
                 framePoints={[
                   { x: itemAt.x - PRODUCT_FRAME.minExtentMm.w / 2, y: itemAt.y - PRODUCT_FRAME.minExtentMm.h / 2 },
                   { x: itemAt.x + PRODUCT_FRAME.minExtentMm.w / 2, y: itemAt.y + PRODUCT_FRAME.minExtentMm.h / 2 },
-                  ...(drawn ? [{ x: drawn.minX, y: drawn.minY }, { x: drawn.maxX, y: drawn.maxY }] : []),
+                  // …with room round it for its figures and clear of the toolbar and the quick bar.
+                  ...(drawn
+                    ? (() => {
+                        const m = Math.max(drawn.w, drawn.h) * 0.18;
+                        return [
+                          { x: drawn.minX - m, y: drawn.minY - m },
+                          { x: drawn.maxX + m, y: drawn.maxY + m },
+                        ];
+                      })()
+                    : []),
                 ]}
                 backdrop={
                   // The chairs, drawn on the canvas itself (tables only) — the same ring the plan will
@@ -1742,6 +2584,30 @@ export function AppearanceModal({
                     </g>
                   )
                 }
+                topmost={
+                  // A repeated shape's copies, dashed, OVER the shapes (the first shape's fill would
+                  // hide them underneath) and taking no pointer — the posts seen in the corners while
+                  // their prototype is dragged.
+                  copies.length > 0 && (
+                    <g className="pointer-events-none">
+                      {copies.map((o, i) => (
+                        <OutlinePath
+                          key={i}
+                          outline={o.outline}
+                          edgeCurves={o.edgeCurves}
+                          open={o.open}
+                          fill="none"
+                          className="stroke-accent"
+                          strokeWidth={1.25}
+                          strokeDasharray="80 60"
+                          vectorEffect="non-scaling-stroke"
+                          opacity={0.7}
+                        />
+                      ))}
+                    </g>
+                  )
+                }
+                defaultDims
                 padMm={PRODUCT_FRAME.padMm}
                 minExtentMm={PRODUCT_FRAME.minExtentMm}
                 gridMm={PRODUCT_FRAME.gridMm}
@@ -1758,7 +2624,7 @@ export function AppearanceModal({
                               key={i}
                               outline={o.outline}
                               edgeCurves={o.edgeCurves}
-                              fill={draft.appearance?.style?.fill ?? "var(--color-inset)"}
+                              fill={p.style?.fill ?? draft.appearance?.style?.fill ?? "var(--color-inset)"}
                               stroke="var(--color-ink-soft)"
                               strokeWidth={1.25}
                               vectorEffect="non-scaling-stroke"
@@ -1779,7 +2645,7 @@ export function AppearanceModal({
                               edgeCurves={o.edgeCurves}
                               open
                               fill="none"
-                              stroke={selected.includes(p.id) ? "var(--color-accent)" : (draft.appearance?.style?.stroke ?? "var(--color-ink-soft)")}
+                              stroke={selected.includes(p.id) ? "var(--color-accent)" : (p.style?.stroke ?? draft.appearance?.style?.stroke ?? "var(--color-ink-soft)")}
                               strokeWidth={selected.includes(p.id) ? 2.5 : 1.5}
                               vectorEffect="non-scaling-stroke"
                             />
@@ -1792,7 +2658,7 @@ export function AppearanceModal({
                         .filter((p) => hasSurface(p))
                         .map((p) => (
                           <g key={p.id} transform={`translate(${p.x} ${p.y})${p.rotation ? ` rotate(${p.rotation})` : ""}`} className="pointer-events-none">
-                            <ItemSurface appearance={{ texture: p.texture, textureImage: p.textureImage }} footprint={shapeFootprint(p.shape, p)} color={itemColor} seed={p.id} />
+                            <ItemSurface appearance={{ texture: p.texture, textureImage: p.textureImage }} footprint={shapeFootprint(p.shape, p)} color={p.style?.fill ?? itemColor} seed={p.id} />
                           </g>
                         ))}
                     {/* A double-click on a shape opens its outline, point by point — the first click
@@ -1907,6 +2773,34 @@ export function AppearanceModal({
                         vectorEffect="non-scaling-stroke"
                       />
                     )}
+                    {/* THE FIGURES (the toolbar's ruler, on from the start): the selected shape's size
+                        round its turned box — a diameter for an unturned circle — else the whole
+                        item's, outside its chairs. The hall editor's own dimension line. */}
+                    {ctx.dims &&
+                      !drawingPart &&
+                      (() => {
+                        const box = one ? partBox(one) : drawn ? { x: drawn.cx, y: drawn.cy, widthMm: drawn.w, depthMm: drawn.h } : null;
+                        if (!box || selShapes.length > 1) return null;
+                        const reach = !one && chairs ? CHAIR_D_MM + 120 : 0;
+                        const gap = ctx.mm(14);
+                        const minX = box.x - box.widthMm / 2;
+                        const maxX = box.x + box.widthMm / 2;
+                        const minY = box.y - box.depthMm / 2 - reach;
+                        const maxY = box.y + box.depthMm / 2;
+                        // A selected shape wears its rotate knob over its top edge, so its width is
+                        // figured along the bottom (the hall editor's rule); the whole item, along
+                        // the top.
+                        const across = one ? maxY + gap : minY - gap;
+                        const side = maxX + reach + gap;
+                        const roundOne = one ? one.shape === "circle" && !((one.rotation || 0) % 360) && !(one.arc && one.arc.sweepDeg < 360) : false;
+                        const tone = one ? "accent" : "ink";
+                        return (
+                          <>
+                            <Dim a={{ x: minX, y: across }} b={{ x: maxX, y: across }} text={`${roundOne ? `⁦⌀${mmToCm(box.widthMm)}⁩` : mmToCm(box.widthMm)} ס״מ`} mm={ctx.mm} tone={tone} rtl />
+                            {!roundOne && <Dim a={{ x: side, y: box.y - box.depthMm / 2 }} b={{ x: side, y: maxY }} text={`${mmToCm(box.depthMm)} ס״מ`} mm={ctx.mm} tone={tone} rtl />}
+                          </>
+                        );
+                      })()}
                     {/* What the plan draws over the outline — the category's picture over the whole
                         item, or its name or icon at the item's own label point — drawn where the item's
                         footprint is centred. */}
@@ -1926,6 +2820,7 @@ export function AppearanceModal({
                             overhead={preview.layer === "ceiling"}
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
+                            chandelier={chandelierDrawOf(preview.appearance, preview.variants)} chuppah={chuppahDrawOf(preview.appearance)}
                             postMm={pergolaPostOf(preview)}
                             rise={climbRise(preview)}
                             border={previewSymbol === "runner" ? borderOf(undefined, preview) : undefined}
@@ -1945,23 +2840,29 @@ export function AppearanceModal({
               />
             )}
 
-            {/* The bar at the canvas's foot follows the selection: the shape being drawn, one shape,
-                several, or — with nothing selected — the item itself. */}
+            {/* The item in a room of its own, in the canvas's corner — above the bar's band, under
+                its popovers (z-40). Hidden, never unmounted, once opened. */}
+            {sceneMounted && !stretch && (
+              <ScenePane
+                subject={shapes.length ? { key: itemSceneKey(preview), build: () => itemScene(preview) } : null}
+                open={scene3d}
+                onClose={() => setScene3d(false)}
+                emptyText="אין עדיין צורה להציג"
+              />
+            )}
+
+            {/* The QUICK bar at the canvas's foot follows the selection: the shape being drawn, one
+                shape (which shape, its size, its turn), several (align, order), or — with nothing
+                selected — the item itself: the first shape's size and the item's height, the same
+                numbers as the form. Everything else about a selection is in the side panel. */}
             <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
               <div className="pointer-events-auto max-w-full">
                 {drawingPart ? (
                   <DrawingBar ed={partEd} isNew={drawingPart.isNew} onCancel={cancelDrawing} onFinish={finishDrawing} />
                 ) : one ? (
-                  <ShapeBar
+                  <ShapeQuickBar
                     part={one}
-                    others={(() => {
-                      const rest = shapes.filter((s) => s.id !== one.id);
-                      if (!rest.length) return null;
-                      const b = drawnBounds(rest);
-                      return { x: b.cx, y: b.cy };
-                    })()}
-                    textured={textured}
-                    color={itemColor}
+                    base={shapes[0]?.id === one.id}
                     onReshape={(next) => reshape(one, next)}
                     onChange={(p) => patchShape(one.id, p)}
                     onRedraw={() => startDrawing(one)}
@@ -1987,88 +2888,59 @@ export function AppearanceModal({
                     <Actions onDuplicate={() => duplicate(selected)} duplicateLabel="שכפול הצורות · Ctrl+D" onDelete={() => removeShapes(selected)} deleteLabel="מחיקת הצורות · Delete" />
                   </Bar>
                 ) : (
-                  <Bar icon={Shapes} title={draft.name || "הפריט"} facts={itemFacts}>
-                    {categoryHasSymbol(draft.category) && (
-                      <Popover label="ציור" icon={Sparkles} value={draft.appearance?.symbol === false ? "כבוי" : "לפי הקטגוריה"} panelClassName="w-80">
-                        <PictureFields product={draft} preview={preview} symbol={previewSymbol} onChange={setAppearance} />
-                      </Popover>
-                    )}
-                    {!previewSymbol && (
-                      <Popover label="תוכן" icon={Type} value={CONTENT_OPTIONS.find(([v]) => v === content)?.[1] ?? ""} panelClassName="w-80">
-                        <div className="space-y-3">
-                          <Segmented
-                            label="מה כתוב בתוך הצורה"
-                            value={content}
-                            options={CONTENT_OPTIONS}
-                            onChange={(c) => {
-                              setAppearance({ content: c });
-                              setPickingIcon(c === "icon");
-                            }}
-                          />
-                          {content === "icon" &&
-                            (pickingIcon || !draft.appearance?.icon ? (
-                              <IconPicker
-                                value={draft.appearance?.icon}
-                                onPick={(icon) => {
-                                  setAppearance({ content: "icon", icon });
-                                  setPickingIcon(false);
-                                }}
-                              />
+                  <Bar
+                    icon={CategoryIcon}
+                    title={draft.name.trim() || "הפריט"}
+                    facts={stretch ? "נמדד על התוכנית" : base ? `${shapes.length === 1 ? "צורה אחת" : `${shapes.length} צורות`} · בחרו צורה כדי לערוך אותה` : "אין צורות"}
+                  >
+                    {base && (
+                      <>
+                        <span title="מידות הצורה הראשונה" className="inline-flex text-muted">
+                          <Ruler className="h-4 w-4" strokeWidth={1.75} />
+                        </span>
+                        {baseRound ? (
+                          <>
+                            <BarUnit>{baseField.label === "רדיוס" ? "R" : "⌀"}</BarUnit>
+                            <BarNumber
+                              label={`${baseField.label} (ס״מ)`}
+                              value={(roundSizeMm(base.shape, base) ?? 0) / baseField.factor / 10}
+                              onChange={(v) => setBase({ diameterMm: Math.round(v * 10 * baseField.factor) })}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <BarNumber label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
+                            <BarUnit>×</BarUnit>
+                            {base.shape === "line" ? (
+                              <BarNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
                             ) : (
-                              <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => setPickingIcon(true)}>
-                                החלפת אייקון
-                              </Button>
-                            ))}
-                        </div>
-                      </Popover>
+                              <BarNumber label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
+                            )}
+                          </>
+                        )}
+                        <BarUnit>ס״מ</BarUnit>
+                        <BarSep />
+                      </>
                     )}
-                    {/* Which sides are laid with chairs — a drawing of the table to click on. The chairs
-                        are on the canvas too, where the effect of a click shows at full size. */}
-                    {seated && footprint && (
-                      <Popover label="צדדים לישיבה" icon={Armchair} value={blocked.length ? `${blocked.length} חסומים` : "הכול"} panelClassName="w-80">
-                        <SeatSidesPicker footprint={footprint} seats={seatCount} blocked={blocked} onToggle={toggleSide} className="h-44 w-full rounded-md bg-canvas" />
-                        <Note>
-                          {blocked.length
-                            ? "הצדדים המקווקווים חסומים — הכסאות עוברים לצדדים הפתוחים. לחיצה על צד פותחת אותו שוב."
-                            : "לחצו על צד כדי שלא יוצבו בו כסאות — שולחן ראש, שולחן צמוד לקיר."}
-                          {seatCount === 0 && " (כמות הכסאות התקנית נקבעת בטופס המוצר.)"}
-                        </Note>
-                      </Popover>
-                    )}
-                    {/* A rug's or a cloth's contour (lib/catalog/border.ts) — the row's; a plan may give a
-                        placement its own or none. */}
-                    {takesBorder(draft) && (
-                      <Popover
-                        label="קונטור"
-                        leading={<Swatch color={draft.appearance?.border?.colour} size={14} />}
-                        value={draft.appearance?.border ? `${Math.round(draft.appearance.border.widthMm) / 10} ס״מ` : "ללא"}
-                        panelClassName="w-80"
-                      >
-                        <div className="space-y-2">
-                          <SwitchRow
-                            checked={!!draft.appearance?.border}
-                            onChange={(on) => setAppearance({ border: on ? newBorder(draft.category) : undefined })}
-                            label="קונטור"
-                            hint={draft.category === "rugs" ? "פס צבעוני לאורך שולי השטיח, בתוך הקצה." : "פס צבעוני לאורך שולי המפה."}
-                          />
-                          {draft.appearance?.border && (
-                            <BorderFields border={draft.appearance.border} category={draft.category} onChange={(border) => setAppearance({ border })} idPrefix="a-border" />
-                          )}
-                        </div>
-                      </Popover>
-                    )}
-                    <Popover label="מראה" icon={Paintbrush} panelClassName="w-80">
-                      <StyleFields style={draft.appearance?.style} onChange={(style) => setAppearance({ style })} strokeWidthDefault={2} />
-                    </Popover>
+                    <span title="גובה הפריט" className="inline-flex text-muted">
+                      <ArrowUpFromLine className="h-4 w-4" strokeWidth={1.75} />
+                    </span>
+                    <NumberField size="sm" aria-label="גובה הפריט (ס״מ)" decimals={0} min={0} hideZero placeholder="—" commitOnBlur value={heightCm} onChange={(v) => setItemHeight(Math.max(0, Math.round(v * 10)))} className="w-14" />
+                    <BarUnit>ס״מ</BarUnit>
                   </Bar>
                 )}
               </div>
             </div>
           </div>
+          {panel}
         </div>
 
         <footer className="flex shrink-0 items-center gap-3 border-t border-border px-5 py-3">
-          {missing && <span className="text-xs text-alert">יש להוסיף לפחות צורה אחת.</span>}
+          {missing ? (
+            <span className="text-xs text-alert-ink">יש להוסיף לפחות צורה אחת.</span>
+          ) : (
+            sizeText && <span className="nums text-xs text-muted">{`${sizeText} · יעודכן בטופס בשמירה`}</span>
+          )}
           <div className="flex-1" />
           <Button type="button" variant="ghost" onClick={onClose}>
             ביטול

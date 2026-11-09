@@ -28,12 +28,16 @@ import { CloseButton } from "./close-button";
  *  passed, and an `overflow-y-auto` body inside it. */
 export function Drawer({
   title,
+  titleAside,
   onClose,
   closeLabel = "סגירה",
   actions,
   children,
 }: {
   title: ReactNode;
+  /** Something that belongs right after the title rather than at the far end — the product drawer's
+   *  category pill ("מוצר חדש [שולחנות ▾]"). The title then takes only its own width. */
+  titleAside?: ReactNode;
   /** Fired by Esc and by the header's close button — the caller unmounts the drawer. */
   onClose: () => void;
   closeLabel?: string;
@@ -68,7 +72,15 @@ export function Drawer({
     >
       <div className="flex h-full flex-col">
         <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-5 py-3.5">
-          <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
+          {titleAside ? (
+            <>
+              <h2 className="min-w-0 shrink truncate whitespace-nowrap text-base font-semibold">{title}</h2>
+              {titleAside}
+              <div className="flex-1" />
+            </>
+          ) : (
+            <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
+          )}
           {actions}
           <CloseButton label={closeLabel} onClick={onClose} />
         </header>

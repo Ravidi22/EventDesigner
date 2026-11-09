@@ -24,12 +24,15 @@ import { fieldLabelClassName } from "@/components/control";
 export function Bar({
   icon,
   title,
+  badge,
   facts,
   onClose,
   children,
 }: {
   icon: LucideIcon;
   title: string;
+  /** A short word in a filled pill after the title — the shape editor's "בסיס" on the first shape. */
+  badge?: string;
   facts?: string;
   /** Left off the one bar that has nothing to dismiss — the empty-selection one, where closing would
    *  mean deselecting something that isn't selected. */
@@ -40,6 +43,7 @@ export function Bar({
     <div className="flex w-max max-w-full flex-col rounded-md border border-border bg-surface shadow-floating">
       <div className="flex flex-wrap items-center gap-2 border-b border-border-soft px-2.5 py-1.5">
         <InspectorHeader icon={icon} label={title} />
+        {badge && <span className="rounded-pill bg-accent-wash px-2 py-px text-[11px] font-semibold text-accent-hover">{badge}</span>}
         {facts && (
           // Truncated rather than wrapped, with the whole of it in the tooltip: this line is context,
           // and context that pushes the controls down a row is no longer context.

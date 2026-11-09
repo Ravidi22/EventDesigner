@@ -1,6 +1,8 @@
 "use client";
 
 import type { Composition } from "@/lib/catalog/types";
+import { chandelierDrawOf } from "@/lib/catalog/chandelier";
+import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import type { DesignDocumentContent, Placement, Point } from "@/lib/design-document/types";
 import type { Footprint } from "@/lib/studio/footprint";
 import { footprintBounds } from "@/lib/studio/footprint";
@@ -189,6 +191,7 @@ function Piece({ placement: p, at, rotation, footprint, overhead }: { placement:
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={symbol === "stairs" || symbol === "ramp" ? climbRise(product, p.climb) : undefined}
           detail={false}

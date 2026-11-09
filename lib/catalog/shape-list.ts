@@ -15,8 +15,8 @@
 // into a hand-drawn outline of exactly what the canvas showed.
 import type { MapAppearance, MapShape, Product, ShapePart } from "./types";
 import { usesDiameter } from "./types";
-import type { Point } from "../studio/hall";
-import { customShapeBounds, flattenEdge, placedPartOutline, sampledBounds, placedPartOutlines, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
+import type { EdgeCurve, Point } from "../studio/hall";
+import { customShapeBounds, flattenEdge, placedPartOutline, sampledBounds, placedPartOutlines, repeatCopies, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
 import { isMain } from "../self-check";
 
 const shapeOfRow = (p: Product): MapShape => p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect");
@@ -33,6 +33,27 @@ function baseAt(p: Product): { x: number; y: number } {
 }
 
 const shifted = (p: ShapePart, dx: number, dy: number): ShapePart => ({ ...p, x: Math.round(p.x + dx), y: Math.round(p.y + dy) });
+
+/** A hand-drawn outline stretched to a new box about its own centre — what a hand-drawn shape's
+ *  resize handles and size fields do, in the editor and in the product drawer's W/D fields alike
+ *  (2026-11-09: the form and the editor edit the SAME numbers). Curves are offsets from their
+ *  endpoints, so they scale by the same two factors. A box under 10cm is held at 10cm. */
+export function rescaleOutline(
+  outline: readonly Point[],
+  edgeCurves: readonly (EdgeCurve | null)[] | undefined,
+  widthMm: number,
+  depthMm: number,
+): { outline: Point[]; edgeCurves: (EdgeCurve | null)[] | undefined; widthMm: number; depthMm: number } {
+  const b = customShapeBounds([...outline], edgeCurves ? [...edgeCurves] : undefined);
+  const sx = b.w > 0 ? Math.max(100, widthMm) / b.w : 1;
+  const sy = b.h > 0 ? Math.max(100, depthMm) / b.h : 1;
+  return {
+    outline: outline.map((v) => ({ x: Math.round(b.cx + (v.x - b.cx) * sx), y: Math.round(b.cy + (v.y - b.cy) * sy) })),
+    edgeCurves: edgeCurves?.map((c) => (c ? { c1: { x: c.c1.x * sx, y: c.c1.y * sy }, c2: { x: c.c2.x * sx, y: c.c2.y * sy } } : c)),
+    widthMm: Math.round(b.w * sx),
+    depthMm: Math.round(b.h * sy),
+  };
+}
 
 /** Every shape of the row, each at its place on the canvas, the base first. Empty for a hand-drawn
  *  row with nothing drawn yet. */
@@ -56,8 +77,11 @@ export function shapesOf(p: Product): ShapePart[] {
         ...(a?.arc ? { arc: a.arc } : {}),
         ...(a?.ring ? { ring: a.ring } : {}),
         ...(a?.hollow ? { hollow: a.hollow } : {}),
+        ...(a?.revolve ? { revolve: a.revolve } : {}),
+        ...(a?.body ? { body: a.body } : {}),
         ...(a?.texture ? { texture: a.texture } : {}),
         ...(a?.textureImage ? { textureImage: a.textureImage } : {}),
+        ...(a?.baseStyle ? { style: a.baseStyle } : {}),
         x: Math.round(at.x),
         y: Math.round(at.y),
         rotation: 0,
@@ -95,6 +119,15 @@ function baked(s: ShapePart, o: BuiltOutline): ShapePart {
     ...(s.hollow ? { hollow: s.hollow } : {}),
     ...(s.texture ? { texture: s.texture } : {}),
     ...(s.textureImage ? { textureImage: s.textureImage } : {}),
+    ...(s.style ? { style: s.style } : {}),
+    // A height of its own, a pin, a repeat, a body (the element model) are not geometry on the plan;
+    // they come across whole.
+    ...(s.zMm !== undefined ? { zMm: s.zMm } : {}),
+    ...(s.heightMm !== undefined ? { heightMm: s.heightMm } : {}),
+    ...(s.revolve ? { revolve: s.revolve } : {}),
+    ...(s.pin ? { pin: s.pin } : {}),
+    ...(s.repeat ? { repeat: s.repeat } : {}),
+    ...(s.body ? { body: s.body } : {}),
     x: Math.round(b.cx),
     y: Math.round(b.cy),
     rotation: 0,
@@ -236,8 +269,11 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
       arc: s0.arc,
       ring: s0.ring,
       hollow: s0.hollow,
+      revolve: s0.revolve,
+      body: s0.body,
       texture: s0.texture,
       textureImage: s0.textureImage,
+      baseStyle: s0.style,
       parts: parts.length ? parts : undefined,
       blockedSides: moved ? undefined : a?.blockedSides,
     },
@@ -246,7 +282,15 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
 
 /** The box of everything drawn, on the editor's canvas — where the item's footprint is centred. */
 export function drawnBounds(shapes: readonly ShapePart[]) {
-  return sampledBounds(shapes.flatMap(placedPartOutlines));
+  return sampledBounds(drawnPieces(shapes));
+}
+
+/** Every outline the canvas draws of the shapes: each shape where it stands — a repeated one as the
+ *  copies it lays against the first shape (lib/studio/footprint.ts repeatCopies), which is what the
+ *  plan draws of it, so the item's box on the canvas is the plan's box. */
+export function drawnPieces(shapes: readonly ShapePart[]): BuiltOutline[] {
+  const base = shapes[0] ? placedPartOutline(shapes[0]) : null;
+  return shapes.flatMap((s, i) => (i > 0 && s.repeat && base ? repeatCopies(s, base) : placedPartOutlines(s)));
 }
 
 // ponytail: self-check. Run: npm run check:shape-list
@@ -276,6 +320,16 @@ if (isMain(import.meta.url)) {
   const list = shapesOf(withPart);
   const promoted = lookOf(withPart, list.slice(1));
   assert(promoted.appearance.shape === "circle" && promoted.dimensions.diameterMm === 900 && !promoted.appearance.parts, "next shape promoted");
+
+  // Each shape keeps its OWN colours: the base's as baseStyle (never the item's style), a part's on
+  // the part — through a round trip, a promotion to base, and a turn baked into an outline.
+  const painted = row({ style: { fill: "#ffffff" }, baseStyle: { fill: "#111111" }, parts: [{ id: "q", shape: "circle", diameterMm: 900, x: 800, y: 0, rotation: 0, style: { stroke: "#aa0000" } }] });
+  const paintedBack = roundTrip(painted);
+  assert(paintedBack.appearance?.baseStyle?.fill === "#111111" && paintedBack.appearance?.style?.fill === "#ffffff", "base colour kept apart from the item's");
+  assert(paintedBack.appearance?.parts?.[0].style?.stroke === "#aa0000", "part colour kept");
+  const paintedList = shapesOf(painted);
+  assert(lookOf(painted, paintedList.slice(1)).appearance.baseStyle?.stroke === "#aa0000", "a promoted part brings its colour to the base");
+  assert(upright({ ...paintedList[0], shape: "custom", outline: [{ x: 0, y: 0 }, { x: 900, y: 0 }, { x: 0, y: 400 }], rotation: 30 }).style?.fill === "#111111", "a baked turn keeps the colour");
 
   // A quarter-turned rectangle is the same rectangle, width and depth swapped — no outline needed.
   const q = upright({ ...shapesOf(row({}))[0], rotation: 90 });
@@ -338,5 +392,16 @@ if (isMain(import.meta.url)) {
   assert(openBack.appearance?.open === true && resolveFootprint(openBack).kind === "custom", "lines only survives the round trip");
   assert((resolveFootprint(openBack) as { open?: boolean }).open === true, "…and reaches the footprint every surface draws");
 
+  // A shape's own height and body (the element model) ride the list in and out: a round base with
+  // a bowl's profile, a part raised a metre — and baked into a hand-drawn shape when a turned one is
+  // stood upright.
+  const bowl = row({ shape: "circle", revolve: [{ r: 0.4, z: 0 }, { r: 1, z: 1 }], parts: [{ id: "s", shape: "rect", widthMm: 600, depthMm: 200, x: 0, y: -600, rotation: 0, zMm: 1000, heightMm: 40 }] }, { diameterMm: 1200, heightMm: 900 });
+  const bowlShapes = shapesOf(bowl);
+  assert(bowlShapes[0].revolve?.length === 2 && bowlShapes[1].zMm === 1000 && bowlShapes[1].heightMm === 40, "the base's body and a part's height open on the canvas");
+  const bowlBack = roundTrip(bowl);
+  assert(bowlBack.appearance?.revolve?.length === 2 && bowlBack.appearance.parts?.[0].zMm === 1000 && bowlBack.appearance.parts?.[0].heightMm === 40, "…and are saved back");
+  const turnedPart = { ...bowlShapes[1], shape: "trapezoid" as const, rotation: 30 };
+  const bakedBack = lookOf(bowl, [turnedPart, bowlShapes[0]]);
+  assert(bakedBack.appearance.shape === "custom" && bakedBack.appearance.parts?.[0].revolve?.length === 2 && bakedBack.appearance.parts?.[0].zMm === undefined, "a turned first shape is baked with nothing lost; the bowl behind it keeps its body (the base has no z)");
   console.log("shape-list: ok");
 }
