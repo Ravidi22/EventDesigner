@@ -161,6 +161,23 @@ export function findAddTool(tools: AddTool[], id: string | null | undefined): Ad
   return id ? tools.find((t) => t.id === id) : undefined;
 }
 
+/** The one entry on the venue's rail that is not a tool: trace a surface of any shape, point by
+ *  point, as a freehand zone is traced. */
+export const DRAW_SURFACE_ID = "surface:draw";
+
+/** One grid of the venue's draw + add rail (app/(app)/halls/halls-rail.tsx). */
+export interface RailSection {
+  section: AddToolSection;
+  label: string;
+  tools: AddTool[];
+}
+
+/** The tools grouped for the rail: one section per ADD_TOOL_SECTIONS entry, in that order, the
+ *  empty ones left out (a catalog with no bars still has the plain bar, but a section can empty). */
+export function railSections(tools: readonly AddTool[]): RailSection[] {
+  return ADD_TOOL_SECTIONS.map((section) => ({ section, label: ADD_TOOL_SECTION_LABEL[section], tools: tools.filter((t) => t.section === section) })).filter((r) => r.tools.length > 0);
+}
+
 // ponytail: self-check. Run: npm run check:add-tools
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -220,6 +237,15 @@ if (isMain(import.meta.url)) {
   assert(findAddTool(tools, "curtain")?.kind === "curtain", "…and so is the venue's curtain");
   assert(findAddTool(tools, "product:gone") === undefined, "an id from another list is a no-op, not a guess");
   assert(findAddTool(tools, null) === undefined, "…and so is no id at all");
+
+  // The halls rail: one grid per section, in the sections' order, every tool exactly once.
+  const rail = railSections(empty);
+  const expected = ADD_TOOL_SECTIONS.filter((s) => empty.some((t) => t.section === s));
+  assert(rail.map((r) => r.section).join() === expected.join(), "the rail's sections come in ADD_TOOL_SECTIONS order, the empty ones dropped");
+  assert(rail.every((r) => r.tools.length > 0), "…and none of them is empty");
+  assert(rail.reduce((n, r) => n + r.tools.length, 0) === empty.length, "…and every tool is in exactly one");
+  assert(rail.every((r) => r.label === ADD_TOOL_SECTION_LABEL[r.section]), "…each under its own label");
+  assert(DRAW_SURFACE_ID === "surface:draw", "the free-drawn surface keeps its old id");
 
   console.log(`add tools: ${tools.length} ok`);
 }

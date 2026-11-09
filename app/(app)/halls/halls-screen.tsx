@@ -154,7 +154,7 @@ import { shareSide } from "@/lib/design-document/stage";
 import type { StageStair } from "@/lib/design-document/types";
 import { ALIGN_LABEL, alignedCentres, alignGuide, needsThree, type AlignOp } from "@/lib/studio/align";
 import type { SnapBox } from "@/lib/studio/snap";
-import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
+import { ADD_TOOL_SECTIONS, ADD_TOOL_SECTION_LABEL, DRAW_SURFACE_ID, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { formatDimensions } from "@/lib/catalog/format";
 import { PlantGlyph } from "@/components/plant-glyph";
@@ -261,9 +261,6 @@ const NO_SELECTION: PlanSelection[] = [];
 /** How far each successive paste lands from the one before. */
 const PASTE_STEP_MM = 400;
 
-/** The add-element flyout's one entry that is not a tool: trace a surface of any shape, point by
- *  point, as a freehand zone is traced. */
-const DRAW_SURFACE = "surface:draw";
 
 /** A surface laid in a closed shape follows the walls round it (lib/venues/face-surfaces.ts): any
  *  edit that moved a wall or a corner re-lays them, inside that same history entry — so a wall drag
@@ -1872,7 +1869,7 @@ export function HallsScreen() {
                       return firstGround
                         ? [
                             {
-                              id: DRAW_SURFACE,
+                              id: DRAW_SURFACE_ID,
                               label: "ציור חופשי",
                               section: "ground",
                               title: "ציור משטח בכל צורה — לחיצה לכל פינה, Enter לסגירה, ואז בחירת החומר",
@@ -1887,7 +1884,7 @@ export function HallsScreen() {
                     triggerIcon={armedTool ? ADD_TOOL_ICON[addToolIconKey(armedTool)] : undefined}
                     onPick={(toolId) => {
                       setAddMenuOpen(false);
-                      if (toolId === DRAW_SURFACE) {
+                      if (toolId === DRAW_SURFACE_ID) {
                         startSurfaceDraw();
                         return;
                       }
