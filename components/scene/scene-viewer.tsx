@@ -73,7 +73,7 @@ export interface SceneViewerProps {
 let webglSupport: boolean | null = null;
 
 /** Asked once per page: three r163+ needs WebGL 2. */
-function hasWebGL(): boolean {
+export function hasWebGL(): boolean {
   if (webglSupport === null) {
     try {
       webglSupport = typeof document !== "undefined" && !!document.createElement("canvas").getContext("webgl2");
@@ -113,7 +113,7 @@ function NoWebGL({ className }: { className: string }) {
  *  resolves; then one frame. A scene whose programs are all cached resolves on the next poll. (A
  *  playing tour freezes its clock on the visibility signal too — ./scene-camera.tsx.) A hidden
  *  viewer still compiles a new scene's programs, so it shows ready. */
-function FrameGate({ scene, hidden, onWarm }: { scene: Scene; hidden: boolean; onWarm: (warm: boolean) => void }) {
+export function FrameGate({ scene, hidden, onWarm }: { scene: Scene; hidden: boolean; onWarm: (warm: boolean) => void }) {
   const get = useThree((s) => s.get);
   const setFrameloop = useThree((s) => s.setFrameloop);
   const invalidate = useThree((s) => s.invalidate);
