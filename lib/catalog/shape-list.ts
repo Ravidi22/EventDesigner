@@ -14,9 +14,9 @@
 // width and depth swapped for a rectangle or an ellipse at a quarter turn, and anything else baked
 // into a hand-drawn outline of exactly what the canvas showed.
 import type { MapAppearance, MapShape, Product, ShapePart } from "./types";
-import { usesDiameter } from "./types";
+import { FRONT_THICK_MM, usesDiameter } from "./types";
 import type { EdgeCurve, Point } from "../studio/hall";
-import { customShapeBounds, flattenEdge, placedPartOutline, sampledBounds, placedPartOutlines, repeatCopies, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
+import { customShapeBounds, flattenEdge, frontFace, placedPartOutline, sampledBounds, placedPartOutlines, repeatCopies, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
 import { isMain } from "../self-check";
 
 const shapeOfRow = (p: Product): MapShape => p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect");
@@ -25,6 +25,8 @@ const shapeOfRow = (p: Product): MapShape => p.appearance?.shape ?? (p.dimension
  *  hand-drawn outline is drawn where its points are. */
 function baseAt(p: Product): { x: number; y: number } {
   const a = p.appearance;
+  // A front base's outline is its FACE (x across, y = −up): no place on the plan of its own.
+  if (a?.plane === "front") return { x: 0, y: 0 };
   if (a?.shape === "custom" && a.outline && a.outline.length >= 3) {
     const b = customShapeBounds(a.outline, a.edgeCurves);
     return { x: b.cx, y: b.cy };
@@ -64,7 +66,34 @@ export function shapesOf(p: Product): ShapePart[] {
   const at = baseAt(p);
   const drawn = shape !== "custom" || (a?.outline?.length ?? 0) >= 3;
   const box = shape === "custom" && drawn ? customShapeBounds(a!.outline!, a!.edgeCurves) : null;
-  const base: ShapePart | null = drawn
+  const front = a?.plane === "front";
+  const base: ShapePart | null = drawn && front
+    ? {
+        id: crypto.randomUUID(),
+        plane: "front",
+        shape,
+        ...(shape === "custom" ? { outline: a!.outline, ...(a!.edgeCurves ? { edgeCurves: a!.edgeCurves } : {}), ...(a!.open ? { open: true } : {}) } : {}),
+        // Its FACE: across and up. The row's height is its face's; the row's depth its thickness.
+        ...(box
+          ? { widthMm: Math.round(box.w), depthMm: Math.round(box.h) }
+          : usesDiameter(shape)
+            ? { diameterMm: d.diameterMm }
+            : { widthMm: d.widthMm, depthMm: d.heightMm }),
+        thicknessMm: d.depthMm,
+        ...(a?.bendDeg ? { bendDeg: a.bendDeg } : {}),
+        ...(a?.faceTurnDeg ? { faceTurnDeg: a.faceTurnDeg } : {}),
+        ...(a?.arc ? { arc: a.arc } : {}),
+        ...(a?.ring ? { ring: a.ring } : {}),
+        ...(a?.hollow ? { hollow: a.hollow } : {}),
+        ...(a?.body ? { body: a.body } : {}),
+        ...(a?.texture ? { texture: a.texture } : {}),
+        ...(a?.textureImage ? { textureImage: a.textureImage } : {}),
+        ...(a?.baseStyle ? { style: a.baseStyle } : {}),
+        x: 0,
+        y: 0,
+        rotation: 0,
+      }
+    : drawn
     ? {
         id: crypto.randomUUID(),
         shape,
@@ -102,6 +131,29 @@ export function upright(s: ShapePart): ShapePart {
     return r % 180 === 0 ? { ...s, rotation: 0 } : { ...s, rotation: 0, widthMm: s.depthMm, depthMm: s.widthMm };
   }
   return baked(s, placedPartOutline(s));
+}
+
+/** A FRONT shape as the base can store it: its plan turn is the caller's (lookOf turns the whole
+ *  drawing back), and a turn within its face is baked into its face — the same rule `upright` is on
+ *  the plan, read in the face's own frame. */
+function uprightFace(s: ShapePart): ShapePart {
+  if (!turn(s.faceTurnDeg || 0)) return s.faceTurnDeg !== undefined ? { ...s, faceTurnDeg: undefined } : s;
+  const face = upright({ ...s, plane: undefined, thicknessMm: undefined, bendDeg: undefined, faceTurnDeg: undefined, x: 0, y: 0, rotation: s.faceTurnDeg || 0 });
+  return { ...face, plane: "front", thicknessMm: s.thicknessMm, ...(s.bendDeg ? { bendDeg: s.bendDeg } : {}), x: s.x, y: s.y, rotation: s.rotation };
+}
+
+/** Every shape's place turned `deg` about a point, and its own turn with it — the whole drawing
+ *  turned as one. */
+export function turnedAbout(list: readonly ShapePart[], about: { x: number; y: number }, deg: number): ShapePart[] {
+  const t = (deg * Math.PI) / 180;
+  const c = Math.cos(t);
+  const sn = Math.sin(t);
+  return list.map((p) => {
+    const dx = p.x - about.x;
+    const dy = p.y - about.y;
+    const r = (((p.rotation || 0) + deg) % 360 + 360) % 360;
+    return { ...p, x: Math.round(about.x + dx * c - dy * sn), y: Math.round(about.y + dx * sn + dy * c), rotation: Math.abs(r - 360) < 1e-9 ? 0 : r };
+  });
 }
 
 /** The shape as a hand-drawn one of outline `o` (on the canvas, turn included), its box's centre its
@@ -241,7 +293,13 @@ export function flipShapes(shapes: readonly ShapePart[], ids: readonly string[],
  *  of the editor draws. `look` carries everything that is not geometry (content, style, picture…).
  *  The list must not be empty. */
 export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimensions: Product["dimensions"]; appearance: MapAppearance } {
-  const [first, ...rest] = shapes;
+  // A FRONT first shape cannot be stored turned on the plan (the base has no turn, and its outline is
+  // its face, not a plan outline to bake the turn into): the whole drawing is turned back about it,
+  // which keeps every shape where it stands relative to it — the item's front is its first face's.
+  const lead = shapes[0];
+  const list = lead?.plane === "front" && turn(lead.rotation || 0) ? turnedAbout(shapes, { x: lead.x, y: lead.y }, -(lead.rotation || 0)) : shapes;
+  const [first, ...rest] = list;
+  if (first.plane === "front") return frontLookOf(look, first, rest);
   const s0 = upright(first);
   const a = look.appearance;
   const custom = s0.shape === "custom";
@@ -276,6 +334,52 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
       baseStyle: s0.style,
       parts: parts.length ? parts : undefined,
       blockedSides: moved ? undefined : a?.blockedSides,
+      plane: undefined,
+      bendDeg: undefined,
+      faceTurnDeg: undefined,
+    },
+  };
+}
+
+/** lookOf for a FRONT first shape: its face's across size and height are the row's width (or
+ *  diameter) and height, its thickness the row's depth; the rest are parts about its band's centre. */
+function frontLookOf(look: Product, first: ShapePart, rest: readonly ShapePart[]): { dimensions: Product["dimensions"]; appearance: MapAppearance } {
+  const s0 = uprightFace({ ...first, rotation: 0 });
+  const a = look.appearance;
+  const d = look.dimensions;
+  const custom = s0.shape === "custom";
+  const box = custom && s0.outline ? customShapeBounds(s0.outline, s0.edgeCurves) : null;
+  const faceH = Math.round(frontFace(s0.shape, s0).h);
+  const thickness = s0.thicknessMm ?? FRONT_THICK_MM;
+  const dimensions: Product["dimensions"] = box
+    ? { ...d, widthMm: Math.round(box.w), depthMm: thickness, heightMm: Math.round(box.h) }
+    : usesDiameter(s0.shape)
+      ? { ...d, diameterMm: s0.diameterMm, depthMm: thickness, heightMm: faceH }
+      : { ...d, widthMm: s0.widthMm, depthMm: thickness, heightMm: s0.depthMm ?? faceH };
+  const parts = rest.map((q) => shifted(q, -s0.x, -s0.y));
+  return {
+    dimensions,
+    appearance: {
+      content: a?.content ?? "none",
+      ...a,
+      shape: s0.shape,
+      plane: "front",
+      bendDeg: s0.bendDeg || undefined,
+      faceTurnDeg: undefined,
+      outline: custom ? s0.outline : a?.outline,
+      edgeCurves: custom ? s0.edgeCurves : a?.edgeCurves,
+      open: custom && s0.open ? true : undefined,
+      arc: s0.arc,
+      ring: s0.ring,
+      hollow: s0.hollow,
+      revolve: undefined,
+      body: s0.body,
+      texture: s0.texture,
+      textureImage: s0.textureImage,
+      baseStyle: s0.style,
+      parts: parts.length ? parts : undefined,
+      // A front base has no seats; a row turned from a plan base loses the sides it had.
+      blockedSides: undefined,
     },
   };
 }
@@ -290,7 +394,7 @@ export function drawnBounds(shapes: readonly ShapePart[]) {
  *  plan draws of it, so the item's box on the canvas is the plan's box. */
 export function drawnPieces(shapes: readonly ShapePart[]): BuiltOutline[] {
   const base = shapes[0] ? placedPartOutline(shapes[0]) : null;
-  return shapes.flatMap((s, i) => (i > 0 && s.repeat && base ? repeatCopies(s, base) : placedPartOutlines(s)));
+  return shapes.flatMap((s, i) => (i > 0 && s.repeat && s.plane !== "front" && base ? repeatCopies(s, base) : placedPartOutlines(s)));
 }
 
 // ponytail: self-check. Run: npm run check:shape-list
@@ -403,5 +507,35 @@ if (isMain(import.meta.url)) {
   const turnedPart = { ...bowlShapes[1], shape: "trapezoid" as const, rotation: 30 };
   const bakedBack = lookOf(bowl, [turnedPart, bowlShapes[0]]);
   assert(bakedBack.appearance.shape === "custom" && bakedBack.appearance.parts?.[0].revolve?.length === 2 && bakedBack.appearance.parts?.[0].zMm === undefined, "a turned first shape is baked with nothing lost; the bowl behind it keeps its body (the base has no z)");
+
+  // THE FRONT PLANE (backdrops S2): a front first shape is the row's base — its face height the
+  // row's height, its thickness the row's depth.
+  const wall = row({ shape: "rect", plane: "front", bendDeg: 40 }, { widthMm: 4000, depthMm: 30, heightMm: 2600 });
+  const ws = shapesOf(wall);
+  assert(ws[0].plane === "front" && ws[0].widthMm === 4000 && ws[0].depthMm === 2600 && ws[0].thicknessMm === 30 && ws[0].bendDeg === 40 && ws[0].x === 0 && ws[0].y === 0, "a front base opens as its face, 30 thick, bent 40°");
+  const wBack = { ...wall, ...lookOf(wall, ws) };
+  assert(
+    wBack.dimensions.widthMm === 4000 && wBack.dimensions.depthMm === 30 && wBack.dimensions.heightMm === 2600 && wBack.appearance?.plane === "front" && wBack.appearance?.bendDeg === 40,
+    `…and saves back the same (${JSON.stringify(wBack.dimensions)})`,
+  );
+  // A petal drawn by hand as the base: its face outline is kept; its height is its box's.
+  const petal = row({ shape: "custom", plane: "front", outline: [{ x: 0, y: 0 }, { x: 800, y: -2000 }, { x: 1600, y: 0 }] }, { widthMm: 1600, depthMm: 20, heightMm: 2000 });
+  const ps = shapesOf(petal);
+  assert(ps[0].x === 0 && ps[0].y === 0 && ps[0].depthMm === 2000, "a hand-drawn front base stands at the origin, its face 2000 high");
+  const pBack = { ...petal, ...lookOf(petal, ps) };
+  assert(pBack.dimensions.heightMm === 2000 && pBack.dimensions.depthMm === 20 && pBack.dimensions.widthMm === 1600 && pBack.appearance?.outline?.length === 3, "a hand-drawn front base round-trips");
+  // Layers behind a front base keep their places (picture 5: two more panels behind it).
+  const layered: ShapePart[] = [ws[0], { ...ws[0], id: "b", y: -300 }, { ...ws[0], id: "c", y: -600 }];
+  const lb = shapesOf({ ...wall, ...lookOf(wall, layered) });
+  assert(lb.length === 3 && lb[1].y === -300 && lb[2].y === -600 && lb.every((s) => s.plane === "front"), "three layers come back at their depths");
+  // The first shape turned 30° on the plan: the whole drawing turns back about it, nothing moves
+  // relative to it.
+  const turned = turnedAbout(layered, { x: 0, y: 0 }, 30);
+  assert(turned[0].rotation === 30 && Math.abs(turned[2].x - 300) < 1, "turnedAbout turns places and shapes");
+  const tb = shapesOf({ ...wall, ...lookOf(wall, turned) });
+  assert(tb[0].rotation === 0 && Math.abs(tb[2].y - -600) < 2 && Math.abs(tb[2].x) < 2 && tb[2].rotation === 0, `a turned front base is stored upright, the drawing turned back about it (${tb[2].x},${tb[2].y},${tb[2].rotation})`);
+  // A plan first shape leaves no front fields behind; a front one behind it stays front.
+  const asPlan = lookOf(wall, [{ ...ws[0], plane: undefined, thicknessMm: undefined, bendDeg: undefined, depthMm: 600 }, { ...ws[0], id: "f", y: -400 }]);
+  assert(asPlan.appearance.plane === undefined && asPlan.appearance.bendDeg === undefined && asPlan.dimensions.depthMm === 600 && asPlan.appearance.parts?.[0].plane === "front", "a plan first shape leaves no front fields behind");
   console.log("shape-list: ok");
 }
