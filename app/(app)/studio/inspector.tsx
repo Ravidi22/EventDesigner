@@ -1711,7 +1711,7 @@ export function Inspector({
               PackagePlus,
               "חסר בקטלוג",
               missingSummary(sp.missing),
-              <MissingPieces bare missing={sp.missing} types={sp.pieceTypes} chosen={sp.chosen} onUse={onUseStagePieces} onAdd={onAddStagePieces} />,
+              <MissingPieces missing={sp.missing} types={sp.pieceTypes} chosen={sp.chosen} onUse={onUseStagePieces} onAdd={onAddStagePieces} />,
               true,
             ),
           breaches.length > 0 && G("clearance", ShieldAlert, "מרחק ביטחון", breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`, <BreachList breaches={breaches} />, true),
@@ -2175,12 +2175,12 @@ export function Inspector({
         drape.type === "sail" ? (clothSheet ? ltr(`${(clothSheet.areaMm2 / 1e6).toFixed(1)} מ״ר`) : "—") : clothMm !== undefined ? ltr(`${drape.type === "canopy" && cloth ? `${cloth.length}× ` : ""}${(clothMm / 1000).toFixed(2)} מ׳`) : run ? ltr(`${(run.lengthMm / 1000).toFixed(2)} מ׳`) : "—",
         led ? (
           // The run drawn of its own is the bar's verb.
-          <LedRailPopover bare rail={drape} lengthMm={runMm} onRail={(rail) => onRail?.(p.id, rail)} />
+          <LedRailPopover rail={drape} lengthMm={runMm} onRail={(rail) => onRail?.(p.id, rail)} />
         ) : clothKind ? (
           onRail ? (
             // A sail's ties and sag, a ceiling drape's height, width, sag, scallops — and both ways to
             // draw it again (a line, an area), which the bar's verb is one of.
-            <CeilingClothPopover bare rail={drape} sheet={clothSheet} onRail={(rail) => onRail(p.id, rail)} onRedraw={onDrawCloth && !p.locked ? (k) => onDrawCloth(p.id, k) : undefined} />
+            <CeilingClothPopover rail={drape} sheet={clothSheet} onRail={(rail) => onRail(p.id, rail)} onRedraw={onDrawCloth && !p.locked ? (k) => onDrawCloth(p.id, k) : undefined} />
           ) : (
             <Note>{railWhere ?? "בד תקרה"}</Note>
           )

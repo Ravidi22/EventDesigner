@@ -83,7 +83,7 @@ import { darkFill, deckLabel, heightColour } from "@/lib/outputs/deck-colours";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { resolveFootprint, footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { nearestWall } from "@/lib/studio/anchor";
-import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { measurements, type Dim, type DimKind, type Leader, type MeasureInput, type MeasureOptions, type Solid } from "@/lib/outputs/measurements";
 import { placeLabels, type Box } from "@/lib/outputs/labels";
 import { formatHang, hangHeightOf, wallRuns } from "@/lib/studio/hang";
@@ -1743,7 +1743,7 @@ function GhostTable({ t }: { t: DesignTable }) {
 export function ChairGlyph({ seat, colour = false, mono = false }: { seat: Seat; colour?: boolean; mono?: boolean | Flat }) {
   const fl = flatOf(mono);
   return (
-    <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
+    <g transform={seatTransform(seat)}>
       {colour ? <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={MUTED} /> : <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} ink={INK} print tone={fl ? fl.chair : undefined} />}
     </g>
   );

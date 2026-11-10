@@ -2,7 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 import { footprintBounds, type Footprint } from "@/lib/studio/footprint";
-import { seatSides, seatsAround, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { seatSides, seatsAround, seatTransform, CHAIR_BACK_MM, CHAIR_D_MM, CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { FootprintShape } from "@/components/footprint-shape";
 
 // Which sides of a table somebody sits at, picked on a drawing of the table itself.
@@ -112,7 +112,7 @@ export function SeatChairs({ seats }: { seats: Seat[] }) {
   return (
     <>
       {seats.map((s, i) => (
-        <g key={i} transform={`translate(${s.x} ${s.y}) rotate(${s.facingDeg})`}>
+        <g key={i} transform={seatTransform(s)}>
           <rect
             x={-CHAIR_D_MM / 2}
             y={-CHAIR_W_MM / 2}

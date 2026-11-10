@@ -183,6 +183,7 @@ export function PanelListRow({
   badge,
   selected,
   onClick,
+  disabled = false,
   trailing,
 }: {
   glyph: ReactNode;
@@ -191,6 +192,9 @@ export function PanelListRow({
   badge?: string;
   selected?: boolean;
   onClick?: (e: MouseEvent) => void;
+  /** Listed but not pickable just now (the studio's dressing focus: what stands behind the scrim) —
+   *  dimmed, and a click does nothing. */
+  disabled?: boolean;
   trailing?: ReactNode;
 }) {
   const body = (
@@ -204,7 +208,11 @@ export function PanelListRow({
   const cls = "flex min-h-[34px] w-full items-center gap-2 rounded-sm px-1.5 text-start transition-colors " + (selected ? "bg-accent-tint text-accent-hover" : "text-ink hover:bg-inset");
   return (
     <div className="flex items-center gap-0.5">
-      {onClick ? (
+      {disabled ? (
+        <button type="button" disabled className="flex min-h-[34px] w-full cursor-default items-center gap-2 rounded-sm px-1.5 text-start text-ink opacity-50">
+          {body}
+        </button>
+      ) : onClick ? (
         <button type="button" onClick={onClick} aria-pressed={selected} className={cls}>
           {body}
         </button>

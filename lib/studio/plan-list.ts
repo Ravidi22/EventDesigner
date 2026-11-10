@@ -29,8 +29,9 @@ export interface PlanListRow {
 }
 
 export interface PlanListOptions {
-  /** A placement's variant → its product's name and shade; undefined when the catalog lacks it. */
-  resolve: (variantId: string) => { product: { id: string; name: string }; swatch?: string } | undefined;
+  /** A placement's variant → its product's name and shade, and where it goes (`anchor` "table" = a
+   *  table's cloth — its surface); undefined when the catalog lacks it. */
+  resolve: (variantId: string) => { product: { id: string; name: string }; swatch?: string; anchor?: string } | undefined;
   venueFeatures?: { id: string; label: string }[];
 }
 
@@ -114,7 +115,11 @@ export function planListRows(doc: DesignDocument, opts: PlanListOptions): Record
       out[plane].push(row);
     }
     row.count++;
-    row.refs.push({ kind: "placement", id: p.id });
+    // A table's cloth is its SURFACE, never selected on its own (the canvas cannot select one, and
+    // an item bar on a cloth offers a % and an angle it ignores): its row selects the tables wearing
+    // it — one cloth per table, so no table is listed twice.
+    if (p.tableId && found?.anchor === "table") row.refs.push({ kind: "table", id: p.tableId });
+    else row.refs.push({ kind: "placement", id: p.id });
     quantity.set(key, (quantity.get(key) ?? 0) + (p.quantity ?? 1));
   }
   for (const [key, row] of rows) {
@@ -217,6 +222,22 @@ if (isMain(import.meta.url)) {
   const bar = rows.floor.find((r) => r.venue);
   assert(bar?.label === "בר" && bar.refs[0].kind === "feature" && bar.refs[0].id === "f1", "a venue feature is a floor row marked venue");
   assert(rows.ceiling.length === 1 && rows.ceiling[0].label === "פריט", "a variant that does not resolve is an 'פריט'");
+
+  // A table's CLOTH is its surface and is never selected on its own (the canvas has no way to): its
+  // row selects the tables wearing it. The row stays — it says which cloth and how many.
+  const clothed: DesignDocument = {
+    ...doc,
+    placements: [...doc.placements, placement("k1", "v-cloth", "table", { tableId: "t1" }), placement("k2", "v-cloth", "table", { tableId: "b2" })],
+  };
+  const withAnchor: PlanListOptions["resolve"] = (v) => (v === "v-cloth" ? { product: { id: "p-cloth", name: "מפה" }, anchor: "table" } : resolve(v));
+  const clothRows = planListRows(clothed, { resolve: withAnchor });
+  const clothRow = clothRows.table.find((r) => r.label === "מפה");
+  assert(clothRow?.count === 2, "a cloth is a row on the table plane, counted");
+  assert(
+    !!clothRow && clothRow.refs.length === 2 && clothRow.refs.every((r) => r.kind === "table") && clothRow.refs.map((r) => r.id).join() === "t1,b2",
+    "…and its refs are the TABLES wearing it, never the cloths",
+  );
+  assert(!!clothRows.table.find((r) => r.label === "פמוט")?.refs.every((r) => r.kind === "placement"), "an item ON a table is still selected itself");
 
   assert(listCrumb(rows, [{ kind: "placement", id: "c2" }]) === "עיצוב שולחן › פמוט", "the crumb names the plane and the row");
   assert(listCrumb(rows, [{ kind: "table", id: "b2" }]) === "שולחנות › שולחן 4", "…a block member finds its block");

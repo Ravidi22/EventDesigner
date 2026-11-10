@@ -6,7 +6,7 @@ import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
-import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock } from "@/components/chair-block";
@@ -3558,7 +3558,7 @@ const CarpetNode = memo(function CarpetNode({
  *  the hairline holds a constant screen width, which is what keeps a room of 400 legible zoomed out. */
 function Chair({ seat }: { seat: Seat }) {
   return (
-    <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
+    <g transform={seatTransform(seat)}>
       <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
     </g>
   );

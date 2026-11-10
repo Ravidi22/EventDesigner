@@ -16,13 +16,14 @@ import { resolveStyle } from "@/lib/element-style";
 import { MIRROR_TRANSFORM } from "@/lib/design-document/mirror";
 import { blockSeats } from "@/lib/design-document/block";
 import { groupSeats } from "@/lib/design-document/groups";
-import { CHAIR_D_MM, CHAIR_W_MM, seatsAround, type Seat } from "@/lib/studio/seating";
+import { CHAIR_D_MM, CHAIR_W_MM, seatsAround, seatTransform, type Seat } from "@/lib/studio/seating";
 import { FootprintShape, dressBlockOf, dressingSpots, placementFootprint, productStyle, tableBlock, tableBlockedSides, tableFootprint } from "./footprint-shape";
 import { ClothDrape, ItemSymbol, SeatChair } from "./item-symbol";
 import { ChairBlock } from "./chair-block";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "./vessel-mark";
 import { borderOf } from "@/lib/catalog/border";
+import { useMounted } from "@/lib/use-mounted";
 
 // A composite catalog item (Product.composition, lib/catalog/composition.ts) drawn the way the plan
 // will draw it once placed: its tables in their cloths with their chairs round them (a block's round
@@ -37,6 +38,14 @@ import { borderOf } from "@/lib/catalog/border";
 const CHAIR_REACH_MM = CHAIR_D_MM + 160;
 
 export function CompositionDrawing({ composition, className }: { composition: Composition; className?: string }) {
+  // Drawn once the page is the browser's, as the catalog's own preview is (appearance-preview.tsx:
+  // trigonometry drawn by Node and by the browser can differ in the last digit — a hydration warning).
+  const mounted = useMounted();
+  if (!mounted) return <svg className={className} role="img" aria-label="תצוגה של הפריט המורכב" />;
+  return <CompositionDrawn composition={composition} className={className} />;
+}
+
+function CompositionDrawn({ composition, className }: { composition: Composition; className?: string }) {
   const box = compositionBox(composition);
   const reach = CHAIR_REACH_MM + Math.max(box.maxX - box.minX, box.maxY - box.minY) * 0.04;
   const vb = `${box.minX - reach} ${box.minY - reach} ${box.maxX - box.minX + reach * 2} ${box.maxY - box.minY + reach * 2}`;
@@ -90,7 +99,7 @@ export function CompositionPieces({
       {rings.map((r) => (
         <g key={r.key} transform={r.transform}>
           {r.seats.map((seat, i) => (
-            <g key={i} transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
+            <g key={i} transform={seatTransform(seat)}>
               <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
             </g>
           ))}

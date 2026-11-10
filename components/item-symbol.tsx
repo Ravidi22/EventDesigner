@@ -22,7 +22,7 @@ export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
 import type { PlacementClimb, Point } from "@/lib/design-document/types";
 import { benchLayoutFor, type BenchLayout } from "@/lib/design-document/bench";
-import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
+import { CHAIR_D_MM, CHAIR_W_MM, seatTransform } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
 import { PergolaGlyph } from "./pergola-glyph";
@@ -324,7 +324,7 @@ function benchSymbol(footprint: Footprint, lay: BenchLayout, chairs: boolean, c:
       {top}
       {chairs &&
         lay.chairs.map((s, i) => (
-          <g key={`chair-${i}`} transform={`translate(${s.x} ${s.y}) rotate(${s.facingDeg}) rotate(-90)`}>
+          <g key={`chair-${i}`} transform={`${seatTransform(s)} rotate(-90)`}>
             {chair(CHAIR_W_MM, CHAIR_D_MM, "dining", seat, seatLine)}
           </g>
         ))}

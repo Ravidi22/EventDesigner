@@ -2,14 +2,14 @@
 
 import type { ReactNode } from "react";
 import { Check, Loader2, Eye, TriangleAlert } from "lucide-react";
-import { Menu, type MenuItem } from "@/components/menu";
 
 // What floats over a canvas besides the selection's bar (2026-11-09, the user's "Studio + Halls"
 // board, top-bar option 1b — "everything floats"): no header bar above the plan. The canvas's own
-// tool strip (PlanCanvas) holds history, zoom, the ruler and the document menu at the top-END
-// corner; the VIEW cluster (which zone or which venue, the 3D) stands at the top-START corner; the
-// save state is a pill in the bottom-start corner; and what the armed tool is waiting for reads in
-// one row of pills under the corners' line, centred.
+// tool strip (PlanCanvas) holds history, zoom and the ruler at the top-END corner — and no document
+// ⋯ (the user, after Plan 1: the document's questions are end-panel groups shown while nothing is
+// selected); the VIEW cluster (which zone, the 3D) stands at the top-START corner; the save state is
+// a pill in the bottom-start corner; and what the armed tool is waiting for reads in one row of
+// pills under the corners' line, centred.
 
 /** The top-start card: a zone or venue chooser, the 3D toggle. */
 export function ViewCluster({ children }: { children: ReactNode }) {
@@ -69,11 +69,4 @@ export function HintPill({ tone = "ink", interactive = false, children }: { tone
   return (
     <div className={"max-w-[70%] rounded-pill px-4 py-2 text-center text-[13px] leading-snug shadow-floating " + look + (interactive ? " pointer-events-auto" : "")}>{children}</div>
   );
-}
-
-/** The document's own verbs (paste, numbering, saved sketches, the underlay), in the canvas strip's
- *  ⋯. An entry whose answer is a set of fields opens that group in the end panel rather than a
- *  panel of its own — fields live in the panel (the board's rule). */
-export function DocumentMenu({ items }: { items: MenuItem[] }) {
-  return <Menu label="פעולות על המסמך" side="bottom" items={items} />;
 }

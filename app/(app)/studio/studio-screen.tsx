@@ -147,7 +147,8 @@ import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } fro
 import type { ContextMenuItem, MarqueeMode } from "@/components/plan-canvas";
 import { VenueAccessNotice, VenueUnsetNotice } from "@/components/venue-access-notice";
 import { ScenePreview } from "./scene-preview";
-import { EndPanel, PanelGroups, PanelList, PanelListFolded, PanelListHeading, PanelListRow, type PanelGroup } from "@/components/end-panel";
+import { HoldWhileDragging } from "./hold-while-dragging";
+import { EndPanel, openEndPanel, PanelGroups, PanelList, PanelListFolded, PanelListHeading, PanelListRow, type PanelGroup } from "@/components/end-panel";
 import { Note } from "@/components/inspector-bar";
 import { listCrumb, planListRows, type PlanListRow } from "@/lib/studio/plan-list";
 import { groupMemory } from "@/lib/studio/panel-groups";
@@ -381,8 +382,10 @@ export function StudioScreen({
     if (scenePrefs) saveScenePreview(scenePrefs);
   }, [scenePrefs]);
   const scenePane = scenePrefs ?? DEFAULT_SCENE_PREVIEW;
-  // The quick bar's dock — the 3D card stands above whatever it holds.
+  // The quick bar's dock — the 3D card stands above whatever it holds — and the canvas column, where
+  // a drag holds the end panel still (./hold-while-dragging.tsx).
   const dockRef = useRef<HTMLDivElement>(null);
+  const columnRef = useRef<HTMLDivElement>(null);
   const patchScene = useCallback((patch: Partial<ScenePreviewPrefs>) => setScenePrefs((cur) => ({ ...(cur ?? DEFAULT_SCENE_PREVIEW), ...patch })), []);
   const toggleScene = useCallback(() => {
     setSceneMounted(true);
@@ -1882,8 +1885,13 @@ export function StudioScreen({
     const f = plan.structure.features.find((x) => x.id === sole.id);
     if (!f) return null;
     const here = arrangedFeature(doc, f);
-    // A curtain offers the catalog's own curtains to hang in its place (lib/venues/curtain.ts).
-    const drapes = f.kind === "curtain" ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall") : [];
+    // A curtain offers the catalog's own curtains to hang in its place (lib/venues/curtain.ts) — the
+    // drapes alone: an LED strip, a sail and a ceiling cloth hang on a rail too (anchor "wall"), but
+    // none of them is a curtain to swap the venue's for.
+    const drapes =
+      f.kind === "curtain"
+        ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall" && !isLedStrip(p) && !isCeilingClothCategory(p.category))
+        : [];
     const curtainSwap: SwapPanel | null = drapes.length ? { kind: "items", count: 1, current: null, similar: 0, options: drapes } : null;
     return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id), curtainSwap };
   }, [sole, plan.structure, doc, catalog]);
@@ -2795,14 +2803,23 @@ export function StudioScreen({
   );
   /** A deck clicked: picked, or — picked already — let go of. Null clears the pick. A pick opens the
    *  end panel's ״פלטה״ group, where its verbs are (the chip it replaced was in view in the bar). */
-  const pickDeck = useCallback((ref: DeckRef | null) => {
-    if (ref) groupMemory.open("studio:fill", "deck");
-    setStageFill((cur) => {
-      if (cur?.phase !== "pick") return cur;
-      const { picked: _was, ...rest } = cur;
-      return ref === null || sameDeckRef(cur.picked, ref) ? rest : { ...rest, picked: ref };
-    });
-  }, []);
+  const pickDeck = useCallback(
+    (ref: DeckRef | null) => {
+      // A deck picked opens ITS group (פלטה: every verb on it) — and the end panel with it, when the
+      // panel was put away: otherwise the pick changed nothing anyone could see. Not on the
+      // toggle-off (the picked deck pressed again lets it go).
+      if (ref && !(stageFill?.phase === "pick" && sameDeckRef(stageFill.picked, ref))) {
+        groupMemory.open("studio:fill", "deck");
+        openEndPanel("studio");
+      }
+      setStageFill((cur) => {
+        if (cur?.phase !== "pick") return cur;
+        const { picked: _was, ...rest } = cur;
+        return ref === null || sameDeckRef(cur.picked, ref) ? rest : { ...rest, picked: ref };
+      });
+    },
+    [stageFill],
+  );
   /** The deck's right-click menu: the bar's verbs, the sizes as a submenu. */
   const deckMenu = useCallback(
     (ref: DeckRef): ContextMenuItem[] => {
@@ -3665,6 +3682,10 @@ export function StudioScreen({
         seated += t?.seated ?? 0;
       }
     }
+    // A standalone banquette's own typed note (BenchSpec.seated) — its seats are in the places below,
+    // so its people are in `seated` too, or the summary reads two bases. (A stage's edge banquette
+    // carries no such note: `seated` is a standalone banquette's only.)
+    for (const p of doc.placements) if (p.bench?.seated && standaloneBench(p, benchOf)) seated += p.bench.seated;
     return { tables, seated, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
   }, [doc]);
 
@@ -4272,6 +4293,20 @@ export function StudioScreen({
     [listDoc, plan.structure, catalog],
   );
   const planTotal = useMemo(() => PLANES.reduce((n, { id }) => n + planRows[id].reduce((m, r) => m + r.count, 0), 0), [planRows]);
+  /** While a table is dressed, the list picks only what is on it or hangs over it (its whole
+   *  block's): a row reaching behind the scrim selected room items nobody could see — Ctrl+A cannot
+   *  (selectAll) — and Delete then removed them unseen. Such a row is listed, dimmed, and inert. */
+  const behindScrim = useCallback(
+    (refs: readonly SelectionRef[]) =>
+      dressingIds.size > 0 &&
+      !refs.every((r) => {
+        if (r.kind === "table") return dressingIds.has(r.id);
+        if (r.kind !== "placement") return false;
+        const p = doc.placements.find((x) => x.id === r.id);
+        return !!p && ((p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId)) || (p.layer === "ceiling" && !!p.over && dressingIds.has(p.over)));
+      }),
+    [dressingIds, doc.placements],
+  );
   // The stages' pieces the catalog lacks (layStage `missing`, worded by shape).
   const missingChecks = useMemo(
     () =>
@@ -5106,9 +5141,12 @@ export function StudioScreen({
         paste();
       } else if (mod && !typing && !e.shiftKey && !e.altKey && isShortcut(e, "d")) {
         // The quick bar's copy button, on the keyboard (after deckKey, so a picked deck in the
-        // fill tool still takes its own Ctrl+D). The browser would bookmark the page.
+        // fill tool still takes its own Ctrl+D). The browser would bookmark the page. Not with stairs,
+        // a banquette or a barrier picked out on a stage: its bar has no copy, and the selection
+        // under it is the whole stage — Ctrl+D there doubled the stage (Delete takes the item first
+        // for the same reason).
         e.preventDefault();
-        if (docRefs(selected).length > 0) duplicate();
+        if (!activeEdge && docRefs(selected).length > 0) duplicate();
       } else if (mod && !typing && isShortcut(e, "g")) {
         e.preventDefault();
         if (e.shiftKey) ungroupSelection();
@@ -5578,7 +5616,7 @@ export function StudioScreen({
         {/* `relative`: the 3D card is positioned against this column (its bottom-start corner, above
             the quick bar), so it sits on the canvas whatever the rail and the end panel are doing —
             and its width is held to this column's. */}
-        <div className="relative min-w-0 flex-1">
+        <div ref={columnRef} className="relative min-w-0 flex-1">
           <CanvasStage
             doc={canvasDoc}
             plan={plan}
@@ -6063,164 +6101,168 @@ export function StudioScreen({
         {/* The end panel (components/end-panel.tsx): what is on the plan, plane by plane, and with
             nothing selected the sketch's own groups under it. */}
         <EndPanel screen="studio" collapsible>
-          {listOpen ? (
-            <PanelList title="בתוכנית" count={planTotal}>
-              {PLANES.map(({ id, label }) => {
-                const rows = planRows[id];
-                // A hidden plane is listed but not picked from: nothing hidden enters a selection
-                // (pickMany). What stands on a table goes with the tables.
-                const shown = layerVisible[id] && (id !== "table" || layerVisible.tables);
-                const Icon = PLANE_ICON[id];
-                return (
-                  <div key={id}>
-                    <PanelListHeading
-                      label={label}
-                      count={rows.reduce((n, r) => n + r.count, 0)}
-                      active={activeLayer === id}
-                      visible={layerVisible[id]}
-                      onActivate={() => setActiveLayer((cur) => (cur === id ? null : id))}
-                      onToggleVisible={() => setLayerVisible((v) => ({ ...v, [id]: !v[id] }))}
-                    />
-                    {/* Working in one plane lists that plane alone (the board's "פעילה"). */}
-                    {(activeLayer === null || activeLayer === id) && rows.length > 0 && (
-                      <div className={shown ? undefined : "opacity-50"}>
-                        {rows.map((row) => (
-                          <PanelListRow
-                            key={row.key}
-                            glyph={
-                              row.swatch ? (
-                                <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: row.swatch }} />
-                              ) : (
-                                <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
-                              )
-                            }
-                            label={row.label}
-                            meta={rowFigure(row)}
-                            badge={row.venue ? "של המקום" : undefined}
-                            selected={row.refs.every((r) => selectedKeys.has(`${r.kind}:${r.id}`))}
-                            // Every one of them (D11) — a block as the one table it is.
-                            onClick={shown ? () => pickMany(row.refs, false) : undefined}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {planTotal === 0 && <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">התוכנית עדיין ריקה — בוחרים פריט בקטלוג ולוחצים על התוכנית, או גוררים אותו.</p>}
-            </PanelList>
-          ) : (
-            <PanelListFolded
-              icon={Layers}
-              title="בתוכנית"
-              count={planTotal}
-              crumb={fillProps ? (fillProps.state.editing ? "עריכת במה" : "מילוי במות") : listCrumb(planRows, selected)}
-              badge={
-                checkRows.length > 0 ? (
-                  <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
-                    <TriangleAlert aria-hidden className="h-3 w-3" strokeWidth={2} />
-                    {checkRows.length}
-                  </span>
-                ) : undefined
-              }
-              onOpen={() => setUnfoldedFor(selected)}
-            />
-          )}
-          {/* The fill tool with its area drawn: its groups, in place of the selection's and the
-              sketch's own, under the folded list — the same props as its quick bar. */}
-          {fillProps && <StageFillPanel part="groups" {...fillProps} />}
-          {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
-              layer scope and nothing selected, the scope's). The same props as the quick bar. */}
-          {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
-          {/* Nothing selected: the sketch's own groups — who it seats, what is wrong with it, how its
-              tables are numbered, the saved sketches, and what this event took out of the venue. The
-              selection's groups (they arrive with the quick bar) take this place otherwise. */}
-          {selected.length === 0 && !fillProps && (
-            <PanelGroups
-              kind="studio:none"
-              title="הסקיצה"
-              sub={plan.zones.map((z) => z.zone.name).filter(Boolean).join(" · ") || undefined}
-              defaultOpen={["seating", "checks"]}
-              groups={[
-                {
-                  key: "seating",
-                  icon: Armchair,
-                  title: "ישיבה",
-                  summary: `${seating.seated}/${seating.tables + seating.benches} מושבים`,
-                  body: (
-                    <>
-                      <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches} />
-                      {seating.benches > 0 && <FactRow label="מהם על בנקטים" value={seating.benches} />}
-                      <FactRow label="שולחנות" value={doc.tables.length} />
-                    </>
-                  ),
-                },
-                {
-                  key: "checks",
-                  icon: checkRows.length > 0 ? TriangleAlert : ShieldAlert,
-                  title: "בדיקות",
-                  warn: checkRows.length > 0,
-                  summary: checkRows.length === 0 ? "הכול תקין" : checkRows.length === 1 ? "בעיה אחת" : `${checkRows.length} בעיות`,
-                  body:
-                    checkRows.length === 0 ? (
-                      <Note>אין חריגה ממרחק ביטחון, ולכל במה יש בקטלוג כל הפלטות.</Note>
-                    ) : (
-                      <div className="-mx-1.5 flex flex-col gap-px">
-                        {checkRows.map((row) => {
-                          const RowIcon = row.kind === "clearance" ? ArrowLeftRight : Puzzle;
-                          return (
-                            // A row selects what it describes — both sides of a breach, the stage.
-                            <button
+          {/* Held still while something is dragged on the canvas (./hold-while-dragging.tsx). */}
+          <HoldWhileDragging area={columnRef}>
+            {listOpen ? (
+              <PanelList title="בתוכנית" count={planTotal}>
+                {PLANES.map(({ id, label }) => {
+                  const rows = planRows[id];
+                  // A hidden plane is listed but not picked from: nothing hidden enters a selection
+                  // (pickMany). What stands on a table goes with the tables.
+                  const shown = layerVisible[id] && (id !== "table" || layerVisible.tables);
+                  const Icon = PLANE_ICON[id];
+                  return (
+                    <div key={id}>
+                      <PanelListHeading
+                        label={label}
+                        count={rows.reduce((n, r) => n + r.count, 0)}
+                        active={activeLayer === id}
+                        visible={layerVisible[id]}
+                        onActivate={() => setActiveLayer((cur) => (cur === id ? null : id))}
+                        onToggleVisible={() => setLayerVisible((v) => ({ ...v, [id]: !v[id] }))}
+                      />
+                      {/* Working in one plane lists that plane alone (the board's "פעילה"). */}
+                      {(activeLayer === null || activeLayer === id) && rows.length > 0 && (
+                        <div className={shown ? undefined : "opacity-50"}>
+                          {rows.map((row) => (
+                            <PanelListRow
                               key={row.key}
-                              type="button"
-                              onClick={() => pickMany(row.refs, false)}
-                              className="flex w-full items-start gap-2 rounded-sm px-1.5 py-1.5 text-start text-[13px] leading-snug text-ink transition-colors hover:bg-inset"
-                            >
-                              <RowIcon aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn-ink" strokeWidth={1.75} />
-                              <span className="min-w-0 flex-1">{row.text}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                              glyph={
+                                row.swatch ? (
+                                  <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: row.swatch }} />
+                                ) : (
+                                  <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+                                )
+                              }
+                              label={row.label}
+                              meta={rowFigure(row)}
+                              badge={row.venue ? "של המקום" : undefined}
+                              selected={row.refs.every((r) => selectedKeys.has(`${r.kind}:${r.id}`))}
+                              // Every one of them (D11) — a block as the one table it is.
+                              onClick={shown ? () => pickMany(row.refs, false) : undefined}
+                              disabled={behindScrim(row.refs)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {planTotal === 0 && <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">התוכנית עדיין ריקה — בוחרים פריט בקטלוג ולוחצים על התוכנית, או גוררים אותו.</p>}
+              </PanelList>
+            ) : (
+              <PanelListFolded
+                icon={Layers}
+                title="בתוכנית"
+                count={planTotal}
+                crumb={fillProps ? (fillProps.state.editing ? "עריכת במה" : "מילוי במות") : listCrumb(planRows, selected)}
+                badge={
+                  checkRows.length > 0 ? (
+                    <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
+                      <TriangleAlert aria-hidden className="h-3 w-3" strokeWidth={2} />
+                      {checkRows.length}
+                    </span>
+                  ) : undefined
+                }
+                onOpen={() => setUnfoldedFor(selected)}
+              />
+            )}
+            {/* The fill tool with its area drawn: its groups, in place of the selection's and the
+                sketch's own, under the folded list — the same props as its quick bar. */}
+            {fillProps && <StageFillPanel part="groups" {...fillProps} />}
+            {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
+                layer scope and nothing selected, the scope's). The same props as the quick bar. */}
+            {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
+            {/* Nothing selected: the sketch's own groups — who it seats, what is wrong with it, how its
+                tables are numbered, the saved sketches, and what this event took out of the venue. The
+                selection's groups (they arrive with the quick bar) take this place otherwise. */}
+            {selected.length === 0 && !fillProps && (
+              <PanelGroups
+                kind="studio:none"
+                title="הסקיצה"
+                sub={plan.zones.map((z) => z.zone.name).filter(Boolean).join(" · ") || undefined}
+                defaultOpen={["seating", "checks"]}
+                groups={[
+                  {
+                    key: "seating",
+                    icon: Armchair,
+                    title: "ישיבה",
+                    summary: `${seating.seated}/${seating.tables + seating.benches} מושבים`,
+                    body: (
+                      <>
+                        <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches} />
+                        {seating.benches > 0 && <FactRow label="מהם על בנקטים" value={seating.benches} />}
+                        <FactRow label="שולחנות" value={doc.tables.length} />
+                      </>
                     ),
-                },
-                {
-                  key: "numbering",
-                  icon: ListOrdered,
-                  title: "מספור",
-                  summary: renumbering.length > 0 ? `${renumbering.length} לא לפי הסדר` : doc.tables.length > 0 ? "לפי הסדר" : "אין שולחנות",
-                  body: <NumberingFields options={numbering} onChange={setNumbering} onRenumber={renumberAll} count={renumbering.length} canRenumber={renumbering.length > 0} />,
-                },
-                {
-                  key: "sketches",
-                  icon: LayoutTemplate,
-                  title: "סקיצות שמורות",
-                  summary: sketches.length > 0 ? `${sketches.length} שמורות` : "אין עדיין",
-                  body: (
-                    <SketchList
-                      sketches={sketches}
-                      sketchEmpty={doc.tables.length + doc.placements.length === 0}
-                      onSave={(name) => void saveSketch(name)}
-                      onLoad={(id, how) => void loadSketch(id, how)}
-                      onDelete={(id) => void deleteSketch(id)}
-                      onPhoto={(id, file) => void sketchPhoto(id, file)}
-                    />
-                  ),
-                },
-                ...(removedVenueFeatures.length > 0
-                  ? [
-                      {
-                        key: "removed",
-                        icon: ArchiveRestore,
-                        title: "פריטי מתחם שהוסרו",
-                        summary: removedVenueFeatures.length === 1 ? removedVenueFeatures[0].label : `${removedVenueFeatures.length} פריטים`,
-                        body: <RemovedFeaturesList features={removedVenueFeatures} onRestore={restoreFeatures} />,
-                      } satisfies PanelGroup,
-                    ]
-                  : []),
-              ]}
-            />
-          )}
+                  },
+                  {
+                    key: "checks",
+                    icon: checkRows.length > 0 ? TriangleAlert : ShieldAlert,
+                    title: "בדיקות",
+                    warn: checkRows.length > 0,
+                    summary: checkRows.length === 0 ? "הכול תקין" : checkRows.length === 1 ? "בעיה אחת" : `${checkRows.length} בעיות`,
+                    body:
+                      checkRows.length === 0 ? (
+                        <Note>אין חריגה ממרחק ביטחון, ולכל במה יש בקטלוג כל הפלטות.</Note>
+                      ) : (
+                        <div className="-mx-1.5 flex flex-col gap-px">
+                          {checkRows.map((row) => {
+                            const RowIcon = row.kind === "clearance" ? ArrowLeftRight : Puzzle;
+                            return (
+                              // A row selects what it describes — both sides of a breach, the stage.
+                              <button
+                                key={row.key}
+                                type="button"
+                                onClick={() => pickMany(row.refs, false)}
+                                className="flex w-full items-start gap-2 rounded-sm px-1.5 py-1.5 text-start text-[13px] leading-snug text-ink transition-colors hover:bg-inset"
+                              >
+                                <RowIcon aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn-ink" strokeWidth={1.75} />
+                                <span className="min-w-0 flex-1">{row.text}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ),
+                  },
+                  {
+                    key: "numbering",
+                    icon: ListOrdered,
+                    title: "מספור",
+                    summary: renumbering.length > 0 ? `${renumbering.length} לא לפי הסדר` : doc.tables.length > 0 ? "לפי הסדר" : "אין שולחנות",
+                    body: <NumberingFields options={numbering} onChange={setNumbering} onRenumber={renumberAll} count={renumbering.length} canRenumber={renumbering.length > 0} />,
+                  },
+                  {
+                    key: "sketches",
+                    icon: LayoutTemplate,
+                    title: "סקיצות שמורות",
+                    summary: sketches.length > 0 ? `${sketches.length} שמורות` : "אין עדיין",
+                    body: (
+                      <SketchList
+                        sketches={sketches}
+                        sketchEmpty={doc.tables.length + doc.placements.length === 0}
+                        onSave={(name) => void saveSketch(name)}
+                        onLoad={(id, how) => void loadSketch(id, how)}
+                        onDelete={(id) => void deleteSketch(id)}
+                        onPhoto={(id, file) => void sketchPhoto(id, file)}
+                      />
+                    ),
+                  },
+                  ...(removedVenueFeatures.length > 0
+                    ? [
+                        {
+                          key: "removed",
+                          icon: ArchiveRestore,
+                          title: "פריטי מתחם שהוסרו",
+                          summary: removedVenueFeatures.length === 1 ? removedVenueFeatures[0].label : `${removedVenueFeatures.length} פריטים`,
+                          body: <RemovedFeaturesList features={removedVenueFeatures} onRestore={restoreFeatures} />,
+                        } satisfies PanelGroup,
+                      ]
+                    : []),
+                ]}
+              />
+            )}
+          </HoldWhileDragging>
         </EndPanel>
       </div>
       <ProductDrawer

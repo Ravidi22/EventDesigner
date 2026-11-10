@@ -70,6 +70,16 @@ export const CHAIR_OFFSET_MM = CHAIR_D_MM / 2 - CHAIR_TUCK_MM;
 
 const CURVE_STEPS = 16; // per bowed edge of an outline
 const CIRCLE_STEPS = 96; // fine enough that a sampled circle is a circle at any zoom a hall is seen at
+/** Within this of a vertex a seat is ON it (pointOnSide) — far above float noise, far below a mm. */
+const VERTEX_TIE_MM = 1e-6;
+
+/** A chair's SVG transform in its table's frame, every number to a thousandth of a mm (or degree):
+ *  the one string every surface that draws a ring writes, so the server's HTML and the browser's
+ *  first render print the same text (a hydration mismatch otherwise). */
+export function seatTransform(seat: Seat): string {
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  return `translate(${r3(seat.x)} ${r3(seat.y)}) rotate(${r3(seat.facingDeg)})`;
+}
 
 /** One side of a table as the seating sees it — a run of edge somebody could sit along.
  *
@@ -159,7 +169,11 @@ function pointOnSide(side: SeatSide, along: number): { on: Point; nx: number; ny
   const { pts, lengths, orient } = side;
   let seg = 0;
   let walked = 0;
-  while (seg < lengths.length - 1 && walked + lengths[seg] < along) {
+  // A seat that falls EXACTLY on a vertex (a round's 16 chairs land on every sixth of its 96 steps)
+  // stays on the segment it reached the vertex by. Compared without a tolerance, the last digit of
+  // the summed lengths decided it — and Node and the browser decided differently, so a round's ring
+  // was drawn 3.75° apart on the server and the client (a hydration mismatch on every load).
+  while (seg < lengths.length - 1 && walked + lengths[seg] < along - VERTEX_TIE_MM) {
     walked += lengths[seg];
     seg++;
   }
@@ -506,6 +520,17 @@ if (isMain(import.meta.url)) {
   const angles = round.map((s) => (Math.atan2(s.y, s.x) * 180) / Math.PI).map((a) => (a + 360) % 360).sort((a, b) => a - b);
   const steps = angles.map((a, i) => (i === 0 ? a + 360 - angles[angles.length - 1] : a - angles[i - 1]));
   assert(steps.every((d) => near(d, 30, 1)), "…and they are evenly spaced round it");
+  // A 2.44 round seating sixteen puts every chair EXACTLY on one of its 96 vertices. Each takes the
+  // segment it reached the vertex by — the same one for all sixteen, so the ring is one ring, and
+  // the same on the server and in the browser (which decided a bare float tie differently).
+  const sixteen = seatsAround({ kind: "circle", diameterMm: 2440 }, 16);
+  const off = sixteen.map((s, k) => {
+    const vertex = (k + 0.5) * 22.5;
+    const normal = ((((s.facingDeg + 180) % 360) + 360) % 360);
+    return Math.round((normal - vertex) * 1000) / 1000;
+  });
+  assert(off.every((d) => d === -1.875), `every chair on a vertex takes the segment before it (${off.join(", ")})`);
+  assert(seatTransform({ x: 1.23456, y: -0.0004, facingDeg: 90.00049 }) === "translate(1.235 0) rotate(90)", "the transform string is rounded to a thousandth");
   // Facing the table: the chair's heading points back at the centre.
   assert(
     round.every((s) => {

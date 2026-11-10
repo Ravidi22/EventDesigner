@@ -1,6 +1,7 @@
 "use client";
 
-import { Blocks, Check, Copy, Expand, FlipHorizontal2, Grid2x2Plus, LayoutTemplate, Move, PackagePlus, PenLine, Pin, PinOff, RotateCw, Ruler, Square, Squircle, Trash2, TriangleAlert, X } from "lucide-react";
+import { Blocks, Check, Copy, Expand, FlipHorizontal2, Grid2x2Plus, LayoutTemplate, Move, PackagePlus, PenLine, Pin, PinOff, RotateCw, Ruler, Square, Squircle, Trash2, TriangleAlert } from "lucide-react";
+import { useState } from "react";
 import type { Point } from "@/lib/studio/hall";
 import type { StagePiece } from "@/lib/design-document/types";
 import { Select } from "@/components/select";
@@ -15,6 +16,7 @@ import { NumberField } from "@/components/number-field";
 import { Menu } from "@/components/menu";
 import { PanelGroups, panelGroup as G, type PanelGroup } from "@/components/end-panel";
 import { SegmentedToggle } from "@/components/plan-canvas";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Segmented, segmentClass } from "@/components/segmented";
 
 // "מילוי במות" — the second half of the area tool. The area is drawn on the canvas
@@ -261,7 +263,6 @@ export function StageFillPanel({
             "חסר בקטלוג",
             missingSummary(missing),
             <MissingPieces
-              bare
               missing={missing}
               types={types}
               chosen={state.chosen}
@@ -555,37 +556,54 @@ export function StageDrawBar({
   // The instruction for the shape chosen — what each option's tooltip used to say — and the
   // templates as the other way in.
   const how = SHAPES.find(([v]) => v === shape)?.[2] ?? SHAPES[0][2];
+  // A saved template is gone for good once deleted (studio settings, no undo): every delete asks the
+  // same question first, the inline bin's and the menu's (components/confirm-dialog.tsx).
+  const [asking, setAsking] = useState<{ id: string; name: string } | null>(null);
   return (
-    <Bar icon={Grid2x2Plus} title="במה חדשה" facts={templates.length > 0 ? `${how} — או במה מתבנית` : how}>
-      <SegmentedToggle value={shape} options={SHAPES.map(([value, label]) => ({ value, label }))} onChange={onShape} ariaLabel="צורת הבמה" />
-      {templates.length > 0 && <QuickSep />}
-      {templates.length > TEMPLATES_INLINE ? (
-        <Menu
-          trigger="pill"
-          icon={LayoutTemplate}
-          label="תבניות"
-          side="top"
-          items={[
-            ...templates.map((t) => ({ label: t.name, icon: LayoutTemplate, onSelect: () => onTemplate(t.id) })),
-            ...templates.map((t, i) => ({ label: `מחיקת התבנית ״${t.name}״`, icon: Trash2, danger: true, separated: i === 0, onSelect: () => onRemoveTemplate(t.id) })),
-          ]}
-        />
-      ) : (
-        templates.map((t) => (
-          <span key={t.id} className="inline-flex items-center rounded-md border border-border">
-            <Button size="sm" variant="ghost" onClick={() => onTemplate(t.id)}>
-              {t.name}
-            </Button>
-            <BarButton icon={X} label={`מחיקת התבנית ״${t.name}״`} onClick={() => onRemoveTemplate(t.id)} />
-          </span>
-        ))
-      )}
-      {/* The pick bar's narrow floor (see there): with templates beside the shapes, a 48px one sent
-          ביטול to a row of its own on a 1440 screen. */}
-      <div className="min-w-3 flex-1" />
-      <Button size="sm" variant="ghost" onClick={onClose} title="יציאה מהכלי · Esc">
-        ביטול
-      </Button>
-    </Bar>
+    <>
+      <Bar icon={Grid2x2Plus} title="במה חדשה" facts={templates.length > 0 ? `${how} — או במה מתבנית` : how}>
+        <SegmentedToggle value={shape} options={SHAPES.map(([value, label]) => ({ value, label }))} onChange={onShape} ariaLabel="צורת הבמה" />
+        {templates.length > 0 && <QuickSep />}
+        {templates.length > TEMPLATES_INLINE ? (
+          <Menu
+            trigger="pill"
+            icon={LayoutTemplate}
+            label="תבניות"
+            side="top"
+            items={[
+              ...templates.map((t) => ({ label: t.name, icon: LayoutTemplate, onSelect: () => onTemplate(t.id) })),
+              ...templates.map((t, i) => ({ label: `מחיקת התבנית ״${t.name}״`, icon: Trash2, danger: true, separated: i === 0, onSelect: () => setAsking(t) })),
+            ]}
+          />
+        ) : (
+          templates.map((t) => (
+            <span key={t.id} className="inline-flex items-center rounded-md border border-border">
+              <Button size="sm" variant="ghost" onClick={() => onTemplate(t.id)}>
+                {t.name}
+              </Button>
+              {/* A bin, never an ✕ — in a popup an ✕ means close. */}
+              <BarButton icon={Trash2} label={`מחיקת התבנית ״${t.name}״`} onClick={() => setAsking(t)} />
+            </span>
+          ))
+        )}
+        {/* The pick bar's narrow floor (see there): with templates beside the shapes, a 48px one sent
+            ביטול to a row of its own on a 1440 screen. */}
+        <div className="min-w-3 flex-1" />
+        <Button size="sm" variant="ghost" onClick={onClose} title="יציאה מהכלי · Esc">
+          ביטול
+        </Button>
+      </Bar>
+      <ConfirmDialog
+        open={asking !== null}
+        title={`למחוק את התבנית ״${asking?.name ?? ""}״?`}
+        body="התבנית תימחק מהסטודיו. במות שכבר הונחו ממנה נשארות כמו שהן."
+        confirmLabel="מחיקה"
+        onConfirm={() => {
+          if (asking) onRemoveTemplate(asking.id);
+          setAsking(null);
+        }}
+        onClose={() => setAsking(null)}
+      />
+    </>
   );
 }
