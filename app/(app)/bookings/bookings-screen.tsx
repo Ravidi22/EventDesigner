@@ -280,6 +280,12 @@ export function BookingsScreen({
         defaultDate={sitting?.date ?? ""}
         defaultEventId={sitting?.eventId}
         events={bookings.map((b) => b.event)}
+        appointments={appointments}
+        lookOf={(e) => {
+          const b = bookings.find((x) => x.event.id === e.id);
+          const st = b ? statusOf(b) : "inquiry";
+          return { label: BOOKING_STATUS_LABEL[st], tone: BOOKING_STATUS_TONE[st] };
+        }}
         onSave={save}
         onDelete={remove}
         onClose={() => setSitting(null)}

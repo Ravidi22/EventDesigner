@@ -3,10 +3,10 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EventSummary } from "@/lib/events/types";
-import { formatEventDate } from "@/lib/events/types";
+import { markEventLost } from "@/lib/events/actions";
 import { clearActiveEventId, loadActiveEventId, setActiveEventId } from "@/lib/events/storage";
 import { useEvents } from "@/lib/events/use-events";
-import type { Appointment } from "@/lib/appointments/types";
+import type { Appointment, AppointmentKind } from "@/lib/appointments/types";
 import { useAppointments } from "@/lib/appointments/use-appointments";
 import type { BusyBlock } from "@/lib/google/types";
 import { useBusy } from "@/lib/google/use-busy";
@@ -17,10 +17,11 @@ import { TodayFocus } from "./today-focus";
 import { EventDetailDrawer } from "./event-detail-drawer";
 import { VenueInvites } from "./venue-invites";
 import type { StudioSideLink } from "@/lib/event-links/types";
-import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EventDialog } from "@/components/event-dialog";
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { AppointmentDialog } from "./appointment-dialog";
+import { EventDeleteDialog } from "./event-delete-dialog";
+import { quickAddItems } from "./quick-add";
 import { toISODate } from "./dashboard-view-utils";
 
 // F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved off this screen — first
@@ -92,7 +93,12 @@ export function DashboardScreen({
     date: string;
     /** Pre-attach the new meeting to this event — set when booking from an event's own drawer. */
     eventId?: string;
+    /** The kind a new entry starts as — the quick-add menu's row. */
+    kind?: AppointmentKind;
   } | null>(null);
+  // A new event on a day the calendar's quick-add was opened on (board 4f) — the shell's own
+  // "+ יצירת אירוע חדש" opens the same dialog without a date.
+  const [creatingOn, setCreatingOn] = useState<string | null>(null);
 
   // An event names its venue directly now (it occupies zones OF a venue), so scoping to the
   // sidebar's active venue is a field read — no hall→venue lookup table in between.
@@ -137,7 +143,7 @@ export function DashboardScreen({
     [appointments, selectedEvent],
   );
 
-  const bookOn = (iso: string) => setBooking({ editing: null, date: iso });
+  const bookOn = (iso: string, kind?: AppointmentKind) => setBooking({ editing: null, date: iso, kind });
   const bookToday = () => bookOn(toISODate(new Date()));
   const editAppointment = (a: Appointment) => setBooking({ editing: a, date: a.date });
 
@@ -195,7 +201,13 @@ export function DashboardScreen({
         busy={busy}
         onOpenEvent={setSelectedEvent}
         onOpenAppointment={editAppointment}
-        onCreateAppointment={bookOn}
+        addItems={(iso) =>
+          quickAddItems("studio", {
+            kind: (k) => bookOn(iso, k),
+            other: () => bookOn(iso),
+            event: () => setCreatingOn(iso),
+          })
+        }
       />
 
       <EventDetailDrawer
@@ -211,18 +223,16 @@ export function DashboardScreen({
         onEventChanged={() => void reloadEvents()}
       />
 
-      <ConfirmDialog
-        open={!!deleting}
-        title={`למחוק את האירוע של ${deleting?.clientName ?? ""}?`}
-        body={
-          <>
-            {deleting?.date ? `האירוע מתאריך ${formatEventDate(deleting.date)} יימחק לצמיתות. ` : "האירוע יימחק לצמיתות. "}
-            הסקיצה, הצעות המחיר, הפגישות והתמונות שסומנו נמחקים איתו, ולא ניתן לשחזר אותם. הוצאות
-            שנרשמו נשמרות, בלי שיוך לאירוע.
-          </>
-        }
-        confirmLabel="מחיקת האירוע"
+      <EventDeleteDialog
+        event={deleting}
         onConfirm={confirmDelete}
+        onMarkLost={async () => {
+          const target = deleting;
+          if (!target) return;
+          await markEventLost(target.id);
+          setDeleting(null);
+          await reloadEvents();
+        }}
         onClose={() => setDeleting(null)}
       />
 
@@ -233,13 +243,20 @@ export function DashboardScreen({
         onSaved={() => void reloadEvents()}
       />
 
+      <EventDialog open={creatingOn !== null} defaultDate={creatingOn ?? undefined} onClose={() => setCreatingOn(null)} />
+
       <AppointmentDialog
         open={booking !== null}
         appointment={booking?.editing ?? null}
         defaultDate={booking?.date ?? ""}
         defaultEventId={booking?.eventId}
+        defaultKind={booking?.kind}
         defaultVenueId={activeVenueId ?? undefined}
         events={visibleEvents}
+        appointments={appointments}
+        busyOn={(d) => busy.byDate.get(d) ?? []}
+        venueName={activeVenueName}
+        googleSync={googleConnected}
         onSave={save}
         onDelete={remove}
         onClose={() => setBooking(null)}

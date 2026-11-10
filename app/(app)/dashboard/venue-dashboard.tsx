@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CalendarClock, CalendarHeart } from "lucide-react";
 import { fetchBookings, type Booking } from "@/lib/hosting/actions";
 import { BOOKING_STATUS_LABEL, BOOKING_STATUS_TONE, bookingStatus, type BookingStatus } from "@/lib/hosting/types";
 import type { Dish, MenuPackage } from "@/lib/menus/types";
-import type { Appointment } from "@/lib/appointments/types";
+import type { Appointment, AppointmentKind } from "@/lib/appointments/types";
 import { useAppointments } from "@/lib/appointments/use-appointments";
 import type { BusyBlock } from "@/lib/google/types";
 import { useBusy } from "@/lib/google/use-busy";
@@ -21,6 +20,7 @@ import { AppointmentDialog } from "./appointment-dialog";
 import { CalendarCard, type EventLook } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
 import { toISODate } from "./dashboard-view-utils";
+import { quickAddItems } from "./quick-add";
 
 
 /**
@@ -59,7 +59,7 @@ export function VenueDashboard({
   const [editing, setEditing] = useState<{ booking: Booking | null; seed?: BookingSeed } | null>(null);
   const [deleting, setDeleting] = useState<Booking | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [sitting, setSitting] = useState<{ editing: Appointment | null; date: string; eventId?: string } | null>(null);
+  const [sitting, setSitting] = useState<{ editing: Appointment | null; date: string; eventId?: string; kind?: AppointmentKind } | null>(null);
   const today = toISODate(new Date());
 
   // The header's "+ יצירת אירוע חדש" (components/app-shell.tsx) opens the booking dialog here.
@@ -132,13 +132,15 @@ export function VenueDashboard({
         busy={busy}
         onOpenEvent={(e) => setOpenId(e.id)}
         onOpenAppointment={editSitting}
-        onCreateAppointment={(iso) => bookOn(iso)}
         look={look}
         summary={summary}
-        addItems={(iso) => [
-          { label: "אירוע באולם", icon: CalendarHeart, onSelect: () => setEditing({ booking: null, seed: { date: iso } }) },
-          { label: "פגישה או טעימה", icon: CalendarClock, onSelect: () => bookOn(iso) },
-        ]}
+        addItems={(iso) =>
+          quickAddItems("venue", {
+            kind: (k) => setSitting({ editing: null, date: iso, kind: k }),
+            other: () => bookOn(iso),
+            event: () => setEditing({ booking: null, seed: { date: iso } }),
+          })
+        }
       />
 
       <BookingDrawer
@@ -192,8 +194,14 @@ export function VenueDashboard({
         appointment={sitting?.editing ?? null}
         defaultDate={sitting?.date ?? ""}
         defaultEventId={sitting?.eventId}
+        defaultKind={sitting?.kind}
         defaultVenueId={activeVenueId ?? undefined}
         events={events}
+        appointments={appointments}
+        busyOn={(d) => busy.byDate.get(d) ?? []}
+        venueName={venues.find((v) => v.id === activeVenueId)?.name}
+        googleSync={googleConnected}
+        lookOf={look}
         onSave={save}
         onDelete={remove}
         onClose={() => setSitting(null)}

@@ -59,6 +59,21 @@ export interface EventSummary {
   createdAt: number;
 }
 
+/** What deleting an event would take with it, counted — the delete question reads these rather than
+ *  reciting a paragraph of what MIGHT go (2026-11-10, the "Modals & popups" board, 4c: "3 פגישות"
+ *  says more than "הפגישות"). `expenses` are the rows that SURVIVE, unlinked (`on delete set null`);
+ *  `billingDocuments` > 0 means the delete will be refused — they are the studio's books. */
+export interface EventFootprint {
+  drawing: boolean;
+  quotes: number;
+  appointments: number;
+  likedImages: number;
+  /** Who the sketch is shared with — a client's name, else their address. */
+  clients: string[];
+  expenses: number;
+  billingDocuments: number;
+}
+
 /** The stage statuses, plus the facts about the event that outrank whatever stage it is parked on.
  *
  *  `confirmed` and `lost` sit ABOVE `sent` in eventStatus()'s ladder, because once a client has

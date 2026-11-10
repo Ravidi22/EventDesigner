@@ -101,6 +101,8 @@
     "check:bar-draw": "tsx lib/catalog/bar-draw.ts",
     "check:shades": "tsx lib/catalog/shades.ts",
     "check:meeting": "tsx lib/meeting/steps.ts",
+    "check:availability": "tsx lib/events/availability.ts",
+    "check:day-strip": "tsx lib/appointments/day-strip.ts",
     "check:zone-selection": "tsx lib/events/zone-selection.ts",
     "check:standard": "tsx lib/catalog/standard/items.ts && tsx lib/catalog/standard/id.ts",
     "check:built-in": "tsx lib/catalog/built-in.ts && tsx lib/catalog/standard/built-ins.ts",
