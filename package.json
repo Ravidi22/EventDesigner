@@ -20,6 +20,7 @@
     "check:element": "tsx lib/element/geometry.ts",
     "check:revolve": "tsx lib/element/revolve.ts",
     "check:elevation-view": "tsx lib/element/elevation.ts",
+    "check:front": "tsx lib/element/front.ts",
     "check:chandelier": "tsx lib/catalog/chandelier.ts",
     "check:chuppah": "tsx lib/catalog/chuppah.ts",
     "check:element-parity": "tsx lib/element/parity.ts",
