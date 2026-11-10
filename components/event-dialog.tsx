@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { reachStep } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import { EventForm } from "./event-form";
+import { MODAL_CLASS } from "./modal-frame";
 
 /**
  * Open a NEW event from wherever you are, then walk straight into the meeting it starts.
@@ -21,12 +22,16 @@ import { EventForm } from "./event-form";
  * Handed an `event`, it EDITS that one in place instead — the dashboard's event drawer opens it for
  * "עריכת פרטי האירוע", so fixing a phone number no longer means walking into the client-facing
  * stepper. It saves, closes and tells the caller; it goes nowhere.
+ *
+ * `defaultDate` starts a NEW event on a day — the calendar's "אירוע חדש בתאריך הזה". Ignored when
+ * editing: an event that exists has its own date.
  */
 export function EventDialog({
   open,
   onClose,
   event = null,
   onSaved,
+  defaultDate,
 }: {
   open: boolean;
   onClose: () => void;
@@ -34,6 +39,8 @@ export function EventDialog({
   event?: EventSummary | null;
   /** Edit only: the saved row, so the caller can re-read its list. */
   onSaved?: (ev: EventSummary) => void;
+  /** Create only: the day the new event is on (ISO yyyy-mm-dd). */
+  defaultDate?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const router = useRouter();
@@ -55,16 +62,17 @@ export function EventDialog({
       // Tailwind display class outranks it, so the dialog renders permanently, in normal flow,
       // wherever it happens to sit in the tree. See app/(app)/dashboard/appointment-dialog.tsx.
       //
-      // `max-h-none` clears the UA's own cap so the form's is the only one. No `overflow-hidden`:
-      // the body already scrolls, and a second clip is one more edge for the date popover to die
-      // against.
-      className="modal m-auto max-h-none w-[92vw] max-w-2xl rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
+      // The frame's classes (components/modal-frame.tsx) at the brief's width. Its `max-h-none`
+      // clears the UA's own cap so the form's is the only one. No `overflow-hidden`: the body
+      // already scrolls, and a second clip is one more edge for the date popover to die against.
+      className={`${MODAL_CLASS} w-[92vw] max-w-2xl`}
     >
       {/* Mounted only while open, so every opening starts on a blank form — the dialog element
           itself stays put for showModal(), but its contents do not survive a close. */}
       {open && (
         <EventForm
           event={event}
+          defaultDate={event ? undefined : defaultDate}
           onCancel={onClose}
           submitLabel={event ? "שמירה" : undefined}
           onSaved={async (ev) => {
