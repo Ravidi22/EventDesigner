@@ -178,6 +178,7 @@ function turnPart(p: Part, t: Transform, deg: number): Part {
     case "box":
     case "extrude":
     case "plane":
+    case "panel":
     case "cylinder":
       return { ...p, at, rotDeg: (p.rotDeg ?? 0) + deg };
     case "ribbon":

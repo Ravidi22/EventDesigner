@@ -137,7 +137,23 @@ export type Part =
    *  ceilingDrapeBody): a GRID of points, rows × columns (every row the same length), in the part's
    *  frame about `at`. The builder works out every point's sag; the viewer only stitches the grid into
    *  a smooth surface seen from both faces. */
-  | { shape: "sheet"; rows: Vec3[][]; at: Vec3; material?: MaterialRef };
+  | { shape: "sheet"; rows: Vec3[][]; at: Vec3; material?: MaterialRef }
+  /** A FRONT shape (lib/element/front.ts): its FACE — `face` outlines in the face's own frame, x
+   *  across about its middle, y = −up about its middle, `widthMm` × `faceHeightMm` the face's box —
+   *  pushed back `thicknessMm` (the face toward plan +y), bent `bendDeg` along an arc on the plan
+   *  (lib/element/front.ts panelPoint), turned `rotDeg` on the plan. `at` is the centre of its plan
+   *  band's box, z its bottom. */
+  | {
+      shape: "panel";
+      face: BuiltOutline[];
+      widthMm: number;
+      faceHeightMm: number;
+      thicknessMm: number;
+      bendDeg: number;
+      at: Vec3;
+      rotDeg?: number;
+      material?: MaterialRef;
+    };
 
 /** One leaf card: `size` across, centred at (x, y, z), turned `yawDeg` on the plan and tipped
  *  `pitchDeg` back from upright (0 = a vertical card, 90 = lying flat), showing atlas `tile` (0–3)

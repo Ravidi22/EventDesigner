@@ -45,7 +45,8 @@ import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferG
 import { frondTriangles, lumpField } from "@/lib/scene/organic";
 import { bloomMesh } from "@/lib/scene/flowers";
 import type { Point } from "@/lib/studio/hall";
-import type { BuiltOutline } from "@/lib/studio/footprint";
+import { flattenEdge, type BuiltOutline } from "@/lib/studio/footprint";
+import { bendCuts, clipSlab, panelPoint } from "@/lib/element/front";
 import { absoluteControlPoints } from "@/lib/studio/geometry";
 import { MM_PER_M, toWorld, worldRotationY } from "@/lib/scene/frame";
 import type { BodyNode, MaterialRef, Part, Vec3 } from "@/lib/scene/types";
@@ -205,6 +206,58 @@ function extrudeGeometry(outline: BuiltOutline, h: number, holes?: BuiltOutline[
   } catch {
     return new BufferGeometry();
   }
+}
+
+/** A FRONT shape's panel (lib/scene/types.ts Part "panel"), about its plan band's box centre with
+ *  its bottom at 0: each face outline laid in three's x/y (x across, y up — its y is −up, so it is
+ *  mirrored), extruded `thickness` along +z (the face toward plan +y, which is three's +z) and
+ *  centred on it. A bent one is cut into slabs across (bendCuts), each slab extruded flat and every
+ *  vertex carried onto the arc through panelPoint — the plan's own arithmetic, so the panel stands on
+ *  the band the plan draws. */
+function panelGeometry(part: Extract<Part, { shape: "panel" }>): BufferGeometry {
+  const t = Math.max(1, part.thicknessMm);
+  const lift = m(part.faceHeightMm / 2);
+  const cuts = bendCuts(part.widthMm, part.bendDeg);
+  const flat = cuts.length === 2 && Math.abs(part.bendDeg || 0) < 0.5;
+  const pieces: BufferGeometry[] = [];
+  const extrude = (shape: Shape | null): BufferGeometry | null => {
+    if (!shape) return null;
+    try {
+      const g = new ExtrudeGeometry(shape, { depth: m(t), bevelEnabled: false, curveSegments: CURVE_SEGMENTS });
+      g.clearGroups();
+      g.translate(0, lift, -m(t / 2));
+      return g;
+    } catch {
+      return null;
+    }
+  };
+  for (const o of part.face) {
+    if (flat) {
+      const g = extrude(shapeOf(o, -1));
+      if (g) pieces.push(g);
+      continue;
+    }
+    // The face as a polygon, its curves sampled, then cut across into slabs.
+    const poly = o.outline.flatMap((a, i) => flattenEdge(a, o.outline[(i + 1) % o.outline.length], o.edgeCurves?.[i]).slice(0, -1));
+    for (let k = 0; k < cuts.length - 1; k++) {
+      const slab = clipSlab(poly, cuts[k], cuts[k + 1]);
+      if (slab.length < 3) continue;
+      const g = extrude(shapeOf({ outline: slab }, -1));
+      if (!g) continue;
+      const pos = g.getAttribute("position");
+      for (let i = 0; i < pos.count; i++) {
+        const q = panelPoint(pos.getX(i) * MM_PER_M, pos.getZ(i) * MM_PER_M, part.widthMm, t, part.bendDeg);
+        pos.setX(i, m(q.x));
+        pos.setZ(i, m(q.y));
+      }
+      pos.needsUpdate = true;
+      g.computeVertexNormals();
+      pieces.push(g);
+    }
+  }
+  const out = mergeNonIndexed(pieces);
+  for (const g of pieces) g.dispose();
+  return out;
 }
 
 function latheGeometry(profile: { r: number; z: number }[], segments: number): BufferGeometry {
@@ -638,6 +691,8 @@ export function partGeometry(part: Part): BufferGeometry {
       return ribbonGeometry(part.path, part.h, part.pleatMm, part.amplitudeMm);
     case "sheet":
       return sheetGeometry(part.rows);
+    case "panel":
+      return panelGeometry(part);
   }
 }
 
@@ -882,6 +937,15 @@ export function geometrySignature(body: BodyNode): string {
           num(row.length);
           for (const q of row) v3(q);
         }
+        break;
+      case "panel":
+        num(p.widthMm);
+        num(p.faceHeightMm);
+        num(p.thicknessMm);
+        num(p.bendDeg * 1000);
+        num(p.rotDeg ?? 0);
+        num(p.face.length);
+        for (const o of p.face) outline(o);
         break;
     }
   }

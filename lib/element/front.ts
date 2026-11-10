@@ -12,8 +12,9 @@
 // face is cut to bend it, and the front-only presets (a wave, a petal).
 //
 // Pure. Run: npm run check:front
-import { FRONT_THICK_MM, type Product, type ShapePart } from "@/lib/catalog/types";
-import { frontBand, frontFace, footprintBounds, placedPartOutline, placedPartOutlines, resolveFootprint, rowShapeDims, sampledBounds } from "@/lib/studio/footprint";
+import { FRONT_BEND_MAX_DEG, FRONT_THICK_MM, type Product, type ShapePart } from "@/lib/catalog/types";
+import { frontBand, frontBandOffset, frontFace, footprintBounds, placedPartOutline, placedPartOutlines, resolveFootprint, rowShapeDims, sampledBounds } from "@/lib/studio/footprint";
+import type { Point } from "@/lib/studio/hall";
 import { isMain } from "../self-check";
 
 /** A shape drawn on the front plane. */
@@ -24,6 +25,62 @@ export function hasFront(product: Product): boolean {
   const a = product.appearance;
   if (!a) return false;
   return isFront(a) || (a.parts ?? []).some(isFront);
+}
+
+// ── Standing it in the room ─────────────────────────────────────────────────────────────────────
+
+/** A point of a front panel on the plan: `u` across its mid-line (−W/2 … W/2, left to right as its
+ *  face is seen), `w` through it (−t/2 the back … +t/2 the face), relative to its plan band's BOX
+ *  centre (lib/studio/footprint.ts frontBand) — so the 3D stands each face point exactly on the band
+ *  the plan draws. Flat: (u, w). Bent: on the arc of radius R = W / sweep struck from in front (+ bend)
+ *  or behind (− bend), the face the inner arc of a + bend and the outer of a − one. */
+export function panelPoint(u: number, w: number, widthMm: number, thicknessMm: number, bendDeg: number): Point {
+  const W = Math.max(1, widthMm);
+  const sweep = Math.min(FRONT_BEND_MAX_DEG, Math.abs(bendDeg || 0));
+  if (sweep < 0.5) return { x: u, y: w };
+  const R = W / ((sweep * Math.PI) / 180);
+  const flip = bendDeg < 0;
+  // For a − bend the drawing is the + one mirrored front to back, which turns the face to the back:
+  // w is read the other way round before the mirror.
+  const ww = flip ? -w : w;
+  const r = Math.max(1, R - ww);
+  const a = -Math.PI / 2 + u / R;
+  const p = { x: r * Math.cos(a), y: r * Math.sin(a) };
+  if (flip) p.y = -p.y;
+  const o = frontBandOffset(W, Math.max(1, thicknessMm), bendDeg);
+  return { x: p.x - o.x, y: p.y - o.y };
+}
+
+/** Where a face is cut across to be bent: both ends and a cut every ≤ 10° of sweep (a flat one is
+ *  not cut). Each slab between two cuts is laid flat and its points moved through panelPoint. */
+export function bendCuts(widthMm: number, bendDeg: number): number[] {
+  const W = Math.max(1, widthMm);
+  const sweep = Math.min(FRONT_BEND_MAX_DEG, Math.abs(bendDeg || 0));
+  if (sweep < 0.5) return [-W / 2, W / 2];
+  const n = Math.max(2, Math.ceil(sweep / 10));
+  return Array.from({ length: n + 1 }, (_, k) => -W / 2 + (W * k) / n);
+}
+
+/** A polygon clipped to the slab a ≤ x ≤ b (Sutherland–Hodgman, one side then the other). A concave
+ *  polygon may come back with zero-width bridges along a cut, which a triangulation takes in its stride. */
+export function clipSlab(polygon: readonly Point[], a: number, b: number): Point[] {
+  const clip = (pts: readonly Point[], keep: (p: Point) => boolean, cut: number): Point[] => {
+    const out: Point[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const q = pts[(i + 1) % pts.length];
+      const pin = keep(p);
+      const qin = keep(q);
+      if (pin) out.push(p);
+      if (pin !== qin && q.x !== p.x) {
+        const t = (cut - p.x) / (q.x - p.x);
+        out.push({ x: cut, y: p.y + (q.y - p.y) * t });
+      }
+    }
+    return out;
+  };
+  const lo = clip(polygon, (p) => p.x >= a, a);
+  return lo.length ? clip(lo, (p) => p.x <= b, b) : [];
 }
 
 if (isMain(import.meta.url)) {
@@ -88,6 +145,28 @@ if (isMain(import.meta.url)) {
     const plainRow = { ...row, appearance: { shape: "rect", content: "none" } } as Product;
     assert(JSON.stringify(resolveFootprint(plainRow)) === JSON.stringify({ kind: "rect", widthMm: 4000, depthMm: 30 }), "a plan row is untouched");
     assert(hasFront(row) && !hasFront(plainRow) && hasFront({ ...plainRow, appearance: { shape: "rect", content: "none", parts: [panel] } } as Product), "hasFront: the base or a part");
+    // ── The room: a panel's points, its cuts, a slab ────────────────────────────────────────────
+    const W = 3000;
+    assert(near(panelPoint(0, 0, W, 20, 0).x, 0) && near(panelPoint(W / 2, 10, W, 20, 0).y, 10), "flat: u across, w toward the face");
+    const mid = panelPoint(0, 0, W, 20, 180);
+    const end = panelPoint(W / 2, 0, W, 20, 180);
+    assert(end.y > mid.y + 900, "bent + : the ends come toward the front");
+    const band = sampledBounds([frontBand(W, 20, 180)]);
+    assert(near(Math.abs(end.x) + 10, band.w / 2, 2), `…the bend reaches the band's sides (${end.x} vs ${band.w / 2})`);
+    // Every face point of the bent panel lies on its band: the back middle, the face ends.
+    const bandPts = frontBand(W, 20, 180).outline;
+    const backMid = panelPoint(0, -10, W, 20, 180);
+    assert(bandPts.some((v) => near(v.x, backMid.x, 1) && near(v.y, backMid.y, 1)) || near(backMid.y, band.minY, 1), `the back's middle is the band's back (${backMid.y} vs ${band.minY})`);
+    const faceEnd = panelPoint(W / 2, 10, W, 20, 180);
+    assert(bandPts.some((v) => near(v.x, faceEnd.x, 1) && near(v.y, faceEnd.y, 1)), "the face's end is a corner of the band");
+    const convexFace = panelPoint(0, 10, W, 20, -90);
+    assert(near(convexFace.y, sampledBounds([frontBand(W, 20, -90)]).maxY, 1), "a − bend's face middle is the band's front-most point");
+    assert(bendCuts(W, 0).length === 2 && bendCuts(W, 180).length >= 19, "a cut every 10° of sweep");
+    const sq = [{ x: -10, y: -5 }, { x: 10, y: -5 }, { x: 10, y: 5 }, { x: -10, y: 5 }];
+    const half = clipSlab(sq, 0, 20);
+    assert(near(Math.max(...half.map((p) => p.x)) - Math.min(...half.map((p) => p.x)), 10), "a slab clip keeps x ∈ [a, b]");
+    assert(clipSlab(sq, 30, 40).length === 0, "…and nothing outside it");
+    assert([300, -300, 1].every((b) => Number.isFinite(panelPoint(W / 2, -10, 100, 5000, b).x) && Number.isFinite(panelPoint(W / 2, -10, 100, 5000, b).y)), "extreme bends are finite");
     console.log("front self-check passed");
   }
 }

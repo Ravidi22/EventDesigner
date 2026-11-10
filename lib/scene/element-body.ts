@@ -7,7 +7,7 @@
 //
 // Pure. Run: npm run check:scene-element
 import type { Product } from "@/lib/catalog/types";
-import { buildHollow, footprintBounds, footprintOutlines, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
+import { buildHollow, footprintBounds, footprintOutlines, frontBand, frontFace, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
 import { definitionOf, elementSizeOf } from "@/lib/element/adapter";
 import { revolveProfileMm } from "@/lib/element/revolve";
 import { elementGeometry, flat, sameFootprint, type ElementGeometry, type ResolvedPart } from "@/lib/element/geometry";
@@ -47,6 +47,10 @@ export function elementParts(geometry: ElementGeometry, body: MaterialRef): Part
     // An outline only (a pergola's roof line): the plan's, never the room's.
     if (op.kind === "none") continue;
     const material = partMaterial(p, body);
+    if (op.kind === "panel") {
+      out.push(...panelParts(p, op, material));
+      continue;
+    }
     const h = Math.max(MIN_PART_MM, p.heightMm);
     for (const outline of solids(p)) {
       if (op.kind === "revolve") {
@@ -70,6 +74,34 @@ export function elementParts(geometry: ElementGeometry, body: MaterialRef): Part
     }
   }
   return out;
+}
+
+/** A front shape's panel (lib/element/front.ts): its face pushed back, standing on its plan band —
+ *  the band's own frame found from where its first corner landed in the element's frame (the band is
+ *  turned about its box centre and moved to the part's place, then the lot is centred), so the panel
+ *  stands exactly on what the plan draws. */
+function panelParts(p: ResolvedPart, op: Extract<ResolvedPart["part"]["op"], { kind: "panel" }>, material: MaterialRef | undefined): Part[] {
+  const face = frontFace(p.part.profile.shape, { ...p.part.profile, faceTurnDeg: op.faceTurnDeg });
+  const band = frontBand(face.w, op.thicknessMm, op.bendDeg);
+  const turn = ((p.part.rotation || 0) * Math.PI) / 180;
+  return p.pieces.map((piece) => {
+    const c0 = band.outline[0];
+    const q0 = piece.outline[0];
+    const cx = q0.x - (c0.x * Math.cos(turn) - c0.y * Math.sin(turn));
+    const cy = q0.y - (c0.x * Math.sin(turn) + c0.y * Math.cos(turn));
+    const part: Part = {
+      shape: "panel",
+      face: face.pieces,
+      widthMm: face.w,
+      faceHeightMm: face.h,
+      thicknessMm: op.thicknessMm,
+      bendDeg: op.bendDeg,
+      at: vec3(cx, cy, p.zMm),
+      ...(p.part.rotation ? { rotDeg: p.part.rotation } : {}),
+    };
+    if (material) part.material = material;
+    return part;
+  });
 }
 
 /** The definition's geometry at the size the item is drawn at, when the element model agrees

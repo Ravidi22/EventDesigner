@@ -25,6 +25,7 @@
     "check:chuppah": "tsx lib/catalog/chuppah.ts",
     "check:element-parity": "tsx lib/element/parity.ts",
     "check:scene-element": "tsx lib/scene/element-body.ts",
+    "check:scene-front": "tsx lib/scene/front-check.ts",
     "check:item-scene": "tsx lib/scene/item-scene.ts",
     "parity-sheet": "tsx scripts/parity-sheet.ts",
     "check:label-anchor": "tsx lib/studio/label-anchor.ts",

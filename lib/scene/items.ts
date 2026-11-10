@@ -150,6 +150,7 @@ function turnPart(p: Part, t: Transform, deg: number): Part {
     case "box":
     case "extrude":
     case "plane":
+    case "panel":
       return { ...p, at, rotDeg: (p.rotDeg ?? 0) + deg };
     case "ribbon":
       return { ...p, at, path: p.path.map((q) => turn(q, deg)) };

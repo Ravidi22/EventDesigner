@@ -613,6 +613,22 @@ export function frontFace(shape: MapShape, d: ShapeDims): { pieces: BuiltOutline
  *  come forward; − = convex). `face` names the edges on the front side. A curve is cut into arcs of
  *  at most 90°, each one cubic (bow); the caps are straight. */
 export function frontBand(widthMm: number, thicknessMm: number, bendDeg: number): BuiltOutline {
+  const raw = frontBandRaw(widthMm, thicknessMm, bendDeg);
+  const b = sampledBounds([raw]);
+  return b.cx || b.cy ? { ...raw, outline: raw.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })) } : raw;
+}
+
+/** Where frontBand's box centre stands in the frame its arcs are struck in (the centre of
+ *  curvature; the panel's own middle for a flat one) — what the 3D subtracts so a bent panel stands
+ *  exactly on its plan band (lib/element/front.ts panelPoint). */
+export function frontBandOffset(widthMm: number, thicknessMm: number, bendDeg: number): Point {
+  const b = sampledBounds([frontBandRaw(widthMm, thicknessMm, bendDeg)]);
+  return { x: b.cx, y: b.cy };
+}
+
+/** frontBand before it is centred on its box: a flat band about its middle, a bent one about its
+ *  centre of curvature (mirrored front to back for a − bend). */
+function frontBandRaw(widthMm: number, thicknessMm: number, bendDeg: number): BuiltOutline {
   const W = Math.max(1, widthMm);
   const t = Math.max(1, thicknessMm);
   const sweep = Math.min(FRONT_BEND_MAX_DEG, Math.abs(bendDeg || 0));
@@ -658,13 +674,11 @@ export function frontBand(widthMm: number, thicknessMm: number, bendDeg: number)
   // A − bend is the + bend mirrored front to back: the face is then the OUTER arc.
   const flip = bendDeg < 0;
   const fy = (p: Point): Point => (flip ? { x: p.x, y: -p.y } : p);
-  const mirrored: BuiltOutline = {
+  return {
     outline: outline.map(fy),
     edgeCurves: edgeCurves.map((c) => (c ? { c1: fy(c.c1), c2: fy(c.c2) } : null)),
     face: flip ? Array.from({ length: n }, (_, k) => k) : face,
   };
-  const b = sampledBounds([mirrored]);
-  return { ...mirrored, outline: mirrored.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })) };
 }
 
 /** A front shape's band from its measurements: the face's across extent, its thickness (absent =
