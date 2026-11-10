@@ -5506,6 +5506,7 @@ export function StudioScreen({
     onStyleTables: (ids, style) => batch(ids.map((id) => ({ type: "styleTable" as const, id, style }))),
     onCopy: copy,
     onCut: cut,
+    onSelectItems: (refs) => pickMany(refs, false),
   };
   // While the stage fill tool is out its own bars take the dock (StageDrawBar, StageFillPanel), and
   // the selection's groups stand down with the selection's bar.

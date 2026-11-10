@@ -140,7 +140,7 @@ import { ArrowDownToLine } from "lucide-react";
 import { hangHeightOf, HANG_MAX_MM } from "@/lib/studio/hang";
 import { ceilingUndersideMm } from "@/lib/scene/overhead";
 import type { Point } from "@/lib/studio/hall";
-import type { Selection, SpinMode } from "./canvas-stage";
+import type { Selection, SelectionRef, SpinMode } from "./canvas-stage";
 import type { DeckType, MissingPiece } from "@/lib/studio/stage-fill";
 import type { PieceInfo } from "@/lib/studio/stage-rim";
 import { MissingPieces } from "./missing-pieces";
@@ -615,6 +615,8 @@ export type InspectorProps = {
    *  button duplicates (onDuplicate); this copy can be pasted into another sketch. */
   onCopy?: () => void;
   onCut?: () => void;
+  /** Select these instead — a row of a group that lists things (the items on a table). */
+  onSelectItems?: (refs: SelectionRef[]) => void;
 };
 
 export function Inspector({
@@ -742,6 +744,7 @@ export function Inspector({
   onStyleTables,
   onCopy,
   onCut,
+  onSelectItems,
 }: InspectorProps) {
   // Local to the one bar that offers it — a copy of another table's dressing has exactly one entry
   // point on this screen, so there is no second dialog to keep in sync (contrast the catalog's
@@ -859,20 +862,19 @@ export function Inspector({
           "table",
           TableIcon,
           "שולחן",
-          group.unnumbered ? "ללא מספור" : ltr(`#${group.number ?? 0}`),
-          <>
-            {swap && <SwapPickRow swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />}
-            {!group.unnumbered && (
-              <PanelRow label="מספר שולחן" htmlFor="group-number">
-                <NumberField id="group-number" decimals={0} min={0} value={group.number ?? 0} onChange={(v) => onRenumberGroup(group.id, v)} className="w-20" />
-              </PanelRow>
-            )}
-            {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number) && <DuplicateNumber />}
-            <div className="mt-2">
-              <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
-            </div>
-            <Note>השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו.</Note>
-          </>,
+          numberSummary(group.number ?? 0, !!group.unnumbered),
+          <TableNumberFields
+            idPrefix="group"
+            swap={swap}
+            swapLabel={swap?.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"}
+            onSwap={onSwap}
+            number={group.number ?? 0}
+            unnumbered={!!group.unnumbered}
+            duplicate={!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number)}
+            onNumber={(v) => onRenumberGroup(group.id, v)}
+            onUnnumbered={(off) => onTablesNumbered(group.tableIds, !off)}
+            note="השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו."
+          />,
         ),
         // One block, one chair count and one occupancy. What is typed here is spread back over the
         // tables underneath (chairs evenly; occupancy filling each to its own seat count, in order)
@@ -881,29 +883,18 @@ export function Inspector({
           "seating",
           Armchair,
           "ישיבה",
-          group.seats > 0 ? ltr(`${group.seated}/${group.seats}`) : "ללא כסאות",
-          <>
-            <PanelRow label="כסאות" htmlFor="group-seats">
-              <NumberField id="group-seats" decimals={0} min={0} value={group.seats} onChange={(v) => onGroupSeats(group.id, v)} className="w-20" />
-            </PanelRow>
-            {group.seats > 0 && (
-              <PanelRow label="תפוסה" htmlFor="group-seated">
-                <NumberField id="group-seated" decimals={0} min={0} value={group.seated} onChange={(v) => onGroupSeated(group.id, v)} className="w-20" />
-                <span className={"text-xs " + occupancyInk(group.seated, group.seats)}>מתוך {group.seats}</span>
-              </PanelRow>
-            )}
-            {group.seats > 0 && onChairForSelection && chairOptions().length > 0 && (
-              <PanelRow label="כיסא" stack>
-                <Select
-                  aria-label="סוג הכיסא סביב הבלוק"
-                  value={blockChair === null ? "__mixed" : blockChair}
-                  options={[...(blockChair === null ? [{ value: "__mixed", label: "כיסאות שונים" }] : []), { value: "", label: defaultChairLabel() }, ...chairOptions()]}
-                  onChange={(v) => v !== "__mixed" && onChairForSelection(v || null)}
-                />
-              </PanelRow>
-            )}
-            <Note>הכסאות מסודרים סביב הבלוק כולו ומתחלקים בין השולחנות שבו; התפוסה ממלאת כל שולחן עד מלוא הכסאות שלו.</Note>
-          </>,
+          seatingSummary(group.seated, group.seats),
+          <SeatingFields
+            idPrefix="group"
+            seats={group.seats}
+            seated={group.seated}
+            onSeats={(v) => onGroupSeats(group.id, v)}
+            onSeated={(v) => onGroupSeated(group.id, v)}
+            chair={blockChair}
+            chairLabel="סוג הכיסא סביב הבלוק"
+            onChair={onChairForSelection}
+            note="הכסאות מסודרים סביב הבלוק כולו ומתחלקים בין השולחנות שבו; התפוסה ממלאת כל שולחן עד מלוא הכסאות שלו."
+          />,
         ),
         !!blockCloth &&
           !!onBlockCloth &&
@@ -929,19 +920,7 @@ export function Inspector({
         // relative places. The design pass's only.
         !!onDressTable && !!lead && G("designs", BookmarkPlus, "עיצובי שולחן", "שמירה והחלה", renderDesigns(lead.id)),
         !!onDressTable && !!lead && blockDressed && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(lead.id, undefined, true)),
-        !!lead &&
-          !!onStyleTables &&
-          G(
-            "look",
-            Palette,
-            "מראה",
-            lead.style?.fill ? <Swatch color={lead.style.fill} size={12} /> : "ברירת מחדל",
-            <StyleFields
-              style={lead.style}
-              onChange={(style) => onStyleTables(group.tableIds, style)}
-              strokeWidthDefault={(lead.variantId ? resolve(lead.variantId)?.product.appearance?.style?.strokeWidthPx : undefined) ?? 2.5}
-            />,
-          ),
+        !!lead && !!onStyleTables && tableLookGroup(lead, (style) => onStyleTables(group.tableIds, style)),
       ],
       ["members", "seating"],
     );
@@ -2296,6 +2275,7 @@ export function Inspector({
   // The cloth is the table's surface, so it is edited from the table rather than selected as its own
   // object on the plan — there is nothing to click that isn't the table itself.
   const cloth = coverOn(doc, t.id);
+  const onTable = doc.placements.filter((p) => p.layer === "table" && p.tableId === t.id && p.id !== cloth?.id);
   const seats = t.seats ?? 0;
   const title = tableLabel(doc, t);
   // How full the top is, read off the title row — the group appears only when it overflows.
@@ -2385,78 +2365,66 @@ export function Inspector({
         "table",
         TableIcon,
         "שולחן",
-        t.unnumbered ? "ללא מספור" : ltr(`#${t.number}`),
-        <>
-          {swap?.kind === "tables" && <SwapPickRow swap={swap} onSwap={onSwap} label="סוג שולחן" />}
-          {!t.unnumbered && (
-            <PanelRow label="מספר שולחן" htmlFor="table-number">
-              <NumberField id="table-number" decimals={0} min={0} value={t.number} onChange={(v) => onRenumber(t.id, v)} className="w-20" />
-            </PanelRow>
-          )}
-          {!t.unnumbered && t.number > 0 && duplicateNumbers(doc, benchOf).has(t.number) && <DuplicateNumber />}
-          <div className="mt-2">
-            <UnnumberedSwitch checked={!!t.unnumbered} onChange={(off) => onTablesNumbered([t.id], !off)} />
-          </div>
-          <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש.</Note>
-        </>,
+        numberSummary(t.number, !!t.unnumbered),
+        <TableNumberFields
+          idPrefix="table"
+          swap={swap?.kind === "tables" ? swap : null}
+          swapLabel="סוג שולחן"
+          onSwap={onSwap}
+          number={t.number}
+          unnumbered={!!t.unnumbered}
+          duplicate={!t.unnumbered && t.number > 0 && duplicateNumbers(doc, benchOf).has(t.number)}
+          onNumber={(v) => onRenumber(t.id, v)}
+          onUnnumbered={(off) => onTablesNumbered([t.id], !off)}
+          note="המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש."
+        />,
       ),
       // The chairs on the plan ARE this number — it came from the catalog row when the table was
       // dropped, and a head table that seats six rather than the standard twelve says so here.
-      // Occupancy joins it because they are the same subject; it appears only once there are chairs,
-      // since a field reading 0/0 on a cocktail table nobody sits at is a question with no answer.
       G(
         "seating",
         Armchair,
         "ישיבה",
-        seats > 0 ? ltr(`${t.seated ?? 0}/${seats}`) : "ללא כסאות",
-        <>
-          <PanelRow label="כסאות" htmlFor="table-seats">
-            <NumberField id="table-seats" decimals={0} min={0} value={seats} onChange={(v) => onSeats(t.id, v)} className="w-20" />
-          </PanelRow>
-          {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only
-              names a table's chair where it differs; this is where it is made to differ. */}
-          {seats > 0 && onChair && chairOptions().length > 0 && (
-            <PanelRow label="כיסא" stack>
-              <Select aria-label="סוג הכיסא" value={t.chairVariantId ?? ""} options={[{ value: "", label: defaultChairLabel() }, ...chairOptions()]} onChange={(v) => onChair(t.id, v || null)} />
-            </PanelRow>
-          )}
-          {seats > 0 && (
-            <PanelRow label="תפוסה" htmlFor="table-seated">
-              <NumberField id="table-seated" decimals={0} min={0} value={t.seated ?? 0} onChange={(v) => onSeated(t.id, v)} className="w-20" />
-              <span className={"text-xs " + occupancyInk(t.seated ?? 0, seats)}>מתוך {seats}</span>
-            </PanelRow>
-          )}
+        seatingSummary(t.seated ?? 0, seats),
+        <SeatingFields
+          idPrefix="table"
+          seats={seats}
+          seated={t.seated ?? 0}
+          onSeats={(v) => onSeats(t.id, v)}
+          onSeated={(v) => onSeated(t.id, v)}
+          chair={t.chairVariantId ?? ""}
+          chairLabel="סוג הכיסא"
+          onChair={onChair ? (variantId) => onChair(t.id, variantId) : undefined}
+        >
           {/* Which sides are laid. The catalog row says what a table of this kind does (a head table
               faces the room); a table pushed against a wall on THIS plan says so here, for itself.
               Drawn turned as it stands, so the side against the wall is the side against the wall. */}
-          {seats > 0 && (
-            <div className="mt-2">
-              <SeatSidesPicker
-                footprint={footprint}
-                seats={seats}
-                blocked={tableBlockedSides(t)}
-                rotation={t.rotation}
-                mirrored={t.mirrored}
-                onToggle={(i) => {
-                  const now = tableBlockedSides(t);
-                  onBlockedSides(t.id, now.includes(i) ? now.filter((x) => x !== i) : [...now, i]);
-                }}
-                className="h-40 w-full rounded-md bg-canvas"
-              />
-              <Note>
-                לחיצה על צד חוסמת אותו לישיבה — הכסאות עוברים לצדדים הפתוחים.
-                {t.blockedSides && (
-                  <>
-                    {" "}
-                    <button type="button" onClick={() => onBlockedSides(t.id, null)} className="font-medium text-accent transition-colors hover:text-accent-hover">
-                      חזרה להגדרת הקטלוג
-                    </button>
-                  </>
-                )}
-              </Note>
-            </div>
-          )}
-        </>,
+          <div className="mt-2">
+            <SeatSidesPicker
+              footprint={footprint}
+              seats={seats}
+              blocked={tableBlockedSides(t)}
+              rotation={t.rotation}
+              mirrored={t.mirrored}
+              onToggle={(i) => {
+                const now = tableBlockedSides(t);
+                onBlockedSides(t.id, now.includes(i) ? now.filter((x) => x !== i) : [...now, i]);
+              }}
+              className="h-40 w-full rounded-md bg-canvas"
+            />
+            <Note>
+              לחיצה על צד חוסמת אותו לישיבה — הכסאות עוברים לצדדים הפתוחים.
+              {t.blockedSides && (
+                <>
+                  {" "}
+                  <button type="button" onClick={() => onBlockedSides(t.id, null)} className="font-medium text-accent transition-colors hover:text-accent-hover">
+                    חזרה להגדרת הקטלוג
+                  </button>
+                </>
+              )}
+            </Note>
+          </div>
+        </SeatingFields>,
       ),
       G(
         "size",
@@ -2491,29 +2459,189 @@ export function Inspector({
             onRemove={() => onRemovePlacement(cloth.id)}
           />,
         ),
+      // What stands on it — the cloth is its own group above. A row selects that item. The design
+      // pass's, like the dressing below it: the hall pass does not draw what stands on a table.
+      !!onDressTable &&
+        onTable.length > 0 &&
+        G(
+          "items",
+          Sparkles,
+          "על השולחן",
+          onTable.length === 1 ? "פריט אחד" : `${onTable.length} פריטים`,
+          <TableItems items={onTable} onSelect={onSelectItems ? (id) => onSelectItems([{ kind: "placement", id }]) : undefined} />,
+        ),
       // Dressing: the designs saved from tables before it, and its whole dressing onto others in a
       // pattern. The design pass's — the hall pass lays tables out and does not dress them.
       !!onDressTable && G("designs", BookmarkPlus, "עיצובי שולחן", "שמירה והחלה", renderDesigns(t.id)),
       !!onDressTable && count > 0 && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(t.id)),
-      G(
-        "look",
-        Palette,
-        "מראה",
-        t.style?.fill ? <Swatch color={t.style.fill} size={12} /> : "ברירת מחדל",
-        <StyleFields
-          style={t.style}
-          onChange={(style) => onStyleTable(t.id, style)}
-          // At rest the table is drawn at its catalog row's weight (productStyle, components/footprint-shape.tsx),
-          // so that is the number to show for it — not the canvas's own 2.5 when the row says otherwise.
-          strokeWidthDefault={(t.variantId ? resolve(t.variantId)?.product.appearance?.style?.strokeWidthPx : undefined) ?? 2.5}
-        />,
-      ),
+      tableLookGroup(t, (style) => onStyleTable(t.id, style)),
     ],
     ["seating", "cloth"],
   );
 }
 
 const G = (key: string, icon: LucideIcon, title: string, summary: ReactNode, body: ReactNode, warn = false): PanelGroup => ({ key, icon, title, summary, body, warn });
+
+/** "#4", or "ללא מספור" — a table's (or a block's) ״שולחן״ group read back. */
+function numberSummary(number: number, unnumbered: boolean): ReactNode {
+  return unnumbered ? "ללא מספור" : ltr(`#${number}`);
+}
+
+/** "8/12", or "ללא כסאות" — a ״ישיבה״ group read back. */
+function seatingSummary(seated: number, seats: number): ReactNode {
+  return seats > 0 ? ltr(`${seated}/${seats}`) : "ללא כסאות";
+}
+
+/** What a table (or a block, as the one table it is) is and its number: the type picker, the number
+ *  field — which another unit may share — "ללא מספור", and a note. One body for both. */
+function TableNumberFields({
+  idPrefix,
+  swap,
+  swapLabel,
+  onSwap,
+  number,
+  unnumbered,
+  duplicate,
+  onNumber,
+  onUnnumbered,
+  note,
+}: {
+  idPrefix: string;
+  /** What it could be swapped for; null = no picker. */
+  swap: SwapPanel | null;
+  swapLabel: string;
+  onSwap: (productId: string, all: boolean) => void;
+  number: number;
+  unnumbered: boolean;
+  /** Another unit on the plan shows the same number. */
+  duplicate: boolean;
+  onNumber: (n: number) => void;
+  onUnnumbered: (unnumbered: boolean) => void;
+  note: string;
+}) {
+  return (
+    <>
+      {swap && <SwapPickRow swap={swap} onSwap={onSwap} label={swapLabel} />}
+      {!unnumbered && (
+        <PanelRow label="מספר שולחן" htmlFor={`${idPrefix}-number`}>
+          <NumberField id={`${idPrefix}-number`} decimals={0} min={0} value={number} onChange={onNumber} className="w-20" />
+        </PanelRow>
+      )}
+      {duplicate && <DuplicateNumber />}
+      <div className="mt-2">
+        <UnnumberedSwitch checked={unnumbered} onChange={onUnnumbered} />
+      </div>
+      <Note>{note}</Note>
+    </>
+  );
+}
+
+/** How many sit at a table (or round a block), how many of them are spoken for, and on which chair
+ *  — the chair asked only once there are chairs, and over a block that mixes chairs it says so.
+ *  `children` is what only a lone table has: which of its sides are laid. One body for both. */
+function SeatingFields({
+  idPrefix,
+  seats,
+  seated,
+  onSeats,
+  onSeated,
+  chair,
+  chairLabel,
+  onChair,
+  note,
+  children,
+}: {
+  idPrefix: string;
+  seats: number;
+  seated: number;
+  onSeats: (n: number) => void;
+  onSeated: (n: number) => void;
+  /** The chair round it ("" = the studio's default), null when a block's tables differ. */
+  chair: string | null;
+  chairLabel: string;
+  /** Absent = no chair question. null = the studio's default again. */
+  onChair?: (variantId: string | null) => void;
+  note?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <>
+      <PanelRow label="כסאות" htmlFor={`${idPrefix}-seats`}>
+        <NumberField id={`${idPrefix}-seats`} decimals={0} min={0} value={seats} onChange={onSeats} className="w-20" />
+      </PanelRow>
+      {/* Occupancy only once there are chairs: a field reading 0/0 on a cocktail table nobody sits at
+          is a question with no answer. */}
+      {seats > 0 && (
+        <PanelRow label="תפוסה" htmlFor={`${idPrefix}-seated`}>
+          <NumberField id={`${idPrefix}-seated`} decimals={0} min={0} value={seated} onChange={onSeated} className="w-20" />
+          <span className={"text-xs " + occupancyInk(seated, seats)}>מתוך {seats}</span>
+        </PanelRow>
+      )}
+      {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only names
+          a table's chair where it differs; this is where it is made to differ. */}
+      {seats > 0 && onChair && chairOptions().length > 0 && (
+        <PanelRow label="כיסא" stack>
+          <Select
+            aria-label={chairLabel}
+            value={chair === null ? "__mixed" : chair}
+            options={[...(chair === null ? [{ value: "__mixed", label: "כיסאות שונים" }] : []), { value: "", label: defaultChairLabel() }, ...chairOptions()]}
+            onChange={(v) => v !== "__mixed" && onChair(v || null)}
+          />
+        </PanelRow>
+      )}
+      {seats > 0 && children}
+      {note && <Note>{note}</Note>}
+    </>
+  );
+}
+
+/** A table's (or a block's) ״מראה״: its own look, read back as its fill. At rest a table is drawn at
+ *  its catalog row's weight (productStyle, components/footprint-shape.tsx), so that is the number
+ *  shown for it — not the canvas's own 2.5 when the row says otherwise. */
+function tableLookGroup(table: DesignTable, onChange: (style: ElementStyle | undefined) => void): PanelGroup {
+  return G(
+    "look",
+    Palette,
+    "מראה",
+    table.style?.fill ? <Swatch color={table.style.fill} size={12} /> : "ברירת מחדל",
+    <StyleFields
+      style={table.style}
+      onChange={onChange}
+      strokeWidthDefault={(table.variantId ? resolve(table.variantId)?.product.appearance?.style?.strokeWidthPx : undefined) ?? 2.5}
+    />,
+  );
+}
+
+/** What stands on a table, one row each: its picture's category (or its shade), its name, its shade
+ *  and how many. A click selects it (absent = plain rows). */
+function TableItems({ items, onSelect }: { items: Placement[]; onSelect?: (id: string) => void }) {
+  return (
+    <>
+      <div className="-mx-1.5 flex flex-col gap-px">
+        {items.map((p) => {
+          const r = resolve(p.variantId);
+          const Icon = (r && CATEGORY_BY_ID[r.category]?.icon) || Sparkles;
+          return (
+            <PanelListRow
+              key={p.id}
+              glyph={
+                r?.swatch ? (
+                  <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: r.swatch }} />
+                ) : (
+                  <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+                )
+              }
+              label={r?.product.name ?? "פריט"}
+              meta={[r?.variant?.name, p.quantity > 1 ? `×${p.quantity}` : null].filter(Boolean).join(" · ") || undefined}
+              onClick={onSelect ? () => onSelect(p.id) : undefined}
+            />
+          );
+        })}
+      </div>
+      {onSelect && <Note>לחיצה על פריט בוחרת אותו. להזזה ולסידור על השולחן — הלבשה.</Note>}
+    </>
+  );
+}
 
 /** A table's (or a block's) number and seats, typed in the quick bar. A table out of the numbering
  *  shows "—" and takes nothing — its ״שולחן״ group puts it back. */
