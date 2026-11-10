@@ -280,6 +280,8 @@ export function SceneLights({
   roofedMm,
   shadows,
   fogScale = 1,
+  sky: withSky = true,
+  fog: withFog = true,
 }: {
   mood: Mood;
   bounds: Bounds;
@@ -287,6 +289,12 @@ export function SceneLights({
   shadows: boolean;
   /** Under 1 the fog closes in (a phone hides the far venue sooner). */
   fogScale?: number;
+  /** False: no sky dome — the shape editor's side views draw the room over the canvas's own ground
+   *  (components/scene/ortho-underlay.tsx), and a dome would paint over it. Fixed per viewer. */
+  sky?: boolean;
+  /** False: no fog — an orthographic camera 15 m out would fog the item it is looking at. Fixed per
+   *  viewer (a fog toggled at run time recompiles every lit program). */
+  fog?: boolean;
 }) {
   const invalidate = useThree((s) => s.invalidate);
   const rig = RIGS[mood];
@@ -359,10 +367,12 @@ export function SceneLights({
       <directionalLight ref={sunRef} position={sun.position} color={sunSpec.colour} intensity={sunSpec.intensity} castShadow={shadows} />
       {/* Last of the opaque pass, on the far plane: only the pixels nothing else covered run the sky
           shader. noPick: a double-click focus (scene-camera.tsx) looks through it to the floor. */}
-      <mesh position={[cx, 0, cz]} frustumCulled={false} material={sky} userData={{ noPick: true }} renderOrder={1000}>
-        <sphereGeometry args={[SKY_RADIUS_M, 24, 12]} />
-      </mesh>
-      <fog attach="fog" args={[rig.fog, fogNear, fogFar]} />
+      {withSky && (
+        <mesh position={[cx, 0, cz]} frustumCulled={false} material={sky} userData={{ noPick: true }} renderOrder={1000}>
+          <sphereGeometry args={[SKY_RADIUS_M, 24, 12]} />
+        </mesh>
+      )}
+      {withFog && <fog attach="fog" args={[rig.fog, fogNear, fogFar]} />}
     </>
   );
 }

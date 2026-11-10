@@ -15,6 +15,8 @@ import {
   Cylinder,
   Donut,
   DraftingCompass,
+  Eye,
+  EyeOff,
   FlipHorizontal2,
   FlipVertical2,
   Frame,
@@ -84,10 +86,13 @@ import { EndPanel, PanelGroupsHeader, PanelList, PanelListRow } from "@/componen
 import { ToolGrid, ToolTile, toolTileClass } from "@/components/tool-tile";
 import { ShapeGrid, ShapeIcon } from "@/components/shape-grid";
 import { ElevationView } from "./elevation-view";
+import { ElevationCanvas } from "./elevation-canvas";
+import { ElevationQuickBar } from "./elevation-bar";
+import { elevationNudge, type ElevationView as SideView } from "@/lib/element/elevation";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
 import { ScenePane } from "./scene-pane";
-import { itemScene, itemSceneKey } from "@/lib/scene/item-scene";
+import { itemBaseZ, itemScene, itemSceneKey } from "@/lib/scene/item-scene";
 import { Menu, type MenuItem } from "@/components/menu";
 import { StructureFeatures } from "@/components/venue-plan";
 import { Dim } from "@/components/venue-dims";
@@ -513,15 +518,26 @@ type RailShape = Exclude<MapShape, "custom">;
 const RAIL_SHAPES = PICKER_SHAPES.filter((s): s is RailShape => s !== "custom");
 const isRailShape = (id: string): id is RailShape => (RAIL_SHAPES as readonly string[]).includes(id);
 
-function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null; drawing: boolean; onArm: (s: RailShape | null) => void; onDraw: () => void }) {
+/** The view switch over the canvas — the plan and the two side views (lib/element/elevation.ts). */
+const VIEW_OPTIONS = [
+  ["plan", "תוכנית"],
+  ["front", "חזית"],
+  ["side", "צד"],
+] as const;
+
+function ShapeRail({ armed, drawing, onArm, onDraw, disabled = false }: { armed: RailShape | null; drawing: boolean; onArm: (s: RailShape | null) => void; onDraw: () => void; disabled?: boolean }) {
+  // A side view places nothing new yet (front shapes are the next stage): shapes are added on the
+  // plan, and the rail says so rather than arming a tool the view cannot place.
+  const why = disabled ? "צורות חדשות מונחות בתוכנית" : undefined;
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-e border-border bg-surface">
+    <aside className={"flex w-56 shrink-0 flex-col border-e border-border bg-surface" + (disabled ? " opacity-50" : "")} title={why}>
       <div className="scroll-slim flex flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
         <button
           type="button"
           onClick={onDraw}
+          disabled={disabled}
           aria-pressed={drawing}
-          title="ציור חופשי — נקודה אחר נקודה"
+          title={why ?? "ציור חופשי — נקודה אחר נקודה"}
           className={
             "flex h-9 w-full items-center justify-center gap-2 rounded-sm border px-2.5 text-[13px] font-semibold transition-colors " +
             (drawing ? "border-accent bg-accent-tint text-accent" : "border-border bg-surface text-ink hover:border-accent-line hover:bg-inset")
@@ -536,8 +552,9 @@ function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null;
               key={s}
               glyph={<ShapeIcon shape={s} />}
               label={SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}
-              title={SHAPE_LABEL[s]}
+              title={why ?? SHAPE_LABEL[s]}
               armed={armed === s}
+              disabled={disabled}
               onClick={() => onArm(armed === s ? null : s)}
               dragId={s}
             />
@@ -858,6 +875,7 @@ function PictureFields({
   symbol,
   onChange,
   onProfile,
+  onEditInView,
 }: {
   product: Product;
   preview: Product;
@@ -866,6 +884,8 @@ function PictureFields({
   /** Sets the FIRST shape's body (its `revolve`) — a chandelier's silhouette. Absent when the first
    *  shape cannot have one (not round). */
   onProfile?: (revolve: RevolvePoint[] | undefined) => void;
+  /** Goes to the חזית view with the first shape selected, where its body is dragged at full size. */
+  onEditInView?: () => void;
 }) {
   const category = CATEGORY_BY_ID[product.category];
   const tone = preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill;
@@ -1002,7 +1022,7 @@ function PictureFields({
           return (
             <div className="space-y-2">
               {profiled && (
-                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} />
+                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} onEditInView={onEditInView} />
               )}
               {/* GLASS PENDANTS: the glass is the shade (גוונים וצבעים — ענבר, עשן, שקוף, כרום), so here
                   only the metal, whether every globe takes its own shade, and their sizes. */}
@@ -1105,7 +1125,7 @@ function PictureFields({
           const flowered = built.flowers !== "none" || built.roof === "flowers" || built.meadow;
           return (
             <div className="space-y-2">
-              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} />}
+              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} onEditInView={onEditInView} />}
               <PanelRow label="עמודים" htmlFor="chuppah-posts">
                 <NumberField id="chuppah-posts" decimals={0} min={0} max={12} commitOnBlur value={built.posts ?? ownPosts} onChange={(v) => set({ posts: Math.round(v) === ownPosts ? undefined : Math.round(v) })} className="w-20" />
               </PanelRow>
@@ -1142,7 +1162,7 @@ function PictureFields({
           const chosen = preview.appearance?.symbolStyle;
           const form = isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
           if (form === "runner" || form === "bud" || form === "single") return null;
-          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} />;
+          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} onEditInView={onEditInView} />;
         })()}
     </div>
   );
@@ -1348,7 +1368,11 @@ function ShapePanel({
   onChange,
   groups,
   bodyTiles,
+  onOpenElevation,
 }: {
+  /** Goes to the חזית view with this shape kept selected — the height drawn at full size, and the
+   *  body dragged on it. */
+  onOpenElevation?: () => void;
   /** The tiles the "גוף" group offers instead of the vessels' — a chandelier's silhouettes. */
   bodyTiles?: RevolveTiles;
   part: ShapePart;
@@ -1400,6 +1424,11 @@ function ShapePanel({
       >
         <div className="space-y-1.5">
           <ElevationView shapes={shapes} itemHeightMm={itemHeightMm} selectedId={part.id} />
+          {onOpenElevation && (
+            <Button type="button" variant="outline" size="sm" className="w-full" onClick={onOpenElevation}>
+              פתיחה בחזית
+            </Button>
+          )}
           {base ? (
             <>
               <PanelRow label="גובה הפריט (ס״מ)" htmlFor={`${id}-height`}>
@@ -1449,7 +1478,7 @@ function ShapePanel({
           a slice, which have no body of revolution. */}
       {(part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
         <FoldRow {...group(groups, "body")} icon={Cylinder} title={bodyTiles ? bodyTiles.title.split(" — ")[0] : "גוף"} summary={bodyValue(part, bodyTiles)}>
-          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} />
+          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} onEditInView={onOpenElevation} />
         </FoldRow>
       )}
       {/* PIN (Stage 3): how this shape follows a resize of the item on the sketch — against the first
@@ -1781,6 +1810,23 @@ export function AppearanceModal({
     setSceneMounted(true);
     setScene3d((v) => !v);
   };
+  // תוכנית · חזית · צד (lib/element/elevation.ts). The side views' canvas is mounted on the first
+  // visit and then kept — hidden while the plan shows — so the room under it compiles once; the plan's
+  // canvas is kept too, its view where the designer left it.
+  const [view, setView] = useState<"plan" | SideView>("plan");
+  // The side view the side canvas shows — kept while the plan is up, so it comes back as it was.
+  const [sideView, setSideView] = useState<SideView>("front");
+  const [sideMounted, setSideMounted] = useState(false);
+  const [roomShown, setRoomShown] = useState(true);
+  const side = view === "plan" ? null : view;
+  const showView = (v: "plan" | SideView) => {
+    if (v !== "plan") {
+      setSideMounted(true);
+      setSideView(v);
+    }
+    setArmedShape(null);
+    setView(v);
+  };
   const [alignPreview, setAlignPreview] = useState<AlignOp | null>(null);
   const [alignKey, setAlignKey] = useState(0);
   // The shape a right-click landed on — reported by the feature layer just before the canvas asks
@@ -1913,7 +1959,21 @@ export function AppearanceModal({
       const next = withShapes(d, flipShapes(d.shapes, ids, axis));
       return { ...next, look: { ...next.look, appearance: next.look.appearance && { ...next.look.appearance, blockedSides: undefined } } };
     });
-  const nudge = (dx: number, dy: number) => editShapes((l) => l.map((s) => (selected.includes(s.id) ? shifted(s, dx, dy) : s)));
+  const nudge = (dx: number, dy: number) =>
+    editShapes((l) =>
+      l.map((s, i) => {
+        if (!selected.includes(s.id)) return s;
+        // In a side view → is across and ↑ is up (a screen's down is the floor's).
+        return side ? { ...s, ...elevationNudge(s, i, side, dx, -dy) } : shifted(s, dx, dy);
+      }),
+    );
+  /** A side view's live edit, inside the open undo entry — the shapes, and the item's height when the
+   *  first shape's top edge moved. Committed when the gesture ends. */
+  const sideEdit = (fn: (list: ShapePart[]) => ShapePart[], itemHeightMm?: number) =>
+    hist.amend((d) => {
+      const next = withShapes(d, fn(d.shapes));
+      return itemHeightMm === undefined ? next : { ...next, look: { ...next.look, dimensions: { ...next.look.dimensions, heightMm: itemHeightMm } } };
+    });
 
   // ── יישור — the selection lined up by one of its own (lib/studio/align.ts) ────────────────────
   const shapeName = (s: ShapePart) => `${s.shape === "custom" ? (s.open ? "קווים" : "צורה חופשית") : SHAPE_LABEL[s.shape]} ${shapes.indexOf(s) + 1}`;
@@ -2213,7 +2273,11 @@ export function AppearanceModal({
         ? `לחצו על הקנבס כדי להניח ${SHAPE_LABEL[armedShape]} · Esc לביטול`
         : missing
           ? "גררו צורה מהמגירה אל הקנבס, או ״ציור חופשי״"
-          : seeded && !hist.canUndo && !selected.length
+          : side && !selected.length
+            ? preview.layer === "ceiling"
+              ? "גררו צורה למעלה או למטה כדי לשנות את גובהה בפריט"
+              : "גררו צורה למעלה או למטה כדי לשנות את גובהה מהרצפה"
+            : seeded && !hist.canUndo && !selected.length
             ? `גודל התחלתי ל${category?.label ?? "פריט"} — הקלידו את המידות האמיתיות בסרגל למטה`
             : null);
 
@@ -2229,6 +2293,10 @@ export function AppearanceModal({
             preview={preview}
             symbol={previewSymbol}
             onChange={setAppearance}
+            onEditInView={() => {
+              if (shapes[0]) setSel([shapes[0].id]);
+              showView("front");
+            }}
             onProfile={
               shapes[0] && (shapes[0].shape === "circle" || shapes[0].shape === "ellipse") && !shapes[0].hollow
                 ? (revolve) => editShapes((list) => list.map((s, i) => (i === 0 ? { ...s, revolve } : s)))
@@ -2367,6 +2435,7 @@ export function AppearanceModal({
             onItemHeight={setItemHeight}
             onChange={(p) => patchShape(one.id, p)}
             groups={groups}
+            onOpenElevation={() => showView("front")}
             bodyTiles={(() => {
               if (shapes[0]?.id !== one.id) return undefined;
               if (previewSymbol === "flowers" || previewSymbol === "centerpiece") return FLOWER_ENVELOPES;
@@ -2411,7 +2480,7 @@ export function AppearanceModal({
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {!stretch && <ShapeRail armed={armedShape} drawing={!!drawingPart?.isNew} onArm={setArmedShape} onDraw={() => startDrawing()} />}
+          {!stretch && <ShapeRail armed={armedShape} drawing={!!drawingPart?.isNew} onArm={setArmedShape} onDraw={() => startDrawing()} disabled={!!side} />}
 
           <div className="relative min-w-0 flex-1 bg-canvas">
             {/* Why something was refused (an outline that crosses itself), for a moment, over the
@@ -2437,6 +2506,8 @@ export function AppearanceModal({
                 )}
               </div>
             ) : (
+              <>
+              <div className={"absolute inset-0" + (side ? " invisible pointer-events-none" : "")} aria-hidden={!!side}>
               <PlanCanvas
                 // A footprint is a cm-scale thing: typed and shown in centimetres. A drawn side goes
                 // where the pointer is (pulled square by the points already drawn); Alt holds it to
@@ -2780,6 +2851,44 @@ export function AppearanceModal({
                   </>
                 )}
               />
+              </div>
+              {/* חזית · צד — the shapes as boxes from their bottom to their top, the room under them. */}
+              {sideMounted && (
+                <div className={"absolute inset-0" + (side ? "" : " invisible pointer-events-none")} aria-hidden={!side}>
+                  <ElevationCanvas
+                    view={sideView}
+                    shapes={shapes}
+                    itemHeightMm={draft.dimensions.heightMm ?? 0}
+                    itemStyle={draft.appearance?.style}
+                    selected={selected}
+                    onSelect={(ids) => {
+                      setArmedShape(null);
+                      setSel(ids);
+                    }}
+                    onEdit={sideEdit}
+                    onCommit={hist.commit}
+                    history={{ canUndo: hist.canUndo, canRedo: hist.canRedo, onUndo: hist.undo, onRedo: hist.redo }}
+                    room={shapes.length ? { subject: { key: itemSceneKey(preview), build: () => itemScene(preview) }, itemAt, baseZMm: itemBaseZ(preview) } : null}
+                    roomShown={roomShown}
+                    hidden={!side}
+                    envelopeIds={shapes[0] && (previewSymbol === "chandelier" || previewSymbol === "flowers" || previewSymbol === "centerpiece" || previewSymbol === "chuppah") ? [shapes[0].id] : undefined}
+                    frame={PRODUCT_FRAME}
+                  />
+                </div>
+              )}
+              {/* The view switch — the plan's strip is at the top END, so this takes the START. Not
+                  while a shape is being drawn: the drawing is the plan's. */}
+              {!drawingPart && (
+                <div className="absolute top-4 start-4 z-20 flex items-center gap-1 rounded-md bg-surface p-1 shadow-floating">
+                  <Segmented label="מבט" hideLabel value={view} options={VIEW_OPTIONS} onChange={showView} />
+                  {side && (
+                    <IconButton label="החדר מאחורי השרטוט" pressed={roomShown} onClick={() => setRoomShown((v) => !v)}>
+                      {roomShown ? <Eye className="h-[18px] w-[18px]" strokeWidth={1.4} /> : <EyeOff className="h-[18px] w-[18px]" strokeWidth={1.4} />}
+                    </IconButton>
+                  )}
+                </div>
+              )}
+              </>
             )}
 
             {/* The item in a room of its own, in the canvas's corner — above the bar's band, under
@@ -2801,6 +2910,23 @@ export function AppearanceModal({
               <div className="pointer-events-auto max-w-full">
                 {drawingPart ? (
                   <DrawingBar ed={partEd} isNew={drawingPart.isNew} onCancel={cancelDrawing} onFinish={finishDrawing} />
+                ) : one && side ? (
+                  <ElevationQuickBar
+                    part={one}
+                    base={shapes[0]?.id === one.id}
+                    hung={preview.layer === "ceiling"}
+                    title={shapeName(one).replace(/ \d+$/, "")}
+                    itemHeightMm={draft.dimensions.heightMm ?? 0}
+                    onChange={(p) => patchShape(one.id, p)}
+                    onItemHeight={setItemHeight}
+                    onDuplicate={() => duplicate([one.id])}
+                    onRemove={() => removeShapes([one.id])}
+                    more={moreItems(
+                      (axis) => flip([one.id], axis),
+                      (how) => restack([one.id], how),
+                    )}
+                    onClose={() => setSel([])}
+                  />
                 ) : one ? (
                   <ShapeQuickBar
                     part={one}

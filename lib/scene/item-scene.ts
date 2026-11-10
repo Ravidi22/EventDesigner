@@ -16,7 +16,9 @@ import { footprintBounds, resolveFootprint, type Footprint } from "@/lib/studio/
 import type { Point } from "@/lib/studio/hall";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { isMain } from "../self-check";
+import { hangHeightOf } from "@/lib/studio/hang";
 import { buildScene } from "./build";
+import { ceilingUndersideMm } from "./overhead";
 import { focusViewpoint, type FocusRef } from "./focus";
 import { DEFAULT_SETTINGS, type BodyNode, type Scene, type SceneSettings, type Viewpoint } from "./types";
 
@@ -89,6 +91,15 @@ export function itemScene(product: Product): { scene: Scene; focus: Viewpoint | 
     });
     return { scene, focus };
   });
+}
+
+/** The height the item's own floor stands at in its room: 0, or for a ceiling row its underside —
+ *  exactly where lib/scene/build.ts ceilingPlacement hangs a placement with no hang height of its own
+ *  under open sky (itemPlan has no roof). The shape editor's side views (lib/element/elevation.ts)
+ *  put their z 0 there, so the boxes stand on the picture. */
+export function itemBaseZ(product: Product): number {
+  if (product.layer !== "ceiling") return 0;
+  return hangHeightOf({}, product) ?? ceilingUndersideMm(null, product.dimensions.heightMm ?? 0);
 }
 
 // ── a composite's arrangement ─────────────────────────────────────────────────────────────────────
@@ -236,6 +247,13 @@ if (isMain(import.meta.url)) {
   const shelf = tableBody.parts.find((q) => q.at.z === 1200);
   assert(!!shelf && shelf.shape === "extrude" && (shelf as { h: number }).h === 40, "a table's raised shape stands at its own height in the table's body");
   assert(tableBody.parts.filter((q) => q.shape === "extrude" && q.at.z === 750 - 30).length === 1, "…and the top is the table's own shape alone, not the shelf's too");
+
+  // Where the item's own floor stands in its room — the side views' z 0 (lib/element/elevation.ts
+  // orthoFrame): the floor for a floor row, a hung row's underside — its row's hang height, else
+  // the open sky's default — so the boxes and the room under them line up.
+  assert(itemBaseZ(bar) === 0, "a floor row's own floor is the room's");
+  assert(itemBaseZ(drum) === 3000, "a hung row's own floor is its hang height");
+  assert(itemBaseZ(cascade) === ceilingUndersideMm(null, 0), "…else the open sky's default underside");
 
   // Nothing of the draft is left in the resolver afterwards.
   assert(resolve("draft") === undefined && resolve("tbl") === undefined, "the draft resolves only for the span of the build");
