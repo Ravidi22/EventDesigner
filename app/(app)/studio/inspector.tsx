@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import {
   Minus,
   Plus,
@@ -61,6 +61,9 @@ import {
   Scissors,
   Shirt,
   Frame,
+  Zap,
+  Sailboat,
+  Waves,
   type LucideIcon,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
@@ -78,6 +81,7 @@ import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
 import type { BenchSideKind, BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
+import { MAX_PER_ROW, MAX_ROWS } from "@/lib/design-document/chair-rows";
 import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
 import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
@@ -134,7 +138,7 @@ import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
 import { SwitchRow } from "@/components/toggle";
 import { CANTILEVER_MAX_MM, railLengthMm, railOf, sketchRailContext, type Rail } from "@/lib/studio/rail";
-import { clothKindOf, sailSheet } from "@/lib/studio/ceiling-cloth";
+import { clothKindOf, clothRuns, sailSheet } from "@/lib/studio/ceiling-cloth";
 import { CeilingClothPopover } from "./ceiling-cloth-bar";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { ArrowDownToLine } from "lucide-react";
@@ -175,8 +179,10 @@ import { MissingPieces, missingSummary } from "./missing-pieces";
 // (`part`). The chips' fields moved into the groups as they were; a chip that was a picker (a type
 // swap, a cloth) is a group's pick row opening the same list beside the panel. Kinds are converted
 // one at a time — the table and the block first, then the stage, a group of stages and a stage's edge
-// item, then a design item and a ceiling item; any kind not yet converted keeps its old bar for "bar"
-// and shows no groups.
+// item, then a design item and a ceiling item, then the special placements (a banquette, chair rows, a
+// flight, a covered carpet, a rug, anything on a rail) — every placement is asked in two places now.
+// A selection not yet converted (several things, a group of design items, a venue feature, the scope
+// bar) keeps its old bar for "bar" and shows no groups.
 export type EdgeKindId = "stairs" | "bench" | "barrier" | "backdrop" | "ramp";
 export const EDGE_KIND_LABEL: Record<EdgeKindId, string> = {
   stairs: "מדרגות",
@@ -1744,44 +1750,64 @@ export function Inspector({
       );
     }
 
-    // Any other placement. A DESIGN ITEM — on a table, hung over one, or standing on the floor — and a
-    // CEILING ITEM not on a rail are asked in two places (below the flags). The special kinds — a
-    // banquette, a chair (rows of them or one that could be), a flight or a ramp, a carpet laid over a
-    // surface, a stretched rug, and anything hung on a rail (a drape, an LED strip, a sail, a ceiling
-    // cloth) — keep their old bar for "bar" and show no groups yet.
+    // Any other placement — a DESIGN ITEM (on a table, hung over one, or standing on the floor), a
+    // CEILING ITEM, and the special kinds: a banquette, a chair (rows of them, or one that could be), a
+    // flight or a ramp, a carpet laid over a surface, a stretched rug, and anything hung on a RAIL (a
+    // drape, an LED strip, a sail, a ceiling cloth). Every one is asked in the same two places. Its
+    // quick bar leads with the numbers that kind is placed by — a design item's drawing size (or how
+    // many), a ceiling item's hang height, a block's rows × chairs, a banquette's number, a flight's
+    // rise, a carpet's margin, a rug's W×D, a rail's length (read, not typed — D14: it is the rail's,
+    // its ends are dragged or the ״מסילה״ group typed) and its drop or height — then its angle and its
+    // one verb, then copy · delete · ⋯. Every other field is a group: what is wrong first, the kind's
+    // own (מסילה · מספר, גובה, ישיבה · שורות · מדרגות · על <name> · גודל ופינות), then what it is, its
+    // shade, its vessel, its contour, its size and — on or over a table — the same item onto others.
     const r = resolve(p.variantId);
     const table = p.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
     // A ceiling item hung OVER a table (Placement.over): named here, centred, arranged in that
     // table's focus mode, and hung over other tables in a pattern — the table-item verbs, above.
     const overTable = p.layer === "ceiling" && p.over ? doc.tables.find((t) => t.id === p.over) : undefined;
     const shades = shadesOf(p.variantId);
-    // A drape hangs on a RAIL (lib/studio/rail.ts) — its legacy span read as a wall rail.
+    const shade = shades.find((s) => s.id === p.variantId);
+    // A drape hangs on a RAIL (lib/studio/rail.ts) — its legacy span read as a wall rail — and so do an
+    // LED strip, a sail and a ceiling cloth.
     const drape = r?.anchor === "wall" ? (railOf(p) ?? undefined) : undefined;
-    const runMm = drape ? railLengthMm(drape, sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product)) : undefined;
+    const railCtx = drape ? sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product) : null;
+    const runMm = drape && railCtx ? railLengthMm(drape, railCtx) : undefined;
     const run = runMm !== undefined ? { lengthMm: runMm } : null;
     const onWhat = drape?.type === "side" ? "על הצד" : drape?.type === "rod" ? "על המוט" : "על הקיר";
-    // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts): its own chip and facts, not a curtain's.
+    // An LED strip rides the same rail but is light, not cloth (./led-popover.tsx): its height, its
+    // stretch, a run of its own — no drop, no rod.
+    const led = !!drape && isLedStrip(r?.product);
+    // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts): its own fields and facts, not a curtain's.
     const clothKind = drape && r ? clothKindOf(r.product.category, drape) : null;
-    const clothSheet = clothKind && drape?.type === "sail" ? sailSheet(drape, sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product)) : null;
-    const clothFact = !clothKind
-      ? null
-      : drape?.type === "sail"
-        ? clothSheet
-          ? `${(clothSheet.areaMm2 / 1e6).toFixed(1)} מ״ר · ${drape.ties.length} קשירות`
-          : "הקיר או המבנה שהמפרש נקשר אליו הוסר"
-        : run
-          ? `${(run.lengthMm / 1000).toFixed(1)} מ׳ בד${drape?.type === "canopy" ? " על שטח" : ""}`
-          : null;
+    const clothSheet = clothKind && drape?.type === "sail" && railCtx ? sailSheet(drape, railCtx) : null;
+    const cloth = clothKind && (drape?.type === "run" || drape?.type === "canopy") ? clothRuns(drape) : null;
+    const clothMm = cloth ? cloth.reduce((n, x) => n + x.lengthMm, 0) : undefined;
     const stretch = r?.sizing === "stretch" && !drape;
-    const size = p.sizeMm;
-    const shade = shades.find((s) => s.id === p.variantId);
-    // A flight or a ramp standing on its own — never one worn on a table or hung on a wall.
+    // The size the canvas draws it at (placementFootprint): its own, else its row's — a rug just laid
+    // has none of its own yet, and read 0×0.
     const drawn = footprintBounds(placementFootprint(p));
     const drawnSize = { widthMm: drawn.w, depthMm: drawn.h };
+    const rugSize = p.sizeMm ?? drawnSize;
+    // A flight or a ramp standing on its own — never one worn on a table or hung on a wall.
     const climb = r && !table && !drape && onClimb ? itemClimbHost(r.product, drawnSize, p.climb) : null;
     const editClimb = (edit: ClimbEdit | null) => {
       if (edit && onClimb) onClimb(p.id, edit);
     };
+    // A STANDALONE BANQUETTE is set like a table: its number (optional — clearing it leaves the
+    // banquette seated but unnumbered), its height, its two sides and their counts, and its occupancy.
+    // Its row is still quoted by the metre; nothing here touches that.
+    const bench = benchPanel?.layout;
+    const benchNumber = benchPanel?.spec?.number;
+    // A chair on the floor may be set out in ROWS (lib/design-document/chair-rows.ts); one that is,
+    // is a block — its count is its rows, and the quantity stepper would only argue with them.
+    const block = chairBlockOf(p);
+    const rowsAllowed = !!onChairRows && r?.product.category === "chairs" && !table && !drape && !p.perch && !p.stage;
+    // A carpet laid OVER a surface or a stage (lib/studio/cover.ts) is that thing's shape: in place of a
+    // size it says what it lies on, takes a margin, and lets go — the shape kept. It faces as that does.
+    const covered = stretch && !!p.cover;
+    const laid = covered ? coverTarget(p, doc, structure) : null;
+    const coverInset = Math.round((p.cover?.insetMm ?? 0) / 10);
 
     const hungOverDressing = overTable
       ? doc.placements.filter((x) => {
@@ -1791,16 +1817,8 @@ export function Inspector({
         }).length
       : 0;
 
-    const bench = benchPanel?.layout;
-    const benchNumber = benchPanel?.spec?.number;
-    // A chair on the floor may be set out in ROWS (lib/design-document/chair-rows.ts); one that is,
-    // is a block — its count is its rows, and the quantity stepper would only argue with them.
-    const block = chairBlockOf(p);
-    const rowsAllowed = !!onChairRows && r?.product.category === "chairs" && !table && !drape && !p.perch && !p.stage;
-    const special =
-      !!bench || !!block || rowsAllowed || !!climb || !!p.cover || stretch || !!p.stage || r?.anchor === "wall" || isLedStrip(r?.product);
-    // The item's "…" — the old bar's and the quick bar's ⋯ (after the clipboard): flip, the floor
-    // stack, selection, the over-table verbs, its catalog row, a stage piece made a stage, the lock.
+    // The item's "…" — the quick bar's ⋯ (after the clipboard): flip, the floor stack, selection, the
+    // over-table verbs, its catalog row, a stage piece made a stage, the lock.
     const itemSections: MenuItem[][] = [
       !table && !drape && !p.cover ? mirrorItems(onMirror) : [],
       stackItems(canRestack, onRestack),
@@ -1823,527 +1841,509 @@ export function Inspector({
       lockItems(lock),
     ];
 
-    // A DESIGN ITEM or a CEILING ITEM. The quick bar asks the one number placing it turns on — how big
-    // it is drawn on this plan (or, counted by the unit or sized by its row, how many), how high it
-    // hangs for a ceiling item — and its angle, offers הלבשה on the table it stands on or hangs over,
-    // and keeps the rare verbs in the ⋯. Every other field is a group: what is wrong first, what it is
-    // (swapped from a picker, and how many), its shade, its vessel, its contour, its size, and — on or
-    // over a table — the same item onto other tables.
-    if (!special) {
-      const ceiling = p.layer === "ceiling";
-      const name = r?.product.name ?? "פריט";
-      const facts = [LAYER_LABEL[p.layer], table ? tableLabel(doc, table) : null, overTable ? `מעל ${tableLabel(doc, overTable)}` : null]
-        .filter(Boolean)
-        .join(" · ");
-      // Drawn bigger or smaller on THIS plan — unless its row has a size of its own to type (מידות).
-      const scaled = !sizePanel;
-      const pct = Math.round((p.scale || 1) * 100);
-      // The table it stands on, or hangs over: its focus mode is where it is moved and arranged.
-      const dressOn = table ?? overTable;
-      const hang =
-        ceiling && onHang
-          ? {
-              own: p.hangHeightMm,
-              fallback: hangHeightOf({}, r?.product),
-              underRoof: roofOf ? ceilingUndersideMm(roofOf(p.position), r?.product.dimensions.heightMm ?? 0) : undefined,
-              set: (mm: number | null) => onHang(p.id, mm),
-            }
-          : null;
-      const hung = hang ? hangView(hang.own, hang.fallback, hang.underRoof) : null;
-      const contour = r && takesBorder(r.product) ? borderOf(p, r.product) : undefined;
-      const rowVessel = r ? productVessel(r.product) : undefined;
+    // Which kind it is — its bar's lead, its own groups, and which of them it opens on (remembered per
+    // kind, lib/studio/panel-groups.ts).
+    const kind = drape ? "rail" : bench ? "bench" : rowsAllowed ? "rows" : climb ? "climb" : covered ? "cover" : stretch ? "rug" : p.layer === "ceiling" ? "ceiling" : "item";
+    const name = r?.product.name ?? "פריט";
+    const title = bench ? (benchPanel?.numbered && benchNumber ? `בנקט ${benchNumber}` : "בנקט") : block ? "שורות כיסאות" : name;
+    const icon = bench ? RectangleHorizontal : block ? Rows3 : climb ? (climb.kind === "ramp" ? Accessibility : Footprints) : led ? Zap : clothKind ? (drape?.type === "sail" ? Sailboat : Waves) : Sparkles;
+    // Where a rail runs, in words — or, when what it ran along is gone, that.
+    const railWhere = !drape
+      ? null
+      : clothKind
+        ? drape.type === "sail"
+          ? clothSheet
+            ? `${drape.ties.length} קשירות`
+            : "הקיר או המבנה שהמפרש נקשר אליו הוסר"
+          : drape.type === "canopy"
+            ? "על שטח"
+            : null
+        : run
+          ? led
+            ? drape.type === "wall"
+              ? "על הקיר"
+              : drape.type === "side"
+                ? "על הצד"
+                : "באוויר"
+            : onWhat
+          : drape.type === "side"
+            ? led
+              ? "האלמנט שהפס רץ עליו הוסר"
+              : "הפריט שהווילון היה תלוי עליו הוסר"
+            : "הקיר נמחק";
+    // …and whether its rail lost what it ran along — said in warn ink on its ״מסילה״ group.
+    const railLost = !!drape && (clothKind ? drape.type === "sail" && !clothSheet : !run);
+    const facts = [
+      block ? `${p.quantity} כיסאות · ${block.spec.rows} שורות × ${block.spec.perRow}` : null,
+      bench || block ? r?.product.name : LAYER_LABEL[p.layer],
+      bench ? `${(bench.widthMm / 1000).toFixed(2)} מ׳` : null,
+      bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
+      table ? tableLabel(doc, table) : null,
+      overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
+      railWhere,
+    ]
+      .filter(Boolean)
+      .join(" · ");
 
-      if (bar)
-        return (
-          <Bar icon={Sparkles} title={name} facts={facts} onClose={onClose}>
-            {hang && hung ? (
-              <>
-                <QuickLead icon={ArrowDownToLine} label="גובה תלייה (ס״מ)" />
-                <QuickNumber
-                  label="גובה תלייה (ס״מ)"
-                  min={0}
-                  max={HANG_MAX_MM / 10}
-                  value={hang.own ? cm(hang.own) : 0}
-                  hideZero
-                  placeholder={hung.placeholder}
-                  onChange={(v) => hang.set(v > 0 ? v * 10 : null)}
-                />
-                <QuickUnit>ס״מ</QuickUnit>
-              </>
-            ) : scaled && p.quantity <= 1 ? (
-              <>
-                <QuickLead icon={Scaling} label="גודל על התוכנית (%)" />
-                <QuickNumber label="גודל על התוכנית (%)" narrow min={30} max={300} value={pct} onChange={(v) => onScale(p.id, v / 100)} />
-                <QuickUnit>%</QuickUnit>
-              </>
-            ) : (
-              // Counted by the unit (or sized by its row, with nothing to scale): how many, in place.
-              <QuantityStepper quantity={p.quantity} onStep={(d) => onQuantity(p.id, d)} />
-            )}
-            <QuickSep />
-            <QuickTurn value={facing} onChange={onFace} />
-            {dressOn && onDressTable && (
-              <>
-                <QuickSep />
-                <ModeVerb icon={PaintRoller} label="הלבשה" onClick={() => onDressTable(dressOn.id)} />
-              </>
-            )}
-            <QuickTail
-              onCopy={onDuplicate}
-              copyLabel="שכפול הפריט"
-              onDelete={onDelete}
-              deleteLabel="מחיקת הפריט"
-              more={moreOf(itemSections)}
-              moreLabel="עוד פעולות לפריט"
-            />
-          </Bar>
+    const ceiling = p.layer === "ceiling";
+    // Drawn bigger or smaller on THIS plan — unless its row has a size of its own to type (מידות), it
+    // stretches, it hangs on a rail, it is a climb (its run follows the step it covers) or a block of
+    // chairs (its size is its rows; its chairs are drawn at their real size).
+    const scaled = !sizePanel && !stretch && !drape && !p.stage && !climb && !block;
+    const pct = Math.round((p.scale || 1) * 100);
+    // The table it stands on, or hangs over: its focus mode is where it is moved and arranged.
+    const dressOn = table ?? overTable;
+    const hang =
+      ceiling && !drape && onHang
+        ? {
+            own: p.hangHeightMm,
+            fallback: hangHeightOf({}, r?.product),
+            underRoof: roofOf ? ceilingUndersideMm(roofOf(p.position), r?.product.dimensions.heightMm ?? 0) : undefined,
+            set: (mm: number | null) => onHang(p.id, mm),
+          }
+        : null;
+    const hung = hang ? hangView(hang.own, hang.fallback, hang.underRoof) : null;
+    const contour = r && takesBorder(r.product) ? borderOf(p, r.product) : undefined;
+    const rowVessel = r ? productVessel(r.product) : undefined;
+    const rowsSpec: ChairRows = p.rows ?? { rows: 1, perRow: 1 };
+
+    if (bar) {
+      // The numbers it is placed by, by kind (see above). Each subject is a segment; a hairline
+      // between them.
+      const lead: { key: string; node: ReactNode }[] = [];
+      const seg = (key: string, node: ReactNode) => lead.push({ key, node });
+      if (drape) {
+        const sail = drape.type === "sail";
+        const lengthMm = clothMm ?? runMm;
+        seg(
+          "length",
+          <>
+            <QuickLead icon={sail ? Sailboat : MoveHorizontal} label={sail ? "שטח המפרש" : "אורך לאורך המסילה"} />
+            <span className="nums whitespace-nowrap text-[13px] font-semibold text-ink" title={sail ? "שטח המפרש — הקשירות נגררות על התוכנית" : "האורך לאורך המסילה — מקצרים בידיות שבקצוות, או ב״מסילה״"}>
+              {sail ? (clothSheet ? ltr((clothSheet.areaMm2 / 1e6).toFixed(1)) : "—") : lengthMm !== undefined ? ltr((lengthMm / 1000).toFixed(2)) : "—"}
+            </span>
+            <QuickUnit>{sail ? "מ״ר" : "מ׳"}</QuickUnit>
+          </>,
         );
-
-      return groupsOf(
-        ceiling ? "ceiling" : "item",
-        name,
-        facts,
-        [
-          breaches.length > 0 && G("clearance", ShieldAlert, "מרחק ביטחון", breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`, <BreachList breaches={breaches} />, true),
-          // How high it hangs — the bar's number, with the row's height back and what the room does
-          // when neither says.
-          !!hang && !!hung && G("hang", ArrowDownToLine, "תלייה", hung.shown ? ltr(hung.words) : hung.words, <HangFields own={hang.own} fallback={hang.fallback} underRoof={hang.underRoof} onHang={hang.set} />),
-          G(
-            "item",
-            Sparkles,
-            "פריט",
-            p.quantity > 1 ? `${name} · ${iso(`×${p.quantity}`)}` : name,
-            <ItemFields product={r?.product} swap={swap} onSwap={onSwap} quantity={p.quantity} onQuantity={(d) => onQuantity(p.id, d)} />,
-          ),
-          shades.length > 0 &&
-            G(
-              "shade",
-              Palette,
-              "גוון",
-              <>
-                {shade?.swatch && <Swatch color={shade.swatch} size={12} />}
-                <span className="truncate">{shade?.name ?? "ברירת מחדל"}</span>
-              </>,
-              <ShadeFields shades={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} />,
-            ),
-          // The vase or jug an arrangement stands in — packed and counted with it.
-          !!onVessel &&
-            !!r &&
-            takesVessel(r.product) &&
-            G("vessel", Amphora, "כלי", vesselView(p.vessel, rowVessel).name, <VesselPickRow own={p.vessel} rowVessel={rowVessel} onVessel={(v) => onVessel([p.id], v)} />),
-          // A runner's contour on THIS plan — its row's until it is given its own.
-          !!onBorder &&
-            !!r &&
-            takesBorder(r.product) &&
-            G(
-              "border",
-              Frame,
-              "קונטור",
-              <>
-                {contour && <Swatch color={contour.colour} size={12} />}
-                {borderWords(contour)}
-              </>,
-              <BorderPanel own={p.border} row={cleanBorder(r.product.appearance?.border)} category={r.product.category} onBorder={(b) => onBorder([p.id], b)} idPrefix={`border-${p.id}`} />,
-            ),
-          scaled && G("scale", Scaling, "גודל על התוכנית", ltr(`${pct}%`), <ScaleFields scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />),
-          !!sizePanel &&
-            G(
-              "size",
-              Ruler,
-              "מידות",
-              ltr(sizePanel.axes.uniform ? `⌀${cm(sizePanel.size.widthMm)}` : `${cm(sizePanel.size.widthMm)}×${cm(sizePanel.size.depthMm)}`),
-              <SizeFields panel={sizePanel} onSize={onSize} />,
-            ),
-          // On a table: the same item onto other tables, in a pattern.
-          !!table && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(table.id, p.id)),
-          // Hung over a table: over other tables in a pattern, strung along its row, one over each item
-          // on its table. Centring it is a one-press verb, in the ⋯.
-          !!overTable &&
-            G(
-              "over",
-              LayoutGrid,
-              "מעל שולחנות",
-              tableLabel(doc, overTable),
-              <>
-                {renderPattern(overTable.id, p.id)}
-                {onSpreadRow && (
-                  <div className="mt-3 border-t border-border-soft pt-3">
-                    <span className={fieldLabelClassName}>פיזור לאורך השורה</span>
-                    <RowSpreadFields doc={doc} sourceId={overTable.id} name={name} heightMm={hangHeightOf(p, r?.product)} onSpread={(opts) => onSpreadRow(p.id, opts)} />
-                  </div>
-                )}
-                {onHangOverDressing && hungOverDressing > 0 && (
-                  <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onHangOverDressing(p.id)}>
-                    <ArrowUpFromLine className="h-3.5 w-3.5" strokeWidth={2} />
-                    {`אחד מעל כל פריט שעל השולחן (${hungOverDressing})`}
-                  </Button>
-                )}
-              </>,
-            ),
-        ],
-        ceiling ? ["hang", "item"] : ["item", "shade"],
+        // How far a curtain comes down (blank = to the floor); how high a strip or a ceiling cloth runs.
+        if (onRail && !led && !clothKind)
+          seg(
+            "drop",
+            <>
+              <QuickLead icon={ArrowDownToLine} label="אורך הבד (ס״מ) — ריק: עד הרצפה" />
+              <QuickNumber label="אורך הבד (ס״מ)" min={0} max={1200} value={p.dropMm ? cm(p.dropMm) : 0} hideZero placeholder="רצפה" onChange={(v) => onRail(p.id, drape, v > 0 ? v * 10 : null)} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+        else if (onRail && led && (drape.type === "wall" || drape.type === "run"))
+          seg(
+            "height",
+            <>
+              <QuickLead icon={MoveVertical} label={drape.type === "wall" ? "גובה מהרצפה (ס״מ)" : "גובה (ס״מ)"} />
+              <QuickNumber
+                label={drape.type === "wall" ? "גובה מהרצפה (ס״מ)" : "גובה (ס״מ)"}
+                min={0}
+                max={1500}
+                value={cm(drape.heightMm ?? 0)}
+                onChange={(v) => onRail(p.id, { ...drape, heightMm: Math.max(0, Math.round(v * 10)) })}
+              />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+        else if (onRail && clothKind && (drape.type === "run" || drape.type === "canopy"))
+          seg(
+            "height",
+            <>
+              <QuickLead icon={MoveVertical} label="גובה (ס״מ)" />
+              <QuickNumber label="גובה (ס״מ)" min={100} max={1500} value={cm(drape.heightMm)} onChange={(v) => onRail(p.id, { ...drape, heightMm: v * 10 })} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+      } else if (bench && benchPanel) {
+        seg(
+          "number",
+          <>
+            <QuickLead icon={Hash} label="מספר הבנקט" />
+            <QuickNumber
+              label="מספר הבנקט"
+              narrow
+              min={0}
+              value={benchNumber ?? 0}
+              hideZero={benchNumber === undefined}
+              placeholder="—"
+              onChange={(v) => onBench(p.id, { number: v })}
+            />
+          </>,
+        );
+      } else if (rowsAllowed && onChairRows) {
+        // A single chair is one row of one: typing more rows (or more in a row) makes it a block.
+        const setRows = (patch: Partial<ChairRows>) => {
+          const next = { ...rowsSpec, ...patch };
+          if (!p.rows && next.rows <= 1 && next.perRow <= 1) return;
+          onChairRows(p.id, next);
+        };
+        seg(
+          "rows",
+          <>
+            <QuickLead icon={Rows3} label="שורות × כיסאות בשורה" />
+            <QuickNumber label="שורות" narrow min={1} max={MAX_ROWS} value={rowsSpec.rows} onChange={(n) => setRows({ rows: n })} />
+            <QuickUnit>×</QuickUnit>
+            <QuickNumber label="כיסאות בשורה" narrow min={1} max={MAX_PER_ROW} value={rowsSpec.perRow} onChange={(n) => setRows({ perRow: n })} />
+          </>,
+        );
+      } else if (climb && r) {
+        seg(
+          "rise",
+          <>
+            <QuickLead icon={MoveVertical} label="הפרש גובה (ס״מ)" />
+            <QuickNumber label="הפרש גובה (ס״מ)" narrow min={0} max={600} value={cm(climb.heightMm)} onChange={(v) => editClimb(climbHeightEdit(p, r.product, drawnSize, v * 10))} />
+            <QuickUnit>ס״מ</QuickUnit>
+          </>,
+        );
+      } else if (covered) {
+        if (onCoverInset)
+          seg(
+            "inset",
+            <>
+              <QuickLead icon={Link2} label="שוליים (ס״מ)" />
+              <QuickNumber label="שוליים (ס״מ)" narrow min={0} value={coverInset} onChange={(v) => onCoverInset(p.id, Math.max(0, v) * 10)} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+      } else if (stretch) {
+        // A carpet sized by number — faster than its corners when the client says "three by two".
+        seg(
+          "size",
+          <>
+            <QuickLead icon={Ruler} label="מידות (ס״מ)" />
+            <QuickNumber label="רוחב השטיח (ס״מ)" min={30} value={cm(rugSize.widthMm)} onChange={(v) => onResize(p.id, { widthMm: v * 10, depthMm: rugSize.depthMm })} />
+            <QuickUnit>×</QuickUnit>
+            <QuickNumber label="עומק השטיח (ס״מ)" min={30} value={cm(rugSize.depthMm)} onChange={(v) => onResize(p.id, { widthMm: rugSize.widthMm, depthMm: v * 10 })} />
+          </>,
+        );
+      } else if (hang && hung) {
+        seg(
+          "hang",
+          <>
+            <QuickLead icon={ArrowDownToLine} label="גובה תלייה (ס״מ)" />
+            <QuickNumber
+              label="גובה תלייה (ס״מ)"
+              min={0}
+              max={HANG_MAX_MM / 10}
+              value={hang.own ? cm(hang.own) : 0}
+              hideZero
+              placeholder={hung.placeholder}
+              onChange={(v) => hang.set(v > 0 ? v * 10 : null)}
+            />
+            <QuickUnit>ס״מ</QuickUnit>
+          </>,
+        );
+      } else if (scaled && p.quantity <= 1) {
+        seg(
+          "scale",
+          <>
+            <QuickLead icon={Scaling} label="גודל על התוכנית (%)" />
+            <QuickNumber label="גודל על התוכנית (%)" narrow min={30} max={300} value={pct} onChange={(v) => onScale(p.id, v / 100)} />
+            <QuickUnit>%</QuickUnit>
+          </>,
+        );
+      } else {
+        // Counted by the unit (or sized by its row, with nothing to scale): how many, in place.
+        seg("quantity", <QuantityStepper quantity={p.quantity} onStep={(d) => onQuantity(p.id, d)} />);
+      }
+      // Its angle — not a carpet laid over a thing (it faces as that does) nor anything on a rail (the
+      // rail is where it runs; its own angle is read by nothing).
+      if (!covered && !drape) seg("turn", <QuickTurn value={facing} onChange={onFace} />);
+      // Its one verb: a rail drawn again on the canvas — a curtain on a rod of its own, a strip as a
+      // free run, a cloth tie by tie or end to end — or the table it stands on (or hangs over) dressed.
+      if (drape) {
+        if (onRail && !p.locked && !clothKind && onDrawRod)
+          seg(
+            "verb",
+            <ModeVerb icon={Minus} label={led ? (drape.type === "run" ? "ציור הפס מחדש" : "פס חופשי") : drape.type === "rod" ? "ציור המוט מחדש" : "ציור על מוט"} onClick={() => onDrawRod(p.id)} />,
+          );
+        else if (onRail && !p.locked && clothKind && onDrawCloth) {
+          const again = drape.type === "sail" ? "sail" : drape.type === "canopy" ? "canopy" : "run";
+          seg("verb", <ModeVerb icon={PenLine} label={again === "canopy" ? "ציור השטח מחדש" : "ציור מחדש"} onClick={() => onDrawCloth(p.id, again)} />);
+        }
+      } else if (dressOn && onDressTable) seg("verb", <ModeVerb icon={PaintRoller} label="הלבשה" onClick={() => onDressTable(dressOn.id)} />);
+      return (
+        <Bar icon={icon} title={title} facts={facts} onClose={onClose}>
+          {lead.map(({ key, node }, i) => (
+            <Fragment key={key}>
+              {i > 0 && <QuickSep />}
+              {node}
+            </Fragment>
+          ))}
+          <QuickTail
+            onCopy={onDuplicate}
+            copyLabel="שכפול הפריט"
+            onDelete={onDelete}
+            deleteLabel="מחיקת הפריט"
+            more={moreOf(itemSections)}
+            moreLabel="עוד פעולות לפריט"
+          />
+        </Bar>
       );
     }
 
-    if (!bar) return null;
-    return (
-      <Bar
-        icon={bench ? RectangleHorizontal : block ? Rows3 : Sparkles}
-        title={bench ? (benchPanel?.numbered && benchNumber ? `בנקט ${benchNumber}` : "בנקט") : block ? "שורות כיסאות" : (r?.product.name ?? "פריט")}
-        facts={[
-          block ? `${p.quantity} כיסאות · ${block.spec.rows} שורות × ${block.spec.perRow}` : null,
-          bench || block ? r?.product.name : LAYER_LABEL[p.layer],
-          bench ? `${(bench.widthMm / 1000).toFixed(2)} מ׳` : null,
-          bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
-          table ? tableLabel(doc, table) : null,
-          overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
-          drape && !clothKind ? (run ? `${(run.lengthMm / 1000).toFixed(2)} מ׳ ${onWhat}` : drape.type === "side" ? "הפריט שהווילון היה תלוי עליו הוסר" : "הקיר נמחק") : null,
-          clothFact,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-        onClose={onClose}
-      >
-        <BreachPopover breaches={breaches} />
-        {/* A STANDALONE BANQUETTE is set like a table: its number (optional — clearing it leaves the
-            banquette seated but unnumbered), its two sides and their counts, and its occupancy.
-            Its row is still quoted by the metre; nothing here touches that. */}
-        {bench && benchPanel && (
-          <Popover label="מספר" icon={Hash} value={benchPanel.numbered && benchNumber ? ltr(`#${benchNumber}`) : "ללא"}>
-            <PanelRow label="מספר" htmlFor="bench-number">
-              {benchNumber !== undefined && <BarButton icon={Undo2} label="ללא מספר" onClick={() => onBench(p.id, { number: null })} />}
-              <NumberField
-                id="bench-number"
-                aria-label="מספר הבנקט"
-                decimals={0}
-                min={0}
-                value={benchNumber ?? 0}
-                onChange={(v) => onBench(p.id, { number: v })}
-                className="w-20"
-              />
-            </PanelRow>
-            {benchPanel.numbered && benchNumber !== undefined && benchNumber > 0 && duplicateNumbers(doc, benchOf).has(benchNumber) && <DuplicateNumber />}
-            <Note>
-              {bench.seats > 0
-                ? "בנקט שיושבים בו ממוספר כמו שולחן — במפת ההצבה ובמספור מחדש. בלי מספר הוא נשאר במניין המקומות בלבד."
-                : "המספר יופיע כשיהיו מקומות ישיבה בבנקט."}
-            </Note>
-          </Popover>
-        )}
-        {/* ITS HEIGHT, as a chip of its own (2026-10-31, the user: "need to be able to define his
-            height in the inspector"): the top — table height for the chairs beside it — always,
-            and a sofa side's seat when it has one. It used to hide inside "ישיבה", and only once a
-            chairs side was chosen. */}
-        {bench && benchPanel && (
-          <Popover label="גובה" icon={MoveVertical} value={`${Math.round(bench.heightMm / 10)} ס״מ`} panelClassName="w-80">
-            <PanelRow label="גובה המשטח" htmlFor="bench-h">
-              <NumberField id="bench-h" decimals={0} min={20} max={150} commitOnBlur value={Math.round(bench.heightMm / 10)} onChange={(cm) => onBench(p.id, { heightMm: cm * 10 })} className="w-20" />
-              <span className="text-xs text-muted">ס״מ מהרצפה</span>
-            </PanelRow>
-            {(bench.back.kind === "sofa" || bench.front.kind === "sofa") && (
-              <PanelRow label="גובה מושב הספה" htmlFor="bench-sh">
-                <NumberField id="bench-sh" decimals={0} min={30} max={70} commitOnBlur value={Math.round(bench.sofaHeightMm / 10)} onChange={(cm) => onBench(p.id, { sofaHeightMm: cm * 10 })} className="w-20" />
-                <span className="text-xs text-muted">ס״מ מהרצפה</span>
-              </PanelRow>
-            )}
-            <Note>המשטח הוא השולחן של הכיסאות שלצידו — 75 ס״מ כברירת מחדל. ספה נמוכה ממנו, והיושבים עליה פונים החוצה.</Note>
-          </Popover>
-        )}
-        {bench && benchPanel && (
-          <Popover label="ישיבה" icon={Armchair} value={bench.seats > 0 ? ltr(`${benchPanel.spec?.seated ?? 0}/${bench.seats}`) : "—"} panelClassName="w-[22rem]">
-            <BenchSidesFields
-              idPrefix="bench"
-              back={{ ...bench.back, set: benchPanel.spec?.back?.seats !== undefined }}
-              front={{ ...bench.front, set: benchPanel.spec?.front?.seats !== undefined }}
-              backLabel="צד אחורי"
-              frontLabel="צד קדמי"
-              autoSeats={Math.floor(bench.widthMm / SEAT_WIDTH_MM)}
-              heightMm={bench.heightMm}
-              sofaHeightMm={bench.sofaHeightMm}
-              heightNote="מהרצפה — שולחן לכיסאות שלצידו"
-              heights={false}
-              lengthMm={bench.widthMm}
-              depthMm={bench.depthMm}
-              onSide={(side, patch) => onBench(p.id, { [side]: patch })}
-              onHeight={(mm) => onBench(p.id, { heightMm: mm })}
-              onSofaHeight={(mm) => onBench(p.id, { sofaHeightMm: mm })}
-            />
-            {bench.seats > 0 && (
-              <PanelRow label="תפוסה" htmlFor="bench-seated">
-                <NumberField
-                  id="bench-seated"
-                  decimals={0}
-                  min={0}
-                  value={benchPanel.spec?.seated ?? 0}
-                  onChange={(v) => onBench(p.id, { seated: v })}
-                  className="w-20"
-                />
-                <span className={"text-xs " + occupancyInk(benchPanel.spec?.seated ?? 0, bench.seats)}>מתוך {bench.seats}</span>
-              </PanelRow>
-            )}
-            <Note>
-              הצד האחורי הוא הצד העליון של הבנקט כפי שהונח. כיסאות נספרים ונארזים כמו כיסאות שולחן; ספה נספרת במקומות הישיבה בלבד.
-              אורך הבנקט נמתח בידיות שבתוכנית.
-            </Note>
-          </Popover>
-        )}
-        {/* A chair's rows: how many, how many in each, the gaps and an aisle — a single chair is one
-            row of one, and typing more makes it a block. */}
-        {rowsAllowed && onChairRows && r && (
-          <ChairRowsPopover single rows={p.rows} chair={catalogBox(r.product)} onChange={(rows) => onChairRows(p.id, rows)} />
-        )}
-        {/* Inline, not behind a subject: how many of a thing there are is the one field on this bar
-            that gets edited over and over while placing. (A block's count is its rows.) */}
-        {!block && <QuantityStepper quantity={p.quantity} onStep={(d) => onQuantity(p.id, d)} />}
-
-        {swap && <SwapPopover swap={swap} onSwap={onSwap} label="החלפה בפריט אחר" />}
-
-        {shades.length > 0 && (
-          <Popover label="גוון" leading={<Swatch color={shade?.swatch} size={14} />} value={shade?.name ?? "ברירת מחדל"}>
-            <ShadeFields shades={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} />
-          </Popover>
-        )}
-
-        {/* The vase or jug an arrangement stands in — packed and counted with it. */}
-        {onVessel && r && takesVessel(r.product) && (
-          <VesselPopover own={p.vessel} rowVessel={productVessel(r.product)} onVessel={(v) => onVessel([p.id], v)} />
-        )}
-
-        {/* A rug's (or a runner's) contour on THIS plan — its row's until it is given its own. */}
-        {onBorder && r && takesBorder(r.product) && (
-          <Popover
-            label="קונטור"
-            leading={<Swatch color={borderOf(p, r.product)?.colour} size={14} />}
-            value={borderWords(borderOf(p, r.product))}
-          >
-            <BorderPanel own={p.border} row={cleanBorder(r.product.appearance?.border)} category={r.product.category} onBorder={(b) => onBorder([p.id], b)} idPrefix={`border-${p.id}`} />
-          </Popover>
-        )}
-
-        {/* A carpet laid OVER a surface or a stage (lib/studio/cover.ts) is that thing's shape: in
-            place of a size it says what it lies on, takes a margin, and lets go — the shape kept. A
-            covered thing since gone is said, in warn ink: the carpet stands as it was laid. */}
-        {stretch && p.cover && (() => {
-          const on = coverTarget(p, doc, structure);
-          const name = on?.name ?? "המשטח";
-          const inset = Math.round((p.cover.insetMm ?? 0) / 10);
-          return (
-            <Popover label={on?.present ? `על ${name}` : `${name} — לא בתוכנית`} icon={Link2} tone={on?.present ? "default" : "warn"} value={inset ? ltr(`${inset}`) : undefined}>
-              {!on?.present && <Note>{`${name} כבר לא בתוכנית — השטיח נשאר בצורה שבה הונח עליו.`}</Note>}
-              {onCoverInset && (
-                <PanelRow label="שוליים (ס״מ)" htmlFor={`cover-inset-${p.id}`}>
-                  <NumberField
-                    id={`cover-inset-${p.id}`}
-                    decimals={0}
-                    min={0}
-                    step={5}
-                    value={inset}
-                    onChange={(v) => onCoverInset(p.id, Math.max(0, v) * 10)}
-                    className="w-20"
-                  />
-                </PanelRow>
-              )}
-              <Note>{`השטיח בצורת ${name} ונע איתו${on?.kind === "feature" ? "; שינוי צורה באולם משנה אותו בפתיחה הבאה של הסקיצה" : ""}.`}</Note>
-              {onDetachCover && (
-                <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onDetachCover(p.id)}>
-                  <Unlink className="h-3.5 w-3.5" strokeWidth={2} />
-                  ניתוק מהמשטח
-                </Button>
-              )}
-            </Popover>
-          );
-        })()}
-
-        {/* A carpet is sized here as well as by its corners — a number is faster when the client
-            says "three by two". */}
-        {stretch && !p.cover && (
-          <Popover
-            label="גודל (ס״מ)"
-            icon={Ruler}
-            value={ltr(`${Math.round((size?.widthMm ?? 0) / 10)}×${Math.round((size?.depthMm ?? 0) / 10)}`)}
-          >
-            <PanelRow>
-              <NumberField
-                aria-label="רוחב"
-                decimals={0}
-                min={30}
-                value={Math.round((size?.widthMm ?? 0) / 10)}
-                onChange={(v) => onResize(p.id, { widthMm: v * 10, depthMm: size?.depthMm ?? v * 10 })}
-                className="w-20"
-              />
-              <span className="text-xs text-muted">×</span>
-              <NumberField
-                aria-label="עומק"
-                decimals={0}
-                min={30}
-                value={Math.round((size?.depthMm ?? 0) / 10)}
-                onChange={(v) => onResize(p.id, { widthMm: size?.widthMm ?? v * 10, depthMm: v * 10 })}
-                className="w-20"
-              />
-            </PanelRow>
-            {/* Rounded corners, as the stage's "פינות": one radius for all four, and each corner on its
-                own — a rug may be rounded on two corners only (2026-10-31). The four fields stand
-                where their corners are on the rug (left to right whatever the page direction), as the
-                points on the plan do. Not on a carpet laid to an outline: those are a rectangle's. */}
-            {onCorners && !p.outline && (
-              <>
-                <PanelRow label="כל הפינות (ס״מ)" htmlFor="rug-corners">
-                  <NumberField
-                    id="rug-corners"
-                    decimals={0}
-                    min={0}
-                    max={Math.round(Math.min(size?.widthMm ?? 0, size?.depthMm ?? 0) / 20)}
-                    step={5}
-                    value={Math.round(Math.max(0, ...(p.corners ?? [0])) / 10)}
-                    onChange={(v) => onCorners(p.id, v > 0 ? [v * 10, v * 10, v * 10, v * 10] : null)}
-                    className="w-20"
-                  />
-                </PanelRow>
-                <PanelRow label="כל פינה בנפרד" stack>
-                  <div dir="ltr" className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-sm border border-border p-2">
-                    {(["פינה שמאלית עליונה", "פינה ימנית עליונה", "פינה שמאלית תחתונה", "פינה ימנית תחתונה"] as const).map((label, k) => {
-                      // Grid order is left-top, right-top, left-bottom, right-bottom; RugCorners is
-                      // top-left, top-right, bottom-right, bottom-left.
-                      const i = [0, 1, 3, 2][k];
-                      const radii: [number, number, number, number] = p.corners ? [...p.corners] : [0, 0, 0, 0];
-                      return (
-                        <div key={i} className={k % 2 ? "justify-self-end" : "justify-self-start"}>
-                          <NumberField
-                            aria-label={`${label} (ס״מ)`}
-                            decimals={0}
-                            min={0}
-                            max={Math.round(Math.min(size?.widthMm ?? 0, size?.depthMm ?? 0) / 20)}
-                            step={5}
-                            value={Math.round(radii[i] / 10)}
-                            onChange={(v) => {
-                              radii[i] = Math.max(0, v) * 10;
-                              onCorners(p.id, radii.some((x) => x > 0) ? radii : null);
-                            }}
-                            className="w-16"
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </PanelRow>
-              </>
-            )}
-            {/* A carpet laid to an outline (let go from a surface or a stage) scales its shape here. */}
-            {p.outline && <Note>השטיח בצורה שבה הונח על המשטח — שינוי הגודל מותח את הצורה.</Note>}
-            {onBows && !p.outline && (
-              <>
-                <Note>
-                  גרירת הריבוע באמצע כל צד מעקמת אותו; לחיצה כפולה עליו מיישרת אותו.
-                  {onCorners ? " הנקודה שבתוך כל פינה מעגלת את הפינה הזו (Alt — את כל הפינות יחד); לחיצה כפולה עליה מיישרת." : ""}
-                </Note>
-                {(p.bows || (p.corners && onCorners)) && (
-                  <div className="mt-3 flex gap-2">
-                    {p.bows && (
-                      <Button size="sm" variant="outline" className="flex-1" onClick={() => onBows(p.id, null)}>
-                        יישור כל הצדדים
-                      </Button>
-                    )}
-                    {p.corners && onCorners && (
-                      <Button size="sm" variant="outline" className="flex-1" onClick={() => onCorners(p.id, null)}>
-                        פינות ישרות
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </Popover>
-        )}
-
-        {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
-        {/* A row that stretches has its own size field above; everything else of a fixed size can
-            still be drawn bigger or smaller on THIS plan — a fuller arrangement on the head table. */}
-        {/* A climb's size is not a drawing choice: its run follows the step it covers. */}
-        {/* Not a block: its size is its rows, and its chairs are drawn at their real size. */}
-        {!sizePanel && !stretch && !drape && !p.stage && !climb && !block && <ScalePopover scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />}
-        {climb && r && (
-          <ClimbPopover
-            host={climb}
-            onHeight={(mm) => editClimb(climbHeightEdit(p, r.product, drawnSize, mm))}
-            onRisers={(n) => editClimb(climbRisersEdit(p, r.product, drawnSize, n))}
-            onAccessible={() => editClimb(climbAccessibleEdit(p, r.product, drawnSize))}
-            onReverse={() => editClimb(climbReverseEdit(p, r.product, drawnSize))}
-          />
-        )}
-        {p.layer === "ceiling" && !drape && onHang && (
-          <HangPopover own={p.hangHeightMm} fallback={hangHeightOf({}, r?.product)} underRoof={roofOf ? ceilingUndersideMm(roofOf(p.position), r?.product.dimensions.heightMm ?? 0) : undefined} onHang={(mm) => onHang(p.id, mm)} />
-        )}
-
-        {/* A drape covers its whole wall (or side) by default; this puts it back after it was
-            shortened. On a rod: its height and its ר. Every rail: the drop, and a rod of its own. */}
-        {/* An LED strip rides the same rail but is light, not cloth: its height, its stretch, a run
-            of its own (./led-popover.tsx) — no drop, no rod. */}
-        {drape && isLedStrip(r?.product) && (
-          <LedRailPopover rail={drape} lengthMm={runMm} onRail={(rail) => onRail?.(p.id, rail)} onDrawRun={onRail && onDrawRod && !p.locked ? () => onDrawRod(p.id) : undefined} />
-        )}
-        {/* A sail's ties and sag, a ceiling drape's height, width, sag, scallops — its own chip. */}
-        {drape && clothKind && onRail && (
-          <CeilingClothPopover
-            rail={drape}
-            sheet={clothSheet}
-            onRail={(rail) => onRail(p.id, rail)}
-            onRedraw={onDrawCloth && !p.locked ? (kind) => onDrawCloth(p.id, kind) : undefined}
-          />
-        )}
-        {drape && !clothKind && !isLedStrip(r?.product) && (
-          <DrapeRailPopover
+    const opens: Record<typeof kind, string[]> = {
+      rail: ["rail", "item"],
+      bench: ["seating", "number"],
+      rows: ["rows", "item"],
+      climb: ["climb", "item"],
+      cover: ["cover", "item"],
+      rug: ["rugsize", "item"],
+      ceiling: ["hang", "item"],
+      item: ["item", "shade"],
+    };
+    const railGroup =
+      !!drape &&
+      G(
+        "rail",
+        led ? Zap : clothKind ? (drape.type === "sail" ? Sailboat : Waves) : drape.type === "rod" ? Minus : Maximize2,
+        "מסילה",
+        drape.type === "sail" ? (clothSheet ? ltr(`${(clothSheet.areaMm2 / 1e6).toFixed(1)} מ״ר`) : "—") : clothMm !== undefined ? ltr(`${drape.type === "canopy" && cloth ? `${cloth.length}× ` : ""}${(clothMm / 1000).toFixed(2)} מ׳`) : run ? ltr(`${(run.lengthMm / 1000).toFixed(2)} מ׳`) : "—",
+        led ? (
+          // The run drawn of its own is the bar's verb.
+          <LedRailPopover bare rail={drape} lengthMm={runMm} onRail={(rail) => onRail?.(p.id, rail)} />
+        ) : clothKind ? (
+          onRail ? (
+            // A sail's ties and sag, a ceiling drape's height, width, sag, scallops — and both ways to
+            // draw it again (a line, an area), which the bar's verb is one of.
+            <CeilingClothPopover bare rail={drape} sheet={clothSheet} onRail={(rail) => onRail(p.id, rail)} onRedraw={onDrawCloth && !p.locked ? (k) => onDrawCloth(p.id, k) : undefined} />
+          ) : (
+            <Note>{railWhere ?? "בד תקרה"}</Note>
+          )
+        ) : (
+          // A drape covers its whole wall (or side) by default; this puts it back after it was
+          // shortened. On a rod: its height and its ר. Every rail: the drop. (A rod of its own is the
+          // bar's verb.)
+          <DrapeRailFields
             rail={drape}
             run={run}
             dropMm={p.dropMm}
             onWhat={onWhat}
             onRail={(rail, dropMm) => (onRail ? onRail(p.id, rail, dropMm) : rail.type === "wall" && dropMm === undefined && onSpan(p.id, { wallId: rail.wallId, from: rail.from, to: rail.to }))}
-            onDrawRod={onDrawRod && !p.locked ? () => onDrawRod(p.id) : undefined}
             editable={!!onRail}
           />
-        )}
-
-        {/* Hung over a table: arranged in that table's focus mode, strung along its row, hung over
-            other tables in a pattern. Centring it and "one over each item" are one-press verbs, in
-            the "…". */}
-        {overTable && (
-          <>
-            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב מעל השולחן — סידור ופיזור של מה שתלוי מעליו · לחיצה כפולה" onClick={() => onDressTable(overTable.id)} />}
-            {onSpreadRow && (
-              <RowSpreadPopover
-                doc={doc}
-                sourceId={overTable.id}
-                name={r?.product.name ?? "הפריט"}
-                heightMm={hangHeightOf(p, r?.product)}
-                onSpread={(opts) => onSpreadRow(p.id, opts)}
+        ),
+        railLost,
+      );
+    const climbSteep = !!climb && climb.kind === "ramp" && rampTooSteep(climb);
+    return groupsOf(
+      kind,
+      title,
+      facts,
+      [
+        breaches.length > 0 && G("clearance", ShieldAlert, "מרחק ביטחון", breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`, <BreachList breaches={breaches} />, true),
+        railGroup,
+        // A STANDALONE BANQUETTE: its number, its height and its two sides — as a table's ״שולחן״ and
+        // ״ישיבה״.
+        !!bench &&
+          !!benchPanel &&
+          G(
+            "number",
+            Hash,
+            "מספר",
+            benchPanel.numbered && benchNumber ? ltr(`#${benchNumber}`) : "ללא",
+            <BenchNumberFields
+              number={benchNumber}
+              seats={bench.seats}
+              duplicate={benchPanel.numbered && benchNumber !== undefined && benchNumber > 0 && duplicateNumbers(doc, benchOf).has(benchNumber)}
+              onNumber={(n) => onBench(p.id, { number: n })}
+            />,
+            benchPanel.numbered && benchNumber !== undefined && benchNumber > 0 && duplicateNumbers(doc, benchOf).has(benchNumber),
+          ),
+        // ITS HEIGHT, a group of its own (2026-10-31, the user: "need to be able to define his height in
+        // the inspector"): the top — table height for the chairs beside it — always, and a sofa side's
+        // seat when it has one.
+        !!bench &&
+          !!benchPanel &&
+          G(
+            "height",
+            MoveVertical,
+            "גובה",
+            `${cm(bench.heightMm)} ס״מ`,
+            <BenchHeightFields
+              heightMm={bench.heightMm}
+              sofaHeightMm={bench.back.kind === "sofa" || bench.front.kind === "sofa" ? bench.sofaHeightMm : undefined}
+              onHeight={(mm) => onBench(p.id, { heightMm: mm })}
+              onSofaHeight={(mm) => onBench(p.id, { sofaHeightMm: mm })}
+            />,
+          ),
+        !!bench &&
+          !!benchPanel &&
+          G(
+            "seating",
+            Armchair,
+            "ישיבה",
+            bench.seats > 0 ? ltr(`${benchPanel.spec?.seated ?? 0}/${bench.seats}`) : "ללא ישיבה",
+            <>
+              <BenchSidesFields
+                idPrefix="bench"
+                back={{ ...bench.back, set: benchPanel.spec?.back?.seats !== undefined }}
+                front={{ ...bench.front, set: benchPanel.spec?.front?.seats !== undefined }}
+                backLabel="צד אחורי"
+                frontLabel="צד קדמי"
+                autoSeats={Math.floor(bench.widthMm / SEAT_WIDTH_MM)}
+                heightMm={bench.heightMm}
+                sofaHeightMm={bench.sofaHeightMm}
+                heightNote="מהרצפה — שולחן לכיסאות שלצידו"
+                heights={false}
+                lengthMm={bench.widthMm}
+                depthMm={bench.depthMm}
+                onSide={(side, patch) => onBench(p.id, { [side]: patch })}
+                onHeight={(mm) => onBench(p.id, { heightMm: mm })}
+                onSofaHeight={(mm) => onBench(p.id, { sofaHeightMm: mm })}
               />
-            )}
-            <Popover label="החלת הפריט מעל שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
+              {bench.seats > 0 && (
+                <PanelRow label="תפוסה" htmlFor="bench-seated">
+                  <NumberField id="bench-seated" decimals={0} min={0} value={benchPanel.spec?.seated ?? 0} onChange={(v) => onBench(p.id, { seated: v })} className="w-20" />
+                  <span className={"text-xs " + occupancyInk(benchPanel.spec?.seated ?? 0, bench.seats)}>מתוך {bench.seats}</span>
+                </PanelRow>
+              )}
+              <Note>
+                הצד האחורי הוא הצד העליון של הבנקט כפי שהונח. כיסאות נספרים ונארזים כמו כיסאות שולחן; ספה נספרת במקומות הישיבה בלבד.
+                אורך הבנקט נמתח בידיות שבתוכנית.
+              </Note>
+            </>,
+          ),
+        // A chair's rows: how many, how many in each, the gaps and an aisle — a single chair is one row
+        // of one, and typing more makes it a block.
+        rowsAllowed &&
+          !!onChairRows &&
+          !!r &&
+          G("rows", Rows3, "שורות", p.rows ? ltr(`${p.rows.rows}×${p.rows.perRow}`) : "כיסא בודד", <ChairRowsPopover bare single rows={p.rows} chair={catalogBox(r.product)} onChange={(rows) => onChairRows(p.id, rows)} />),
+        !!climb &&
+          !!r &&
+          G(
+            "climb",
+            climb.kind === "ramp" ? Accessibility : Footprints,
+            climb.kind === "ramp" ? "רמפה" : "מדרגות",
+            climb.kind === "ramp" ? ltr(formatRatio(rampRatio(climb)) || "—") : ltr(`${climbRisers(climb)}×${cm(riserHeightMm(climb))}`),
+            <ClimbFields
+              host={climb}
+              onHeight={(mm) => editClimb(climbHeightEdit(p, r.product, drawnSize, mm))}
+              onRisers={(n) => editClimb(climbRisersEdit(p, r.product, drawnSize, n))}
+              onAccessible={() => editClimb(climbAccessibleEdit(p, r.product, drawnSize))}
+              onReverse={() => editClimb(climbReverseEdit(p, r.product, drawnSize))}
+            />,
+            climbSteep,
+          ),
+        // What it lies on — a covered thing since gone is said, in warn ink: the carpet stands as it
+        // was laid.
+        covered &&
+          G(
+            "cover",
+            Link2,
+            laid?.present ? `על ${laid.name}` : `${laid?.name ?? "המשטח"} — לא בתוכנית`,
+            coverInset ? ltr(`${coverInset} ס״מ`) : "צמוד לקצה",
+            <CoverFields
+              id={p.id}
+              name={laid?.name ?? "המשטח"}
+              present={!!laid?.present}
+              feature={laid?.kind === "feature"}
+              insetCm={coverInset}
+              onInset={onCoverInset ? (cmv) => onCoverInset(p.id, Math.max(0, cmv) * 10) : undefined}
+              onDetach={onDetachCover ? () => onDetachCover(p.id) : undefined}
+            />,
+            !laid?.present,
+          ),
+        // A rug's size and its corners — rounded together or one by one, and its bowed sides said.
+        stretch &&
+          !covered &&
+          G(
+            "rugsize",
+            Ruler,
+            "גודל ופינות",
+            ltr(`${cm(rugSize.widthMm)}×${cm(rugSize.depthMm)}`),
+            <RugSizeFields
+              placement={p}
+              size={rugSize}
+              onSize={(size) => onResize(p.id, size)}
+              onCorners={onCorners ? (corners) => onCorners(p.id, corners) : undefined}
+              onBows={onBows ? (bows) => onBows(p.id, bows) : undefined}
+            />,
+          ),
+        // How high it hangs — the bar's number, with the row's height back and what the room does
+        // when neither says.
+        !!hang && !!hung && G("hang", ArrowDownToLine, "תלייה", hung.shown ? ltr(hung.words) : hung.words, <HangFields own={hang.own} fallback={hang.fallback} underRoof={hang.underRoof} onHang={hang.set} />),
+        G(
+          "item",
+          Sparkles,
+          "פריט",
+          !block && p.quantity > 1 ? `${name} · ${iso(`×${p.quantity}`)}` : name,
+          // A block's count is its rows — no stepper.
+          <ItemFields product={r?.product} swap={swap} onSwap={onSwap} quantity={block ? undefined : p.quantity} onQuantity={(d) => onQuantity(p.id, d)} />,
+        ),
+        shades.length > 0 &&
+          G(
+            "shade",
+            Palette,
+            "גוון",
+            <>
+              {shade?.swatch && <Swatch color={shade.swatch} size={12} />}
+              <span className="truncate">{shade?.name ?? "ברירת מחדל"}</span>
+            </>,
+            <ShadeFields shades={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} />,
+          ),
+        // The vase or jug an arrangement stands in — packed and counted with it.
+        !!onVessel &&
+          !!r &&
+          takesVessel(r.product) &&
+          G("vessel", Amphora, "כלי", vesselView(p.vessel, rowVessel).name, <VesselPickRow own={p.vessel} rowVessel={rowVessel} onVessel={(v) => onVessel([p.id], v)} />),
+        // A rug's or a runner's contour on THIS plan — its row's until it is given its own.
+        !!onBorder &&
+          !!r &&
+          takesBorder(r.product) &&
+          G(
+            "border",
+            Frame,
+            "קונטור",
+            <>
+              {contour && <Swatch color={contour.colour} size={12} />}
+              {borderWords(contour)}
+            </>,
+            <BorderPanel own={p.border} row={cleanBorder(r.product.appearance?.border)} category={r.product.category} onBorder={(b) => onBorder([p.id], b)} idPrefix={`border-${p.id}`} />,
+          ),
+        scaled && G("scale", Scaling, "גודל על התוכנית", ltr(`${pct}%`), <ScaleFields scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />),
+        !!sizePanel &&
+          G(
+            "size",
+            Ruler,
+            "מידות",
+            ltr(sizePanel.axes.uniform ? `⌀${cm(sizePanel.size.widthMm)}` : `${cm(sizePanel.size.widthMm)}×${cm(sizePanel.size.depthMm)}`),
+            <SizeFields panel={sizePanel} onSize={onSize} />,
+          ),
+        // On a table: the same item onto other tables, in a pattern.
+        !!table && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(table.id, p.id)),
+        // Hung over a table: over other tables in a pattern, strung along its row, one over each item
+        // on its table. Centring it is a one-press verb, in the ⋯.
+        !!overTable &&
+          G(
+            "over",
+            LayoutGrid,
+            "מעל שולחנות",
+            tableLabel(doc, overTable),
+            <>
               {renderPattern(overTable.id, p.id)}
-            </Popover>
-          </>
-        )}
-
-        {/* On a table: move it about its own table, and put it on others in a pattern — the table
-            bar's order, focus mode first. */}
-        {table && (
-          <>
-            {onDressTable && <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה" onClick={() => onDressTable(table.id)} />}
-            <Popover label="החלת הפריט על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
-              {renderPattern(table.id, p.id)}
-            </Popover>
-          </>
-        )}
-
-        {/* A carpet laid over a surface or a stage faces as that does (lib/studio/cover.ts). */}
-        {!p.cover && <Rotation value={facing} onChange={onFace} />}
-        <MoreMenu label="עוד פעולות לפריט" sections={itemSections} />
-        <Actions
-          onDuplicate={onDuplicate}
-          duplicateLabel="שכפול הפריט"
-          onDelete={onDelete}
-          deleteLabel="מחיקת הפריט"
-        />
-      </Bar>
+              {onSpreadRow && (
+                <div className="mt-3 border-t border-border-soft pt-3">
+                  <span className={fieldLabelClassName}>פיזור לאורך השורה</span>
+                  <RowSpreadFields doc={doc} sourceId={overTable.id} name={name} heightMm={hangHeightOf(p, r?.product)} onSpread={(opts) => onSpreadRow(p.id, opts)} />
+                </div>
+              )}
+              {onHangOverDressing && hungOverDressing > 0 && (
+                <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onHangOverDressing(p.id)}>
+                  <ArrowUpFromLine className="h-3.5 w-3.5" strokeWidth={2} />
+                  {`אחד מעל כל פריט שעל השולחן (${hungOverDressing})`}
+                </Button>
+              )}
+            </>,
+          ),
+      ],
+      opens[kind],
     );
   }
 
@@ -3471,17 +3471,7 @@ function SurfaceFields({
   );
 }
 
-function SizePopover({ panel, onSize }: { panel: SizePanel; onSize: (size: { widthMm: number; depthMm: number } | null) => void }) {
-  const { size, axes } = panel;
-  const value = axes.uniform ? `⌀${cm(size.widthMm)}` : `${cm(size.widthMm)}×${cm(size.depthMm)}`;
-  return (
-    <Popover label="גודל (ס״מ)" icon={Scaling} value={ltr(value)}>
-      <SizeFields panel={panel} onSize={onSize} />
-    </Popover>
-  );
-}
-
-/** The size fields themselves — the chip's panel, and a table's ״מידות״ group. */
+/** The size fields — a table's and an item's ״מידות״ group. */
 function SizeFields({ panel, onSize }: { panel: SizePanel; onSize: (size: { widthMm: number; depthMm: number } | null) => void }) {
   const { size, catalog, axes, spec, custom } = panel;
   const step = spec.stepMm || 100;
@@ -3533,18 +3523,8 @@ function SizeFields({ panel, onSize }: { panel: SizePanel; onSize: (size: { widt
   );
 }
 
-/** The safety distances this thing is not being given, by name — carried in the warning ink on the
- *  chip itself, so the bar says so before it is opened. */
-function BreachPopover({ breaches }: { breaches: { other: string; distance: number; required: number }[] }) {
-  if (breaches.length === 0) return null;
-  return (
-    <Popover label="מרחק ביטחון" icon={ShieldAlert} tone="warn" value={breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`}>
-      <BreachList breaches={breaches} />
-    </Popover>
-  );
-}
-
-/** The breaches themselves, by the other thing's name — the chip's panel, and a table's group. */
+/** The safety distances this thing is not being given, by the other thing's name — every kind's
+ *  ״מרחק ביטחון״ group, in warn ink. */
 function BreachList({ breaches }: { breaches: { other: string; distance: number; required: number }[] }) {
   return (
     <>
@@ -3689,15 +3669,7 @@ type RowSpreadProps = {
   onSpread: (opts: { axis: "row" | "column"; count: number; wave?: HeightWave | null }) => void;
 };
 
-function RowSpreadPopover(props: RowSpreadProps) {
-  return (
-    <Popover label="פיזור לאורך השורה" icon={AlignHorizontalDistributeCenter} value="לאורך השורה" panelClassName="w-72">
-      <RowSpreadFields {...props} />
-    </Popover>
-  );
-}
-
-/** The row spread's fields — the chip's panel, and a hung item's ״מעל שולחנות״ group. */
+/** The row spread's fields — in a hung item's ״מעל שולחנות״ group. */
 function RowSpreadFields({ doc, sourceId, name, heightMm, onSpread }: RowSpreadProps) {
   const [axis, setAxis] = useState<"row" | "column">("row");
   const [typed, setTyped] = useState<number | null>(null);
@@ -3741,17 +3713,16 @@ function RowSpreadFields({ doc, sourceId, name, heightMm, onSpread }: RowSpreadP
   );
 }
 
-/** A drape's rail on its bar (lib/studio/rail.ts): on a wall or a side, the whole of it again and —
- *  on a side — the other side of it; on a rod, its height and its ר (no post under its end); on any,
- *  how far the cloth comes down (blank = to the floor) and a rod of its own drawn on the canvas. The
- *  stretch itself is the grips on the plan. */
-function DrapeRailPopover({
+/** A drape's rail — its ״מסילה״ group (lib/studio/rail.ts): on a wall or a side, the whole of it again
+ *  and — on a side — the other side of it; on a rod, its height and its ר (no post under its end); on
+ *  any, how far the cloth comes down (blank = to the floor). The stretch itself is the grips on the
+ *  plan; a rod of its own, drawn on the canvas, is the quick bar's verb. */
+function DrapeRailFields({
   rail,
   run,
   dropMm,
   onWhat,
   onRail,
-  onDrawRod,
   editable,
 }: {
   rail: Rail;
@@ -3759,13 +3730,13 @@ function DrapeRailPopover({
   dropMm?: number;
   onWhat: string;
   onRail: (rail: Rail, dropMm?: number | null) => void;
-  onDrawRod?: () => void;
   /** The host writes any rail (onRail) — otherwise only a wall's stretch is offered. */
   editable: boolean;
 }) {
   const whole = (rail.type === "wall" || rail.type === "side") && Math.min(rail.from, rail.to) === 0 && Math.max(rail.from, rail.to) === 1;
   return (
-    <Popover label={onWhat} icon={rail.type === "rod" ? Minus : Maximize2} value={run ? ltr(`${(run.lengthMm / 1000).toFixed(2)} מ׳`) : "—"} panelClassName="w-80">
+    <>
+      {!run && <Note>{rail.type === "side" ? "הפריט שהווילון היה תלוי עליו הוסר — מוחקים את הווילון ותולים אחד חדש, או ״ציור על מוט״." : "הקיר שהווילון היה תלוי עליו נמחק — מוחקים את הווילון ותולים אחד חדש, או ״ציור על מוט״."}</Note>}
       {(rail.type === "wall" || rail.type === "side") && (
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="flex-1" disabled={!run || whole} onClick={() => onRail({ ...rail, from: 0, to: 1 })}>
@@ -3797,18 +3768,12 @@ function DrapeRailPopover({
           <NumberField id="drape-drop" decimals={0} min={0} max={1200} hideZero placeholder="עד הרצפה" value={dropMm ? Math.round(dropMm / 10) : 0} onChange={(v) => onRail(rail, v > 0 ? v * 10 : null)} className="w-24" />
         </PanelRow>
       )}
-      {onDrawRod && editable && (
-        <Button size="sm" variant="outline" className="w-full" onClick={onDrawRod}>
-          <Minus className="h-3.5 w-3.5" strokeWidth={2} />
-          {rail.type === "rod" ? "ציור המוט מחדש" : "תלייה על מוט — ציור על הקנבס"}
-        </Button>
-      )}
       <Note>
         {rail.type === "rod"
-          ? "לחיצה לכל עמוד, Enter או לחיצה כפולה לסיום. גוררים עמוד כדי להזיז אותו. המוט מתומחר מהשורה הראשונה בקטגוריית ״מוטות וילון״."
-          : `לקיצור — הידיות ש${onWhat} עצמו.`}
+          ? "״ציור המוט מחדש״ בסרגל: לחיצה לכל עמוד, Enter או לחיצה כפולה לסיום. גוררים עמוד כדי להזיז אותו. המוט מתומחר מהשורה הראשונה בקטגוריית ״מוטות וילון״."
+          : `לקיצור — הידיות ש${onWhat} עצמו. מוט משלו — ״ציור על מוט״ בסרגל.`}
       </Note>
-    </Popover>
+    </>
   );
 }
 
@@ -3827,16 +3792,7 @@ function hangView(own: number | undefined, fallback: number | undefined, underRo
   };
 }
 
-function HangPopover({ own, fallback, underRoof, onHang }: { own?: number; fallback?: number; underRoof?: number; onHang: (mm: number | null) => void }) {
-  const view = hangView(own, fallback, underRoof);
-  return (
-    <Popover label="גובה תלייה" icon={ArrowDownToLine} value={view.shown ? ltr(view.words) : view.words}>
-      <HangFields own={own} fallback={fallback} underRoof={underRoof} onHang={onHang} />
-    </Popover>
-  );
-}
-
-/** The hang height's fields — the chip's panel, and a ceiling item's ״תלייה״ group. */
+/** The hang height's fields — a ceiling item's ״תלייה״ group. */
 function HangFields({ own, fallback, underRoof, onHang }: { own?: number; fallback?: number; underRoof?: number; onHang: (mm: number | null) => void }) {
   const { roofed, placeholder } = hangView(own, fallback, underRoof);
   return (
@@ -3867,8 +3823,8 @@ function HangFields({ own, fallback, underRoof, onHang }: { own?: number; fallba
 /** A rented flight or ramp standing on its own: the step it covers, and what follows from it — the
  *  steps (≤18cm on 28cm treads) or the 1:12 run. The venue's own stairs ask the same questions in the
  *  same words (components/venue-inspector.tsx ClimbFields). A ramp steeper than 1:12 is said, in alert
- *  ink, with the one press that lays it back — never refused. */
-function ClimbPopover({
+ *  ink, with the one press that lays it back — never refused. Its ״מדרגות״ / ״רמפה״ group. */
+function ClimbFields({
   host,
   onHeight,
   onRisers,
@@ -3888,12 +3844,7 @@ function ClimbPopover({
   const cm = (mm: number) => Math.round(mm / 10);
   const runM = (host.depthMm / 1000).toFixed(2);
   return (
-    <Popover
-      label={ramp ? "רמפה" : "מדרגות"}
-      icon={ramp ? Accessibility : Footprints}
-      tone={steep ? "warn" : "default"}
-      value={ramp ? ltr(formatRatio(rampRatio(host)) || "—") : ltr(`${risers}×${cm(riserHeightMm(host))}`)}
-    >
+    <>
       <PanelRow label="הפרש גובה (ס״מ)" htmlFor="climb-height">
         <NumberField
           id="climb-height"
@@ -3934,7 +3885,7 @@ function ClimbPopover({
         <ArrowDownUp className="h-3.5 w-3.5" strokeWidth={2} />
         היפוך כיוון העלייה
       </Button>
-    </Popover>
+    </>
   );
 }
 
@@ -3957,17 +3908,9 @@ function vesselView(own: string | null | undefined, rowVessel?: string) {
 }
 
 /** "כלי" — which vase or jug an arrangement stands in: the catalog's vessels (`vases`), each shade
- *  its own option, plus "as its catalog row" and "none on this plan". */
-function VesselPopover({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
-  return (
-    <Popover label="כלי" icon={Amphora} value={vesselView(own, rowVessel).name} panelClassName="w-80">
-      <VesselFields own={own} rowVessel={rowVessel} onVessel={onVessel} />
-    </Popover>
-  );
-}
-
-/** "כלי" as a group's pick row: the vessel in use, and "החלפה" opens the same typed list as a picker
- *  beside the panel — a pick applies and the picker goes. */
+ *  its own option, plus "as its catalog row" and "none on this plan" — as a group's pick row: the
+ *  vessel in use, and "החלפה" opens the typed list as a picker beside the panel — a pick applies and
+ *  the picker goes. */
 function VesselPickRow({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
   const view = vesselView(own, rowVessel);
   const chosen = view.current ? view.choices.find((c) => c.value === view.current) : undefined;
@@ -4001,7 +3944,7 @@ function VesselPickRow({ own, rowVessel, onVessel }: { own: string | null | unde
   );
 }
 
-/** The vessel list itself — the chip's panel, and the ״כלי״ group's picker. */
+/** The vessel list itself — the ״כלי״ group's picker. */
 function VesselFields({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
   const { choices, nameOf, value } = vesselView(own, rowVessel);
   return (
@@ -4026,18 +3969,9 @@ function VesselFields({ own, rowVessel, onVessel }: { own: string | null | undef
   );
 }
 
-/** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
- *  the quote, the packing list and the order still count it as the row it is. */
-function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
-  return (
-    <Popover label="גודל על התוכנית" icon={Scaling} value={ltr(`${Math.round(scale * 100)}%`)}>
-      <ScaleFields scale={scale} onScale={onScale} />
-    </Popover>
-  );
-}
-
-/** The drawing size's fields — the chip's panel, and a design item's ״גודל על התוכנית״ group: four
- *  ready sizes (the board's segmented look) and the percentage typed. */
+/** How big one item is drawn on this plan, as a percentage of its catalog size — a design item's
+ *  ״גודל על התוכנית״ group: four ready sizes (the board's segmented look) and the percentage typed. A
+ *  drawing size only: the quote, the packing list and the order still count it as the row it is. */
 function ScaleFields({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
   const pct = Math.round(scale * 100);
   return (
@@ -4059,7 +3993,7 @@ function ScaleFields({ scale, onScale }: { scale: number; onScale: (scale: numbe
 }
 
 /** How many of a thing stand here — − N +, inline: the one number edited over and over while
- *  placing. The old bar's, the quick bar's (an item counted by the unit) and the ״פריט״ group's. */
+ *  placing. The quick bar's (an item counted by the unit) and the ״פריט״ group's. */
 function QuantityStepper({ quantity, onStep }: { quantity: number; onStep: (delta: number) => void }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="כמות">
@@ -4071,7 +4005,7 @@ function QuantityStepper({ quantity, onStep }: { quantity: number; onStep: (delt
 }
 
 /** A shade picked from swatches, its name spelled out under them — colour never carries the meaning
- *  alone: two of a designer's creams look identical at 18px. The chip's panel and the ״גוון״ group. */
+ *  alone: two of a designer's creams look identical at 18px. The ״גוון״ group. */
 function ShadeFields({ shades, value, onChange }: { shades: ReturnType<typeof shadesOf>; value: string; onChange: (variantId: string) => void }) {
   const shade = shades.find((s) => s.id === value);
   return (
@@ -4087,8 +4021,9 @@ function borderWords(b: Border | undefined): ReactNode {
   return b ? ltr(`${Math.round(b.widthMm) / 10}`) : "ללא";
 }
 
-/** A design item's ״פריט״ group: what it is — a pick row swapping it for another row of its kind
- *  when the catalog has one, else the row itself — and how many of it stand here. */
+/** An item's ״פריט״ group: what it is — a pick row swapping it for another row of its kind when the
+ *  catalog has one, else the row itself — and how many of it stand here (none for a block of chairs:
+ *  its count is its rows). */
 function ItemFields({
   product,
   swap,
@@ -4099,7 +4034,8 @@ function ItemFields({
   product?: Product;
   swap: SwapPanel | null;
   onSwap: (productId: string, all: boolean) => void;
-  quantity: number;
+  /** Undefined = no count to step. */
+  quantity: number | undefined;
   onQuantity: (delta: number) => void;
 }) {
   return (
@@ -4117,9 +4053,210 @@ function ItemFields({
           </span>
         </div>
       ) : null}
-      <PanelRow label="כמות">
-        <QuantityStepper quantity={quantity} onStep={onQuantity} />
+      {quantity !== undefined && (
+        <PanelRow label="כמות">
+          <QuantityStepper quantity={quantity} onStep={onQuantity} />
+        </PanelRow>
+      )}
+    </>
+  );
+}
+
+/** A standalone banquette's ״מספר״ group: it is numbered like a table while anybody sits on it —
+ *  cleared, it stays seated but unnumbered. */
+function BenchNumberFields({
+  number,
+  seats,
+  duplicate,
+  onNumber,
+}: {
+  number: number | undefined;
+  seats: number;
+  /** Another unit on the plan shows the same number. */
+  duplicate: boolean;
+  /** `null` = no number. */
+  onNumber: (n: number | null) => void;
+}) {
+  return (
+    <>
+      <PanelRow label="מספר" htmlFor="bench-number">
+        {number !== undefined && <BarButton icon={Undo2} label="ללא מספר" onClick={() => onNumber(null)} />}
+        <NumberField id="bench-number" decimals={0} min={0} value={number ?? 0} onChange={(v) => onNumber(v)} className="w-20" />
       </PanelRow>
+      {duplicate && <DuplicateNumber />}
+      <Note>
+        {seats > 0
+          ? "בנקט שיושבים בו ממוספר כמו שולחן — במפת ההצבה ובמספור מחדש. בלי מספר הוא נשאר במניין המקומות בלבד."
+          : "המספר יופיע כשיהיו מקומות ישיבה בבנקט."}
+      </Note>
+    </>
+  );
+}
+
+/** A standalone banquette's ״גובה״ group: its top — table height for the chairs beside it — and,
+ *  when a side is a sofa, the sofa's seat (`sofaHeightMm` undefined = no sofa side). */
+function BenchHeightFields({
+  heightMm,
+  sofaHeightMm,
+  onHeight,
+  onSofaHeight,
+}: {
+  heightMm: number;
+  sofaHeightMm: number | undefined;
+  onHeight: (mm: number) => void;
+  onSofaHeight: (mm: number) => void;
+}) {
+  return (
+    <>
+      <PanelRow label="גובה המשטח" htmlFor="bench-h">
+        <NumberField id="bench-h" decimals={0} min={20} max={150} commitOnBlur value={cm(heightMm)} onChange={(v) => onHeight(v * 10)} className="w-20" />
+        <span className="text-xs text-muted">ס״מ מהרצפה</span>
+      </PanelRow>
+      {sofaHeightMm !== undefined && (
+        <PanelRow label="גובה מושב הספה" htmlFor="bench-sh">
+          <NumberField id="bench-sh" decimals={0} min={30} max={70} commitOnBlur value={cm(sofaHeightMm)} onChange={(v) => onSofaHeight(v * 10)} className="w-20" />
+          <span className="text-xs text-muted">ס״מ מהרצפה</span>
+        </PanelRow>
+      )}
+      <Note>המשטח הוא השולחן של הכיסאות שלצידו — 75 ס״מ כברירת מחדל. ספה נמוכה ממנו, והיושבים עליה פונים החוצה.</Note>
+    </>
+  );
+}
+
+/** A carpet laid OVER a surface or a stage (lib/studio/cover.ts) — its ״על <name>״ group: the margin
+ *  it stops short of the edge by, what it follows, and letting go of it (the shape kept). A covered
+ *  thing since gone is said: the carpet stands as it was laid. */
+function CoverFields({
+  id,
+  name,
+  present,
+  feature,
+  insetCm,
+  onInset,
+  onDetach,
+}: {
+  id: string;
+  name: string;
+  present: boolean;
+  /** It lies on a venue surface (re-laid on the sketch's next open), not on a stage. */
+  feature: boolean;
+  insetCm: number;
+  onInset?: (cm: number) => void;
+  onDetach?: () => void;
+}) {
+  return (
+    <>
+      {!present && <Note>{`${name} כבר לא בתוכנית — השטיח נשאר בצורה שבה הונח עליו.`}</Note>}
+      {onInset && (
+        <PanelRow label="שוליים (ס״מ)" htmlFor={`cover-inset-${id}`}>
+          <NumberField id={`cover-inset-${id}`} decimals={0} min={0} step={5} value={insetCm} onChange={onInset} className="w-20" />
+        </PanelRow>
+      )}
+      <Note>{`השטיח בצורת ${name} ונע איתו${feature ? "; שינוי צורה באולם משנה אותו בפתיחה הבאה של הסקיצה" : ""}.`}</Note>
+      {onDetach && (
+        <Button size="sm" variant="outline" className="mt-3 w-full" onClick={onDetach}>
+          <Unlink className="h-3.5 w-3.5" strokeWidth={2} />
+          ניתוק מהמשטח
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** A stretched rug's ״גודל ופינות״ group: its size by number (as the bar), its rounded corners — one
+ *  radius for all four, and each corner on its own (a rug may be rounded on two corners only,
+ *  2026-10-31) — and its bowed sides said, with the ways back to straight. The four corner fields
+ *  stand where their corners are on the rug (left to right whatever the page direction), as the
+ *  points on the plan do. A carpet laid to an outline (let go from a surface or a stage) has none of
+ *  the corners: those are a rectangle's, and a size stretches its shape. */
+function RugSizeFields({
+  placement: p,
+  size,
+  onSize,
+  onCorners,
+  onBows,
+}: {
+  placement: Placement;
+  /** As the canvas draws it — its own size, else its row's. */
+  size: { widthMm: number; depthMm: number };
+  onSize: (size: { widthMm: number; depthMm: number }) => void;
+  onCorners?: (corners: [number, number, number, number] | null) => void;
+  onBows?: (bows: [number, number, number, number] | null) => void;
+}) {
+  const maxRadius = Math.round(Math.min(size.widthMm, size.depthMm) / 20);
+  return (
+    <>
+      <PanelRow label="רוחב × עומק (ס״מ)">
+        <NumberField aria-label="רוחב" decimals={0} min={30} value={cm(size.widthMm)} onChange={(v) => onSize({ widthMm: v * 10, depthMm: size.depthMm })} className="w-20" />
+        <span className="text-xs text-muted">×</span>
+        <NumberField aria-label="עומק" decimals={0} min={30} value={cm(size.depthMm)} onChange={(v) => onSize({ widthMm: size.widthMm, depthMm: v * 10 })} className="w-20" />
+      </PanelRow>
+      {onCorners && !p.outline && (
+        <>
+          <PanelRow label="כל הפינות (ס״מ)" htmlFor="rug-corners">
+            <NumberField
+              id="rug-corners"
+              decimals={0}
+              min={0}
+              max={maxRadius}
+              step={5}
+              value={Math.round(Math.max(0, ...(p.corners ?? [0])) / 10)}
+              onChange={(v) => onCorners(v > 0 ? [v * 10, v * 10, v * 10, v * 10] : null)}
+              className="w-20"
+            />
+          </PanelRow>
+          <PanelRow label="כל פינה בנפרד" stack>
+            <div dir="ltr" className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-sm border border-border p-2">
+              {(["פינה שמאלית עליונה", "פינה ימנית עליונה", "פינה שמאלית תחתונה", "פינה ימנית תחתונה"] as const).map((label, k) => {
+                // Grid order is left-top, right-top, left-bottom, right-bottom; RugCorners is
+                // top-left, top-right, bottom-right, bottom-left.
+                const i = [0, 1, 3, 2][k];
+                const radii: [number, number, number, number] = p.corners ? [...p.corners] : [0, 0, 0, 0];
+                return (
+                  <div key={i} className={k % 2 ? "justify-self-end" : "justify-self-start"}>
+                    <NumberField
+                      aria-label={`${label} (ס״מ)`}
+                      decimals={0}
+                      min={0}
+                      max={maxRadius}
+                      step={5}
+                      value={Math.round(radii[i] / 10)}
+                      onChange={(v) => {
+                        radii[i] = Math.max(0, v) * 10;
+                        onCorners(radii.some((x) => x > 0) ? radii : null);
+                      }}
+                      className="w-16"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </PanelRow>
+        </>
+      )}
+      {p.outline && <Note>השטיח בצורה שבה הונח על המשטח — שינוי הגודל מותח את הצורה.</Note>}
+      {onBows && !p.outline && (
+        <>
+          <Note>
+            גרירת הריבוע באמצע כל צד מעקמת אותו; לחיצה כפולה עליו מיישרת אותו.
+            {onCorners ? " הנקודה שבתוך כל פינה מעגלת את הפינה הזו (Alt — את כל הפינות יחד); לחיצה כפולה עליה מיישרת." : ""}
+          </Note>
+          {(p.bows || (p.corners && onCorners)) && (
+            <div className="mt-3 flex gap-2">
+              {p.bows && (
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => onBows(null)}>
+                  יישור כל הצדדים
+                </Button>
+              )}
+              {p.corners && onCorners && (
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => onCorners(null)}>
+                  פינות ישרות
+                </Button>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </>
   );
 }

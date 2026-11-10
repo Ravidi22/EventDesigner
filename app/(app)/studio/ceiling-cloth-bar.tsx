@@ -6,7 +6,8 @@
 //
 // One Popover (components/popover.tsx brings its own frame): PanelRow per field, a width on every
 // NumberField, the actions outline. Every edit is the host's one setPlacementRail. Absent field =
-// the default, shown as the placeholder — a blank box says "as the cloth would be".
+// the default, shown as the placeholder — a blank box says "as the cloth would be". `bare` is the
+// fields alone, for the studio's end-panel group ״מסילה״ (components/end-panel.tsx).
 import type { Rail, RailSheet, SailRail, CanopyRail, RunRail } from "@/lib/studio/rail";
 import { clothRuns, CLOTH_WIDTH_MM, RUN_SAG_MM, sailTieHeight } from "@/lib/studio/ceiling-cloth";
 import { Popover } from "@/components/popover";
@@ -27,11 +28,14 @@ function own<T extends object>(rail: T, key: keyof T & string, v: number): T {
 }
 
 export function CeilingClothPopover({
+  bare = false,
   rail,
   sheet,
   onRail,
   onRedraw,
 }: {
+  /** The fields alone, with no popover round them. */
+  bare?: boolean;
   rail: Rail;
   /** A sail as it hangs (lib/studio/ceiling-cloth.ts sailSheet) — its area and its own posts. */
   sheet?: RailSheet | null;
@@ -39,15 +43,15 @@ export function CeilingClothPopover({
   /** Draw it again on the canvas — a sail tie by tie, a drape as a run or as an area. */
   onRedraw?: (kind: "sail" | "run" | "canopy") => void;
 }) {
-  if (rail.type === "sail") return <SailPanel rail={rail} sheet={sheet} onRail={onRail} onRedraw={onRedraw} />;
-  if (rail.type === "run" || rail.type === "canopy") return <DrapePanel rail={rail} onRail={onRail} onRedraw={onRedraw} />;
+  if (rail.type === "sail") return <SailPanel bare={bare} rail={rail} sheet={sheet} onRail={onRail} onRedraw={onRedraw} />;
+  if (rail.type === "run" || rail.type === "canopy") return <DrapePanel bare={bare} rail={rail} onRail={onRail} onRedraw={onRedraw} />;
   return null;
 }
 
-function SailPanel({ rail, sheet, onRail, onRedraw }: { rail: SailRail; sheet?: RailSheet | null; onRail: (rail: Rail) => void; onRedraw?: (kind: "sail") => void }) {
+function SailPanel({ bare, rail, sheet, onRail, onRedraw }: { bare: boolean; rail: SailRail; sheet?: RailSheet | null; onRail: (rail: Rail) => void; onRedraw?: (kind: "sail") => void }) {
   const area = sheet ? sheet.areaMm2 / 1e6 : null;
-  return (
-    <Popover label="מפרש" icon={Sailboat} value={area !== null ? ltr(`${area.toFixed(1)} מ״ר`) : "—"} panelClassName="w-80">
+  const body = (
+    <>
       {rail.ties.map((t, i) => {
         const what = t.to?.kind === "wall" ? "על קיר" : t.to?.kind === "feature" ? "על פינה" : "עמוד";
         return (
@@ -79,22 +83,23 @@ function SailPanel({ rail, sheet, onRail, onRedraw }: { rail: SailRail; sheet?: 
         הגובה של כל קשירה מהרצפה. ריק בשקיעה — 8% מהאלכסון הארוך. גוררים קשירה על התוכנית: ליד קיר או פינה של מבנה היא נקשרת אליהם, אחרת עמוד (Alt — תמיד עמוד). המפרש מתומחר לפי שטחו
         {sheet && sheet.posts.length > 0 ? ` · ${sheet.posts.length} עמודים` : ""}.
       </Note>
+    </>
+  );
+  if (bare) return body;
+  return (
+    <Popover label="מפרש" icon={Sailboat} value={area !== null ? ltr(`${area.toFixed(1)} מ״ר`) : "—"} panelClassName="w-80">
+      {body}
     </Popover>
   );
 }
 
-function DrapePanel({ rail, onRail, onRedraw }: { rail: RunRail | CanopyRail; onRail: (rail: Rail) => void; onRedraw?: (kind: "run" | "canopy") => void }) {
+function DrapePanel({ bare, rail, onRail, onRedraw }: { bare: boolean; rail: RunRail | CanopyRail; onRail: (rail: Rail) => void; onRedraw?: (kind: "run" | "canopy") => void }) {
   const runs = clothRuns(rail);
   const lengthMm = runs.reduce((n, r) => n + r.lengthMm, 0);
   const autoWaves = runs[0]?.waves ?? 1;
   const canopy = rail.type === "canopy" ? rail : null;
-  return (
-    <Popover
-      label={canopy ? "בד תקרה — שטח" : "בד תקרה"}
-      icon={canopy ? LayoutGrid : Waves}
-      value={ltr(`${canopy ? `${runs.length}× ` : ""}${(lengthMm / 1000).toFixed(1)} מ׳`)}
-      panelClassName="w-80"
-    >
+  const body = (
+    <>
       <PanelRow label="גובה (ס״מ)" htmlFor="drape-h">
         <NumberField id="drape-h" decimals={0} min={100} max={1500} step={10} commitOnBlur value={cm(rail.heightMm)} onChange={(v) => onRail({ ...rail, heightMm: v * 10 })} className="w-24" />
       </PanelRow>
@@ -150,6 +155,17 @@ function DrapePanel({ rail, onRail, onRedraw }: { rail: RunRail | CanopyRail; on
           : "בד בין שתי נקודות, נאסף בכל גל ושוקע באמצעו — גוררים את הקצוות על התוכנית."}{" "}
         ריק — ברירת המחדל. מתומחר לפי אורך הבד.
       </Note>
+    </>
+  );
+  if (bare) return body;
+  return (
+    <Popover
+      label={canopy ? "בד תקרה — שטח" : "בד תקרה"}
+      icon={canopy ? LayoutGrid : Waves}
+      value={ltr(`${canopy ? `${runs.length}× ` : ""}${(lengthMm / 1000).toFixed(1)} מ׳`)}
+      panelClassName="w-80"
+    >
+      {body}
     </Popover>
   );
 }

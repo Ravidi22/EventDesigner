@@ -4,6 +4,8 @@
 // wall again, and the wall's other face. On a side: the whole side again and the side of it the light
 // is on. On a free run: its height. On any: a run of its own, drawn on the canvas (two clicks). The
 // stretch itself is the grips on the plan; the colour is the shade, on the bar's own shade chip.
+// `bare` is the fields alone, for the studio's end-panel group ״מסילה״ (components/end-panel.tsx); a
+// run of its own is then the quick bar's verb, and the caller passes no `onDrawRun`.
 import { Maximize2, Minus, Zap } from "lucide-react";
 import type { Rail } from "@/lib/studio/rail";
 import { Popover } from "@/components/popover";
@@ -14,11 +16,14 @@ import { Button } from "@/components/button";
 const cm = (mm: number) => Math.round(mm / 10);
 
 export function LedRailPopover({
+  bare = false,
   rail,
   lengthMm,
   onRail,
   onDrawRun,
 }: {
+  /** The fields alone, with no popover round them. */
+  bare?: boolean;
   rail: Rail;
   /** Along the rail — the arc on a bowed wall. Undefined when what it ran along is gone. */
   lengthMm: number | undefined;
@@ -28,8 +33,8 @@ export function LedRailPopover({
 }) {
   const where = rail.type === "wall" ? "על הקיר" : rail.type === "side" ? "על הצד" : "באוויר";
   const whole = (rail.type === "wall" || rail.type === "side") && Math.min(rail.from, rail.to) === 0 && Math.max(rail.from, rail.to) === 1;
-  return (
-    <Popover label={`פס לד ${where}`} icon={Zap} value={lengthMm !== undefined ? ltr(`${(lengthMm / 1000).toFixed(2)} מ׳`) : "—"} panelClassName="w-80">
+  const body = (
+    <>
       {rail.type === "wall" && (
         <PanelRow label="גובה מהרצפה (ס״מ)" htmlFor="led-height">
           <NumberField id="led-height" decimals={0} min={0} max={1500} step={5} commitOnBlur value={cm(rail.heightMm ?? 0)} onChange={(v) => onRail({ ...rail, heightMm: Math.max(0, Math.round(v * 10)) })} className="w-20" />
@@ -70,6 +75,12 @@ export function LedRailPopover({
             ? "הפס רץ לאורך שפת האלמנט, בגובה שלו. לקיצור — הידיות שבקצוות."
             : "פס בין שתי נקודות באוויר. גוררים את הקצוות כדי להזיז אותם."}
       </Note>
+    </>
+  );
+  if (bare) return body;
+  return (
+    <Popover label={`פס לד ${where}`} icon={Zap} value={lengthMm !== undefined ? ltr(`${(lengthMm / 1000).toFixed(2)} מ׳`) : "—"} panelClassName="w-80">
+      {body}
     </Popover>
   );
 }
